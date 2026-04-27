@@ -41,7 +41,7 @@ const schema = z.object({
   OPENAI_FACT_REASONING_EFFORT: reasoningEffort.optional(),
   OPENAI_EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
   OPENAI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1200),
-  OPENAI_NEED_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(3200),
+  OPENAI_NEED_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(8000),
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(3200),
   OPENAI_FACT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(700),
   DEBUG_OPENAI_USAGE: booleanFlag(false),

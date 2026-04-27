@@ -2321,7 +2321,10 @@ export class AssistantService {
     try {
       const response = await client.responses.create({
         model: config.OPENAI_PLANNER_MODEL,
-        reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
+        // No `reasoning` here — need extraction is pure structured extraction,
+        // not problem-solving. Reasoning tokens count against max_output_tokens
+        // and can exhaust the budget before the JSON schema output is complete,
+        // causing the API to throw on a truncated response (SyntaxError at ~1780 chars).
         input: [
           { role: 'system', content: buildNeedExtractorPrompt() },
           {
@@ -2388,10 +2391,19 @@ export class AssistantService {
             }
           }
         },
-        max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_NEED_MAX_OUTPUT_TOKENS), 4000)
+        // 8 000 floor: need state JSON with many items can exceed 4 000 tokens;
+        // without reasoning overhead we can safely allocate the full budget to output.
+        max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_NEED_MAX_OUTPUT_TOKENS), 8000)
       }, signal ? { signal } : undefined);
       logOpenAIUsage('need_extraction', config.OPENAI_PLANNER_MODEL, response);
-      const outputText = response.output_text ?? response.output?.[0]?.content?.[0]?.text;
+      // output_text may throw on an incomplete response (finish_reason: 'length')
+      // in strict JSON schema mode — guard with try/catch before parsing.
+      let outputText: string | undefined;
+      try {
+        outputText = response.output_text ?? response.output?.[0]?.content?.[0]?.text;
+      } catch {
+        outputText = response.output?.[0]?.content?.[0]?.text;
+      }
       const parsed = parseJsonObject(outputText, 'need_extraction');
       const aiUpdate = coerceNeedUpdate(parsed);
       const merged = mergeNeedState(current, mergeNeedState(emptyNeedState(), aiUpdate));
