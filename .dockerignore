@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.agent
+.git
+.gitignore
+dist
+node_modules
+npm-debug.log*
+local-live-tests
+test-results
+playwright-report

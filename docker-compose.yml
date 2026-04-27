@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: chat_ai_postgres
+    environment:
+      POSTGRES_DB: chat_ai
+      POSTGRES_USER: chat_ai
+      POSTGRES_PASSWORD: chat_ai
+    ports:
+      - "5432:5432"
+    volumes:
+      - chat_ai_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chat_ai -d chat_ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  chat_ai_pgdata:

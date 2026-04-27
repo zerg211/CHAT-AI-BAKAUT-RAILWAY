@@ -1,0 +1,505 @@
+import * as cheerio from 'cheerio';
+import { fetch } from 'undici';
+import { createEmbedding } from '../ai/openaiClient.js';
+import { config } from '../config.js';
+import { ProductRepository } from '../db/repositories.js';
+import type { CatalogPageInput, CatalogProductInput } from '../shared/types.js';
+import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
+
+type SitemapEntry = {
+  loc: string;
+  lastmod?: string;
+};
+
+export type SitemapSyncOptions = {
+  sitemapUrl?: string;
+  maxProducts?: number;
+  maxContentPages?: number;
+  concurrency?: number;
+  includeProducts?: boolean;
+  includeContent?: boolean;
+  includeEmbeddings?: boolean;
+  requestDelayMs?: number;
+  onlyUrls?: string[];
+  onProgress?: (message: string) => void;
+};
+
+type FetchResult = {
+  url: string;
+  status: number;
+  html: string;
+};
+
+const defaultContentRoots = new Set([
+  'articles',
+  'news',
+  'services',
+  'projects',
+  'implemented-projects',
+  'stocks',
+  'faq',
+  'guarantee',
+  'garantiya',
+  'delivery-and-payment',
+  'about',
+  'brands'
+]);
+
+function decodeXml(value: string) {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'");
+}
+
+function parseSitemapIndex(xml: string) {
+  return [...xml.matchAll(/<sitemap\b[\s\S]*?<\/sitemap>/gi)]
+    .map((match) => match[0].match(/<loc>([\s\S]*?)<\/loc>/i)?.[1])
+    .filter((value): value is string => Boolean(value))
+    .map((value) => decodeXml(value.trim()));
+}
+
+function parseSitemapEntries(xml: string): SitemapEntry[] {
+  const blocks = [...xml.matchAll(/<url\b[\s\S]*?<\/url>/gi)];
+  if (!blocks.length) {
+    return [...xml.matchAll(/<loc>([\s\S]*?)<\/loc>/gi)].map((match) => ({ loc: decodeXml(match[1].trim()) }));
+  }
+  return blocks
+    .map((block) => ({
+      loc: decodeXml(block[0].match(/<loc>([\s\S]*?)<\/loc>/i)?.[1]?.trim() ?? ''),
+      lastmod: block[0].match(/<lastmod>([\s\S]*?)<\/lastmod>/i)?.[1]?.trim()
+    }))
+    .filter((entry) => entry.loc);
+}
+
+function pathParts(url: string) {
+  try {
+    return new URL(url).pathname.split('/').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function sameHost(url: string, baseUrl: string) {
+  try {
+    return new URL(url).hostname === new URL(baseUrl).hostname;
+  } catch {
+    return false;
+  }
+}
+
+function isCatalogUrl(url: string, baseUrl: string) {
+  const parts = pathParts(url);
+  return sameHost(url, baseUrl) && parts[0] === 'catalog';
+}
+
+function looksLikeProductUrl(url: string, baseUrl: string) {
+  const parts = pathParts(url);
+  if (!sameHost(url, baseUrl) || parts[0] !== 'catalog' || parts.length < 3) return false;
+  const last = parts.at(-1) ?? '';
+  return last.length > 8 && !last.startsWith('filter') && !last.includes('clear');
+}
+
+function contentPageType(url: string, baseUrl: string) {
+  const parts = pathParts(url);
+  if (!sameHost(url, baseUrl) || !parts.length) return undefined;
+  if (parts[0] === 'catalog') return undefined;
+  return defaultContentRoots.has(parts[0]) ? parts[0] : undefined;
+}
+
+async function fetchText(url: string): Promise<FetchResult> {
+  const response = await fetch(url, {
+    headers: { 'user-agent': 'Bakaut AI catalog sync (+local development; respects sitemap)' },
+    signal: AbortSignal.timeout(35_000)
+  });
+  return { url, status: response.status, html: await response.text() };
+}
+
+async function collectSitemapEntries(sitemapUrl: string) {
+  const root = await fetchText(sitemapUrl);
+  if (root.status >= 400) throw new Error(`Sitemap HTTP ${root.status}: ${sitemapUrl}`);
+  const sitemapUrls = parseSitemapIndex(root.html);
+  const targetSitemaps = sitemapUrls.length ? sitemapUrls : [sitemapUrl];
+  const entries: SitemapEntry[] = [];
+
+  for (const url of targetSitemaps) {
+    const response = await fetchText(url);
+    if (response.status >= 400) continue;
+    entries.push(...parseSitemapEntries(response.html));
+  }
+
+  const byUrl = new Map<string, SitemapEntry>();
+  for (const entry of entries) byUrl.set(entry.loc, entry);
+  return { sitemapUrls: targetSitemaps, entries: [...byUrl.values()] };
+}
+
+function assignSpec(specs: Record<string, string>, keyText: string, valueText: string) {
+  const key = normalizeSpecKey(cleanText(keyText));
+  const value = cleanText(valueText);
+  if (!key || !value || key.length > 120 || value.length > 500) return;
+  specs[key] = value;
+}
+
+function extractSpecs($: cheerio.CheerioAPI) {
+  const specs: Record<string, string> = {};
+
+  $('.props-item, .caption-item').each((_, node) => {
+    const title = $(node).find('.props-item__title, .caption-item__title').first().text();
+    const value = $(node).find('.props-item__text, .caption-item__text').first().text();
+    assignSpec(specs, title, value);
+  });
+
+  $('table tr').each((_, row) => {
+    const cells = $(row)
+      .find('td, th')
+      .toArray()
+      .map((cell) => cleanText($(cell).text()));
+    if (cells.length >= 2) assignSpec(specs, cells[0], cells.slice(1).join(' '));
+  });
+
+  $('dl').each((_, dl) => {
+    const terms = $(dl).find('dt').toArray();
+    const defs = $(dl).find('dd').toArray();
+    terms.forEach((term, index) => assignSpec(specs, $(term).text(), $(defs[index]).text()));
+  });
+
+  return specs;
+}
+
+function extractJsonLd($: cheerio.CheerioAPI) {
+  const blocks: unknown[] = [];
+  $('script[type="application/ld+json"]').each((_, script) => {
+    const text = $(script).text();
+    if (!text.trim()) return;
+    try {
+      blocks.push(JSON.parse(text));
+    } catch {
+      // Ignore broken JSON-LD blocks from the source page.
+    }
+  });
+  return blocks;
+}
+
+function findJsonProduct(value: unknown): any | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findJsonProduct(item);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const object = value as Record<string, unknown>;
+  const type = object['@type'];
+  if (type === 'Product' || (Array.isArray(type) && type.includes('Product'))) return object;
+  for (const item of Object.values(object)) {
+    const found = findJsonProduct(item);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function extractBreadcrumbs($: cheerio.CheerioAPI) {
+  return $('.breadcrumbs a, [class*="breadcrumb"] a')
+    .toArray()
+    .map((node) => cleanText($(node).text()))
+    .filter(Boolean);
+}
+
+function extractDocuments($: cheerio.CheerioAPI, pageUrl: string) {
+  const docs: Array<{ title: string; url: string }> = [];
+  $('a[href]').each((_, node) => {
+    const href = $(node).attr('href');
+    if (!href || !/\.(pdf|doc|docx|xls|xlsx|zip|rar)(?:[?#].*)?$/i.test(href)) return;
+    const url = absoluteUrl(href, pageUrl);
+    if (url) docs.push({ title: cleanText($(node).text()) || url.split('/').pop() || url, url });
+  });
+  return [...new Map(docs.map((doc) => [doc.url, doc])).values()];
+}
+
+function extractImages($: cheerio.CheerioAPI, pageUrl: string) {
+  const urls = new Set<string>();
+  const add = (value: string | undefined) => {
+    const url = absoluteUrl(value, pageUrl);
+    if (url) urls.add(url);
+  };
+  add($('meta[property="og:image"]').attr('content'));
+  $('[itemprop="image"], .card__main-slider img, .card__thumbs-slider-item').each((_, node) => {
+    add($(node).attr('src'));
+    const style = $(node).attr('style') ?? '';
+    const match = style.match(/url\(['"]?([^'")]+)['"]?\)/i);
+    if (match) add(match[1]);
+  });
+  return [...urls];
+}
+
+function extractArticle($: cheerio.CheerioAPI, specs: Record<string, string>) {
+  const fromCaption = $('.product-caption__item')
+    .toArray()
+    .map((node) => cleanText($(node).text()))
+    .find((text) => /артикул/i.test(text));
+  const captionMatch = fromCaption?.match(/артикул\s+(.+)/i)?.[1]?.trim();
+  return specs['артикул'] || captionMatch;
+}
+
+function extractBrand(specs: Record<string, string>, name: string, jsonProduct: any | undefined) {
+  const specBrand = Object.entries(specs).find(([key]) => /производитель|бренд|марка/i.test(key))?.[1];
+  const jsonBrand = typeof jsonProduct?.brand === 'string'
+    ? jsonProduct.brand
+    : typeof jsonProduct?.brand?.name === 'string'
+      ? jsonProduct.brand.name
+      : undefined;
+  if (specBrand) return specBrand;
+  if (jsonBrand) return jsonBrand;
+  const firstToken = name.split(/\s+/).find((token) => /^[A-Z0-9-]{3,}$/i.test(token));
+  return firstToken;
+}
+
+function extractAvailability($: cheerio.CheerioAPI) {
+  const offer = $('[itemprop="availability"]').first().attr('href') ?? '';
+  const text = cleanText($('.product-not-in-stock, [class*="stock"], [class*="availability"]').first().text());
+  if (offer.includes('OutOfStock')) return { status: 'out_of_stock', text: text || 'Нет в наличии' };
+  if (offer.includes('InStock')) return { status: 'in_stock', text: text || 'В наличии' };
+  return text ? { status: 'unknown', text } : undefined;
+}
+
+function isNotFoundPage($: cheerio.CheerioAPI, status: number) {
+  const h1 = cleanText($('h1').first().text()).toLowerCase();
+  return status === 404 || h1.includes('страница не найдена') || /(^|\s)404($|\s)/.test(h1);
+}
+
+function extractProduct(response: FetchResult, baseUrl: string, sitemapLastmod?: string): CatalogProductInput | null {
+  const $ = cheerio.load(response.html);
+  if (isNotFoundPage($, response.status)) return null;
+
+  const jsonProduct = extractJsonLd($).map(findJsonProduct).find(Boolean);
+  const hasProductSignals =
+    response.html.includes('schema.org/Product') ||
+    $('[itemtype*="schema.org/Product"]').length > 0 ||
+    $('.card__current-price, .card__title, .props-list, [itemprop="offers"]').length > 0;
+  if (!hasProductSignals) return null;
+
+  const name = cleanText($('h1').first().text() || $('.card__title').first().text() || jsonProduct?.name);
+  if (!name || name.length < 4) return null;
+
+  const specs = extractSpecs($);
+  const article = extractArticle($, specs);
+  const description = cleanText(
+    $('#description .card__caption').first().text() ||
+      $('[itemprop="description"]').first().text() ||
+      $('meta[name="description"]').attr('content')
+  );
+  const priceText = cleanText(
+    $('[itemprop="price"]').first().attr('content') ||
+      $('.card__current-price').first().text() ||
+      $('meta[property="product:price:amount"]').attr('content') ||
+      jsonProduct?.offers?.price
+  );
+  const breadcrumbs = extractBreadcrumbs($);
+  const category = [...breadcrumbs].reverse().find((item) => item.toLowerCase() !== 'каталог' && item.toLowerCase() !== 'главная');
+  const images = extractImages($, response.url);
+  const siteProductId = $('.js_favorite[data-id], .js_compare[data-id]').first().attr('data-id');
+  const availability = extractAvailability($);
+  const slug = slugFromUrl(response.url);
+
+  return {
+    externalId: slug ? `bakaut:${slug}` : undefined,
+    sourceUrl: response.url,
+    slug,
+    name,
+    brand: extractBrand(specs, name, jsonProduct),
+    category,
+    price: parsePrice(priceText),
+    currency: 'RUB',
+    imageUrl: images[0],
+    description,
+    specs,
+    sourcePriority: 30,
+    raw: {
+      sourceType: 'site',
+      pageType: 'product',
+      crawledAt: new Date().toISOString(),
+      sitemapLastmod,
+      article,
+      siteProductId,
+      availability,
+      breadcrumbs,
+      images,
+      documents: extractDocuments($, response.url),
+      deliveryText: cleanText($('.delivery-info').first().text())
+    }
+  };
+}
+
+function readablePageText($: cheerio.CheerioAPI) {
+  $('script, style, noscript, svg, form, header, footer, nav, .breadcrumbs, .header, .footer').remove();
+  const preferred = $('article, main, .page, .content, .section').first();
+  const text = cleanText((preferred.length ? preferred : $('body')).text());
+  return text.replace(/\s{2,}/g, ' ').slice(0, 40_000);
+}
+
+function extractCatalogPage(response: FetchResult, baseUrl: string, pageType: string, sitemapLastmod?: string): CatalogPageInput | null {
+  const $ = cheerio.load(response.html);
+  if (isNotFoundPage($, response.status)) return null;
+  const title = cleanText($('h1').first().text() || $('title').first().text());
+  if (!title || title.length < 3) return null;
+  const content = readablePageText($);
+  if (content.length < 200) return null;
+  const summary = cleanText($('meta[name="description"]').attr('content') || content.slice(0, 500));
+  return {
+    sourceUrl: response.url,
+    pageType,
+    title,
+    content,
+    summary,
+    raw: {
+      sourceType: 'site',
+      pageType,
+      crawledAt: new Date().toISOString(),
+      sitemapLastmod,
+      documents: extractDocuments($, response.url)
+    }
+  };
+}
+
+async function maybeEmbedding(text: string, enabled: boolean) {
+  if (!enabled) return undefined;
+  const embedding = await createEmbedding(text).catch(() => undefined);
+  return embedding ?? undefined;
+}
+
+async function runPool<T>(
+  items: T[],
+  concurrency: number,
+  handler: (item: T, index: number) => Promise<void>
+) {
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      await handler(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function limitedErrors(errors: Array<{ url: string; error: string }>, url: string, error: unknown) {
+  if (errors.length < 50) {
+    errors.push({ url, error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, repository = new ProductRepository()) {
+  const baseUrl = config.CATALOG_BASE_URL;
+  const sitemapUrl = options.sitemapUrl ?? new URL('/sitemap.xml', baseUrl).toString();
+  const includeProducts = options.includeProducts ?? true;
+  const includeContent = options.includeContent ?? true;
+  const includeEmbeddings = options.includeEmbeddings ?? false;
+  const concurrency = options.concurrency ?? 4;
+  const requestDelayMs = options.requestDelayMs ?? 150;
+  const errors: Array<{ url: string; error: string }> = [];
+  const sourceId = await repository.startCatalogSource({ type: 'site_crawl', location: sitemapUrl });
+
+  const stats = {
+    sitemapUrl,
+    sitemapFiles: 0,
+    sitemapEntries: 0,
+    productCandidates: 0,
+    contentCandidates: 0,
+    importedProducts: 0,
+    skippedProducts: 0,
+    failedProducts: 0,
+    importedContentPages: 0,
+    skippedContentPages: 0,
+    failedContentPages: 0,
+    productsWithoutPrice: 0,
+    productsWithoutSpecs: 0,
+    errors
+  };
+
+  try {
+    const collected = await collectSitemapEntries(sitemapUrl);
+    stats.sitemapFiles = collected.sitemapUrls.length;
+    stats.sitemapEntries = collected.entries.length;
+
+    const onlyUrlEntries: SitemapEntry[] = options.onlyUrls?.map((loc) => ({ loc })) ?? [];
+    const productEntries = onlyUrlEntries.length
+      ? onlyUrlEntries.filter((entry) => isCatalogUrl(entry.loc, baseUrl))
+      : collected.entries
+          .filter((entry) => isCatalogUrl(entry.loc, baseUrl))
+          .sort((a, b) => Number(looksLikeProductUrl(b.loc, baseUrl)) - Number(looksLikeProductUrl(a.loc, baseUrl)))
+          .slice(0, options.maxProducts ?? Number.MAX_SAFE_INTEGER);
+    const contentEntries = onlyUrlEntries.length
+      ? onlyUrlEntries
+          .map((entry) => ({ ...entry, pageType: contentPageType(entry.loc, baseUrl) }))
+          .filter((entry): entry is SitemapEntry & { pageType: string } => typeof entry.pageType === 'string')
+      : collected.entries
+          .map((entry) => ({ ...entry, pageType: contentPageType(entry.loc, baseUrl) }))
+          .filter((entry): entry is SitemapEntry & { pageType: string } => typeof entry.pageType === 'string')
+          .slice(0, options.maxContentPages ?? Number.MAX_SAFE_INTEGER);
+
+    stats.productCandidates = productEntries.length;
+    stats.contentCandidates = contentEntries.length;
+    options.onProgress?.(`Sitemap: ${stats.sitemapEntries} URLs, ${stats.productCandidates} catalog candidates, ${stats.contentCandidates} content candidates`);
+
+    if (includeProducts) {
+      await runPool(productEntries, concurrency, async (entry, index) => {
+        try {
+          const response = await fetchText(entry.loc);
+          const product = extractProduct(response, baseUrl, entry.lastmod);
+          if (!product) {
+            stats.skippedProducts += 1;
+            return;
+          }
+          const embedding = await maybeEmbedding(productToEmbeddingText(product), includeEmbeddings);
+          await repository.upsertProduct(product, embedding);
+          stats.importedProducts += 1;
+          if (!product.price) stats.productsWithoutPrice += 1;
+          if (!Object.keys(product.specs ?? {}).length) stats.productsWithoutSpecs += 1;
+          if (stats.importedProducts % 100 === 0) {
+            options.onProgress?.(`Products imported: ${stats.importedProducts}/${stats.productCandidates}`);
+          }
+        } catch (error) {
+          stats.failedProducts += 1;
+          limitedErrors(errors, entry.loc, error);
+        } finally {
+          if (requestDelayMs > 0) await sleep(requestDelayMs);
+        }
+      });
+    }
+
+    if (includeContent) {
+      await runPool(contentEntries, Math.min(concurrency, 3), async (entry) => {
+        try {
+          const response = await fetchText(entry.loc);
+          const page = extractCatalogPage(response, baseUrl, entry.pageType, entry.lastmod);
+          if (!page) {
+            stats.skippedContentPages += 1;
+            return;
+          }
+          const embedding = await maybeEmbedding([page.title, page.summary, page.content].filter(Boolean).join('\n').slice(0, 8000), includeEmbeddings);
+          await repository.upsertCatalogPage(page, embedding);
+          stats.importedContentPages += 1;
+        } catch (error) {
+          stats.failedContentPages += 1;
+          limitedErrors(errors, entry.loc, error);
+        } finally {
+          if (requestDelayMs > 0) await sleep(requestDelayMs);
+        }
+      });
+    }
+
+    await repository.finishCatalogSource(sourceId, 'completed', stats);
+    return stats;
+  } catch (error) {
+    await repository.finishCatalogSource(sourceId, 'failed', stats, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
+}
