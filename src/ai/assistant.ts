@@ -2455,7 +2455,7 @@ export class AssistantService {
             contentExcerpt: truncateForAI(page.content, PLANNER_PAGE_CONTENT_LIMIT)
           })),
           openDataConflicts: input.conflicts
-        })
+        }))
       }
     ];
     const plannerRequest = {
