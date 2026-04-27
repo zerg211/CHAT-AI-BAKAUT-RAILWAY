@@ -210,7 +210,16 @@ function parseJsonObject(outputText: string | undefined, stage: string) {
     .replace(/```$/i, '')
     .trim();
   if (!cleaned) throw new Error(`${stage} returned empty JSON`);
-  return JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    if (e instanceof SyntaxError && cleaned.includes('{')) {
+      // In case of token truncation, try to return empty object to prevent hard crash
+      console.warn(`[${stage}] Invalid JSON structure. Returning empty object to gracefully recover. Error: ${e.message}`);
+      return {};
+    }
+    throw e;
+  }
 }
 
 function toNeedItems(items: unknown) {
