@@ -862,8 +862,25 @@ function App() {
 
   useEffect(() => {
     if (!sessionId) return;
-    const interval = window.setInterval(() => {
-      fetch(`${apiBase}/api/chat/sessions/${sessionId}/heartbeat`, { method: 'POST' }).catch(() => undefined);
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const response = await fetch(`${apiBase}/api/chat/sessions/${sessionId}/heartbeat`, { method: 'POST' });
+        if (cancelled) return;
+        // Session no longer exists on the server (deleted, expired, or DB reset).
+        // Stop the interval, drop the stale id, and let createSession() spin up a fresh one.
+        if (response.status === 404) {
+          window.clearInterval(interval);
+          sessionStorage.removeItem('bakaut_session_id');
+          setSessionId(null);
+          createSession().then((next) => {
+            if (!cancelled) setSessionId(next);
+          }).catch(() => undefined);
+        }
+      } catch {
+        /* network blip — keep trying */
+      }
     }, 25_000);
     const close = () => {
       const url = `${apiBase}/api/chat/sessions/${sessionId}/close`;
@@ -871,6 +888,7 @@ function App() {
     };
     window.addEventListener('pagehide', close);
     return () => {
+      cancelled = true;
       window.clearInterval(interval);
       window.removeEventListener('pagehide', close);
     };
