@@ -34,6 +34,7 @@ function mapSession(row: QueryResultRow): ConversationSession {
     pageUrl: row.page_url,
     userAgent: row.user_agent,
     needState: mapNeedState(row.need_state),
+    historySummary: row.history_summary ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     lastHeartbeatAt: row.last_heartbeat_at.toISOString(),
@@ -206,6 +207,17 @@ export class ConversationRepository {
       [maxInactiveMinutes]
     );
     return result.rowCount ?? 0;
+  }
+
+  async updateHistorySummary(sessionId: string, summary: string) {
+    const result = await this.db.query(
+      `UPDATE conversation_sessions
+       SET history_summary = $2, updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [sessionId, summary]
+    );
+    return mapSession(result.rows[0]);
   }
 
   async updateNeedState(sessionId: string, needState: CustomerNeedState) {

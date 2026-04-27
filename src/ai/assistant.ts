@@ -1,9 +1,27 @@
 import { config } from '../config.js';
 import { ConversationRepository, ProductRepository } from '../db/repositories.js';
+import yaml from 'js-yaml';
 import type { ChatResponsePayload, CustomerNeedState, DataConflict, Message, Product, ProductCard } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient } from './openaiClient.js';
 import { emptyNeedState, mergeNeedState, summarizeNeedState } from './needState.js';
+
+function cleanEmpty(obj: any): any {
+  if (obj === null || obj === undefined || obj === '') return undefined;
+  if (Array.isArray(obj)) {
+    const cleaned = obj.map(cleanEmpty).filter((v) => v !== undefined);
+    return cleaned.length > 0 ? cleaned : undefined;
+  }
+  if (typeof obj === 'object') {
+    const cleaned: Record<string, any> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      const v = cleanEmpty(val);
+      if (v !== undefined) cleaned[key] = v;
+    }
+    return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+  }
+  return obj;
+}
 
 interface GenerateAnswerInput {
   sessionId: string;
@@ -392,6 +410,14 @@ function coerceTurnPlan(value: any, baseQuery: string, latestUserMessage = baseQ
     needsWebSearch: Boolean(value?.needsWebSearch),
     missingInformation,
     answerGuidance: String(value?.answerGuidance ?? '').trim().slice(0, 2000)
+  };
+}
+
+function compactTurnPlanForAnswer(plan: AssistantTurnPlan): AssistantTurnPlan {
+  return {
+    ...plan,
+    missingInformation: plan.missingInformation.slice(0, 4),
+    answerGuidance: truncateForAI(plan.answerGuidance, 700)
   };
 }
 
@@ -2279,7 +2305,7 @@ export class AssistantService {
     private readonly products = new ProductRepository()
   ) {}
 
-  async updateNeedState(current: CustomerNeedState, userMessage: string, history: Message[], signal?: AbortSignal) {
+  async updateNeedState(current: CustomerNeedState, historySummary: string | null | undefined, userMessage: string, history: Message[], signal?: AbortSignal) {
     const client = createOpenAIClient();
     if (!client) throw new Error('AI service is unavailable');
 
@@ -2291,11 +2317,12 @@ export class AssistantService {
           { role: 'system', content: buildNeedExtractorPrompt() },
           {
             role: 'user',
-            content: JSON.stringify({
+            content: yaml.dump(cleanEmpty({
               currentNeedState: current,
-              recentHistory: compactHistoryForAI(history, 8, 700),
+              historySummary: historySummary || undefined,
+              recentHistory: compactHistoryForAI(history, 4, 700),
               latestUserMessage: userMessage
-            })
+            }))
           }
         ],
         text: {
@@ -2377,6 +2404,7 @@ export class AssistantService {
     knowledgePages: Awaited<ReturnType<ProductRepository['searchCatalogPages']>>;
     conflicts: Awaited<ReturnType<ProductRepository['getOpenConflictsForProducts']>>;
     history: Message[];
+    historySummary?: string | null;
     baseQuery: string;
     signal?: AbortSignal;
   }) {
@@ -2394,10 +2422,11 @@ export class AssistantService {
       { role: 'system', content: buildTurnPlannerPrompt() },
       {
         role: 'user',
-        content: JSON.stringify({
+        content: yaml.dump(cleanEmpty({
           latestUserMessage: input.userMessage,
           currentNeedState: input.needState,
-          recentHistory: compactHistoryForAI(input.history, PLANNER_HISTORY_LIMIT, PLANNER_HISTORY_CONTENT_LIMIT),
+          historySummary: input.historySummary || undefined,
+          recentHistory: compactHistoryForAI(input.history, 4, PLANNER_HISTORY_CONTENT_LIMIT),
           preliminaryCatalogCandidates: input.products.slice(0, PLANNER_CANDIDATE_LIMIT).map((product) => ({
             id: product.id,
             name: product.name,
@@ -2535,7 +2564,7 @@ export class AssistantService {
     if (!client) throw new Error('AI service is unavailable');
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
-    const needState = await this.updateNeedState(session.needState, input.userMessage, history, input.signal);
+    const needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal);
     await this.conversations.updateNeedState(input.sessionId, needState);
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
@@ -2551,6 +2580,7 @@ export class AssistantService {
       knowledgePages: preliminaryKnowledgePages,
       conflicts: preliminaryConflicts,
       history,
+      historySummary: session.historySummary,
       baseQuery,
       signal: input.signal
     });
@@ -2694,10 +2724,13 @@ export class AssistantService {
     const context = {
       ...buildAssistantContext({
         needState,
+        historySummary: session.historySummary,
         products: productsForAnswer,
         knowledgePages,
         conflicts,
         messages: history
+      }, {
+        mode: answerNeedsFullCatalogContext ? 'expanded' : 'compact'
       }),
       productCardsShown: cards.map((card) => ({
         id: card.id,
@@ -2741,6 +2774,11 @@ export class AssistantService {
       factualVerificationPolicy,
       responseStyle
     };
+    const answerInputPayload = {
+      turnPlan: compactTurnPlanForAnswer(effectivePlan),
+      answerContext: context,
+      latestUserMessage: input.userMessage
+    };
 
     let answer = '';
     let completedResponse: unknown;
@@ -2764,7 +2802,7 @@ export class AssistantService {
       input: [
         {
           role: 'user',
-          content: `AI-план текущего хода:\n${JSON.stringify(effectivePlan, null, 2)}\n\nКонтекст для ответа:\n${JSON.stringify(context, null, 2)}\n\nПоследняя реплика покупателя: ${input.userMessage}`
+          content: yaml.dump(cleanEmpty(answerInputPayload))
         }
       ],
       stream: true,
@@ -2923,7 +2961,35 @@ export class AssistantService {
       }
     });
 
+    this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
+
     return { answer, needState, productCards: cards, usedWebSearch, leadRequested: purchasePlan.leadRequested, assistantMessageId: assistantMessage.id };
+  }
+
+  private async maybeSummarizeHistory(sessionId: string, history: Message[], existingSummary?: string | null) {
+    if (history.length < 6) return;
+    const client = createOpenAIClient();
+    if (!client) return;
+    try {
+      const messagesToSummarize = history.slice(0, -4);
+      if (!messagesToSummarize.length) return;
+      const response = await client.responses.create({
+        model: config.OPENAI_PLANNER_MODEL,
+        input: [
+          { role: 'system', content: 'Кратко опиши, что обсуждалось в этих сообщениях. Оставь только суть: что искали, что выбрали, какие условия важны. Если есть предыдущее резюме, объедини его с новыми сообщениями.' },
+          { role: 'user', content: yaml.dump(cleanEmpty({
+            previousSummary: existingSummary,
+            newMessagesToSummarize: compactHistoryForAI(messagesToSummarize, 10, 700)
+          })) }
+        ]
+      });
+      const summary = (response.output_text ?? '').trim();
+      if (summary) {
+        await this.conversations.updateHistorySummary(sessionId, summary);
+      }
+    } catch (e) {
+      console.warn('Background history summarization failed', safeError(e));
+    }
   }
 
   private async storeVerifiedWebFindings(input: {
@@ -2963,7 +3029,7 @@ export class AssistantService {
         },
         {
           role: 'user',
-          content: JSON.stringify({
+          content: yaml.dump(cleanEmpty({
             products: input.products.map((product) => ({
               id: product.id,
               name: product.name,
@@ -2971,7 +3037,7 @@ export class AssistantService {
             })),
             citations,
             answer: input.answer
-          })
+          }))
         }
       ],
       text: {

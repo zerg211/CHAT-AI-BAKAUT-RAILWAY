@@ -12,6 +12,7 @@ export interface ConversationSession {
   pageUrl?: string | null;
   userAgent?: string | null;
   needState: CustomerNeedState;
+  historySummary?: string | null;
   createdAt: string;
   updatedAt: string;
   lastHeartbeatAt: string;

@@ -1,15 +1,90 @@
 import type { CatalogPage, CustomerNeedState, DataConflict, Message, Product } from '../shared/types.js';
 
-const FINAL_CONTEXT_HISTORY_LIMIT = 12;
+const FINAL_CONTEXT_HISTORY_LIMIT = 4;
 const FINAL_CONTEXT_HISTORY_CONTENT_LIMIT = 700;
 const FINAL_CONTEXT_PRODUCT_DESCRIPTION_LIMIT = 900;
 const FINAL_CONTEXT_PAGE_SUMMARY_LIMIT = 600;
 const FINAL_CONTEXT_PAGE_CONTENT_LIMIT = 1200;
+const COMPACT_CONTEXT_HISTORY_LIMIT = 4;
+const COMPACT_CONTEXT_HISTORY_CONTENT_LIMIT = 260;
+const COMPACT_CONTEXT_PRODUCT_DESCRIPTION_LIMIT = 220;
+const COMPACT_CONTEXT_PAGE_SUMMARY_LIMIT = 260;
+const COMPACT_CONTEXT_PAGE_CONTENT_LIMIT = 0;
+
+type AssistantContextMode = 'compact' | 'expanded';
 
 function truncateText(value: string | null | undefined, maxLength: number) {
   const text = String(value ?? '').trim();
+  if (maxLength <= 0) return '';
   if (text.length <= maxLength) return text;
   return `${text.slice(0, maxLength).trim()}...`;
+}
+
+function compactNeedItems(items: CustomerNeedState[keyof Pick<CustomerNeedState, 'explicitNeeds'>], limit: number) {
+  return items.slice(0, limit).map((item) => ({
+    value: truncateText(item.value, 180),
+    confidence: Math.round(item.confidence * 100) / 100
+  }));
+}
+
+function compactNeedState(state: CustomerNeedState, mode: AssistantContextMode) {
+  const limit = mode === 'expanded' ? 5 : 3;
+  const activeSignals = Object.fromEntries(
+    Object.entries(state.featureSignals).filter(([, value]) => value >= 0.25)
+  );
+
+  return {
+    summary: truncateText(state.lastSummary, mode === 'expanded' ? 700 : 260),
+    explicit: compactNeedItems(state.explicitNeeds, limit),
+    implicit: compactNeedItems(state.implicitNeeds, mode === 'expanded' ? 4 : 2),
+    constraints: compactNeedItems(state.constraints, limit),
+    criteria: compactNeedItems(state.importantCriteria, limit),
+    facts: compactNeedItems(state.confirmedFacts, mode === 'expanded' ? 5 : 3),
+    uncertain: compactNeedItems(state.uncertainInferences, mode === 'expanded' ? 4 : 2),
+    contradictions: compactNeedItems(state.contradictions, mode === 'expanded' ? 4 : 2),
+    signals: activeSignals
+  };
+}
+
+function compactSpecs(specs: Record<string, unknown>, mode: AssistantContextMode) {
+  const maxItems = mode === 'expanded' ? 14 : 7;
+  const valueLimit = mode === 'expanded' ? 220 : 120;
+  const result: Record<string, string | number | boolean | null> = {};
+
+  for (const [key, rawValue] of Object.entries(specs ?? {})) {
+    if (Object.keys(result).length >= maxItems) break;
+    if (rawValue === undefined || rawValue === '') continue;
+    const normalizedKey = truncateText(key, 90);
+    if (!normalizedKey) continue;
+    if (rawValue === null || typeof rawValue === 'number' || typeof rawValue === 'boolean') {
+      result[normalizedKey] = rawValue;
+      continue;
+    }
+    const value = typeof rawValue === 'string' ? rawValue : JSON.stringify(rawValue);
+    const normalizedValue = truncateText(value, valueLimit);
+    if (normalizedValue) result[normalizedKey] = normalizedValue;
+  }
+
+  return result;
+}
+
+function compactProduct(product: Product, mode: AssistantContextMode) {
+  const descriptionLimit = mode === 'expanded'
+    ? FINAL_CONTEXT_PRODUCT_DESCRIPTION_LIMIT
+    : COMPACT_CONTEXT_PRODUCT_DESCRIPTION_LIMIT;
+  const description = truncateText(product.description, descriptionLimit);
+
+  return {
+    id: product.id,
+    name: product.name,
+    brand: product.brand,
+    category: product.category,
+    price: product.price,
+    currency: product.currency,
+    sourceUrl: mode === 'expanded' ? product.sourceUrl : undefined,
+    summary: description || undefined,
+    specs: compactSpecs(product.specs, mode)
+  };
 }
 
 export function buildSystemPrompt() {
@@ -139,37 +214,46 @@ selectedProductIds заполняй только id из preliminaryCatalogCandi
 
 export function buildAssistantContext(input: {
   needState: CustomerNeedState;
+  historySummary?: string | null;
   products: Product[];
   knowledgePages?: CatalogPage[];
   conflicts: DataConflict[];
   messages: Message[];
-}) {
-  const history = input.messages.slice(-FINAL_CONTEXT_HISTORY_LIMIT).map((message) => ({
+}, options: { mode?: AssistantContextMode } = {}) {
+  const mode = options.mode ?? 'expanded';
+  const historyLimit = mode === 'expanded' ? FINAL_CONTEXT_HISTORY_LIMIT : COMPACT_CONTEXT_HISTORY_LIMIT;
+  const historyContentLimit = mode === 'expanded'
+    ? FINAL_CONTEXT_HISTORY_CONTENT_LIMIT
+    : COMPACT_CONTEXT_HISTORY_CONTENT_LIMIT;
+  const pageSummaryLimit = mode === 'expanded'
+    ? FINAL_CONTEXT_PAGE_SUMMARY_LIMIT
+    : COMPACT_CONTEXT_PAGE_SUMMARY_LIMIT;
+  const pageContentLimit = mode === 'expanded'
+    ? FINAL_CONTEXT_PAGE_CONTENT_LIMIT
+    : COMPACT_CONTEXT_PAGE_CONTENT_LIMIT;
+  const history = input.messages.slice(-historyLimit).map((message) => ({
     role: message.role,
-    content: truncateText(message.content, FINAL_CONTEXT_HISTORY_CONTENT_LIMIT)
+    content: truncateText(message.content, historyContentLimit)
   }));
 
   return {
-    needState: input.needState,
-    catalogCandidates: input.products.map((product) => ({
-      id: product.id,
-      name: product.name,
-      brand: product.brand,
-      category: product.category,
-      price: product.price,
-      currency: product.currency,
-      sourceUrl: product.sourceUrl,
-      description: truncateText(product.description, FINAL_CONTEXT_PRODUCT_DESCRIPTION_LIMIT),
-      specs: product.specs
-    })),
+    contextMode: mode,
+    needSummary: compactNeedState(input.needState, mode),
+    historySummary: input.historySummary || undefined,
+    catalogCandidates: input.products.map((product) => compactProduct(product, mode)),
     knowledgePages: (input.knowledgePages ?? []).map((page) => ({
       title: page.title,
       pageType: page.pageType,
-      sourceUrl: page.sourceUrl,
-      summary: truncateText(page.summary, FINAL_CONTEXT_PAGE_SUMMARY_LIMIT),
-      contentExcerpt: truncateText(page.content, FINAL_CONTEXT_PAGE_CONTENT_LIMIT)
+      sourceUrl: mode === 'expanded' ? page.sourceUrl : undefined,
+      summary: truncateText(page.summary || page.content, pageSummaryLimit),
+      contentExcerpt: pageContentLimit ? truncateText(page.content, pageContentLimit) : undefined
     })),
-    openDataConflicts: input.conflicts,
+    openDataConflicts: input.conflicts.map((conflict) => ({
+      productId: conflict.productId,
+      attribute: conflict.attribute,
+      values: conflict.values,
+      status: conflict.status
+    })),
     conversationHistory: history
   };
 }

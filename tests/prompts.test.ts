@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, buildTurnPlannerPrompt } from '../src/ai/prompts.js';
+import { buildAssistantContext, buildSystemPrompt, buildTurnPlannerPrompt } from '../src/ai/prompts.js';
 
 describe('assistant prompt guardrails', () => {
   it('contains business restrictions without turning dialog into fixed scripts', () => {
@@ -29,5 +29,68 @@ describe('assistant prompt guardrails', () => {
     expect(prompt).toContain('не заменять цены расходников ценой самой техники');
     expect(prompt).toContain('dyadko.ru');
     expect(prompt).toContain('переводить зарубежные цены в рубли');
+  });
+
+  it('builds a compact final-answer context for low-token turns', () => {
+    const context = buildAssistantContext({
+      needState: {
+        explicitNeeds: [{ value: 'generator 5-6 kW', evidence: 'user', confidence: 0.9, updatedAt: 'now' }],
+        implicitNeeds: [],
+        constraints: [{ value: 'inverter enclosed budget', evidence: 'user', confidence: 0.8, updatedAt: 'now' }],
+        importantCriteria: [],
+        confirmedFacts: [],
+        uncertainInferences: [],
+        contradictions: [],
+        featureSignals: {
+          portable: 0,
+          homeUse: 0.8,
+          compact: 0.3,
+          lowNoise: 0.9,
+          coldStart: 0,
+          professionalDuty: 0,
+          budgetSensitive: 0.7
+        },
+        lastSummary: 'buyer needs a compact inverter enclosed generator'
+      },
+      products: [{
+        id: 'p1',
+        name: 'Test Generator',
+        brand: 'Test',
+        category: 'Generators',
+        price: 100000,
+        currency: 'RUB',
+        sourceUrl: 'https://example.test/product',
+        imageUrl: null,
+        description: 'x'.repeat(2000),
+        specs: Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`spec-${index}`, 'y'.repeat(200)]))
+      }],
+      knowledgePages: [{
+        id: 'k1',
+        title: 'Manual',
+        pageType: 'manual',
+        sourceUrl: 'https://example.test/manual',
+        summary: 's'.repeat(1000),
+        content: 'c'.repeat(2000),
+        raw: {},
+        createdAt: 'now',
+        updatedAt: 'now'
+      }],
+      conflicts: [],
+      messages: Array.from({ length: 8 }, (_, index) => ({
+        id: String(index),
+        sessionId: 's1',
+        role: index % 2 ? 'assistant' : 'user',
+        content: `message-${index} ${'z'.repeat(1000)}`,
+        metadata: {},
+        createdAt: 'now'
+      }))
+    }, { mode: 'compact' });
+
+    expect(context.contextMode).toBe('compact');
+    expect(context.conversationHistory).toHaveLength(4);
+    expect(context.catalogCandidates[0]?.summary?.length).toBeLessThanOrEqual(223);
+    expect(Object.keys(context.catalogCandidates[0]?.specs ?? {})).toHaveLength(7);
+    expect(context.knowledgePages[0]?.contentExcerpt).toBeUndefined();
+    expect(JSON.stringify(context)).not.toContain('example.test/product');
   });
 });
