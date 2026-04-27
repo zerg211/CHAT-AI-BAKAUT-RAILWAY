@@ -2379,7 +2379,7 @@ export class AssistantService {
             }
           }
         },
-        max_output_tokens: jsonOutputTokenLimit(config.OPENAI_NEED_MAX_OUTPUT_TOKENS)
+        max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_NEED_MAX_OUTPUT_TOKENS), 4000)
       }, signal ? { signal } : undefined);
       logOpenAIUsage('need_extraction', config.OPENAI_PLANNER_MODEL, response);
       const outputText = response.output_text ?? response.output?.[0]?.content?.[0]?.text;
@@ -2461,7 +2461,7 @@ export class AssistantService {
           schema: turnPlanSchema()
         }
       },
-      max_output_tokens: jsonOutputTokenLimit(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS)
+      max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS), 4000)
     };
 
     try {
