@@ -1,1 +1,1 @@
-ALTER TABLE conversation_sessions ADD COLUMN history_summary TEXT;
+ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS history_summary TEXT;
