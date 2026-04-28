@@ -201,10 +201,26 @@ export function buildTurnPlannerPrompt() {
     "maxPowerKwMax": number | null,
     "powerReasoning": string
   },
+  "selectionState": {
+    "currentProductClass": "generator" | "weldingGenerator" | "generatorOil" | "engineOil" | "generatorAccessory" | "plateAccessory" | "plate" | "rammer" | "roller" | "cutter" | "diamondBlade" | "diamondCore" | "trowel" | "unknown",
+    "targetProductClass": "generator" | "weldingGenerator" | "generatorOil" | "engineOil" | "generatorAccessory" | "plateAccessory" | "plate" | "rammer" | "roller" | "cutter" | "diamondBlade" | "diamondCore" | "trowel" | "unknown",
+    "compatibilityTargetProduct": string,
+    "mustHaveTraits": string[],
+    "niceToHaveTraits": string[],
+    "excludedClasses": string[],
+    "brandConstraint": string,
+    "exactModelConstraint": string,
+    "isAccessoryFollowUp": boolean,
+    "selectionConfidence": number,
+    "shouldShowCards": boolean,
+    "cardDisplayMode": "exact_matches" | "compatible_accessories" | "alternatives" | "preliminary" | "none"
+  },
   "needsWebSearch": boolean,
   "missingInformation": string[],
   "answerGuidance": string
 }
+
+selectionState заполняй как рабочее состояние подбора, а не как текст ответа. currentProductClass - что уже обсуждали; targetProductClass - что надо подобрать сейчас; compatibilityTargetProduct - модель, к которой подбирают расходник/аксессуар; mustHaveTraits - жесткие критерии; niceToHaveTraits - желательные признаки; brandConstraint/exactModelConstraint - только если покупатель сам ограничил бренд или модель; cardDisplayMode выбирает смысл карточек: exact_matches, compatible_accessories, alternatives, preliminary или none.
 
 requiredProductTraits заполняй по смыслу реплики и состояния диалога, а не только по точным словам. productRole отделяет основной товар от аксессуара: если покупатель просит "генератор в кожухе", "закрытый генератор", "тихий генератор" - это productIntent generator, productRole coreProduct, enclosure enclosed; если просит "кожух для генератора", "АВР для генератора", "фильтр/ремень/масло для генератора" - это generatorAccessory или generatorOil и productRole accessory/consumable. Если покупатель просит удобный запуск без ручного дергания, запуск с ключа/кнопки или аналогичную потребность - startType должен быть electric. Если это не требуется, ставь any или unknown, не выдумывай.
 productIntent выбирай по текущей потребности: weldingGenerator для сварочного генератора 2-в-1, generatorOil для масла именно к генератору, engineOil для 4-тактного моторного масла к виброплите/трамбовке/резчику/генератору, generatorAccessory для кожухов/фильтров/АВР/других расходников, plateAccessory для ковриков/накладок к виброплите, trowel для затирочных машин, diamondCore для алмазных коронок, diamondBlade для дисков, roller для виброкатков. По маслу определяй, подходит ли оно по типу двигателя, SAE вязкости и классу; если не хватает одного параметра - задай один точный вопрос, а не отправляй покупателя в паспорт. Если покупатель указал точный бренд или модель, не добивай selectedProductIds товарами других брендов; аналоги нужны только если покупатель просит аналоги.

@@ -302,6 +302,190 @@ describe('recommendation ranking', () => {
     expect(slice?.products.map((item) => item.id).sort()).toEqual(['p120', 'p160', 'p90']);
   });
 
+  it('builds a full catalog slice for generator power constraints, not only plate weights', async () => {
+    const message = 'need benzin generator 5-6 kw for dacha';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      product('plate', 'Plate compactor 120 kg', 120000, 'https://example.test/plate'),
+      product('gen55', 'Generator benzin Alpha 5.5 kw', 55000, 'https://example.test/generator-55'),
+      product('gen60', 'Generator benzin Bravo 6.0 kw', 65000, 'https://example.test/generator-60'),
+      product('gen90', 'Generator benzin Big 9.0 kw', 115000, 'https://example.test/generator-90')
+    ]) as never);
+
+    const slice = await assistant.findStructuredCatalogSlice(message, state, {
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'auto',
+      contextScope: 'activeNeed',
+      searchScope: 'focusedNeed',
+      catalogSearchQuery: message,
+      selectedProductIds: [],
+      requiredProductTraits: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'unknown',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        nominalPowerKwMin: 5,
+        nominalPowerKwMax: 6,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: 'explicit range'
+      },
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        compatibilityTargetProduct: '',
+        mustHaveTraits: ['5-6 kw'],
+        niceToHaveTraits: [],
+        excludedClasses: [],
+        brandConstraint: '',
+        exactModelConstraint: '',
+        isAccessoryFollowUp: false,
+        selectionConfidence: 0.9,
+        shouldShowCards: true,
+        cardDisplayMode: 'exact_matches'
+      },
+      needsWebSearch: false,
+      missingInformation: [],
+      answerGuidance: ''
+    } as any);
+
+    expect(slice?.source).toBe('full_catalog_slice');
+    expect(slice?.constraints.nominalPowerKwMin).toBe(5);
+    expect(slice?.constraints.nominalPowerKwMax).toBe(6);
+    expect(slice?.products.map((item) => item.id).sort()).toEqual(['gen55', 'gen60']);
+  });
+
+  it('builds a full catalog slice for diamond core diameter constraints', async () => {
+    const message = 'need diamond core drill 72 mm for concrete';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      product('core72', 'Diamond core drill 72 mm', 7000, 'https://example.test/core-72'),
+      product('core70', 'Diamond core drill 70 mm', 6800, 'https://example.test/core-70'),
+      product('core125', 'Diamond core drill 125 mm', 9500, 'https://example.test/core-125'),
+      product('blade72', 'Diamond blade 72 mm', 2500, 'https://example.test/blade-72')
+    ]) as never);
+
+    const slice = await assistant.findStructuredCatalogSlice(message, state, {
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'auto',
+      contextScope: 'activeNeed',
+      searchScope: 'focusedNeed',
+      catalogSearchQuery: message,
+      selectedProductIds: [],
+      requiredProductTraits: {
+        productIntent: 'diamondCore',
+        productRole: 'coreProduct',
+        fuel: 'unknown',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        nominalPowerKwMin: null,
+        nominalPowerKwMax: null,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: ''
+      },
+      selectionState: {
+        currentProductClass: 'diamondCore',
+        targetProductClass: 'diamondCore',
+        compatibilityTargetProduct: '',
+        mustHaveTraits: ['72 mm'],
+        niceToHaveTraits: [],
+        excludedClasses: [],
+        brandConstraint: '',
+        exactModelConstraint: '',
+        isAccessoryFollowUp: false,
+        selectionConfidence: 0.9,
+        shouldShowCards: true,
+        cardDisplayMode: 'exact_matches'
+      },
+      needsWebSearch: false,
+      missingInformation: [],
+      answerGuidance: ''
+    } as any);
+
+    expect(slice?.source).toBe('full_catalog_slice');
+    expect(slice?.constraints.diameterMmMin).toBe(70);
+    expect(slice?.constraints.diameterMmMax).toBe(74);
+    expect(slice?.products.map((item) => item.id).sort()).toEqual(['core70', 'core72']);
+  });
+
+  it('aligns cards with the concrete model named in the final answer', () => {
+    const message = 'need benzin generator 5-6 kw';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const products = [
+      product('a', 'Generator benzin Alpha 5.5 kw', 55000, 'https://example.test/a'),
+      product('b', 'Generator benzin Bravo 6.0 kw', 65000, 'https://example.test/b')
+    ];
+    const result = assistantTestHooks.enforceAnswerCardContract(
+      'Best option here is Generator benzin Bravo 6.0 kw.',
+      assistantTestHooks.cardsFromPlan([products[0]], state, message, {
+        action: 'recommend_products',
+        catalogSearchQuery: message,
+        selectedProductIds: [],
+        needsWebSearch: false,
+        missingInformation: [],
+        answerGuidance: ''
+      } as any),
+      products,
+      state,
+      message,
+      {
+        action: 'recommend_products',
+        answerMode: 'productRecommendation',
+        cardPolicy: 'showProducts',
+        followUpPolicy: 'auto',
+        contextScope: 'activeNeed',
+        searchScope: 'focusedNeed',
+        catalogSearchQuery: message,
+        selectedProductIds: [],
+        requiredProductTraits: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          fuel: 'unknown',
+          startType: 'unknown',
+          enclosure: 'unknown',
+          conventionalGenerator: null,
+          singlePhase220: null,
+          nominalPowerKwMin: 5,
+          nominalPowerKwMax: 6,
+          maxPowerKwMin: null,
+          maxPowerKwMax: null,
+          powerReasoning: ''
+        },
+        selectionState: {
+          currentProductClass: 'generator',
+          targetProductClass: 'generator',
+          compatibilityTargetProduct: '',
+          mustHaveTraits: [],
+          niceToHaveTraits: [],
+          excludedClasses: [],
+          brandConstraint: '',
+          exactModelConstraint: '',
+          isAccessoryFollowUp: false,
+          selectionConfidence: 0.9,
+          shouldShowCards: true,
+          cardDisplayMode: 'exact_matches'
+        },
+        needsWebSearch: false,
+        missingInformation: [],
+        answerGuidance: ''
+      } as any
+    );
+
+    expect(result.cards[0].id).toBe('b');
+    expect(result.diagnostics.addedCardIds).toEqual(['b']);
+    expect(result.diagnostics.firstCardAligned).toBe(true);
+  });
+
   it('keeps catalog availability questions out of current-lineup web-search routing', () => {
     const message = ru('\\u0410 \\u0447\\u0442\\u043e \\u0440\\u0430\\u0437\\u0432\\u0435 \\u043d\\u0435\\u0442 \\u043f\\u043b\\u0438\\u0442 BPS 1550 WACKER? \\u0418\\u043b\\u0438 \\u043d\\u0435\\u0442 LAT 100 \\u0438\\u043b\\u0438 LAT 80 \\u043e\\u0442 HUSQVARNA?');
     const plan = {

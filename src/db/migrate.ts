@@ -25,9 +25,23 @@ export async function runMigrations() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        filename text PRIMARY KEY,
+        applied_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
     for (const file of files) {
+      const applied = await client.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [file]);
+      if ((applied.rowCount ?? 0) > 0) continue;
       const sql = await fs.readFile(path.join(sqlDir, file), 'utf8');
       await client.query(sql);
+      await client.query(
+        `INSERT INTO schema_migrations(filename)
+         VALUES ($1)
+         ON CONFLICT (filename) DO NOTHING`,
+        [file]
+      );
     }
     await client.query('COMMIT');
   } catch (error) {

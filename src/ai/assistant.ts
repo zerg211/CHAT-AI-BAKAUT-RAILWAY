@@ -78,6 +78,28 @@ type SearchScope =
   | 'sameBrandOnly'
   | 'previousSelectionOnly';
 
+type CardDisplayMode =
+  | 'exact_matches'
+  | 'compatible_accessories'
+  | 'alternatives'
+  | 'preliminary'
+  | 'none';
+
+type SelectionState = {
+  currentProductClass: ProductIntent;
+  targetProductClass: ProductIntent;
+  compatibilityTargetProduct: string;
+  mustHaveTraits: string[];
+  niceToHaveTraits: string[];
+  excludedClasses: ProductIntent[];
+  brandConstraint: string;
+  exactModelConstraint: string;
+  isAccessoryFollowUp: boolean;
+  selectionConfidence: number;
+  shouldShowCards: boolean;
+  cardDisplayMode: CardDisplayMode;
+};
+
 type AssistantTurnPlan = {
   action: AssistantTurnAction;
   answerMode: AnswerMode;
@@ -88,6 +110,7 @@ type AssistantTurnPlan = {
   catalogSearchQuery: string;
   selectedProductIds: string[];
   requiredProductTraits: RequiredProductTraits;
+  selectionState: SelectionState;
   needsWebSearch: boolean;
   missingInformation: string[];
   answerGuidance: string;
@@ -156,7 +179,7 @@ type ProductFitProfile = {
 };
 
 type StructuredCatalogSlice = {
-  source: 'structured_constraints' | 'exact_model_lookup';
+  source: 'structured_constraints' | 'exact_model_lookup' | 'full_catalog_slice';
   products: Product[];
   totalMatched: number;
   visibleLimit: number;
@@ -164,6 +187,16 @@ type StructuredCatalogSlice = {
     productIntent: ProductIntent;
     weightKgMin?: number;
     weightKgMax?: number;
+    diameterMmMin?: number;
+    diameterMmMax?: number;
+    nominalPowerKwMin?: number;
+    nominalPowerKwMax?: number;
+    maxPowerKwMin?: number;
+    maxPowerKwMax?: number;
+    budgetMax?: number;
+    brandConstraint?: string;
+    exactModelConstraint?: string;
+    mustHaveTraits?: string[];
     exactModelTokens?: string[];
   };
   exactCatalogMatches?: Product[];
@@ -188,6 +221,13 @@ type CardSelectionDiagnostics = {
   rankedCount: number;
   fallbackSuppressed: boolean;
   fallbackReason?: string;
+};
+
+type CardContractDiagnostics = {
+  mentionedProductIds: string[];
+  addedCardIds: string[];
+  reordered: boolean;
+  firstCardAligned: boolean;
 };
 
 const MAX_PRODUCT_CARDS = 10;
@@ -353,6 +393,21 @@ function coerceSearchScope(value: unknown): SearchScope {
   return allowed.includes(value as SearchScope) ? value as SearchScope : 'focusedNeed';
 }
 
+function coerceCardDisplayMode(value: unknown): CardDisplayMode {
+  const allowed: CardDisplayMode[] = ['exact_matches', 'compatible_accessories', 'alternatives', 'preliminary', 'none'];
+  return allowed.includes(value as CardDisplayMode) ? value as CardDisplayMode : 'preliminary';
+}
+
+function coerceStringList(value: unknown, limit = 12) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean).slice(0, limit);
+}
+
+function coerceProductIntentList(value: unknown, limit = 12): ProductIntent[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(coerceProductIntent).filter((item) => item !== 'unknown').slice(0, limit);
+}
+
 function coerceNullableBoolean(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
 }
@@ -399,6 +454,47 @@ function coerceRequiredProductTraits(value: any): RequiredProductTraits {
   };
 }
 
+function emptySelectionState(intent: ProductIntent = 'unknown'): SelectionState {
+  return {
+    currentProductClass: intent,
+    targetProductClass: intent,
+    compatibilityTargetProduct: '',
+    mustHaveTraits: [],
+    niceToHaveTraits: [],
+    excludedClasses: [],
+    brandConstraint: '',
+    exactModelConstraint: '',
+    isAccessoryFollowUp: false,
+    selectionConfidence: intent === 'unknown' ? 0 : 0.45,
+    shouldShowCards: intent !== 'unknown',
+    cardDisplayMode: intent === 'unknown' ? 'none' : 'preliminary'
+  };
+}
+
+function coerceSelectionState(value: any, traits: RequiredProductTraits, fallbackIntent: ProductIntent): SelectionState {
+  const fallback = emptySelectionState(fallbackIntent);
+  if (!value || typeof value !== 'object') return fallback;
+  const targetProductClass = coerceProductIntent(value.targetProductClass);
+  const currentProductClass = coerceProductIntent(value.currentProductClass);
+  const confidence = Number(value.selectionConfidence);
+  return {
+    currentProductClass: currentProductClass === 'unknown' ? fallback.currentProductClass : currentProductClass,
+    targetProductClass: targetProductClass === 'unknown'
+      ? traits.productIntent !== 'unknown' ? traits.productIntent : fallback.targetProductClass
+      : targetProductClass,
+    compatibilityTargetProduct: String(value.compatibilityTargetProduct ?? '').trim().slice(0, 160),
+    mustHaveTraits: coerceStringList(value.mustHaveTraits, 16),
+    niceToHaveTraits: coerceStringList(value.niceToHaveTraits, 16),
+    excludedClasses: coerceProductIntentList(value.excludedClasses, 16),
+    brandConstraint: String(value.brandConstraint ?? '').trim().slice(0, 80),
+    exactModelConstraint: String(value.exactModelConstraint ?? '').trim().slice(0, 120),
+    isAccessoryFollowUp: Boolean(value.isAccessoryFollowUp) || traits.productRole === 'accessory' || traits.productRole === 'consumable',
+    selectionConfidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : fallback.selectionConfidence,
+    shouldShowCards: typeof value.shouldShowCards === 'boolean' ? value.shouldShowCards : fallback.shouldShowCards,
+    cardDisplayMode: coerceCardDisplayMode(value.cardDisplayMode)
+  };
+}
+
 function coerceTurnPlan(value: any, baseQuery: string, latestUserMessage = baseQuery): AssistantTurnPlan {
   const allowedActions: AssistantTurnAction[] = [
     'answer_question',
@@ -421,6 +517,7 @@ function coerceTurnPlan(value: any, baseQuery: string, latestUserMessage = baseQ
     ? latestUserMessage
     : value?.catalogSearchQuery ?? scopedFallbackQuery;
   const catalogSearchQuery = String(rawCatalogSearchQuery).trim() || scopedFallbackQuery;
+  const requiredProductTraits = coerceRequiredProductTraits(value?.requiredProductTraits);
 
   return {
     action,
@@ -431,7 +528,8 @@ function coerceTurnPlan(value: any, baseQuery: string, latestUserMessage = baseQ
     searchScope: coerceSearchScope(value?.searchScope),
     catalogSearchQuery: catalogSearchQuery.slice(0, 1200),
     selectedProductIds,
-    requiredProductTraits: coerceRequiredProductTraits(value?.requiredProductTraits),
+    requiredProductTraits,
+    selectionState: coerceSelectionState(value?.selectionState, requiredProductTraits, requiredProductTraits.productIntent),
     needsWebSearch: Boolean(value?.needsWebSearch),
     missingInformation,
     answerGuidance: String(value?.answerGuidance ?? '').trim().slice(0, 2000)
@@ -500,6 +598,22 @@ function fallbackTurnPlan(input: { userMessage: string; needState: CustomerNeedS
     catalogSearchQuery: input.baseQuery,
     selectedProductIds: [],
     requiredProductTraits: traits,
+    selectionState: {
+      ...emptySelectionState(profile.intent),
+      currentProductClass: profile.intent,
+      targetProductClass: profile.intent,
+      mustHaveTraits: [
+        profile.wantsGasoline ? 'gasoline' : '',
+        profile.wantsDiesel ? 'diesel' : '',
+        profile.wantsElectricStart ? 'electric_start' : '',
+        profile.wantsInverterGenerator ? 'inverter' : '',
+        profile.wantsEnclosedGenerator ? 'enclosed' : ''
+      ].filter(Boolean),
+      exactModelConstraint: profile.exactModelTokens[0] ?? '',
+      isAccessoryFollowUp: profile.accessoryRequested,
+      shouldShowCards: answerMode === 'productRecommendation',
+      cardDisplayMode: profile.accessoryRequested ? 'compatible_accessories' : 'preliminary'
+    },
     needsWebSearch: false,
     missingInformation: [],
     answerGuidance: 'Служебный планировщик не вернул валидный JSON. Ответь по текущей реплике и сохраненной потребности, без выдумывания фактов.'
@@ -723,6 +837,23 @@ function extractWeightKg(product: Product) {
   return match ? Number(match[1]) : undefined;
 }
 
+function extractDimensionMm(product: Product) {
+  for (const [key, value] of Object.entries(product.specs ?? {})) {
+    if (!/(?:\u0434\u0438\u0430\u043c\u0435\u0442\u0440|diameter|\u0434\u0438\u0441\u043a|\u043a\u0440\u0443\u0433|\u043a\u043e\u0440\u043e\u043d\u043a|\u0433\u043b\u0443\u0431\u0438\u043d|\u0434\u043b\u0438\u043d)/iu.test(key)) continue;
+    const parsed = parseLoosePositiveNumber(value);
+    if (parsed !== undefined && parsed >= 10 && parsed <= 2500) return parsed;
+  }
+  const text = [
+    product.name,
+    product.description,
+    JSON.stringify(product.specs ?? {})
+  ].join(' ');
+  const diameter = text.match(/(?:\u0434\u0438\u0430\u043c\u0435\u0442\u0440|diameter|[dD]\s*=?)\D{0,20}(\d{2,4})\s*(?:\u043c\u043c|mm)\b/iu);
+  if (diameter) return Number(diameter[1]);
+  const nearUnit = text.match(/\b(\d{2,4})\s*(?:\u043c\u043c|mm)\b/iu);
+  return nearUnit ? Number(nearUnit[1]) : undefined;
+}
+
 function extractPowerKw(product: Product) {
   const text = [
     product.name,
@@ -848,6 +979,41 @@ function productMatchesRequestedBrand(product: Product, requestedBrands: Set<str
   return [...requestedBrands].some((brand) => productText.includes(brand));
 }
 
+function productMatchesIntent(product: Product, intent: ProductIntent) {
+  if (intent === 'unknown') return true;
+  const flags = classifyProduct(product);
+  switch (intent) {
+    case 'generator':
+      return flags.isGenerator;
+    case 'weldingGenerator':
+      return flags.isWeldingGenerator;
+    case 'generatorOil':
+      return flags.isGeneratorOil;
+    case 'engineOil':
+      return flags.isEngineOil;
+    case 'generatorAccessory':
+      return flags.isGeneratorAccessory;
+    case 'plateAccessory':
+      return flags.isPlateAccessory;
+    case 'plate':
+      return flags.isPlate;
+    case 'rammer':
+      return flags.isRammer;
+    case 'roller':
+      return flags.isRoller;
+    case 'cutter':
+      return flags.isCutter;
+    case 'diamondBlade':
+      return flags.isDiamondBlade;
+    case 'diamondCore':
+      return flags.isDiamondCore;
+    case 'trowel':
+      return flags.isTrowel;
+    default:
+      return true;
+  }
+}
+
 function extractModelTokens(value: string) {
   const dashed = value.match(/[\p{L}\p{N}]+(?:[-/][\p{L}\p{N}]+)+/gu) ?? [];
   const compact = value.match(/\b(?=[\p{L}\p{N}]*\d)(?=[\p{L}\p{N}]*\p{L})[\p{L}\p{N}]{6,}\b/gu) ?? [];
@@ -887,6 +1053,22 @@ function parseWeightNeedRangeKg(text: string) {
     min: Math.max(0, Math.min(a, b) - (Number.isFinite(tolerance) ? tolerance : 0)),
     max: Math.max(a, b) + (Number.isFinite(tolerance) ? tolerance : 0)
   };
+}
+
+function parseDimensionNeedRangeMm(text: string) {
+  const normalized = text.replace(/\s+/g, ' ');
+  const range = normalized.match(/(\d{2,4})\s*(?:-|вЂ“|вЂ”|\/|\u0438\u043b\u0438|\u0434\u043e)\s*(\d{2,4})\s*(?:\u043c\u043c|mm)\b/iu);
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    if (Number.isFinite(a) && Number.isFinite(b)) return { min: Math.min(a, b), max: Math.max(a, b) };
+  }
+  const single = normalized.match(/(?:\u0434\u0438\u0430\u043c\u0435\u0442\u0440|diameter|[dD]\s*=?)?\D{0,20}\b(\d{2,4})\s*(?:\u043c\u043c|mm)\b/iu);
+  if (!single) return undefined;
+  const value = Number(single[1]);
+  if (!Number.isFinite(value)) return undefined;
+  const tolerance = value <= 120 ? 2 : value <= 450 ? 5 : 15;
+  return { min: Math.max(0, value - tolerance), max: value + tolerance };
 }
 
 function isCatalogAvailabilityQuestion(text: string) {
@@ -2037,10 +2219,16 @@ function mandatoryCatalogLineupAlternativeFacts(userMessage: string, products: P
 }
 
 function deterministicCatalogSliceAnswer(slice: StructuredCatalogSlice, cards: ProductCard[]) {
-  if (slice.source === 'structured_constraints') {
-    const range = slice.constraints.weightKgMin && slice.constraints.weightKgMax
-      ? `${slice.constraints.weightKgMin}-${slice.constraints.weightKgMax} кг`
-      : 'заданным критериям';
+  if (slice.source === 'structured_constraints' || slice.source === 'full_catalog_slice') {
+    const constraints = [
+      slice.constraints.weightKgMin && slice.constraints.weightKgMax ? `${slice.constraints.weightKgMin}-${slice.constraints.weightKgMax} кг` : '',
+      slice.constraints.diameterMmMin && slice.constraints.diameterMmMax ? `${slice.constraints.diameterMmMin}-${slice.constraints.diameterMmMax} мм` : '',
+      slice.constraints.nominalPowerKwMin && slice.constraints.nominalPowerKwMax ? `${slice.constraints.nominalPowerKwMin}-${slice.constraints.nominalPowerKwMax} кВт` : '',
+      slice.constraints.maxPowerKwMin && slice.constraints.maxPowerKwMax ? `${slice.constraints.maxPowerKwMin}-${slice.constraints.maxPowerKwMax} кВт максимум` : '',
+      slice.constraints.budgetMax ? `до ${rubPrice(slice.constraints.budgetMax)}` : '',
+      slice.constraints.brandConstraint || ''
+    ].filter(Boolean);
+    const range = constraints.length ? constraints.join(', ') : 'заданным критериям';
     const visible = cards.slice(0, slice.totalMatched > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : MAX_PRODUCT_CARDS);
     const names = visible.map((card) => {
       const weight = parseLoosePositiveNumber(card.specs?.['масса, кг'] ?? card.specs?.['Масса, кг']) ?? undefined;
@@ -2106,7 +2294,7 @@ function mergeProductsById(products: Product[], extraProducts: Product[]) {
 
 function isCoreEquipment(product: Product) {
   const flags = classifyProduct(product);
-  return flags.isGenerator || flags.isWeldingGenerator || flags.isPlate || flags.isRammer || flags.isRoller || flags.isCutter || flags.isTrowel;
+  return flags.isGenerator || flags.isWeldingGenerator || flags.isPlate || flags.isRammer || flags.isRoller || flags.isCutter || flags.isDiamondBlade || flags.isDiamondCore || flags.isTrowel;
 }
 
 function isOilCard(product: Product) {
@@ -2122,6 +2310,91 @@ function productMentionedInText(product: Product, text: string) {
   const brand = displayProductBrand(product) || product.brand;
   const compactBrand = compactModelText(brand ?? '');
   return compactBrand.length >= 3 && compactText.includes(compactBrand);
+}
+
+function strongProductMentionIndex(product: Product, text: string) {
+  const compactText = compactModelText(text);
+  if (!compactText) return -1;
+  const compactName = compactModelText(product.name);
+  if (compactName.length >= 12) {
+    const index = compactText.indexOf(compactName);
+    if (index >= 0) return index;
+  }
+  const modelTokens = extractModelTokens(product.name)
+    .map((token) => compactModelText(token))
+    .filter((token) => token.length >= 4);
+  for (const token of modelTokens) {
+    const index = compactText.indexOf(token);
+    if (index >= 0) return index;
+  }
+  const nameTokens = String(product.name)
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((token) => compactModelText(token))
+    .filter((token) => token.length >= 4 && /\d/.test(token));
+  for (const token of nameTokens) {
+    const index = compactText.indexOf(token);
+    if (index >= 0) return index;
+  }
+  return -1;
+}
+
+function enforceAnswerCardContract(
+  answer: string,
+  cards: ProductCard[],
+  products: Product[],
+  state: CustomerNeedState,
+  userMessage: string,
+  plan: AssistantTurnPlan,
+  cardLimit = MAX_PRODUCT_CARDS
+) {
+  const emptyDiagnostics: CardContractDiagnostics = {
+    mentionedProductIds: [],
+    addedCardIds: [],
+    reordered: false,
+    firstCardAligned: true
+  };
+  if (!answer.trim()) return { cards, diagnostics: emptyDiagnostics };
+  if (isLeadPlan(plan)) return { cards, diagnostics: emptyDiagnostics };
+  if (plan.cardPolicy === 'textOnly' && plan.action !== 'recommend_products') return { cards, diagnostics: emptyDiagnostics };
+
+  const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+  const byId = new Map<string, Product>();
+  for (const card of cards) byId.set(card.id, productFromCard(card));
+  for (const product of products) byId.set(product.id, product);
+
+  const mentioned = [...byId.values()]
+    .map((product) => ({ product, index: strongProductMentionIndex(product, answer) }))
+    .filter((item) => item.index >= 0)
+    .filter((item) => {
+      const score = recommendationScore(item.product, state, userMessage, profile);
+      return isCardWorthy(item.product, profile, score);
+    })
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.product);
+
+  if (!mentioned.length) return { cards, diagnostics: emptyDiagnostics };
+
+  const currentIds = new Set(cards.map((card) => card.id));
+  const mentionedIds = new Set(mentioned.map((product) => product.id));
+  const baseProducts = cards.map(productFromCard);
+  const ordered = [
+    ...mentioned,
+    ...baseProducts.filter((product) => !mentionedIds.has(product.id))
+  ];
+  const unique = mergeProductsById([], ordered).slice(0, cardLimit);
+  const nextCards = productCards(unique, state, userMessage, profile, cardLimit);
+  const addedCardIds = mentioned.filter((product) => !currentIds.has(product.id)).map((product) => product.id);
+  const reordered = cards.map((card) => card.id).join('|') !== nextCards.map((card) => card.id).join('|');
+
+  return {
+    cards: nextCards,
+    diagnostics: {
+      mentionedProductIds: [...mentionedIds],
+      addedCardIds,
+      reordered,
+      firstCardAligned: nextCards[0]?.id === mentioned[0]?.id
+    }
+  };
 }
 
 function selectedPurchaseProductIds(products: Product[], history: Message[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
@@ -2183,6 +2456,11 @@ function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], hist
       contextScope: 'previousSelection' as ContextScope,
       searchScope: 'previousSelectionOnly' as SearchScope,
       selectedProductIds: selectedProductIds.length ? selectedProductIds : plan.selectedProductIds,
+      selectionState: {
+        ...plan.selectionState,
+        shouldShowCards: true,
+        cardDisplayMode: 'exact_matches' as CardDisplayMode
+      },
       answerGuidance: [
         plan.answerGuidance,
         'Покупатель перешел к оформлению. Не говори, что заявка уже создана или что ты уже взял товар в заявку. Коротко подтверди комплект по карточкам, попроси оставить имя и телефон в форме. Не продолжай подбор альтернатив, если покупатель их не просил.'
@@ -2687,46 +2965,127 @@ export class AssistantService {
       stateText(state, '')
     ].filter(Boolean).join(' ');
     const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
-    const exactTokens = expandModelTokenAliases(extractModelTokens(userMessage));
+    const hasPlateText = /(?:\u0432\u0438\u0431\u0440\u043e\s*\u043f\u043b\u0438\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|plate\s*compactor)/iu.test(activeText);
+    const selectionState = plan.selectionState ?? emptySelectionState(plan.requiredProductTraits.productIntent);
+    const targetIntent = selectionState.targetProductClass !== 'unknown'
+      ? selectionState.targetProductClass
+      : plan.requiredProductTraits.productIntent !== 'unknown'
+        ? plan.requiredProductTraits.productIntent
+        : profile.intent === 'unknown' && hasPlateText
+          ? 'plate'
+          : profile.intent;
+    const exactModelConstraint = selectionState.exactModelConstraint.trim();
+    const exactTokens = expandModelTokenAliases(extractModelTokens([userMessage, exactModelConstraint].filter(Boolean).join(' ')));
     const catalogOnlyExactLookup = exactTokens.length > 0 && isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage);
-    const exactCatalogMatches = catalogOnlyExactLookup
+    const exactCatalogMatches = exactTokens.length && (catalogOnlyExactLookup || exactModelConstraint)
       ? await this.products.searchProductsByModelTokens(exactTokens, 80).catch(() => [])
       : [];
-    const hasPlateText = /(?:\u0432\u0438\u0431\u0440\u043e\s*\u043f\u043b\u0438\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|plate\s*compactor)/iu.test(activeText);
-    const productIntent: ProductIntent = profile.intent === 'unknown' && hasPlateText ? 'plate' : profile.intent;
-    const weightRange = productIntent === 'plate' ? parseWeightNeedRangeKg(activeText) : undefined;
+    const productIntent: ProductIntent = targetIntent;
+    const sliceProfile: ProductFitProfile = productIntent === profile.intent ? profile : { ...profile, intent: productIntent };
+    const weightRange = ['plate', 'rammer', 'roller', 'trowel'].includes(productIntent)
+      ? parseWeightNeedRangeKg(activeText)
+      : undefined;
+    const dimensionRange = ['diamondCore', 'diamondBlade', 'cutter', 'trowel'].includes(productIntent)
+      ? parseDimensionNeedRangeMm(activeText)
+      : undefined;
+    const powerRange = ['generator', 'weldingGenerator'].includes(productIntent)
+      ? (sliceProfile.generatorPower ?? (sliceProfile.desiredPowerRange
+          ? { nominalMin: sliceProfile.desiredPowerRange.min, nominalMax: sliceProfile.desiredPowerRange.max, source: 'explicit_text' as const }
+          : undefined))
+      : undefined;
+    const budgetMax = sliceProfile.budgetMax;
     const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
+    const hasStructuredCriteria = Boolean(
+      weightRange ||
+      dimensionRange ||
+      powerRange ||
+      budgetMax ||
+      selectionState.brandConstraint.trim() ||
+      selectionState.mustHaveTraits.length ||
+      exactModelConstraint
+    );
+    const shouldBuildFullSlice = canListProducts &&
+      productIntent !== 'unknown' &&
+      !isLeadPlan(plan) &&
+      !shouldUseCurrentLineupStyle(userMessage, plan) &&
+      (hasStructuredCriteria ||
+        (plan.action === 'recommend_products' &&
+          plan.cardPolicy !== 'textOnly' &&
+          (selectionState.shouldShowCards || selectionState.selectionConfidence >= 0.55 || plan.selectedProductIds.length > 0)));
 
-    if (!weightRange && !catalogOnlyExactLookup) return null;
+    if (!shouldBuildFullSlice && !catalogOnlyExactLookup) return null;
     if (!canListProducts && !exactCatalogMatches.length) return null;
 
     const allProducts = canListProducts
       ? await this.products.listProducts(5000).catch(() => [])
       : [];
-    const matchedByConstraints = weightRange
+    const explicitBrand = normalizeBrandKey(selectionState.brandConstraint);
+    const requestedBrandSet = requestedBrandKeysFromProducts(allProducts, [activeText, selectionState.brandConstraint].join(' '));
+    if (explicitBrand.length >= 3) requestedBrandSet.add(explicitBrand);
+    const hasRequestedBrand = requestedBrandSet.size > 0;
+    const powerMatches = (product: Product) => {
+      if (!powerRange) return true;
+      const power = extractGeneratorPower(product);
+      const nominal = power.nominalKw;
+      const max = power.maxKw;
+      if ((powerRange.nominalMin || powerRange.nominalMax) && nominal === undefined) return false;
+      if ((powerRange.maxMin || powerRange.maxMax) && max === undefined) return false;
+      if (powerRange.nominalMin && nominal !== undefined && nominal < powerRange.nominalMin - 0.4) return false;
+      if (powerRange.nominalMax && nominal !== undefined && nominal > powerRange.nominalMax + (powerRange.source === 'estimated_load' ? 0.7 : 0.8)) return false;
+      if (powerRange.maxMin && max !== undefined && max < powerRange.maxMin - 0.5) return false;
+      if (powerRange.maxMax && max !== undefined && max > powerRange.maxMax + (powerRange.source === 'estimated_load' ? 0.8 : 1.0)) return false;
+      return true;
+    };
+    const rankDistance = (product: Product) => {
+      let distance = 0;
+      if (weightRange) {
+        const weight = extractWeightKg(product);
+        const center = (weightRange.min + weightRange.max) / 2;
+        distance += weight === undefined ? 10_000 : Math.abs(weight - center);
+      }
+      if (dimensionRange) {
+        const diameter = extractDimensionMm(product);
+        const center = (dimensionRange.min + dimensionRange.max) / 2;
+        distance += diameter === undefined ? 10_000 : Math.abs(diameter - center) * 0.25;
+      }
+      if (powerRange) {
+        const nominal = extractGeneratorPower(product).nominalKw;
+        const min = powerRange.nominalMin ?? powerRange.maxMin ?? 0;
+        const max = powerRange.nominalMax ?? powerRange.maxMax ?? min;
+        const center = (min + max) / 2;
+        distance += nominal === undefined ? 10_000 : Math.abs(nominal - center) * 8;
+      }
+      return distance;
+    };
+    const matchedByConstraints = shouldBuildFullSlice
       ? allProducts
-          .filter((product) =>
-            classifyProduct(product).isPlate ||
-            /(?:\u0432\u0438\u0431\u0440\u043e\s*\u043f\u043b\u0438\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|plate\s*compactor)/iu.test(productFullText(product))
-          )
-          .map((product) => ({ product, weightKg: extractWeightKg(product) }))
-          .filter((item): item is { product: Product; weightKg: number } =>
-            item.weightKg !== undefined &&
-            item.weightKg >= weightRange.min &&
-            item.weightKg <= weightRange.max
-          )
-          .sort((a, b) => {
-            const center = (weightRange.min + weightRange.max) / 2;
-            const distance = Math.abs(a.weightKg - center) - Math.abs(b.weightKg - center);
-            if (distance !== 0) return distance;
-            return Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
+          .filter((product) => productMatchesIntent(product, productIntent))
+          .filter((product) => !hasRequestedBrand || productMatchesRequestedBrand(product, requestedBrandSet))
+          .filter((product) => !exactModelConstraint || productHasExactModel(product, { ...sliceProfile, exactModelTokens: exactTokens }))
+          .filter((product) => productFitPenalty(product, sliceProfile) >= 0 || (exactModelCanBypassFit(sliceProfile) && productHasExactModel(product, { ...sliceProfile, exactModelTokens: exactTokens })))
+          .filter((product) => {
+            if (!weightRange) return true;
+            const weight = extractWeightKg(product);
+            return weight !== undefined && weight >= weightRange.min && weight <= weightRange.max;
           })
-          .map((item) => item.product)
+          .filter((product) => {
+            if (!dimensionRange) return true;
+            const dimension = extractDimensionMm(product);
+            return dimension !== undefined && dimension >= dimensionRange.min && dimension <= dimensionRange.max;
+          })
+          .filter(powerMatches)
+          .sort((a, b) => {
+            const distance = rankDistance(a) - rankDistance(b);
+            if (distance !== 0) return distance;
+            const score = recommendationScore(b, state, userMessage, sliceProfile) - recommendationScore(a, state, userMessage, sliceProfile);
+            if (score !== 0) return score;
+            return Number(a.price ?? Number.MAX_SAFE_INTEGER) - Number(b.price ?? Number.MAX_SAFE_INTEGER);
+          })
       : [];
 
     if (matchedByConstraints.length) {
       return {
-        source: 'structured_constraints',
+        source: productIntent === 'plate' && weightRange ? 'structured_constraints' : 'full_catalog_slice',
         products: matchedByConstraints,
         totalMatched: matchedByConstraints.length,
         visibleLimit: matchedByConstraints.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : matchedByConstraints.length,
@@ -2734,6 +3093,16 @@ export class AssistantService {
           productIntent,
           weightKgMin: weightRange?.min,
           weightKgMax: weightRange?.max,
+          diameterMmMin: dimensionRange?.min,
+          diameterMmMax: dimensionRange?.max,
+          nominalPowerKwMin: powerRange?.nominalMin,
+          nominalPowerKwMax: powerRange?.nominalMax,
+          maxPowerKwMin: powerRange?.maxMin,
+          maxPowerKwMax: powerRange?.maxMax,
+          budgetMax,
+          brandConstraint: selectionState.brandConstraint || undefined,
+          exactModelConstraint: exactModelConstraint || undefined,
+          mustHaveTraits: selectionState.mustHaveTraits.length ? selectionState.mustHaveTraits : undefined,
           exactModelTokens: exactTokens.length ? exactTokens : undefined
         },
         exactCatalogMatches
@@ -2822,7 +3191,7 @@ export class AssistantService {
     if (structuredCatalogSlice?.products.length) {
       for (const product of structuredCatalogSlice.products) byId.set(product.id, product);
       for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
-      if (!isLeadPlan(effectivePlan) && structuredCatalogSlice.source === 'structured_constraints') {
+      if (!isLeadPlan(effectivePlan) && (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = {
           ...effectivePlan,
           action: 'recommend_products',
@@ -2877,7 +3246,7 @@ export class AssistantService {
     const cardSelection = selectCardsFromPlan(productsForCardSelection, needState, input.userMessage, effectivePlan, {
       cardLimit: structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS
     });
-    const cards = cardSelection.cards;
+    let cards = cardSelection.cards;
     const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
       ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
       : null;
@@ -3199,6 +3568,16 @@ export class AssistantService {
     const usedWebSearch = responseUsedWebSearch(completedResponse);
     const rawAnswer = answer;
     answer = sanitizeVisibleAnswer(answer, effectivePlan);
+    const cardContract = enforceAnswerCardContract(
+      answer,
+      cards,
+      productsForCardSelection,
+      needState,
+      input.userMessage,
+      effectivePlan,
+      structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS
+    );
+    cards = cardContract.cards;
     if (answer) await input.onDelta?.(answer);
     if (usedWebSearch && completedResponse) {
       await this.storeVerifiedWebFindings({
@@ -3227,6 +3606,7 @@ export class AssistantService {
         internalSources: extractUrlCitations(completedResponse).slice(0, 12),
         turnPlan: effectivePlan,
         cardSelection: cardSelection.diagnostics,
+        cardContract: cardContract.diagnostics,
         structuredCatalogSlice: structuredCatalogSlice
           ? {
               source: structuredCatalogSlice.source,
@@ -3504,6 +3884,99 @@ function turnPlanSchema() {
           'powerReasoning'
         ]
       },
+      selectionState: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          currentProductClass: {
+            type: 'string',
+            enum: [
+              'generator',
+              'weldingGenerator',
+              'generatorOil',
+              'engineOil',
+              'generatorAccessory',
+              'plateAccessory',
+              'plate',
+              'rammer',
+              'roller',
+              'cutter',
+              'diamondBlade',
+              'diamondCore',
+              'trowel',
+              'unknown'
+            ]
+          },
+          targetProductClass: {
+            type: 'string',
+            enum: [
+              'generator',
+              'weldingGenerator',
+              'generatorOil',
+              'engineOil',
+              'generatorAccessory',
+              'plateAccessory',
+              'plate',
+              'rammer',
+              'roller',
+              'cutter',
+              'diamondBlade',
+              'diamondCore',
+              'trowel',
+              'unknown'
+            ]
+          },
+          compatibilityTargetProduct: { type: 'string' },
+          mustHaveTraits: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+          niceToHaveTraits: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+          excludedClasses: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: [
+                'generator',
+                'weldingGenerator',
+                'generatorOil',
+                'engineOil',
+                'generatorAccessory',
+                'plateAccessory',
+                'plate',
+                'rammer',
+                'roller',
+                'cutter',
+                'diamondBlade',
+                'diamondCore',
+                'trowel',
+                'unknown'
+              ]
+            },
+            maxItems: 16
+          },
+          brandConstraint: { type: 'string' },
+          exactModelConstraint: { type: 'string' },
+          isAccessoryFollowUp: { type: 'boolean' },
+          selectionConfidence: { type: 'number', minimum: 0, maximum: 1 },
+          shouldShowCards: { type: 'boolean' },
+          cardDisplayMode: {
+            type: 'string',
+            enum: ['exact_matches', 'compatible_accessories', 'alternatives', 'preliminary', 'none']
+          }
+        },
+        required: [
+          'currentProductClass',
+          'targetProductClass',
+          'compatibilityTargetProduct',
+          'mustHaveTraits',
+          'niceToHaveTraits',
+          'excludedClasses',
+          'brandConstraint',
+          'exactModelConstraint',
+          'isAccessoryFollowUp',
+          'selectionConfidence',
+          'shouldShowCards',
+          'cardDisplayMode'
+        ]
+      },
       needsWebSearch: { type: 'boolean' },
       missingInformation: {
         type: 'array',
@@ -3521,6 +3994,7 @@ function turnPlanSchema() {
       'catalogSearchQuery',
       'selectedProductIds',
       'requiredProductTraits',
+      'selectionState',
       'needsWebSearch',
       'missingInformation',
       'answerGuidance'
@@ -3594,6 +4068,7 @@ function extractUrlCitations(value: unknown, depth = 0): WebCitation[] {
 export const assistantTestHooks = {
   buildProductFitProfile,
   selectCardsFromPlan,
+  enforceAnswerCardContract,
   cardsFromPlan,
   sanitizeVisibleAnswer,
   recommendationScore,
@@ -3610,6 +4085,7 @@ export const assistantTestHooks = {
   buildFactualVerificationPolicy,
   webSearchContextSize,
   parseWeightNeedRangeKg,
+  parseDimensionNeedRangeMm,
   isCatalogAvailabilityQuestion,
   isManufacturingStatusQuestion
 };
