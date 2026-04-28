@@ -329,13 +329,15 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
   if (!response.ok) throw new Error('feedback failed');
 }
 
-const INITIAL_VISIBLE_CARDS = 4;
+const INITIAL_VISIBLE_CARDS = 7;
+const SHOW_ALL_CARD_COUNT = 10;
 
 function ProductCards({ cards }: { cards: ProductCard[] }) {
   const [expanded, setExpanded] = useState(false);
   if (!cards.length) return null;
 
-  const visibleCards = expanded ? cards : cards.slice(0, INITIAL_VISIBLE_CARDS);
+  const initialCount = cards.length <= SHOW_ALL_CARD_COUNT ? cards.length : INITIAL_VISIBLE_CARDS;
+  const visibleCards = expanded ? cards : cards.slice(0, initialCount);
   const hiddenCount = Math.max(0, cards.length - visibleCards.length);
 
   return (
@@ -366,7 +368,7 @@ function ProductCards({ cards }: { cards: ProductCard[] }) {
           </article>
         ))}
       </div>
-      {cards.length > INITIAL_VISIBLE_CARDS ? (
+      {cards.length > initialCount ? (
         <button className="product-more" type="button" onClick={() => setExpanded((value) => !value)}>
           {expanded ? 'Свернуть' : `Показать еще ${hiddenCount}`}
         </button>

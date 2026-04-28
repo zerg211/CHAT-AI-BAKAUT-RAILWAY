@@ -52,6 +52,10 @@ class FakeProducts {
   async vectorSearch() {
     return [];
   }
+
+  async listProducts() {
+    return this.products;
+  }
 }
 
 async function rank(message: string, products: ReturnType<typeof product>[]) {
@@ -251,6 +255,87 @@ describe('recommendation ranking', () => {
     } as any);
 
     expect(cards.map((card) => card.id)).toEqual(['within']);
+  });
+
+  it('builds a full structured plate slice from an explicit weight range', async () => {
+    const message = ru('\\u041d\\u0443\\u0436\\u043d\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u043d\\u0435\\u0431\\u043e\\u043b\\u044c\\u0448\\u0430\\u044f 100-150\\u043a\\u0433, \\u043f\\u043b\\u044e\\u0441 \\u043c\\u0438\\u043d\\u0443\\u0441 10\\u043a\\u0433');
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      productWithSpecs('p90', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 90 \\u043a\\u0433'), 100000, 'https://example.test/p90', { [ru('\\u043c\\u0430\\u0441\\u0441\\u0430, \\u043a\\u0433')]: '90' }),
+      productWithSpecs('p120', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 120 \\u043a\\u0433'), 120000, 'https://example.test/p120', { [ru('\\u043c\\u0430\\u0441\\u0441\\u0430, \\u043a\\u0433')]: '120' }),
+      productWithSpecs('p160', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 160 \\u043a\\u0433'), 160000, 'https://example.test/p160', { [ru('\\u043c\\u0430\\u0441\\u0441\\u0430, \\u043a\\u0433')]: '160' }),
+      productWithSpecs('p70', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 70 \\u043a\\u0433'), 70000, 'https://example.test/p70', { [ru('\\u043c\\u0430\\u0441\\u0441\\u0430, \\u043a\\u0433')]: '70' }),
+      productWithSpecs('rammer', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u0442\\u0440\\u0430\\u043c\\u0431\\u043e\\u0432\\u043a\\u0430 120 \\u043a\\u0433'), 130000, 'https://example.test/rammer', { [ru('\\u043c\\u0430\\u0441\\u0441\\u0430, \\u043a\\u0433')]: '120' })
+    ]) as never);
+
+    const slice = await assistant.findStructuredCatalogSlice(message, state, {
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'auto',
+      contextScope: 'activeNeed',
+      searchScope: 'focusedNeed',
+      catalogSearchQuery: message,
+      selectedProductIds: [],
+      requiredProductTraits: {
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        fuel: 'unknown',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        nominalPowerKwMin: null,
+        nominalPowerKwMax: null,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: ''
+      },
+      needsWebSearch: false,
+      missingInformation: [],
+      answerGuidance: ''
+    } as any);
+
+    expect(slice?.source).toBe('structured_constraints');
+    expect(slice?.constraints.weightKgMin).toBe(90);
+    expect(slice?.constraints.weightKgMax).toBe(160);
+    expect(slice?.products.map((item) => item.id).sort()).toEqual(['p120', 'p160', 'p90']);
+  });
+
+  it('keeps catalog availability questions out of current-lineup web-search routing', () => {
+    const message = ru('\\u0410 \\u0447\\u0442\\u043e \\u0440\\u0430\\u0437\\u0432\\u0435 \\u043d\\u0435\\u0442 \\u043f\\u043b\\u0438\\u0442 BPS 1550 WACKER? \\u0418\\u043b\\u0438 \\u043d\\u0435\\u0442 LAT 100 \\u0438\\u043b\\u0438 LAT 80 \\u043e\\u0442 HUSQVARNA?');
+    const plan = {
+      action: 'answer_question',
+      answerMode: 'currentLineup',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'answerNowNoDeferredOffer',
+      contextScope: 'activeNeed',
+      searchScope: 'focusedNeed',
+      catalogSearchQuery: message,
+      selectedProductIds: [],
+      requiredProductTraits: {
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        fuel: 'unknown',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        nominalPowerKwMin: null,
+        nominalPowerKwMax: null,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: ''
+      },
+      needsWebSearch: true,
+      missingInformation: [],
+      answerGuidance: ''
+    } as any;
+
+    expect(assistantTestHooks.isCatalogAvailabilityQuestion(message)).toBe(true);
+    expect(assistantTestHooks.isManufacturingStatusQuestion(message)).toBe(false);
+    expect(assistantTestHooks.shouldUseCurrentLineupStyle(message, plan)).toBe(false);
+    expect(assistantTestHooks.shouldUseWebSearch(message, plan)).toBe(false);
   });
 
   it('treats electric start as a required need, not only a ranking bonus', () => {

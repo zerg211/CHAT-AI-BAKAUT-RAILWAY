@@ -155,6 +155,20 @@ type ProductFitProfile = {
   exactModelTokens: string[];
 };
 
+type StructuredCatalogSlice = {
+  source: 'structured_constraints' | 'exact_model_lookup';
+  products: Product[];
+  totalMatched: number;
+  visibleLimit: number;
+  constraints: {
+    productIntent: ProductIntent;
+    weightKgMin?: number;
+    weightKgMax?: number;
+    exactModelTokens?: string[];
+  };
+  exactCatalogMatches?: Product[];
+};
+
 type CardSelectionDiagnostics = {
   profile: {
     intent: ProductIntent;
@@ -177,6 +191,8 @@ type CardSelectionDiagnostics = {
 };
 
 const MAX_PRODUCT_CARDS = 10;
+const FULL_SLICE_PRODUCT_CARDS = 40;
+const LARGE_SLICE_VISIBLE_CARDS = 7;
 const PLANNER_CANDIDATE_LIMIT = 16;
 const MIN_JSON_OUTPUT_TOKENS = 2400;
 const PLANNER_HISTORY_LIMIT = 8;
@@ -684,7 +700,20 @@ function stateText(state: CustomerNeedState, userMessage: string) {
   ].join(' ');
 }
 
+function parseLoosePositiveNumber(value: unknown) {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : undefined;
+  const match = String(value ?? '').replace(/\s+/g, ' ').match(/(\d+(?:[,.]\d+)?)/);
+  if (!match) return undefined;
+  const parsed = Number(match[1].replace(',', '.'));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function extractWeightKg(product: Product) {
+  for (const [key, value] of Object.entries(product.specs ?? {})) {
+    if (!/(?:\u043c\u0430\u0441\u0441|\u0432\u0435\u0441|weight)/iu.test(key)) continue;
+    const parsed = parseLoosePositiveNumber(value);
+    if (parsed !== undefined) return parsed;
+  }
   const text = [
     product.name,
     product.description,
@@ -825,6 +854,47 @@ function extractModelTokens(value: string) {
   const shortModel = value.match(/\b(?=[\p{L}\p{N}\s\/-]{4,12}\b)(?=[\p{L}\p{N}\s\/-]*\d{2,})(?=[\p{L}\p{N}\s\/-]*\p{L})\p{L}{1,4}\s*[-/]?\s*\d{2,4}[\p{L}\p{N}]{0,3}\b/gu) ?? [];
   const spaced = value.match(/\b[\p{L}]{2,}\s+\d{3,}[\p{L}\p{N}]*\b/gu) ?? [];
   return [...new Set([...dashed, ...compact, ...shortModel, ...spaced].filter((token) => /\d/.test(token) && /\p{L}/u.test(token) && compactModelText(token).length >= 4))];
+}
+
+function expandModelTokenAliases(tokens: string[]) {
+  const expanded = new Set(tokens);
+  for (const token of tokens) {
+    const compact = compactModelText(token);
+    const lat = compact.match(/^lat(\d{2,4})$/i);
+    if (lat) {
+      expanded.add(`LF ${lat[1]} LAT`);
+      expanded.add(`LF ${lat[1]}`);
+    }
+    const lf = compact.match(/^lf(\d{2,4})lat?$/i) ?? compact.match(/^lf(\d{2,4})$/i);
+    if (lf) {
+      expanded.add(`LAT ${lf[1]}`);
+      expanded.add(`LF ${lf[1]} LAT`);
+    }
+  }
+  return [...expanded];
+}
+
+function parseWeightNeedRangeKg(text: string) {
+  const normalized = text.replace(/\s+/g, ' ');
+  const range = normalized.match(/(\d{2,4})\s*(?:-|–|—|\u0434\u043e)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu);
+  if (!range) return undefined;
+  const a = Number(range[1]);
+  const b = Number(range[2]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined;
+  const toleranceMatch = normalized.match(/(?:±|\+\/-|\u043f\u043b\u044e\u0441\s+\u043c\u0438\u043d\u0443\u0441)\s*(\d{1,3})\s*(?:\u043a\u0433|kg)?/iu);
+  const tolerance = toleranceMatch ? Number(toleranceMatch[1]) : 0;
+  return {
+    min: Math.max(0, Math.min(a, b) - (Number.isFinite(tolerance) ? tolerance : 0)),
+    max: Math.max(a, b) + (Number.isFinite(tolerance) ? tolerance : 0)
+  };
+}
+
+function isCatalogAvailabilityQuestion(text: string) {
+  return /(?:\u0440\u0430\u0437\u0432\u0435|\u0435\u0441\u0442\u044c\s+\u043b\u0438|\u0435\u0441\u0442\u044c\s+[^?!.]{0,40}\s+\u0432\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433|\u043d\u0435\u0442\s+(?:\u043b\u0438\s+)?|\u0443\s+\u0432\u0430\u0441|\u0432\s+\u043d\u0430\u0448\u0435\u043c\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435)/iu.test(text);
+}
+
+function isManufacturingStatusQuestion(text: string) {
+  return /(?:\u0432\u044b\u043f\u0443\u0441\u043a|\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434|\u0441\u043d\u044f(?:\u0442|\u043b)|\u0437\u0430\u0432\u043e\u0434|\u0442\u0435\u043a\u0443\u0449(?:\u0430\u044f|\u0435\u0439|\u0443\u044e)?\s+\u043b\u0438\u043d\u0435\u0439\u043a|current\s+lineup|discontinued|still\s+(?:made|produced))/iu.test(text);
 }
 
 function parseDesiredPowerRange(text: string) {
@@ -1391,10 +1461,10 @@ function recommendationScore(product: Product, state: CustomerNeedState, userMes
   return score;
 }
 
-function productCards(products: Product[], state: CustomerNeedState, userMessage = '', profile = buildProductFitProfile(state, userMessage)): ProductCard[] {
+function productCards(products: Product[], state: CustomerNeedState, userMessage = '', profile = buildProductFitProfile(state, userMessage), limit = MAX_PRODUCT_CARDS): ProductCard[] {
   const criteria: string[] = [];
 
-  return products.slice(0, MAX_PRODUCT_CARDS).map((product) => ({
+  return products.slice(0, limit).map((product) => ({
     id: product.id,
     name: product.name,
     brand: displayProductBrand(product),
@@ -1428,12 +1498,12 @@ function productBrandKey(product: Product) {
   return String(product.brand || nameBrand || product.id).trim().toLowerCase();
 }
 
-function diversifyRankedProducts(items: Array<{ product: Product; score: number }>) {
+function diversifyRankedProducts(items: Array<{ product: Product; score: number }>, limit = MAX_PRODUCT_CARDS) {
   const remaining = [...items];
   const result: Product[] = [];
   const usedBrands = new Set<string>();
 
-  while (remaining.length && result.length < MAX_PRODUCT_CARDS) {
+  while (remaining.length && result.length < limit) {
     let pickIndex = 0;
     if (result.length < 4) {
       const bestScore = remaining[0].score;
@@ -1603,12 +1673,14 @@ function fallbackDetectCurrentLineupQuestion(text: string) {
 }
 
 function shouldUseCurrentLineupStyle(userMessage: string, plan?: AssistantTurnPlan) {
+  if (isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage)) return false;
   if (plan?.answerMode === 'currentLineup') return true;
   if (plan?.answerMode && plan.answerMode !== 'unknown') return false;
   return fallbackDetectCurrentLineupQuestion(userMessage) && !fallbackDetectOwnershipCostQuestion(userMessage);
 }
 
 function shouldUseWebSearch(userMessage: string, plan: AssistantTurnPlan) {
+  const catalogOnly = isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage);
   const planText = [
     plan.action,
     plan.catalogSearchQuery,
@@ -1616,10 +1688,10 @@ function shouldUseWebSearch(userMessage: string, plan: AssistantTurnPlan) {
     plan.missingInformation.join(' ')
   ].join(' ');
   const fallbackAllowed = plan.answerMode === 'unknown';
-  return plan.needsWebSearch ||
+  return (!catalogOnly && (plan.needsWebSearch ||
     plan.action === 'verify_with_web' ||
+    plan.answerMode === 'currentLineup')) ||
     plan.answerMode === 'serviceCostComparison' ||
-    plan.answerMode === 'currentLineup' ||
     (fallbackAllowed && fallbackDetectOwnershipCostQuestion(`${userMessage} ${planText}`));
 }
 
@@ -1964,6 +2036,37 @@ function mandatoryCatalogLineupAlternativeFacts(userMessage: string, products: P
   return facts.join(' ');
 }
 
+function deterministicCatalogSliceAnswer(slice: StructuredCatalogSlice, cards: ProductCard[]) {
+  if (slice.source === 'structured_constraints') {
+    const range = slice.constraints.weightKgMin && slice.constraints.weightKgMax
+      ? `${slice.constraints.weightKgMin}-${slice.constraints.weightKgMax} кг`
+      : 'заданным критериям';
+    const visible = cards.slice(0, slice.totalMatched > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : MAX_PRODUCT_CARDS);
+    const names = visible.map((card) => {
+      const weight = parseLoosePositiveNumber(card.specs?.['масса, кг'] ?? card.specs?.['Масса, кг']) ?? undefined;
+      return `${card.name}${weight ? ` (${weight} кг)` : ''}${card.price ? ` - ${rubPrice(card.price)}` : ''}`;
+    });
+    const intro = `В каталоге по диапазону ${range} нашлось ${slice.totalMatched} подходящ${slice.totalMatched === 1 ? 'ая позиция' : 'их позиций'}.`;
+    const list = names.length ? `Показываю ${names.length}: ${names.join('; ')}.` : '';
+    const tail = slice.totalMatched > MAX_PRODUCT_CARDS
+      ? 'Остальные подходящие варианты оставляю за кнопкой "Показать еще". Чтобы сузить выбор, уточните: нужна прямоходная плита для небольших работ или реверсивная для более плотного грунта и объема?'
+      : 'Чтобы точнее выбрать из них, уточните: чаще будете работать по песку/щебню или по асфальту?';
+    return [intro, list, tail].filter(Boolean).join('\n\n');
+  }
+
+  const exact = (slice.exactCatalogMatches ?? slice.products).slice(0, 10);
+  if (exact.length) {
+    const lines = exact.map((product) => {
+      const kind = isCoreEquipment(product) ? 'товар' : 'позиция/расходник';
+      const weight = extractWeightKg(product);
+      return `${product.name}${weight ? ` (${weight} кг)` : ''}${product.price ? ` - ${rubPrice(product.price)}` : ''}: ${kind}`;
+    });
+    return `Проверил по каталогу: по указанным моделям нашлись такие позиции.\n\n${lines.join('; ')}.\n\nЕсли это расходник, он подтверждает привязку к модели, но не заменяет карточку самой плиты.`;
+  }
+
+  return '';
+}
+
 function productFromCard(card: ProductCard): Product {
   return {
     id: card.id,
@@ -2088,7 +2191,8 @@ function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], hist
   };
 }
 
-function selectCardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
+function selectCardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan, options: { cardLimit?: number } = {}) {
+  const cardLimit = options.cardLimit ?? MAX_PRODUCT_CARDS;
   const baseProfile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
   const requestedBrandSet = ['generatorOil', 'engineOil', 'generatorAccessory', 'plateAccessory'].includes(baseProfile.intent)
     ? new Set<string>()
@@ -2125,7 +2229,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     .filter((item) => matchesRequestedBrand(item.product))
     .filter((item) => isCardWorthy(item.product, profile, item.score))
     .sort((a, b) => b.score - a.score);
-  const ranked = diversifyRankedProducts(rankedItems);
+  const ranked = diversifyRankedProducts(rankedItems, cardLimit);
   const selectedCards = selected
     .filter((product) => matchesRequestedBrand(product))
     .filter((product) => leadRequested || currentNeedAllowsProduct(product));
@@ -2167,9 +2271,9 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
           ...(shouldAppendRanked ? ranked.filter((product) => !selectedIds.has(product.id)) : [])
         ];
     const combined = !leadRequested && shouldAppendRanked
-      ? diversifyRankedProducts(combinedRaw.map((product) => ({ product, score: rankingScore(product) })).sort((a, b) => b.score - a.score))
+      ? diversifyRankedProducts(combinedRaw.map((product) => ({ product, score: rankingScore(product) })).sort((a, b) => b.score - a.score), cardLimit)
       : combinedRaw;
-    const cards = productCards(combined, state, userMessage, profile);
+    const cards = productCards(combined, state, userMessage, profile, cardLimit);
     return {
       cards,
       diagnostics: cardDiagnostics(
@@ -2189,7 +2293,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     .filter((item) => productHasExactModel(item.product, profile) && isCardWorthy(item.product, profile, item.score))
     .map((item) => item.product);
   if (exactMatches.length && plan.action !== 'ask_clarifying_question' && plan.searchScope !== 'broadenAlternatives') {
-    const cards = productCards(exactMatches, state, userMessage, profile);
+    const cards = productCards(exactMatches, state, userMessage, profile, cardLimit);
     return {
       cards,
       diagnostics: cardDiagnostics(profile, selected.length, selectedRejectedCount, ranked.length, false)
@@ -2203,7 +2307,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     };
   }
 
-  const cards = productCards(ranked, state, userMessage, profile);
+  const cards = productCards(ranked, state, userMessage, profile, cardLimit);
   return {
     cards,
     diagnostics: cardDiagnostics(
@@ -2576,6 +2680,85 @@ export class AssistantService {
       .slice(0, 12);
   }
 
+  async findStructuredCatalogSlice(userMessage: string, state: CustomerNeedState, plan: AssistantTurnPlan): Promise<StructuredCatalogSlice | null> {
+    const activeText = [
+      userMessage,
+      plan.catalogSearchQuery,
+      stateText(state, '')
+    ].filter(Boolean).join(' ');
+    const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+    const exactTokens = expandModelTokenAliases(extractModelTokens(userMessage));
+    const catalogOnlyExactLookup = exactTokens.length > 0 && isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage);
+    const exactCatalogMatches = catalogOnlyExactLookup
+      ? await this.products.searchProductsByModelTokens(exactTokens, 80).catch(() => [])
+      : [];
+    const hasPlateText = /(?:\u0432\u0438\u0431\u0440\u043e\s*\u043f\u043b\u0438\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|plate\s*compactor)/iu.test(activeText);
+    const productIntent: ProductIntent = profile.intent === 'unknown' && hasPlateText ? 'plate' : profile.intent;
+    const weightRange = productIntent === 'plate' ? parseWeightNeedRangeKg(activeText) : undefined;
+    const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
+
+    if (!weightRange && !catalogOnlyExactLookup) return null;
+    if (!canListProducts && !exactCatalogMatches.length) return null;
+
+    const allProducts = canListProducts
+      ? await this.products.listProducts(5000).catch(() => [])
+      : [];
+    const matchedByConstraints = weightRange
+      ? allProducts
+          .filter((product) =>
+            classifyProduct(product).isPlate ||
+            /(?:\u0432\u0438\u0431\u0440\u043e\s*\u043f\u043b\u0438\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|plate\s*compactor)/iu.test(productFullText(product))
+          )
+          .map((product) => ({ product, weightKg: extractWeightKg(product) }))
+          .filter((item): item is { product: Product; weightKg: number } =>
+            item.weightKg !== undefined &&
+            item.weightKg >= weightRange.min &&
+            item.weightKg <= weightRange.max
+          )
+          .sort((a, b) => {
+            const center = (weightRange.min + weightRange.max) / 2;
+            const distance = Math.abs(a.weightKg - center) - Math.abs(b.weightKg - center);
+            if (distance !== 0) return distance;
+            return Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
+          })
+          .map((item) => item.product)
+      : [];
+
+    if (matchedByConstraints.length) {
+      return {
+        source: 'structured_constraints',
+        products: matchedByConstraints,
+        totalMatched: matchedByConstraints.length,
+        visibleLimit: matchedByConstraints.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : matchedByConstraints.length,
+        constraints: {
+          productIntent,
+          weightKgMin: weightRange?.min,
+          weightKgMax: weightRange?.max,
+          exactModelTokens: exactTokens.length ? exactTokens : undefined
+        },
+        exactCatalogMatches
+      };
+    }
+
+    if (exactCatalogMatches.length) {
+      return {
+        source: 'exact_model_lookup',
+        products: exactCatalogMatches,
+        totalMatched: exactCatalogMatches.length,
+        visibleLimit: exactCatalogMatches.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : exactCatalogMatches.length,
+        constraints: {
+          productIntent,
+          weightKgMin: weightRange?.min,
+          weightKgMax: weightRange?.max,
+          exactModelTokens: exactTokens
+        },
+        exactCatalogMatches
+      };
+    }
+
+    return null;
+  }
+
   async generateAnswer(input: GenerateAnswerInput): Promise<ChatResponsePayload> {
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
@@ -2634,7 +2817,42 @@ export class AssistantService {
     }
     let allCandidates = [...byId.values()];
     const purchasePlan = purchasePlanIfNeeded(plan, allCandidates, history, needState, input.userMessage);
-    const effectivePlan = purchasePlan.plan;
+    let effectivePlan = purchasePlan.plan;
+    const structuredCatalogSlice = await this.findStructuredCatalogSlice(input.userMessage, needState, effectivePlan);
+    if (structuredCatalogSlice?.products.length) {
+      for (const product of structuredCatalogSlice.products) byId.set(product.id, product);
+      for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
+      if (!isLeadPlan(effectivePlan) && structuredCatalogSlice.source === 'structured_constraints') {
+        effectivePlan = {
+          ...effectivePlan,
+          action: 'recommend_products',
+          answerMode: 'productRecommendation',
+          cardPolicy: 'showProducts',
+          followUpPolicy: structuredCatalogSlice.totalMatched > MAX_PRODUCT_CARDS ? 'askClarifyingQuestion' : 'auto',
+          needsWebSearch: false,
+          answerGuidance: [
+            effectivePlan.answerGuidance,
+            'Use structuredCatalogSlice as the complete authoritative catalog slice for the current hard constraints. If totalMatched is 1-10, cover the whole slice. If totalMatched is above 10, show the visible cards, mention that more matching products are behind show-more, and ask one narrowing question.'
+          ].filter(Boolean).join('\n')
+        };
+      }
+      if (!isLeadPlan(effectivePlan) && structuredCatalogSlice.source === 'exact_model_lookup') {
+        const hasCoreExact = structuredCatalogSlice.products.some((product) => isCoreEquipment(product));
+        effectivePlan = {
+          ...effectivePlan,
+          action: 'answer_question',
+          answerMode: 'short',
+          cardPolicy: hasCoreExact ? 'showProducts' : 'textOnly',
+          followUpPolicy: 'answerNowNoDeferredOffer',
+          needsWebSearch: false,
+          answerGuidance: [
+            effectivePlan.answerGuidance,
+            'The buyer asked whether named models exist in the catalog. Answer from exactCatalogMatches first. Explain whether each found item is a core product or only an accessory/consumable, and compare found core products against the current hard constraints.'
+          ].filter(Boolean).join('\n')
+        };
+      }
+      allCandidates = [...byId.values()];
+    }
     const currentLineupStyle = shouldUseCurrentLineupStyle(input.userMessage, effectivePlan);
     const catalogLineupAlternatives = currentLineupStyle
       ? await this.findCatalogLineupAlternatives(input.userMessage, needState, allCandidates)
@@ -2642,15 +2860,23 @@ export class AssistantService {
     for (const product of catalogLineupAlternatives) byId.set(product.id, product);
     allCandidates = [...byId.values()];
     const selectedCandidateIds = new Set(effectivePlan.selectedProductIds);
+    const candidatePool = structuredCatalogSlice?.products.length
+      ? mergeProductsById(structuredCatalogSlice.products, allCandidates)
+      : allCandidates;
     const candidates = [
-      ...allCandidates.filter((product) => selectedCandidateIds.has(product.id)),
-      ...allCandidates.filter((product) => !selectedCandidateIds.has(product.id))
+      ...candidatePool.filter((product) => selectedCandidateIds.has(product.id)),
+      ...candidatePool.filter((product) => !selectedCandidateIds.has(product.id))
     ].slice(0, PLANNER_CANDIDATE_LIMIT);
     const knowledgePages = plan.catalogSearchQuery !== baseQuery
       ? await this.findKnowledgePages(input.userMessage, needState, plan.catalogSearchQuery, input.signal)
       : preliminaryKnowledgePages;
     const conflicts = await this.products.getOpenConflictsForProducts(candidates.map((product) => product.id));
-    const cardSelection = selectCardsFromPlan(candidates, needState, input.userMessage, effectivePlan);
+    const productsForCardSelection = structuredCatalogSlice?.products.length
+      ? structuredCatalogSlice.products
+      : candidates;
+    const cardSelection = selectCardsFromPlan(productsForCardSelection, needState, input.userMessage, effectivePlan, {
+      cardLimit: structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS
+    });
     const cards = cardSelection.cards;
     const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
       ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
@@ -2760,19 +2986,35 @@ export class AssistantService {
         price: card.price,
         reasons: card.reasons.slice(0, 2)
       })),
-      productCardsVisibleFirst: cards.slice(0, 4).map((card) => ({
+      productCardsVisibleFirst: cards.slice(0, LARGE_SLICE_VISIBLE_CARDS).map((card) => ({
         id: card.id,
         name: card.name,
         category: card.category,
         price: card.price,
         reasons: card.reasons.slice(0, 2)
       })),
-      productCardsBehindShowMore: cards.slice(4).map((card) => ({
+      productCardsBehindShowMore: cards.slice(LARGE_SLICE_VISIBLE_CARDS).map((card) => ({
         id: card.id,
         name: card.name,
         category: card.category,
         price: card.price
       })),
+      structuredCatalogSlice: structuredCatalogSlice
+        ? {
+            source: structuredCatalogSlice.source,
+            totalMatched: structuredCatalogSlice.totalMatched,
+            visibleLimit: structuredCatalogSlice.visibleLimit,
+            constraints: structuredCatalogSlice.constraints,
+            exactCatalogMatches: (structuredCatalogSlice.exactCatalogMatches ?? []).slice(0, 20).map((product) => ({
+              id: product.id,
+              name: product.name,
+              category: product.category,
+              price: product.price,
+              weightKg: extractWeightKg(product),
+              isCoreProduct: isCoreEquipment(product)
+            }))
+          }
+        : null,
       cardSelectionDiagnostics: cardSelection.diagnostics,
       leadRequested: purchasePlan.leadRequested,
       selectedBundleForLead: purchasePlan.leadRequested
@@ -2940,6 +3182,12 @@ export class AssistantService {
     }
 
     if (!answer.trim()) {
+      if (structuredCatalogSlice) {
+        answer = deterministicCatalogSliceAnswer(structuredCatalogSlice, cards);
+      }
+    }
+
+    if (!answer.trim()) {
       const catalogFacts = typeof context.mandatoryCatalogLineupAlternativeFacts === 'string'
         ? context.mandatoryCatalogLineupAlternativeFacts.trim()
         : '';
@@ -2978,7 +3226,16 @@ export class AssistantService {
         searchScope: effectivePlan.searchScope,
         internalSources: extractUrlCitations(completedResponse).slice(0, 12),
         turnPlan: effectivePlan,
-        cardSelection: cardSelection.diagnostics
+        cardSelection: cardSelection.diagnostics,
+        structuredCatalogSlice: structuredCatalogSlice
+          ? {
+              source: structuredCatalogSlice.source,
+              totalMatched: structuredCatalogSlice.totalMatched,
+              visibleLimit: structuredCatalogSlice.visibleLimit,
+              constraints: structuredCatalogSlice.constraints,
+              exactCatalogMatchCount: structuredCatalogSlice.exactCatalogMatches?.length ?? 0
+            }
+          : null
       }
     });
 
@@ -3351,5 +3608,8 @@ export const assistantTestHooks = {
   shouldUseDeepReasoningForAnswer,
   resolveReasoningProfile,
   buildFactualVerificationPolicy,
-  webSearchContextSize
+  webSearchContextSize,
+  parseWeightNeedRangeKg,
+  isCatalogAvailabilityQuestion,
+  isManufacturingStatusQuestion
 };
