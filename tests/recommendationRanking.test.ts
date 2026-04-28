@@ -418,6 +418,59 @@ describe('recommendation ranking', () => {
     expect(slice?.products.map((item) => item.id).sort()).toEqual(['core70', 'core72']);
   });
 
+  it('does not treat LF 80 L as an exact LF 80 LAT match', async () => {
+    const message = 'Есть ли в каталоге виброплита Husqvarna LF 80 LAT?';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      product('lf80l', 'Виброплита прямоходная бензиновая Husqvarna LF 80 L (84 кг)', 251000, 'https://example.test/lf_80_l/'),
+      product('lf80lat', 'Виброплита прямоходная бензиновая Husqvarna LF 80 LAT (95 кг) 9678550-02', 255000, 'https://example.test/lf_80_lat/')
+    ]) as never);
+
+    const slice = await assistant.findStructuredCatalogSlice(message, state, {
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'auto',
+      contextScope: 'activeNeed',
+      searchScope: 'focusedNeed',
+      catalogSearchQuery: message,
+      selectedProductIds: [],
+      requiredProductTraits: {
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        fuel: 'unknown',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        nominalPowerKwMin: null,
+        nominalPowerKwMax: null,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: ''
+      },
+      selectionState: {
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        compatibilityTargetProduct: '',
+        mustHaveTraits: ['LF 80 LAT'],
+        niceToHaveTraits: [],
+        excludedClasses: [],
+        brandConstraint: 'Husqvarna',
+        exactModelConstraint: 'LF 80 LAT',
+        isAccessoryFollowUp: false,
+        selectionConfidence: 0.95,
+        shouldShowCards: true,
+        cardDisplayMode: 'exact_matches'
+      },
+      needsWebSearch: false,
+      missingInformation: [],
+      answerGuidance: ''
+    } as any);
+
+    expect(slice?.products.map((item) => item.id)).toEqual(['lf80lat']);
+  });
+
   it('aligns cards with the concrete model named in the final answer', () => {
     const message = 'need benzin generator 5-6 kw';
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));

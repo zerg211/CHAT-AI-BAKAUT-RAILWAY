@@ -1237,6 +1237,42 @@ function productHasExactModel(product: Product, profile: ProductFitProfile) {
   return profile.exactModelTokens.some((token) => compact.includes(compactModelText(token)));
 }
 
+function strictExactModelTokens(value: string) {
+  const tokens = extractModelTokens(value);
+  const strict = new Set<string>();
+  for (const token of tokens) {
+    const compact = compactModelText(token);
+    if (!compact) continue;
+    strict.add(token);
+    const lat = compact.match(/^lat(\d{2,4})$/i);
+    if (lat) strict.add(`LF ${lat[1]} LAT`);
+    const lfLat = compact.match(/^lf(\d{2,4})lat$/i);
+    if (lfLat) strict.add(`LF ${lfLat[1]} LAT`);
+  }
+  return [...strict];
+}
+
+function productMatchesExactModelConstraint(product: Product, exactModelConstraint: string, fallbackTokens: string[]) {
+  const productCompact = compactModelText(productFullText(product));
+  const compactConstraint = compactModelText(exactModelConstraint);
+  const latConstraint = compactConstraint.match(/^lat(\d{2,4})$/i);
+  if (latConstraint) {
+    const number = latConstraint[1];
+    return productCompact.includes(`lat${number}`) || productCompact.includes(`lf${number}lat`);
+  }
+  const lfLatConstraint = compactConstraint.match(/^lf(\d{2,4})lat$/i);
+  if (lfLatConstraint) return productCompact.includes(`lf${lfLatConstraint[1]}lat`);
+  if (/^[a-zа-я]+\d{2,4}[a-zа-я]+$/iu.test(compactConstraint)) return productCompact.includes(compactConstraint);
+
+  const constraintTokens = strictExactModelTokens(exactModelConstraint);
+  const tokens = constraintTokens.length ? constraintTokens : fallbackTokens;
+  if (!tokens.length) return true;
+  return tokens.some((token) => {
+    const compact = compactModelText(token);
+    return compact.length >= 4 && productCompact.includes(compact);
+  });
+}
+
 function classifyProduct(product: Product) {
   const text = productFullText(product);
   const reliableStartText = [product.name, product.category, JSON.stringify(product.specs ?? {})]
@@ -3076,7 +3112,7 @@ export class AssistantService {
       ? allProducts
           .filter((product) => productMatchesIntent(product, productIntent))
           .filter((product) => !hasRequestedBrand || productMatchesRequestedBrand(product, requestedBrandSet))
-          .filter((product) => !exactModelConstraint || productHasExactModel(product, { ...sliceProfile, exactModelTokens: exactTokens }))
+          .filter((product) => !exactModelConstraint || productMatchesExactModelConstraint(product, exactModelConstraint, exactTokens))
           .filter((product) => productFitPenalty(product, sliceProfile) >= 0 || (exactModelCanBypassFit(sliceProfile) && productHasExactModel(product, { ...sliceProfile, exactModelTokens: exactTokens })))
           .filter((product) => {
             if (!weightRange) return true;
