@@ -2690,6 +2690,21 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
   return cleaned.trim();
 }
 
+function ensureLargeSliceShowMoreNote(answer: string, slice: StructuredCatalogSlice | null | undefined, cards: ProductCard[]) {
+  if (!slice || slice.totalMatched <= MAX_PRODUCT_CARDS || cards.length <= LARGE_SLICE_VISIBLE_CARDS) return answer;
+  if (/(?:\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c\s+\u0435\u0449|\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c\s+\u0435\u0449\u0435|show\s*more|\u043e\u0441\u0442\u0430\u043b\u044c\u043d)/iu.test(answer)) return answer;
+  const visible = Math.min(slice.visibleLimit, LARGE_SLICE_VISIBLE_CARDS, cards.length);
+  const note = `Показываю первые ${visible} карточек, остальные подходящие варианты будут в "Показать еще".`;
+  const paragraphs = answer.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  if (!paragraphs.length) return note;
+  const last = paragraphs[paragraphs.length - 1] ?? '';
+  if (/[?？]\s*$/.test(last) && paragraphs.length > 1) {
+    paragraphs.splice(paragraphs.length - 1, 0, note);
+    return paragraphs.join('\n\n');
+  }
+  return `${answer.trim()}\n\n${note}`;
+}
+
 export class AssistantService {
   constructor(
     private readonly conversations = new ConversationRepository(),
@@ -3568,6 +3583,7 @@ export class AssistantService {
     const usedWebSearch = responseUsedWebSearch(completedResponse);
     const rawAnswer = answer;
     answer = sanitizeVisibleAnswer(answer, effectivePlan);
+    answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards);
     const cardContract = enforceAnswerCardContract(
       answer,
       cards,
@@ -4071,6 +4087,7 @@ export const assistantTestHooks = {
   enforceAnswerCardContract,
   cardsFromPlan,
   sanitizeVisibleAnswer,
+  ensureLargeSliceShowMoreNote,
   recommendationScore,
   supplementalCatalogQueries,
   productFitPenalty,

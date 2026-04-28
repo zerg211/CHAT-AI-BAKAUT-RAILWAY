@@ -486,6 +486,30 @@ describe('recommendation ranking', () => {
     expect(result.diagnostics.firstCardAligned).toBe(true);
   });
 
+  it('adds a show-more note for large structured slices when the answer omits it', () => {
+    const cards = Array.from({ length: 12 }, (_, index) => ({
+      id: `p${index}`,
+      name: `Plate ${index}`,
+      category: 'Plate compactors',
+      price: 100000 + index,
+      reasons: []
+    }));
+    const answer = assistantTestHooks.ensureLargeSliceShowMoreNote(
+      'Есть варианты в нужном весе.\n\nУточните, нужна прямоходная или реверсивная?',
+      {
+        source: 'structured_constraints',
+        products: [],
+        totalMatched: 12,
+        visibleLimit: 7,
+        constraints: { productIntent: 'plate' }
+      } as any,
+      cards as any
+    );
+
+    expect(answer).toContain('Показать еще');
+    expect(answer.endsWith('Уточните, нужна прямоходная или реверсивная?')).toBe(true);
+  });
+
   it('keeps catalog availability questions out of current-lineup web-search routing', () => {
     const message = ru('\\u0410 \\u0447\\u0442\\u043e \\u0440\\u0430\\u0437\\u0432\\u0435 \\u043d\\u0435\\u0442 \\u043f\\u043b\\u0438\\u0442 BPS 1550 WACKER? \\u0418\\u043b\\u0438 \\u043d\\u0435\\u0442 LAT 100 \\u0438\\u043b\\u0438 LAT 80 \\u043e\\u0442 HUSQVARNA?');
     const plan = {
