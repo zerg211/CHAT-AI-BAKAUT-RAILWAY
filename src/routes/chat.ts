@@ -22,7 +22,7 @@ const generationStatusMessages = [
   'Собираю короткий ответ с выводом и ценами...'
 ];
 
-const GENERATION_TIMEOUT_MS = 90_000;
+const GENERATION_TIMEOUT_MS = 180_000;
 
 export async function registerChatRoutes(app: FastifyInstance) {
   const conversations = new ConversationRepository();

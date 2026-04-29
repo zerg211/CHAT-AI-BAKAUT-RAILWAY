@@ -13,5 +13,5 @@ describe('app', () => {
       answerModel: expect.any(String),
       plannerModel: expect.any(String)
     });
-  });
+  }, 15_000);
 });

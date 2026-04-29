@@ -353,6 +353,125 @@ describe('recommendation ranking', () => {
     expect(slice?.products.map((item) => item.id).sort()).toEqual(['p120', 'p160', 'p90']);
   });
 
+  it('lets the resolved turn contract disable structured catalog expansion for factual text-only turns', async () => {
+    const message = 'Нужна виброплита 100-150 кг';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      productWithSpecs('p120', 'Виброплита 120 кг', 120000, 'https://example.test/p120', { 'масса, кг': '120' })
+    ]) as never);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      catalogSearchQuery: message,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 100,
+        weightKgMax: 150
+      }
+    });
+    const contract = assistantTestHooks.resolveTurnContractForPlan(plan, {
+      forceTextOnlyReason: 'detailed_fact'
+    });
+
+    const slice = await assistant.findStructuredCatalogSlice(message, state, plan, contract);
+
+    expect(slice).toBeNull();
+  });
+
+  it('lets the resolved turn contract disable full-catalog selection for factual text-only turns', async () => {
+    const message = 'Нужна виброплита 100-150 кг';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      productWithSpecs('p120', 'Виброплита 120 кг', 120000, 'https://example.test/p120', { 'масса, кг': '120' })
+    ]) as never);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      catalogSearchQuery: message,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 100,
+        weightKgMax: 150
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'plate',
+        currentProductClass: 'plate',
+        hardConstraints: {
+          productIntent: 'plate',
+          weightKgMin: 100,
+          weightKgMax: 150
+        },
+        confidence: 0.8,
+        selectionConfidence: 0.8,
+        shouldShowCards: true
+      }
+    });
+    const contract = assistantTestHooks.resolveTurnContractForPlan(plan, {
+      forceTextOnlyReason: 'detailed_fact'
+    });
+
+    const selection = await assistant.selectProductsForTurn(message, state, plan, [], contract);
+
+    expect(selection.trace.source).toBe('candidate_selection_engine');
+    expect(selection.matchedProducts).toHaveLength(0);
+    expect(selection.state.selectedProductIds).toEqual([]);
+  });
+
+  it('uses resolved turn contract selected products instead of stale planner selections in selection scoring', async () => {
+    const message = 'Нужна виброплита 100-150 кг';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      productWithSpecs('fresh', 'Виброплита 120 кг fresh', 120000, 'https://example.test/fresh', { 'масса, кг': '120' }),
+      productWithSpecs('stale', 'Виброплита 120 кг stale', 120000, 'https://example.test/stale', { 'масса, кг': '120' })
+    ]) as never);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      catalogSearchQuery: message,
+      selectedProductIds: ['stale'],
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 100,
+        weightKgMax: 150
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'plate',
+        currentProductClass: 'plate',
+        hardConstraints: {
+          productIntent: 'plate',
+          weightKgMin: 100,
+          weightKgMax: 150
+        },
+        confidence: 0.8,
+        selectionConfidence: 0.8,
+        shouldShowCards: true
+      }
+    });
+    const baseContract = assistantTestHooks.resolveTurnContractForPlan(plan);
+    const contract = {
+      ...baseContract,
+      selection: {
+        ...baseContract.selection,
+        selectedProductIds: []
+      }
+    };
+
+    const selection = await assistant.selectProductsForTurn(message, state, plan, [], contract);
+
+    expect(selection.matchedProducts.map((product) => product.id).slice(0, 2)).toEqual(['fresh', 'stale']);
+  });
+
   it('parses hyphenated plus-minus tolerance in weight ranges', () => {
     const parsed = assistantTestHooks.parseWeightNeedRangeKg('вес 100-150 кг, плюс-минус 10 кг можно');
 
@@ -1317,6 +1436,29 @@ describe('recommendation ranking', () => {
     const cards = assistantTestHooks.cardsFromPlan(products, state, 'Take this plate and 1l oil for it', plan.plan);
 
     expect(cards.map((card) => card.id)).toEqual(['plate', 'tss-1']);
+  });
+
+  it('lets the resolved turn contract suppress cards even if the legacy planner still says showProducts', () => {
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate('Need generator for factual technical comparison'));
+    const products = [
+      brandedProduct('gen-1', 'Generator TSS SGG 6000EHNA', 'ТСС', 'generators', 70000, 'https://example.test/catalog/generators/gen-1/')
+    ];
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      selectedProductIds: ['gen-1']
+    }) as any;
+    const contract = assistantTestHooks.resolveTurnContractForPlan(plan, {
+      forceTextOnlyReason: 'detailed_fact'
+    });
+
+    const legacyCards = assistantTestHooks.selectCardsFromPlan(products, state, 'Compare service cost, no cards needed', plan).cards;
+    const contractSelection = assistantTestHooks.selectCardsFromTurnContract(products, state, 'Compare service cost, no cards needed', plan, contract);
+
+    expect(legacyCards.map((card) => card.id)).toEqual(['gen-1']);
+    expect(contractSelection.cards).toHaveLength(0);
+    expect(contractSelection.diagnostics).toMatchObject({ reason: 'contract_text_only_detailed_fact' });
   });
 
   it('does not treat model code fragments like 5W as engine oil', () => {

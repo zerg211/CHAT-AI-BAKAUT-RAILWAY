@@ -1,0 +1,107 @@
+import { config } from '../config.js';
+
+export type WebCitation = {
+  url: string;
+  title?: string;
+  snippet?: string;
+};
+
+export function safeError(error: unknown) {
+  if (!error || typeof error !== 'object') return { message: String(error) };
+  const value = error as { name?: string; status?: number; code?: string; message?: string };
+  return {
+    name: value.name,
+    status: value.status,
+    code: value.code,
+    message: value.message
+  };
+}
+
+export function logOpenAIUsage(stage: string, model: string, response: unknown) {
+  if (!config.DEBUG_OPENAI_USAGE || !response || typeof response !== 'object') return;
+  const usage = (response as { usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    output_tokens_details?: { reasoning_tokens?: number };
+  } }).usage;
+  if (!usage) return;
+  console.info('OpenAI usage', {
+    stage,
+    model,
+    inputTokens: usage.input_tokens,
+    outputTokens: usage.output_tokens,
+    reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
+    totalTokens: usage.total_tokens
+  });
+}
+
+export function responseUsedWebSearch(value: unknown) {
+  if (!value) return false;
+  if (extractUrlCitations(value).length > 0) return true;
+  return hasResponseNode(value, (object) => {
+    const type = typeof object.type === 'string' ? object.type : '';
+    return /web_search|search_result|url_citation/i.test(type);
+  });
+}
+
+export function extractResponseText(value: unknown, depth = 0): string {
+  if (!value || depth > 8) return '';
+  if (typeof value === 'string') return '';
+  if (Array.isArray(value)) {
+    return value.map((item) => extractResponseText(item, depth + 1)).filter(Boolean).join('\n').trim();
+  }
+  if (typeof value !== 'object') return '';
+
+  const object = value as Record<string, unknown>;
+  const objectType = typeof object.type === 'string' ? object.type : '';
+  if (typeof object.output_text === 'string' && object.output_text.trim()) return object.output_text.trim();
+  if (
+    typeof object.text === 'string'
+    && object.text.trim()
+    && (!objectType || /output_text|message|text/i.test(objectType))
+  ) {
+    return object.text.trim();
+  }
+
+  const contentText = extractResponseText(object.content, depth + 1);
+  if (contentText) return contentText;
+  const outputText = extractResponseText(object.output, depth + 1);
+  if (outputText) return outputText;
+  const messageText = extractResponseText(object.message, depth + 1);
+  if (messageText) return messageText;
+  return '';
+}
+
+function hasResponseNode(value: unknown, predicate: (object: Record<string, unknown>) => boolean, depth = 0): boolean {
+  if (!value || depth > 8) return false;
+  if (Array.isArray(value)) return value.some((item) => hasResponseNode(item, predicate, depth + 1));
+  if (typeof value !== 'object') return false;
+
+  const object = value as Record<string, unknown>;
+  if (predicate(object)) return true;
+  return Object.values(object).some((item) => hasResponseNode(item, predicate, depth + 1));
+}
+
+export function extractUrlCitations(value: unknown, depth = 0): WebCitation[] {
+  if (!value || depth > 8) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => extractUrlCitations(item, depth + 1));
+  if (typeof value !== 'object') return [];
+
+  const object = value as Record<string, unknown>;
+  const type = typeof object.type === 'string' ? object.type : '';
+  const url = typeof object.url === 'string' ? object.url : undefined;
+  const isCitation = Boolean(url && /url_citation|web_search|search_result|citation/i.test(type));
+  const own: WebCitation[] = isCitation && url
+    ? [{
+        url,
+        title: typeof object.title === 'string' ? object.title : undefined,
+        snippet: typeof object.snippet === 'string' ? object.snippet : undefined
+      }]
+    : [];
+
+  return [
+    ...own,
+    ...Object.values(object).flatMap((item) => extractUrlCitations(item, depth + 1))
+  ].filter((citation, index, all) => all.findIndex((item) => item.url === citation.url) === index);
+}

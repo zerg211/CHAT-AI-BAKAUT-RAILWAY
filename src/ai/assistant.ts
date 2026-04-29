@@ -5,6 +5,8 @@ import type { ChatResponsePayload, CustomerNeedState, DataConflict, Message, Pro
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient } from './openaiClient.js';
 import { emptyNeedState, emptyProductSelectionState, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
+import { extractResponseText, extractUrlCitations, logOpenAIUsage, responseUsedWebSearch, safeError, type WebCitation } from './responseUtils.js';
+import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
 
 function cleanEmpty(obj: any): any {
   if (obj === null || obj === undefined || obj === '') return undefined;
@@ -23,242 +25,8 @@ function cleanEmpty(obj: any): any {
   return obj;
 }
 
-interface GenerateAnswerInput {
-  sessionId: string;
-  userMessage: string;
-  onDelta?: (text: string) => void | Promise<void>;
-  signal?: AbortSignal;
-}
-
-type WebCitation = {
-  url: string;
-  title?: string;
-  snippet?: string;
-};
-
-type AssistantTurnAction =
-  | 'answer_question'
-  | 'recommend_products'
-  | 'ask_clarifying_question'
-  | 'verify_with_web'
-  | 'collect_lead'
-  | 'handoff_specialist';
-
-type AnswerMode =
-  | 'short'
-  | 'productRecommendation'
-  | 'detailedFact'
-  | 'serviceCostComparison'
-  | 'currentLineup'
-  | 'leadCollection'
-  | 'unknown';
-
-type CardPolicy =
-  | 'auto'
-  | 'showProducts'
-  | 'showAccessories'
-  | 'textOnly';
-
-type FollowUpPolicy =
-  | 'auto'
-  | 'answerNowNoDeferredOffer'
-  | 'askClarifyingQuestion'
-  | 'offerNextStepAllowed'
-  | 'collectLead';
-
-type ContextScope =
-  | 'latestMessageOnly'
-  | 'activeNeed'
-  | 'previousSelection'
-  | 'fullSession';
-
-type SearchScope =
-  | 'focusedNeed'
-  | 'broadenAlternatives'
-  | 'sameBrandOnly'
-  | 'previousSelectionOnly';
-
-type CardDisplayMode =
-  | 'exact_matches'
-  | 'compatible_accessories'
-  | 'alternatives'
-  | 'structured_selection'
-  | 'preliminary'
-  | 'none';
-
-type SelectionState = {
-  currentProductClass: ProductIntent;
-  targetProductClass: ProductIntent;
-  compatibilityTargetProduct: string;
-  mustHaveTraits: string[];
-  niceToHaveTraits: string[];
-  excludedClasses: ProductIntent[];
-  brandConstraint: string;
-  exactModelConstraint: string;
-  isAccessoryFollowUp: boolean;
-  selectionConfidence: number;
-  shouldShowCards: boolean;
-  cardDisplayMode: CardDisplayMode;
-};
-
-type AssistantTurnPlan = {
-  action: AssistantTurnAction;
-  answerMode: AnswerMode;
-  cardPolicy: CardPolicy;
-  followUpPolicy: FollowUpPolicy;
-  contextScope: ContextScope;
-  searchScope: SearchScope;
-  catalogSearchQuery: string;
-  selectedProductIds: string[];
-  requiredProductTraits: RequiredProductTraits;
-  selectionState: SelectionState;
-  needsWebSearch: boolean;
-  missingInformation: string[];
-  answerGuidance: string;
-};
-
-type ProductIntent =
-  | 'generator'
-  | 'weldingGenerator'
-  | 'generatorOil'
-  | 'engineOil'
-  | 'generatorAccessory'
-  | 'plateAccessory'
-  | 'plate'
-  | 'rammer'
-  | 'roller'
-  | 'cutter'
-  | 'diamondBlade'
-  | 'diamondCore'
-  | 'trowel'
-  | 'unknown';
-type ProductFuel = 'gasoline' | 'diesel' | 'any' | 'unknown';
-type ProductStartType = 'electric' | 'manual' | 'any' | 'unknown';
-type ProductRole = 'coreProduct' | 'accessory' | 'consumable' | 'unknown';
-type ProductEnclosure = 'enclosed' | 'open' | 'any' | 'unknown';
-
-type RequiredProductTraits = {
-  productIntent: ProductIntent;
-  productRole: ProductRole;
-  fuel: ProductFuel;
-  startType: ProductStartType;
-  enclosure: ProductEnclosure;
-  conventionalGenerator: boolean | null;
-  singlePhase220: boolean | null;
-  budgetMax: number | null;
-  weightKgMin: number | null;
-  weightKgMax: number | null;
-  diameterMmMin: number | null;
-  diameterMmMax: number | null;
-  nominalPowerKwMin: number | null;
-  nominalPowerKwMax: number | null;
-  maxPowerKwMin: number | null;
-  maxPowerKwMax: number | null;
-  powerReasoning: string;
-};
-
-type GeneratorPowerProfile = {
-  nominalMin?: number;
-  nominalMax?: number;
-  maxMin?: number;
-  maxMax?: number;
-  source: 'planner' | 'explicit_text' | 'estimated_load';
-};
-
-type ProductFitProfile = {
-  intent: ProductIntent;
-  activeNeedText: string;
-  requestedBrands: string[];
-  accessoryRequested: boolean;
-  weldingRequested: boolean;
-  wantsGasoline: boolean;
-  wantsDiesel: boolean;
-  wantsElectricStart: boolean;
-  wantsInverterGenerator: boolean;
-  wantsEnclosedGenerator: boolean;
-  wantsConventionalGenerator: boolean;
-  wantsSinglePhase220: boolean;
-  desiredPowerRange?: { min: number; max: number };
-  generatorPower?: GeneratorPowerProfile;
-  budgetMax?: number;
-  exactModelTokens: string[];
-};
-
-type StructuredCatalogSlice = {
-  source: 'structured_constraints' | 'exact_model_lookup' | 'full_catalog_slice';
-  products: Product[];
-  totalMatched: number;
-  visibleLimit: number;
-  constraints: {
-    productIntent: ProductIntent;
-    weightKgMin?: number;
-    weightKgMax?: number;
-    diameterMmMin?: number;
-    diameterMmMax?: number;
-    nominalPowerKwMin?: number;
-    nominalPowerKwMax?: number;
-    maxPowerKwMin?: number;
-    maxPowerKwMax?: number;
-    budgetMax?: number;
-    brandConstraint?: string;
-    exactModelConstraint?: string;
-    mustHaveTraits?: string[];
-    exactModelTokens?: string[];
-  };
-  exactCatalogMatches?: Product[];
-};
-
-type ProductSelectionResult = {
-  state: ProductSelectionState;
-  matchedProducts: Product[];
-  visibleProducts: Product[];
-  hiddenProducts: Product[];
-  comparisonProducts: Product[];
-  rejectedProducts: ProductSelectionRejection[];
-  missingQuestions: string[];
-  confidence: number;
-  trace: Record<string, unknown>;
-};
-
-type CardSelectionDiagnostics = {
-  profile: {
-    intent: ProductIntent;
-    requestedBrands: string[];
-    wantsGasoline: boolean;
-    wantsDiesel: boolean;
-    wantsElectricStart: boolean;
-    wantsInverterGenerator: boolean;
-    wantsEnclosedGenerator: boolean;
-    wantsConventionalGenerator: boolean;
-    desiredPowerRange?: { min: number; max: number };
-    generatorPower?: GeneratorPowerProfile;
-    budgetMax?: number;
-  };
-  selectedCount: number;
-  selectedRejectedCount: number;
-  rankedCount: number;
-  fallbackSuppressed: boolean;
-  fallbackReason?: string;
-};
-
-type CardContractDiagnostics = {
-  mentionedProductIds: string[];
-  addedCardIds: string[];
-  reordered: boolean;
-  firstCardAligned: boolean;
-};
-
-const MAX_PRODUCT_CARDS = 10;
-const FULL_SLICE_PRODUCT_CARDS = 50;
-const LARGE_SLICE_VISIBLE_CARDS = 7;
-const PLANNER_CANDIDATE_LIMIT = 16;
-const MIN_JSON_OUTPUT_TOKENS = 2400;
-const PLANNER_HISTORY_LIMIT = 8;
-const PLANNER_HISTORY_CONTENT_LIMIT = 700;
-const PLANNER_PRODUCT_DESCRIPTION_LIMIT = 900;
-const PLANNER_PAGE_SUMMARY_LIMIT = 600;
-const PLANNER_PAGE_CONTENT_LIMIT = 1200;
-
+import type { AssistantTurnAction, AssistantTurnPlan, AnswerMode, CardContractDiagnostics, CardDisplayMode, CardPolicy, CardSelectionDiagnostics, ContextScope, FollowUpPolicy, GenerateAnswerInput, GeneratorPowerProfile, ProductFitProfile, ProductFuel, ProductIntent, ProductRole, ProductSelectionResult, ProductStartType, ProductEnclosure, RequiredProductTraits, SearchScope, SelectionState, StructuredCatalogSlice } from './assistantTypes.js';
+import { FULL_SLICE_PRODUCT_CARDS, LARGE_SLICE_VISIBLE_CARDS, MAX_PRODUCT_CARDS, MIN_JSON_OUTPUT_TOKENS, PLANNER_CANDIDATE_LIMIT, PLANNER_HISTORY_CONTENT_LIMIT, PLANNER_HISTORY_LIMIT, PLANNER_PAGE_CONTENT_LIMIT, PLANNER_PAGE_SUMMARY_LIMIT, PLANNER_PRODUCT_DESCRIPTION_LIMIT } from './assistantTypes.js';
 function jsonOutputTokenLimit(value: number) {
   return Math.max(value, MIN_JSON_OUTPUT_TOKENS);
 }
@@ -3467,31 +3235,45 @@ function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], hist
   };
 }
 
-function selectCardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan, options: { cardLimit?: number } = {}) {
+function contractTextOnlyDiagnosticReason(turnContract: ResolvedTurnContract) {
+  return turnContract.render.textOnlyReason
+    ? `contract_text_only_${turnContract.render.textOnlyReason}`
+    : 'contract_text_only';
+}
+
+function selectCardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan, options: { cardLimit?: number; turnContract?: ResolvedTurnContract } = {}) {
   const cardLimit = options.cardLimit ?? MAX_PRODUCT_CARDS;
-  const baseProfile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+  const turnContract = options.turnContract ?? resolveTurnContract({ plan });
+  const baseProfile = buildProductFitProfile(
+    state,
+    userMessage,
+    turnContract.scope.catalogSearchQuery,
+    (turnContract.selection.requiredProductTraits ?? plan.requiredProductTraits) as RequiredProductTraits
+  );
   const requestedBrandSet = ['generatorOil', 'engineOil', 'generatorAccessory', 'plateAccessory'].includes(baseProfile.intent)
     ? new Set<string>()
-    : plan.searchScope === 'broadenAlternatives'
+    : turnContract.scope.search === 'broadenAlternatives'
       ? new Set<string>()
     : requestedBrandKeysFromProducts(products, baseProfile.activeNeedText);
   const profile: ProductFitProfile = { ...baseProfile, requestedBrands: [...requestedBrandSet] };
-  const policyTextOnly = plan.cardPolicy === 'textOnly';
+  const policyTextOnly = turnContract.render.cards === 'none';
   const policyServiceComparison = policyTextOnly &&
-    (plan.answerMode === 'serviceCostComparison' || plan.answerMode === 'detailedFact');
-  const policyCurrentLineup = policyTextOnly && plan.answerMode === 'currentLineup';
-  const leadRequested = isLeadPlan(plan);
-  const structuredSelectionAuthoritative = plan.selectionState?.cardDisplayMode === 'structured_selection' &&
-    plan.action === 'recommend_products' &&
-    plan.cardPolicy === 'showProducts';
+    (turnContract.action.answerMode === 'serviceCostComparison' || turnContract.action.answerMode === 'detailedFact');
+  const policyCurrentLineup = policyTextOnly && turnContract.action.answerMode === 'currentLineup';
+  const leadRequested = turnContract.render.leadForm;
+  const contractSelectionState = (turnContract.selection.selectionState ?? plan.selectionState) as SelectionState | undefined;
+  const structuredSelectionAuthoritative = contractSelectionState?.cardDisplayMode === 'structured_selection' &&
+    turnContract.action.primary === 'recommend_products' &&
+    turnContract.render.cards === 'showProducts';
   const suppressCardsForFactualComparison = (policyServiceComparison || shouldUseDetailedFactStyle(userMessage, plan, 0)) &&
     !leadRequested &&
-    plan.action !== 'recommend_products';
+    turnContract.action.primary !== 'recommend_products';
   const suppressCardsForCurrentLineupQuestion = (policyCurrentLineup || shouldUseCurrentLineupStyle(userMessage, plan)) &&
     !leadRequested &&
-    plan.action !== 'recommend_products';
+    turnContract.action.primary !== 'recommend_products';
   const byId = new Map(products.map((product) => [product.id, product]));
-  const selected = plan.selectedProductIds
+  const selectedProductIds = turnContract.selection.selectedProductIds;
+  const selected = selectedProductIds
     .map((id) => byId.get(id))
     .filter((product): product is Product => Boolean(product));
   const matchesRequestedBrand = (product: Product) => productMatchesRequestedBrand(product, requestedBrandSet);
@@ -3501,12 +3283,12 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     productFitPenalty(product, profile) >= 0;
 
   const isBroadenComparisonAnchor = (product: Product) =>
-    plan.searchScope === 'broadenAlternatives' && productHasExactModel(product, profile);
+    turnContract.scope.search === 'broadenAlternatives' && productHasExactModel(product, profile);
   const score = (product: Product) => recommendationScore(product, state, userMessage, profile);
   const rankingScore = (product: Product) => score(product) - (isBroadenComparisonAnchor(product) ? 260 : 0);
-  const preserveSelectedOrder = plan.selectedProductIds.length > 0 &&
-    plan.action === 'recommend_products' &&
-    plan.cardPolicy === 'showProducts';
+  const preserveSelectedOrder = selectedProductIds.length > 0 &&
+    turnContract.action.primary === 'recommend_products' &&
+    turnContract.render.cards === 'showProducts';
   const rankedItems = products
     .map((product) => ({ product, score: rankingScore(product) }))
     .filter((item) => matchesRequestedBrand(item.product))
@@ -3567,11 +3349,11 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
 
   if (selected.length) {
     const selectedIds = new Set(selectedCards.map((product) => product.id));
-    const shouldAppendRanked = !leadRequested && plan.action !== 'ask_clarifying_question';
-    const plannerSelectionIsAuthoritative = plan.action === 'recommend_products' &&
-      plan.cardPolicy === 'showProducts' &&
-      plan.searchScope !== 'broadenAlternatives' &&
-      plan.selectedProductIds.length > 0;
+    const shouldAppendRanked = !leadRequested && turnContract.action.primary !== 'ask_clarifying_question';
+    const plannerSelectionIsAuthoritative = turnContract.action.primary === 'recommend_products' &&
+      turnContract.render.cards === 'showProducts' &&
+      turnContract.scope.search !== 'broadenAlternatives' &&
+      selectedProductIds.length > 0;
     if (plannerSelectionIsAuthoritative) {
       const cards = productCards(selectedCards, state, userMessage, profile, cardLimit);
       return {
@@ -3587,7 +3369,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
       };
     }
     const rankedIds = new Set(ranked.map((product) => product.id));
-    const combinedRaw = plan.searchScope === 'broadenAlternatives' && shouldAppendRanked
+    const combinedRaw = turnContract.scope.search === 'broadenAlternatives' && shouldAppendRanked
       ? [
           ...ranked,
           ...selectedCards.filter((product) => !rankedIds.has(product.id))
@@ -3620,7 +3402,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     .filter((item) => matchesRequestedBrand(item.product))
     .filter((item) => currentNeedAllowsProduct(item.product) && productHasExactModel(item.product, profile) && isCardWorthy(item.product, profile, item.score))
     .map((item) => item.product);
-  if (exactMatches.length && plan.action !== 'ask_clarifying_question' && plan.searchScope !== 'broadenAlternatives') {
+  if (exactMatches.length && turnContract.action.primary !== 'ask_clarifying_question' && turnContract.scope.search !== 'broadenAlternatives') {
     const cards = productCards(exactMatches, state, userMessage, profile, cardLimit);
     return {
       cards,
@@ -3628,7 +3410,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     };
   }
 
-  if (plan.action !== 'recommend_products') {
+  if (turnContract.action.primary !== 'recommend_products') {
     return {
       cards: [],
       diagnostics: cardDiagnostics(profile, selected.length, selectedRejectedCount, ranked.length, false)
@@ -3637,7 +3419,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
 
   const confidentPlannerChoseNoCards = (plan.selectionState?.selectionConfidence ?? 0) >= 0.55 &&
     plan.selectionState?.shouldShowCards === false;
-  if (!plan.selectedProductIds.length && confidentPlannerChoseNoCards) {
+  if (!selectedProductIds.length && confidentPlannerChoseNoCards) {
     return {
       cards: [],
       diagnostics: cardDiagnostics(profile, selected.length, selectedRejectedCount, ranked.length, true, 'planner_did_not_select_products')
@@ -3658,46 +3440,40 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
   };
 }
 
+function resolveTurnContractForPlan(
+  plan: AssistantTurnPlan,
+  options: Omit<Parameters<typeof resolveTurnContract>[0], 'plan'> = {}
+) {
+  return resolveTurnContract({ plan, ...options });
+}
+
+function selectCardsFromTurnContract(
+  products: Product[],
+  state: CustomerNeedState,
+  userMessage: string,
+  plan: AssistantTurnPlan,
+  turnContract: ResolvedTurnContract,
+  options: { cardLimit?: number } = {}
+) {
+  if (turnContract.render.cards === 'none') {
+    return {
+      cards: [],
+      diagnostics: {
+        reason: contractTextOnlyDiagnosticReason(turnContract),
+        action: turnContract.action.primary,
+        answerMode: turnContract.action.answerMode,
+        cardPolicy: turnContract.render.cards,
+        selectedProductCount: turnContract.selection.selectedProductIds.length
+      }
+    };
+  }
+
+  return selectCardsFromPlan(products, state, userMessage, plan, { ...options, turnContract });
+}
+
 function cardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
   return selectCardsFromPlan(products, state, userMessage, plan).cards;
 }
-function responseUsedWebSearch(value: unknown) {
-  if (!value) return false;
-  if (extractUrlCitations(value).length > 0) return true;
-  return hasResponseNode(value, (object) => {
-    const type = typeof object.type === 'string' ? object.type : '';
-    return /web_search|search_result|url_citation/i.test(type);
-  });
-}
-
-function extractResponseText(value: unknown, depth = 0): string {
-  if (!value || depth > 8) return '';
-  if (typeof value === 'string') return '';
-  if (Array.isArray(value)) {
-    return value.map((item) => extractResponseText(item, depth + 1)).filter(Boolean).join('\n').trim();
-  }
-  if (typeof value !== 'object') return '';
-
-  const object = value as Record<string, unknown>;
-  const objectType = typeof object.type === 'string' ? object.type : '';
-  if (typeof object.output_text === 'string' && object.output_text.trim()) return object.output_text.trim();
-  if (
-    typeof object.text === 'string'
-    && object.text.trim()
-    && (!objectType || /output_text|message|text/i.test(objectType))
-  ) {
-    return object.text.trim();
-  }
-
-  const contentText = extractResponseText(object.content, depth + 1);
-  if (contentText) return contentText;
-  const outputText = extractResponseText(object.output, depth + 1);
-  if (outputText) return outputText;
-  const messageText = extractResponseText(object.message, depth + 1);
-  if (messageText) return messageText;
-  return '';
-}
-
 function normalizeEvidenceUrl(value?: string | null) {
   if (!value) return '';
   try {
@@ -4036,20 +3812,23 @@ export class AssistantService {
     userMessage: string,
     state: CustomerNeedState,
     plan: AssistantTurnPlan,
-    baseCandidates: Product[]
+    baseCandidates: Product[],
+    turnContract: ResolvedTurnContract = resolveTurnContract({ plan })
   ): Promise<ProductSelectionResult> {
     const currentSelection = state.selectionState ?? emptyProductSelectionState();
-    const activeText = [userMessage, plan.catalogSearchQuery, stateText(state, '')].filter(Boolean).join(' ');
-    const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+    const contractSearchQuery = turnContract.scope.catalogSearchQuery;
+    const contractTraits = (turnContract.selection.requiredProductTraits ?? plan.requiredProductTraits) as RequiredProductTraits;
+    const activeText = [userMessage, contractSearchQuery, stateText(state, '')].filter(Boolean).join(' ');
+    const profile = buildProductFitProfile(state, userMessage, contractSearchQuery, contractTraits);
     const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile);
     const selectionState = mergeProductSelectionState(currentSelection, selectionUpdate);
-    const selectionProfile = buildProductFitProfile({ ...state, selectionState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+    const selectionProfile = buildProductFitProfile({ ...state, selectionState }, userMessage, contractSearchQuery, contractTraits);
     const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
     const shouldUseCatalog = canListProducts &&
       selectionState.targetProductClass !== 'unknown' &&
-      !isLeadPlan(plan) &&
+      !isLeadAction(turnContract.action.primary) &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
-      plan.cardPolicy !== 'textOnly';
+      turnContract.render.cards !== 'none';
     const tokenRoles = selectionState.hardConstraints.exactModelTokenRoles ?? [];
     const comparisonTokens = tokenRoles.filter((token) => token.role === 'comparisonProduct').map((token) => token.value);
     const targetTokens = selectionState.hardConstraints.exactModelTokens;
@@ -4065,7 +3844,7 @@ export class AssistantService {
       : [];
     const allProducts = shouldUseCatalog ? await this.products.listProducts(5000).catch(() => []) : [];
     const sourceProducts = shouldUseCatalog ? mergeProductsById(allProducts, [...baseCandidates, ...exactTargetProducts]) : mergeProductsById(baseCandidates, exactTargetProducts);
-    const selectedIds = new Set([...plan.selectedProductIds, ...selectionState.selectedProductIds]);
+    const selectedIds = new Set(turnContract.selection.selectedProductIds);
     const canRecommendFromSelection = hasReliableGeneratorSelectionBasis(selectionState);
     const scored = canRecommendFromSelection
       ? sortSelectionProducts(sourceProducts
@@ -4144,13 +3923,20 @@ export class AssistantService {
     };
   }
 
-  async findStructuredCatalogSlice(userMessage: string, state: CustomerNeedState, plan: AssistantTurnPlan): Promise<StructuredCatalogSlice | null> {
+  async findStructuredCatalogSlice(
+    userMessage: string,
+    state: CustomerNeedState,
+    plan: AssistantTurnPlan,
+    turnContract: ResolvedTurnContract = resolveTurnContract({ plan })
+  ): Promise<StructuredCatalogSlice | null> {
+    const contractSearchQuery = turnContract.scope.catalogSearchQuery;
+    const contractTraits = (turnContract.selection.requiredProductTraits ?? plan.requiredProductTraits) as RequiredProductTraits;
     const activeText = [
       userMessage,
-      plan.catalogSearchQuery,
+      contractSearchQuery,
       stateText(state, '')
     ].filter(Boolean).join(' ');
-    const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+    const profile = buildProductFitProfile(state, userMessage, contractSearchQuery, contractTraits);
     const hasPlateText = /(?:\u0432\u0438\u0431\u0440\u043e\s*\u043f\u043b\u0438\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|plate\s*compactor)/iu.test(activeText);
     const selectionState = plan.selectionState ?? emptySelectionState(plan.requiredProductTraits.productIntent);
     const targetIntent = selectionState.targetProductClass !== 'unknown'
@@ -4192,12 +3978,12 @@ export class AssistantService {
     );
     const shouldBuildFullSlice = canListProducts &&
       productIntent !== 'unknown' &&
-      !isLeadPlan(plan) &&
+      !isLeadAction(turnContract.action.primary) &&
+      turnContract.render.cards !== 'none' &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
       (hasStructuredCriteria ||
-        (plan.action === 'recommend_products' &&
-          plan.cardPolicy !== 'textOnly' &&
-          (selectionState.shouldShowCards || selectionState.selectionConfidence >= 0.55 || plan.selectedProductIds.length > 0)));
+        (turnContract.action.primary === 'recommend_products' &&
+          (selectionState.shouldShowCards || selectionState.selectionConfidence >= 0.55 || turnContract.selection.selectedProductIds.length > 0)));
 
     if (!shouldBuildFullSlice && !catalogOnlyExactLookup) return null;
     if (!canListProducts && !exactCatalogMatches.length) return null;
@@ -4546,23 +4332,35 @@ export class AssistantService {
     const productsForCardSelection = structuredCatalogSlice?.products.length
       ? structuredCatalogSlice.products
       : candidates;
-    const cardSelection = selectCardsFromPlan(productsForCardSelection, needState, input.userMessage, effectivePlan, {
+    const detailedFactStyle = shouldUseDetailedFactStyle(input.userMessage, effectivePlan, 0);
+    const mustUseWebSearch = shouldUseWebSearch(input.userMessage, effectivePlan);
+    const turnContract = resolveTurnContract({
+      plan: effectivePlan,
+      forceTextOnlyReason: currentLineupStyle
+        ? 'current_lineup'
+        : detailedFactStyle
+          ? 'detailed_fact'
+          : effectivePlan.cardPolicy === 'textOnly'
+            ? 'planner_text_only'
+            : undefined,
+      forceWebRequired: mustUseWebSearch
+    });
+    const cardSelection = selectCardsFromTurnContract(productsForCardSelection, needState, input.userMessage, effectivePlan, turnContract, {
       cardLimit: structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS
     });
     let cards = cardSelection.cards;
     const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
       ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
       : null;
-    const detailedFactStyle = shouldUseDetailedFactStyle(input.userMessage, effectivePlan, cards.length);
-    const mustUseWebSearch = shouldUseWebSearch(input.userMessage, effectivePlan);
+    const webRequired = turnContract.knowledge.webRequired;
     const deepAnswerReasoning = shouldUseDeepReasoningForAnswer(
       effectivePlan,
       currentLineupStyle,
       detailedFactStyle,
-      mustUseWebSearch,
+      webRequired,
       conflicts.length
     );
-    const answerComplexityScore = [currentLineupStyle, detailedFactStyle, mustUseWebSearch, conflicts.length > 0].filter(Boolean).length;
+    const answerComplexityScore = [currentLineupStyle, detailedFactStyle, webRequired, conflicts.length > 0].filter(Boolean).length;
     const answerProfile = {
       model: config.OPENAI_ANSWER_MODEL,
       effort: config.OPENAI_ANSWER_REASONING_EFFORT
@@ -4733,7 +4531,8 @@ export class AssistantService {
       catalogLineupAlternativeGroups: catalogLineupAlternativeGroupsContext(catalogLineupAlternatives),
       mandatoryCatalogLineupAlternativeFacts: mandatoryCatalogLineupAlternativeFacts(input.userMessage, catalogLineupAlternatives),
       factualVerificationPolicy,
-      responseStyle
+      responseStyle,
+      turnContract
     };
     const answerInputPayload = {
       turnPlan: compactTurnPlanForAnswer(effectivePlan),
@@ -4957,6 +4756,7 @@ export class AssistantService {
         searchScope: effectivePlan.searchScope,
         internalSources: extractUrlCitations(completedResponse).slice(0, 12),
         turnPlan: effectivePlan,
+        turnContract,
         cardSelection: cardSelection.diagnostics,
         cardContract: cardContract.diagnostics,
         productSelection: finalSelectionMetadata,
@@ -5373,71 +5173,10 @@ function turnPlanSchema() {
   };
 }
 
-function safeError(error: unknown) {
-  if (!error || typeof error !== 'object') return { message: String(error) };
-  const value = error as { name?: string; status?: number; code?: string; message?: string };
-  return {
-    name: value.name,
-    status: value.status,
-    code: value.code,
-    message: value.message
-  };
-}
-
-function logOpenAIUsage(stage: string, model: string, response: unknown) {
-  if (!config.DEBUG_OPENAI_USAGE || !response || typeof response !== 'object') return;
-  const usage = (response as { usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    output_tokens_details?: { reasoning_tokens?: number };
-  } }).usage;
-  if (!usage) return;
-  console.info('OpenAI usage', {
-    stage,
-    model,
-    inputTokens: usage.input_tokens,
-    outputTokens: usage.output_tokens,
-    reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
-    totalTokens: usage.total_tokens
-  });
-}
-
-function hasResponseNode(value: unknown, predicate: (object: Record<string, unknown>) => boolean, depth = 0): boolean {
-  if (!value || depth > 8) return false;
-  if (Array.isArray(value)) return value.some((item) => hasResponseNode(item, predicate, depth + 1));
-  if (typeof value !== 'object') return false;
-
-  const object = value as Record<string, unknown>;
-  if (predicate(object)) return true;
-  return Object.values(object).some((item) => hasResponseNode(item, predicate, depth + 1));
-}
-
-function extractUrlCitations(value: unknown, depth = 0): WebCitation[] {
-  if (!value || depth > 8) return [];
-  if (Array.isArray(value)) return value.flatMap((item) => extractUrlCitations(item, depth + 1));
-  if (typeof value !== 'object') return [];
-
-  const object = value as Record<string, unknown>;
-  const type = typeof object.type === 'string' ? object.type : '';
-  const url = typeof object.url === 'string' ? object.url : undefined;
-  const isCitation = Boolean(url && /url_citation|web_search|search_result|citation/i.test(type));
-  const own: WebCitation[] = isCitation && url
-    ? [{
-        url,
-        title: typeof object.title === 'string' ? object.title : undefined,
-        snippet: typeof object.snippet === 'string' ? object.snippet : undefined
-      }]
-    : [];
-
-  return [
-    ...own,
-    ...Object.values(object).flatMap((item) => extractUrlCitations(item, depth + 1))
-  ].filter((citation, index, all) => all.findIndex((item) => item.url === citation.url) === index);
-}
-
 export const assistantTestHooks = {
   buildProductFitProfile,
+  resolveTurnContractForPlan,
+  selectCardsFromTurnContract,
   selectCardsFromPlan,
   answerContextProductsForCards,
   compactSuitableProductsForAnswer,
