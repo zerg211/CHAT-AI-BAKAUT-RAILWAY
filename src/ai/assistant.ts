@@ -32,6 +32,10 @@ import {
   isCoreEquipment, isOilCard, productMentionedInText, strongProductMentionIndex,
   displayProductBrand, intentTextPatterns
 } from './productClassifier.js';
+import { getSessionGuard, cleanupSessionGuard } from './consistencyGuard.js';
+import { buildOfftopicGuard } from './offtopicPolicy.js';
+import { assessLeadTemperature, temperatureGuidance } from './leadTemperature.js';
+import { traceTimer, emitTrace } from './tracing.js';
 
 function cleanEmpty(obj: any): any {
   if (obj === null || obj === undefined || obj === '') return undefined;
@@ -3654,6 +3658,8 @@ export class AssistantService {
   async generateAnswer(input: GenerateAnswerInput): Promise<ChatResponsePayload> {
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
+    const consistencyGuard = getSessionGuard(input.sessionId);
+    const traceTotal = traceTimer('generateAnswer', input.sessionId);
 
     await this.conversations.addMessage({ sessionId: input.sessionId, role: 'user', content: input.userMessage });
     const client = createOpenAIClient();
@@ -4094,7 +4100,13 @@ export class AssistantService {
     const buildAnswerRequest = (model: string, effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh') => ({
       model,
       reasoning: { effort },
-      instructions: `${buildSystemPrompt()}\n\n${answerStyleInstructions}`,
+      instructions: [
+        buildSystemPrompt(),
+        buildOfftopicGuard(),
+        consistencyGuard.buildConsistencyContext(),
+        temperatureGuidance(assessLeadTemperature(input.userMessage, needState, history).level),
+        answerStyleInstructions
+      ].filter(Boolean).join('\n\n'),
       input: [
         {
           role: 'user',
@@ -4302,6 +4314,24 @@ export class AssistantService {
     });
 
     this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
+
+    const cardProducts = cards.map((c) => allCandidates.find((p) => p.id === c.id)).filter((p): p is Product => !!p);
+    consistencyGuard.recordFacts(cardProducts, answer);
+    const consistencyWarnings = consistencyGuard.checkAnswer(answer);
+    if (consistencyWarnings.length) {
+      console.warn('[ConsistencyGuard]', input.sessionId, consistencyWarnings);
+    }
+
+    const leadTemp = assessLeadTemperature(input.userMessage, needState, history);
+    const totalDuration = traceTotal({
+      leadTemperature: leadTemp.level,
+      leadScore: leadTemp.score,
+      cardCount: cards.length,
+      candidateCount: allCandidates.length,
+      consistencyWarnings: consistencyWarnings.length,
+      usedWebSearch
+    });
+    console.log(`[Turn] session=${input.sessionId} duration=${totalDuration}ms cards=${cards.length} lead=${leadTemp.level}(${leadTemp.score})`);
 
     return {
       answer,
