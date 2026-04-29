@@ -3,7 +3,7 @@ import { ConversationRepository, ProductRepository } from '../db/repositories.js
 import yaml from 'js-yaml';
 import type { ChatResponsePayload, CustomerNeedState, DataConflict, Message, Product, ProductCard, ProductElectricalLoadItem, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
-import { createEmbedding, createOpenAIClient } from './openaiClient.js';
+import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { emptyNeedState, emptyProductSelectionState, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 
 function cleanEmpty(obj: any): any {
@@ -3775,12 +3775,8 @@ export class AssistantService {
     if (!client) throw new Error('AI service is unavailable');
 
     try {
-      const response = await client.responses.create({
+      const needExtractionRequest = {
         model: config.OPENAI_PLANNER_MODEL,
-        // No `reasoning` here — need extraction is pure structured extraction,
-        // not problem-solving. Reasoning tokens count against max_output_tokens
-        // and can exhaust the budget before the JSON schema output is complete,
-        // causing the API to throw on a truncated response (SyntaxError at ~1780 chars).
         input: [
           { role: 'system', content: buildNeedExtractorPrompt() },
           {
@@ -3795,7 +3791,7 @@ export class AssistantService {
         ],
         text: {
           format: {
-            type: 'json_schema',
+            type: 'json_schema' as const,
             name: 'need_state_update',
             strict: true,
             schema: {
@@ -3847,10 +3843,12 @@ export class AssistantService {
             }
           }
         },
-        // 8 000 floor: need state JSON with many items can exceed 4 000 tokens;
-        // without reasoning overhead we can safely allocate the full budget to output.
         max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_NEED_MAX_OUTPUT_TOKENS), 8000)
-      }, signal ? { signal } : undefined);
+      };
+      const response: any = await withRetry(
+        () => client.responses.create(needExtractionRequest, signal ? { signal } : undefined),
+        2, signal
+      );
       logOpenAIUsage('need_extraction', config.OPENAI_PLANNER_MODEL, response);
       // output_text may throw on an incomplete response (finish_reason: 'length')
       // in strict JSON schema mode — guard with try/catch before parsing.
@@ -3942,18 +3940,24 @@ export class AssistantService {
     };
 
     try {
-      const response = await client.responses.create(plannerRequest, input.signal ? { signal: input.signal } : undefined);
+      const response: any = await withRetry(
+        () => client.responses.create(plannerRequest, input.signal ? { signal: input.signal } : undefined),
+        2, input.signal
+      );
       logOpenAIUsage('turn_planner', planningProfile.model, response);
       const parsed = parseJsonObject(response.output_text || '{}', 'turn_planner');
       return coerceTurnPlan(parsed, input.baseQuery, input.userMessage);
     } catch (error) {
       if (planningProfile.model !== config.OPENAI_PLANNER_MODEL) {
         try {
-          const fallbackResponse = await client.responses.create({
-            ...plannerRequest,
-            model: config.OPENAI_PLANNER_MODEL,
-            reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT }
-          }, input.signal ? { signal: input.signal } : undefined);
+          const fallbackResponse: any = await withRetry(
+            () => client.responses.create({
+              ...plannerRequest,
+              model: config.OPENAI_PLANNER_MODEL,
+              reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT }
+            }, input.signal ? { signal: input.signal } : undefined),
+            2, input.signal
+          );
           logOpenAIUsage('turn_planner_fallback', config.OPENAI_PLANNER_MODEL, fallbackResponse);
           const parsed = parseJsonObject(fallbackResponse.output_text || '{}', 'turn_planner');
           return coerceTurnPlan(parsed, input.baseQuery, input.userMessage);
@@ -4992,7 +4996,7 @@ export class AssistantService {
     try {
       const messagesToSummarize = history.slice(0, -4);
       if (!messagesToSummarize.length) return;
-      const response = await client.responses.create({
+      const response: any = await withRetry(() => client.responses.create({
         model: config.OPENAI_PLANNER_MODEL,
         input: [
           { role: 'system', content: 'Кратко опиши, что обсуждалось в этих сообщениях. Оставь только суть: что искали, что выбрали, какие условия важны. Если есть предыдущее резюме, объедини его с новыми сообщениями.' },
@@ -5001,13 +5005,17 @@ export class AssistantService {
             newMessagesToSummarize: compactHistoryForAI(messagesToSummarize, 10, 700)
           })) }
         ]
-      });
+      }), 2);
       const summary = (response.output_text ?? '').trim();
       if (summary) {
         await this.conversations.updateHistorySummary(sessionId, summary);
       }
     } catch (e) {
-      console.warn('Background history summarization failed', safeError(e));
+      const err = safeError(e);
+      console.error('[HistorySummary] Failed for session', sessionId, err);
+      if (existingSummary) {
+        console.warn('[HistorySummary] Keeping existing summary as fallback');
+      }
     }
   }
 
@@ -5038,7 +5046,7 @@ export class AssistantService {
     if (!client || !input.products.length) return;
     if (!config.OPENAI_ENABLE_WEB_FACT_EXTRACTION) return;
 
-    const response = await client.responses.create({
+    const response: any = await withRetry(() => client.responses.create({
       model: config.OPENAI_FACT_MODEL,
       reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
       input: [
@@ -5090,7 +5098,7 @@ export class AssistantService {
         }
       },
       max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS
-    }, input.signal ? { signal: input.signal } : undefined);
+    }, input.signal ? { signal: input.signal } : undefined), 2, input.signal);
     logOpenAIUsage('web_fact_extraction', config.OPENAI_FACT_MODEL, response);
 
     const parsed = JSON.parse(response.output_text || '{"facts":[]}') as {

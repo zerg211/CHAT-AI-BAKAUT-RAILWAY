@@ -53,7 +53,8 @@ const schema = z.object({
   EMAIL_HTTP_AUTH_HEADER: z.string().optional(),
   EMAIL_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   EMAIL_FROM: z.string().optional(),
-  LEADS_TO_EMAIL: z.string().optional()
+  LEADS_TO_EMAIL: z.string().optional(),
+  CORS_ORIGINS: z.string().optional()
 });
 
 const parsedConfig = schema.parse(process.env);

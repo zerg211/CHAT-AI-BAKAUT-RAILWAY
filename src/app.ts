@@ -29,8 +29,11 @@ export async function buildApp() {
     }
   });
 
+  const corsOrigins = config.CORS_ORIGINS
+    ? config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+    : true;
   await app.register(cors, {
-    origin: true,
+    origin: corsOrigins,
     credentials: true
   });
   await app.register(rateLimit, {

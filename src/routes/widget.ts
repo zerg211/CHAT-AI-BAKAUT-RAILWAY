@@ -83,7 +83,7 @@ export async function registerWidgetRoutes(app: FastifyInstance) {
     const protocol = request.headers['x-forwarded-proto'] ?? 'http';
     const host = request.headers['x-forwarded-host'] ?? request.headers.host;
     const inferredBase = host ? `${protocol}://${host}` : config.PUBLIC_BASE_URL;
-    const baseUrl = config.NODE_ENV === 'production' ? config.PUBLIC_BASE_URL || inferredBase : inferredBase;
+    const baseUrl = config.PUBLIC_BASE_URL !== 'http://localhost:3010' ? config.PUBLIC_BASE_URL : inferredBase;
     reply.type('application/javascript; charset=utf-8');
     return reply.send(embedScript(baseUrl));
   });
