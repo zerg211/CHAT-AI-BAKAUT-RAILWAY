@@ -680,7 +680,7 @@ export function intentTextPatterns(intent: ProductSelectionClass): string[] {
     roller: ['виброкат', 'каток', 'roller'],
     cutter: ['резчик', 'швонарез', 'cutter'],
     diamondBlade: ['алмаз', 'диск', 'круг', 'diamond', 'blade'],
-    diamondCore: ['коронк', 'алмаз', 'core', 'подрозет'],
+    diamondCore: ['коронк', 'алмаз', 'core', 'подрозет', 'бурен', 'сверлен'],
     trowel: ['затироч']
   };
   return patternMap[intent] ?? [];

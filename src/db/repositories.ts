@@ -650,7 +650,7 @@ export class ProductRepository {
     if (!patterns.length) {
       return this.listProducts(limit);
     }
-    const conditions = patterns.map((_, i) => `(LOWER(name || ' ' || COALESCE(category, '') || ' ' || COALESCE(description, '')) LIKE $${i + 1})`);
+    const conditions = patterns.map((_, i) => `(LOWER(name || ' ' || COALESCE(brand, '') || ' ' || COALESCE(category, '') || ' ' || COALESCE(description, '') || ' ' || COALESCE(source_url, '') || ' ' || COALESCE(specs::text, '')) LIKE $${i + 1})`);
     const query = `SELECT * FROM products WHERE ${conditions.join(' OR ')} ORDER BY updated_at DESC LIMIT $${patterns.length + 1}`;
     const params = [...patterns.map((p) => `%${p.toLowerCase()}%`), limit];
     const result = await this.db.query(query, params);
