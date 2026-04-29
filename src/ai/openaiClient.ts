@@ -3,7 +3,7 @@ import { config } from '../config.js';
 
 export function createOpenAIClient() {
   if (!config.OPENAI_API_KEY) return null;
-  return new OpenAI({ apiKey: config.OPENAI_API_KEY }) as any;
+  return new OpenAI({ apiKey: config.OPENAI_API_KEY, maxRetries: 0 }) as any;
 }
 
 function isRetryableError(error: unknown): boolean {
@@ -26,7 +26,10 @@ export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, signal?
       if (!isRetryableError(error) || attempt === maxRetries) throw error;
       const delayMs = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 16000);
       console.warn(`[OpenAI] Retryable error (attempt ${attempt + 1}/${maxRetries}): ${error instanceof Error ? error.message : String(error)}. Retrying in ${Math.round(delayMs)}ms`);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delayMs);
+        signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+      });
     }
   }
   throw lastError;
