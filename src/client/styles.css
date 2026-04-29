@@ -451,6 +451,34 @@ h1 {
 .bubble li { color: var(--text-1); }
 .bubble li + li { margin-top: 4px; }
 
+.markdown-table-wrap {
+  max-width: 100%;
+  margin: 10px 0;
+  overflow-x: auto;
+}
+
+.markdown-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.markdown-table th,
+.markdown-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-table th {
+  color: var(--text);
+  font-weight: 700;
+  background: var(--bg-2);
+}
+
 .bubble hr {
   margin: 14px 0;
   border: 0;

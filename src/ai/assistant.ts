@@ -1,10 +1,10 @@
 import { config } from '../config.js';
 import { ConversationRepository, ProductRepository } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { ChatResponsePayload, CustomerNeedState, DataConflict, Message, Product, ProductCard } from '../shared/types.js';
+import type { ChatResponsePayload, CustomerNeedState, DataConflict, Message, Product, ProductCard, ProductElectricalLoadItem, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient } from './openaiClient.js';
-import { emptyNeedState, mergeNeedState, summarizeNeedState } from './needState.js';
+import { emptyNeedState, emptyProductSelectionState, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 
 function cleanEmpty(obj: any): any {
   if (obj === null || obj === undefined || obj === '') return undefined;
@@ -82,6 +82,7 @@ type CardDisplayMode =
   | 'exact_matches'
   | 'compatible_accessories'
   | 'alternatives'
+  | 'structured_selection'
   | 'preliminary'
   | 'none';
 
@@ -144,6 +145,11 @@ type RequiredProductTraits = {
   enclosure: ProductEnclosure;
   conventionalGenerator: boolean | null;
   singlePhase220: boolean | null;
+  budgetMax: number | null;
+  weightKgMin: number | null;
+  weightKgMax: number | null;
+  diameterMmMin: number | null;
+  diameterMmMax: number | null;
   nominalPowerKwMin: number | null;
   nominalPowerKwMax: number | null;
   maxPowerKwMin: number | null;
@@ -202,6 +208,18 @@ type StructuredCatalogSlice = {
   exactCatalogMatches?: Product[];
 };
 
+type ProductSelectionResult = {
+  state: ProductSelectionState;
+  matchedProducts: Product[];
+  visibleProducts: Product[];
+  hiddenProducts: Product[];
+  comparisonProducts: Product[];
+  rejectedProducts: ProductSelectionRejection[];
+  missingQuestions: string[];
+  confidence: number;
+  trace: Record<string, unknown>;
+};
+
 type CardSelectionDiagnostics = {
   profile: {
     intent: ProductIntent;
@@ -231,7 +249,7 @@ type CardContractDiagnostics = {
 };
 
 const MAX_PRODUCT_CARDS = 10;
-const FULL_SLICE_PRODUCT_CARDS = 40;
+const FULL_SLICE_PRODUCT_CARDS = 50;
 const LARGE_SLICE_VISIBLE_CARDS = 7;
 const PLANNER_CANDIDATE_LIMIT = 16;
 const MIN_JSON_OUTPUT_TOKENS = 2400;
@@ -394,7 +412,7 @@ function coerceSearchScope(value: unknown): SearchScope {
 }
 
 function coerceCardDisplayMode(value: unknown): CardDisplayMode {
-  const allowed: CardDisplayMode[] = ['exact_matches', 'compatible_accessories', 'alternatives', 'preliminary', 'none'];
+  const allowed: CardDisplayMode[] = ['exact_matches', 'compatible_accessories', 'alternatives', 'structured_selection', 'preliminary', 'none'];
   return allowed.includes(value as CardDisplayMode) ? value as CardDisplayMode : 'preliminary';
 }
 
@@ -427,6 +445,11 @@ function emptyRequiredProductTraits(): RequiredProductTraits {
     enclosure: 'unknown',
     conventionalGenerator: null,
     singlePhase220: null,
+    budgetMax: null,
+    weightKgMin: null,
+    weightKgMax: null,
+    diameterMmMin: null,
+    diameterMmMax: null,
     nominalPowerKwMin: null,
     nominalPowerKwMax: null,
     maxPowerKwMin: null,
@@ -446,6 +469,11 @@ function coerceRequiredProductTraits(value: any): RequiredProductTraits {
     enclosure: coerceProductEnclosure(value.enclosure),
     conventionalGenerator: coerceNullableBoolean(value.conventionalGenerator),
     singlePhase220: coerceNullableBoolean(value.singlePhase220),
+    budgetMax: coerceNullableNumber(value.budgetMax),
+    weightKgMin: coerceNullableNumber(value.weightKgMin),
+    weightKgMax: coerceNullableNumber(value.weightKgMax),
+    diameterMmMin: coerceNullableNumber(value.diameterMmMin),
+    diameterMmMax: coerceNullableNumber(value.diameterMmMax),
     nominalPowerKwMin: coerceNullableNumber(value.nominalPowerKwMin),
     nominalPowerKwMax: coerceNullableNumber(value.nominalPowerKwMax),
     maxPowerKwMin: coerceNullableNumber(value.maxPowerKwMin),
@@ -559,21 +587,6 @@ function fallbackTurnPlan(input: { userMessage: string; needState: CustomerNeedS
         : profile.intent === 'unknown'
           ? 'short'
           : 'productRecommendation';
-  traits.productIntent = profile.intent;
-  traits.productRole = profile.accessoryRequested ? 'accessory' : profile.intent === 'unknown' ? 'unknown' : 'coreProduct';
-  traits.fuel = profile.wantsGasoline ? 'gasoline' : profile.wantsDiesel ? 'diesel' : 'unknown';
-  traits.startType = profile.wantsElectricStart ? 'electric' : 'unknown';
-  traits.enclosure = profile.wantsEnclosedGenerator ? 'enclosed' : 'unknown';
-  traits.conventionalGenerator = profile.wantsConventionalGenerator || null;
-  traits.singlePhase220 = profile.wantsSinglePhase220 || null;
-  traits.nominalPowerKwMin = profile.generatorPower?.nominalMin ?? null;
-  traits.nominalPowerKwMax = profile.generatorPower?.nominalMax ?? null;
-  traits.maxPowerKwMin = profile.generatorPower?.maxMin ?? null;
-  traits.maxPowerKwMax = profile.generatorPower?.maxMax ?? null;
-  traits.powerReasoning = profile.generatorPower
-    ? `Fallback estimate from current need, source: ${profile.generatorPower.source}`
-    : '';
-
   return {
     action: leadAction
       ? 'collect_lead'
@@ -599,20 +612,9 @@ function fallbackTurnPlan(input: { userMessage: string; needState: CustomerNeedS
     selectedProductIds: [],
     requiredProductTraits: traits,
     selectionState: {
-      ...emptySelectionState(profile.intent),
-      currentProductClass: profile.intent,
-      targetProductClass: profile.intent,
-      mustHaveTraits: [
-        profile.wantsGasoline ? 'gasoline' : '',
-        profile.wantsDiesel ? 'diesel' : '',
-        profile.wantsElectricStart ? 'electric_start' : '',
-        profile.wantsInverterGenerator ? 'inverter' : '',
-        profile.wantsEnclosedGenerator ? 'enclosed' : ''
-      ].filter(Boolean),
-      exactModelConstraint: profile.exactModelTokens[0] ?? '',
-      isAccessoryFollowUp: profile.accessoryRequested,
-      shouldShowCards: answerMode === 'productRecommendation',
-      cardDisplayMode: profile.accessoryRequested ? 'compatible_accessories' : 'preliminary'
+      ...emptySelectionState('unknown'),
+      shouldShowCards: false,
+      cardDisplayMode: 'none'
     },
     needsWebSearch: false,
     missingInformation: [],
@@ -625,6 +627,7 @@ function productSearchText(message: string, state: CustomerNeedState) {
     items.filter((item) => item.confidence >= 0.32).map((item) => item.value).join(' ');
   const parts = [
     message,
+    selectionText(state.selectionState),
     activeValues(state.explicitNeeds),
     activeValues(state.implicitNeeds),
     activeValues(state.constraints),
@@ -672,6 +675,8 @@ const diamondBladeTerms = [
 const weightTerms = [
   fromEscaped('\\u0432\\u0435\\u0441'),
   fromEscaped('\\u043f\\u0435\\u0440\\u0435\\u043d\\u043e\\u0441'),
+  fromEscaped('\\u043f\\u0435\\u0440\\u0435\\u0432\\u043e\\u0437'),
+  fromEscaped('\\u0442\\u0440\\u0430\\u043d\\u0441\\u043f\\u043e\\u0440\\u0442'),
   fromEscaped('\\u0433\\u0430\\u0431\\u0430\\u0440\\u0438\\u0442'),
   fromEscaped('\\u0436\\u0435\\u043d\\u0430'),
   fromEscaped('\\u0436\\u0435\\u043d\\u044b'),
@@ -682,6 +687,14 @@ const weightTerms = [
   fromEscaped('\\u043e\\u0434\\u043d\\u043e\\u043c\\u0443'),
   fromEscaped('\\u043e\\u0434\\u043d\\u0430'),
   fromEscaped('\\u043a\\u043e\\u043c\\u043f\\u0430\\u043a\\u0442')
+];
+const wheelTransportTerms = [
+  fromEscaped('\\u043a\\u043e\\u043b\\u0435\\u0441'),
+  fromEscaped('\\u0442\\u0435\\u043b\\u0435\\u0436'),
+  fromEscaped('\\u0442\\u0440\\u0430\\u043d\\u0441\\u043f\\u043e\\u0440\\u0442'),
+  fromEscaped('\\u043f\\u0435\\u0440\\u0435\\u0432\\u043e\\u0437'),
+  'wheel',
+  'transport'
 ];
 const homeTerms = [
   fromEscaped('\\u0434\\u0430\\u0447'),
@@ -807,11 +820,36 @@ function productLiters(product: Product) {
 function stateText(state: CustomerNeedState, userMessage: string) {
   return [
     userMessage,
+    selectionText(state.selectionState),
     state.explicitNeeds.map((x) => x.value).join(' '),
     state.implicitNeeds.map((x) => x.value).join(' '),
     state.constraints.map((x) => x.value).join(' '),
     state.importantCriteria.map((x) => x.value).join(' ')
   ].join(' ');
+}
+
+function selectionText(selection?: ProductSelectionState | null) {
+  if (!selection) return '';
+  const hard = selection.hardConstraints;
+  const soft = selection.softPreferences;
+  return [
+    selection.targetProductClass !== 'unknown' ? selection.targetProductClass : '',
+    hard.productIntent !== 'unknown' ? hard.productIntent : '',
+    hard.productRole !== 'unknown' ? hard.productRole : '',
+    hard.budgetMax ? `budget ${hard.budgetMax}` : '',
+    hard.nominalPowerKwMin || hard.nominalPowerKwMax ? `nominal ${hard.nominalPowerKwMin ?? ''}-${hard.nominalPowerKwMax ?? ''} kw` : '',
+    hard.maxPowerKwMin || hard.maxPowerKwMax ? `max ${hard.maxPowerKwMin ?? ''}-${hard.maxPowerKwMax ?? ''} kw` : '',
+    hard.weightKgMin || hard.weightKgMax ? `weight ${hard.weightKgMin ?? ''}-${hard.weightKgMax ?? ''} kg` : '',
+    hard.diameterMmMin || hard.diameterMmMax ? `diameter ${hard.diameterMmMin ?? ''}-${hard.diameterMmMax ?? ''} mm` : '',
+    hard.fuel && hard.fuel !== 'unknown' ? hard.fuel : '',
+    hard.startType && hard.startType !== 'unknown' ? `${hard.startType} start` : '',
+    hard.enclosure && hard.enclosure !== 'unknown' ? hard.enclosure : '',
+    hard.brandConstraint,
+    hard.exactModelConstraint,
+    hard.exactModelTokens.join(' '),
+    hard.mustHaveTraits.join(' '),
+    soft.mustHaveTraits.join(' ')
+  ].filter(Boolean).join(' ');
 }
 
 function parseLoosePositiveNumber(value: unknown) {
@@ -861,6 +899,11 @@ function extractPowerKw(product: Product) {
     JSON.stringify(product.specs ?? {})
   ].join(' ');
   const match = text.match(powerRegex);
+  return match ? Number(match[1].replace(',', '.')) : undefined;
+}
+
+function extractNamePowerKw(product: Product) {
+  const match = String(product.name ?? '').match(powerRegex);
   return match ? Number(match[1].replace(',', '.')) : undefined;
 }
 
@@ -1014,12 +1057,42 @@ function productMatchesIntent(product: Product, intent: ProductIntent) {
   }
 }
 
+function extractGeneratorPowerForHardSelection(product: Product) {
+  const displayedNominal = extractNamePowerKw(product);
+  const power = extractGeneratorPower(product);
+  return {
+    nominalKw: displayedNominal ?? power.nominalKw,
+    maxKw: power.maxKw
+  };
+}
+
+function isTechnicalSpecToken(token: string) {
+  const normalized = token.trim().toLowerCase().replace(/\s+/g, '');
+  const compact = compactModelText(token);
+  if (!compact) return true;
+  if (/^(?:under|over|upto|to|до|от|около|about|around|max|maximum|min|minimum)\d{1,7}$/iu.test(compact)) return true;
+  if (/^(?:plate|generator|cutter|core|blade|vibroplate|виброплит[аы]?|генератор|диск|коронка|резчик)\s*\d{1,4}$/iu.test(token.trim())) return true;
+  if (/\b(?:generator|генератор|электростанц)\b.*?\d{2,4}\s*[vв]\b/iu.test(token)) return true;
+  if (/^(?:\d{2,4}[vв]|[vв]\d{2,4})(?:[-/](?:\d{2,4}[vв]|[vв]\d{2,4}))*$/iu.test(normalized)) return true;
+  if (/^(?:[vв]?\d{2,4}[vв]?){1,2}$/iu.test(compact) && /[vв]/iu.test(compact)) return true;
+  if (/^\d+(?:kw|квт|kva|ква)$/iu.test(normalized)) return true;
+  if (/^\d+(?:kg|кг|mm|мм)$/iu.test(normalized)) return true;
+  return false;
+}
+
+function isLikelyModelToken(token: string) {
+  const compact = compactModelText(token);
+  if (compact.length < 4) return false;
+  if (isTechnicalSpecToken(token)) return false;
+  return /\d/u.test(compact) && /\p{L}/u.test(compact);
+}
+
 function extractModelTokens(value: string) {
   const dashed = value.match(/[\p{L}\p{N}]+(?:[-/][\p{L}\p{N}]+)+/gu) ?? [];
   const compact = value.match(/\b(?=[\p{L}\p{N}]*\d)(?=[\p{L}\p{N}]*\p{L})[\p{L}\p{N}]{6,}\b/gu) ?? [];
   const shortModel = value.match(/\b(?=[\p{L}\p{N}\s\/-]{4,12}\b)(?=[\p{L}\p{N}\s\/-]*\d{2,})(?=[\p{L}\p{N}\s\/-]*\p{L})\p{L}{1,4}\s*[-/]?\s*\d{2,4}[\p{L}\p{N}]{0,3}\b/gu) ?? [];
   const spaced = value.match(/\b[\p{L}]{2,}\s+\d{3,}[\p{L}\p{N}]*\b/gu) ?? [];
-  return [...new Set([...dashed, ...compact, ...shortModel, ...spaced].filter((token) => /\d/.test(token) && /\p{L}/u.test(token) && compactModelText(token).length >= 4))];
+  return [...new Set([...dashed, ...compact, ...shortModel, ...spaced].filter(isLikelyModelToken))];
 }
 
 function expandModelTokenAliases(tokens: string[]) {
@@ -1047,7 +1120,7 @@ function parseWeightNeedRangeKg(text: string) {
   const a = Number(range[1]);
   const b = Number(range[2]);
   if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined;
-  const toleranceMatch = normalized.match(/(?:±|\+\/-|\u043f\u043b\u044e\u0441\s+\u043c\u0438\u043d\u0443\u0441)\s*(\d{1,3})\s*(?:\u043a\u0433|kg)?/iu);
+  const toleranceMatch = normalized.match(/(?:±|\+\/-|\u043f\u043b\u044e\u0441\s*(?:-|\u2011|\u2012|\u2013|\u2014|\s)\s*\u043c\u0438\u043d\u0443\u0441)\s*(\d{1,3})\s*(?:\u043a\u0433|kg)?/iu);
   const tolerance = toleranceMatch ? Number(toleranceMatch[1]) : 0;
   return {
     min: Math.max(0, Math.min(a, b) - (Number.isFinite(tolerance) ? tolerance : 0)),
@@ -1096,6 +1169,15 @@ function parseBudgetMax(text: string) {
   const matchedText = match[0].toLowerCase();
   if (value < 1000 || /тыс|т\.?\s*р/.test(matchedText)) return Math.round(value * 1000);
   return Math.round(value);
+}
+
+function hasBudgetSignal(text: string) {
+  return /(?:бюджет|цена|цене|стоимост|руб|₽|тыс|т\.?\s*р|rub|budget|price|cost)/iu.test(text);
+}
+
+function hasExplicitGeneratorPowerRequest(text: string) {
+  return /(?:генератор|бензогенератор|электростанц)[^.!?\n]{0,60}\d+(?:[,.]\d+)?\s*(?:квт|kw|kva|ква)/iu.test(text) ||
+    /\d+(?:[,.]\d+)?\s*(?:квт|kw|kva|ква)[^.!?\n]{0,60}(?:генератор|бензогенератор|электростанц)/iu.test(text);
 }
 
 // Text classifiers below are retrieval/fallback helpers. They must not override
@@ -1166,11 +1248,14 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
   const latestText = userMessage.trim();
   const queryText = retrievalQuery.trim();
   const stateMemoryText = stateText(state, '');
-  const activeNeedText = [latestText, queryText].filter(Boolean).join(' ') || stateMemoryText;
+  const selection = state.selectionState ?? emptyProductSelectionState();
+  const hard = selection.hardConstraints;
+  const activeNeedText = [latestText, queryText, selectionText(selection)].filter(Boolean).join(' ') || stateMemoryText;
   const latestIntent = inferProductIntent(latestText);
   const queryIntent = inferProductIntent(queryText);
   const memoryIntent = inferProductIntent([state.lastSummary, stateMemoryText].filter(Boolean).join(' '));
   const traitIntent = traits?.productIntent ?? 'unknown';
+  const selectionIntent = selection.targetProductClass !== 'unknown' ? selection.targetProductClass : hard.productIntent;
   const activeNeedLower = activeNeedText.toLowerCase();
   const plannerKnowsProductRole = Boolean(traits && traits.productRole !== 'unknown');
   const plannerKnowsEnclosure = Boolean(traits && traits.enclosure !== 'unknown');
@@ -1180,24 +1265,33 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
   const coreProductTrait = traits?.productRole === 'coreProduct' ||
     (traits?.productIntent === 'generator' && traits?.enclosure === 'enclosed');
   const accessoryTrait = traits?.productRole === 'accessory' || traits?.productRole === 'consumable';
-  const textIntentShouldOverrideGeneratorTrait = traitIntent === 'generator' &&
-    latestIntent !== 'unknown' &&
-    latestIntent !== 'generator' &&
-    !(coreProductTrait && latestIntent === 'generatorAccessory') &&
-    !(generatorInEnclosureRequest && latestIntent === 'generatorAccessory');
-  const intent = textIntentShouldOverrideGeneratorTrait
-    ? latestIntent
-    : traitIntent !== 'unknown'
+  const intent = traitIntent !== 'unknown'
     ? traitIntent
-    : latestIntent !== 'unknown'
+      : latestIntent !== 'unknown'
       ? latestIntent
       : queryIntent !== 'unknown'
         ? queryIntent
-        : memoryIntent;
-  const exactModelTokens = extractModelTokens([userMessage, retrievalQuery].filter(Boolean).join(' '));
+        : selectionIntent !== 'unknown'
+          ? selectionIntent
+          : memoryIntent;
+  const exactModelTokens = expandModelTokenAliases(extractModelTokens([
+    userMessage,
+    retrievalQuery,
+    hard.exactModelConstraint,
+    hard.exactModelTokens.join(' ')
+  ].filter(Boolean).join(' ')));
   const desiredPowerRange = parseDesiredPowerRange(activeNeedText);
   const generatorPower = normalizePowerRange(
     generatorPowerFromTraits(traits) ??
+    ((hard.nominalPowerKwMin || hard.nominalPowerKwMax || hard.maxPowerKwMin || hard.maxPowerKwMax)
+      ? {
+          nominalMin: hard.nominalPowerKwMin,
+          nominalMax: hard.nominalPowerKwMax,
+          maxMin: hard.maxPowerKwMin,
+          maxMax: hard.maxPowerKwMax,
+          source: 'explicit_text' as const
+        }
+      : undefined) ??
     (desiredPowerRange ? { nominalMin: desiredPowerRange.min, nominalMax: desiredPowerRange.max, source: 'explicit_text' } : undefined) ??
     estimatedGeneratorPowerFromLoads(activeNeedText)
   );
@@ -1212,16 +1306,16 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
         fallbackDetectStandaloneGeneratorAccessoryRequest(activeNeedLower)
       )),
     weldingRequested: containsAny(activeNeedText, weldingTerms),
-    wantsGasoline: traits?.fuel === 'gasoline' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, gasolineTerms)),
-    wantsDiesel: traits?.fuel === 'diesel' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, dieselTerms)),
-    wantsElectricStart: traits?.startType === 'electric' || ((!traits || traits.startType === 'unknown') && (hasElectricStartSignal(activeNeedText) || /(?:\bkey\b|кнопк|ключ)/i.test(activeNeedText))),
-    wantsInverterGenerator: traits?.conventionalGenerator === false || ((!traits || traits.conventionalGenerator === null) && containsAny(activeNeedText, inverterTerms)),
-    wantsEnclosedGenerator: traits?.enclosure === 'enclosed' || (!traits || traits.enclosure === 'unknown' ? generatorInEnclosureRequest : false),
-    wantsConventionalGenerator: traits?.conventionalGenerator === true || ((!traits || traits.conventionalGenerator === null) && /(?:обычн|не\s+инвертор|без\s+инвертор)/i.test(activeNeedText)),
-    wantsSinglePhase220: traits?.singlePhase220 === true || ((!traits || traits.singlePhase220 === null) && containsAny(activeNeedText, singlePhaseTerms)),
+    wantsGasoline: hard.fuel === 'gasoline' || traits?.fuel === 'gasoline' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, gasolineTerms)),
+    wantsDiesel: hard.fuel === 'diesel' || traits?.fuel === 'diesel' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, dieselTerms)),
+    wantsElectricStart: hard.startType === 'electric' || traits?.startType === 'electric' || ((!traits || traits.startType === 'unknown') && (hasElectricStartSignal(activeNeedText) || /(?:\bkey\b|кнопк|ключ)/i.test(activeNeedText))),
+    wantsInverterGenerator: hard.conventionalGenerator === false || traits?.conventionalGenerator === false || ((!traits || traits.conventionalGenerator === null) && containsAny(activeNeedText, inverterTerms)),
+    wantsEnclosedGenerator: hard.enclosure === 'enclosed' || traits?.enclosure === 'enclosed' || (!traits || traits.enclosure === 'unknown' ? generatorInEnclosureRequest : false),
+    wantsConventionalGenerator: hard.conventionalGenerator === true || traits?.conventionalGenerator === true || ((!traits || traits.conventionalGenerator === null) && hasConventionalGeneratorSignal(activeNeedText)),
+    wantsSinglePhase220: hard.singlePhase220 === true || traits?.singlePhase220 === true || ((!traits || traits.singlePhase220 === null) && containsAny(activeNeedText, singlePhaseTerms)),
     desiredPowerRange,
     generatorPower,
-    budgetMax: parseBudgetMax(activeNeedText),
+    budgetMax: parseBudgetMax(activeNeedText) ?? hard.budgetMax,
     exactModelTokens
   };
 }
@@ -1299,6 +1393,7 @@ function classifyProduct(product: Product) {
   const isAccessory = isPlateAccessory || catalogGeneratorOil || containsAny(classText, accessoryTerms) ||
     (standaloneGeneratorAccessory && !/(?:^|\s)(?:генератор|электростанц)/i.test(classText));
   const isWeldingGenerator = containsAny(classText, weldingTerms) || category.includes('сварочные генераторы');
+  const isConcreteVibrator = /(?:вибратор|vibrator|vibratory)/iu.test(classText) && !containsAny(classText, generatorTerms);
   const isDiamondCore = /(?:алмаз.*коронк|коронк.*алмаз|almaznye_koronki|core.?drill|подрозет|бурен|сверлен)/i.test(classText);
   const isRoller = containsAny(classText, rollerTerms) || /виброкат|каток/i.test(category);
   const enclosureSpec = String((product.specs as Record<string, unknown> | null | undefined)?.[fromEscaped('\\u0442\\u0438\\u043f \\u043a\\u043e\\u0436\\u0443\\u0445\\u0430')] ?? '').toLowerCase();
@@ -1321,13 +1416,13 @@ function classifyProduct(product: Product) {
   return {
     text,
     category,
-    isGenerator: containsAny(text, generatorTerms) && !isAccessory && !isWeldingGenerator,
+    isGenerator: containsAny(text, generatorTerms) && !isAccessory && !isWeldingGenerator && !isConcreteVibrator,
     isGeneratorAccessory: isAccessory && !isGeneratorOil && !isPlateAccessory,
     isGeneratorOil: catalogGeneratorOil && !isIncompatibleOil,
     isEngineOil,
     isPlateAccessory,
     isWeldingGenerator,
-    isPlate: containsAny(classText, plateTerms),
+    isPlate: containsAny(classText, plateTerms) && !isPlateAccessory,
     isRammer: containsAny(classText, rammerTerms),
     isRoller,
     isCutter: containsAny(classText, cutterTerms),
@@ -1631,6 +1726,8 @@ function recommendationScore(product: Product, state: CustomerNeedState, userMes
     else score -= 80;
   }
 
+  if (wantsPlate && wantsPortable && containsAny(productText, wheelTransportTerms)) score += 24;
+
   if (wantsHomeUse && weight !== undefined) {
     if (weight <= 100) score += 18;
     if (weight > 180) score -= 25;
@@ -1695,6 +1792,56 @@ function productCards(products: Product[], state: CustomerNeedState, userMessage
     reasons: productReasons(product, state, criteria, userMessage, profile),
     caveats: product.price ? [] : ['Цена требует проверки перед оформлением']
   }));
+}
+
+function productCardPriceRange(cards: ProductCard[]) {
+  const prices = cards
+    .map((card) => typeof card.price === 'number' ? card.price : undefined)
+    .filter((price): price is number => typeof price === 'number' && Number.isFinite(price) && price > 0);
+  if (!prices.length) return null;
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  return {
+    min,
+    max,
+    text: min === max
+      ? `${Math.round(min).toLocaleString('ru-RU')} ₽`
+      : `${Math.round(min).toLocaleString('ru-RU')}–${Math.round(max).toLocaleString('ru-RU')} ₽`
+  };
+}
+
+function answerContextProductsForCards(input: {
+  answerNeedsFullCatalogContext: boolean;
+  recommendationAnswer: boolean;
+  selectionHasEstimatedPump: boolean;
+  cards: ProductCard[];
+  candidates: Product[];
+  cardSourceProducts: Product[];
+}) {
+  if (input.selectionHasEstimatedPump) return [];
+  if (input.answerNeedsFullCatalogContext && !input.recommendationAnswer) return input.candidates;
+  const cardIds = new Set(input.cards.map((card) => card.id));
+  if (!cardIds.size) return [];
+  return input.cardSourceProducts.filter((product) => cardIds.has(product.id));
+}
+
+function compactSuitableProductsForAnswer(products: Product[], visibleCardIds: Set<string>, shownCardIds: Set<string>, limit = FULL_SLICE_PRODUCT_CARDS) {
+  return products.slice(0, limit).map((product) => {
+    const flags = classifyProduct(product);
+    return {
+      id: product.id,
+      name: product.name,
+      category: product.category,
+      price: product.price,
+      visibleCard: visibleCardIds.has(product.id),
+      behindShowMore: shownCardIds.has(product.id) && !visibleCardIds.has(product.id),
+      powerKw: extractPowerKw(product),
+      weightKg: extractWeightKg(product),
+      isInverter: flags.isInverter,
+      isConventionalGenerator: flags.isGenerator && !flags.isInverter,
+      isCoreProduct: isCoreEquipment(product)
+    };
+  });
 }
 
 function displayProductBrand(product: Product) {
@@ -1874,6 +2021,26 @@ function isLeadPlan(plan: AssistantTurnPlan) {
   return isLeadAction(plan.action) || plan.answerMode === 'leadCollection' || plan.followUpPolicy === 'collectLead';
 }
 
+function planAllowsCatalogSelectionOverride(plan: AssistantTurnPlan) {
+  return !isLeadPlan(plan) && (
+    plan.action === 'recommend_products' ||
+    plan.answerMode === 'productRecommendation' ||
+    plan.cardPolicy === 'showProducts' ||
+    plan.selectionState.shouldShowCards ||
+    plan.selectedProductIds.length > 0
+  );
+}
+
+function shouldForceStructuredSelectionCards(userMessage: string, plan: AssistantTurnPlan, result: ProductSelectionResult) {
+  return result.matchedProducts.length > 0 &&
+    hasReliableGeneratorSelectionBasis(result.state) &&
+    !hasEstimatedPumpLoad(result.state) &&
+    result.confidence >= 0.55 &&
+    !isLeadPlan(plan) &&
+    !shouldUseCurrentLineupStyle(userMessage, plan) &&
+    !shouldUseDetailedFactStyle(userMessage, plan, 0);
+}
+
 function fallbackDetectPurchaseIntent(text: string) {
   return /(?:\bbuy\b|\border\b|\btake\b|куплю|беру|возьму|давайте|оформ|заказ|в\s+заявк|оставлю\s+контакт|передайте\s+менеджеру)/iu.test(text);
 }
@@ -1883,6 +2050,13 @@ function fallbackDetectOwnershipCostQuestion(text: string) {
   const hasServiceOrCostTerm = /(?:сервис|обслуживан|регламент|то\b|ремонт|запчаст|детал|расходник|фильтр|свеч|ремен|стоимост|цен[ауы]|ценник|владени|эксплуатацион|service|maintenance|repair|spare|parts|consumable|ownership)/iu.test(normalized);
   const asksForFacts = /(?:сколько|стоит|цены?|стоимост|что\s+по|как\s+с|сравн|ориентир|актуальн|в\s+сети|какие|меняют|дорог|дешев|выгодн|затрат)/iu.test(normalized);
   return hasServiceOrCostTerm && asksForFacts;
+}
+
+function fallbackDetectTechnicalSpecVerificationQuestion(text: string) {
+  const normalized = text.toLowerCase();
+  const asksComparison = /(?:\u0441\u0440\u0430\u0432\u043d|compare|\u0447\u0442\u043e\s+\u043b\u0443\u0447\u0448|\u0433\u0434\u0435\s+\u043b\u0443\u0447\u0448|better|which)/iu.test(normalized);
+  const asksUnverifiedSpecs = /(?:\u0448\u0443\u043c|\u0442\u0438\u0448\u0435|\u0434\u0431|db|thd|\u0433\u0430\u0440\u043c\u043e\u043d\u0438\u043a|avr|\u0430\u0432\u0440|\u0441\u0438\u043d\u0443\u0441|\u043d\u0430\u043f\u0440\u044f\u0436|\u0447\u0430\u0441\u0442\u043e\u0442|\u0438\u043d\u0432\u0435\u0440\u0442\u043e\u0440|\u044d\u043a\u043e\u043d\u043e\u043c\u0438\u0447|\u0440\u0430\u0441\u0445\u043e\u0434\s+\u0442\u043e\u043f\u043b|noise|quieter|sine|voltage|frequency|inverter|economy|fuel\s+consumption)/iu.test(normalized);
+  return asksComparison && asksUnverifiedSpecs && extractModelTokens(text).length >= 2;
 }
 
 function fallbackDetectCurrentLineupQuestion(text: string) {
@@ -1905,12 +2079,12 @@ function shouldUseWebSearch(userMessage: string, plan: AssistantTurnPlan) {
     plan.answerGuidance,
     plan.missingInformation.join(' ')
   ].join(' ');
+  if (plan.needsWebSearch || plan.action === 'verify_with_web') return true;
+  if (plan.answerMode === 'currentLineup' || plan.answerMode === 'serviceCostComparison') return true;
+  if (catalogOnly) return false;
+  if (fallbackDetectTechnicalSpecVerificationQuestion(`${userMessage} ${planText}`)) return true;
   const fallbackAllowed = plan.answerMode === 'unknown';
-  return (!catalogOnly && (plan.needsWebSearch ||
-    plan.action === 'verify_with_web' ||
-    plan.answerMode === 'currentLineup')) ||
-    plan.answerMode === 'serviceCostComparison' ||
-    (fallbackAllowed && fallbackDetectOwnershipCostQuestion(`${userMessage} ${planText}`));
+  return fallbackAllowed && fallbackDetectOwnershipCostQuestion(`${userMessage} ${planText}`);
 }
 
 function shouldUseDetailedFactStyle(userMessage: string, plan: AssistantTurnPlan, cardCount: number) {
@@ -2328,6 +2502,744 @@ function mergeProductsById(products: Product[], extraProducts: Product[]) {
   return [...byId.values()];
 }
 
+function uniqueList(values: Array<string | undefined | null>, limit: number) {
+  return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, limit);
+}
+
+function productIntentFromSelection(state: ProductSelectionState, plan: AssistantTurnPlan, profile: ProductFitProfile): ProductIntent {
+  if (plan.selectionState.targetProductClass !== 'unknown') return plan.selectionState.targetProductClass;
+  if (plan.requiredProductTraits.productIntent !== 'unknown') return plan.requiredProductTraits.productIntent;
+  if (state.targetProductClass !== 'unknown') return state.targetProductClass as ProductIntent;
+  if (state.hardConstraints.productIntent !== 'unknown') return state.hardConstraints.productIntent as ProductIntent;
+  return profile.intent;
+}
+
+function rankingPreferenceFromText(text: string): ProductRankingPreference | undefined {
+  if (/(?:сам(?:ый|ая|ое|ые)\s+дешев|дешевле|подешевле|бюджетн|минимальн\w*\s+цен|cheapest|lowest\s+price|budget)/iu.test(text)) return 'cheapest';
+  if (/(?:премиум|лучше(?:е|ий)?|сам(?:ый|ая|ое)\s+лучш|дороже|premium|best)/iu.test(text)) return 'premium';
+  if (/(?:оптимальн|сбаланс|по\s+соотношению|balanced|value)/iu.test(text)) return 'balanced';
+  return undefined;
+}
+
+function isRankingOnlyFollowUp(text: string) {
+  const hasRanking = Boolean(rankingPreferenceFromText(text));
+  if (!hasRanking) return false;
+  return !parseDesiredPowerRange(text) &&
+    !parseWeightNeedRangeKg(text) &&
+    !parseDimensionNeedRangeMm(text) &&
+    !parseBudgetMax(text) &&
+    inferProductIntent(text) === 'unknown';
+}
+
+function hasExplicitPowerText(text: string) {
+  return Boolean(parseDesiredPowerRange(text) || text.match(powerRegex));
+}
+
+function hasCompatibilityTargetContext(text: string) {
+  return /(?:кот[её]л|boiler|baxi|насос|pump|холодильник|fridge|инструмент|tool|двигател|engine|артикул\s+\S+)/iu.test(text);
+}
+
+function isTermExplanationQuestion(text: string) {
+  return /(?:что\s+это|что\s+такое|чем\s+отлича|объясн|расскаж|нужен\s+ли)/iu.test(text);
+}
+
+function hasConventionalGeneratorSignal(text: string) {
+  return /(?:обычн\w*\s+(?:генератор|бензогенератор|электростанц)|(?:генератор|бензогенератор|электростанц)\s+обычн|не\s+инвертор|без\s+инвертор|conventional|not\s+inverter)/iu.test(text);
+}
+
+function hasHomeSinglePhaseLoadContext(text: string) {
+  return /(?:дом|дач|квартир|кот[её]л|холодильник|свет|освещен|телевизор|роутер|насос|boiler|fridge|home|house)/iu.test(text) &&
+    !/(?:380\s*(?:в|v)|тр[её]хфаз|3\s*фаз|three[-\s]?phase)/iu.test(text);
+}
+
+function compatibilityTargetFromText(text: string): ProductSelectionState['compatibilityTargetProduct'] | undefined {
+  if (!hasCompatibilityTargetContext(text)) return undefined;
+  const article = text.match(/(?:артикул|article|part\s*no\.?)\s*([A-Za-zА-Яа-я0-9-]{4,})/iu)?.[1];
+  const baxi = text.match(/\b(Baxi\s+[A-Za-zА-Яа-я0-9\s-]{2,40})/iu)?.[1]?.trim();
+  const boiler = /кот[её]л|boiler|baxi/iu.test(text);
+  const pump = /насос|pump/iu.test(text);
+  return {
+    name: baxi,
+    article,
+    kind: boiler ? 'boiler' : pump ? 'pump' : 'load',
+    evidence: text
+  };
+}
+
+function plannerBrandBelongsToCompatibilityTarget(
+  brand: string,
+  compatibilityTarget: ProductSelectionState['compatibilityTargetProduct'] | undefined,
+  targetProductClass: ProductIntent
+) {
+  const brandKey = normalizeBrandKey(brand);
+  if (brandKey.length < 3 || !compatibilityTarget || targetProductClass === 'unknown') return false;
+  const targetText = compactModelText([
+    compatibilityTarget.name,
+    compatibilityTarget.article,
+    compatibilityTarget.evidence,
+    compatibilityTarget.kind
+  ].filter(Boolean).join(' '));
+  return targetText.includes(brandKey);
+}
+
+function mergeCompatibilityTarget(
+  current: ProductSelectionState['compatibilityTargetProduct'] | undefined,
+  update: ProductSelectionState['compatibilityTargetProduct'] | undefined
+) {
+  if (!update) return current;
+  return {
+    kind: update.kind ?? current?.kind,
+    name: update.name ?? current?.name,
+    article: update.article ?? current?.article,
+    evidence: update.evidence ?? current?.evidence
+  };
+}
+
+function roundPowerKw(value: number, step = 0.1) {
+  return Math.round(value / step) * step;
+}
+
+function ceilPowerKw(value: number, step = 0.5) {
+  return Math.ceil(value / step) * step;
+}
+
+function applianceCount(text: string, singular: RegExp, plural: RegExp) {
+  const digit = text.match(new RegExp(String.raw`(\d+)\s*(?:${plural.source}|${singular.source})`, 'iu'));
+  if (digit) return Number(digit[1]);
+  if (/(?:два|две)\s+/iu.test(text) && (singular.test(text) || plural.test(text))) return 2;
+  if (/(?:три)\s+/iu.test(text) && (singular.test(text) || plural.test(text))) return 3;
+  return singular.test(text) || plural.test(text) ? 1 : 0;
+}
+
+function explicitKwNear(text: string, terms: RegExp) {
+  const before = text.match(new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:квт|kw)[^.!?\n]{0,80}${terms.source}`, 'iu'));
+  const after = text.match(new RegExp(String.raw`${terms.source}[^.!?\n]{0,80}(\d+(?:[,.]\d+)?)\s*(?:квт|kw)`, 'iu'));
+  const value = before?.[1] ?? after?.[1];
+  if (!value) return undefined;
+  const parsed = Number(value.replace(',', '.'));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseLoadPowerAmount(value: string | undefined, unit: string | undefined) {
+  if (!value) return undefined;
+  const parsed = Number(value.replace(',', '.'));
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  const normalizedUnit = compactModelText(unit ?? '');
+  return normalizedUnit === 'w' || normalizedUnit === 'вт'
+    ? roundPowerKw(parsed / 1000)
+    : parsed;
+}
+
+function explicitLoadKwNear(text: string, terms: RegExp) {
+  const after = text.match(new RegExp(String.raw`${terms.source}[^.!?,;\n]{0,50}?(\d+(?:[,.]\d+)?)\s*(кВт|kw|Вт|w)`, 'iu'));
+  const afterValue = parseLoadPowerAmount(after?.[1], after?.[2]);
+  if (afterValue) return afterValue;
+  const before = text.match(new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(кВт|kw|Вт|w)[^.!?,;\n]{0,25}${terms.source}`, 'iu'));
+  return parseLoadPowerAmount(before?.[1], before?.[2]);
+}
+
+function pumpRunningKwEstimate(text: string) {
+  if (/(?:\u0441\u043a\u0432\u0430\u0436\u0438\u043d|\u0433\u043b\u0443\u0431\u0438\u043d|borehole|well)/iu.test(text)) return 1.1;
+  if (/(?:\u0446\u0438\u0440\u043a\u0443\u043b|\u043e\u0442\u043e\u043f|circulation)/iu.test(text)) return 0.12;
+  if (/(?:\u0434\u0440\u0435\u043d\u0430\u0436|\u0444\u0435\u043a\u0430\u043b|sewage|drainage)/iu.test(text)) return 0.75;
+  return 0.8;
+}
+
+function pumpStartingKwEstimate(runningKw: number) {
+  return roundPowerKw(Math.max(runningKw * 2.6, runningKw + 1.2));
+}
+
+function loadItemKey(item: ProductElectricalLoadItem) {
+  return `${item.kind}:${item.name ?? ''}`;
+}
+
+function calculateGeneratorLoadProfile(items: ProductElectricalLoadItem[], simultaneousStarting = false): ProductGeneratorLoadProfile | undefined {
+  const usable = items.filter((item) => item.count > 0 && (item.runningKw || item.startingKw));
+  if (!usable.length) return undefined;
+  const running = usable.reduce((sum, item) => sum + (item.runningKw ?? 0) * item.count, 0);
+  const startingExtra = usable.map((item) => Math.max(0, (item.startingKw ?? item.runningKw ?? 0) - (item.runningKw ?? 0)));
+  const maxStartingExtra = startingExtra.length
+    ? Math.max(...usable.map((item, index) => startingExtra[index] * item.count))
+    : 0;
+  const allStartingExtra = usable.reduce((sum, item, index) => sum + startingExtra[index] * item.count, 0);
+  const requiredStartingKw = running + (simultaneousStarting ? allStartingExtra : maxStartingExtra);
+  const requiredNominalKw = ceilPowerKw(requiredStartingKw, 0.5);
+  const calculation = usable
+    .map((item) => `${item.name ?? item.kind}: ${item.count} x ${item.runningKw ?? '?'} kW run / ${item.startingKw ?? item.runningKw ?? '?'} kW start`)
+    .join('; ');
+  return {
+    items: usable,
+    totalRunningKw: roundPowerKw(running),
+    requiredStartingKw: roundPowerKw(requiredStartingKw),
+    requiredNominalKw,
+    simultaneousStarting,
+    calculation,
+    confidence: usable.some((item) => item.source === 'explicit_user') ? 0.82 : 0.58
+  };
+}
+
+function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLoadProfile, compatibilityTarget?: ProductSelectionState['compatibilityTargetProduct']) {
+  const lower = text.toLowerCase();
+  const items = new Map<string, ProductElectricalLoadItem>();
+  for (const item of current?.items ?? []) items.set(loadItemKey(item), item);
+
+  const detectedFridgeCount = applianceCount(lower, /холодильник|fridge/iu, /холодильник[а-я]*|fridges/iu);
+  const previousFridge = items.get('refrigerator:холодильник') ?? [...items.values()].find((item) => item.kind === 'refrigerator');
+  const pluralFridgeMention = /(?:холодильники|fridges)/iu.test(lower);
+  const fridgeCount = detectedFridgeCount === 1 && previousFridge?.count
+    ? previousFridge.count
+    : detectedFridgeCount === 1 && pluralFridgeMention
+      ? 2
+    : detectedFridgeCount;
+  if (fridgeCount) {
+    const item: ProductElectricalLoadItem = {
+      kind: 'refrigerator',
+      name: 'холодильник',
+      count: fridgeCount,
+      runningKw: 0.15,
+      startingKw: 1,
+      source: 'estimated_average',
+      evidence: text
+    };
+    items.set(loadItemKey(item), item);
+  }
+
+  if (/(?:свет|освещен|ламп)/iu.test(lower)) {
+    const explicit = explicitLoadKwNear(text, /(?:свет|освещен|ламп)/iu);
+    const item: ProductElectricalLoadItem = {
+      kind: 'lighting',
+      name: 'свет',
+      count: 1,
+      runningKw: explicit ?? 0.8,
+      startingKw: explicit ?? 0.8,
+      source: explicit ? 'explicit_user' : 'estimated_average',
+      evidence: text
+    };
+    items.set(loadItemKey(item), item);
+  }
+
+  if (/(?:кот[её]л|boiler|baxi)/iu.test(lower) || compatibilityTarget?.kind === 'boiler') {
+    const explicit = explicitLoadKwNear(text, /(?:кот[её]л|boiler|baxi)/iu) ?? (compatibilityTarget?.kind === 'boiler' ? singlePowerKwFromText(text) : undefined);
+    const previous = [...items.values()].find((item) => item.kind === 'boiler');
+    const item: ProductElectricalLoadItem = {
+      kind: 'boiler',
+      name: compatibilityTarget?.name ?? previous?.name ?? 'котел',
+      count: 1,
+      runningKw: explicit ?? previous?.runningKw,
+      startingKw: explicit ?? previous?.startingKw ?? explicit,
+      source: explicit ? 'explicit_user' : previous?.source ?? 'estimated_average',
+      evidence: explicit ? text : previous?.evidence ?? text
+    };
+    items.set(loadItemKey(item), item);
+  }
+
+  const simultaneousStarting = /(?:одновременно|вместе|разом|сразу)/iu.test(lower);
+  if (/(?:\u043d\u0430\u0441\u043e\u0441|pump)/iu.test(lower) || compatibilityTarget?.kind === 'pump') {
+    const explicit = explicitLoadKwNear(text, /(?:\u043d\u0430\u0441\u043e\u0441|pump)/iu) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
+    const previous = [...items.values()].find((item) => item.kind === 'pump');
+    const runningKw = explicit ?? previous?.runningKw ?? pumpRunningKwEstimate(lower);
+    const item: ProductElectricalLoadItem = {
+      kind: 'pump',
+      name: compatibilityTarget?.kind === 'pump' ? compatibilityTarget.name ?? 'pump' : 'pump',
+      count: 1,
+      runningKw,
+      startingKw: explicit
+        ? pumpStartingKwEstimate(explicit)
+        : previous?.startingKw ?? pumpStartingKwEstimate(runningKw),
+      source: explicit ? 'explicit_user' : previous?.source ?? 'estimated_average',
+      evidence: explicit ? text : previous?.evidence ?? text
+    };
+    items.set(loadItemKey(item), item);
+  }
+
+  return calculateGeneratorLoadProfile([...items.values()], simultaneousStarting || current?.simultaneousStarting === true);
+}
+
+function tokenRolesForTurn(tokens: string[], userMessage: string, targetProductClass: ProductIntent): ProductSelectionToken[] {
+  if (!tokens.length) return [];
+  const compatibilityContext = hasCompatibilityTargetContext(userMessage);
+  const comparisonContext = isCatalogAvailabilityQuestion(userMessage) ||
+    /(?:почему\s+.*не\s+показ|сравн|а\s+что|разве|нет\s+таких|или\s+нет|compare|why.*not)/iu.test(userMessage);
+  return tokens.map((value) => ({
+    value,
+    role: compatibilityContext && targetProductClass === 'generator'
+      ? 'compatibilityTarget'
+      : comparisonContext
+        ? 'comparisonProduct'
+        : 'targetProduct',
+    evidence: userMessage
+  }));
+}
+
+function activePowerFromLoadText(text: string) {
+  const explicit = parseDesiredPowerRange(text);
+  if (explicit) return { min: explicit.min, max: explicit.max, source: 'explicit_user' as const };
+  const boilerKw = text.match(/(?:кот[её]л|boiler|baxi)[^.!?\n]{0,80}(\d+(?:[,.]\d+)?)\s*(?:квт|kw)/iu)
+    ?? text.match(/(\d+(?:[,.]\d+)?)\s*(?:квт|kw)[^.!?\n]{0,80}(?:кот[её]л|boiler|baxi)/iu);
+  if (boilerKw) {
+    const kw = Number(boilerKw[1].replace(',', '.'));
+    if (Number.isFinite(kw) && kw >= 3) {
+      return {
+        min: Math.max(kw, Math.round(kw * 1.0 * 10) / 10),
+        max: Math.round((kw + 1) * 10) / 10,
+        source: 'inferred_from_load' as const
+      };
+    }
+  }
+  return undefined;
+}
+
+function singlePowerKwFromText(text: string) {
+  const match = text.match(powerRegex);
+  if (!match) return undefined;
+  const kw = normalizePowerValue(match[1]);
+  return kw && Number.isFinite(kw) ? kw : undefined;
+}
+
+function hasMaterialHardConstraints(selection?: ProductSelectionState | null) {
+  const hard = selection?.hardConstraints;
+  if (!hard) return false;
+  return Boolean(
+    hard.budgetMax ||
+    hard.nominalPowerKwMin ||
+    hard.nominalPowerKwMax ||
+    hard.maxPowerKwMin ||
+    hard.maxPowerKwMax ||
+    hard.weightKgMin ||
+    hard.weightKgMax ||
+    hard.diameterMmMin ||
+    hard.diameterMmMax ||
+    hard.fuel ||
+    hard.startType ||
+    hard.enclosure ||
+    hard.brandConstraint
+  );
+}
+
+function shouldPreserveSelectionForFollowUp(userMessage: string, previousSelection?: ProductSelectionState | null) {
+  if (!hasMaterialHardConstraints(previousSelection)) return false;
+  if (isRankingOnlyFollowUp(userMessage)) return true;
+  const tokens = extractModelTokens(userMessage);
+  if (!tokens.length) return false;
+  return isCatalogAvailabilityQuestion(userMessage) ||
+    /(?:почему|зачем|разве|а\s+что|нет\s+таких|не\s+показ|сравн|compare|why|what\s+about|instead)/iu.test(userMessage);
+}
+
+function explicitCriteriaFromTurn(
+  current: ProductSelectionState,
+  userMessage: string,
+  activeText: string,
+  plan: AssistantTurnPlan,
+  profile: ProductFitProfile
+) {
+  const targetProductClass = productIntentFromSelection(current, plan, profile);
+  const plannerTraits = plan.requiredProductTraits;
+  const rankingPreference = rankingPreferenceFromText(userMessage);
+  const rankingOnly = isRankingOnlyFollowUp(userMessage);
+  const currentHard = current.activeRequirement ?? current.hardConstraints;
+  const exactTokensFromMessage = expandModelTokenAliases(extractModelTokens(userMessage));
+  const exactTokenRoles = tokenRolesForTurn(exactTokensFromMessage, userMessage, targetProductClass);
+  const targetExactTokens = exactTokenRoles.filter((token) => token.role === 'targetProduct').map((token) => token.value);
+  const hard: ProductSelectionCriteria = {
+    productIntent: targetProductClass,
+    productRole: plan.requiredProductTraits.productRole !== 'unknown'
+      ? plan.requiredProductTraits.productRole
+      : targetProductClass === 'unknown'
+        ? 'unknown'
+        : 'coreProduct',
+    exactModelTokens: targetExactTokens,
+    exactModelTokenRoles: exactTokenRoles,
+    excludedClasses: plan.selectionState.excludedClasses,
+    mustHaveTraits: [],
+    provenance: {}
+  };
+  const soft: ProductSelectionCriteria = {
+    productIntent: targetProductClass,
+    productRole: hard.productRole,
+    mustHaveTraits: uniqueList([...plan.selectionState.mustHaveTraits, ...plan.selectionState.niceToHaveTraits], 24),
+    exactModelTokens: [],
+    excludedClasses: []
+  };
+
+  const plannerHasWeightRange = Boolean(plannerTraits.weightKgMin || plannerTraits.weightKgMax);
+  if (!rankingOnly && plannerHasWeightRange) {
+    hard.weightKgMin = plannerTraits.weightKgMin ?? undefined;
+    hard.weightKgMax = plannerTraits.weightKgMax ?? undefined;
+    if (plannerTraits.weightKgMin) hard.provenance!.weightKgMin = 'planner';
+    if (plannerTraits.weightKgMax) hard.provenance!.weightKgMax = 'planner';
+  } else {
+    const weightRange = parseWeightNeedRangeKg(userMessage);
+    if (!rankingOnly && weightRange) {
+      hard.weightKgMin = weightRange.min;
+      hard.weightKgMax = weightRange.max;
+      hard.provenance!.weightKgMin = 'explicit_user';
+      hard.provenance!.weightKgMax = 'explicit_user';
+    }
+  }
+  const plannerHasDimensionRange = Boolean(plannerTraits.diameterMmMin || plannerTraits.diameterMmMax);
+  if (!rankingOnly && plannerHasDimensionRange) {
+    hard.diameterMmMin = plannerTraits.diameterMmMin ?? undefined;
+    hard.diameterMmMax = plannerTraits.diameterMmMax ?? undefined;
+    if (plannerTraits.diameterMmMin) hard.provenance!.diameterMmMin = 'planner';
+    if (plannerTraits.diameterMmMax) hard.provenance!.diameterMmMax = 'planner';
+  } else {
+    const dimensionRange = parseDimensionNeedRangeMm(userMessage);
+    if (!rankingOnly && dimensionRange) {
+      hard.diameterMmMin = dimensionRange.min;
+      hard.diameterMmMax = dimensionRange.max;
+      hard.provenance!.diameterMmMin = 'explicit_user';
+      hard.provenance!.diameterMmMax = 'explicit_user';
+    }
+  }
+  if (!rankingOnly && plannerTraits.budgetMax && hasBudgetSignal(userMessage)) {
+    hard.budgetMax = plannerTraits.budgetMax;
+    hard.provenance!.budgetMax = 'planner';
+  } else {
+    const budgetMax = parseBudgetMax(userMessage);
+    if (!rankingOnly && budgetMax) {
+      hard.budgetMax = budgetMax;
+      hard.provenance!.budgetMax = 'explicit_user';
+    }
+  }
+  const compatibilityTarget = mergeCompatibilityTarget(current.compatibilityTargetProduct, compatibilityTargetFromText(userMessage));
+  const loadProfile = targetProductClass === 'generator'
+    ? generatorLoadProfileFromText(userMessage, current.loadProfile, compatibilityTarget)
+    : undefined;
+  const loadProfileOverridesPlannerPower = Boolean(loadProfile?.requiredNominalKw && !hasExplicitGeneratorPowerRequest(userMessage));
+  const plannerPower = !loadProfileOverridesPlannerPower && (
+    plannerTraits.nominalPowerKwMin ||
+    plannerTraits.nominalPowerKwMax ||
+    plannerTraits.maxPowerKwMin ||
+    plannerTraits.maxPowerKwMax
+  )
+    ? {
+        nominalMin: plannerTraits.nominalPowerKwMin,
+        nominalMax: plannerTraits.nominalPowerKwMax,
+        maxMin: plannerTraits.maxPowerKwMin,
+        maxMax: plannerTraits.maxPowerKwMax,
+        source: 'planner' as const
+      }
+    : undefined;
+  const desiredPower = !plannerPower && loadProfile?.requiredNominalKw
+    ? { min: loadProfile.requiredNominalKw, max: Math.max(loadProfile.requiredNominalKw + 1.5, loadProfile.requiredNominalKw), source: 'inferred_from_load' as const }
+    : !plannerPower ? activePowerFromLoadText(userMessage) ?? (
+      current.compatibilityTargetProduct?.kind && hasExplicitPowerText(userMessage)
+        ? (() => {
+            const kw = singlePowerKwFromText(userMessage);
+            return kw && kw >= 3
+              ? { min: kw, max: Math.round((kw + 1) * 10) / 10, source: 'inferred_from_load' as const }
+              : undefined;
+          })()
+        : undefined
+    ) : undefined;
+  if (!rankingOnly && plannerPower) {
+    if (plannerPower.nominalMin) {
+      hard.nominalPowerKwMin = plannerPower.nominalMin;
+      hard.provenance!.nominalPowerKwMin = 'planner';
+    }
+    if (plannerPower.nominalMax) {
+      hard.nominalPowerKwMax = plannerPower.nominalMax;
+      hard.provenance!.nominalPowerKwMax = 'planner';
+    }
+    if (plannerPower.maxMin) {
+      hard.maxPowerKwMin = plannerPower.maxMin;
+      hard.provenance!.maxPowerKwMin = 'planner';
+    }
+    if (plannerPower.maxMax) {
+      hard.maxPowerKwMax = plannerPower.maxMax;
+      hard.provenance!.maxPowerKwMax = 'planner';
+    }
+  } else if (!rankingOnly && desiredPower) {
+    hard.nominalPowerKwMin = desiredPower.min;
+    hard.nominalPowerKwMax = desiredPower.max;
+    hard.provenance!.nominalPowerKwMin = desiredPower.source;
+    hard.provenance!.nominalPowerKwMax = desiredPower.source;
+    if (desiredPower.source === 'inferred_from_load' && loadProfile?.requiredStartingKw) {
+      hard.maxPowerKwMin = loadProfile.requiredStartingKw;
+      hard.provenance!.maxPowerKwMin = 'inferred_from_load';
+    }
+  } else if (!rankingOnly && !currentHard.nominalPowerKwMin && !currentHard.nominalPowerKwMax && !currentHard.maxPowerKwMin && !currentHard.maxPowerKwMax) {
+    if (hasExplicitPowerText(userMessage)) {
+      if (plan.requiredProductTraits.nominalPowerKwMin) {
+        hard.nominalPowerKwMin = plan.requiredProductTraits.nominalPowerKwMin;
+        hard.provenance!.nominalPowerKwMin = 'explicit_user';
+      }
+      if (plan.requiredProductTraits.nominalPowerKwMax) {
+        hard.nominalPowerKwMax = plan.requiredProductTraits.nominalPowerKwMax;
+        hard.provenance!.nominalPowerKwMax = 'explicit_user';
+      }
+      if (plan.requiredProductTraits.maxPowerKwMin) {
+        hard.maxPowerKwMin = plan.requiredProductTraits.maxPowerKwMin;
+        hard.provenance!.maxPowerKwMin = 'explicit_user';
+      }
+      if (plan.requiredProductTraits.maxPowerKwMax) {
+        hard.maxPowerKwMax = plan.requiredProductTraits.maxPowerKwMax;
+        hard.provenance!.maxPowerKwMax = 'explicit_user';
+      }
+    }
+  }
+
+  if (plannerTraits.fuel === 'gasoline' || plannerTraits.fuel === 'diesel') {
+    hard.fuel = plannerTraits.fuel;
+    hard.provenance!.fuel = 'planner';
+  }
+  if (plannerTraits.startType === 'electric' || plannerTraits.startType === 'manual') {
+    hard.startType = plannerTraits.startType;
+    hard.provenance!.startType = 'planner';
+  }
+  if (plannerTraits.enclosure === 'enclosed' || plannerTraits.enclosure === 'open') {
+    hard.enclosure = plannerTraits.enclosure;
+    hard.provenance!.enclosure = 'planner';
+  }
+  if (plannerTraits.conventionalGenerator !== null) {
+    hard.conventionalGenerator = plannerTraits.conventionalGenerator;
+    hard.provenance!.conventionalGenerator = 'planner';
+  }
+  if (plannerTraits.singlePhase220 !== null) {
+    hard.singlePhase220 = plannerTraits.singlePhase220;
+    hard.provenance!.singlePhase220 = 'planner';
+  }
+  if (!hard.startType && hasElectricStartSignal(userMessage)) {
+    hard.startType = 'electric';
+    hard.provenance!.startType = 'explicit_user';
+  }
+  if (!hard.enclosure && fallbackDetectGeneratorEnclosureSignal(userMessage)) {
+    hard.enclosure = 'enclosed';
+    hard.provenance!.enclosure = 'explicit_user';
+  }
+  if (hard.conventionalGenerator === undefined && containsAny(userMessage, inverterTerms) && !isTermExplanationQuestion(userMessage)) {
+    hard.conventionalGenerator = false;
+    hard.provenance!.conventionalGenerator = 'explicit_user';
+  }
+  if (hard.conventionalGenerator === undefined && hasConventionalGeneratorSignal(userMessage)) {
+    hard.conventionalGenerator = true;
+    hard.provenance!.conventionalGenerator = 'explicit_user';
+  }
+  if (hard.singlePhase220 === undefined && containsAny(userMessage, singlePhaseTerms)) {
+    hard.singlePhase220 = true;
+    hard.provenance!.singlePhase220 = 'explicit_user';
+  } else if (hard.singlePhase220 === undefined && targetProductClass === 'generator' && hasHomeSinglePhaseLoadContext(userMessage)) {
+    hard.singlePhase220 = true;
+    hard.provenance!.singlePhase220 = 'inferred_from_load';
+  }
+  const plannerBrandConstraint = plan.selectionState.brandConstraint.trim();
+  if (
+    plannerBrandConstraint &&
+    !plannerBrandBelongsToCompatibilityTarget(plannerBrandConstraint, compatibilityTarget, targetProductClass)
+  ) {
+    hard.brandConstraint = plannerBrandConstraint;
+  }
+  if (plan.selectionState.exactModelConstraint.trim() && targetExactTokens.length) {
+    hard.exactModelConstraint = plan.selectionState.exactModelConstraint.trim();
+    hard.provenance!.exactModelConstraint = 'explicit_user';
+  }
+  const hasHardUpdate = Boolean(
+    hard.budgetMax ||
+    hard.nominalPowerKwMin ||
+    hard.nominalPowerKwMax ||
+    hard.maxPowerKwMin ||
+    hard.maxPowerKwMax ||
+    hard.weightKgMin ||
+    hard.weightKgMax ||
+    hard.diameterMmMin ||
+    hard.diameterMmMax ||
+    hard.fuel ||
+    hard.startType ||
+    hard.enclosure ||
+    hard.conventionalGenerator !== undefined ||
+    hard.singlePhase220 !== undefined ||
+    hard.brandConstraint ||
+    hard.exactModelConstraint ||
+    hard.exactModelTokens.length ||
+    (hard.exactModelTokenRoles?.length ?? 0) > 0
+  );
+
+  return {
+    currentProductClass: targetProductClass,
+    targetProductClass,
+    activeRequirement: hasHardUpdate ? hard : undefined,
+    hardConstraints: hasHardUpdate ? hard : undefined,
+    softPreferences: soft,
+    unknowns: plan.missingInformation,
+    selectedProductIds: plan.selectedProductIds,
+    compatibilityTargetProduct: compatibilityTarget,
+    loadProfile,
+    rankingPreference,
+    confidence: Math.max(plan.selectionState.selectionConfidence, targetProductClass === 'unknown' ? 0 : 0.55),
+    updatedAt: new Date().toISOString()
+  } satisfies Partial<ProductSelectionState>;
+}
+
+function powerCriteriaFromSelection(criteria: ProductSelectionCriteria): GeneratorPowerProfile | undefined {
+  if (!criteria.nominalPowerKwMin && !criteria.nominalPowerKwMax && !criteria.maxPowerKwMin && !criteria.maxPowerKwMax) return undefined;
+  return normalizePowerRange({
+    nominalMin: criteria.nominalPowerKwMin,
+    nominalMax: criteria.nominalPowerKwMax,
+    maxMin: criteria.maxPowerKwMin,
+    maxMax: criteria.maxPowerKwMax,
+    source: 'explicit_text'
+  });
+}
+
+function productMeetsCalculatedLoad(product: Product, state: ProductSelectionState) {
+  const required = state.loadProfile?.requiredNominalKw;
+  if (!required || state.hardConstraints.productIntent !== 'generator') return true;
+  const power = extractGeneratorPowerForHardSelection(product);
+  if (power.nominalKw === undefined) return false;
+  return power.nominalKw >= required - 0.2 || (power.maxKw !== undefined && power.maxKw >= required + 0.5 && power.nominalKw >= required - 0.7);
+}
+
+function hasReliableGeneratorSelectionBasis(state: ProductSelectionState) {
+  const hard = state.hardConstraints;
+  if (hard.productIntent !== 'generator') return true;
+  if (hard.exactModelTokens.length || hard.exactModelConstraint) return true;
+  if (state.loadProfile?.requiredNominalKw) return true;
+  return Boolean(hard.nominalPowerKwMin || hard.nominalPowerKwMax || hard.maxPowerKwMin || hard.maxPowerKwMax);
+}
+
+function hasEstimatedPumpLoad(state: ProductSelectionState) {
+  return state.hardConstraints.productIntent === 'generator' &&
+    (state.loadProfile?.items ?? []).some((item) => item.kind === 'pump' && item.source === 'estimated_average');
+}
+
+function productSelectionHardViolation(product: Product, state: ProductSelectionState, profile: ProductFitProfile) {
+  const hard = state.hardConstraints;
+  const flags = classifyProduct(product);
+  if (hard.productIntent !== 'unknown' && !productMatchesIntent(product, hard.productIntent as ProductIntent)) return `product class is not ${hard.productIntent}`;
+  if (hard.productRole === 'coreProduct' && !isCoreEquipment(product)) return 'product is not core equipment';
+  const excludedClass = hard.excludedClasses.find((intent) => productMatchesIntent(product, intent as ProductIntent));
+  if (excludedClass) return `product belongs to excluded class ${excludedClass}`;
+  if (hard.fuel === 'gasoline' && flags.isDiesel) return 'diesel product violates gasoline-only constraint';
+  if (hard.fuel === 'diesel' && flags.isGasoline) return 'gasoline product violates diesel-only constraint';
+  if (hard.startType === 'electric' && !flags.hasElectricStart) return 'product lacks required electric start';
+  if (hard.enclosure === 'enclosed' && !flags.hasGeneratorEnclosureSignal) return 'product lacks required enclosed/noise-protected execution';
+  if (hard.enclosure === 'open' && flags.hasGeneratorEnclosureSignal && !flags.hasOpenFrameSignal) return 'product is enclosed but open execution is required';
+  if (hard.conventionalGenerator === true && flags.isInverter) return 'inverter product violates conventional-generator constraint';
+  if (hard.conventionalGenerator === false && !flags.isInverter && flags.isGenerator) return 'conventional product violates inverter-generator constraint';
+  if (hard.budgetMax) {
+    const price = product.price;
+    if (typeof price !== 'number') return `price is unknown under budget ${hard.budgetMax}`;
+    if (price > hard.budgetMax * 1.02) return `price ${price} exceeds budget ${hard.budgetMax}`;
+  }
+  if (hard.brandConstraint) {
+    const requested = new Set([normalizeBrandKey(hard.brandConstraint)].filter((item) => item.length >= 3));
+    if (requested.size && !productMatchesRequestedBrand(product, requested)) return `brand does not match ${hard.brandConstraint}`;
+  }
+  if (hard.exactModelConstraint && !productMatchesExactModelConstraint(product, hard.exactModelConstraint, hard.exactModelTokens)) return `model does not match ${hard.exactModelConstraint}`;
+  if (hard.exactModelTokens.length && !productHasExactModel(product, { ...profile, exactModelTokens: hard.exactModelTokens })) return 'product does not match exact model tokens';
+  if (hard.weightKgMin || hard.weightKgMax) {
+    const weight = extractWeightKg(product);
+    if (weight === undefined) return 'weight is unknown';
+    if (hard.weightKgMin && weight < hard.weightKgMin) return `weight ${weight} kg is below ${hard.weightKgMin} kg`;
+    if (hard.weightKgMax && weight > hard.weightKgMax) return `weight ${weight} kg is above ${hard.weightKgMax} kg`;
+  }
+  if (hard.diameterMmMin || hard.diameterMmMax) {
+    const dimension = extractDimensionMm(product);
+    if (dimension === undefined) return 'diameter is unknown';
+    if (hard.diameterMmMin && dimension < hard.diameterMmMin) return `diameter ${dimension} mm is below ${hard.diameterMmMin} mm`;
+    if (hard.diameterMmMax && dimension > hard.diameterMmMax) return `diameter ${dimension} mm is above ${hard.diameterMmMax} mm`;
+  }
+  const powerRange = powerCriteriaFromSelection(hard);
+  if (powerRange) {
+    const power = extractGeneratorPowerForHardSelection(product);
+    if ((powerRange.nominalMin || powerRange.nominalMax) && power.nominalKw === undefined) return 'nominal power is unknown';
+    if ((powerRange.maxMin || powerRange.maxMax) && power.maxKw === undefined) return 'max power is unknown';
+    if (powerRange.nominalMin && power.nominalKw !== undefined && power.nominalKw < powerRange.nominalMin - 0.4) return `nominal power ${power.nominalKw} kW is below ${powerRange.nominalMin} kW`;
+    if (powerRange.nominalMax && power.nominalKw !== undefined && power.nominalKw > powerRange.nominalMax + 0.8) return `nominal power ${power.nominalKw} kW is above ${powerRange.nominalMax} kW`;
+    if (powerRange.maxMin && power.maxKw !== undefined && power.maxKw < powerRange.maxMin - 0.5) return `max power ${power.maxKw} kW is below ${powerRange.maxMin} kW`;
+    if (powerRange.maxMax && power.maxKw !== undefined && power.maxKw > powerRange.maxMax + 1.0) return `max power ${power.maxKw} kW is above ${powerRange.maxMax} kW`;
+  }
+  if (!productMeetsCalculatedLoad(product, state)) return `nominal power is below calculated load ${state.loadProfile?.requiredNominalKw} kW`;
+  return null;
+}
+
+function productMatchesSelectionCriteria(product: Product, state: ProductSelectionState, profile: ProductFitProfile) {
+  return !productSelectionHardViolation(product, state, profile);
+}
+
+function productRejectionReason(product: Product, state: ProductSelectionState, profile: ProductFitProfile) {
+  const hardViolation = productSelectionHardViolation(product, state, profile);
+  if (hardViolation) return hardViolation;
+  const penalty = productFitPenalty(product, profile);
+  if (penalty < 0) return `does not satisfy active fit constraints (${penalty})`;
+  return 'does not satisfy active hard constraints';
+}
+
+function sortSelectionProducts(
+  items: Array<{ product: Product; score: number }>,
+  preference?: ProductRankingPreference,
+  budgetMax?: number
+) {
+  return items.sort((a, b) => {
+    if (budgetMax) {
+      const aPrice = Number(a.product.price ?? -1);
+      const bPrice = Number(b.product.price ?? -1);
+      const aWithin = aPrice > 0 && aPrice <= budgetMax;
+      const bWithin = bPrice > 0 && bPrice <= budgetMax;
+      if (aWithin !== bWithin) return aWithin ? -1 : 1;
+      if (aWithin && bWithin && aPrice !== bPrice) return bPrice - aPrice;
+    }
+    if (preference === 'cheapest') {
+      const price = Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
+      if (price !== 0) return price;
+    }
+    if (preference === 'premium') {
+      const price = Number(b.product.price ?? -1) - Number(a.product.price ?? -1);
+      if (price !== 0) return price;
+    }
+    if (!preference) {
+      const price = Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
+      if (price !== 0) return price;
+    }
+    const score = b.score - a.score;
+    if (score !== 0) return score;
+    return Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
+  });
+}
+
+function missingQuestionsForSelection(state: ProductSelectionState, totalMatched: number) {
+  const hard = state.hardConstraints;
+  if (hard.productIntent === 'generator' && !hasReliableGeneratorSelectionBasis(state)) {
+    return uniqueList([
+      'какие приборы будут подключаться и какая у них нагрузка в кВт/Вт',
+      'будут ли холодильники, насосы или другой моторный потребитель запускаться одновременно',
+      ...state.unknowns
+    ], 4).slice(0, 2);
+  }
+  if (totalMatched <= LARGE_SLICE_VISIBLE_CARDS) return state.unknowns.slice(0, 2);
+  const questions = [...state.unknowns];
+  if (hard.productIntent === 'generator') {
+    if (!hard.nominalPowerKwMin && !hard.nominalPowerKwMax) questions.push('какая нужна рабочая мощность или какие приборы будут подключаться');
+    if (!hard.startType) questions.push('важен ли электростарт');
+  }
+  if (['plate', 'rammer', 'roller'].includes(hard.productIntent)) {
+    if (!hard.weightKgMin && !hard.weightKgMax) questions.push('какой вес/класс уплотнения нужен');
+    questions.push('по какому основанию будете работать: песок/щебень, грунт, асфальт или плитка');
+  }
+  if (['diamondBlade', 'diamondCore', 'cutter'].includes(hard.productIntent)) {
+    if (!hard.diameterMmMin && !hard.diameterMmMax) questions.push('какой диаметр оснастки нужен');
+    questions.push('по какому материалу будет резка или бурение');
+  }
+  return uniqueList(questions, 3);
+}
+
+function selectionMetadata(result: ProductSelectionResult): ProductSelectionMetadata {
+  return {
+    matchedProductIds: result.matchedProducts.map((product) => product.id),
+    visibleProductIds: result.visibleProducts.map((product) => product.id),
+    hiddenProductIds: result.hiddenProducts.map((product) => product.id),
+    comparisonProductIds: result.comparisonProducts.map((product) => product.id),
+    rejectedProducts: result.rejectedProducts,
+    totalMatched: result.matchedProducts.length,
+    selectionConfidence: result.confidence,
+    missingQuestions: result.missingQuestions,
+    loadProfile: result.state.loadProfile,
+    rankingPreference: result.state.rankingPreference,
+    activeHardConstraints: result.state.hardConstraints,
+    selectionTrace: result.trace
+  };
+}
+
 function isCoreEquipment(product: Product) {
   const flags = classifyProduct(product);
   return flags.isGenerator || flags.isWeldingGenerator || flags.isPlate || flags.isRammer || flags.isRoller || flags.isCutter || flags.isDiamondBlade || flags.isDiamondCore || flags.isTrowel;
@@ -2403,7 +3315,8 @@ function enforceAnswerCardContract(
     .filter((item) => item.index >= 0)
     .filter((item) => {
       const score = recommendationScore(item.product, state, userMessage, profile);
-      return isCardWorthy(item.product, profile, score);
+      return productMatchesSelectionCriteria(item.product, state.selectionState ?? emptyProductSelectionState(), profile) &&
+        isCardWorthy(item.product, profile, score);
     })
     .sort((a, b) => a.index - b.index)
     .map((item) => item.product);
@@ -2431,6 +3344,55 @@ function enforceAnswerCardContract(
       firstCardAligned: nextCards[0]?.id === mentioned[0]?.id
     }
   };
+}
+
+function repairAnswerCardText(answer: string, cards: ProductCard[], plan: AssistantTurnPlan) {
+  let clean = answer.trim();
+  if (!clean) return clean;
+  if (!cards.length) {
+    return clean;
+  }
+  const firstProduct = productFromCard(cards[0]);
+  clean = clean.split(/(?<=[.!?\n])\s+/u).map((sentence) => {
+    const hasFirstCardOrderClaim = /(?:перв(?:ой|ая|ую|ым)\s+карточк|first\s+card)/iu.test(sentence);
+    if (!hasFirstCardOrderClaim) return sentence;
+    if (strongProductMentionIndex(firstProduct, sentence) >= 0) return sentence;
+    const mentionsOtherVisibleCard = cards.slice(1).some((card) => strongProductMentionIndex(productFromCard(card), sentence) >= 0);
+    if (!mentionsOtherVisibleCard) return sentence;
+    return sentence
+      .replace(/показан[ао]?\s+перв(?:ой|ая|ую|ым)\s+карточк(?:ой|а|у|и)?/giu, 'есть среди карточек')
+      .replace(/перв(?:ой|ая|ую|ым)\s+карточк(?:ой|а|у|и)?/giu, 'среди карточек')
+      .replace(/first\s+card/giu, 'visible cards');
+  }).join(' ');
+  const firstMentioned = strongProductMentionIndex(firstProduct, clean) >= 0;
+  const startsWithDanglingReference = /^(?:[-–—]\s*)?(?:это|он|она|они|такой|такая|вариант)/iu.test(clean) ||
+    /(?:самый|лучший|главный|удобный|бюджетный)[^.!?\n]{0,80}[—-]\s*$/iu.test(clean);
+  if (firstMentioned && !startsWithDanglingReference) return clean;
+  const priceText = typeof cards[0].price === 'number'
+    ? ` за ${Math.round(cards[0].price).toLocaleString('ru-RU')} ${cards[0].currency ?? 'RUB'}`
+    : '';
+  const prefix = `Основной вариант по текущим критериям — ${cards[0].name}${priceText}.`;
+  if (startsWithDanglingReference) {
+    return `${prefix}\n\n${clean.replace(/^(?:[-–—]\s*)?(?:это|он|она|они)\s*/iu, '')}`;
+  }
+  if (plan.answerMode === 'productRecommendation' || plan.action === 'recommend_products') {
+    return `${prefix}\n\n${clean}`;
+  }
+  return clean;
+}
+
+function repairGeneratorLoadMinimumText(answer: string, loadProfile?: ProductGeneratorLoadProfile) {
+  const required = loadProfile?.requiredNominalKw;
+  if (!required || !Number.isFinite(required)) return answer;
+  const formatted = Number.isInteger(required) ? String(required) : String(required).replace('.', ',');
+  return answer.replace(
+    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435|\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440(?:\s+\u043f\u043e\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0443)?|\u043d\u0443\u0436\u0435\u043d(?:\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440)?(?:\s+\u043e\u043a\u043e\u043b\u043e)?|(?:\u0441\s+\u0437\u0430\u043f\u0430\u0441\u043e\u043c\s+)?\u043e\u0442)[^.!?\n]{0,90}?)(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0412\u0442|kw)/giu,
+    (match, prefix: string, value: string) => {
+      const parsed = Number(String(value).replace(',', '.'));
+      if (!Number.isFinite(parsed) || parsed <= required + 0.4) return match;
+      return `${prefix}${formatted} кВт`;
+    }
+  );
 }
 
 function selectedPurchaseProductIds(products: Product[], history: Message[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
@@ -2519,6 +3481,9 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     (plan.answerMode === 'serviceCostComparison' || plan.answerMode === 'detailedFact');
   const policyCurrentLineup = policyTextOnly && plan.answerMode === 'currentLineup';
   const leadRequested = isLeadPlan(plan);
+  const structuredSelectionAuthoritative = plan.selectionState?.cardDisplayMode === 'structured_selection' &&
+    plan.action === 'recommend_products' &&
+    plan.cardPolicy === 'showProducts';
   const suppressCardsForFactualComparison = (policyServiceComparison || shouldUseDetailedFactStyle(userMessage, plan, 0)) &&
     !leadRequested &&
     plan.action !== 'recommend_products';
@@ -2530,24 +3495,30 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     .map((id) => byId.get(id))
     .filter((product): product is Product => Boolean(product));
   const matchesRequestedBrand = (product: Product) => productMatchesRequestedBrand(product, requestedBrandSet);
+  const selectionState = state.selectionState ?? emptyProductSelectionState();
   const currentNeedAllowsProduct = (product: Product) =>
-    productFitPenalty(product, profile) >= 0 ||
-    (exactModelCanBypassFit(profile) && !violatesHardRequiredTraits(product, profile) && productHasExactModel(product, profile));
+    productMatchesSelectionCriteria(product, selectionState, profile) &&
+    productFitPenalty(product, profile) >= 0;
 
   const isBroadenComparisonAnchor = (product: Product) =>
     plan.searchScope === 'broadenAlternatives' && productHasExactModel(product, profile);
   const score = (product: Product) => recommendationScore(product, state, userMessage, profile);
   const rankingScore = (product: Product) => score(product) - (isBroadenComparisonAnchor(product) ? 260 : 0);
+  const preserveSelectedOrder = plan.selectedProductIds.length > 0 &&
+    plan.action === 'recommend_products' &&
+    plan.cardPolicy === 'showProducts';
   const rankedItems = products
     .map((product) => ({ product, score: rankingScore(product) }))
     .filter((item) => matchesRequestedBrand(item.product))
-    .filter((item) => isCardWorthy(item.product, profile, item.score))
+    .filter((item) => currentNeedAllowsProduct(item.product) && isCardWorthy(item.product, profile, item.score))
     .sort((a, b) => b.score - a.score);
   const ranked = diversifyRankedProducts(rankedItems, cardLimit);
   const selectedCards = selected
     .filter((product) => matchesRequestedBrand(product))
-    .filter((product) => leadRequested || currentNeedAllowsProduct(product));
-  if (!leadRequested) selectedCards.sort((a, b) => rankingScore(b) - rankingScore(a));
+    .filter((product) => leadRequested || structuredSelectionAuthoritative
+      ? productMatchesSelectionCriteria(product, selectionState, profile)
+      : currentNeedAllowsProduct(product));
+  if (!leadRequested && !preserveSelectedOrder) selectedCards.sort((a, b) => rankingScore(b) - rankingScore(a));
   const selectedRejectedCount = selected.length - selectedCards.length;
 
   if (suppressCardsForFactualComparison) {
@@ -2571,9 +3542,50 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     };
   }
 
+  if (structuredSelectionAuthoritative) {
+    const selectedIds = new Set(selectedCards.map((product) => product.id));
+    const structuredProducts = [
+      ...selectedCards,
+      ...products
+        .filter((product) => !selectedIds.has(product.id))
+        .filter((product) => matchesRequestedBrand(product))
+        .filter((product) => productMatchesSelectionCriteria(product, selectionState, profile))
+    ];
+    const cards = productCards(mergeProductsById([], structuredProducts), state, userMessage, profile, cardLimit);
+    return {
+      cards,
+      diagnostics: cardDiagnostics(
+        profile,
+        selected.length,
+        selectedRejectedCount,
+        structuredProducts.length,
+        cards.length === 0,
+        cards.length === 0 ? 'structured_selection_had_no_cardable_products' : undefined
+      )
+    };
+  }
+
   if (selected.length) {
     const selectedIds = new Set(selectedCards.map((product) => product.id));
     const shouldAppendRanked = !leadRequested && plan.action !== 'ask_clarifying_question';
+    const plannerSelectionIsAuthoritative = plan.action === 'recommend_products' &&
+      plan.cardPolicy === 'showProducts' &&
+      plan.searchScope !== 'broadenAlternatives' &&
+      plan.selectedProductIds.length > 0;
+    if (plannerSelectionIsAuthoritative) {
+      const cards = productCards(selectedCards, state, userMessage, profile, cardLimit);
+      return {
+        cards,
+        diagnostics: cardDiagnostics(
+          profile,
+          selected.length,
+          selectedRejectedCount,
+          ranked.length,
+          cards.length === 0,
+          cards.length === 0 ? 'planner_selected_products_but_all_were_rejected_by_current_need' : undefined
+        )
+      };
+    }
     const rankedIds = new Set(ranked.map((product) => product.id));
     const combinedRaw = plan.searchScope === 'broadenAlternatives' && shouldAppendRanked
       ? [
@@ -2584,7 +3596,9 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
           ...selectedCards,
           ...(shouldAppendRanked ? ranked.filter((product) => !selectedIds.has(product.id)) : [])
         ];
-    const combined = !leadRequested && shouldAppendRanked
+    const combined = preserveSelectedOrder
+      ? combinedRaw.slice(0, cardLimit)
+      : !leadRequested && shouldAppendRanked
       ? diversifyRankedProducts(combinedRaw.map((product) => ({ product, score: rankingScore(product) })).sort((a, b) => b.score - a.score), cardLimit)
       : combinedRaw;
     const cards = productCards(combined, state, userMessage, profile, cardLimit);
@@ -2604,7 +3618,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
   const exactMatches = products
     .map((product) => ({ product, score: score(product) }))
     .filter((item) => matchesRequestedBrand(item.product))
-    .filter((item) => productHasExactModel(item.product, profile) && isCardWorthy(item.product, profile, item.score))
+    .filter((item) => currentNeedAllowsProduct(item.product) && productHasExactModel(item.product, profile) && isCardWorthy(item.product, profile, item.score))
     .map((item) => item.product);
   if (exactMatches.length && plan.action !== 'ask_clarifying_question' && plan.searchScope !== 'broadenAlternatives') {
     const cards = productCards(exactMatches, state, userMessage, profile, cardLimit);
@@ -2618,6 +3632,15 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     return {
       cards: [],
       diagnostics: cardDiagnostics(profile, selected.length, selectedRejectedCount, ranked.length, false)
+    };
+  }
+
+  const confidentPlannerChoseNoCards = (plan.selectionState?.selectionConfidence ?? 0) >= 0.55 &&
+    plan.selectionState?.shouldShowCards === false;
+  if (!plan.selectedProductIds.length && confidentPlannerChoseNoCards) {
+    return {
+      cards: [],
+      diagnostics: cardDiagnostics(profile, selected.length, selectedRejectedCount, ranked.length, true, 'planner_did_not_select_products')
     };
   }
 
@@ -3009,6 +4032,118 @@ export class AssistantService {
       .slice(0, 12);
   }
 
+  async selectProductsForTurn(
+    userMessage: string,
+    state: CustomerNeedState,
+    plan: AssistantTurnPlan,
+    baseCandidates: Product[]
+  ): Promise<ProductSelectionResult> {
+    const currentSelection = state.selectionState ?? emptyProductSelectionState();
+    const activeText = [userMessage, plan.catalogSearchQuery, stateText(state, '')].filter(Boolean).join(' ');
+    const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+    const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile);
+    const selectionState = mergeProductSelectionState(currentSelection, selectionUpdate);
+    const selectionProfile = buildProductFitProfile({ ...state, selectionState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+    const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
+    const shouldUseCatalog = canListProducts &&
+      selectionState.targetProductClass !== 'unknown' &&
+      !isLeadPlan(plan) &&
+      !shouldUseCurrentLineupStyle(userMessage, plan) &&
+      plan.cardPolicy !== 'textOnly';
+    const tokenRoles = selectionState.hardConstraints.exactModelTokenRoles ?? [];
+    const comparisonTokens = tokenRoles.filter((token) => token.role === 'comparisonProduct').map((token) => token.value);
+    const targetTokens = selectionState.hardConstraints.exactModelTokens;
+    const lookupTokens = uniqueList([...targetTokens, ...comparisonTokens], 32);
+    const exactProducts = lookupTokens.length
+      ? await this.products.searchProductsByModelTokens(lookupTokens, 80).catch(() => [])
+      : [];
+    const exactTargetProducts = targetTokens.length
+      ? exactProducts.filter((product) => productHasExactModel(product, { ...selectionProfile, exactModelTokens: targetTokens }))
+      : [];
+    const exactComparisonProducts = comparisonTokens.length
+      ? exactProducts.filter((product) => productHasExactModel(product, { ...selectionProfile, exactModelTokens: comparisonTokens }))
+      : [];
+    const allProducts = shouldUseCatalog ? await this.products.listProducts(5000).catch(() => []) : [];
+    const sourceProducts = shouldUseCatalog ? mergeProductsById(allProducts, [...baseCandidates, ...exactTargetProducts]) : mergeProductsById(baseCandidates, exactTargetProducts);
+    const selectedIds = new Set([...plan.selectedProductIds, ...selectionState.selectedProductIds]);
+    const canRecommendFromSelection = hasReliableGeneratorSelectionBasis(selectionState);
+    const scored = canRecommendFromSelection
+      ? sortSelectionProducts(sourceProducts
+        .filter((product) => productMatchesSelectionCriteria(product, selectionState, selectionProfile))
+        .map((product) => ({
+          product,
+          score: recommendationScore(product, { ...state, selectionState }, userMessage, selectionProfile) + (selectedIds.has(product.id) ? 120 : 0)
+        })), selectionState.rankingPreference, selectionState.hardConstraints.budgetMax)
+      : [];
+    let matchedProducts = selectionState.rankingPreference === 'cheapest'
+      ? scored.slice(0, Math.max(50, FULL_SLICE_PRODUCT_CARDS)).map((item) => item.product)
+      : selectionState.rankingPreference === 'premium' || selectionState.rankingPreference === 'balanced'
+        ? diversifyRankedProducts(scored, Math.max(50, FULL_SLICE_PRODUCT_CARDS))
+        : scored.slice(0, Math.max(50, FULL_SLICE_PRODUCT_CARDS)).map((item) => item.product);
+    if (!matchedProducts.length && selectionState.rankingPreference && isRankingOnlyFollowUp(userMessage)) {
+      const priorIds = new Set(
+        (selectionState.matchedProductIds?.length ? selectionState.matchedProductIds : selectionState.previousCandidateProductIds) ?? []
+      );
+      if (priorIds.size) {
+        matchedProducts = sortSelectionProducts(sourceProducts
+          .filter((product) => priorIds.has(product.id))
+          .filter((product) => isCoreEquipment(product))
+          .map((product) => ({
+            product,
+            score: recommendationScore(product, { ...state, selectionState }, userMessage, selectionProfile)
+          })), selectionState.rankingPreference, selectionState.hardConstraints.budgetMax)
+          .slice(0, Math.max(50, FULL_SLICE_PRODUCT_CARDS))
+          .map((item) => item.product);
+      }
+    }
+    const matchedIds = new Set(matchedProducts.map((product) => product.id));
+    const comparisonProducts = exactComparisonProducts
+      .filter((product) => !matchedIds.has(product.id))
+      .filter((product) => isCoreEquipment(product))
+      .filter((product, index, all) => all.findIndex((candidate) => candidate.id === product.id) === index);
+    const rejectedProducts = comparisonProducts.map((product) => ({
+      productId: product.id,
+      reason: productRejectionReason(product, selectionState, selectionProfile)
+    }));
+    const visibleLimit = matchedProducts.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : MAX_PRODUCT_CARDS;
+    const visibleProducts = matchedProducts.slice(0, visibleLimit);
+    const hiddenProducts = matchedProducts.slice(visibleLimit);
+    const confidence = Math.max(selectionState.confidence, matchedProducts.length ? 0.78 : selectionState.targetProductClass === 'unknown' ? 0.2 : 0.45);
+    const missingQuestions = missingQuestionsForSelection(selectionState, matchedProducts.length);
+    return {
+      state: {
+        ...selectionState,
+        selectedProductIds: visibleProducts.map((product) => product.id),
+        matchedProductIds: matchedProducts.map((product) => product.id),
+        comparisonProductIds: comparisonProducts.map((product) => product.id),
+        rejectedProducts,
+        previousCandidateProductIds: uniqueList([...matchedProducts, ...comparisonProducts].map((product) => product.id), 64),
+        confidence,
+        unknowns: missingQuestions,
+        updatedAt: new Date().toISOString()
+      },
+      matchedProducts,
+      visibleProducts,
+      hiddenProducts,
+      comparisonProducts,
+      rejectedProducts,
+      missingQuestions,
+      confidence,
+      trace: {
+        source: shouldUseCatalog ? 'full_catalog_selection_engine' : 'candidate_selection_engine',
+        targetProductClass: selectionState.targetProductClass,
+        hardConstraints: selectionState.hardConstraints,
+        comparisonTokens,
+        rankingPreference: selectionState.rankingPreference,
+        totalSourceProducts: sourceProducts.length,
+        totalMatched: matchedProducts.length,
+        totalComparison: comparisonProducts.length,
+        canRecommendFromSelection,
+        visibleLimit
+      }
+    };
+  }
+
   async findStructuredCatalogSlice(userMessage: string, state: CustomerNeedState, plan: AssistantTurnPlan): Promise<StructuredCatalogSlice | null> {
     const activeText = [
       userMessage,
@@ -3126,6 +4261,14 @@ export class AssistantService {
           })
           .filter(powerMatches)
           .sort((a, b) => {
+            if (budgetMax) {
+              const aPrice = Number(a.price ?? -1);
+              const bPrice = Number(b.price ?? -1);
+              const aWithin = aPrice > 0 && aPrice <= budgetMax;
+              const bWithin = bPrice > 0 && bPrice <= budgetMax;
+              if (aWithin !== bWithin) return aWithin ? -1 : 1;
+              if (aWithin && bWithin && aPrice !== bPrice) return bPrice - aPrice;
+            }
             const distance = rankDistance(a) - rankDistance(b);
             if (distance !== 0) return distance;
             const score = recommendationScore(b, state, userMessage, sliceProfile) - recommendationScore(a, state, userMessage, sliceProfile);
@@ -3188,7 +4331,19 @@ export class AssistantService {
     if (!client) throw new Error('AI service is unavailable');
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
-    const needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal);
+    const previousSelectionState = session.needState.selectionState;
+    let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal);
+    if (shouldPreserveSelectionForFollowUp(input.userMessage, previousSelectionState)) {
+      needState = {
+        ...needState,
+        selectionState: {
+          ...previousSelectionState,
+          softPreferences: needState.selectionState?.softPreferences ?? previousSelectionState.softPreferences,
+          unknowns: needState.selectionState?.unknowns?.length ? needState.selectionState.unknowns : previousSelectionState.unknowns,
+          conflicts: needState.selectionState?.conflicts?.length ? needState.selectionState.conflicts : previousSelectionState.conflicts
+        }
+      };
+    }
     await this.conversations.updateNeedState(input.sessionId, needState);
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
@@ -3238,21 +4393,81 @@ export class AssistantService {
     let allCandidates = [...byId.values()];
     const purchasePlan = purchasePlanIfNeeded(plan, allCandidates, history, needState, input.userMessage);
     let effectivePlan = purchasePlan.plan;
-    const structuredCatalogSlice = await this.findStructuredCatalogSlice(input.userMessage, needState, effectivePlan);
+    const selectionResult = await this.selectProductsForTurn(input.userMessage, needState, effectivePlan, allCandidates);
+    for (const product of selectionResult.comparisonProducts) byId.set(product.id, product);
+    if (JSON.stringify(selectionResult.state) !== JSON.stringify(needState.selectionState)) {
+      needState = { ...needState, selectionState: selectionResult.state };
+      await this.conversations.updateNeedState(input.sessionId, needState);
+    }
+    const selectionHard = selectionResult.state.hardConstraints;
+    const selectionCanRecommend = hasReliableGeneratorSelectionBasis(selectionResult.state);
+    const selectionHasEstimatedPump = hasEstimatedPumpLoad(selectionResult.state);
+    const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
+      ? {
+          source: selectionResult.trace.source === 'full_catalog_selection_engine' ? 'full_catalog_slice' : 'structured_constraints',
+          products: selectionResult.matchedProducts,
+          totalMatched: selectionResult.matchedProducts.length,
+          visibleLimit: selectionResult.visibleProducts.length,
+          constraints: {
+            productIntent: selectionHard.productIntent as ProductIntent,
+            weightKgMin: selectionHard.weightKgMin,
+            weightKgMax: selectionHard.weightKgMax,
+            diameterMmMin: selectionHard.diameterMmMin,
+            diameterMmMax: selectionHard.diameterMmMax,
+            nominalPowerKwMin: selectionHard.nominalPowerKwMin,
+            nominalPowerKwMax: selectionHard.nominalPowerKwMax,
+            maxPowerKwMin: selectionHard.maxPowerKwMin,
+            maxPowerKwMax: selectionHard.maxPowerKwMax,
+            budgetMax: selectionHard.budgetMax,
+            brandConstraint: selectionHard.brandConstraint,
+            exactModelConstraint: selectionHard.exactModelConstraint,
+            mustHaveTraits: selectionHard.mustHaveTraits.length ? selectionHard.mustHaveTraits : undefined,
+            exactModelTokens: selectionHard.exactModelTokens.length ? selectionHard.exactModelTokens : undefined
+          },
+          exactCatalogMatches: selectionHard.exactModelTokens.length ? selectionResult.matchedProducts : undefined
+        }
+      : null;
     if (structuredCatalogSlice?.products.length) {
       for (const product of structuredCatalogSlice.products) byId.set(product.id, product);
       for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
-      if (!isLeadPlan(effectivePlan) && (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
+      const selectionEngineRequestsCards = shouldForceStructuredSelectionCards(input.userMessage, effectivePlan, selectionResult);
+      if ((planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards) &&
+        (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = {
           ...effectivePlan,
           action: 'recommend_products',
           answerMode: 'productRecommendation',
           cardPolicy: 'showProducts',
-          followUpPolicy: structuredCatalogSlice.totalMatched > MAX_PRODUCT_CARDS ? 'askClarifyingQuestion' : 'auto',
+          followUpPolicy: selectionResult.hiddenProducts.length ? 'askClarifyingQuestion' : 'auto',
+          selectedProductIds: selectionResult.visibleProducts.map((product) => product.id),
+          requiredProductTraits: {
+            ...effectivePlan.requiredProductTraits,
+            productIntent: selectionHard.productIntent,
+            productRole: selectionHard.productRole,
+            fuel: selectionHard.fuel ?? 'unknown',
+            startType: selectionHard.startType ?? 'unknown',
+            enclosure: selectionHard.enclosure ?? 'unknown',
+            conventionalGenerator: selectionHard.conventionalGenerator ?? null,
+            singlePhase220: selectionHard.singlePhase220 ?? null,
+            budgetMax: selectionHard.budgetMax ?? null,
+            nominalPowerKwMin: selectionHard.nominalPowerKwMin ?? null,
+            nominalPowerKwMax: selectionHard.nominalPowerKwMax ?? null,
+            maxPowerKwMin: selectionHard.maxPowerKwMin ?? null,
+            maxPowerKwMax: selectionHard.maxPowerKwMax ?? null,
+            weightKgMin: selectionHard.weightKgMin ?? null,
+            weightKgMax: selectionHard.weightKgMax ?? null,
+            diameterMmMin: selectionHard.diameterMmMin ?? null,
+            diameterMmMax: selectionHard.diameterMmMax ?? null
+          },
+          selectionState: {
+            ...effectivePlan.selectionState,
+            shouldShowCards: true,
+            cardDisplayMode: 'structured_selection'
+          },
           needsWebSearch: false,
           answerGuidance: [
             effectivePlan.answerGuidance,
-            'Use structuredCatalogSlice as the complete authoritative catalog slice for the current hard constraints. If totalMatched is 1-10, cover the whole slice. If totalMatched is above 10, show the visible cards, mention that more matching products are behind show-more, and ask one narrowing question.'
+            'Use productSelection as the authoritative catalog selection for the current hard constraints. Name only visible cards as recommendations. If hiddenProductIds is not empty, mention show-more and ask one narrowing question from missingQuestions.'
           ].filter(Boolean).join('\n')
         };
       }
@@ -3272,6 +4487,43 @@ export class AssistantService {
         };
       }
       allCandidates = [...byId.values()];
+    }
+    if (!selectionCanRecommend && selectionHard.productIntent === 'generator') {
+      effectivePlan = {
+        ...effectivePlan,
+        action: 'ask_clarifying_question',
+        answerMode: 'short',
+        cardPolicy: 'textOnly',
+        followUpPolicy: 'askClarifyingQuestion',
+        selectedProductIds: [],
+        answerGuidance: [
+          effectivePlan.answerGuidance,
+          'Do not recommend generator models yet. The current request lacks a reliable load or power basis. Ask for connected consumers and their kW/W loads, including motor startup loads if known.'
+        ].filter(Boolean).join('\n')
+      };
+    }
+    if (selectionHasEstimatedPump) {
+      effectivePlan = {
+        ...effectivePlan,
+        action: 'ask_clarifying_question',
+        answerMode: 'short',
+        cardPolicy: 'textOnly',
+        followUpPolicy: 'askClarifyingQuestion',
+        selectedProductIds: [],
+        answerGuidance: [
+          effectivePlan.answerGuidance,
+          'A pump is present but its power/model/type is still unknown, so productSelection is only a load-risk estimate, not a recommendation. Do not name generator models or show catalog cards yet. Ask for pump power, model, or at least pump type, and explain that motor startup current controls the final generator class.'
+        ].filter(Boolean).join('\n')
+      };
+    }
+    if (!selectionHasEstimatedPump && selectionHard.productIntent === 'generator' && selectionResult.state.loadProfile?.requiredNominalKw) {
+      effectivePlan = {
+        ...effectivePlan,
+        answerGuidance: [
+          effectivePlan.answerGuidance,
+          `Calculated generator load from current dialogue: minimum nominal power ${selectionResult.state.loadProfile.requiredNominalKw} kW, starting demand ${selectionResult.state.loadProfile.requiredStartingKw} kW. State these as the calculated minimum; do not state a higher minimum only because the first catalog card is more powerful.`
+        ].filter(Boolean).join('\n')
+      };
     }
     const currentLineupStyle = shouldUseCurrentLineupStyle(input.userMessage, effectivePlan);
     const catalogLineupAlternatives = currentLineupStyle
@@ -3382,11 +4634,21 @@ export class AssistantService {
       detailedFactStyle ||
       mustUseWebSearch ||
       effectivePlan.action === 'verify_with_web';
-    const productsForAnswer = answerNeedsFullCatalogContext
-      ? candidates
-      : cards.length
-        ? candidates.filter((product) => cardIdsForAnswer.has(product.id)).slice(0, MAX_PRODUCT_CARDS)
-        : candidates.slice(0, 8);
+    const recommendationAnswer = effectivePlan.action === 'recommend_products' || effectivePlan.answerMode === 'productRecommendation';
+    const productsForAnswer = answerContextProductsForCards({
+      answerNeedsFullCatalogContext,
+      recommendationAnswer,
+      selectionHasEstimatedPump,
+      cards,
+      candidates,
+      cardSourceProducts: productsForCardSelection
+    });
+    const priceRangeForAnswer = productCardPriceRange(cards);
+    const visibleCardIdsForContext = new Set(cards.slice(0, LARGE_SLICE_VISIBLE_CARDS).map((card) => card.id));
+    const shownCardIdsForContext = new Set(cards.map((card) => card.id));
+    const suitableProductsForContext = selectionResult.matchedProducts.length
+      ? selectionResult.matchedProducts
+      : productsForCardSelection.filter((product) => cardIdsForAnswer.has(product.id));
 
     const context = {
       ...buildAssistantContext({
@@ -3415,9 +4677,25 @@ export class AssistantService {
       })),
       productCardsBehindShowMore: cards.slice(LARGE_SLICE_VISIBLE_CARDS).map((card) => ({
         id: card.id,
-        name: card.name,
         category: card.category,
         price: card.price
+      })),
+      productCardPriceRange: priceRangeForAnswer,
+      allSuitableProductCount: selectionResult.matchedProducts.length || cards.length,
+      allSuitableProducts: compactSuitableProductsForAnswer(
+        suitableProductsForContext,
+        visibleCardIdsForContext,
+        shownCardIdsForContext
+      ),
+      productSelection: selectionMetadata(selectionResult),
+      comparisonProducts: selectionResult.comparisonProducts.slice(0, 12).map((product) => ({
+        id: product.id,
+        name: product.name,
+        category: product.category,
+        price: product.price,
+        reason: selectionResult.rejectedProducts.find((item) => item.productId === product.id)?.reason,
+        weightKg: extractWeightKg(product),
+        powerKw: extractPowerKw(product)
       })),
       structuredCatalogSlice: structuredCatalogSlice
         ? {
@@ -3472,6 +4750,12 @@ export class AssistantService {
         : 'Стиль ответа сейчас важен: пиши короче и проще. Если карточки товаров будут показаны под ответом, текст должен быть коротким выводом, а не вторым каталогом: 3-4 коротких предложения максимум, не больше двух моделей в тексте, без полного перечисления карточек. Главный/лучший вариант в тексте обязан быть первой видимой карточкой productCardsVisibleFirst[0]. Остальные видимые модели можно называть только как альтернативы; скрытые за кнопкой “Показать еще” можно упомянуть только как дополнительные варианты. Без длинных вступлений, без канцелярита, без роботизированных фраз. Говори как живой менеджер: спокойно, понятно, по делу. Не показывай внешние ссылки, URL, домены и markdown-ссылки: web search используется только внутренне.';
     const answerStyleInstructions = [
       baseAnswerStyleInstructions,
+      'For product recommendation turns, productCardsShown is the only concrete product set the buyer can see. Name only models from productCardsShown/productCardsVisibleFirst. Do not name catalogCandidates or allSuitableProducts items as found/recommended unless they are also in productCardsShown; refer to behindShowMore items only as additional suitable options under Show more. If productCardsShown is empty, do not name any concrete model.',
+      'When you say "selection" or "podborka", define the scope: "po tekushchim kriteriyam v kataloge". If allSuitableProductCount is present, use it as the total suitable catalog slice and explain that first cards are shown now and the rest are under Show more.',
+      'Do not say an inverter generator is required while showing only conventional generator cards. If inverter is a hard requirement, conventional generators are not suitable; ask whether to broaden to conventional options. If inverter is only a preference, say explicitly that shown conventional cards are compromise options, not inverter models.',
+      'Do not use the phrase "hidden options" or Russian equivalents like "скрытые варианты"; say "additional suitable options are under Show more" or "I can expand the catalog selection". If productCardPriceRange is present and several suitable cards are shown, mention the catalog price range for the requested product type and stated need. For ordinary product comparisons, prefer short bullets over markdown tables unless exact tabular data is necessary.',
+      'If answerContext.productSelection.loadProfile contains a pump item with source estimated_average, do not call any generator a final/best/first choice and do not say it will fit. Treat visible generator cards only as preliminary candidates, explain that pump startup is the risk, and ask for pump model, type, or power before final selection.',
+      'For generator recommendations with answerContext.productSelection.loadProfile, state the calculated minimum from requiredNominalKw/requiredStartingKw separately from the visible catalog cards. Do not turn the first visible card power into the required class; if cards are more powerful than the calculated minimum, say they are catalog options with reserve.',
       factualVerificationGuidance,
       comparativeAnswerGuidance,
       effectivePlan.followUpPolicy === 'answerNowNoDeferredOffer' && !currentLineupStyle && !detailedFactStyle
@@ -3619,6 +4903,8 @@ export class AssistantService {
     const usedWebSearch = responseUsedWebSearch(completedResponse);
     const rawAnswer = answer;
     answer = sanitizeVisibleAnswer(answer, effectivePlan);
+    answer = repairAnswerCardText(answer, cards, effectivePlan);
+    answer = repairGeneratorLoadMinimumText(answer, selectionResult.state.loadProfile);
     answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards);
     const cardContract = enforceAnswerCardContract(
       answer,
@@ -3630,6 +4916,20 @@ export class AssistantService {
       structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS
     );
     cards = cardContract.cards;
+    const finalVisibleCardIds = cards.slice(0, LARGE_SLICE_VISIBLE_CARDS).map((card) => card.id);
+    const finalHiddenCardIds = [
+      ...cards.slice(LARGE_SLICE_VISIBLE_CARDS).map((card) => card.id),
+      ...selectionResult.hiddenProducts.map((product) => product.id)
+    ].filter((id, index, all) => !finalVisibleCardIds.includes(id) && all.indexOf(id) === index);
+    const finalSelectionMetadata: ProductSelectionMetadata = {
+      ...selectionMetadata(selectionResult),
+      matchedProductIds: selectionResult.matchedProducts.length
+        ? selectionResult.matchedProducts.map((product) => product.id)
+        : cards.map((card) => card.id),
+      visibleProductIds: finalVisibleCardIds,
+      hiddenProductIds: finalHiddenCardIds,
+      totalMatched: Math.max(selectionResult.matchedProducts.length, cards.length)
+    };
     if (answer) await input.onDelta?.(answer);
     if (usedWebSearch && completedResponse) {
       await this.storeVerifiedWebFindings({
@@ -3659,6 +4959,7 @@ export class AssistantService {
         turnPlan: effectivePlan,
         cardSelection: cardSelection.diagnostics,
         cardContract: cardContract.diagnostics,
+        productSelection: finalSelectionMetadata,
         structuredCatalogSlice: structuredCatalogSlice
           ? {
               source: structuredCatalogSlice.source,
@@ -3673,7 +4974,15 @@ export class AssistantService {
 
     this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
 
-    return { answer, needState, productCards: cards, usedWebSearch, leadRequested: purchasePlan.leadRequested, assistantMessageId: assistantMessage.id };
+    return {
+      answer,
+      needState,
+      productCards: cards,
+      usedWebSearch,
+      leadRequested: purchasePlan.leadRequested,
+      assistantMessageId: assistantMessage.id,
+      metadata: { selection: finalSelectionMetadata }
+    };
   }
 
   private async maybeSummarizeHistory(sessionId: string, history: Message[], existingSummary?: string | null) {
@@ -3915,6 +5224,11 @@ function turnPlanSchema() {
           },
           conventionalGenerator: { type: ['boolean', 'null'] },
           singlePhase220: { type: ['boolean', 'null'] },
+          budgetMax: { type: ['number', 'null'] },
+          weightKgMin: { type: ['number', 'null'] },
+          weightKgMax: { type: ['number', 'null'] },
+          diameterMmMin: { type: ['number', 'null'] },
+          diameterMmMax: { type: ['number', 'null'] },
           nominalPowerKwMin: { type: ['number', 'null'] },
           nominalPowerKwMax: { type: ['number', 'null'] },
           maxPowerKwMin: { type: ['number', 'null'] },
@@ -3929,6 +5243,11 @@ function turnPlanSchema() {
           'enclosure',
           'conventionalGenerator',
           'singlePhase220',
+          'budgetMax',
+          'weightKgMin',
+          'weightKgMax',
+          'diameterMmMin',
+          'diameterMmMax',
           'nominalPowerKwMin',
           'nominalPowerKwMax',
           'maxPowerKwMin',
@@ -4011,7 +5330,7 @@ function turnPlanSchema() {
           shouldShowCards: { type: 'boolean' },
           cardDisplayMode: {
             type: 'string',
-            enum: ['exact_matches', 'compatible_accessories', 'alternatives', 'preliminary', 'none']
+            enum: ['exact_matches', 'compatible_accessories', 'alternatives', 'structured_selection', 'preliminary', 'none']
           }
         },
         required: [
@@ -4120,6 +5439,9 @@ function extractUrlCitations(value: unknown, depth = 0): WebCitation[] {
 export const assistantTestHooks = {
   buildProductFitProfile,
   selectCardsFromPlan,
+  answerContextProductsForCards,
+  compactSuitableProductsForAnswer,
+  shouldForceStructuredSelectionCards,
   enforceAnswerCardContract,
   cardsFromPlan,
   sanitizeVisibleAnswer,
@@ -4139,6 +5461,10 @@ export const assistantTestHooks = {
   webSearchContextSize,
   parseWeightNeedRangeKg,
   parseDimensionNeedRangeMm,
+  extractModelTokens,
+  fallbackTurnPlan,
+  repairAnswerCardText,
+  repairGeneratorLoadMinimumText,
   isCatalogAvailabilityQuestion,
   isManufacturingStatusQuestion
 };

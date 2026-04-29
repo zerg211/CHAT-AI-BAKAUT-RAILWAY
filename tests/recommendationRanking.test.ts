@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AssistantService, assistantTestHooks } from '../src/ai/assistant.js';
-import { emptyNeedState, heuristicNeedUpdate, mergeNeedState } from '../src/ai/needState.js';
+import { emptyNeedState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
+import type { ProductSelectionCriteria } from '../src/shared/types.js';
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
 
@@ -56,6 +57,56 @@ class FakeProducts {
   async listProducts() {
     return this.products;
   }
+}
+
+function baseTurnPlan(overrides: Record<string, unknown> = {}) {
+  return {
+    action: 'recommend_products',
+    answerMode: 'productRecommendation',
+    cardPolicy: 'showProducts',
+    followUpPolicy: 'auto',
+    contextScope: 'activeNeed',
+    searchScope: 'focusedNeed',
+    catalogSearchQuery: '',
+    selectedProductIds: [],
+    requiredProductTraits: {
+      productIntent: 'unknown',
+      productRole: 'unknown',
+      fuel: 'unknown',
+      startType: 'unknown',
+      enclosure: 'unknown',
+      conventionalGenerator: null,
+      singlePhase220: null,
+      budgetMax: null,
+      weightKgMin: null,
+      weightKgMax: null,
+      diameterMmMin: null,
+      diameterMmMax: null,
+      nominalPowerKwMin: null,
+      nominalPowerKwMax: null,
+      maxPowerKwMin: null,
+      maxPowerKwMax: null,
+      powerReasoning: ''
+    },
+    selectionState: {
+      currentProductClass: 'unknown',
+      targetProductClass: 'unknown',
+      compatibilityTargetProduct: '',
+      mustHaveTraits: [],
+      niceToHaveTraits: [],
+      excludedClasses: [],
+      brandConstraint: '',
+      exactModelConstraint: '',
+      isAccessoryFollowUp: false,
+      selectionConfidence: 0,
+      shouldShowCards: true,
+      cardDisplayMode: 'preliminary'
+    },
+    needsWebSearch: false,
+    missingInformation: [],
+    answerGuidance: '',
+    ...overrides
+  } as any;
 }
 
 async function rank(message: string, products: ReturnType<typeof product>[]) {
@@ -302,6 +353,12 @@ describe('recommendation ranking', () => {
     expect(slice?.products.map((item) => item.id).sort()).toEqual(['p120', 'p160', 'p90']);
   });
 
+  it('parses hyphenated plus-minus tolerance in weight ranges', () => {
+    const parsed = assistantTestHooks.parseWeightNeedRangeKg('вес 100-150 кг, плюс-минус 10 кг можно');
+
+    expect(parsed).toEqual({ min: 90, max: 160 });
+  });
+
   it('builds a full catalog slice for generator power constraints, not only plate weights', async () => {
     const message = 'need benzin generator 5-6 kw for dacha';
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
@@ -539,6 +596,206 @@ describe('recommendation ranking', () => {
     expect(result.diagnostics.firstCardAligned).toBe(true);
   });
 
+  it('does not expose uncarded candidates to product recommendation answer context', () => {
+    const shown = product('shown', 'Generator gasoline shown 6.0 kW', 60_000, 'https://example.test/shown');
+    const unshown = product('unshown', 'Generator gasoline unshown 6.0 kW', 65_000, 'https://example.test/unshown');
+    const cards = [{
+      id: shown.id,
+      name: shown.name,
+      category: shown.category,
+      price: shown.price,
+      reasons: []
+    }];
+
+    const products = assistantTestHooks.answerContextProductsForCards({
+      answerNeedsFullCatalogContext: false,
+      recommendationAnswer: true,
+      selectionHasEstimatedPump: false,
+      cards: cards as any,
+      candidates: [shown, unshown],
+      cardSourceProducts: [shown, unshown]
+    });
+    const withoutCards = assistantTestHooks.answerContextProductsForCards({
+      answerNeedsFullCatalogContext: false,
+      recommendationAnswer: true,
+      selectionHasEstimatedPump: false,
+      cards: [],
+      candidates: [shown, unshown],
+      cardSourceProducts: [shown, unshown]
+    });
+
+    expect(products.map((item) => item.id)).toEqual(['shown']);
+    expect(withoutCards).toEqual([]);
+  });
+
+  it('keeps expanded fact answers able to use catalog candidates when cards are intentionally suppressed', () => {
+    const candidate = product('fact', 'Generator gasoline factual model 6.0 kW', 60_000, 'https://example.test/fact');
+
+    const products = assistantTestHooks.answerContextProductsForCards({
+      answerNeedsFullCatalogContext: true,
+      recommendationAnswer: false,
+      selectionHasEstimatedPump: false,
+      cards: [],
+      candidates: [candidate],
+      cardSourceProducts: []
+    });
+
+    expect(products.map((item) => item.id)).toEqual(['fact']);
+  });
+
+  it('forces cards for reliable structured catalog selections even when planner made the turn text-only', () => {
+    const state = mergeProductSelectionState(emptyNeedState().selectionState, {
+      targetProductClass: 'generator',
+      hardConstraints: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 5,
+        nominalPowerKwMax: 7,
+        exactModelTokens: [],
+        mustHaveTraits: [],
+        excludedClasses: []
+      },
+      confidence: 0.8
+    });
+    const result = {
+      state,
+      matchedProducts: [product('g1', 'Generator gasoline inverter 6.0 kW', 80_000, 'https://example.test/g1')],
+      confidence: 0.8
+    };
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      selectedProductIds: [],
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        shouldShowCards: false
+      }
+    });
+
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      'show all suitable generator options for this load',
+      plan,
+      result as any
+    )).toBe(true);
+  });
+
+  it('uses normalized selection constraints for structured card slices instead of stale planner traits', () => {
+    const message = 'show suitable house generators with ordinary models as compromise';
+    const productItem = productWithSpecs(
+      'ordinary',
+      'Generator gasoline SUMEC SU7700 5.0 kW open frame',
+      42_490,
+      'https://example.test/generators/sumec-su7700',
+      {}
+    );
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          fuel: 'gasoline',
+          nominalPowerKwMin: 5,
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.9
+      })
+    };
+    const stalePlannerPlan = baseTurnPlan({
+      catalogSearchQuery: message,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        conventionalGenerator: false
+      }
+    });
+    const normalizedPlan = baseTurnPlan({
+      catalogSearchQuery: message,
+      requiredProductTraits: {
+        ...stalePlannerPlan.requiredProductTraits,
+        conventionalGenerator: null
+      },
+      selectedProductIds: ['ordinary'],
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      }
+    });
+
+    expect(assistantTestHooks.selectCardsFromPlan([productItem], state, message, stalePlannerPlan).cards).toHaveLength(0);
+    expect(assistantTestHooks.selectCardsFromPlan([productItem], state, message, normalizedPlan).cards.map((card) => card.id)).toEqual(['ordinary']);
+  });
+
+  it('keeps the full structured selection in cards so the UI can reveal more suitable products', () => {
+    const message = 'show all suitable house generators';
+    const products = Array.from({ length: 12 }, (_, index) => productWithSpecs(
+      `g${index}`,
+      `Generator gasoline Fit ${index + 5}.0 kW`,
+      50_000 + index * 1000,
+      `https://example.test/generators/g${index}`,
+      {}
+    ));
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          fuel: 'gasoline',
+          nominalPowerKwMin: 5,
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.9
+      })
+    };
+    const plan = baseTurnPlan({
+      catalogSearchQuery: message,
+      selectedProductIds: products.slice(0, 7).map((item) => item.id),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        nominalPowerKwMin: 5
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      }
+    });
+
+    const result = assistantTestHooks.selectCardsFromPlan(products, state, message, plan, { cardLimit: 50 });
+
+    expect(result.cards).toHaveLength(12);
+    expect(result.cards.slice(0, 7).map((card) => card.id)).toEqual(products.slice(0, 7).map((item) => item.id));
+  });
+
+  it('marks visible and show-more suitable products in answer context', () => {
+    const first = product('first', 'Generator gasoline inverter first 6.0 kW', 60_000, 'https://example.test/first');
+    const extra = product('extra', 'Generator gasoline extra 6.0 kW', 65_000, 'https://example.test/extra');
+
+    const context = assistantTestHooks.compactSuitableProductsForAnswer(
+      [first, extra],
+      new Set(['first']),
+      new Set(['first', 'extra'])
+    );
+
+    expect(context).toMatchObject([
+      { id: 'first', visibleCard: true, behindShowMore: false, isInverter: true },
+      { id: 'extra', visibleCard: false, behindShowMore: true, isConventionalGenerator: true }
+    ]);
+  });
+
   it('adds a show-more note for large structured slices when the answer omits it', () => {
     const cards = Array.from({ length: 12 }, (_, index) => ({
       id: `p${index}`,
@@ -563,7 +820,7 @@ describe('recommendation ranking', () => {
     expect(answer.endsWith('Уточните, нужна прямоходная или реверсивная?')).toBe(true);
   });
 
-  it('keeps catalog availability questions out of current-lineup web-search routing', () => {
+  it('keeps catalog availability questions out of current-lineup routing but respects explicit planner web search', () => {
     const message = ru('\\u0410 \\u0447\\u0442\\u043e \\u0440\\u0430\\u0437\\u0432\\u0435 \\u043d\\u0435\\u0442 \\u043f\\u043b\\u0438\\u0442 BPS 1550 WACKER? \\u0418\\u043b\\u0438 \\u043d\\u0435\\u0442 LAT 100 \\u0438\\u043b\\u0438 LAT 80 \\u043e\\u0442 HUSQVARNA?');
     const plan = {
       action: 'answer_question',
@@ -596,7 +853,62 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.isCatalogAvailabilityQuestion(message)).toBe(true);
     expect(assistantTestHooks.isManufacturingStatusQuestion(message)).toBe(false);
     expect(assistantTestHooks.shouldUseCurrentLineupStyle(message, plan)).toBe(false);
-    expect(assistantTestHooks.shouldUseWebSearch(message, plan)).toBe(false);
+    expect(assistantTestHooks.shouldUseWebSearch(message, plan)).toBe(true);
+    expect(assistantTestHooks.shouldUseWebSearch(message, {
+      ...plan,
+      answerMode: 'short',
+      needsWebSearch: false
+    })).toBe(false);
+  });
+
+  it('does not let text fallback override a structured planner product intent', () => {
+    const profile = assistantTestHooks.buildProductFitProfile(
+      emptyNeedState(),
+      'oil filter and oil for generator',
+      'oil filter and oil for generator',
+      {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    );
+
+    expect(profile.intent).toBe('generator');
+  });
+
+  it('does not append ranked fallback cards when the planner selected exact visible products', () => {
+    const state = emptyNeedState();
+    const products = [
+      product('selected', 'Generator gasoline Selected 5 kW', 50_000, 'https://example.test/catalog/generators/selected'),
+      product('fallback', 'Generator gasoline Fallback 5 kW', 45_000, 'https://example.test/catalog/generators/fallback')
+    ];
+    const cards = assistantTestHooks.cardsFromPlan(products, state, 'show selected generator', baseTurnPlan({
+      selectedProductIds: ['selected'],
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        selectionConfidence: 0.8,
+        shouldShowCards: true
+      }
+    }));
+
+    expect(cards.map((card) => card.id)).toEqual(['selected']);
+  });
+
+  it('does not invent cards when a confident planner chose none', () => {
+    const state = emptyNeedState();
+    const products = [
+      product('fallback', 'Generator gasoline Fallback 5 kW', 45_000, 'https://example.test/catalog/generators/fallback')
+    ];
+    const cards = assistantTestHooks.cardsFromPlan(products, state, 'show generator', baseTurnPlan({
+      selectedProductIds: [],
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        selectionConfidence: 0.8,
+        shouldShowCards: false
+      }
+    }));
+
+    expect(cards).toEqual([]);
   });
 
   it('treats electric start as a required need, not only a ranking bonus', () => {
@@ -1282,5 +1594,775 @@ describe('recommendation ranking', () => {
 
     expect(selection.cards).toEqual([]);
     expect(selection.diagnostics.fallbackReason).toBe('suppressed_for_current_lineup_question');
+  });
+
+  it('selection engine keeps hard budget across turns and filters over-budget products', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      productWithSpecs('fit', 'Generator gasoline AP6500E 5.5 kW electric start', 80_000, 'https://example.test/catalog/generator/fit', { start: 'electric starter' }),
+      productWithSpecs('over', 'Generator gasoline EP6500E 5.5 kW electric start', 180_000, 'https://example.test/catalog/generator/over', { start: 'electric starter' })
+    ]) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          budgetMax: 90_000,
+          nominalPowerKwMin: 5,
+          nominalPowerKwMax: 6,
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.8
+      })
+    };
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'gasoline generator 5-6 kw electric start',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        startType: 'electric'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('show suitable options with electric start', state, plan, []);
+
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['fit']);
+    expect(result.state.hardConstraints.budgetMax).toBe(90_000);
+  });
+
+  it('selection engine exposes hidden products and narrowing questions for large catalog slices', async () => {
+    const products = Array.from({ length: 12 }, (_, index) =>
+      product(`p${index}`, ru(`\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 ${105 + index} \\u043a\\u0433`), 100_000 + index, `https://example.test/catalog/vibroplity/p${index}`)
+    );
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'plate 100-150 kg',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'plate',
+        selectionConfidence: 0.8
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('Need plate 100-150 kg plus minus 10 kg', emptyNeedState(), plan, products);
+
+    expect(result.matchedProducts).toHaveLength(12);
+    expect(result.visibleProducts.length).toBeGreaterThan(0);
+    expect(result.hiddenProducts.length).toBeGreaterThan(0);
+    expect(result.missingQuestions.length).toBeGreaterThan(0);
+  });
+
+  it('exact model selection does not return an accessory as the core product', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      product('mat', ru('\\u041a\\u043e\\u0432\\u0440\\u0438\\u043a \\u0434\\u043b\\u044f \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b Husqvarna LF 80 LAT'), 12_000, 'https://example.test/catalog/accessories/lf80-mat'),
+      product('plate', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Husqvarna LF 80 LAT 95 \\u043a\\u0433'), 154_000, 'https://example.test/catalog/vibroplity/lf80-lat')
+    ]) as never);
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'Husqvarna LF 80 LAT plate',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'plate',
+        exactModelConstraint: 'LF 80 LAT',
+        selectionConfidence: 0.8
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('Is there Husqvarna LF 80 LAT plate?', emptyNeedState(), plan, []);
+
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['plate']);
+  });
+
+  it('fallback turn plan does not select products or hard product traits', () => {
+    const plan = assistantTestHooks.fallbackTurnPlan({
+      userMessage: 'Need generator 5-6 kw with electric start',
+      needState: emptyNeedState(),
+      baseQuery: 'Need generator 5-6 kw with electric start'
+    });
+
+    expect(plan.selectedProductIds).toEqual([]);
+    expect(plan.requiredProductTraits.productIntent).toBe('unknown');
+    expect(plan.requiredProductTraits.startType).toBe('unknown');
+    expect(plan.selectionState.shouldShowCards).toBe(false);
+  });
+
+  it('does not treat voltage and power specs as exact model tokens', () => {
+    const tokens = assistantTestHooks.extractModelTokens('Need generator 220V/230V 5-6 kW with electric start, maybe AP6500E');
+
+    expect(tokens.map((token) => token.toLowerCase())).toContain('ap6500e');
+    expect(tokens.join(' ')).not.toMatch(/220|230|5-6|kw/i);
+  });
+
+  it('does not classify a concrete vibrator with 380V in the name as a generator', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      product('vibrator', 'Вибратор глубинный (привод) H3EM-I, 380В GRANDPOOL', 9_580, 'https://example.test/catalog/vibratory/h3em'),
+      product('generator', 'Генератор бензиновый TOR KM2800i 2.8 кВт', 23_272, 'https://example.test/catalog/generator/km2800i')
+    ]) as never);
+
+    const result = await assistant.selectProductsForTurn('Нужен генератор для дома 3 кВт', emptyNeedState(), baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('vibrator');
+    expect(result.missingQuestions.length).toBeGreaterThan(0);
+  });
+
+  it('does not create hard budget from an unknown answer', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      productWithSpecs('g1', 'Generator gasoline A3500i 3.0 kW', 40_000, 'https://example.test/catalog/generators/g1', {})
+    ]) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.7
+      })
+    };
+
+    const result = await assistant.selectProductsForTurn('не знаю', state, baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(result.state.hardConstraints.budgetMax).toBeUndefined();
+  });
+
+  it('keeps a boiler article as compatibility target, not generator exact token', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([]) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.7
+      })
+    };
+
+    const result = await assistant.selectProductsForTurn('котел у меня Baxi Ampera Plus, на нем артикул E8403106', state, baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(result.state.hardConstraints.exactModelTokens).not.toContain('E8403106');
+    expect(result.state.compatibilityTargetProduct?.article).toBe('E8403106');
+  });
+
+  it('does not turn an inverter explanation question into a hard inverter requirement', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([]) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.7
+      })
+    };
+
+    const result = await assistant.selectProductsForTurn('Инверторный? А что это вообще?', state, baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(result.state.hardConstraints.conventionalGenerator).toBeUndefined();
+  });
+
+  it('infers 220 V from ordinary home load context without treating it as planner-made hard data', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([]) as never);
+
+    const result = await assistant.selectProductsForTurn('Для дома: два холодильника, свет и котел.', emptyNeedState(), baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(result.state.hardConstraints.singlePhase220).toBe(true);
+    expect(result.state.hardConstraints.provenance?.singlePhase220).toBe('inferred_from_load');
+  });
+
+  it('replaces stale low generator power after a confirmed boiler load and keeps cheapest within that set', async () => {
+    const products = [
+      productWithSpecs('weak', 'Generator gasoline BISON BS3250i 3.0 kW', 28_032, 'https://example.test/catalog/generators/weak', {}),
+      productWithSpecs('expensive', 'Generator gasoline FUBAG TI 7000 A ES 6.5 kW', 126_060, 'https://example.test/catalog/generators/expensive', { start: 'electric starter' }),
+      productWithSpecs('cheap-fit', 'Generator gasoline TSS SGG 7000Ei 7.0 kW', 80_913, 'https://example.test/catalog/generators/cheap-fit', { start: 'electric starter' })
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const initialSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      compatibilityTargetProduct: { kind: 'boiler', name: 'Baxi Ampera Plus', article: 'E8403106' },
+      hardConstraints: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 2,
+        nominalPowerKwMax: 3.5,
+        exactModelTokens: [],
+        mustHaveTraits: [],
+        excludedClasses: []
+      },
+      confidence: 0.8
+    });
+
+    const powered = await assistant.selectProductsForTurn('нашел он 6 квт', { ...emptyNeedState(), selectionState: initialSelection }, baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(powered.state.hardConstraints.nominalPowerKwMin).toBe(6);
+    expect(powered.matchedProducts.map((item) => item.id)).not.toContain('weak');
+
+    const cheapest = await assistant.selectProductsForTurn('а какой самый дешевый вариант?', { ...emptyNeedState(), selectionState: powered.state }, baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(cheapest.state.hardConstraints.nominalPowerKwMin).toBe(6);
+    expect(cheapest.visibleProducts[0]?.id).toBe('cheap-fit');
+    expect(cheapest.visibleProducts.map((item) => item.id)).not.toContain('weak');
+  });
+
+  it('calculates generator load from boiler, refrigerators, and lighting before matching products', async () => {
+    const products = [
+      productWithSpecs('six', 'Generator gasoline Budget 6.0 kW', 50_000, 'https://example.test/catalog/generators/six', {}),
+      productWithSpecs('seven', 'Generator gasoline Mid 7.0 kW', 70_000, 'https://example.test/catalog/generators/seven', {}),
+      productWithSpecs('nine', 'Generator gasoline Fit 9.0 kW', 90_000, 'https://example.test/catalog/generators/nine', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+    const planWithCompatibilityBrand = baseTurnPlan({
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'Baxi'
+      },
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const home = await assistant.selectProductsForTurn(
+      ru('\\u0414\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430: \\u0434\\u0432\\u0430 \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a\\u0430, \\u0441\\u0432\\u0435\\u0442 \\u0438 \\u043a\\u043e\\u0442\\u0435\\u043b, \\u043e\\u0431\\u044b\\u0447\\u043d\\u0430\\u044f \\u0441\\u0435\\u0442\\u044c 220 \\u0412.'),
+      emptyNeedState(),
+      plan,
+      []
+    );
+    const boiler = await assistant.selectProductsForTurn(
+      ru('\\u041a\\u043e\\u0442\\u0435\\u043b Baxi Ampera Plus, \\u0430\\u0440\\u0442\\u0438\\u043a\\u0443\\u043b E8403106.'),
+      { ...emptyNeedState(), selectionState: home.state },
+      planWithCompatibilityBrand,
+      []
+    );
+    const powered = await assistant.selectProductsForTurn(
+      ru('\\u041a\\u043e\\u0442\\u0435\\u043b 6 \\u043a\\u0412\\u0442, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a\\u0438 \\u043e\\u0431\\u044b\\u0447\\u043d\\u044b\\u0435, \\u0441\\u0432\\u0435\\u0442 \\u043f\\u0440\\u0438\\u043c\\u0435\\u0440\\u043d\\u043e 800 \\u0412\\u0442.'),
+      { ...emptyNeedState(), selectionState: boiler.state },
+      planWithCompatibilityBrand,
+      products
+    );
+
+    expect(powered.state.loadProfile?.requiredNominalKw).toBe(9);
+    expect(powered.state.hardConstraints.nominalPowerKwMin).toBe(9);
+    expect(powered.state.hardConstraints.brandConstraint).toBeUndefined();
+    expect(powered.visibleProducts.map((item) => item.id)).toEqual(['nine']);
+    expect(powered.matchedProducts.map((item) => item.id)).not.toContain('six');
+    expect(powered.matchedProducts.map((item) => item.id)).not.toContain('seven');
+  });
+
+  it('ranking follow-up can sort the previous matched set instead of dropping cards', async () => {
+    const products = [
+      productWithSpecs('fit-expensive', 'Generator gasoline inverter FUBAG TI 7000 A ES 6.5 kW', 126_060, 'https://example.test/catalog/generators/fit-expensive', {}),
+      productWithSpecs('fit-cheap', 'Generator gasoline inverter TSS SGG 6000Ei 6.0 kW', 80_377, 'https://example.test/catalog/generators/fit-cheap', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: ['non-existing-model'],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        matchedProductIds: ['fit-expensive', 'fit-cheap'],
+        previousCandidateProductIds: ['fit-expensive', 'fit-cheap'],
+        confidence: 0.8
+      })
+    };
+
+    const cheapest = await assistant.selectProductsForTurn('а какой самый дешевый вариант?', state, baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), []);
+
+    expect(cheapest.visibleProducts.map((item) => item.id)).toEqual(['fit-cheap', 'fit-expensive']);
+  });
+
+  it('sorts suitable products by price policy depending on budget presence', async () => {
+    const products = [
+      productWithSpecs('mid', 'Generator gasoline Fit 9.0 kW', 70_000, 'https://example.test/catalog/generators/mid', {}),
+      productWithSpecs('cheap', 'Generator gasoline Fit 9.0 kW', 50_000, 'https://example.test/catalog/generators/cheap', {}),
+      productWithSpecs('near-budget', 'Generator gasoline Fit 9.0 kW', 90_000, 'https://example.test/catalog/generators/near-budget', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const baseHardConstraints: ProductSelectionCriteria = {
+      productIntent: 'generator',
+      productRole: 'coreProduct',
+      nominalPowerKwMin: 9,
+      nominalPowerKwMax: 10,
+      exactModelTokens: [],
+      mustHaveTraits: [],
+      excludedClasses: []
+    };
+    const baseSelection: Parameters<typeof mergeProductSelectionState>[1] = {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: baseHardConstraints,
+      confidence: 0.8
+    };
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const noBudget = await assistant.selectProductsForTurn('show generator options', {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, baseSelection)
+    }, plan, products);
+    const withBudget = await assistant.selectProductsForTurn('show generator options', {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        ...baseSelection,
+        hardConstraints: {
+          ...baseHardConstraints,
+          budgetMax: 100_000
+        }
+      })
+    }, plan, products);
+
+    expect(noBudget.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'mid', 'near-budget']);
+    expect(withBudget.visibleProducts.map((item) => item.id)).toEqual(['near-budget', 'mid', 'cheap']);
+  });
+
+  it('enforces LLM-planned hard traits against planner-selected cards', async () => {
+    const products = [
+      productWithSpecs('diesel', 'Генератор дизельный ENERGO ED5.0/230-KL (4,5 кВт)', 203_111, 'https://example.test/catalog/dizelnye_generatory/ed5-kl/', {}),
+      productWithSpecs('honda5000', 'Генератор бензиновый Honda EG 5000 CX (4,0 кВт)', 179_900, 'https://example.test/catalog/benzinovye_generatory/honda-eg-5000/', { start: ru('\\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u0440\\u0442\\u0435\\u0440') }),
+      productWithSpecs('honda4000', 'Генератор бензиновый Honda EG 4000 CX (3,2 кВт)', 149_990, 'https://example.test/catalog/benzinovye_generatory/honda-eg-4000/', { start: ru('\\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u0440\\u0442\\u0435\\u0440') }),
+      productWithSpecs('manual', 'Генератор бензиновый Manual 4.0 kW', 90_000, 'https://example.test/catalog/benzinovye_generatory/manual/', { start: ru('\\u0440\\u0443\\u0447\\u043d\\u043e\\u0439') })
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          fuel: 'gasoline',
+          nominalPowerKwMin: 3.2,
+          nominalPowerKwMax: 4.5,
+          budgetMax: 200_000,
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.8
+      })
+    };
+    const message = 'Покажи подходящие варианты.';
+    const plan = baseTurnPlan({
+      selectedProductIds: ['diesel', 'manual', 'honda5000'],
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'electric'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(message, state, plan, products);
+    const cards = assistantTestHooks.cardsFromPlan(products, { ...state, selectionState: result.state }, message, plan);
+
+    expect(result.state.hardConstraints.fuel).toBe('gasoline');
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['honda5000', 'honda4000']);
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('diesel');
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('manual');
+    expect(cards.map((item) => item.id)).not.toContain('diesel');
+    expect(cards.map((item) => item.id)).not.toContain('manual');
+  });
+
+  it('does not mark arbitrary small generators as suitable before load is known', async () => {
+    const products = [
+      productWithSpecs('small', 'Generator gasoline inverter 1.0 kW', 20_000, 'https://example.test/catalog/generators/small', {}),
+      productWithSpecs('mid', 'Generator gasoline inverter 3.0 kW', 45_000, 'https://example.test/catalog/generators/mid', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(ru('\\u041d\\u0443\\u0436\\u0435\\u043d \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430.'), emptyNeedState(), plan, products);
+
+    expect(result.visibleProducts).toEqual([]);
+    expect(result.matchedProducts).toEqual([]);
+    expect(result.missingQuestions.join(' ')).toContain(ru('\\u043a\\u0430\\u043a\\u0438\\u0435 \\u043f\\u0440\\u0438\\u0431\\u043e\\u0440\\u044b'));
+  });
+
+  it('keeps exact comparison products separate from hard-matched plate recommendations', async () => {
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      product('small', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 small 60 \\u043a\\u0433'), 50_000, 'https://example.test/catalog/vibroplity/small'),
+      product('bps', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Wacker Neuson BPS 1550 91 \\u043a\\u0433'), 160_000, 'https://example.test/catalog/vibroplity/bps1550'),
+      productWithSpecs('lf100', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Husqvarna LF 100 PACE 105 \\u043a\\u0433'), undefined as any, 'https://example.test/catalog/vibroplity/lf100pace', {}),
+      product('lf', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Husqvarna LF 80 LAT 95 \\u043a\\u0433'), 255_000, 'https://example.test/catalog/vibroplity/lf80lat')
+    ]) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        hardConstraints: {
+          productIntent: 'plate',
+          productRole: 'coreProduct',
+          weightKgMin: 90,
+          weightKgMax: 160,
+          budgetMax: 200_000,
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.8
+      })
+    };
+
+    const result = await assistant.selectProductsForTurn('why not compare BPS 1550, LF 100 and LF 80 LAT?', state, baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'plate'
+      }
+    }), []);
+
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['bps']);
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('lf100');
+    expect(result.comparisonProducts.map((item) => item.id)).toContain('lf100');
+    expect(result.comparisonProducts.map((item) => item.id)).toContain('lf');
+    expect(result.rejectedProducts.find((item) => item.productId === 'lf100')?.reason).toContain('price is unknown');
+    expect(result.rejectedProducts.find((item) => item.productId === 'lf')?.reason).toContain('budget');
+  });
+
+  it('repairs product recommendation text that names no visible card', () => {
+    const repaired = assistantTestHooks.repairAnswerCardText('— это самый удобный вариант из подборки.', [{
+      id: 'g1',
+      name: 'Generator gasoline A3500i 3.0 kW',
+      category: 'Generators',
+      price: 40_000,
+      currency: 'RUB',
+      imageUrl: null,
+      sourceUrl: null,
+      brand: null,
+      specs: {},
+      reasons: [],
+      caveats: []
+    }], baseTurnPlan());
+
+    expect(repaired).toContain('Generator gasoline A3500i 3.0 kW');
+  });
+
+  it('keeps the model answer when no cards satisfy the LLM-planned constraints', () => {
+    const answer = 'I do not see a catalog card that satisfies gasoline, about 4 kW, and electric start at the same time.';
+    const repaired = assistantTestHooks.repairAnswerCardText(answer, [], baseTurnPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation'
+    }));
+
+    expect(repaired).toBe(answer);
+  });
+
+  it('repairs generator load minimum text when the first card has higher power', () => {
+    const repaired = assistantTestHooks.repairGeneratorLoadMinimumText('По вашей нагрузке минимум нужен генератор около 5 кВт с запасом. По расчету вам нужен генератор с запасом от 5 кВт по номиналу.', {
+      items: [],
+      totalRunningKw: 2.1,
+      requiredStartingKw: 3.9,
+      requiredNominalKw: 4,
+      simultaneousStarting: false,
+      calculation: '',
+      confidence: 0.82
+    });
+
+    expect(repaired).toContain('около 4 кВт');
+    expect(repaired).toContain('от 4 кВт');
+  });
+
+  it('does not allow a non-first visible card to be called the first card', () => {
+    const repaired = assistantTestHooks.repairAnswerCardText('Wacker Neuson BPS 1550 показан первой карточкой.', [{
+      id: 'redverg',
+      name: 'Виброплита REDVERG RD-29155 (91 кг)',
+      category: 'Виброплиты',
+      price: 54_000,
+      currency: 'RUB',
+      imageUrl: null,
+      sourceUrl: null,
+      brand: null,
+      specs: {},
+      reasons: [],
+      caveats: []
+    }, {
+      id: 'bps',
+      name: 'Виброплита Wacker Neuson BPS 1550 Gw-c CE (91 кг)',
+      category: 'Виброплиты',
+      price: 160_000,
+      currency: 'RUB',
+      imageUrl: null,
+      sourceUrl: null,
+      brand: null,
+      specs: {},
+      reasons: [],
+      caveats: []
+    }], baseTurnPlan());
+
+    expect(repaired).toContain('есть среди карточек');
+    expect(repaired).not.toContain('первой карточкой');
+  });
+
+  it('uses an estimated pump load before recommending house generators', async () => {
+    const products = [
+      productWithSpecs('weak', 'Generator gasoline inverter 2.8 kW', 30_000, 'https://example.test/generators/weak', {}),
+      productWithSpecs('fit', 'Generator gasoline inverter 3.8 kW', 70_000, 'https://example.test/generators/fit', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(ru('\\u041d\\u0443\\u0436\\u0435\\u043d \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430: \\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439 \\u043d\\u0430\\u0441\\u043e\\u0441, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0438 \\u0441\\u0432\\u0435\\u0442.'), emptyNeedState(), plan, products);
+
+    expect(result.state.loadProfile?.items.some((item) => item.kind === 'pump' && item.source === 'estimated_average')).toBe(true);
+    expect(result.state.loadProfile?.requiredNominalKw).toBeGreaterThanOrEqual(3.5);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit']);
+  });
+
+  it('recalculates generator load when explicit pump power appears', async () => {
+    const products = [
+      productWithSpecs('weak', 'Generator gasoline inverter 2.8 kW', 30_000, 'https://example.test/generators/weak', {}),
+      productWithSpecs('fit', 'Generator gasoline inverter 4.0 kW', 80_000, 'https://example.test/generators/fit', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(ru('\\u041d\\u0430\\u0441\\u043e\\u0441 1,1 \\u043a\\u0412\\u0442, \\u043e\\u0431\\u044b\\u0447\\u043d\\u044b\\u0439 \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0438 \\u0441\\u0432\\u0435\\u0442 800 \\u0412\\u0442.'), emptyNeedState(), plan, products);
+
+    expect(result.state.loadProfile?.items.find((item) => item.kind === 'pump')?.runningKw).toBe(1.1);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit']);
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('weak');
+  });
+
+  it('keeps calculated load above planner power guesses from appliance watts', async () => {
+    const products = [
+      productWithSpecs('fit', 'Generator gasoline inverter 4.0 kW', 80_000, 'https://example.test/generators/fit', {}),
+      productWithSpecs('oversized', 'Generator gasoline inverter 8.0 kW', 120_000, 'https://example.test/generators/oversized', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        budgetMax: 800,
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 8
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(ru('\\u041d\\u0430\\u0441\\u043e\\u0441 1,1 \\u043a\\u0412\\u0442, \\u043e\\u0431\\u044b\\u0447\\u043d\\u044b\\u0439 \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0438 \\u0441\\u0432\\u0435\\u0442 800 \\u0412\\u0442.'), emptyNeedState(), plan, products);
+
+    expect(result.state.loadProfile?.requiredNominalKw).toBe(4);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBe(4);
+    expect(result.state.hardConstraints.budgetMax).toBeUndefined();
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit']);
+  });
+
+  it('does not read previous generator constraint text as pump power', async () => {
+    const products = [
+      productWithSpecs('fit', 'Generator gasoline inverter 4.0 kW', 80_000, 'https://example.test/generators/fit', {}),
+      productWithSpecs('oversized', 'Generator gasoline inverter 8.0 kW', 120_000, 'https://example.test/generators/oversized', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const previousSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      targetProductClass: 'generator',
+      currentProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 5.5,
+        maxPowerKwMin: 3.9
+      },
+      loadProfile: {
+        items: [{
+          kind: 'pump',
+          name: 'pump',
+          count: 1,
+          runningKw: 1.1,
+          startingKw: 2.9,
+          source: 'estimated_average',
+          evidence: 'pump estimate'
+        }],
+        totalRunningKw: 2.1,
+        requiredStartingKw: 3.9,
+        requiredNominalKw: 4,
+        simultaneousStarting: false,
+        calculation: '',
+        confidence: 0.58
+      }
+    });
+    const state = {
+      ...emptyNeedState(),
+      selectionState: previousSelection,
+      explicitNeeds: [{
+        value: ru('\\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439 \\u043d\\u0430\\u0441\\u043e\\u0441'),
+        confidence: 0.9,
+        source: 'user' as const,
+        evidence: 'test',
+        updatedAt: new Date().toISOString()
+      }]
+    };
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(ru('\\u041d\\u0430\\u0441\\u043e\\u0441 1,1 \\u043a\\u0412\\u0442, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0438 \\u0441\\u0432\\u0435\\u0442 800 \\u0412\\u0442.'), state, plan, products);
+
+    expect(result.state.loadProfile?.items.find((item) => item.kind === 'pump')?.runningKw).toBe(1.1);
+    expect(result.state.loadProfile?.requiredNominalKw).toBe(4);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit']);
+  });
+
+  it('sorts budgeted catalog matches from the budget ceiling downward', async () => {
+    const products = [
+      product('cheap', 'Vibroplita 80 kg', 60_000, 'https://example.test/plates/cheap'),
+      product('near-budget', 'Vibroplita 90 kg wheel kit', 95_000, 'https://example.test/plates/near-budget'),
+      product('mid', 'Vibroplita 83 kg', 82_000, 'https://example.test/plates/mid')
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        budgetMax: 100_000,
+        weightKgMax: 90
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('Need vibroplita under 100000 rub, up to 90 kg, easy to transport.', emptyNeedState(), plan, products);
+
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['near-budget', 'mid', 'cheap']);
+  });
+
+  it('uses web verification for technical model comparisons with unverified specs', () => {
+    const plan = baseTurnPlan({
+      answerMode: 'productRecommendation',
+      needsWebSearch: false
+    });
+
+    expect(assistantTestHooks.shouldUseWebSearch('Compare TOR KM2800i and FUBAG BS 3300: which is quieter and better THD for a boiler?', plan)).toBe(true);
   });
 });

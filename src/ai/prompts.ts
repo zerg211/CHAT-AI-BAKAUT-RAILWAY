@@ -195,6 +195,11 @@ export function buildTurnPlannerPrompt() {
     "enclosure": "enclosed" | "open" | "any" | "unknown",
     "conventionalGenerator": boolean | null,
     "singlePhase220": boolean | null,
+    "budgetMax": number | null,
+    "weightKgMin": number | null,
+    "weightKgMax": number | null,
+    "diameterMmMin": number | null,
+    "diameterMmMax": number | null,
     "nominalPowerKwMin": number | null,
     "nominalPowerKwMax": number | null,
     "maxPowerKwMin": number | null,
@@ -225,6 +230,11 @@ selectionState заполняй как рабочее состояние под�
 requiredProductTraits заполняй по смыслу реплики и состояния диалога, а не только по точным словам. productRole отделяет основной товар от аксессуара: если покупатель просит "генератор в кожухе", "закрытый генератор", "тихий генератор" - это productIntent generator, productRole coreProduct, enclosure enclosed; если просит "кожух для генератора", "АВР для генератора", "фильтр/ремень/масло для генератора" - это generatorAccessory или generatorOil и productRole accessory/consumable. Если покупатель просит удобный запуск без ручного дергания, запуск с ключа/кнопки или аналогичную потребность - startType должен быть electric. Если это не требуется, ставь any или unknown, не выдумывай.
 productIntent выбирай по текущей потребности: weldingGenerator для сварочного генератора 2-в-1, generatorOil для масла именно к генератору, engineOil для 4-тактного моторного масла к виброплите/трамбовке/резчику/генератору, generatorAccessory для кожухов/фильтров/АВР/других расходников, plateAccessory для ковриков/накладок к виброплите, trowel для затирочных машин, diamondCore для алмазных коронок, diamondBlade для дисков, roller для виброкатков. По маслу определяй, подходит ли оно по типу двигателя, SAE вязкости и классу; если не хватает одного параметра - задай один точный вопрос, а не отправляй покупателя в паспорт. Если покупатель указал точный бренд или модель, не добивай selectedProductIds товарами других брендов; аналоги нужны только если покупатель просит аналоги.
 Для генераторов различай номинальную и максимальную мощность. Если считаешь нагрузку по приборам, указывай диапазон так, чтобы maxPowerKw отражал пусковой пик с запасом, а nominalPowerKw - длительную рабочую нагрузку. Не завышай номинал: свет + холодильник + бытовой насос обычно не требуют 6 кВт номинальной мощности, особенно если запуск не одновременный.
+The planner is the semantic brain for product selection. Infer hard constraints from meaning, including refusals, changed requirements, and "not this kind" corrections, then encode them in requiredProductTraits and selectionState. selectedProductIds must contain only products that satisfy those semantic constraints; do not expect downstream card code to fix your product choice.
+When the buyer gives budget, weight, or diameter constraints, encode them directly in requiredProductTraits as budgetMax, weightKgMin/weightKgMax, and diameterMmMin/diameterMmMax. If the buyer gives an approximate single value, use a practical narrow range and explain the assumption in answerGuidance. Leave these fields null when they are not real constraints.
+For generators with a pump/motor load: if pump power is known, recalculate the load and reject previously considered models that no longer have enough running/starting reserve. If pump power is unknown, ask for pump model/type or use a cautious average by pump type and mark the recommendation as preliminary; do not present a weak final model as certain.
+For technical comparisons involving noise, THD, AVR, waveform/sine quality, consumption, exact inverter/conventional type, or similar specs: set needsWebSearch=true unless those facts are already in catalog candidates. In answerGuidance require the final assistant to separate verified facts from general engineering inference.
+For plate compactors: do not require reversible travel for small paths/paving slabs unless the buyer asks for reverse, deep compaction, professional duty, or heavy soil work. If transport by one person matters, prefer lighter models or wheel kits and explain any tradeoff.
 selectedProductIds заполняй только id из preliminaryCatalogCandidates, максимум 10. Если покупатель уже выбрал комплект или просит оформить/купить/взять товар, ставь action collect_lead и выбирай только позиции этого комплекта: основную технику и конкретный расходник нужного объема, без альтернатив. Если подходящих товаров больше 4, выбирай более широкий набор по разным брендам и моделям, но без нерелевантных позиций. answerGuidance - краткая инструкция финальному ассистенту, без текста для покупателя.`;
 }
 

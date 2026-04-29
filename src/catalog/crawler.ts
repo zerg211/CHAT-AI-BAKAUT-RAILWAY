@@ -25,7 +25,7 @@ function isProductLikeUrl(url: string) {
   try {
     const pathParts = new URL(url).pathname.split('/').filter(Boolean);
     const slug = pathParts.at(-1) ?? '';
-    return pathParts[0] === 'catalog' && pathParts.length >= 3 && slug.includes('_');
+    return pathParts[0] === 'catalog' && pathParts.length >= 3 && slug.length > 4 && !slug.startsWith('filter');
   } catch {
     return false;
   }
@@ -184,4 +184,74 @@ export async function syncCatalogFromSite(
     await repository.finishCatalogSource(sourceId, 'failed', { visited: visited.size, imported, failed }, String(error));
     throw error;
   }
+}
+
+function normalizeInventoryUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    url.search = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return value.replace(/\/$/, '');
+  }
+}
+
+export async function inventoryCatalogFromSite(
+  options: { baseUrl?: string; maxPages?: number; startPath?: string; importMissing?: boolean } = {},
+  repository = new ProductRepository()
+) {
+  const baseUrl = options.baseUrl ?? config.CATALOG_BASE_URL;
+  const maxPages = options.maxPages ?? config.CATALOG_MAX_PAGES;
+  const startUrl = new URL(options.startPath ?? '/catalog/', baseUrl).toString();
+  const queue = [startUrl];
+  const visited = new Set<string>();
+  const siteProducts = new Map<string, CatalogProductInput>();
+  let failed = 0;
+
+  while (queue.length && visited.size < maxPages) {
+    const url = queue.shift()!;
+    const normalizedUrl = normalizeInventoryUrl(url);
+    if (visited.has(normalizedUrl)) continue;
+    visited.add(normalizedUrl);
+
+    try {
+      const html = await fetchText(url);
+      for (const link of extractLinks(html, url, baseUrl)) {
+        const normalizedLink = normalizeInventoryUrl(link);
+        if (!visited.has(normalizedLink) && queue.length + visited.size < maxPages) queue.push(link);
+      }
+      const product = extractProduct(html, url, baseUrl);
+      if (product?.sourceUrl) siteProducts.set(normalizeInventoryUrl(product.sourceUrl), product);
+    } catch {
+      failed += 1;
+    }
+  }
+
+  const dbUrls = new Set((await repository.listProductSourceUrls(20000)).map(normalizeInventoryUrl));
+  const missingProducts = [...siteProducts.entries()]
+    .filter(([url]) => !dbUrls.has(url))
+    .map(([, product]) => product);
+
+  if (options.importMissing) {
+    for (const product of missingProducts) {
+      const embedding = await createEmbedding(productToEmbeddingText(product)).catch(() => null);
+      await repository.upsertProduct(product, embedding ?? undefined);
+    }
+  }
+
+  return {
+    visited: visited.size,
+    failed,
+    siteProductCount: siteProducts.size,
+    dbProductUrlCount: dbUrls.size,
+    missingCount: missingProducts.length,
+    importedMissing: options.importMissing ? missingProducts.length : 0,
+    missingProducts: missingProducts.slice(0, 200).map((product) => ({
+      name: product.name,
+      sourceUrl: product.sourceUrl,
+      price: product.price,
+      category: product.category
+    }))
+  };
 }

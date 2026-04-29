@@ -124,6 +124,148 @@ export interface NeedItem {
   updatedAt: string;
 }
 
+export type ProductSelectionClass =
+  | 'generator'
+  | 'weldingGenerator'
+  | 'generatorOil'
+  | 'engineOil'
+  | 'generatorAccessory'
+  | 'plateAccessory'
+  | 'plate'
+  | 'rammer'
+  | 'roller'
+  | 'cutter'
+  | 'diamondBlade'
+  | 'diamondCore'
+  | 'trowel'
+  | 'unknown';
+
+export type ProductSelectionRole = 'coreProduct' | 'accessory' | 'consumable' | 'unknown';
+export type ProductSelectionConstraintSource = 'explicit_user' | 'inferred_from_load' | 'catalog_fact' | 'previous_selection' | 'planner';
+export type ProductSelectionTokenRole = 'targetProduct' | 'comparisonProduct' | 'compatibilityTarget' | 'ignored';
+export type ProductRankingPreference = 'cheapest' | 'balanced' | 'premium';
+
+export interface ProductSelectionToken {
+  value: string;
+  role: ProductSelectionTokenRole;
+  evidence?: string;
+}
+
+export interface ProductSelectionRejection {
+  productId: string;
+  reason: string;
+}
+
+export interface ProductSelectionCompatibilityTarget {
+  name?: string;
+  article?: string;
+  kind?: string;
+  evidence?: string;
+}
+
+export type ProductElectricalLoadSource = 'explicit_user' | 'estimated_average' | 'web_average' | 'catalog_fact';
+
+export interface ProductElectricalLoadItem {
+  kind: string;
+  name?: string;
+  count: number;
+  runningKw?: number;
+  startingKw?: number;
+  source: ProductElectricalLoadSource;
+  evidence?: string;
+}
+
+export interface ProductGeneratorLoadProfile {
+  items: ProductElectricalLoadItem[];
+  totalRunningKw?: number;
+  requiredStartingKw?: number;
+  requiredNominalKw?: number;
+  simultaneousStarting?: boolean;
+  calculation?: string;
+  confidence?: number;
+}
+
+export type ProductSelectionConstraintProvenance = Partial<Record<
+  | 'budgetMax'
+  | 'nominalPowerKwMin'
+  | 'nominalPowerKwMax'
+  | 'maxPowerKwMin'
+  | 'maxPowerKwMax'
+  | 'weightKgMin'
+  | 'weightKgMax'
+  | 'diameterMmMin'
+  | 'diameterMmMax'
+  | 'fuel'
+  | 'startType'
+  | 'enclosure'
+  | 'conventionalGenerator'
+  | 'singlePhase220'
+  | 'brandConstraint'
+  | 'exactModelConstraint',
+  ProductSelectionConstraintSource
+>>;
+
+export interface ProductSelectionCriteria {
+  productIntent: ProductSelectionClass;
+  productRole: ProductSelectionRole;
+  budgetMax?: number;
+  nominalPowerKwMin?: number;
+  nominalPowerKwMax?: number;
+  maxPowerKwMin?: number;
+  maxPowerKwMax?: number;
+  weightKgMin?: number;
+  weightKgMax?: number;
+  diameterMmMin?: number;
+  diameterMmMax?: number;
+  fuel?: 'gasoline' | 'diesel' | 'any' | 'unknown';
+  startType?: 'electric' | 'manual' | 'any' | 'unknown';
+  enclosure?: 'enclosed' | 'open' | 'any' | 'unknown';
+  conventionalGenerator?: boolean | null;
+  singlePhase220?: boolean | null;
+  brandConstraint?: string;
+  exactModelConstraint?: string;
+  exactModelTokens: string[];
+  exactModelTokenRoles?: ProductSelectionToken[];
+  mustHaveTraits: string[];
+  excludedClasses: ProductSelectionClass[];
+  provenance?: ProductSelectionConstraintProvenance;
+}
+
+export interface ProductSelectionState {
+  currentProductClass: ProductSelectionClass;
+  targetProductClass: ProductSelectionClass;
+  activeRequirement?: ProductSelectionCriteria;
+  hardConstraints: ProductSelectionCriteria;
+  softPreferences: ProductSelectionCriteria;
+  unknowns: string[];
+  conflicts: string[];
+  selectedProductIds: string[];
+  matchedProductIds?: string[];
+  comparisonProductIds?: string[];
+  rejectedProducts?: ProductSelectionRejection[];
+  compatibilityTargetProduct?: ProductSelectionCompatibilityTarget;
+  loadProfile?: ProductGeneratorLoadProfile;
+  previousCandidateProductIds?: string[];
+  rankingPreference?: ProductRankingPreference;
+  confidence: number;
+  updatedAt?: string;
+}
+
+export interface ProductSelectionMetadata {
+  matchedProductIds: string[];
+  visibleProductIds: string[];
+  hiddenProductIds: string[];
+  comparisonProductIds?: string[];
+  rejectedProducts?: ProductSelectionRejection[];
+  totalMatched: number;
+  selectionConfidence: number;
+  missingQuestions: string[];
+  loadProfile?: ProductGeneratorLoadProfile;
+  rankingPreference?: ProductRankingPreference;
+  activeHardConstraints?: ProductSelectionCriteria;
+  selectionTrace?: Record<string, unknown>;
+}
+
 export interface CustomerNeedState {
   explicitNeeds: NeedItem[];
   implicitNeeds: NeedItem[];
@@ -141,6 +283,7 @@ export interface CustomerNeedState {
     professionalDuty: number;
     budgetSensitive: number;
   };
+  selectionState: ProductSelectionState;
   lastSummary: string;
 }
 
@@ -151,6 +294,10 @@ export interface ChatResponsePayload {
   usedWebSearch: boolean;
   leadRequested?: boolean;
   assistantMessageId?: string;
+  metadata?: {
+    selection?: ProductSelectionMetadata;
+    [key: string]: unknown;
+  };
 }
 
 export interface CatalogProductInput {

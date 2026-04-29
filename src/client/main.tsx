@@ -177,11 +177,43 @@ function renderInlineMarkdown(text: string, keyPrefix: string) {
   return nodes;
 }
 
+function splitInlineMarkdownTableRows(line: string) {
+  const rows = [...line.matchAll(/\|[^|\n]+(?:\|[^|\n]+){2,}\|/g)];
+  if (rows.length < 2) return [line];
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const row of rows) {
+    const start = row.index ?? 0;
+    if (start > cursor) {
+      const prefix = line.slice(cursor, start).trim();
+      if (prefix) parts.push(prefix);
+    }
+    parts.push(row[0].trim());
+    cursor = start + row[0].length;
+  }
+  const suffix = line.slice(cursor).trim();
+  if (suffix) parts.push(suffix);
+  return parts;
+}
+
+function markdownTableCells(line: string) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+  const cells = trimmed.slice(1, -1).split('|').map((cell) => cell.trim());
+  return cells.length >= 2 ? cells : null;
+}
+
+function isMarkdownTableSeparator(line: string) {
+  const cells = markdownTableCells(line);
+  return Boolean(cells?.length && cells.every((cell) => /^:?-{3,}:?$/.test(cell)));
+}
+
 function renderMarkdownText(text: string) {
   const nodes: React.ReactNode[] = [];
   const paragraph: string[] = [];
   let listType: 'ul' | 'ol' | null = null;
   let listItems: string[] = [];
+  let tableRows: string[][] = [];
 
   function flushParagraph() {
     if (!paragraph.length) return;
@@ -206,13 +238,53 @@ function renderMarkdownText(text: string) {
     listItems = [];
   }
 
-  for (const line of text.split(/\r?\n/)) {
+  function flushTable() {
+    if (!tableRows.length) return;
+    const [head, ...body] = tableRows;
+    nodes.push(
+      <div className="markdown-table-wrap" key={`table-${nodes.length}`}>
+        <table className="markdown-table">
+          <thead>
+            <tr>{head.map((cell, index) => <th key={`th-${index}`}>{renderInlineMarkdown(cell, `th-${nodes.length}-${index}`)}</th>)}</tr>
+          </thead>
+          <tbody>
+            {body.map((row, rowIndex) => (
+              <tr key={`tr-${rowIndex}`}>
+                {row.map((cell, cellIndex) => <td key={`td-${cellIndex}`}>{renderInlineMarkdown(cell, `td-${nodes.length}-${rowIndex}-${cellIndex}`)}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+    tableRows = [];
+  }
+
+  const lines = text.split(/\r?\n/).flatMap(splitInlineMarkdownTableRows);
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) {
       flushParagraph();
       flushList();
+      flushTable();
       continue;
     }
+
+    if (isMarkdownTableSeparator(trimmed)) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const tableCells = markdownTableCells(trimmed);
+    if (tableCells) {
+      flushParagraph();
+      flushList();
+      tableRows.push(tableCells);
+      continue;
+    }
+
+    flushTable();
 
     if (/^-{3,}$/.test(trimmed)) {
       flushParagraph();
@@ -246,6 +318,7 @@ function renderMarkdownText(text: string) {
 
   flushParagraph();
   flushList();
+  flushTable();
   return nodes;
 }
 
@@ -381,9 +454,14 @@ function LeadPanel({ sessionId, latestQuestion, autoOpenKey }: { sessionId: stri
   const [form, setForm] = useState<LeadForm>({ name: '', phone: '', email: '', question: latestQuestion });
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [expanded, setExpanded] = useState(false);
+  const lastAutoQuestionRef = useRef(latestQuestion);
 
   useEffect(() => {
-    setForm((current) => ({ ...current, question: current.question || latestQuestion }));
+    setForm((current) => {
+      const shouldRefresh = !current.question || current.question === lastAutoQuestionRef.current;
+      return shouldRefresh ? { ...current, question: latestQuestion } : current;
+    });
+    lastAutoQuestionRef.current = latestQuestion;
   }, [latestQuestion]);
 
   useEffect(() => {

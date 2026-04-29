@@ -646,6 +646,18 @@ export class ProductRepository {
     return result.rows.map(mapProduct);
   }
 
+  async listProductSourceUrls(limit = 10000) {
+    const result = await this.db.query(
+      `SELECT source_url
+       FROM products
+       WHERE source_url IS NOT NULL
+       ORDER BY updated_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return result.rows.map((row) => String(row.source_url)).filter(Boolean);
+  }
+
   async getOpenConflictsForProducts(productIds: string[]) {
     if (!productIds.length) return [];
     const result = await this.db.query(

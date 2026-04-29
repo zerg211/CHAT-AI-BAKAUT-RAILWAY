@@ -15,6 +15,7 @@
     "migrate": "tsx src/db/migrate.ts",
     "catalog:sync": "tsx src/scripts/syncCatalog.ts",
     "catalog:sync:sitemap": "tsx src/scripts/syncCatalogSitemap.ts",
+    "catalog:inventory": "tsx src/scripts/inventoryCatalog.ts",
     "catalog:import": "tsx src/scripts/importCatalogCsv.ts"
   },
   "dependencies": {

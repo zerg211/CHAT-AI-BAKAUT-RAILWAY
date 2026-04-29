@@ -1,4 +1,33 @@
-import type { CustomerNeedState, NeedItem } from '../shared/types.js';
+import type { CustomerNeedState, NeedItem, ProductSelectionCriteria, ProductSelectionState } from '../shared/types.js';
+
+function emptySelectionCriteria(): ProductSelectionCriteria {
+  return {
+    productIntent: 'unknown',
+    productRole: 'unknown',
+    exactModelTokens: [],
+    exactModelTokenRoles: [],
+    mustHaveTraits: [],
+    excludedClasses: [],
+    provenance: {}
+  };
+}
+
+export function emptyProductSelectionState(): ProductSelectionState {
+  return {
+    currentProductClass: 'unknown',
+    targetProductClass: 'unknown',
+    hardConstraints: emptySelectionCriteria(),
+    softPreferences: emptySelectionCriteria(),
+    unknowns: [],
+    conflicts: [],
+    selectedProductIds: [],
+    matchedProductIds: [],
+    comparisonProductIds: [],
+    rejectedProducts: [],
+    previousCandidateProductIds: [],
+    confidence: 0
+  };
+}
 
 export function emptyNeedState(): CustomerNeedState {
   return {
@@ -18,6 +47,7 @@ export function emptyNeedState(): CustomerNeedState {
       professionalDuty: 0,
       budgetSensitive: 0
     },
+    selectionState: emptyProductSelectionState(),
     lastSummary: ''
   };
 }
@@ -102,6 +132,135 @@ function mergeSignals(
   ) as CustomerNeedState['featureSignals'];
 }
 
+function uniqueStrings(values: Array<string | undefined | null>, limit: number) {
+  return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, limit);
+}
+
+function mergeLoadProfile(
+  current: ProductSelectionState['loadProfile'],
+  update: ProductSelectionState['loadProfile'],
+  reset = false
+): ProductSelectionState['loadProfile'] {
+  if (!update) return reset ? undefined : current;
+  const baseItems = reset ? [] : current?.items ?? [];
+  const byKey = new Map<string, NonNullable<ProductSelectionState['loadProfile']>['items'][number]>();
+  for (const item of baseItems) {
+    byKey.set(`${item.kind}:${item.name ?? ''}`, item);
+  }
+  for (const item of update.items ?? []) {
+    byKey.set(`${item.kind}:${item.name ?? ''}`, item);
+  }
+  return {
+    ...(!reset ? current ?? {} : {}),
+    ...update,
+    items: [...byKey.values()].slice(-16)
+  };
+}
+
+function sanitizePositiveNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function mergeCriteria(
+  current: ProductSelectionCriteria | undefined,
+  update: Partial<ProductSelectionCriteria> | undefined,
+  reset = false
+): ProductSelectionCriteria {
+  const empty = emptySelectionCriteria();
+  const base = reset ? empty : { ...empty, ...(current ?? {}) };
+  if (!update) return base;
+  const nextProvenance = { ...(reset ? {} : base.provenance ?? {}), ...(update.provenance ?? {}) };
+  const isExplicitPowerUpdate = Boolean(
+    update.nominalPowerKwMin !== undefined ||
+    update.nominalPowerKwMax !== undefined ||
+    update.maxPowerKwMin !== undefined ||
+    update.maxPowerKwMax !== undefined
+  );
+  const isExplicitWeightUpdate = Boolean(update.weightKgMin !== undefined || update.weightKgMax !== undefined);
+  const isExplicitDiameterUpdate = Boolean(update.diameterMmMin !== undefined || update.diameterMmMax !== undefined);
+  return {
+    ...base,
+    ...update,
+    budgetMax: sanitizePositiveNumber(update.budgetMax) ?? base.budgetMax,
+    nominalPowerKwMin: isExplicitPowerUpdate ? sanitizePositiveNumber(update.nominalPowerKwMin) : base.nominalPowerKwMin,
+    nominalPowerKwMax: isExplicitPowerUpdate ? sanitizePositiveNumber(update.nominalPowerKwMax) : base.nominalPowerKwMax,
+    maxPowerKwMin: isExplicitPowerUpdate ? sanitizePositiveNumber(update.maxPowerKwMin) : base.maxPowerKwMin,
+    maxPowerKwMax: isExplicitPowerUpdate ? sanitizePositiveNumber(update.maxPowerKwMax) : base.maxPowerKwMax,
+    weightKgMin: isExplicitWeightUpdate ? sanitizePositiveNumber(update.weightKgMin) : base.weightKgMin,
+    weightKgMax: isExplicitWeightUpdate ? sanitizePositiveNumber(update.weightKgMax) : base.weightKgMax,
+    diameterMmMin: isExplicitDiameterUpdate ? sanitizePositiveNumber(update.diameterMmMin) : base.diameterMmMin,
+    diameterMmMax: isExplicitDiameterUpdate ? sanitizePositiveNumber(update.diameterMmMax) : base.diameterMmMax,
+    productIntent: update.productIntent && update.productIntent !== 'unknown' ? update.productIntent : base.productIntent,
+    productRole: update.productRole && update.productRole !== 'unknown' ? update.productRole : base.productRole,
+    exactModelTokens: uniqueStrings([...(reset ? [] : base.exactModelTokens), ...(update.exactModelTokens ?? [])], 16),
+    exactModelTokenRoles: [
+      ...(reset ? [] : base.exactModelTokenRoles ?? []),
+      ...(update.exactModelTokenRoles ?? [])
+    ].filter((item, index, all) => item.value && all.findIndex((candidate) => candidate.value === item.value && candidate.role === item.role) === index).slice(0, 24),
+    mustHaveTraits: uniqueStrings([...(reset ? [] : base.mustHaveTraits), ...(update.mustHaveTraits ?? [])], 24),
+    excludedClasses: uniqueStrings([...(reset ? [] : base.excludedClasses), ...(update.excludedClasses ?? [])], 24) as ProductSelectionCriteria['excludedClasses'],
+    provenance: nextProvenance
+  };
+}
+
+export function mergeProductSelectionState(
+  current: ProductSelectionState | undefined,
+  update: Partial<ProductSelectionState> | undefined,
+  scopeChanged = false
+): ProductSelectionState {
+  const empty = emptyProductSelectionState();
+  const base = current
+    ? {
+        ...empty,
+        ...current,
+        hardConstraints: { ...empty.hardConstraints, ...current.hardConstraints },
+        softPreferences: { ...empty.softPreferences, ...current.softPreferences }
+      }
+    : empty;
+  if (!update) return base;
+
+  const incomingTarget = update.targetProductClass && update.targetProductClass !== 'unknown'
+    ? update.targetProductClass
+    : undefined;
+  const classChanged = Boolean(incomingTarget && base.targetProductClass !== 'unknown' && incomingTarget !== base.targetProductClass);
+  const reset = scopeChanged || classChanged;
+  const nextTarget = incomingTarget ?? (reset ? 'unknown' : base.targetProductClass);
+
+  return {
+    currentProductClass: update.currentProductClass && update.currentProductClass !== 'unknown'
+      ? update.currentProductClass
+      : nextTarget !== 'unknown'
+        ? nextTarget
+        : reset
+          ? 'unknown'
+          : base.currentProductClass,
+    targetProductClass: nextTarget,
+    activeRequirement: update.activeRequirement
+      ? mergeCriteria(reset ? undefined : base.activeRequirement, update.activeRequirement, reset)
+      : reset
+        ? undefined
+        : base.activeRequirement,
+    hardConstraints: mergeCriteria(base.hardConstraints, update.hardConstraints, reset),
+    softPreferences: mergeCriteria(base.softPreferences, update.softPreferences, reset),
+    unknowns: uniqueStrings([...(reset ? [] : base.unknowns), ...(update.unknowns ?? [])], 16),
+    conflicts: uniqueStrings([...(reset ? [] : base.conflicts), ...(update.conflicts ?? [])], 16),
+    selectedProductIds: uniqueStrings([...(reset ? [] : base.selectedProductIds), ...(update.selectedProductIds ?? [])], 16),
+    matchedProductIds: uniqueStrings([...(reset ? [] : base.matchedProductIds ?? []), ...(update.matchedProductIds ?? [])], 64),
+    comparisonProductIds: uniqueStrings([...(reset ? [] : base.comparisonProductIds ?? []), ...(update.comparisonProductIds ?? [])], 32),
+    rejectedProducts: [
+      ...(reset ? [] : base.rejectedProducts ?? []),
+      ...(update.rejectedProducts ?? [])
+    ].filter((item, index, all) => item.productId && all.findIndex((candidate) => candidate.productId === item.productId && candidate.reason === item.reason) === index).slice(-32),
+    compatibilityTargetProduct: update.compatibilityTargetProduct ?? (reset ? undefined : base.compatibilityTargetProduct),
+    loadProfile: mergeLoadProfile(base.loadProfile, update.loadProfile, reset),
+    previousCandidateProductIds: uniqueStrings([...(reset ? [] : base.previousCandidateProductIds ?? []), ...(update.previousCandidateProductIds ?? [])], 64),
+    rankingPreference: update.rankingPreference ?? (reset ? undefined : base.rankingPreference),
+    confidence: Math.max(reset ? base.confidence * 0.35 : base.confidence, update.confidence ?? 0),
+    updatedAt: update.updatedAt ?? base.updatedAt
+  };
+}
+
 export function mergeNeedState(current: CustomerNeedState, update: Partial<CustomerNeedState>): CustomerNeedState {
   const updateSignals: Partial<CustomerNeedState['featureSignals']> = update.featureSignals ?? {};
   const scopeChanged = updateHasScopeChange(update);
@@ -128,6 +287,7 @@ export function mergeNeedState(current: CustomerNeedState, update: Partial<Custo
     uncertainInferences: mergeItems(activeCurrent.uncertainInferences, update.uncertainInferences ?? [], 0.2),
     contradictions: mergeItems(activeCurrent.contradictions, update.contradictions ?? [], 0.2),
     featureSignals: mergeSignals(current.featureSignals, updateSignals, signalFactor),
+    selectionState: mergeProductSelectionState(current.selectionState, update.selectionState, scopeChanged),
     lastSummary: update.lastSummary?.trim() || current.lastSummary
   };
 }

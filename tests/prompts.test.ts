@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { emptyProductSelectionState } from '../src/ai/needState.js';
 import { buildAssistantContext, buildSystemPrompt, buildTurnPlannerPrompt } from '../src/ai/prompts.js';
 
 describe('assistant prompt guardrails', () => {
@@ -50,6 +51,7 @@ describe('assistant prompt guardrails', () => {
           professionalDuty: 0,
           budgetSensitive: 0.7
         },
+        selectionState: emptyProductSelectionState(),
         lastSummary: 'buyer needs a compact inverter enclosed generator'
       },
       products: [{
