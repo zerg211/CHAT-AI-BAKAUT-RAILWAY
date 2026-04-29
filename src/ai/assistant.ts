@@ -4316,8 +4316,8 @@ export class AssistantService {
     this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
 
     const cardProducts = cards.map((c) => allCandidates.find((p) => p.id === c.id)).filter((p): p is Product => !!p);
-    consistencyGuard.recordFacts(cardProducts, answer);
     const consistencyWarnings = consistencyGuard.checkAnswer(answer);
+    consistencyGuard.recordFacts(cardProducts, answer);
     if (consistencyWarnings.length) {
       console.warn('[ConsistencyGuard]', input.sessionId, consistencyWarnings);
     }
