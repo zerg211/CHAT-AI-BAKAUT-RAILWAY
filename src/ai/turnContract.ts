@@ -37,6 +37,41 @@ export interface PlannerLikeTurn {
   selectionState?: unknown;
 }
 
+type ProductSelectionConstraintSource = 'explicit_user' | 'inferred_from_load' | 'catalog_fact' | 'previous_selection' | 'planner';
+
+type TraitsWithProvenance = {
+  productIntent?: string;
+  singlePhase220?: boolean | null;
+  provenance?: {
+    singlePhase220?: ProductSelectionConstraintSource;
+  };
+};
+
+const GENERATOR_PHASE_MISSING_INFO = '220 В или 380 В';
+const GENERATOR_PHASE_GUIDANCE = 'До явного подтверждения покупателем 220 В или 380 В не финально рекомендуй генератор и не показывай карточки. Коротко объясни, что бытовая нагрузка похожа на 220 В, но финальный подбор зависит от нужного выхода, и задай один вопрос: нужен генератор 220 В или 380 В?';
+
+function traitsOf(plan: PlannerLikeTurn): TraitsWithProvenance {
+  return (plan.requiredProductTraits ?? {}) as TraitsWithProvenance;
+}
+
+function isGeneratorIntent(intent: string | undefined) {
+  return intent === 'generator' || intent === 'weldingGenerator';
+}
+
+function hasExplicitGeneratorPhase(traits: TraitsWithProvenance) {
+  if (traits.singlePhase220 === null || typeof traits.singlePhase220 === 'undefined') return false;
+  const source = traits.provenance?.singlePhase220;
+  return source === 'explicit_user' || source === 'previous_selection';
+}
+
+function needsGeneratorPhaseConfirmation(plan: PlannerLikeTurn) {
+  const traits = traitsOf(plan);
+  if (plan.action !== 'recommend_products' || !isGeneratorIntent(traits.productIntent)) return false;
+
+  const source = traits.provenance?.singlePhase220;
+  return typeof traits.singlePhase220 !== 'undefined' && traits.singlePhase220 !== null && source === 'inferred_from_load' && !hasExplicitGeneratorPhase(traits);
+}
+
 export interface ResolvedTurnContract {
   action: {
     primary: TurnAction;
@@ -80,15 +115,31 @@ export function resolveTurnContract(input: {
   forceWebRequired?: boolean;
 }): ResolvedTurnContract {
   const overrides: string[] = [];
-  const leadForm = isLeadAction(input.plan.action) || input.plan.answerMode === 'leadCollection' || input.plan.followUpPolicy === 'collectLead';
+  const requiresGeneratorPhaseConfirmation = needsGeneratorPhaseConfirmation(input.plan);
+  const leadForm = !requiresGeneratorPhaseConfirmation &&
+    (isLeadAction(input.plan.action) || input.plan.answerMode === 'leadCollection' || input.plan.followUpPolicy === 'collectLead');
 
-  let cards: TurnRenderCards = input.plan.cardPolicy === 'textOnly'
+  const primaryAction: TurnAction = requiresGeneratorPhaseConfirmation ? 'ask_clarifying_question' : input.plan.action;
+  const answerMode: TurnAnswerMode = requiresGeneratorPhaseConfirmation ? 'short' : input.plan.answerMode;
+  const followUpPolicy: TurnFollowUpPolicy = requiresGeneratorPhaseConfirmation ? 'askClarifyingQuestion' : input.plan.followUpPolicy;
+  const selectedProductIds = requiresGeneratorPhaseConfirmation ? [] : [...input.plan.selectedProductIds];
+  const missingInformation = [...input.plan.missingInformation];
+  let guidance = input.plan.answerGuidance;
+  if (requiresGeneratorPhaseConfirmation) {
+    if (!missingInformation.includes(GENERATOR_PHASE_MISSING_INFO)) missingInformation.push(GENERATOR_PHASE_MISSING_INFO);
+    guidance = [guidance, GENERATOR_PHASE_GUIDANCE].filter(Boolean).join('\n');
+    overrides.push('generator_phase_requires_explicit_confirmation');
+  }
+
+  let cards: TurnRenderCards = requiresGeneratorPhaseConfirmation
     ? 'none'
-    : input.plan.cardPolicy === 'showProducts'
-      ? 'showProducts'
-      : input.plan.cardPolicy === 'showAccessories'
-        ? 'showAccessories'
-        : 'auto';
+    : input.plan.cardPolicy === 'textOnly'
+      ? 'none'
+      : input.plan.cardPolicy === 'showProducts'
+        ? 'showProducts'
+        : input.plan.cardPolicy === 'showAccessories'
+          ? 'showAccessories'
+          : 'auto';
 
   if (leadForm && cards === 'auto') {
     cards = 'selectedOnly';
@@ -98,16 +149,16 @@ export function resolveTurnContract(input: {
     cards = 'none';
     overrides.push(`force_text_only:${input.forceTextOnlyReason}`);
   }
-  if (input.forceCards) {
+  if (input.forceCards && !requiresGeneratorPhaseConfirmation) {
     cards = input.forceCards;
     overrides.push(`force_cards:${input.forceCards}`);
   }
 
   return {
     action: {
-      primary: input.plan.action,
-      answerMode: input.plan.answerMode,
-      followUpPolicy: input.plan.followUpPolicy
+      primary: primaryAction,
+      answerMode,
+      followUpPolicy
     },
     scope: {
       context: input.plan.contextScope,
@@ -116,10 +167,10 @@ export function resolveTurnContract(input: {
     },
     knowledge: {
       webRequired: input.forceWebRequired ?? input.plan.needsWebSearch,
-      missingInformation: [...input.plan.missingInformation]
+      missingInformation
     },
     selection: {
-      selectedProductIds: [...input.plan.selectedProductIds],
+      selectedProductIds,
       requiredProductTraits: input.plan.requiredProductTraits,
       selectionState: input.plan.selectionState
     },
@@ -128,7 +179,7 @@ export function resolveTurnContract(input: {
       leadForm,
       textOnlyReason: input.forceTextOnlyReason
     },
-    guidance: input.plan.answerGuidance,
+    guidance,
     diagnostics: {
       sourcePlan: input.plan,
       overrides

@@ -3,6 +3,10 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { pool } from './pool.js';
 
+type QueryableClient = {
+  query: (text: string, values?: unknown[]) => Promise<unknown>;
+};
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..', '..');
 
@@ -43,6 +47,7 @@ export async function runMigrations() {
         [file]
       );
     }
+    await repairRequiredSchema(client);
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -50,6 +55,12 @@ export async function runMigrations() {
   } finally {
     client.release();
   }
+}
+
+export async function repairRequiredSchema(client: QueryableClient) {
+  // Keep this tiny and idempotent: it protects local/dev databases where
+  // schema_migrations can say that 004 ran while the physical column is absent.
+  await client.query('ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS history_summary TEXT');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

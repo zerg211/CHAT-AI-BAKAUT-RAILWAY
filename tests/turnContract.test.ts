@@ -62,4 +62,47 @@ describe('turn contract resolver', () => {
     expect(contract.render.textOnlyReason).toBe('current_lineup');
     expect(contract.diagnostics.sourcePlan.action).toBe('verify_with_web');
   });
+
+  it('downgrades generator recommendations when 220/380 phase is only inferred from load context', () => {
+    const contract = resolveTurnContract({
+      plan: {
+        ...basePlan,
+        requiredProductTraits: {
+          productIntent: 'generator',
+          singlePhase220: true,
+          provenance: { singlePhase220: 'inferred_from_load' }
+        },
+        selectedProductIds: ['g1', 'g2'],
+        missingInformation: []
+      }
+    });
+
+    expect(contract.action.primary).toBe('ask_clarifying_question');
+    expect(contract.action.answerMode).toBe('short');
+    expect(contract.action.followUpPolicy).toBe('askClarifyingQuestion');
+    expect(contract.render.cards).toBe('none');
+    expect(contract.selection.selectedProductIds).toEqual([]);
+    expect(contract.knowledge.missingInformation).toContain('220 В или 380 В');
+    expect(contract.guidance).toContain('не финально рекомендуй генератор');
+    expect(contract.diagnostics.overrides).toContain('generator_phase_requires_explicit_confirmation');
+  });
+
+  it('allows generator recommendations when the phase was explicitly provided by the buyer', () => {
+    const contract = resolveTurnContract({
+      plan: {
+        ...basePlan,
+        requiredProductTraits: {
+          productIntent: 'generator',
+          singlePhase220: false,
+          provenance: { singlePhase220: 'explicit_user' }
+        },
+        selectedProductIds: ['g380']
+      }
+    });
+
+    expect(contract.action.primary).toBe('recommend_products');
+    expect(contract.render.cards).toBe('showProducts');
+    expect(contract.selection.selectedProductIds).toEqual(['g380']);
+    expect(contract.knowledge.missingInformation).not.toContain('220 В или 380 В');
+  });
 });

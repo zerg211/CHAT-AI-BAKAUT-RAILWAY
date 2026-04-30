@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS conversation_sessions (
   page_url text,
   user_agent text,
   need_state jsonb NOT NULL DEFAULT '{}'::jsonb,
+  history_summary text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   last_heartbeat_at timestamptz NOT NULL DEFAULT now(),

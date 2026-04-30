@@ -1511,6 +1511,24 @@ describe('recommendation ranking', () => {
     expect(cleaned).toBe('Проверил пример и Подойдет 10W-40.');
   });
 
+  it('normalizes reversed and duplicate visible power ranges', () => {
+    const cleaned = assistantTestHooks.sanitizeVisibleAnswer('Лучше смотреть генератор 4–3,5 кВт, а не писать 5–5 кВт. Запас 6-5,5 кВт тоже норм.');
+
+    expect(cleaned).toContain('3,5–4 кВт');
+    expect(cleaned).toContain('5 кВт');
+    expect(cleaned).toContain('5,5–6 кВт');
+    expect(cleaned).not.toMatch(/4–3,5\s*кВт/);
+    expect(cleaned).not.toMatch(/5–5\s*кВт/);
+  });
+
+  it('does not normalize hyphenated model names as numeric ranges', () => {
+    const cleaned = assistantTestHooks.sanitizeVisibleAnswer('Модель MP-15CE и генератор 220В остаются как есть, диапазон 4-3,5 кВт исправляется.');
+
+    expect(cleaned).toContain('MP-15CE');
+    expect(cleaned).toContain('220В');
+    expect(cleaned).toContain('3,5–4 кВт');
+  });
+
   it('removes deferred comparison offers at the end of factual answers', () => {
     const noDeferredOfferPlan = { followUpPolicy: 'answerNowNoDeferredOffer' } as any;
     const cleaned = assistantTestHooks.sanitizeVisibleAnswer('K 770 дешевле по ТО.\n\nЕсли хотите, я дальше могу разложить по конкретным позициям: свеча, фильтр, ремень.', noDeferredOfferPlan);
@@ -2316,6 +2334,54 @@ describe('recommendation ranking', () => {
 
     expect(repaired).toContain('около 4 кВт');
     expect(repaired).toContain('от 4 кВт');
+  });
+
+  it('does not reintroduce reversed power ranges after generator load repair', () => {
+    const sanitized = assistantTestHooks.sanitizeVisibleAnswer('Лучше смотреть уже 5–3,5 кВт из-за пускового тока.');
+    const repaired = assistantTestHooks.repairGeneratorLoadMinimumText(sanitized, {
+      items: [],
+      totalRunningKw: 2.1,
+      requiredStartingKw: 3.9,
+      requiredNominalKw: 3.5,
+      simultaneousStarting: false,
+      calculation: '',
+      confidence: 0.82
+    });
+
+    expect(repaired).not.toMatch(/5\s*[-–—]\s*3,5\s*кВт/);
+    expect(repaired).not.toMatch(/3,5\s*[-–—]\s*3,5\s*кВт/);
+    expect(repaired).toContain('3,5–5 кВт');
+  });
+
+  it('collapses duplicate power ranges introduced after generator load repair', () => {
+    const repaired = assistantTestHooks.repairGeneratorLoadMinimumText('Для скважинного насоса я бы смотрел 5–5 кВт номинал.', {
+      items: [],
+      totalRunningKw: 2.1,
+      requiredStartingKw: 3.9,
+      requiredNominalKw: 4,
+      simultaneousStarting: false,
+      calculation: '',
+      confidence: 0.82
+    });
+
+    expect(repaired).not.toMatch(/5\s*[-–—]\s*5\s*кВт/);
+    expect(repaired).toContain('5 кВт');
+  });
+
+  it('does not rewrite a named generator card power spec while repairing load minimum text', () => {
+    const repaired = assistantTestHooks.repairGeneratorLoadMinimumText('По расчёту минимум: 4 кВт номинальной; первым смотрите SUMEC SU7700E 5 кВт — нормальный запас.', {
+      items: [],
+      totalRunningKw: 2.1,
+      requiredStartingKw: 3.9,
+      requiredNominalKw: 4,
+      simultaneousStarting: false,
+      calculation: '',
+      confidence: 0.82
+    });
+
+    expect(repaired).toContain('минимум: 4 кВт');
+    expect(repaired).toContain('SUMEC SU7700E 5 кВт');
+    expect(repaired).not.toContain('SUMEC SU7700E 4 кВт');
   });
 
   it('does not allow a non-first visible card to be called the first card', () => {

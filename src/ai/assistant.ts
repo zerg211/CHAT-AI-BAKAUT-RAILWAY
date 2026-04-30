@@ -7,6 +7,7 @@ import { createEmbedding, createOpenAIClient } from './openaiClient.js';
 import { emptyNeedState, emptyProductSelectionState, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 import { extractResponseText, extractUrlCitations, logOpenAIUsage, responseUsedWebSearch, safeError, type WebCitation } from './responseUtils.js';
 import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
+import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 
 function cleanEmpty(obj: any): any {
   if (obj === null || obj === undefined || obj === '') return undefined;
@@ -3153,14 +3154,15 @@ function repairGeneratorLoadMinimumText(answer: string, loadProfile?: ProductGen
   const required = loadProfile?.requiredNominalKw;
   if (!required || !Number.isFinite(required)) return answer;
   const formatted = Number.isInteger(required) ? String(required) : String(required).replace('.', ',');
-  return answer.replace(
-    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435|\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440(?:\s+\u043f\u043e\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0443)?|\u043d\u0443\u0436\u0435\u043d(?:\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440)?(?:\s+\u043e\u043a\u043e\u043b\u043e)?|(?:\u0441\s+\u0437\u0430\u043f\u0430\u0441\u043e\u043c\s+)?\u043e\u0442)[^.!?\n]{0,90}?)(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0412\u0442|kw)/giu,
+  return normalizeVisiblePowerRanges(answer.replace(
+    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435|\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440(?:\s+\u043f\u043e\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0443)?|\u043d\u0443\u0436\u0435\u043d(?:\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440)?(?:\s+\u043e\u043a\u043e\u043b\u043e)?|(?:\u0441\s+\u0437\u0430\u043f\u0430\u0441\u043e\u043c\s+)?(?<![\u0410-\u042f\u0430-\u044f\u0401\u0451])\u043e\u0442(?![\u0410-\u042f\u0430-\u044f\u0401\u0451]))[^.!?;\n]{0,90}?)(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0412\u0442|kw)/giu,
     (match, prefix: string, value: string) => {
       const parsed = Number(String(value).replace(',', '.'));
       if (!Number.isFinite(parsed) || parsed <= required + 0.4) return match;
+      if (/[-–—]\s*$/.test(prefix)) return match;
       return `${prefix}${formatted} кВт`;
     }
-  );
+  ));
 }
 
 function selectedPurchaseProductIds(products: Product[], history: Message[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
@@ -3505,6 +3507,26 @@ function stripDeferredOfferTail(answer: string) {
     .replace(/(?:^|(?<=[.!?])\s+)Если\s+(?:хотите|хочешь),?\s+дальше\s+(?:лучше\s+)?(?:смотреть|подбирать|сравнивать|проверять|искать)[\s\S]{0,500}$/iu, '');
 }
 
+function formatVisibleKwValue(value: number) {
+  return Number.isInteger(value)
+    ? String(value)
+    : String(Number(value.toFixed(2))).replace('.', ',');
+}
+
+function normalizeVisiblePowerRanges(answer: string) {
+  return answer.replace(
+    /(^|[^\dA-Za-zА-Яа-я])(\d+(?:[,.]\d+)?)\s*[-–—]\s*(\d+(?:[,.]\d+)?)\s*(кВт|kw)(?=$|[^\dA-Za-zА-Яа-я])/gi,
+    (match, prefix: string, left: string, right: string) => {
+      const first = Number(left.replace(',', '.'));
+      const second = Number(right.replace(',', '.'));
+      if (!Number.isFinite(first) || !Number.isFinite(second)) return match;
+      if (first === second) return `${prefix}${formatVisibleKwValue(first)} кВт`;
+      if (first > second) return `${prefix}${formatVisibleKwValue(second)}–${formatVisibleKwValue(first)} кВт`;
+      return match;
+    }
+  );
+}
+
 function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
   let cleaned = answer
     .replace(/[^]*/g, '')
@@ -3519,6 +3541,7 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
+  cleaned = normalizeVisiblePowerRanges(cleaned);
   if (plan?.followUpPolicy === 'answerNowNoDeferredOffer') {
     cleaned = stripDeferredOfferTail(cleaned);
   }
@@ -4243,7 +4266,8 @@ export class AssistantService {
             weightKgMin: selectionHard.weightKgMin ?? null,
             weightKgMax: selectionHard.weightKgMax ?? null,
             diameterMmMin: selectionHard.diameterMmMin ?? null,
-            diameterMmMax: selectionHard.diameterMmMax ?? null
+            diameterMmMax: selectionHard.diameterMmMax ?? null,
+            ...(selectionHard.provenance ? { provenance: selectionHard.provenance } : {})
           },
           selectionState: {
             ...effectivePlan.selectionState,
@@ -4350,7 +4374,7 @@ export class AssistantService {
     });
     let cards = cardSelection.cards;
     const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
-      ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
+      ? cards.map((card) => card.price ?? 0).reduce((total, price) => total + price, 0)
       : null;
     const webRequired = turnContract.knowledge.webRequired;
     const deepAnswerReasoning = shouldUseDeepReasoningForAnswer(
@@ -4705,6 +4729,11 @@ export class AssistantService {
     answer = repairAnswerCardText(answer, cards, effectivePlan);
     answer = repairGeneratorLoadMinimumText(answer, selectionResult.state.loadProfile);
     answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards);
+    const numericSanitizedAnswer = sanitizeVisibleAnswerNumbers(answer);
+    if (numericSanitizedAnswer !== answer) {
+      console.warn('Answer numeric sanity adjusted buyer-visible power range');
+      answer = numericSanitizedAnswer;
+    }
     const cardContract = enforceAnswerCardContract(
       answer,
       cards,

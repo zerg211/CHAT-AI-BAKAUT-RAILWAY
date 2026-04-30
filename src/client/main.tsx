@@ -1,6 +1,8 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { ChatResponsePayload, ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
+import { streamChatMessage } from './chatStream';
+import { submitLead } from './leadSubmit';
+import type { ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
 import './styles.css';
 
 type ChatMessage = {
@@ -350,49 +352,6 @@ async function createSession() {
   return data.session.id;
 }
 
-async function streamMessage(
-  sessionId: string,
-  message: string,
-  handlers: { onDelta: (delta: string) => void; onStatus?: (status: string) => void },
-  signal?: AbortSignal
-) {
-  const response = await fetch(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message }),
-    signal
-  });
-  if (!response.ok || !response.body) throw new Error('Не удалось получить ответ');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let donePayload: ChatResponsePayload | null = null;
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split('\n\n');
-    buffer = events.pop() ?? '';
-
-    for (const rawEvent of events) {
-      const eventLine = rawEvent.split('\n').find((line) => line.startsWith('event:'));
-      const dataLine = rawEvent.split('\n').find((line) => line.startsWith('data:'));
-      if (!eventLine || !dataLine) continue;
-      const event = eventLine.replace('event:', '').trim();
-      const data = JSON.parse(dataLine.replace('data:', '').trim());
-      if (event === 'delta') handlers.onDelta(data.delta ?? '');
-      if (event === 'status') handlers.onStatus?.(data.status ?? '');
-      if (event === 'done') donePayload = data as ChatResponsePayload;
-      if (event === 'error') throw new Error(data.error ?? 'Ошибка ответа');
-    }
-  }
-
-  if (!donePayload) throw new Error('Server finished without a done payload');
-  return donePayload;
-}
-
 async function sendAssistantFeedback(sessionId: string, messageId: string, rating: FeedbackRating) {
   const response = await fetch(`${apiBase}/api/chat/sessions/${sessionId}/messages/${messageId}/feedback`, {
     method: 'POST',
@@ -472,18 +431,13 @@ function LeadPanel({ sessionId, latestQuestion, autoOpenKey }: { sessionId: stri
     event.preventDefault();
     setStatus('sending');
     try {
-      const response = await fetch(`${apiBase}/api/leads`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          sessionId: sessionId ?? undefined,
-          name: form.name,
-          phone: form.phone || undefined,
-          email: form.email || undefined,
-          question: form.question || latestQuestion
-        })
+      await submitLead(apiBase, {
+        sessionId: sessionId ?? undefined,
+        name: form.name,
+        phone: form.phone || undefined,
+        email: form.email || undefined,
+        question: form.question || latestQuestion
       });
-      if (!response.ok) throw new Error('lead failed');
       setStatus('sent');
       setForm({ name: '', phone: '', email: '', question: '' });
     } catch (submitError) {
@@ -1001,7 +955,7 @@ function App() {
     ]);
 
     try {
-      const payload = await streamMessage(sessionId, userText, {
+      const payload = await streamChatMessage(apiBase, sessionId, userText, {
         onDelta: (delta) => {
           setMessages((current) => current.map((message) => (
             message.id === assistantId ? { ...message, content: message.content + delta, progress: undefined } : message
