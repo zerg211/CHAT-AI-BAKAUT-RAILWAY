@@ -45,7 +45,7 @@ const schema = z.object({
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(3200),
   OPENAI_FACT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(700),
   DEBUG_OPENAI_USAGE: booleanFlag(false),
-  OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(false),
+  OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(true),
   CATALOG_BASE_URL: z.string().url().default('https://bakautprof.ru'),
   CATALOG_MAX_PAGES: z.coerce.number().int().positive().default(300),
   EMAIL_HTTP_URL: z.string().url().optional(),
@@ -53,7 +53,8 @@ const schema = z.object({
   EMAIL_HTTP_AUTH_HEADER: z.string().optional(),
   EMAIL_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   EMAIL_FROM: z.string().optional(),
-  LEADS_TO_EMAIL: z.string().optional()
+  LEADS_TO_EMAIL: z.string().optional(),
+  CORS_ORIGINS: z.string().optional()
 });
 
 const parsedConfig = schema.parse(process.env);

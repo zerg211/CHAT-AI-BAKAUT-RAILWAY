@@ -315,3 +315,32 @@ export interface CatalogProductInput {
   raw?: Record<string, unknown>;
   sourcePriority?: number;
 }
+
+export type GeneratorPowerProfileSource = 'planner' | 'explicit_text' | 'estimated_load';
+
+export interface GeneratorPowerProfile {
+  nominalMin?: number;
+  nominalMax?: number;
+  maxMin?: number;
+  maxMax?: number;
+  source: GeneratorPowerProfileSource;
+}
+
+export interface ProductFitProfile {
+  intent: ProductSelectionClass;
+  activeNeedText: string;
+  requestedBrands: string[];
+  accessoryRequested: boolean;
+  weldingRequested: boolean;
+  wantsGasoline: boolean;
+  wantsDiesel: boolean;
+  wantsElectricStart: boolean;
+  wantsInverterGenerator: boolean;
+  wantsEnclosedGenerator: boolean;
+  wantsConventionalGenerator: boolean;
+  wantsSinglePhase220: boolean;
+  desiredPowerRange?: { min: number; max: number };
+  generatorPower?: GeneratorPowerProfile;
+  budgetMax?: number;
+  exactModelTokens: string[];
+}

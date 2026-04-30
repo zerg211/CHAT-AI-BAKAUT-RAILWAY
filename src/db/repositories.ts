@@ -646,6 +646,17 @@ export class ProductRepository {
     return result.rows.map(mapProduct);
   }
 
+  async listProductsByTextFilter(patterns: string[], limit = 5000) {
+    if (!patterns.length) {
+      return this.listProducts(limit);
+    }
+    const conditions = patterns.map((_, i) => `(LOWER(name || ' ' || COALESCE(brand, '') || ' ' || COALESCE(category, '') || ' ' || COALESCE(description, '') || ' ' || COALESCE(source_url, '') || ' ' || COALESCE(specs::text, '')) LIKE $${i + 1})`);
+    const query = `SELECT * FROM products WHERE ${conditions.join(' OR ')} ORDER BY updated_at DESC LIMIT $${patterns.length + 1}`;
+    const params = [...patterns.map((p) => `%${p.toLowerCase()}%`), limit];
+    const result = await this.db.query(query, params);
+    return result.rows.map(mapProduct);
+  }
+
   async listProductSourceUrls(limit = 10000) {
     const result = await this.db.query(
       `SELECT source_url
