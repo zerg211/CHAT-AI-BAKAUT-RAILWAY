@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveTurnContract } from '../src/ai/turnContract.js';
+import { assistantTestHooks } from '../src/ai/assistant.js';
 
 const basePlan = {
   action: 'recommend_products' as const,
@@ -104,5 +105,102 @@ describe('turn contract resolver', () => {
     expect(contract.render.cards).toBe('showProducts');
     expect(contract.selection.selectedProductIds).toEqual(['g380']);
     expect(contract.knowledge.missingInformation).not.toContain('220 В или 380 В');
+  });
+
+  it('does not change authoritative recommendation cards to follow an LLM text mention', () => {
+    const firstCard = {
+      id: 'main-card',
+      name: 'Генератор бензиновый основной 5.0 кВт',
+      category: 'Генераторы',
+      price: 61000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/main-card/',
+      specs: { 'Номинальная мощность': '5.0 кВт' },
+      reasons: [],
+      caveats: []
+    };
+    const otherProduct = {
+      id: 'other-card',
+      name: 'Генератор бензиновый альтернативный 5.0 кВт',
+      category: 'Генераторы',
+      price: 99000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/other-card/',
+      specs: { 'Номинальная мощность': '5.0 кВт' }
+    };
+    const needState = {
+      explicitNeeds: [],
+      implicitNeeds: [],
+      constraints: [],
+      importantCriteria: [],
+      confirmedFacts: [],
+      uncertainInferences: [],
+      contradictions: [],
+      featureSignals: {
+        portable: 0,
+        homeUse: 0,
+        compact: 0,
+        lowNoise: 0,
+        coldStart: 0,
+        professionalDuty: 0,
+        budgetSensitive: 0
+      },
+      lastSummary: '',
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        activeRequirement: undefined,
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          singlePhase220: true,
+          nominalPowerKwMin: 4.5,
+          nominalPowerKwMax: 5.5,
+          provenance: {}
+        },
+        softPreferences: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          mustHaveTraits: [],
+          exactModelTokens: [],
+          excludedClasses: []
+        },
+        unknowns: [],
+        conflicts: [],
+        selectedProductIds: ['main-card'],
+        matchedProductIds: ['main-card', 'other-card'],
+        previousCandidateProductIds: ['main-card', 'other-card'],
+        comparisonProductIds: [],
+        rejectedProducts: [],
+        confidence: 0.9,
+        updatedAt: '2026-05-01T00:00:00.000Z'
+      }
+    } as any;
+
+    const result = assistantTestHooks.enforceAnswerCardContract(
+      'Лучший вариант — Генератор бензиновый альтернативный 5.0 кВт.',
+      [firstCard] as any,
+      [otherProduct] as any,
+      needState,
+      'Подбери бензиновый генератор 5 кВт до 100 тысяч',
+      basePlan as any,
+      4
+    );
+
+    expect(result.cards.map((card: { id: string }) => card.id)).toEqual(['main-card']);
+    expect(result.diagnostics.addedCardIds).toEqual([]);
+    expect(result.diagnostics.reordered).toBe(false);
+  });
+
+  it('caps visible product cards when buyer explicitly asks for one main and one backup option', () => {
+    expect(assistantTestHooks.requestedVisibleCardLimitFromText('Выберите конкретно: один основной генератор и один запасной.'))
+      .toBe(2);
+    expect(assistantTestHooks.requestedVisibleCardLimitFromText('Покажи 2 варианта, без длинного списка.'))
+      .toBe(2);
   });
 });

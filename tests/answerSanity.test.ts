@@ -21,4 +21,9 @@ describe('sanitizeVisibleAnswerNumbers', () => {
     expect(sanitizeVisibleAnswerNumbers('Пусковой запас лучше держать от 4 до 3.5 кВА.'))
       .toBe('Пусковой запас лучше держать от 3,5 до 4 кВА.');
   });
+
+  it('repairs nominal/peak generator power when peak is lower than nominal', () => {
+    expect(sanitizeVisibleAnswerNumbers('Ориентир — 6,5 кВт номинала и 6,1 кВт по пику.'))
+      .toBe('Ориентир — 6,1 кВт номинала и 6,5 кВт по пику.');
+  });
 });

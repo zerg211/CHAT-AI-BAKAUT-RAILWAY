@@ -36,6 +36,9 @@ import { getSessionGuard, cleanupSessionGuard } from './consistencyGuard.js';
 import { buildOfftopicGuard } from './offtopicPolicy.js';
 import { assessLeadTemperature, temperatureGuidance } from './leadTemperature.js';
 import { traceTimer, emitTrace } from './tracing.js';
+import { enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
+import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
+import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 
 function cleanEmpty(obj: any): any {
   if (obj === null || obj === undefined || obj === '') return undefined;
@@ -172,6 +175,7 @@ type RequiredProductTraits = {
   maxPowerKwMin: number | null;
   maxPowerKwMax: number | null;
   powerReasoning: string;
+  provenance?: ProductSelectionCriteria['provenance'];
 };
 
 
@@ -685,6 +689,12 @@ function selectionText(selection?: ProductSelectionState | null) {
 function estimatedGeneratorPowerFromLoads(text: string): GeneratorPowerProfile | undefined {
   const lower = text.toLowerCase();
   const loads: Array<{ running: number; starting: number }> = [];
+  for (const item of generatorReferenceLoadItemsFromText(text)) {
+    if (['lighting', 'refrigerator', 'pump'].includes(item.kind)) continue;
+    const running = item.runningKw;
+    const starting = item.startingKw ?? running;
+    if (running && starting) loads.push({ running, starting });
+  }
   if (/(?:\u043d\u0430\u0441\u043e\u0441|pump)/i.test(lower)) {
     const running = numberNearNeed(lower, /(?:\u043d\u0430\u0441\u043e\u0441|pump)/i) ?? 0.8;
     loads.push({ running, starting: Math.max(running * 2.8, running + 1.2) });
@@ -2003,9 +2013,9 @@ function explicitLoadKwNear(text: string, terms: RegExp) {
 }
 
 function pumpRunningKwEstimate(text: string) {
-  if (/(?:\u0441\u043a\u0432\u0430\u0436\u0438\u043d|\u0433\u043b\u0443\u0431\u0438\u043d|borehole|well)/iu.test(text)) return 1.1;
-  if (/(?:\u0446\u0438\u0440\u043a\u0443\u043b|\u043e\u0442\u043e\u043f|circulation)/iu.test(text)) return 0.12;
-  if (/(?:\u0434\u0440\u0435\u043d\u0430\u0436|\u0444\u0435\u043a\u0430\u043b|sewage|drainage)/iu.test(text)) return 0.75;
+  if (/(?:скважин|глубин|borehole|well)/iu.test(text)) return 1.1;
+  if (/(?:циркул|отоп|circulation)/iu.test(text)) return 0.12;
+  if (/(?:дренаж|фекал|sewage|drainage)/iu.test(text)) return 0.75;
   return 0.8;
 }
 
@@ -2042,10 +2052,21 @@ function calculateGeneratorLoadProfile(items: ProductElectricalLoadItem[], simul
   };
 }
 
+function hasAffirmativeSimultaneousStarting(text: string) {
+  const simultaneous = /(?:одновременно|вместе|разом|сразу)/iu.test(text);
+  if (!simultaneous) return false;
+  const nonSimultaneous = /(?:не\s+(?:буду|планирую|собираюсь|нужно|надо)?[^.!?;\n]{0,90}(?:одновременно|вместе|разом|сразу)|(?:одновременно|вместе|разом|сразу)[^.!?;\n]{0,90}не\s+(?:буду|планирую|собираюсь|нужно|надо)?|(?:по\s+очереди|отдельно|не\s+в\s+один\s+момент))/iu.test(text);
+  return !nonSimultaneous;
+}
+
 function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLoadProfile, compatibilityTarget?: ProductSelectionState['compatibilityTargetProduct']) {
   const lower = text.toLowerCase();
   const items = new Map<string, ProductElectricalLoadItem>();
   for (const item of current?.items ?? []) items.set(loadItemKey(item), item);
+  for (const item of generatorReferenceLoadItemsFromText(text)) {
+    const key = loadItemKey(item);
+    if (!items.has(key)) items.set(key, item);
+  }
 
   const detectedFridgeCount = applianceCount(lower, /холодильник|fridge/iu, /холодильник[а-я]*|fridges/iu);
   const previousFridge = items.get('refrigerator:холодильник') ?? [...items.values()].find((item) => item.kind === 'refrigerator');
@@ -2097,9 +2118,9 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
     items.set(loadItemKey(item), item);
   }
 
-  const simultaneousStarting = /(?:одновременно|вместе|разом|сразу)/iu.test(lower);
-  if (/(?:\u043d\u0430\u0441\u043e\u0441|pump)/iu.test(lower) || compatibilityTarget?.kind === 'pump') {
-    const explicit = explicitLoadKwNear(text, /(?:\u043d\u0430\u0441\u043e\u0441|pump)/iu) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
+  const simultaneousStarting = hasAffirmativeSimultaneousStarting(text);
+  if (/(?:насос|pump)/iu.test(lower) || compatibilityTarget?.kind === 'pump') {
+    const explicit = explicitLoadKwNear(text, /(?:насос|pump)/iu) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
     const previous = [...items.values()].find((item) => item.kind === 'pump');
     const runningKw = explicit ?? previous?.runningKw ?? pumpRunningKwEstimate(lower);
     const item: ProductElectricalLoadItem = {
@@ -2109,10 +2130,13 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
       runningKw,
       startingKw: explicit
         ? pumpStartingKwEstimate(explicit)
-        : previous?.startingKw ?? pumpStartingKwEstimate(runningKw),
+        : pumpStartingKwEstimate(runningKw),
       source: explicit ? 'explicit_user' : previous?.source ?? 'estimated_average',
       evidence: explicit ? text : previous?.evidence ?? text
     };
+    for (const [key, existing] of [...items.entries()]) {
+      if (existing.kind === 'pump') items.delete(key);
+    }
     items.set(loadItemKey(item), item);
   }
 
@@ -2541,7 +2565,7 @@ function sortSelectionProducts(
       const aWithin = aPrice > 0 && aPrice <= budgetMax;
       const bWithin = bPrice > 0 && bPrice <= budgetMax;
       if (aWithin !== bWithin) return aWithin ? -1 : 1;
-      if (aWithin && bWithin && aPrice !== bPrice) return bPrice - aPrice;
+      if (aWithin && bWithin && aPrice !== bPrice && preference !== 'premium') return aPrice - bPrice;
     }
     if (preference === 'cheapest') {
       const price = Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
@@ -2644,6 +2668,22 @@ function enforceAnswerCardContract(
 
   const currentIds = new Set(cards.map((card) => card.id));
   const mentionedIds = new Set(mentioned.map((product) => product.id));
+  const authoritativeCardIds = new Set([
+    ...plan.selectedProductIds,
+    ...(state.selectionState?.selectedProductIds ?? [])
+  ]);
+  const hasAuthoritativeShownCard = cards.some((card) => authoritativeCardIds.has(card.id));
+  if ((plan.action === 'recommend_products' || plan.answerMode === 'productRecommendation') && hasAuthoritativeShownCard) {
+    return {
+      cards,
+      diagnostics: {
+        mentionedProductIds: [...mentionedIds],
+        addedCardIds: [],
+        reordered: false,
+        firstCardAligned: cards[0] ? cards[0].id === mentioned[0]?.id : true
+      }
+    };
+  }
   const baseProducts = cards.map(productFromCard);
   const ordered = [
     ...mentioned,
@@ -2704,14 +2744,43 @@ function repairGeneratorLoadMinimumText(answer: string, loadProfile?: ProductGen
   const required = loadProfile?.requiredNominalKw;
   if (!required || !Number.isFinite(required)) return answer;
   const formatted = Number.isInteger(required) ? String(required) : String(required).replace('.', ',');
-  return answer.replace(
-    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435|\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440(?:\s+\u043f\u043e\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0443)?|\u043d\u0443\u0436\u0435\u043d(?:\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440)?(?:\s+\u043e\u043a\u043e\u043b\u043e)?|(?:\u0441\s+\u0437\u0430\u043f\u0430\u0441\u043e\u043c\s+)?\u043e\u0442)[^.!?\n]{0,90}?)(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0412\u0442|kw)/giu,
+  const repaired = answer.replace(
+    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435|\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440(?:\s+\u043f\u043e\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0443)?|\u043d\u0443\u0436\u0435\u043d(?:\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440)?(?:\s+\u043e\u043a\u043e\u043b\u043e)?|\u0441\s+\u0437\u0430\u043f\u0430\u0441\u043e\u043c\s+\u043e\u0442)\s*[:\u2014-]?\s*)(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0412\u0442|kw)/giu,
     (match, prefix: string, value: string) => {
       const parsed = Number(String(value).replace(',', '.'));
       if (!Number.isFinite(parsed) || parsed <= required + 0.4) return match;
       return `${prefix}${formatted} кВт`;
     }
   );
+  return sanitizeVisibleAnswerNumbers(repaired);
+}
+
+function requestedVisibleCardLimitFromText(text: string): number | undefined {
+  const normalized = text.toLowerCase().replace(/ё/g, 'е');
+  const explicitTwo = /(?:один|1)\s+(?:основн|главн|перв)[^.!?\n]{0,80}(?:и|\+|,)[^.!?\n]{0,80}(?:один|1)\s+(?:запасн|альтернатив)/iu.test(normalized) ||
+    /(?:пару|два|две|2)\s+(?:вариант|модел|позици)/iu.test(normalized) ||
+    /(?:вариант|модел|позици)[^.!?\n]{0,40}(?:пару|два|две|2)\b/iu.test(normalized);
+  if (explicitTwo) return 2;
+
+  const explicitOne = /(?:один|1)\s+(?:вариант|модель|позици|генератор|товар)\b/iu.test(normalized) ||
+    /(?:выбери|покажи|дай|подбери|посоветуй)[^.!?\n]{0,50}(?:лучший|один)\s+(?:вариант|модель|генератор|товар)/iu.test(normalized);
+  if (explicitOne) return 1;
+
+  const numeric = normalized.match(/(?:покажи|дай|подбери|выбери|посоветуй)[^.!?\n]{0,50}\b([1-4])\s*(?:вариант|модел|позици|товар)/iu);
+  if (numeric?.[1]) return Math.max(1, Math.min(4, Number(numeric[1])));
+
+  return undefined;
+}
+
+function effectiveVisibleCardLimitFromConversation(userMessage: string, history: Message[], maxMessages = 8): number | undefined {
+  const current = requestedVisibleCardLimitFromText(userMessage);
+  if (current) return current;
+  for (const message of [...history].slice(-maxMessages).reverse()) {
+    if (message.role !== 'user') continue;
+    const limit = requestedVisibleCardLimitFromText(message.content);
+    if (limit) return limit;
+  }
+  return undefined;
 }
 
 function selectedPurchaseProductIds(products: Product[], history: Message[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
@@ -2786,8 +2855,43 @@ function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], hist
   };
 }
 
+function resolveTurnContractForPlan(
+  plan: AssistantTurnPlan,
+  options: { forceTextOnlyReason?: string; forceCards?: ResolvedTurnContract['render']['cards']; forceWebRequired?: boolean } = {}
+) {
+  return resolveTurnContract({ plan, ...options });
+}
+
+function applyResolvedTurnContractToPlan(plan: AssistantTurnPlan, contract: ResolvedTurnContract): AssistantTurnPlan {
+  const cardPolicy = contract.render.cards === 'none'
+    ? 'textOnly'
+    : contract.render.cards === 'showProducts' || contract.render.cards === 'selectedOnly'
+      ? 'showProducts'
+      : contract.render.cards === 'showAccessories'
+        ? 'showAccessories'
+        : plan.cardPolicy;
+  return {
+    ...plan,
+    action: contract.action.primary,
+    answerMode: contract.action.answerMode,
+    followUpPolicy: contract.action.followUpPolicy,
+    contextScope: contract.scope.context,
+    searchScope: contract.scope.search,
+    catalogSearchQuery: contract.scope.catalogSearchQuery,
+    needsWebSearch: contract.knowledge.webRequired,
+    missingInformation: contract.knowledge.missingInformation,
+    selectedProductIds: contract.selection.selectedProductIds,
+    requiredProductTraits: (contract.selection.requiredProductTraits ?? plan.requiredProductTraits) as AssistantTurnPlan['requiredProductTraits'],
+    selectionState: (contract.selection.selectionState ?? plan.selectionState) as AssistantTurnPlan['selectionState'],
+    cardPolicy,
+    answerGuidance: contract.guidance
+  };
+}
+
 function selectCardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan, options: { cardLimit?: number } = {}) {
-  const cardLimit = options.cardLimit ?? MAX_PRODUCT_CARDS;
+  const requestedCardLimit = requestedVisibleCardLimitFromText(userMessage);
+  const baseCardLimit = options.cardLimit ?? MAX_PRODUCT_CARDS;
+  const cardLimit = Math.max(1, Math.min(baseCardLimit, requestedCardLimit ?? baseCardLimit));
   const baseProfile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
   const requestedBrandSet = ['generatorOil', 'engineOil', 'generatorAccessory', 'plateAccessory'].includes(baseProfile.intent)
     ? new Set<string>()
@@ -2977,6 +3081,19 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
   };
 }
 
+function selectCardsFromTurnContract(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan, contract: ResolvedTurnContract, options: { cardLimit?: number } = {}) {
+  if (contract.render.cards === 'none') {
+    return {
+      cards: [],
+      diagnostics: {
+        ...cardDiagnostics(buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits), contract.selection.selectedProductIds.length, 0, 0, false, 'contract_text_only'),
+        reason: contract.render.textOnlyReason ? `contract_text_only_${contract.render.textOnlyReason}` : 'contract_text_only'
+      }
+    };
+  }
+  return selectCardsFromPlan(products, state, userMessage, plan, options);
+}
+
 function cardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
   return selectCardsFromPlan(products, state, userMessage, plan).cards;
 }
@@ -3065,7 +3182,7 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
   if (plan?.followUpPolicy === 'answerNowNoDeferredOffer') {
     cleaned = stripDeferredOfferTail(cleaned);
   }
-  return cleaned.trim();
+  return sanitizeVisibleAnswerNumbers(cleaned).trim();
 }
 
 function ensureLargeSliceShowMoreNote(answer: string, slice: StructuredCatalogSlice | null | undefined, cards: ProductCard[]) {
@@ -3359,7 +3476,9 @@ export class AssistantService {
     userMessage: string,
     state: CustomerNeedState,
     plan: AssistantTurnPlan,
-    baseCandidates: Product[]
+    baseCandidates: Product[],
+    contract?: ResolvedTurnContract,
+    visibleLimitOverride?: number
   ): Promise<ProductSelectionResult> {
     const currentSelection = state.selectionState ?? emptyProductSelectionState();
     const activeText = [userMessage, plan.catalogSearchQuery, stateText(state, '')].filter(Boolean).join(' ');
@@ -3372,7 +3491,8 @@ export class AssistantService {
       selectionState.targetProductClass !== 'unknown' &&
       !isLeadPlan(plan) &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
-      plan.cardPolicy !== 'textOnly';
+      plan.cardPolicy !== 'textOnly' &&
+      contract?.render.cards !== 'none';
     const tokenRoles = selectionState.hardConstraints.exactModelTokenRoles ?? [];
     const comparisonTokens = tokenRoles.filter((token) => token.role === 'comparisonProduct').map((token) => token.value);
     const targetTokens = selectionState.hardConstraints.exactModelTokens;
@@ -3393,8 +3513,25 @@ export class AssistantService {
           ? await (this.products as ProductRepository).listProductsByTextFilter(catalogPatterns, 5000).catch(() => [])
           : await this.products.listProducts(5000).catch(() => []))
       : [];
-    const sourceProducts = shouldUseCatalog ? mergeProductsById(allProducts, [...baseCandidates, ...exactTargetProducts]) : mergeProductsById(baseCandidates, exactTargetProducts);
-    const selectedIds = new Set([...plan.selectedProductIds, ...selectionState.selectedProductIds]);
+    const unscopedSourceProducts = shouldUseCatalog ? mergeProductsById(allProducts, [...baseCandidates, ...exactTargetProducts]) : mergeProductsById(baseCandidates, exactTargetProducts);
+    const previousSelectionOnly = plan.searchScope === 'previousSelectionOnly';
+    const previousSelectionIds = previousSelectionOnly
+      ? uniqueList([
+          ...(contract?.selection.selectedProductIds ?? []),
+          ...selectionState.selectedProductIds,
+          ...(selectionState.matchedProductIds ?? []),
+          ...(selectionState.previousCandidateProductIds ?? [])
+        ].filter(Boolean), 64)
+      : [];
+    const previousSelectionOrder = new Map(previousSelectionIds.map((id, index) => [id, index]));
+    const sourceProducts = previousSelectionIds.length
+      ? unscopedSourceProducts
+        .filter((product) => previousSelectionOrder.has(product.id))
+        .sort((a, b) => (previousSelectionOrder.get(a.id) ?? 9999) - (previousSelectionOrder.get(b.id) ?? 9999))
+      : unscopedSourceProducts;
+    const selectedIds = new Set(contract
+      ? contract.selection.selectedProductIds
+      : [...plan.selectedProductIds, ...selectionState.selectedProductIds]);
     const canRecommendFromSelection = hasReliableGeneratorSelectionBasis(selectionState);
     const scored = canRecommendFromSelection
       ? sortSelectionProducts(sourceProducts
@@ -3434,7 +3571,9 @@ export class AssistantService {
       productId: product.id,
       reason: productRejectionReason(product, selectionState, selectionProfile)
     }));
-    const visibleLimit = matchedProducts.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : MAX_PRODUCT_CARDS;
+    const requestedVisibleLimit = visibleLimitOverride ?? requestedVisibleCardLimitFromText(userMessage);
+    const defaultVisibleLimit = matchedProducts.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : MAX_PRODUCT_CARDS;
+    const visibleLimit = Math.max(1, Math.min(defaultVisibleLimit, requestedVisibleLimit ?? defaultVisibleLimit));
     const visibleProducts = matchedProducts.slice(0, visibleLimit);
     const hiddenProducts = matchedProducts.slice(visibleLimit);
     const confidence = Math.max(selectionState.confidence, matchedProducts.length ? 0.78 : selectionState.targetProductClass === 'unknown' ? 0.2 : 0.45);
@@ -3473,7 +3612,7 @@ export class AssistantService {
     };
   }
 
-  async findStructuredCatalogSlice(userMessage: string, state: CustomerNeedState, plan: AssistantTurnPlan): Promise<StructuredCatalogSlice | null> {
+  async findStructuredCatalogSlice(userMessage: string, state: CustomerNeedState, plan: AssistantTurnPlan, contract?: ResolvedTurnContract): Promise<StructuredCatalogSlice | null> {
     const activeText = [
       userMessage,
       plan.catalogSearchQuery,
@@ -3523,6 +3662,7 @@ export class AssistantService {
       productIntent !== 'unknown' &&
       !isLeadPlan(plan) &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
+      contract?.render.cards !== 'none' &&
       (hasStructuredCriteria ||
         (plan.action === 'recommend_products' &&
           plan.cardPolicy !== 'textOnly' &&
@@ -3600,7 +3740,7 @@ export class AssistantService {
               const aWithin = aPrice > 0 && aPrice <= budgetMax;
               const bWithin = bPrice > 0 && bPrice <= budgetMax;
               if (aWithin !== bWithin) return aWithin ? -1 : 1;
-              if (aWithin && bWithin && aPrice !== bPrice) return bPrice - aPrice;
+              if (aWithin && bWithin && aPrice !== bPrice) return aPrice - bPrice;
             }
             const distance = rankDistance(a) - rankDistance(b);
             if (distance !== 0) return distance;
@@ -3728,7 +3868,13 @@ export class AssistantService {
     let allCandidates = [...byId.values()];
     const purchasePlan = purchasePlanIfNeeded(plan, allCandidates, history, needState, input.userMessage);
     let effectivePlan = purchasePlan.plan;
-    const selectionResult = await this.selectProductsForTurn(input.userMessage, needState, effectivePlan, allCandidates);
+    if (shouldEnrichGeneratorLoadReference(input.userMessage)) {
+      await enrichGeneratorLoadReferenceFromWeb(client, input.userMessage, input.signal)
+        .catch((error) => console.warn('Generator load reference enrichment failed', safeError(error)));
+    }
+    const visibleCardLimit = effectiveVisibleCardLimitFromConversation(input.userMessage, history);
+    let turnContract = resolveTurnContractForPlan(effectivePlan);
+    const selectionResult = await this.selectProductsForTurn(input.userMessage, needState, effectivePlan, allCandidates, turnContract, visibleCardLimit);
     for (const product of selectionResult.comparisonProducts) byId.set(product.id, product);
     if (JSON.stringify(selectionResult.state) !== JSON.stringify(needState.selectionState)) {
       needState = { ...needState, selectionState: selectionResult.state };
@@ -3789,6 +3935,7 @@ export class AssistantService {
             nominalPowerKwMax: selectionHard.nominalPowerKwMax ?? null,
             maxPowerKwMin: selectionHard.maxPowerKwMin ?? null,
             maxPowerKwMax: selectionHard.maxPowerKwMax ?? null,
+            provenance: selectionHard.provenance ?? effectivePlan.requiredProductTraits.provenance,
             weightKgMin: selectionHard.weightKgMin ?? null,
             weightKgMax: selectionHard.weightKgMax ?? null,
             diameterMmMin: selectionHard.diameterMmMin ?? null,
@@ -3860,6 +4007,8 @@ export class AssistantService {
         ].filter(Boolean).join('\n')
       };
     }
+    turnContract = resolveTurnContractForPlan(effectivePlan);
+    effectivePlan = applyResolvedTurnContractToPlan(effectivePlan, turnContract);
     const currentLineupStyle = shouldUseCurrentLineupStyle(input.userMessage, effectivePlan);
     const catalogLineupAlternatives = currentLineupStyle
       ? await this.findCatalogLineupAlternatives(input.userMessage, needState, allCandidates)
@@ -3881,10 +4030,13 @@ export class AssistantService {
     const productsForCardSelection = structuredCatalogSlice?.products.length
       ? structuredCatalogSlice.products
       : candidates;
-    const cardSelection = selectCardsFromPlan(productsForCardSelection, needState, input.userMessage, effectivePlan, {
-      cardLimit: structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS
+    const cardSelection = selectCardsFromTurnContract(productsForCardSelection, needState, input.userMessage, effectivePlan, turnContract, {
+      cardLimit: Math.max(1, Math.min(
+        structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS,
+        visibleCardLimit ?? (structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS)
+      ))
     });
-    let cards = cardSelection.cards;
+    let cards: ProductCard[] = cardSelection.cards;
     const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
       ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
       : null;
@@ -4254,7 +4406,10 @@ export class AssistantService {
       needState,
       input.userMessage,
       effectivePlan,
-      structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS
+      Math.max(1, Math.min(
+        structuredCatalogSlice?.products.length ? FULL_SLICE_PRODUCT_CARDS : MAX_PRODUCT_CARDS,
+        requestedVisibleCardLimitFromText(input.userMessage) ?? MAX_PRODUCT_CARDS
+      ))
     );
     cards = cardContract.cards;
     const finalVisibleCardIds = cards.slice(0, LARGE_SLICE_VISIBLE_CARDS).map((card) => card.id);
@@ -4801,7 +4956,10 @@ function extractUrlCitations(value: unknown, depth = 0): WebCitation[] {
 
 export const assistantTestHooks = {
   buildProductFitProfile,
+  requestedVisibleCardLimitFromText,
+  resolveTurnContractForPlan,
   selectCardsFromPlan,
+  selectCardsFromTurnContract,
   answerContextProductsForCards,
   compactSuitableProductsForAnswer,
   shouldForceStructuredSelectionCards,

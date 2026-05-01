@@ -119,6 +119,253 @@ async function rank(message: string, products: ReturnType<typeof product>[]) {
 }
 
 describe('recommendation ranking', () => {
+  it('keeps LLM previous-selection scope from introducing new catalogue products', async () => {
+    const currentMain = productWithSpecs('current-main', ru('Генератор бензиновый SUMEC SU4500i 4.5 kW'), 82000, 'https://example.test/current-main/', {
+      'Номинальная мощность': '4.5 кВт',
+      'Максимальная мощность': '5.0 кВт'
+    });
+    const currentBackup = productWithSpecs('current-backup', ru('Генератор бензиновый SUMEC SU7700 5.0 kW'), 99000, 'https://example.test/current-backup/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const cheaperNew = productWithSpecs('cheaper-new', ru('Генератор бензиновый новый дешевле 5.0 kW'), 61000, 'https://example.test/cheaper-new/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const oversizedNew = productWithSpecs('oversized-new', ru('Генератор бензиновый новый мощнее 7.5 kW'), 73000, 'https://example.test/oversized-new/', {
+      'Номинальная мощность': '7.5 кВт',
+      'Максимальная мощность': '8.0 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      cheaperNew,
+      oversizedNew,
+      currentMain,
+      currentBackup
+    ] as any) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        selectedProductIds: ['current-main', 'current-backup'],
+        matchedProductIds: ['current-main', 'current-backup'],
+        previousCandidateProductIds: ['current-main', 'current-backup'],
+        rankingPreference: 'cheapest',
+        confidence: 0.9,
+        loadProfile: {
+          totalRunningKw: 3.2,
+          requiredStartingKw: 4.3,
+          requiredNominalKw: 4.5,
+          simultaneousStarting: false,
+          items: []
+        },
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          startType: 'any',
+          enclosure: 'any',
+          conventionalGenerator: null,
+          singlePhase220: true,
+          nominalPowerKwMin: 4,
+          nominalPowerKwMax: 5.5,
+          maxPowerKwMin: 4.3,
+          maxPowerKwMax: 6,
+          provenance: {}
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      contextScope: 'previousSelection',
+      searchScope: 'previousSelectionOnly',
+      catalogSearchQuery: 'сравнить текущие выбранные генераторы, без поиска новых вариантов',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 5.5,
+        maxPowerKwMin: 4.3,
+        maxPowerKwMax: 6
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator'
+      },
+      answerGuidance: 'Покупатель продолжает обсуждать уже выбранную пару; не искать новые товары.'
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      ru('А из этих двух какой сначала брать, а какой оставить запасным?'),
+      state,
+      plan,
+      [cheaperNew, oversizedNew, currentMain, currentBackup] as any
+    );
+
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['current-main', 'current-backup']);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['current-main', 'current-backup']);
+    expect(result.state.selectedProductIds).toEqual(['current-main', 'current-backup']);
+  });
+
+  it('uses previousSelection as an anchor, not a cage, when the buyer asks to broaden alternatives', async () => {
+    const currentMain = productWithSpecs('current-main', ru('Генератор бензиновый SUMEC SU4500i 4.5 kW'), 82000, 'https://example.test/current-main/', {
+      'Номинальная мощность': '4.5 кВт',
+      'Максимальная мощность': '5.0 кВт'
+    });
+    const currentBackup = productWithSpecs('current-backup', ru('Генератор бензиновый SUMEC SU7700 5.0 kW'), 99000, 'https://example.test/current-backup/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const cheaperNew = productWithSpecs('cheaper-new', ru('Генератор бензиновый новый дешевле 5.0 kW'), 61000, 'https://example.test/cheaper-new/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      currentMain,
+      currentBackup,
+      cheaperNew
+    ] as any) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        selectedProductIds: ['current-main', 'current-backup'],
+        matchedProductIds: ['current-main', 'current-backup'],
+        previousCandidateProductIds: ['current-main', 'current-backup'],
+        rankingPreference: 'cheapest',
+        confidence: 0.9,
+        loadProfile: {
+          totalRunningKw: 3.2,
+          requiredStartingKw: 4.3,
+          requiredNominalKw: 4.5,
+          simultaneousStarting: false,
+          items: []
+        },
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          startType: 'any',
+          enclosure: 'any',
+          conventionalGenerator: null,
+          singlePhase220: true,
+          nominalPowerKwMin: 4,
+          nominalPowerKwMax: 5.5,
+          maxPowerKwMin: 4.3,
+          maxPowerKwMax: 6,
+          provenance: {}
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      contextScope: 'previousSelection',
+      searchScope: 'broadenAlternatives',
+      catalogSearchQuery: 'найти более дешевый генератор с теми же критериями',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 5.5,
+        maxPowerKwMin: 4.3,
+        maxPowerKwMax: 6
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator'
+      },
+      answerGuidance: 'Покупатель опирается на прежнюю пару, но просит найти новые более дешевые альтернативы.'
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      ru('А есть дешевле этих двух, но чтобы подходил так же?'),
+      state,
+      plan,
+      [currentMain, currentBackup, cheaperNew] as any
+    );
+
+    expect(result.visibleProducts.map((item) => item.id)).toContain('cheaper-new');
+    expect(result.matchedProducts[0]?.id).toBe('cheaper-new');
+  });
+
+  it('sorts suitable products cheapest-first under a budget ceiling unless premium is requested', async () => {
+    const cheap = productWithSpecs('cheap-ok', ru('Генератор бензиновый 5.0 kW бюджетный'), 61000, 'https://example.test/cheap-ok/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const expensive = productWithSpecs('expensive-ok', ru('Генератор бензиновый 5.0 kW дорогой'), 99000, 'https://example.test/expensive-ok/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([expensive, cheap] as any) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        rankingPreference: 'cheapest',
+        confidence: 0.9,
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          singlePhase220: true,
+          budgetMax: 100000,
+          nominalPowerKwMin: 4.5,
+          nominalPowerKwMax: 5.5,
+          maxPowerKwMin: 5,
+          maxPowerKwMax: 6,
+          provenance: { budgetMax: 'explicit_user' }
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'бензиновый генератор до 100000',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        budgetMax: 100000,
+        nominalPowerKwMin: 4.5,
+        nominalPowerKwMax: 5.5,
+        maxPowerKwMin: 5,
+        maxPowerKwMax: 6
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      ru('Нужен бензиновый генератор до 100 тысяч, без переплаты.'),
+      state,
+      plan,
+      [expensive, cheap] as any
+    );
+
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['cheap-ok', 'expensive-ok']);
+  });
+
   it('promotes portable plate compactors for any portability wording, not one fixed phrase', async () => {
     const message = ru('\\u041d\\u0443\\u0436\\u043d\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0434\\u0430\\u0447\\u0438, \\u0431\\u0443\\u0434\\u0443 \\u043e\\u0434\\u0438\\u043d \\u0442\\u0430\\u0441\\u043a\\u0430\\u0442\\u044c \\u0440\\u0443\\u043a\\u0430\\u043c\\u0438, \\u043d\\u0443\\u0436\\u043d\\u0430 \\u043d\\u0435 \\u0442\\u044f\\u0436\\u0435\\u043b\\u0430\\u044f \\u0438 \\u043a\\u043e\\u043c\\u043f\\u0430\\u043a\\u0442\\u043d\\u0430\\u044f');
     const { ranked } = await rank(message, [
@@ -1822,6 +2069,45 @@ describe('recommendation ranking', () => {
     expect(result.missingQuestions.length).toBeGreaterThan(0);
   });
 
+  it('keeps extra matched products hidden behind show more when buyer asks for one main and one backup', async () => {
+    const products = Array.from({ length: 12 }, (_, index) =>
+      productWithSpecs(`g${index}`, `Generator gasoline ${4 + index / 10} kW`, 50_000 + index, `https://example.test/catalog/generators/g${index}`, {})
+    );
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          nominalPowerKwMin: 4,
+          nominalPowerKwMax: 6,
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        confidence: 0.8
+      })
+    };
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('Подбери один основной генератор и один запасной, остальное можно под Показать еще', state, plan, []);
+
+    expect(result.matchedProducts).toHaveLength(12);
+    expect(result.visibleProducts).toHaveLength(2);
+    expect(result.hiddenProducts).toHaveLength(10);
+    expect(result.state.selectedProductIds).toEqual(result.visibleProducts.map((item) => item.id));
+    expect(result.state.matchedProductIds).toHaveLength(12);
+  });
+
   it('exact model selection does not return an accessory as the core product', async () => {
     const assistant = new AssistantService(undefined as never, new FakeProducts([
       product('mat', ru('\\u041a\\u043e\\u0432\\u0440\\u0438\\u043a \\u0434\\u043b\\u044f \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b Husqvarna LF 80 LAT'), 12_000, 'https://example.test/catalog/accessories/lf80-mat'),
@@ -2092,6 +2378,44 @@ describe('recommendation ranking', () => {
     expect(powered.matchedProducts.map((item) => item.id)).not.toContain('seven');
   });
 
+  it('does not promote non-simultaneous mentioned loads into the active generator scenario', async () => {
+    const products = [
+      productWithSpecs('four', 'Генератор бензиновый инверторный SUMEC SU4500i 4.0 kW', 36_500, 'https://example.test/catalog/generators/four', {}),
+      productWithSpecs('five', 'Генератор бензиновый SUMEC SU7700 5.0 kW', 42_490, 'https://example.test/catalog/generators/five', {}),
+      productWithSpecs('seven-half', 'Генератор бензиновый ET-POWER ET8000EAX 7.5 kW', 72_500, 'https://example.test/catalog/generators/seven-half', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const initial = await assistant.selectProductsForTurn(
+      'Нужен генератор для дачи: свет, холодильник и болгарка или дрель, мощность инструмента не знаю. Сеть 220 В. Подбери один основной генератор и один запасной.',
+      emptyNeedState(),
+      plan,
+      products,
+      undefined,
+      2
+    );
+    const followUp = await assistant.selectProductsForTurn(
+      'Если добавлю роутер, телевизор и ноутбук, это меняет выбор? Чайник и инструмент одновременно включать не буду.',
+      { ...emptyNeedState(), selectionState: initial.state },
+      plan,
+      products,
+      undefined,
+      2
+    );
+
+    expect(followUp.state.loadProfile?.items.map((item) => item.name)).not.toContain('электрочайник');
+    expect(followUp.state.loadProfile?.requiredNominalKw).toBeLessThanOrEqual(5);
+    expect(followUp.state.loadProfile?.simultaneousStarting).toBe(false);
+    expect(followUp.state.hardConstraints.nominalPowerKwMin).toBeLessThanOrEqual(5);
+  });
+
   it('ranking follow-up can sort the previous matched set instead of dropping cards', async () => {
     const products = [
       productWithSpecs('fit-expensive', 'Generator gasoline inverter FUBAG TI 7000 A ES 6.5 kW', 126_060, 'https://example.test/catalog/generators/fit-expensive', {}),
@@ -2127,7 +2451,7 @@ describe('recommendation ranking', () => {
     expect(cheapest.visibleProducts.map((item) => item.id)).toEqual(['fit-cheap', 'fit-expensive']);
   });
 
-  it('sorts suitable products by price policy depending on budget presence', async () => {
+  it('sorts suitable products cheapest-first under a budget ceiling', async () => {
     const products = [
       productWithSpecs('mid', 'Generator gasoline Fit 9.0 kW', 70_000, 'https://example.test/catalog/generators/mid', {}),
       productWithSpecs('cheap', 'Generator gasoline Fit 9.0 kW', 50_000, 'https://example.test/catalog/generators/cheap', {}),
@@ -2173,7 +2497,7 @@ describe('recommendation ranking', () => {
     }, plan, products);
 
     expect(noBudget.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'mid', 'near-budget']);
-    expect(withBudget.visibleProducts.map((item) => item.id)).toEqual(['near-budget', 'mid', 'cheap']);
+    expect(withBudget.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'mid', 'near-budget']);
   });
 
   it('enforces LLM-planned hard traits against planner-selected cards', async () => {
@@ -2219,7 +2543,7 @@ describe('recommendation ranking', () => {
     const cards = assistantTestHooks.cardsFromPlan(products, { ...state, selectionState: result.state }, message, plan);
 
     expect(result.state.hardConstraints.fuel).toBe('gasoline');
-    expect(result.matchedProducts.map((item) => item.id)).toEqual(['honda5000', 'honda4000']);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['honda4000', 'honda5000']);
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('diesel');
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('manual');
     expect(cards.map((item) => item.id)).not.toContain('diesel');
@@ -2562,7 +2886,7 @@ describe('recommendation ranking', () => {
 
     const result = await assistant.selectProductsForTurn('Need vibroplita under 100000 rub, up to 90 kg, easy to transport.', emptyNeedState(), plan, products);
 
-    expect(result.visibleProducts.map((item) => item.id)).toEqual(['near-budget', 'mid', 'cheap']);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'mid', 'near-budget']);
   });
 
   it('uses web verification for technical model comparisons with unverified specs', () => {

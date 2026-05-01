@@ -35,6 +35,14 @@ function normalizeRange(minRaw: string, maxRaw: string, unit: string, separator:
     : `${left}–${right} ${normalizedUnit}`;
 }
 
+function normalizeNominalPeak(nominalRaw: string, nominalLabel: string, peakRaw: string, peakLabel: string, unit: string) {
+  const nominal = parseRuNumber(nominalRaw);
+  const peak = parseRuNumber(peakRaw);
+  if (nominal === null || peak === null) return null;
+  if (peak >= nominal || sameNumber(nominal, peak)) return null;
+  return `${formatRuNumber(peak)} ${unit} ${nominalLabel} и ${formatRuNumber(nominal)} ${unit} ${peakLabel}`;
+}
+
 /**
  * Deterministic buyer-visible numeric sanity pass.
  * It does not invent product specs; it only fixes impossible/degenerate power ranges
@@ -57,6 +65,14 @@ export function sanitizeVisibleAnswerNumbers(answer: string) {
   );
   sanitized = sanitized.replace(wordRange, (match, minRaw: string, maxRaw: string, unit: string) => {
     return normalizeRange(minRaw, maxRaw, unit, 'words') ?? match;
+  });
+
+  const nominalPeak = new RegExp(
+    `([0-9]+(?:[,.][0-9]+)?)\\s*(${POWER_UNIT_RE})\\s*((?:номинал(?:а|ьн(?:ая|ой|ую|ые|ых)?)?|ном\\.?))\\s+и\\s+([0-9]+(?:[,.][0-9]+)?)\\s*\\2\\s*((?:по\\s+пику|пик(?:овая|овой|овую|овые|овых)?|макс\\.?|максимум))`,
+    'giu'
+  );
+  sanitized = sanitized.replace(nominalPeak, (match, nominalRaw: string, unit: string, nominalLabel: string, peakRaw: string, peakLabel: string) => {
+    return normalizeNominalPeak(nominalRaw, nominalLabel, peakRaw, peakLabel, unit) ?? match;
   });
 
   return sanitized;
