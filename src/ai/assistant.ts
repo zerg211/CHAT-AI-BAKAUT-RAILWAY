@@ -686,6 +686,11 @@ function selectionText(selection?: ProductSelectionState | null) {
 }
 
 
+function hasNegatedPumpLoad(text: string) {
+  return /(?:насос\w*|pump)[^.!?;\n]{0,40}(?:нет|не\s+будет|не\s+планир|отсутств|исключ)/iu.test(text) ||
+    /(?:нет|не\s+будет|не\s+планир|без|отсутств|исключ)[^.!?;\n]{0,40}(?:насос\w*|pump)/iu.test(text);
+}
+
 function estimatedGeneratorPowerFromLoads(text: string): GeneratorPowerProfile | undefined {
   const lower = text.toLowerCase();
   const loads: Array<{ running: number; starting: number }> = [];
@@ -695,7 +700,7 @@ function estimatedGeneratorPowerFromLoads(text: string): GeneratorPowerProfile |
     const starting = item.startingKw ?? running;
     if (running && starting) loads.push({ running, starting });
   }
-  if (/(?:\u043d\u0430\u0441\u043e\u0441|pump)/i.test(lower)) {
+  if (!hasNegatedPumpLoad(text) && /(?:\u043d\u0430\u0441\u043e\u0441|pump)/i.test(lower)) {
     const running = numberNearNeed(lower, /(?:\u043d\u0430\u0441\u043e\u0441|pump)/i) ?? 0.8;
     loads.push({ running, starting: Math.max(running * 2.8, running + 1.2) });
   }
@@ -1419,6 +1424,14 @@ function fallbackDetectPurchaseIntent(text: string) {
   return /(?:\bbuy\b|\border\b|\btake\b|куплю|беру|возьму|давайте|оформ|заказ|в\s+заявк|оставлю\s+контакт|передайте\s+менеджеру)/iu.test(text);
 }
 
+function fallbackDetectLeadHandoffIntent(text: string) {
+  const normalized = text.toLowerCase();
+  const hasContact = /(?:\+?\d[\d\s()\-]{8,}\d|тел(?:ефон)?|контакт|зовут|меня\s+зовут|whatsapp|ватсап|telegram|телеграм)/iu.test(normalized);
+  if (!hasContact) return false;
+  return fallbackDetectPurchaseIntent(normalized) ||
+    /(?:специалист|менеджер|свяж|перезвон|подтверд|провер|налич|цен[ау]|доставк|оформ|заявк)/iu.test(normalized);
+}
+
 function fallbackDetectOwnershipCostQuestion(text: string) {
   const normalized = text.toLowerCase();
   const hasServiceOrCostTerm = /(?:сервис|обслуживан|регламент|то\b|ремонт|запчаст|детал|расходник|фильтр|свеч|ремен|стоимост|цен[ауы]|ценник|владени|эксплуатацион|service|maintenance|repair|spare|parts|consumable|ownership)/iu.test(normalized);
@@ -1931,7 +1944,8 @@ function compatibilityTargetFromText(text: string): ProductSelectionState['compa
   const article = text.match(/(?:артикул|article|part\s*no\.?)\s*([A-Za-zА-Яа-я0-9-]{4,})/iu)?.[1];
   const baxi = text.match(/\b(Baxi\s+[A-Za-zА-Яа-я0-9\s-]{2,40})/iu)?.[1]?.trim();
   const boiler = /кот[её]л|boiler|baxi/iu.test(text);
-  const pump = /насос|pump/iu.test(text);
+  const pump = /насос|pump/iu.test(text) && !hasNegatedPumpLoad(text);
+  if (!boiler && !pump && !article && !baxi) return undefined;
   return {
     name: baxi,
     article,
@@ -2118,8 +2132,15 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
     items.set(loadItemKey(item), item);
   }
 
+  const negatedPumpLoad = hasNegatedPumpLoad(text);
+  const removedKinds = negatedPumpLoad ? ['pump'] : [];
+  if (negatedPumpLoad) {
+    for (const [key, existing] of [...items.entries()]) {
+      if (existing.kind === 'pump') items.delete(key);
+    }
+  }
   const simultaneousStarting = hasAffirmativeSimultaneousStarting(text);
-  if (/(?:насос|pump)/iu.test(lower) || compatibilityTarget?.kind === 'pump') {
+  if (!negatedPumpLoad && (/(?:насос|pump)/iu.test(lower) || compatibilityTarget?.kind === 'pump')) {
     const explicit = explicitLoadKwNear(text, /(?:насос|pump)/iu) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
     const previous = [...items.values()].find((item) => item.kind === 'pump');
     const runningKw = explicit ?? previous?.runningKw ?? pumpRunningKwEstimate(lower);
@@ -2140,7 +2161,9 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
     items.set(loadItemKey(item), item);
   }
 
-  return calculateGeneratorLoadProfile([...items.values()], simultaneousStarting || current?.simultaneousStarting === true);
+  const profile = calculateGeneratorLoadProfile([...items.values()], simultaneousStarting || current?.simultaneousStarting === true);
+  if (profile && removedKinds.length) profile.removedKinds = removedKinds;
+  return profile;
 }
 
 function tokenRolesForTurn(tokens: string[], userMessage: string, targetProductClass: ProductIntent): ProductSelectionToken[] {
@@ -2759,7 +2782,8 @@ function requestedVisibleCardLimitFromText(text: string): number | undefined {
   const normalized = text.toLowerCase().replace(/ё/g, 'е');
   const explicitTwo = /(?:один|1)\s+(?:основн|главн|перв)[^.!?\n]{0,80}(?:и|\+|,)[^.!?\n]{0,80}(?:один|1)\s+(?:запасн|альтернатив)/iu.test(normalized) ||
     /(?:пару|два|две|2)\s+(?:вариант|модел|позици)/iu.test(normalized) ||
-    /(?:вариант|модел|позици)[^.!?\n]{0,40}(?:пару|два|две|2)\b/iu.test(normalized);
+    /(?:вариант|модел|позици)[^.!?\n]{0,40}(?:пару|два|две|2)\b/iu.test(normalized) ||
+    /(?:какой|что)\s+(?:вариант|модел|позици|генератор)[^.!?\n]{0,120}(?:перв|главн|основн|взял|брал)[^.!?\n]{0,120}(?:альтернатив|запасн)/iu.test(normalized);
   if (explicitTwo) return 2;
 
   const explicitOne = /(?:один|1)\s+(?:вариант|модель|позици|генератор|товар)\b/iu.test(normalized) ||
@@ -2828,7 +2852,7 @@ function selectedPurchaseProductIds(products: Product[], history: Message[], sta
 }
 
 function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], history: Message[], state: CustomerNeedState, userMessage: string) {
-  const leadRequested = isLeadPlan(plan);
+  const leadRequested = isLeadPlan(plan) || fallbackDetectLeadHandoffIntent(userMessage);
   if (!leadRequested) return { plan, leadRequested };
 
   const selectedProductIds = selectedPurchaseProductIds(products, history, state, userMessage, plan);
@@ -2853,6 +2877,30 @@ function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], hist
       ].filter(Boolean).join('\n')
     }
   };
+}
+
+function formatLeadPrice(value?: number | null, currency = 'RUB') {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
+  const rounded = Math.round(value).toLocaleString('ru-RU');
+  return currency === 'RUB' ? `${rounded} ₽` : `${rounded} ${currency}`;
+}
+
+function deterministicLeadCollectionAnswer(cards: ProductCard[], totalPrice?: number | null) {
+  const visibleCards = cards.slice(0, Math.max(1, Math.min(2, cards.length)));
+  const names = visibleCards.map((card) => card.name).filter(Boolean);
+  const itemsText = names.length
+    ? names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(', ')} и ${names[names.length - 1]}`
+    : 'выбранный вариант';
+  const totalText = formatLeadPrice(totalPrice, cards.find((card) => card.currency)?.currency ?? 'RUB');
+  const priceText = totalText ? ` Ориентир по сумме: ${totalText}.` : '';
+
+  return [
+    `Зафиксировал для проверки менеджером: ${itemsText}.`,
+    `${priceText}Оставьте имя и телефон в форме — специалист подтвердит наличие, актуальную цену и доставку.`,
+    'Заявку уже созданной не считаю: финально её подтвердит менеджер после проверки.'
+  ].join(' ');
 }
 
 function resolveTurnContractForPlan(
@@ -3515,13 +3563,17 @@ export class AssistantService {
       : [];
     const unscopedSourceProducts = shouldUseCatalog ? mergeProductsById(allProducts, [...baseCandidates, ...exactTargetProducts]) : mergeProductsById(baseCandidates, exactTargetProducts);
     const previousSelectionOnly = plan.searchScope === 'previousSelectionOnly';
+    const currentVisibleSelectionIds = uniqueList([
+      ...(contract?.selection.selectedProductIds ?? []),
+      ...selectionState.selectedProductIds
+    ].filter(Boolean), 64);
     const previousSelectionIds = previousSelectionOnly
-      ? uniqueList([
-          ...(contract?.selection.selectedProductIds ?? []),
-          ...selectionState.selectedProductIds,
-          ...(selectionState.matchedProductIds ?? []),
-          ...(selectionState.previousCandidateProductIds ?? [])
-        ].filter(Boolean), 64)
+      ? (currentVisibleSelectionIds.length
+          ? currentVisibleSelectionIds
+          : uniqueList([
+              ...(selectionState.matchedProductIds ?? []),
+              ...(selectionState.previousCandidateProductIds ?? [])
+            ].filter(Boolean), 64))
       : [];
     const previousSelectionOrder = new Map(previousSelectionIds.map((id, index) => [id, index]));
     const sourceProducts = previousSelectionIds.length
@@ -3546,6 +3598,25 @@ export class AssistantService {
       : selectionState.rankingPreference === 'premium' || selectionState.rankingPreference === 'balanced'
         ? diversifyRankedProducts(scored, Math.max(50, FULL_SLICE_PRODUCT_CARDS))
         : scored.slice(0, Math.max(50, FULL_SLICE_PRODUCT_CARDS)).map((item) => item.product);
+    const requestedVisibleLimit = visibleLimitOverride ?? requestedVisibleCardLimitFromText(userMessage);
+    const shouldPinCurrentVisibleSelection = Boolean(
+      requestedVisibleLimit &&
+      currentVisibleSelectionIds.length >= requestedVisibleLimit &&
+      plan.searchScope !== 'broadenAlternatives' &&
+      !comparisonTokens.length &&
+      !targetTokens.length
+    );
+    if (shouldPinCurrentVisibleSelection) {
+      const pinnedOrder = new Map(currentVisibleSelectionIds.map((id, index) => [id, index]));
+      const pinnedProducts = sourceProducts
+        .filter((product) => pinnedOrder.has(product.id))
+        .sort((a, b) => (pinnedOrder.get(a.id) ?? 9999) - (pinnedOrder.get(b.id) ?? 9999));
+      const pinnedIds = new Set(pinnedProducts.map((product) => product.id));
+      matchedProducts = [
+        ...pinnedProducts,
+        ...matchedProducts.filter((product) => !pinnedIds.has(product.id))
+      ];
+    }
     if (!matchedProducts.length && selectionState.rankingPreference && isRankingOnlyFollowUp(userMessage)) {
       const priorIds = new Set(
         (selectionState.matchedProductIds?.length ? selectionState.matchedProductIds : selectionState.previousCandidateProductIds) ?? []
@@ -3571,7 +3642,6 @@ export class AssistantService {
       productId: product.id,
       reason: productRejectionReason(product, selectionState, selectionProfile)
     }));
-    const requestedVisibleLimit = visibleLimitOverride ?? requestedVisibleCardLimitFromText(userMessage);
     const defaultVisibleLimit = matchedProducts.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : MAX_PRODUCT_CARDS;
     const visibleLimit = Math.max(1, Math.min(defaultVisibleLimit, requestedVisibleLimit ?? defaultVisibleLimit));
     const visibleProducts = matchedProducts.slice(0, visibleLimit);
@@ -4314,7 +4384,9 @@ export class AssistantService {
       answerRequest.tool_choice = { type: 'web_search_preview' };
     }
 
-    try {
+    if (purchasePlan.leadRequested) {
+      answer = deterministicLeadCollectionAnswer(cards, bundleTotalPrice);
+    } else try {
       const result = await executeAnswerRequest(answerRequest, 'answer');
       answer = result.answer;
       completedResponse = result.completedResponse;
@@ -4986,6 +5058,7 @@ export const assistantTestHooks = {
   fallbackTurnPlan,
   repairAnswerCardText,
   repairGeneratorLoadMinimumText,
+  deterministicLeadCollectionAnswer,
   isCatalogAvailabilityQuestion,
   isManufacturingStatusQuestion
 };

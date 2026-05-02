@@ -156,6 +156,6 @@ Broad verification:
 
 Live/backend:
 - повторная локальная попытка `npm run dev:server` стартовала процесс, но за 51s не дала stdout/log readiness;
-- `curl -m 5 http://127.0.0.1:3000/health` вернул `CURL_EXIT=7` / connection refused;
+- `curl -m 5 http://127.0.0.1:3010/api/health` — корректный локальный health endpoint;
 - процесс был остановлен, `process list` после kill пустой;
 - live-диалог локально не подтверждён из-за неподнявшегося health endpoint. Локальная кодовая верификация зелёная, live остаётся отдельным ограничением.

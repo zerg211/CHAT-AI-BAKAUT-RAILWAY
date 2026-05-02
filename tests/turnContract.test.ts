@@ -202,5 +202,7 @@ describe('turn contract resolver', () => {
       .toBe(2);
     expect(assistantTestHooks.requestedVisibleCardLimitFromText('Покажи 2 варианта, без длинного списка.'))
       .toBe(2);
+    expect(assistantTestHooks.requestedVisibleCardLimitFromText('Мне не нужен большой список. Скажите по-человечески: какой вариант вы бы взяли первым, и какая нормальная альтернатива?'))
+      .toBe(2);
   });
 });

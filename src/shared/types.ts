@@ -183,6 +183,7 @@ export interface ProductGeneratorLoadProfile {
   simultaneousStarting?: boolean;
   calculation?: string;
   confidence?: number;
+  removedKinds?: string[];
 }
 
 export type ProductSelectionConstraintProvenance = Partial<Record<

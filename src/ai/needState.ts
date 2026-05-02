@@ -142,7 +142,8 @@ function mergeLoadProfile(
   reset = false
 ): ProductSelectionState['loadProfile'] {
   if (!update) return reset ? undefined : current;
-  const baseItems = reset ? [] : current?.items ?? [];
+  const removedKinds = new Set(update.removedKinds ?? []);
+  const baseItems = reset ? [] : (current?.items ?? []).filter((item) => !removedKinds.has(item.kind));
   const byKey = new Map<string, NonNullable<ProductSelectionState['loadProfile']>['items'][number]>();
   for (const item of baseItems) {
     byKey.set(`${item.kind}:${item.name ?? ''}`, item);

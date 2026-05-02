@@ -433,9 +433,20 @@ export function isManufacturingStatusQuestion(text: string) {
   return /(?:\u0432\u044b\u043f\u0443\u0441\u043a|\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434|\u0441\u043d\u044f(?:\u0442|\u043b)|\u0437\u0430\u0432\u043e\u0434|\u0442\u0435\u043a\u0443\u0449(?:\u0430\u044f|\u0435\u0439|\u0443\u044e)?\s+\u043b\u0438\u043d\u0435\u0439\u043a|current\s+lineup|discontinued|still\s+(?:made|produced))/iu.test(text);
 }
 
+function isExploratoryPowerRangeQuestion(text: string, match: RegExpMatchArray) {
+  const start = match.index ?? 0;
+  const end = start + match[0].length;
+  const before = text.slice(Math.max(0, start - 80), start).toLowerCase();
+  const after = text.slice(end, Math.min(text.length, end + 80)).toLowerCase();
+  const sentenceTailAsQuestion = /(?:\?|или\s+нет|or\s+not|или\s+не\s+надо)/iu.test(after);
+  if (!sentenceTailAsQuestion) return false;
+  return /(?:надо\s+(?:ли\s+)?(?:переходить|перейти|подниматься|уходить)|нужно\s+(?:ли\s+)?(?:переходить|перейти|подниматься|уходить|брать|смотреть)|стоит\s+(?:ли\s+)?(?:переходить|перейти|брать|смотреть)|имеет\s+смысл\s+(?:переходить|перейти|брать|смотреть)|do\s+i\s+need\s+to\s+(?:switch|move)|should\s+i\s+(?:switch|move|take))/iu.test(before);
+}
+
 export function parseDesiredPowerRange(text: string) {
   const match = text.match(powerRangeRegex);
   if (!match) return undefined;
+  if (isExploratoryPowerRangeQuestion(text, match)) return undefined;
   const a = Number(match[1].replace(',', '.'));
   const b = Number(match[2].replace(',', '.'));
   if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined;
