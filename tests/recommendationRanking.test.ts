@@ -318,6 +318,107 @@ describe('recommendation ranking', () => {
     expect(rationale.matchedProducts.slice(0, 2).map((item) => item.id)).toEqual(['first-choice', 'backup-choice']);
   });
 
+  it('does not let planner-only inverter and electric-start preferences erase suitable generator cards', async () => {
+    const suitableConventional = productWithSpecs('suitable-conventional', ru('Генератор бензиновый DDE G550E (5,0 кВт)'), 61390, 'https://example.test/suitable-conventional/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const suitableBackup = productWithSpecs('suitable-backup', ru('Генератор бензиновый CHAMPION GG6500 (5,0 кВт)'), 64600, 'https://example.test/suitable-backup/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const inverterOverBudget = productWithSpecs('inverter-over-budget', ru('Генератор бензиновый инверторный EVOline BQH 6200 E (5,0 кВт)'), 129990, 'https://example.test/inverter-over-budget/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      suitableConventional,
+      suitableBackup,
+      inverterOverBudget
+    ] as any) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        rankingPreference: 'cheapest',
+        confidence: 0.84,
+        loadProfile: {
+          totalRunningKw: 2.8,
+          requiredStartingKw: 4.3,
+          requiredNominalKw: 4.5,
+          simultaneousStarting: false,
+          items: [{
+            kind: 'estimated-current-load',
+            name: 'холодильник, свет, роутер, ТВ и отдельный инструмент',
+            count: 1,
+            runningKw: 2.8,
+            startingKw: 4.3,
+            source: 'estimated_average',
+            evidence: 'предыдущий ход: дачные потребители без насоса'
+          }]
+        },
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          startType: 'electric',
+          conventionalGenerator: false,
+          singlePhase220: true,
+          budgetMax: 90000,
+          nominalPowerKwMin: 4.5,
+          nominalPowerKwMax: 6,
+          maxPowerKwMin: 4.3,
+          provenance: {
+            fuel: 'planner',
+            startType: 'planner',
+            conventionalGenerator: 'planner',
+            budgetMax: 'explicit_user',
+            nominalPowerKwMin: 'inferred_from_load',
+            nominalPowerKwMax: 'inferred_from_load',
+            maxPowerKwMin: 'inferred_from_load'
+          }
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'бензиновый инверторный генератор 220 В с электростартом около 4,5 кВт до 90000',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'electric',
+        conventionalGenerator: false,
+        singlePhase220: true,
+        budgetMax: 90000,
+        nominalPowerKwMin: 4.5,
+        nominalPowerKwMax: 6,
+        maxPowerKwMin: 4.3
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      ru('Бюджет примерно до 90 тысяч. Насоса нет. Чайник бывает 2 кВт, но с инструментом одновременно включать не буду. Хочется без лишнего запаса, но чтобы холодильнику и электронике было нормально.'),
+      state,
+      plan,
+      [suitableConventional, suitableBackup, inverterOverBudget] as any
+    );
+
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['suitable-conventional', 'suitable-backup']);
+    expect(result.state.hardConstraints.startType).toBeUndefined();
+    expect(result.state.hardConstraints.conventionalGenerator).toBeUndefined();
+    expect(result.trace?.totalMatched).toBe(2);
+  });
+
   it('uses previousSelection as an anchor, not a cage, when the buyer asks to broaden alternatives', async () => {
     const currentMain = productWithSpecs('current-main', ru('Генератор бензиновый SUMEC SU4500i 4.5 kW'), 82000, 'https://example.test/current-main/', {
       'Номинальная мощность': '4.5 кВт',

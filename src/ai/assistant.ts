@@ -2568,6 +2568,38 @@ function productMatchesSelectionCriteria(product: Product, state: ProductSelecti
   return !productSelectionHardViolation(product, state, profile);
 }
 
+function relaxedPlannerOnlyOptionalGeneratorTraits(state: ProductSelectionState): ProductSelectionState | null {
+  const hard = state.hardConstraints;
+  if (hard.productIntent !== 'generator') return null;
+  const provenance = hard.provenance ?? {};
+  const shouldRelaxStartType = provenance.startType === 'planner' && hard.startType !== undefined && hard.startType !== 'any';
+  const shouldRelaxConventional = provenance.conventionalGenerator === 'planner' && hard.conventionalGenerator !== undefined && hard.conventionalGenerator !== null;
+  const shouldRelaxEnclosure = provenance.enclosure === 'planner' && hard.enclosure !== undefined && hard.enclosure !== 'any';
+  if (!shouldRelaxStartType && !shouldRelaxConventional && !shouldRelaxEnclosure) return null;
+
+  const relaxedHard = {
+    ...hard,
+    provenance: { ...provenance }
+  };
+  if (shouldRelaxStartType) {
+    delete relaxedHard.startType;
+    delete relaxedHard.provenance.startType;
+  }
+  if (shouldRelaxConventional) {
+    delete relaxedHard.conventionalGenerator;
+    delete relaxedHard.provenance.conventionalGenerator;
+  }
+  if (shouldRelaxEnclosure) {
+    delete relaxedHard.enclosure;
+    delete relaxedHard.provenance.enclosure;
+  }
+  return {
+    ...state,
+    hardConstraints: relaxedHard,
+    activeRequirement: relaxedHard
+  };
+}
+
 function productRejectionReason(product: Product, state: ProductSelectionState, profile: ProductFitProfile) {
   const hardViolation = productSelectionHardViolation(product, state, profile);
   if (hardViolation) return hardViolation;
@@ -3534,6 +3566,8 @@ export class AssistantService {
     const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile);
     const selectionState = mergeProductSelectionState(currentSelection, selectionUpdate);
     const selectionProfile = buildProductFitProfile({ ...state, selectionState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+    let effectiveSelectionState = selectionState;
+    let effectiveSelectionProfile = selectionProfile;
     const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
     const shouldUseCatalog = canListProducts &&
       selectionState.targetProductClass !== 'unknown' &&
@@ -3584,18 +3618,40 @@ export class AssistantService {
     const selectedIds = new Set(contract
       ? contract.selection.selectedProductIds
       : [...plan.selectedProductIds, ...selectionState.selectedProductIds]);
-    const canRecommendFromSelection = hasReliableGeneratorSelectionBasis(selectionState);
-    const scored = canRecommendFromSelection
+    let canRecommendFromSelection = hasReliableGeneratorSelectionBasis(effectiveSelectionState);
+    const scoreProducts = (candidateState: ProductSelectionState, candidateProfile: ProductFitProfile) => canRecommendFromSelection
       ? sortSelectionProducts(sourceProducts
-        .filter((product) => productMatchesSelectionCriteria(product, selectionState, selectionProfile))
+        .filter((product) => productMatchesSelectionCriteria(product, candidateState, candidateProfile))
         .map((product) => ({
           product,
-          score: recommendationScore(product, { ...state, selectionState }, userMessage, selectionProfile) + (selectedIds.has(product.id) ? 120 : 0)
-        })), selectionState.rankingPreference, selectionState.hardConstraints.budgetMax)
+          score: recommendationScore(product, { ...state, selectionState: candidateState }, userMessage, candidateProfile) + (selectedIds.has(product.id) ? 120 : 0)
+        })), candidateState.rankingPreference, candidateState.hardConstraints.budgetMax)
       : [];
-    let matchedProducts = selectionState.rankingPreference === 'cheapest'
+    let scored = scoreProducts(effectiveSelectionState, effectiveSelectionProfile);
+    if (!scored.length) {
+      const relaxedState = relaxedPlannerOnlyOptionalGeneratorTraits(selectionState);
+      if (relaxedState) {
+        const relaxedProfile = buildProductFitProfile({ ...state, selectionState: relaxedState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+        const relaxedCanRecommend = hasReliableGeneratorSelectionBasis(relaxedState);
+        const relaxedScored = relaxedCanRecommend
+          ? sortSelectionProducts(sourceProducts
+            .filter((product) => productMatchesSelectionCriteria(product, relaxedState, relaxedProfile))
+            .map((product) => ({
+              product,
+              score: recommendationScore(product, { ...state, selectionState: relaxedState }, userMessage, relaxedProfile) + (selectedIds.has(product.id) ? 120 : 0)
+            })), relaxedState.rankingPreference, relaxedState.hardConstraints.budgetMax)
+          : [];
+        if (relaxedScored.length) {
+          effectiveSelectionState = relaxedState;
+          effectiveSelectionProfile = relaxedProfile;
+          canRecommendFromSelection = relaxedCanRecommend;
+          scored = relaxedScored;
+        }
+      }
+    }
+    let matchedProducts = effectiveSelectionState.rankingPreference === 'cheapest'
       ? scored.slice(0, Math.max(50, FULL_SLICE_PRODUCT_CARDS)).map((item) => item.product)
-      : selectionState.rankingPreference === 'premium' || selectionState.rankingPreference === 'balanced'
+      : effectiveSelectionState.rankingPreference === 'premium' || effectiveSelectionState.rankingPreference === 'balanced'
         ? diversifyRankedProducts(scored, Math.max(50, FULL_SLICE_PRODUCT_CARDS))
         : scored.slice(0, Math.max(50, FULL_SLICE_PRODUCT_CARDS)).map((item) => item.product);
     const requestedVisibleLimit = visibleLimitOverride ?? requestedVisibleCardLimitFromText(userMessage);
@@ -3640,17 +3696,17 @@ export class AssistantService {
       .filter((product, index, all) => all.findIndex((candidate) => candidate.id === product.id) === index);
     const rejectedProducts = comparisonProducts.map((product) => ({
       productId: product.id,
-      reason: productRejectionReason(product, selectionState, selectionProfile)
+      reason: productRejectionReason(product, effectiveSelectionState, effectiveSelectionProfile)
     }));
     const defaultVisibleLimit = matchedProducts.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : MAX_PRODUCT_CARDS;
     const visibleLimit = Math.max(1, Math.min(defaultVisibleLimit, requestedVisibleLimit ?? defaultVisibleLimit));
     const visibleProducts = matchedProducts.slice(0, visibleLimit);
     const hiddenProducts = matchedProducts.slice(visibleLimit);
-    const confidence = Math.max(selectionState.confidence, matchedProducts.length ? 0.78 : selectionState.targetProductClass === 'unknown' ? 0.2 : 0.45);
-    const missingQuestions = missingQuestionsForSelection(selectionState, matchedProducts.length);
+    const confidence = Math.max(effectiveSelectionState.confidence, matchedProducts.length ? 0.78 : effectiveSelectionState.targetProductClass === 'unknown' ? 0.2 : 0.45);
+    const missingQuestions = missingQuestionsForSelection(effectiveSelectionState, matchedProducts.length);
     return {
       state: {
-        ...selectionState,
+        ...effectiveSelectionState,
         selectedProductIds: visibleProducts.map((product) => product.id),
         matchedProductIds: matchedProducts.map((product) => product.id),
         comparisonProductIds: comparisonProducts.map((product) => product.id),
@@ -3669,10 +3725,10 @@ export class AssistantService {
       confidence,
       trace: {
         source: shouldUseCatalog ? 'full_catalog_selection_engine' : 'candidate_selection_engine',
-        targetProductClass: selectionState.targetProductClass,
-        hardConstraints: selectionState.hardConstraints,
+        targetProductClass: effectiveSelectionState.targetProductClass,
+        hardConstraints: effectiveSelectionState.hardConstraints,
         comparisonTokens,
-        rankingPreference: selectionState.rankingPreference,
+        rankingPreference: effectiveSelectionState.rankingPreference,
         totalSourceProducts: sourceProducts.length,
         totalMatched: matchedProducts.length,
         totalComparison: comparisonProducts.length,
@@ -5042,6 +5098,8 @@ export const assistantTestHooks = {
   recommendationScore,
   supplementalCatalogQueries,
   productFitPenalty,
+  productSelectionHardViolation,
+  relaxedPlannerOnlyOptionalGeneratorTraits,
   isCardWorthy,
   purchasePlanIfNeeded,
   shouldUseWebSearch,
