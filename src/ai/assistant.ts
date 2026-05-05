@@ -1513,6 +1513,13 @@ function fallbackDetectLeadHandoffIntent(text: string) {
     /(?:специалист|менеджер|свяж|перезвон|подтверд|провер|налич|цен[ау]|доставк|оформ|заявк)/iu.test(normalized);
 }
 
+function fallbackDetectOperationalHandoffQuestion(text: string) {
+  const normalized = text.toLowerCase();
+  const hasOperationalTerm = /(?:доставк|налич|в\s+наличии|на\s+складе|скидк|спецуслов|самовывоз|оплат|оформ|заказ|купить|забрать|актуальн\w*\s+цен|финальн\w*\s+цен|точн\w*\s+цен|срок[иов]*\s+(?:достав|получ))/iu.test(normalized);
+  if (!hasOperationalTerm) return false;
+  return /(?:сколько|стоим|услов|есть\s+ли|точно|можно\s+ли|могу\s+оставить|оставлю|перезвон|свяж|логист|менеджер|телефон|контакт)/iu.test(normalized);
+}
+
 function fallbackDetectOwnershipCostQuestion(text: string) {
   const normalized = text.toLowerCase();
   const hasServiceOrCostTerm = /(?:сервис|обслуживан|регламент|то\b|ремонт|запчаст|детал|расходник|фильтр|свеч|ремен|стоимост|цен[ауы]|ценник|владени|эксплуатацион|service|maintenance|repair|spare|parts|consumable|ownership)/iu.test(normalized);
@@ -3173,7 +3180,7 @@ function selectedPurchaseProductIds(products: Product[], history: Message[], sta
 }
 
 function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], history: Message[], state: CustomerNeedState, userMessage: string) {
-  const leadRequested = isLeadPlan(plan) || fallbackDetectLeadHandoffIntent(userMessage);
+  const leadRequested = isLeadPlan(plan) || fallbackDetectLeadHandoffIntent(userMessage) || fallbackDetectOperationalHandoffQuestion(userMessage);
   if (!leadRequested) return { plan, leadRequested };
 
   const selectedProductIds = selectedPurchaseProductIds(products, history, state, userMessage, plan);
@@ -4474,6 +4481,70 @@ export class AssistantService {
     const client = createOpenAIClient();
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
+    if (fallbackDetectOperationalHandoffQuestion(input.userMessage) || fallbackDetectLeadHandoffIntent(input.userMessage)) {
+      const previousProducts = lastShownProductCards(history);
+      const cards = productCards(previousProducts, session.needState, input.userMessage, undefined, MAX_PRODUCT_CARDS);
+      const initialVisibleCount = Math.min(cards.length, Math.max(1, Math.min(2, cards.length)));
+      const cardDisplay = cardDisplayOptions(initialVisibleCount, cards);
+      const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
+        ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
+        : null;
+      const autoLeadResult = await this.createLeadFromChatContact(session, history, cards, input.userMessage, session.needState);
+      const answer = deterministicLeadCollectionAnswer(cards, bundleTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult));
+      if (answer) await input.onDelta?.(answer);
+      const assistantMessage = await this.conversations.addMessage({
+        sessionId: input.sessionId,
+        role: 'assistant',
+        content: answer,
+        metadata: {
+          productCards: cards,
+          cardDisplay,
+          usedWebSearch: false,
+          responseStyle: 'lead_collection',
+          answerMode: 'leadCollection',
+          cardPolicy: cards.length ? 'showProducts' : 'textOnly',
+          followUpPolicy: 'collectLead',
+          contextScope: 'previousSelection',
+          searchScope: 'previousSelectionOnly',
+          aiDiagnostics,
+          answerGenerationFallback: aiDiagnostics.answerGenerationFallback,
+          operationalHandoff: true,
+          autoLead: autoLeadResult ? {
+            created: autoLeadResult.created,
+            leadId: autoLeadResult.lead?.id,
+            emailStatus: autoLeadResult.emailStatus,
+            missing: autoLeadResult.missing,
+            error: autoLeadResult.error
+          } : undefined
+        }
+      });
+      this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
+      traceTotal({
+        leadTemperature: 'hot',
+        leadScore: 1,
+        cardCount: cards.length,
+        candidateCount: previousProducts.length,
+        consistencyWarnings: 0,
+        usedWebSearch: false,
+        operationalHandoff: true
+      });
+      return {
+        answer,
+        needState: session.needState,
+        productCards: cards,
+        cardDisplay,
+        usedWebSearch: false,
+        leadRequested: !autoLeadResult?.created,
+        leadCreated: autoLeadResult?.created ?? false,
+        assistantMessageId: assistantMessage.id,
+        metadata: {
+          cardDisplay,
+          aiDiagnostics,
+          answerGenerationFallback: aiDiagnostics.answerGenerationFallback,
+          operationalHandoff: true
+        }
+      };
+    }
     const previousSelectionState = session.needState.selectionState;
     let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal, aiDiagnostics);
     if (shouldPreserveSelectionForFollowUp(input.userMessage, previousSelectionState)) {
