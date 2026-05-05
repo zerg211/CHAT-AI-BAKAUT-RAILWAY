@@ -501,6 +501,88 @@ describe('recommendation ranking', () => {
     expect(result.visibleProducts.map((item) => item.id)).toEqual(['tor-km2000is']);
   });
 
+  it('clears stale electric-start constraints when user evidence only talks about load startup', async () => {
+    const enclosureKey = ru('\\u0442\\u0438\\u043f \\u043a\\u043e\\u0436\\u0443\\u0445\\u0430');
+    const enclosed = ru('\\u0417\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0439');
+    const products = [
+      productWithSpecs('tor-km2000is', 'Generator gasoline TOR KM2000is 2.0 kW inverter enclosed manual', 26_540, 'https://example.test/tor-km2000is/', { [enclosureKey]: enclosed }),
+      productWithSpecs('firman-open-electric', 'Generator gasoline FIRMAN RD2910E1 2.0 kW electric start open frame', 26_990, 'https://example.test/firman-rd2910e1/', {}),
+      productWithSpecs('tor-km2000ie-electric', 'Generator gasoline TOR KM2000ie electric starter 2.0 kW inverter', 34_500, 'https://example.test/tor-km2000ie/', { [enclosureKey]: enclosed })
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [
+            { role: 'compatibilityTarget', value: 'GA-B509MLSL', evidence: ru('\\u041d\\u0435\\u0442 \\u0431\\u044e\\u0434\\u0436\\u0435\\u0442 \\u0434\\u043e 30 \\u0442\\u043e\\u0447\\u043d\\u043e, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a LG GA-B509MLSL') }
+          ],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          budgetMax: 30000,
+          startType: 'electric',
+          nominalPowerKwMin: 1.8,
+          nominalPowerKwMax: 2.2,
+          singlePhase220: true,
+          provenance: {
+            budgetMax: 'planner',
+            startType: 'explicit_user',
+            nominalPowerKwMin: 'planner',
+            nominalPowerKwMax: 'planner',
+            singlePhase220: 'planner'
+          }
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      selectedProductIds: ['firman-open-electric'],
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'electric',
+        enclosure: 'unknown',
+        singlePhase220: true,
+        budgetMax: 30000,
+        nominalPowerKwMin: 1.8,
+        nominalPowerKwMax: 2.2,
+        maxPowerKwMin: 2,
+        maxPowerKwMax: 2.5,
+        provenance: {
+          startType: 'explicit_user'
+        }
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      }
+    });
+    const message = ru('\\u0427\\u0442\\u043e \\u043d\\u0435\\u0442\\u0443 \\u0437\\u0430 30 000 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u043e\\u0432 2 \\u043a\\u0432\\u0442 \\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0445?');
+    const conversationUserText = [
+      ru('\\u043d\\u0443\\u0436\\u0435\\u043d \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440'),
+      ru('\\u0431\\u0443\\u0434\\u0443 \\u043f\\u043e\\u0434\\u043a\\u043b\\u044e\\u0447\\u0430\\u0442\\u044c \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0438 \\u0441\\u0432\\u0435\\u0442, \\u043d\\u0443\\u0436\\u0435\\u043d \\u0442\\u0438\\u0445\\u0438\\u0439 \\u043d\\u0435\\u0431\\u043e\\u043b\\u044c\\u0448\\u043e\\u0439 \\u0438 \\u043d\\u0435\\u0434\\u043e\\u0440\\u043e\\u0433\\u043e\\u0439 \\u0442\\u044b\\u0441\\u044f\\u0447 \\u0434\\u043e 30, 220'),
+      ru('\\u041d\\u0435\\u0442 \\u0431\\u044e\\u0434\\u0436\\u0435\\u0442 \\u0434\\u043e 30 \\u0442\\u043e\\u0447\\u043d\\u043e,\\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0443 \\u043c\\u0435\\u043d\\u044f LG GA-B509MLSL')
+    ].join(' ');
+
+    const result = await assistant.selectProductsForTurn(message, state, plan, products as any, undefined, undefined, conversationUserText);
+
+    expect(result.state.hardConstraints.startType).toBeUndefined();
+    expect(result.state.hardConstraints.enclosure).toBe('enclosed');
+    expect(result.visibleProducts.map((item) => item.id)[0]).toBe('tor-km2000is');
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('firman-open-electric');
+  });
+
   it('uses catalog availability turns to show exact matches and nearest alternatives despite text-only currentLineup plans', async () => {
     const enclosureKey = ru('\\u0442\\u0438\\u043f \\u043a\\u043e\\u0436\\u0443\\u0445\\u0430');
     const enclosed = ru('\\u0417\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0439');
@@ -3689,7 +3771,7 @@ describe('recommendation ranking', () => {
         confidence: 0.8
       })
     };
-    const message = 'Покажи подходящие варианты.';
+    const message = ru('\\u041f\\u043e\\u043a\\u0430\\u0436\\u0438 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0435 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u044b \\u0441 \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u0440\\u0442\\u043e\\u043c.');
     const plan = baseTurnPlan({
       selectedProductIds: ['diesel', 'manual', 'honda5000'],
       requiredProductTraits: {

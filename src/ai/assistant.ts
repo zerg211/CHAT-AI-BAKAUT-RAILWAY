@@ -794,6 +794,43 @@ function hasExplicitGeneratorElectricStartNeed(text: string) {
   return /(?:\u044d\u043b\u0435\u043a\u0442\u0440(?:\u043e)?\s*\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u0440\u0442|\u044d\u043b\.?\s*\u0441\u0442\u0430\u0440\u0442|\u0430\u0432\u0442\u043e\s*\u0437\u0430\u043f\u0443\u0441\u043a|\u0430\u0432\u0442\u043e\u0437\u0430\u043f\u0443\u0441\u043a|\u0437\u0430\u043f\u0443\u0441\u043a\s+(?:\u0441\s+)?(?:\u043a\u043d\u043e\u043f\u043a|\u043a\u043b\u044e\u0447)|(?:\u043a\u043d\u043e\u043f\u043a|\u043a\u043b\u044e\u0447)[\p{L}\s]{0,18}\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s*\/\s*\u044d\u043b\u0435\u043a\u0442\u0440|\u043d\u0435\s+\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0431\u0435\u0437\s+\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0431\u0435\u0437\s+(?:\u0440\u044b\u0432\u043a|\u0434\u0435\u0440\u0433\u0430\u043d)[^.!?\n]{0,24}(?:\u0448\u043d\u0443\u0440|\u0442\u0440\u043e\u0441)|\u043d\u0435\s+\u0434\u0435\u0440\u0433\u0430\u0442\u044c[^.!?\n]{0,24}(?:\u0448\u043d\u0443\u0440|\u0442\u0440\u043e\u0441)|electric\s+start|button\s+start|key\s+start)/iu.test(text);
 }
 
+function needEvidenceText(state: CustomerNeedState) {
+  return [
+    ...state.explicitNeeds,
+    ...state.implicitNeeds,
+    ...state.constraints,
+    ...state.importantCriteria,
+    ...state.confirmedFacts,
+    ...state.uncertainInferences
+  ].map((item) => item.evidence).filter(Boolean).join(' ');
+}
+
+function clearUngroundedGeneratorElectricStart(state: ProductSelectionState, evidenceText: string) {
+  const hard = state.hardConstraints;
+  const target = state.targetProductClass !== 'unknown' ? state.targetProductClass : hard.productIntent;
+  if (target !== 'generator' || hard.startType !== 'electric') return state;
+  if (hasExplicitGeneratorElectricStartNeed(evidenceText)) return state;
+
+  const provenance = { ...(hard.provenance ?? {}) };
+  delete provenance.startType;
+  const sanitizedHard = { ...hard, provenance };
+  delete sanitizedHard.startType;
+
+  let activeRequirement = state.activeRequirement;
+  if (activeRequirement?.startType === 'electric') {
+    const activeProvenance = { ...(activeRequirement.provenance ?? {}) };
+    delete activeProvenance.startType;
+    activeRequirement = { ...activeRequirement, provenance: activeProvenance };
+    delete activeRequirement.startType;
+  }
+
+  return {
+    ...state,
+    hardConstraints: sanitizedHard,
+    activeRequirement
+  };
+}
+
 function buildProductFitProfile(state: CustomerNeedState, userMessage: string, retrievalQuery = '', traits?: RequiredProductTraits): ProductFitProfile {
   const latestText = userMessage.trim();
   const queryText = retrievalQuery.trim();
@@ -2035,6 +2072,15 @@ function recentConversationText(history: Message[], maxMessages = 10) {
   return history.slice(-maxMessages).map((message) => message.content).filter(Boolean).join(' ');
 }
 
+function recentUserConversationText(history: Message[], maxMessages = 10) {
+  return history
+    .slice(-maxMessages)
+    .filter((message) => message.role === 'user')
+    .map((message) => message.content)
+    .filter(Boolean)
+    .join(' ');
+}
+
 function mergeProductsById(products: Product[], extraProducts: Product[]) {
   const byId = new Map<string, Product>();
   for (const product of [...products, ...extraProducts]) byId.set(product.id, product);
@@ -2593,15 +2639,12 @@ function explicitCriteriaFromTurn(
     hard.provenance!.fuel = 'planner';
   }
   const latestExplicitElectricStart = hasExplicitGeneratorElectricStartNeed(userMessage);
-  const plannerAnchoredStartType = plan.action === 'recommend_products' &&
-    plan.cardPolicy !== 'textOnly' &&
-    plan.selectedProductIds.length > 0;
-  if (plannerTraits.startType === 'electric' && (latestExplicitElectricStart || plannerAnchoredStartType)) {
+  if (plannerTraits.startType === 'electric' && latestExplicitElectricStart) {
     hard.startType = plannerTraits.startType;
-    hard.provenance!.startType = 'planner';
+    hard.provenance!.startType = 'explicit_user';
   } else if (plannerTraits.startType === 'manual' && !latestExplicitElectricStart && /(?:\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u0434\u0435\u0440\u0433\u0430\u0442\u044c\s+\u0448\u043d\u0443\u0440|manual\s+start|recoil\s+start)/iu.test(userMessage)) {
     hard.startType = plannerTraits.startType;
-    hard.provenance!.startType = 'planner';
+    hard.provenance!.startType = 'explicit_user';
   }
   if (plannerTraits.enclosure === 'enclosed' || plannerTraits.enclosure === 'open') {
     hard.enclosure = plannerTraits.enclosure;
@@ -4224,13 +4267,18 @@ export class AssistantService {
     plan: AssistantTurnPlan,
     baseCandidates: Product[],
     contract?: ResolvedTurnContract,
-    visibleLimitOverride?: number
+    visibleLimitOverride?: number,
+    conversationUserText = ''
   ): Promise<ProductSelectionResult> {
     const currentSelection = state.selectionState ?? emptyProductSelectionState();
     const activeText = [userMessage, plan.catalogSearchQuery, stateText(state, '')].filter(Boolean).join(' ');
     const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
     const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile);
     let selectionState = mergeProductSelectionState(currentSelection, selectionUpdate);
+    selectionState = clearUngroundedGeneratorElectricStart(
+      selectionState,
+      [userMessage, conversationUserText, needEvidenceText(state)].filter(Boolean).join(' ')
+    );
     if (selectionState.targetProductClass === 'plate' &&
       isSmallSitePlateNeed(activeText) &&
       !selectionState.hardConstraints.weightKgMin &&
@@ -4794,7 +4842,15 @@ export class AssistantService {
     }
     const visibleCardLimit = effectiveVisibleCardLimitFromConversation(input.userMessage, history);
     let turnContract = resolveTurnContractForPlan(effectivePlan);
-    const selectionResult = await this.selectProductsForTurn(input.userMessage, needState, effectivePlan, allCandidates, turnContract, visibleCardLimit);
+    const selectionResult = await this.selectProductsForTurn(
+      input.userMessage,
+      needState,
+      effectivePlan,
+      allCandidates,
+      turnContract,
+      visibleCardLimit,
+      recentUserConversationText(history)
+    );
     for (const product of selectionResult.comparisonProducts) byId.set(product.id, product);
     if (JSON.stringify(selectionResult.state) !== JSON.stringify(needState.selectionState)) {
       needState = { ...needState, selectionState: selectionResult.state };
