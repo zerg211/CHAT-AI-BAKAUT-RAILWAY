@@ -183,6 +183,10 @@ describe('assistant OpenAI failure fallback', () => {
       used: true,
       reason: 'unsupported_country_region_territory'
     });
+    expect(payload.metadata?.finalCardsSource).toBe('selection');
+    expect(payload.metadata?.turnPlan).toMatchObject({ cardPolicy: 'showProducts' });
+    expect(payload.metadata?.cardSelection).toBeTruthy();
+    expect(payload.metadata?.cardContract).toBeTruthy();
     const savedAssistant = conversations.messages.find((message) => message.role === 'assistant');
     expect(savedAssistant?.metadata.productCards).toHaveLength(2);
     expect(savedAssistant?.metadata.aiDiagnostics).toMatchObject({

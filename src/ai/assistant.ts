@@ -1476,14 +1476,42 @@ function shouldForceStructuredSelectionCards(userMessage: string, plan: Assistan
   const fallbackGroundedSelection = fallbackPlanner &&
     (explicitLatestIntent || hasUserGroundedSelectionEvidence(result.state)) &&
     (result.state.hardConstraints.productIntent !== 'generator' || hasReliableGeneratorSelectionBasis(result.state));
+  const plannerAllowsCards = plan.cardPolicy !== 'textOnly' && planAllowsCatalogSelectionOverride(plan);
+  const followUpRequestsCards = plan.cardPolicy !== 'textOnly' && isProductCardSelectionFollowUp(userMessage);
   return result.matchedProducts.length > 0 &&
-    (planAllowsCatalogSelectionOverride(plan) || isProductCardSelectionFollowUp(userMessage) || fallbackGroundedSelection) &&
+    (plannerAllowsCards || followUpRequestsCards || fallbackGroundedSelection || selectionResultCanDriveCards(plan, result, userMessage)) &&
     hasReliableGeneratorSelectionBasis(result.state) &&
     !hasEstimatedPumpLoad(result.state) &&
     result.confidence >= 0.55 &&
     !isLeadPlan(plan) &&
     !shouldUseCurrentLineupStyle(userMessage, plan) &&
-    !shouldUseDetailedFactStyle(userMessage, plan, 0);
+    !shouldUseDetailedFactStyle(userMessage, plan, 0) &&
+    !isTextOnlyFactualTurn(userMessage, plan);
+}
+
+function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
+  return plan.action === 'answer_question' &&
+    plan.cardPolicy === 'auto' &&
+    (plan.answerMode === 'short' || plan.answerMode === 'unknown') &&
+    result.trace?.canRecommendFromSelection === true &&
+    result.visibleProducts.length > 0 &&
+    result.matchedProducts.length > 0 &&
+    result.confidence >= 0.55 &&
+    hasReliableGeneratorSelectionBasis(result.state) &&
+    !hasEstimatedPumpLoad(result.state) &&
+    !isLeadPlan(plan) &&
+    !shouldUseCurrentLineupStyle(userMessage, plan) &&
+    !shouldUseDetailedFactStyle(userMessage, plan, 0) &&
+    !isTextOnlyFactualTurn(userMessage, plan);
+}
+
+function isTextOnlyFactualTurn(userMessage: string, plan: AssistantTurnPlan) {
+  if (shouldUseDetailedFactStyle(userMessage, plan, 0) || shouldUseCurrentLineupStyle(userMessage, plan)) return true;
+  if (fallbackDetectOwnershipCostQuestion(userMessage) || fallbackDetectTechnicalSpecVerificationQuestion(userMessage)) return true;
+  const catalogOnlyAvailability = isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage);
+  return !catalogOnlyAvailability &&
+    !isProductCardSelectionFollowUp(userMessage) &&
+    fallbackDetectCurrentLineupQuestion(userMessage);
 }
 
 function hasUserGroundedSelectionEvidence(state: ProductSelectionState) {
@@ -5278,6 +5306,10 @@ export class AssistantService {
       metadata: {
         selection: finalSelectionMetadata,
         cardDisplay,
+        finalCardsSource: finalCards.source,
+        turnPlan: compactTurnPlanForAnswer(effectivePlan),
+        cardSelection: cardSelection.diagnostics,
+        cardContract: cardContract.diagnostics,
         aiDiagnostics,
         answerGenerationFallback: answerFallbackMetadata
       }
@@ -5747,6 +5779,7 @@ export const assistantTestHooks = {
   selectCardsFromTurnContract,
   answerContextProductsForCards,
   compactSuitableProductsForAnswer,
+  selectionResultCanDriveCards,
   shouldForceStructuredSelectionCards,
   enforceAnswerCardContract,
   detectAnswerCardContractViolation,

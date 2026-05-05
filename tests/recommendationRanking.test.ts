@@ -119,6 +119,68 @@ async function rank(message: string, products: ReturnType<typeof product>[]) {
   };
 }
 
+function reliableGeneratorSelectionResult(overrides: Record<string, unknown> = {}) {
+  const fit = productWithSpecs('fit-generator', 'Generator gasoline inverter 2.8 kW electric start enclosed', 72_000, 'https://example.test/generators/fit/', {
+    nominalPower: '2.8 kW',
+    maxPower: '3.2 kW',
+    start: 'electric starter'
+  });
+  const state = mergeProductSelectionState(emptyNeedState().selectionState, {
+    currentProductClass: 'generator',
+    targetProductClass: 'generator',
+    hardConstraints: {
+      productIntent: 'generator',
+      productRole: 'coreProduct',
+      exactModelTokens: [],
+      mustHaveTraits: [],
+      excludedClasses: [],
+      nominalPowerKwMin: 2,
+      nominalPowerKwMax: 3.5,
+      maxPowerKwMin: 1.9,
+      singlePhase220: true,
+      provenance: {
+        nominalPowerKwMin: 'inferred_from_load',
+        nominalPowerKwMax: 'inferred_from_load',
+        maxPowerKwMin: 'inferred_from_load',
+        singlePhase220: 'explicit_user'
+      }
+    },
+    loadProfile: {
+      items: [{
+        kind: 'boiler',
+        name: 'boiler',
+        count: 1,
+        runningKw: 0.15,
+        startingKw: 0.15,
+        source: 'explicit_user',
+        evidence: 'boiler 150 W'
+      }],
+      confidence: 0.82,
+      calculation: 'boiler 150 W, refrigerator and lighting',
+      totalRunningKw: 1.1,
+      requiredNominalKw: 2,
+      requiredStartingKw: 1.9,
+      simultaneousStarting: false
+    } as any,
+    confidence: 0.78
+  });
+
+  return {
+    state,
+    matchedProducts: [fit],
+    visibleProducts: [fit],
+    hiddenProducts: [],
+    comparisonProducts: [],
+    rejectedProducts: [],
+    missingQuestions: [],
+    confidence: 0.78,
+    trace: {
+      canRecommendFromSelection: true
+    },
+    ...overrides
+  } as any;
+}
+
 describe('recommendation ranking', () => {
   it('classifies core machines with ambiguous kit words by product evidence, not flat blacklist terms', () => {
     const corePlate = brandedProduct(
@@ -290,6 +352,100 @@ describe('recommendation ranking', () => {
     expect(result.state.targetProductClass).toBe('unknown');
     expect(result.state.hardConstraints.singlePhase220).toBe(true);
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(false);
+  });
+
+  it('promotes a reliable first-turn house generator selection to product cards', async () => {
+    const products = [
+      productWithSpecs('fit-1', 'Generator gasoline inverter 2.8 kW electric start enclosed', 72_000, 'https://example.test/generators/fit-1/', {
+        nominalPower: '2.8 kW',
+        maxPower: '3.2 kW',
+        start: 'electric starter'
+      }),
+      productWithSpecs('fit-2', 'Generator gasoline inverter 3.5 kW electric start enclosed', 92_000, 'https://example.test/generators/fit-2/', {
+        nominalPower: '3.5 kW',
+        maxPower: '4.0 kW',
+        start: 'electric starter'
+      }),
+      productWithSpecs('oversized', 'Generator gasoline 8.0 kW electric start', 140_000, 'https://example.test/generators/oversized/', {
+        nominalPower: '8.0 kW'
+      })
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const message = ru('\\u041d\\u0443\\u0436\\u0435\\u043d \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430 220 \\u0412: \\u043a\\u043e\\u0442\\u0435\\u043b 150 \\u0412\\u0442, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0438 \\u0441\\u0432\\u0435\\u0442. \\u0412\\u0430\\u0436\\u043d\\u043e, \\u0447\\u0442\\u043e\\u0431\\u044b \\u0436\\u0435\\u043d\\u0430 \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a\\u0430\\u043b\\u0430 \\u043a\\u043d\\u043e\\u043f\\u043a\\u043e\\u0439 \\u0438 \\u0431\\u044b\\u043b\\u043e \\u043d\\u0435 \\u043e\\u0447\\u0435\\u043d\\u044c \\u0448\\u0443\\u043c\\u043d\\u043e.');
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'auto',
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        shouldShowCards: false,
+        cardDisplayMode: 'none'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(message, emptyNeedState(), plan, products as any);
+
+    expect(result.trace.canRecommendFromSelection).toBe(true);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit-1', 'fit-2']);
+    expect(assistantTestHooks.selectionResultCanDriveCards(plan, result, message)).toBe(true);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(true);
+  });
+
+  it('keeps reliable selection card promotion behind text-only and factual-answer guards', () => {
+    const result = reliableGeneratorSelectionResult();
+    const baseAutoPlan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'auto'
+    });
+
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      ru('\\u0410 \\u0447\\u0442\\u043e \\u043f\\u043e \\u0441\\u0435\\u0440\\u0432\\u0438\\u0441\\u0443, \\u0437\\u0430\\u043f\\u0447\\u0430\\u0441\\u0442\\u044f\\u043c \\u0438 \\u0440\\u0430\\u0441\\u0445\\u043e\\u0434\\u043d\\u0438\\u043a\\u0430\\u043c \\u0434\\u043b\\u044f \\u044d\\u0442\\u043e\\u0433\\u043e \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0430?'),
+      baseAutoPlan,
+      result
+    )).toBe(false);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      ru('\\u0410 TOR KM2000ie \\u0435\\u0449\\u0435 \\u0432\\u044b\\u043f\\u0443\\u0441\\u043a\\u0430\\u0435\\u0442\\u0441\\u044f \\u0438\\u043b\\u0438 \\u044d\\u0442\\u043e \\u0441\\u0442\\u0430\\u0440\\u0430\\u044f \\u043c\\u043e\\u0434\\u0435\\u043b\\u044c?'),
+      baseAutoPlan,
+      result
+    )).toBe(false);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      'Need generator for home 220 V with boiler and fridge',
+      { ...baseAutoPlan, cardPolicy: 'textOnly' },
+      result
+    )).toBe(false);
+  });
+
+  it('does not promote estimated-pump generator selection to product cards', () => {
+    const pumpState = mergeProductSelectionState(reliableGeneratorSelectionResult().state, {
+      loadProfile: {
+        items: [{
+          kind: 'pump',
+          name: 'pump',
+          count: 1,
+          runningKw: 0.8,
+          startingKw: 3.2,
+          source: 'estimated_average',
+          evidence: 'pump without exact power'
+        }],
+        confidence: 0.52,
+        calculation: 'estimated pump',
+        totalRunningKw: 0.8,
+        requiredNominalKw: 4,
+        requiredStartingKw: 3.2,
+        simultaneousStarting: false
+      } as any,
+      confidence: 0.78
+    });
+    const result = reliableGeneratorSelectionResult({ state: pumpState });
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'auto'
+    });
+
+    expect(assistantTestHooks.selectionResultCanDriveCards(plan, result, 'Need generator for a pump')).toBe(false);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards('Need generator for a pump', plan, result)).toBe(false);
   });
 
   it('keeps LLM previous-selection scope from introducing new catalogue products', async () => {
