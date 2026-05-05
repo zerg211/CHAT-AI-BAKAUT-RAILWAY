@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AssistantService, assistantTestHooks } from '../src/ai/assistant.js';
 import { emptyNeedState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
-import { classifyProduct, isCoreEquipment, parseBudgetMax } from '../src/ai/productClassifier.js';
+import { classifyProduct, fallbackDetectGeneratorEnclosureSignal, isCoreEquipment, parseBudgetMax, productMatchesRequestedBrand, requestedBrandKeysFromProducts } from '../src/ai/productClassifier.js';
 import type { ProductSelectionCriteria } from '../src/shared/types.js';
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
@@ -182,6 +182,22 @@ function reliableGeneratorSelectionResult(overrides: Record<string, unknown> = {
 }
 
 describe('recommendation ranking', () => {
+  it('does not treat short brand names as substrings inside generic words', () => {
+    const tor = brandedProduct('tor', 'Generator gasoline TOR KM2000is 2.0 kW', 'TOR', 'Generators', 26_540, 'https://example.test/tor/');
+    const bison = brandedProduct('bison', 'Generator gasoline BISON BS2000IS 1.8 kW', 'BISON', 'Generators', 33_200, 'https://example.test/bison/');
+
+    expect([...requestedBrandKeysFromProducts([tor, bison] as any, 'Need generator 2 kW under 30000')]).toEqual([]);
+    expect([...requestedBrandKeysFromProducts([tor, bison] as any, 'Need TOR generator 2 kW')]).toEqual(['tor']);
+    expect(productMatchesRequestedBrand(bison as any, new Set(['tor']))).toBe(false);
+    expect(productMatchesRequestedBrand(tor as any, new Set(['tor']))).toBe(true);
+  });
+
+  it('detects enclosed generator wording when the enclosure adjective follows the product', () => {
+    expect(fallbackDetectGeneratorEnclosureSignal(
+      ru('\\u0427\\u0442\\u043e \\u043d\\u0435\\u0442\\u0443 \\u0437\\u0430 30 000 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u043e\\u0432 2 \\u043a\\u0432\\u0442 \\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0445?')
+    )).toBe(true);
+  });
+
   it('classifies core machines with ambiguous kit words by product evidence, not flat blacklist terms', () => {
     const corePlate = brandedProduct(
       'plate-kit',
@@ -414,6 +430,165 @@ describe('recommendation ranking', () => {
       }
     });
 
+    expect(assistantTestHooks.selectionResultCanDriveCards(plan, result, message)).toBe(true);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(true);
+  });
+
+  it('does not turn refrigerator startup context into an electric-start generator constraint', async () => {
+    const enclosureKey = ru('\\u0442\\u0438\\u043f \\u043a\\u043e\\u0436\\u0443\\u0445\\u0430');
+    const enclosed = ru('\\u0417\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0439');
+    const tor = productWithSpecs('tor-km2000is', 'Generator gasoline TOR KM2000is 2.0 kW inverter', 26_540, 'https://example.test/tor-km2000is/', {
+      [enclosureKey]: enclosed
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([tor] as any) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        rankingPreference: 'cheapest',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          enclosure: 'enclosed',
+          singlePhase220: true,
+          budgetMax: 30000,
+          nominalPowerKwMin: 2,
+          nominalPowerKwMax: 2.5,
+          provenance: {
+            fuel: 'planner',
+            enclosure: 'explicit_user',
+            singlePhase220: 'explicit_user',
+            budgetMax: 'explicit_user',
+            nominalPowerKwMin: 'explicit_user',
+            nominalPowerKwMax: 'explicit_user'
+          }
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'auto',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'electric',
+        enclosure: 'enclosed',
+        singlePhase220: true,
+        budgetMax: 30000,
+        nominalPowerKwMin: 2,
+        nominalPowerKwMax: 2.5
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator'
+      }
+    });
+    const message = ru('\\u041d\\u0435\\u0442, \\u0431\\u044e\\u0434\\u0436\\u0435\\u0442 \\u0434\\u043e 30 \\u0442\\u043e\\u0447\\u043d\\u043e, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0443 \\u043c\\u0435\\u043d\\u044f LG GA-B509MLSL, \\u0445\\u043e\\u0447\\u0443 \\u0447\\u0442\\u043e\\u0431\\u044b \\u0441\\u0442\\u0430\\u0440\\u0442\\u043e\\u0432\\u0430\\u043b \\u043d\\u043e\\u0440\\u043c\\u0430\\u043b\\u044c\\u043d\\u043e.');
+
+    const result = await assistant.selectProductsForTurn(message, state, plan, [tor] as any);
+
+    expect(assistantTestHooks.hasExplicitGeneratorElectricStartNeed(message)).toBe(false);
+    expect(result.state.hardConstraints.startType).toBeUndefined();
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['tor-km2000is']);
+  });
+
+  it('uses catalog availability turns to show exact matches and nearest alternatives despite text-only currentLineup plans', async () => {
+    const enclosureKey = ru('\\u0442\\u0438\\u043f \\u043a\\u043e\\u0436\\u0443\\u0445\\u0430');
+    const enclosed = ru('\\u0417\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0439');
+    const products = [
+      productWithSpecs('tor-km2000is', 'Generator gasoline TOR KM2000is 2.0 kW inverter', 26_540, 'https://example.test/tor-km2000is/', { [enclosureKey]: enclosed }),
+      productWithSpecs('sunreka-g1800is', 'Generator gasoline SUNREKA G1800iS 1.6 kW inverter', 32_060, 'https://example.test/sunreka-g1800is/', { [enclosureKey]: enclosed }),
+      productWithSpecs('bison-bs2000is', 'Generator gasoline BISON BS2000IS 1.8 kW inverter', 33_200, 'https://example.test/bison-bs2000is/', { [enclosureKey]: enclosed }),
+      productWithSpecs('bison-bs2500is', 'Generator gasoline BISON BS2500IS 2.3 kW inverter', 35_200, 'https://example.test/bison-bs2500is/', { [enclosureKey]: enclosed }),
+      productWithSpecs('tss-sgg-2400si', 'Generator gasoline TSS SGG 2400SI 2.0 kW inverter', 39_728, 'https://example.test/tss-sgg-2400si/', { [enclosureKey]: enclosed }),
+      productWithSpecs('hnd-ge2200ji', 'Generator gasoline HND GE2200Ji 2.0 kW inverter', 52_900, 'https://example.test/hnd-ge2200ji/', { [enclosureKey]: enclosed }),
+      productWithSpecs('open-aipower', 'Generator gasoline A-iPower LITE AP2200 2.0 kW open frame', 25_490, 'https://example.test/open-aipower/', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        rankingPreference: 'cheapest',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          enclosure: 'enclosed',
+          singlePhase220: true,
+          budgetMax: 30000,
+          nominalPowerKwMin: 2,
+          nominalPowerKwMax: 2.5,
+          provenance: {
+            fuel: 'planner',
+            enclosure: 'explicit_user',
+            singlePhase220: 'explicit_user',
+            budgetMax: 'explicit_user',
+            nominalPowerKwMin: 'explicit_user',
+            nominalPowerKwMax: 'explicit_user'
+          }
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'currentLineup',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'answerNowNoDeferredOffer',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        enclosure: 'enclosed',
+        singlePhase220: true,
+        budgetMax: 30000,
+        nominalPowerKwMin: 2,
+        nominalPowerKwMax: 2.5,
+        provenance: {
+          singlePhase220: 'inferred_from_load'
+        }
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        shouldShowCards: false,
+        cardDisplayMode: 'none'
+      }
+    });
+    const message = ru('\\u0427\\u0442\\u043e \\u043d\\u0435\\u0442\\u0443 \\u0437\\u0430 30 000 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u043e\\u0432 2 \\u043a\\u0432\\u0442 \\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0445?');
+    const contract = assistantTestHooks.resolveTurnContractForPlan(plan);
+
+    const result = await assistant.selectProductsForTurn(message, state, plan, products as any, contract);
+
+    const ids = result.visibleProducts.map((item) => item.id);
+    expect(assistantTestHooks.isCatalogAvailabilityQuestion(message)).toBe(true);
+    expect(assistantTestHooks.isCatalogShortlistTurn(message, plan)).toBe(true);
+    expect(result.trace.canRecommendFromSelection).toBe(true);
+    expect(ids[0]).toBe('tor-km2000is');
+    expect(result.state.hardConstraints.provenance?.singlePhase220).toBe('explicit_user');
+    expect(ids).toEqual(expect.arrayContaining([
+      'sunreka-g1800is',
+      'bison-bs2000is',
+      'bison-bs2500is',
+      'tss-sgg-2400si'
+    ]));
+    expect(ids).not.toContain('hnd-ge2200ji');
+    expect(ids).not.toContain('open-aipower');
     expect(assistantTestHooks.selectionResultCanDriveCards(plan, result, message)).toBe(true);
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(true);
   });

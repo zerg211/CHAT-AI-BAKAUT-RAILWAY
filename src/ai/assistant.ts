@@ -790,6 +790,10 @@ function normalizePowerRange(range?: GeneratorPowerProfile) {
   return normalized;
 }
 
+function hasExplicitGeneratorElectricStartNeed(text: string) {
+  return /(?:\u044d\u043b\u0435\u043a\u0442\u0440(?:\u043e)?\s*\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u0440\u0442|\u044d\u043b\.?\s*\u0441\u0442\u0430\u0440\u0442|\u0430\u0432\u0442\u043e\s*\u0437\u0430\u043f\u0443\u0441\u043a|\u0430\u0432\u0442\u043e\u0437\u0430\u043f\u0443\u0441\u043a|\u0437\u0430\u043f\u0443\u0441\u043a\s+(?:\u0441\s+)?(?:\u043a\u043d\u043e\u043f\u043a|\u043a\u043b\u044e\u0447)|(?:\u043a\u043d\u043e\u043f\u043a|\u043a\u043b\u044e\u0447)[\p{L}\s]{0,18}\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s*\/\s*\u044d\u043b\u0435\u043a\u0442\u0440|\u043d\u0435\s+\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0431\u0435\u0437\s+\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0431\u0435\u0437\s+(?:\u0440\u044b\u0432\u043a|\u0434\u0435\u0440\u0433\u0430\u043d)[^.!?\n]{0,24}(?:\u0448\u043d\u0443\u0440|\u0442\u0440\u043e\u0441)|\u043d\u0435\s+\u0434\u0435\u0440\u0433\u0430\u0442\u044c[^.!?\n]{0,24}(?:\u0448\u043d\u0443\u0440|\u0442\u0440\u043e\u0441)|electric\s+start|button\s+start|key\s+start)/iu.test(text);
+}
+
 function buildProductFitProfile(state: CustomerNeedState, userMessage: string, retrievalQuery = '', traits?: RequiredProductTraits): ProductFitProfile {
   const latestText = userMessage.trim();
   const queryText = retrievalQuery.trim();
@@ -805,6 +809,7 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
   const activeNeedLower = activeNeedText.toLowerCase();
   const plannerKnowsProductRole = Boolean(traits && traits.productRole !== 'unknown');
   const plannerKnowsEnclosure = Boolean(traits && traits.enclosure !== 'unknown');
+  const explicitElectricStartNeed = hasExplicitGeneratorElectricStartNeed([latestText, queryText].filter(Boolean).join(' '));
   const generatorInEnclosureRequest = !plannerKnowsEnclosure
     ? fallbackDetectGeneratorEnclosureSignal(activeNeedLower)
     : false;
@@ -854,7 +859,7 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
     weldingRequested: containsAny(activeNeedText, weldingTerms),
     wantsGasoline: hard.fuel === 'gasoline' || traits?.fuel === 'gasoline' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, gasolineTerms)),
     wantsDiesel: hard.fuel === 'diesel' || traits?.fuel === 'diesel' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, dieselTerms)),
-    wantsElectricStart: hard.startType === 'electric' || traits?.startType === 'electric' || ((!traits || traits.startType === 'unknown') && (hasElectricStartSignal(activeNeedText) || /(?:\bkey\b|кнопк|ключ)/i.test(activeNeedText))),
+    wantsElectricStart: hard.startType === 'electric' || (traits?.startType === 'electric' && explicitElectricStartNeed) || ((!traits || traits.startType === 'unknown') && explicitElectricStartNeed),
     wantsInverterGenerator: hard.conventionalGenerator === false || traits?.conventionalGenerator === false || ((!traits || traits.conventionalGenerator === null) && containsAny(activeNeedText, inverterTerms)),
     wantsEnclosedGenerator: hard.enclosure === 'enclosed' || traits?.enclosure === 'enclosed' || (!traits || traits.enclosure === 'unknown' ? generatorInEnclosureRequest : false),
     wantsConventionalGenerator: hard.conventionalGenerator === true || traits?.conventionalGenerator === true || ((!traits || traits.conventionalGenerator === null) && hasConventionalGeneratorSignal(activeNeedText)),
@@ -1469,7 +1474,16 @@ function planAllowsCatalogSelectionOverride(plan: AssistantTurnPlan) {
   );
 }
 
+function isCatalogShortlistTurn(userMessage: string, plan?: AssistantTurnPlan) {
+  const catalogText = [userMessage, plan?.catalogSearchQuery].filter(Boolean).join(' ');
+  const catalogAvailability = isCatalogAvailabilityQuestion(catalogText) && !isManufacturingStatusQuestion(userMessage);
+  if (!catalogAvailability) return false;
+  if (fallbackDetectOwnershipCostQuestion(userMessage) || fallbackDetectTechnicalSpecVerificationQuestion(userMessage)) return false;
+  return true;
+}
+
 function shouldForceStructuredSelectionCards(userMessage: string, plan: AssistantTurnPlan, result: ProductSelectionResult) {
+  const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
   const latestIntent = inferProductIntent(userMessage);
   const fallbackPlanner = /Служебный планировщик/u.test(plan.answerGuidance);
   const explicitLatestIntent = fallbackPlanner && latestIntent !== 'unknown' && latestIntent === result.state.targetProductClass;
@@ -1484,20 +1498,25 @@ function shouldForceStructuredSelectionCards(userMessage: string, plan: Assistan
     !hasEstimatedPumpLoad(result.state) &&
     result.confidence >= 0.55 &&
     !isLeadPlan(plan) &&
-    !shouldUseCurrentLineupStyle(userMessage, plan) &&
+    (catalogShortlistTurn || !shouldUseCurrentLineupStyle(userMessage, plan)) &&
     !shouldUseDetailedFactStyle(userMessage, plan, 0) &&
     !isTextOnlyFactualTurn(userMessage, plan);
 }
 
 function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
+  const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
   const answerQuestionWithAutoCards = plan.action === 'answer_question' &&
     plan.cardPolicy === 'auto' &&
     (plan.answerMode === 'short' || plan.answerMode === 'unknown');
   const clarifyingTextOnlyContradictedByReliableSelection = plan.action === 'ask_clarifying_question' &&
     plan.cardPolicy === 'textOnly' &&
     (plan.answerMode === 'short' || plan.answerMode === 'unknown');
+  const catalogShortlistWithTextPlan = catalogShortlistTurn &&
+    (plan.action === 'answer_question' || plan.action === 'ask_clarifying_question' || plan.action === 'verify_with_web') &&
+    (plan.cardPolicy === 'auto' || plan.cardPolicy === 'textOnly') &&
+    (plan.answerMode === 'short' || plan.answerMode === 'unknown' || plan.answerMode === 'currentLineup');
 
-  return (answerQuestionWithAutoCards || clarifyingTextOnlyContradictedByReliableSelection) &&
+  return (answerQuestionWithAutoCards || clarifyingTextOnlyContradictedByReliableSelection || catalogShortlistWithTextPlan) &&
     result.trace?.canRecommendFromSelection === true &&
     result.visibleProducts.length > 0 &&
     result.matchedProducts.length > 0 &&
@@ -1505,13 +1524,14 @@ function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSe
     hasReliableGeneratorSelectionBasis(result.state) &&
     !hasEstimatedPumpLoad(result.state) &&
     !isLeadPlan(plan) &&
-    !shouldUseCurrentLineupStyle(userMessage, plan) &&
+    (catalogShortlistTurn || !shouldUseCurrentLineupStyle(userMessage, plan)) &&
     !shouldUseDetailedFactStyle(userMessage, plan, 0) &&
     !isTextOnlyFactualTurn(userMessage, plan);
 }
 
 function isTextOnlyFactualTurn(userMessage: string, plan: AssistantTurnPlan) {
-  if (shouldUseDetailedFactStyle(userMessage, plan, 0) || shouldUseCurrentLineupStyle(userMessage, plan)) return true;
+  const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
+  if (shouldUseDetailedFactStyle(userMessage, plan, 0) || (!catalogShortlistTurn && shouldUseCurrentLineupStyle(userMessage, plan))) return true;
   if (fallbackDetectOwnershipCostQuestion(userMessage) || fallbackDetectTechnicalSpecVerificationQuestion(userMessage)) return true;
   const catalogOnlyAvailability = isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage);
   return !catalogOnlyAvailability &&
@@ -1574,6 +1594,7 @@ function fallbackDetectCurrentLineupQuestion(text: string) {
 
 function shouldUseCurrentLineupStyle(userMessage: string, plan?: AssistantTurnPlan) {
   if (isProductCardSelectionFollowUp(userMessage)) return false;
+  if (isCatalogShortlistTurn(userMessage, plan)) return false;
   if (isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage)) return false;
   if (plan?.answerMode === 'currentLineup') return true;
   if (plan?.answerMode && plan.answerMode !== 'unknown') return false;
@@ -1581,16 +1602,16 @@ function shouldUseCurrentLineupStyle(userMessage: string, plan?: AssistantTurnPl
 }
 
 function shouldUseWebSearch(userMessage: string, plan: AssistantTurnPlan) {
-  const catalogOnly = isCatalogAvailabilityQuestion(userMessage) && !isManufacturingStatusQuestion(userMessage);
   const planText = [
     plan.action,
     plan.catalogSearchQuery,
     plan.answerGuidance,
     plan.missingInformation.join(' ')
   ].join(' ');
-  if (plan.needsWebSearch || plan.action === 'verify_with_web') return true;
+  if (plan.needsWebSearch) return true;
+  if (isCatalogShortlistTurn(userMessage, plan)) return false;
+  if (plan.action === 'verify_with_web') return true;
   if (plan.answerMode === 'currentLineup' || plan.answerMode === 'serviceCostComparison') return true;
-  if (catalogOnly) return false;
   if (fallbackDetectTechnicalSpecVerificationQuestion(`${userMessage} ${planText}`)) return true;
   const fallbackAllowed = plan.answerMode === 'unknown';
   return fallbackAllowed && fallbackDetectOwnershipCostQuestion(`${userMessage} ${planText}`);
@@ -2571,7 +2592,14 @@ function explicitCriteriaFromTurn(
     hard.fuel = plannerTraits.fuel;
     hard.provenance!.fuel = 'planner';
   }
-  if (plannerTraits.startType === 'electric' || plannerTraits.startType === 'manual') {
+  const latestExplicitElectricStart = hasExplicitGeneratorElectricStartNeed(userMessage);
+  const plannerAnchoredStartType = plan.action === 'recommend_products' &&
+    plan.cardPolicy !== 'textOnly' &&
+    plan.selectedProductIds.length > 0;
+  if (plannerTraits.startType === 'electric' && (latestExplicitElectricStart || plannerAnchoredStartType)) {
+    hard.startType = plannerTraits.startType;
+    hard.provenance!.startType = 'planner';
+  } else if (plannerTraits.startType === 'manual' && !latestExplicitElectricStart && /(?:\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u0434\u0435\u0440\u0433\u0430\u0442\u044c\s+\u0448\u043d\u0443\u0440|manual\s+start|recoil\s+start)/iu.test(userMessage)) {
     hard.startType = plannerTraits.startType;
     hard.provenance!.startType = 'planner';
   }
@@ -2583,11 +2611,14 @@ function explicitCriteriaFromTurn(
     hard.conventionalGenerator = plannerTraits.conventionalGenerator;
     hard.provenance!.conventionalGenerator = 'planner';
   }
-  if (plannerTraits.singlePhase220 !== null) {
+  const currentHasGroundedSinglePhase = currentHard.singlePhase220 !== undefined &&
+    currentHard.singlePhase220 !== null &&
+    (currentHard.provenance?.singlePhase220 === 'explicit_user' || currentHard.provenance?.singlePhase220 === 'previous_selection');
+  if (plannerTraits.singlePhase220 !== null && !currentHasGroundedSinglePhase) {
     hard.singlePhase220 = plannerTraits.singlePhase220;
     hard.provenance!.singlePhase220 = 'planner';
   }
-  if (!hard.startType && hasElectricStartSignal(userMessage)) {
+  if (!hard.startType && latestExplicitElectricStart) {
     hard.startType = 'electric';
     hard.provenance!.startType = 'explicit_user';
   }
@@ -2606,7 +2637,7 @@ function explicitCriteriaFromTurn(
   if (hard.singlePhase220 === undefined && containsAny(userMessage, singlePhaseTerms)) {
     hard.singlePhase220 = true;
     hard.provenance!.singlePhase220 = 'explicit_user';
-  } else if (hard.singlePhase220 === undefined && targetProductClass === 'generator' && hasHomeSinglePhaseLoadContext(userMessage)) {
+  } else if (hard.singlePhase220 === undefined && !currentHasGroundedSinglePhase && targetProductClass === 'generator' && hasHomeSinglePhaseLoadContext(userMessage)) {
     hard.singlePhase220 = true;
     hard.provenance!.singlePhase220 = 'inferred_from_load';
   }
@@ -2827,6 +2858,98 @@ function sortSelectionProducts(
     if (score !== 0) return score;
     return Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
   });
+}
+
+function catalogShortlistAlternativeScore(product: Product, state: ProductSelectionState, profile: ProductFitProfile) {
+  const hard = state.hardConstraints;
+  if (hard.productIntent !== 'unknown' && !productMatchesIntent(product, hard.productIntent as ProductIntent)) return null;
+  if (hard.productRole === 'coreProduct' && !isCoreEquipment(product)) return null;
+  if (hard.excludedClasses.some((intent) => productMatchesIntent(product, intent as ProductIntent))) return null;
+  if (hard.brandConstraint) {
+    const requested = new Set([normalizeBrandKey(hard.brandConstraint)].filter((item) => item.length >= 3));
+    if (requested.size && !productMatchesRequestedBrand(product, requested)) return null;
+  }
+  if (hard.exactModelConstraint || hard.exactModelTokens.length) return null;
+
+  const flags = classifyProduct(product);
+  if (hard.fuel === 'gasoline' && flags.isDiesel) return null;
+  if (hard.fuel === 'diesel' && flags.isGasoline) return null;
+
+  let score = 0;
+  if (hard.startType === 'electric' && !flags.hasElectricStart) score += 280;
+  if (hard.enclosure === 'enclosed' && !flags.hasGeneratorEnclosureSignal) score += 360;
+  if (hard.enclosure === 'open' && flags.hasGeneratorEnclosureSignal && !flags.hasOpenFrameSignal) score += 240;
+  if (hard.conventionalGenerator === true && flags.isInverter) score += 160;
+  if (hard.conventionalGenerator === false && !flags.isInverter && flags.isGenerator) score += 180;
+
+  if (hard.budgetMax) {
+    const price = product.price;
+    if (typeof price !== 'number') {
+      score += 240;
+    } else if (price > hard.budgetMax * 1.02) {
+      const over = price - hard.budgetMax;
+      const ceiling = hard.budgetMax + Math.max(10_000, hard.budgetMax * 0.35);
+      if (price > ceiling) return null;
+      score += 40 + over / 100;
+    }
+  }
+
+  const powerRange = powerCriteriaFromSelection(hard);
+  if (powerRange) {
+    const power = extractGeneratorPowerForHardSelection(product);
+    if ((powerRange.nominalMin || powerRange.nominalMax) && power.nominalKw === undefined) {
+      score += 260;
+    } else if (power.nominalKw !== undefined) {
+      if (powerRange.nominalMin && power.nominalKw < powerRange.nominalMin - 0.4) {
+        const deficit = powerRange.nominalMin - power.nominalKw;
+        if (deficit > Math.max(1, powerRange.nominalMin * 0.45)) return null;
+        score += 70 + deficit * 160;
+      } else if (powerRange.nominalMin && power.nominalKw < powerRange.nominalMin) {
+        score += (powerRange.nominalMin - power.nominalKw) * 80;
+      }
+      if (powerRange.nominalMax && power.nominalKw > powerRange.nominalMax + 0.8) {
+        const excess = power.nominalKw - powerRange.nominalMax;
+        if (excess > Math.max(2, powerRange.nominalMax * 0.9)) return null;
+        score += 60 + excess * 45;
+      }
+    }
+    if (powerRange.maxMin && power.maxKw !== undefined && power.maxKw < powerRange.maxMin - 0.5) {
+      score += 70 + (powerRange.maxMin - power.maxKw) * 120;
+    }
+  }
+
+  if (!productMeetsCalculatedLoad(product, state)) score += 420;
+  const penalty = productFitPenalty(product, profile);
+  if (penalty <= -260) return null;
+  if (penalty < 0) score += Math.abs(penalty) * 0.35;
+  return score;
+}
+
+function nearestCatalogShortlistAlternatives(
+  products: Product[],
+  matchedProducts: Product[],
+  state: ProductSelectionState,
+  profile: ProductFitProfile,
+  limit: number
+) {
+  if (limit <= 0) return [];
+  const matchedIds = new Set(matchedProducts.map((product) => product.id));
+  const scored = products
+    .filter((product) => !matchedIds.has(product.id))
+    .map((product) => {
+      const score = catalogShortlistAlternativeScore(product, state, profile);
+      return score === null ? null : { product, score };
+    })
+    .filter((item): item is { product: Product; score: number } => Boolean(item))
+    .sort((a, b) => {
+      const score = a.score - b.score;
+      if (score !== 0) return score;
+      return Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
+    });
+  const nearest = scored.filter((item) => item.score < 300);
+  return (nearest.length ? nearest : scored)
+    .slice(0, limit)
+    .map((item) => item.product);
 }
 
 function missingQuestionsForSelection(state: ProductSelectionState, totalMatched: number) {
@@ -3429,6 +3552,13 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
   const currentNeedAllowsProduct = (product: Product) =>
     productMatchesSelectionCriteria(product, selectionState, profile) &&
     productFitPenalty(product, profile) >= 0;
+  const structuredSelectionMatchedIds = new Set(selectionState.matchedProductIds ?? []);
+  const structuredSelectionAllowsSelectedProduct = (product: Product) =>
+    structuredSelectionAuthoritative &&
+    structuredSelectionMatchedIds.has(product.id) &&
+    isCoreEquipment(product) &&
+    (selectionState.targetProductClass === 'unknown' || productMatchesIntent(product, selectionState.targetProductClass as ProductIntent)) &&
+    productFitPenalty(product, profile) > -260;
 
   const isBroadenComparisonAnchor = (product: Product) =>
     plan.searchScope === 'broadenAlternatives' && productHasExactModel(product, profile);
@@ -3448,7 +3578,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     .filter((product) => previousSelectionOnly
       ? true
       : leadRequested || structuredSelectionAuthoritative
-      ? productMatchesSelectionCriteria(product, selectionState, profile)
+      ? productMatchesSelectionCriteria(product, selectionState, profile) || structuredSelectionAllowsSelectedProduct(product)
       : currentNeedAllowsProduct(product));
   if (!leadRequested && !preserveSelectedOrder) selectedCards.sort((a, b) => rankingScore(b) - rankingScore(a));
   const selectedRejectedCount = selected.length - selectedCards.length;
@@ -3488,7 +3618,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
       ...products
         .filter((product) => !selectedIds.has(product.id))
         .filter((product) => matchesRequestedBrand(product))
-        .filter((product) => productMatchesSelectionCriteria(product, selectionState, profile))
+        .filter((product) => productMatchesSelectionCriteria(product, selectionState, profile) || structuredSelectionAllowsSelectedProduct(product))
     ];
     const cards = productCards(mergeProductsById([], structuredProducts), state, userMessage, profile, cardLimit);
     return {
@@ -4131,12 +4261,13 @@ export class AssistantService {
     let effectiveSelectionState = selectionState;
     let effectiveSelectionProfile = selectionProfile;
     const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
+    const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
     const shouldUseCatalog = canListProducts &&
       selectionState.targetProductClass !== 'unknown' &&
       !isLeadPlan(plan) &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
-      plan.cardPolicy !== 'textOnly' &&
-      contract?.render.cards !== 'none';
+      (plan.cardPolicy !== 'textOnly' || catalogShortlistTurn) &&
+      (contract?.render.cards !== 'none' || catalogShortlistTurn);
     const tokenRoles = selectionState.hardConstraints.exactModelTokenRoles ?? [];
     const comparisonTokens = tokenRoles.filter((token) => token.role === 'comparisonProduct').map((token) => token.value);
     const targetTokens = selectionState.hardConstraints.exactModelTokens;
@@ -4256,6 +4387,15 @@ export class AssistantService {
       !effectiveSelectionState.hardConstraints.budgetMax) {
       matchedProducts = [...matchedProducts].sort((a, b) => Number(a.price ?? Number.MAX_SAFE_INTEGER) - Number(b.price ?? Number.MAX_SAFE_INTEGER));
     }
+    const catalogShortlistAlternativeLimit = catalogShortlistTurn
+      ? Math.max(0, LARGE_SLICE_VISIBLE_CARDS - matchedProducts.length)
+      : 0;
+    const catalogShortlistAlternatives = catalogShortlistAlternativeLimit
+      ? nearestCatalogShortlistAlternatives(sourceProducts, matchedProducts, effectiveSelectionState, effectiveSelectionProfile, catalogShortlistAlternativeLimit)
+      : [];
+    if (catalogShortlistAlternatives.length) {
+      matchedProducts = mergeProductsById([], [...matchedProducts, ...catalogShortlistAlternatives]);
+    }
     const matchedIds = new Set(matchedProducts.map((product) => product.id));
     const comparisonProducts = exactComparisonProducts
       .filter((product) => !matchedIds.has(product.id))
@@ -4316,6 +4456,8 @@ export class AssistantService {
         totalComparison: comparisonProducts.length,
         diagnosticRejectedProducts,
         canRecommendFromSelection,
+        catalogShortlistTurn,
+        catalogShortlistAlternativeIds: catalogShortlistAlternatives.map((product) => product.id),
         visibleLimit
       }
     };
@@ -4358,6 +4500,7 @@ export class AssistantService {
       : undefined;
     const budgetMax = sliceProfile.budgetMax;
     const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
+    const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
     const hasStructuredCriteria = Boolean(
       weightRange ||
       dimensionRange ||
@@ -4371,10 +4514,10 @@ export class AssistantService {
       productIntent !== 'unknown' &&
       !isLeadPlan(plan) &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
-      contract?.render.cards !== 'none' &&
+      (contract?.render.cards !== 'none' || catalogShortlistTurn) &&
       (hasStructuredCriteria ||
         (plan.action === 'recommend_products' &&
-          plan.cardPolicy !== 'textOnly' &&
+          (plan.cardPolicy !== 'textOnly' || catalogShortlistTurn) &&
           (selectionState.shouldShowCards || selectionState.selectionConfidence >= 0.55 || plan.selectedProductIds.length > 0)));
 
     if (!shouldBuildFullSlice && !catalogOnlyExactLookup) return null;
@@ -5790,6 +5933,8 @@ export const assistantTestHooks = {
   compactSuitableProductsForAnswer,
   selectionResultCanDriveCards,
   shouldForceStructuredSelectionCards,
+  isCatalogShortlistTurn,
+  hasExplicitGeneratorElectricStartNeed,
   enforceAnswerCardContract,
   detectAnswerCardContractViolation,
   repairAnswerForFinalCards,

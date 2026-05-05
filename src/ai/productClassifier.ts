@@ -364,20 +364,34 @@ export function normalizeBrandKey(value?: string | null) {
     .replace(/^тм/, '');
 }
 
+function compactTextTokens(value: string) {
+  return value
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/gu)
+    .map((token) => compactModelText(token))
+    .filter(Boolean);
+}
+
+function brandKeyMentionedInText(brandKey: string, text: string) {
+  const tokens = compactTextTokens(text);
+  if (tokens.includes(brandKey)) return true;
+  if (brandKey.length <= 3) return false;
+  return compactModelText(text).includes(brandKey);
+}
+
 export function requestedBrandKeysFromProducts(products: Product[], text: string) {
-  const compactText = compactModelText(text);
   const brands = new Set<string>();
   for (const product of products) {
     const key = normalizeBrandKey(product.brand);
-    if (key.length >= 3 && compactText.includes(key)) brands.add(key);
+    if (key.length >= 3 && brandKeyMentionedInText(key, text)) brands.add(key);
   }
   return brands;
 }
 
 export function productMatchesRequestedBrand(product: Product, requestedBrands: Set<string>) {
   if (!requestedBrands.size) return true;
-  const productText = compactModelText([product.brand, product.name].filter(Boolean).join(' '));
-  return [...requestedBrands].some((brand) => productText.includes(brand));
+  const productText = [product.brand, product.name].filter(Boolean).join(' ');
+  return [...requestedBrands].some((brand) => brandKeyMentionedInText(brand, productText));
 }
 
 export function productMatchesIntent(product: Product, intent: ProductIntent) {
@@ -503,7 +517,7 @@ export function parseDimensionNeedRangeMm(text: string) {
 }
 
 export function isCatalogAvailabilityQuestion(text: string) {
-  return /(?:\u0440\u0430\u0437\u0432\u0435|\u0435\u0441\u0442\u044c\s+\u043b\u0438|\u0435\u0441\u0442\u044c\s+[^?!.]{0,40}\s+\u0432\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433|\u043d\u0435\u0442\s+(?:\u043b\u0438\s+)?|\u0443\s+\u0432\u0430\u0441|\u0432\s+\u043d\u0430\u0448\u0435\u043c\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435)/iu.test(text);
+  return /(?:\u0440\u0430\u0437\u0432\u0435|\u0435\u0441\u0442\u044c\s+\u043b\u0438|\u0435\u0441\u0442\u044c\s+[^?!.]{0,40}\s+\u0432\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433|\u0435\u0441\u0442\u044c\s+[^?!.]{0,50}\s+(?:\u0434\u043e|\u0437\u0430)\s*\d|\u043d\u0435\u0442\u0443\s+(?:\u043b\u0438\s+)?|\u043d\u0435\u0442\s+(?:\u043b\u0438\s+)?|\u0443\s+\u0432\u0430\u0441|\u0432\s+\u043d\u0430\u0448\u0435\u043c\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435)/iu.test(text);
 }
 
 export function isManufacturingStatusQuestion(text: string) {
@@ -593,6 +607,7 @@ export function inferProductIntent(text: string): ProductIntent {
 
 export function fallbackDetectGeneratorEnclosureSignal(text: string) {
   return /(?:генератор|электростанц)[^.!?\n]{0,80}(?:в|со|с)\s+(?:закрыт\w*\s+)?(?:кожух|корпус|шумозащит|шумоизоляц|тих\w*)/iu.test(text) ||
+    /(?:генератор|электростанц)[^.!?\n]{0,80}(?:закрыт\w*|тих\w*|шумозащит\w*|шумоизоляц\w*)/iu.test(text) ||
     /(?:закрыт\w*|тих\w*|шумозащит\w*|шумоизоляц\w*|в\s+кожухе|в\s+корпусе)[^.!?\n]{0,80}(?:генератор|электростанц)/iu.test(text);
 }
 
