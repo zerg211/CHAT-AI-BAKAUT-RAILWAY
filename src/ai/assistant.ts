@@ -2874,8 +2874,11 @@ function selectionMetadata(result: ProductSelectionResult): ProductSelectionMeta
 
 function initialVisibleCardCountForCards(cards: ProductCard[], selectionResult: ProductSelectionResult, visibleCardLimit?: number) {
   if (!cards.length) return 0;
-  const fallback = cards.length > MAX_PRODUCT_CARDS ? LARGE_SLICE_VISIBLE_CARDS : cards.length;
-  const requested = (visibleCardLimit ?? selectionResult.visibleProducts.length) || fallback;
+  const fallback = Math.min(cards.length, LARGE_SLICE_VISIBLE_CARDS);
+  const selectionVisible = selectionResult.visibleProducts.length
+    ? Math.min(selectionResult.visibleProducts.length, fallback)
+    : fallback;
+  const requested = visibleCardLimit ?? selectionVisible;
   return Math.max(1, Math.min(cards.length, requested));
 }
 
@@ -5782,6 +5785,7 @@ export const assistantTestHooks = {
   resolveTurnContractForPlan,
   selectCardsFromPlan,
   selectCardsFromTurnContract,
+  initialVisibleCardCountForCards,
   answerContextProductsForCards,
   compactSuitableProductsForAnswer,
   selectionResultCanDriveCards,

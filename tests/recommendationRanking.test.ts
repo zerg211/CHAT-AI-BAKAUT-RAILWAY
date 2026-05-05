@@ -1803,6 +1803,33 @@ describe('recommendation ranking', () => {
     expect(result.cards.slice(0, 7).map((card) => card.id)).toEqual(products.slice(0, 7).map((item) => item.id));
   });
 
+  it('caps the initial visible structured selection to seven cards', () => {
+    const products = Array.from({ length: 10 }, (_, index) => productWithSpecs(
+      `g${index}`,
+      `Generator gasoline electric ${index + 1}.0 kW`,
+      50_000 + index * 1000,
+      `https://example.test/generators/g${index}`,
+      {}
+    ));
+    const cards = products.map((item) => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      price: item.price,
+      specs: item.specs,
+      reasons: [],
+      caveats: []
+    }));
+    const result = reliableGeneratorSelectionResult({
+      matchedProducts: products,
+      visibleProducts: products,
+      hiddenProducts: []
+    });
+
+    expect(assistantTestHooks.initialVisibleCardCountForCards(cards as any, result)).toBe(7);
+    expect(assistantTestHooks.initialVisibleCardCountForCards(cards as any, result, 2)).toBe(2);
+  });
+
   it('marks visible and show-more suitable products in answer context', () => {
     const first = product('first', 'Generator gasoline inverter first 6.0 kW', 60_000, 'https://example.test/first');
     const extra = product('extra', 'Generator gasoline extra 6.0 kW', 65_000, 'https://example.test/extra');
