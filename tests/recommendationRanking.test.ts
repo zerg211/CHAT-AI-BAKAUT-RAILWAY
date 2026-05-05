@@ -391,6 +391,33 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(true);
   });
 
+  it('promotes reliable selection cards when a non-blocking clarification plan says text-only', () => {
+    const result = reliableGeneratorSelectionResult();
+    const basePlan = baseTurnPlan();
+    const message = ru('\\u041d\\u0443\\u0436\\u0435\\u043d \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430 220 \\u0412: \\u043a\\u043e\\u0442\\u0435\\u043b, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a, \\u0441\\u0432\\u0435\\u0442, \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a \\u043a\\u043d\\u043e\\u043f\\u043a\\u043e\\u0439 \\u0438 \\u043f\\u043e\\u0442\\u0438\\u0448\\u0435.');
+    const plan = baseTurnPlan({
+      action: 'ask_clarifying_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'askClarifyingQuestion',
+      missingInformation: [ru('\\u041a\\u043d\\u043e\\u043f\\u043a\\u0430 \\u0441\\u0442\\u0440\\u043e\\u0433\\u043e \\u043e\\u0431\\u044f\\u0437\\u0430\\u0442\\u0435\\u043b\\u044c\\u043d\\u0430?')],
+      requiredProductTraits: {
+        ...basePlan.requiredProductTraits,
+        productIntent: 'generator',
+        startType: 'electric',
+        singlePhase220: true
+      },
+      selectionState: {
+        ...basePlan.selectionState,
+        shouldShowCards: false,
+        cardDisplayMode: 'none'
+      }
+    });
+
+    expect(assistantTestHooks.selectionResultCanDriveCards(plan, result, message)).toBe(true);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(true);
+  });
+
   it('keeps reliable selection card promotion behind text-only and factual-answer guards', () => {
     const result = reliableGeneratorSelectionResult();
     const baseAutoPlan = baseTurnPlan({
@@ -398,15 +425,33 @@ describe('recommendation ranking', () => {
       answerMode: 'short',
       cardPolicy: 'auto'
     });
+    const clarifyingTextOnlyPlan = baseTurnPlan({
+      action: 'ask_clarifying_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'askClarifyingQuestion'
+    });
+    const serviceAndSparesMessage = ru('\\u0410 \\u0447\\u0442\\u043e \\u043f\\u043e \\u0441\\u0435\\u0440\\u0432\\u0438\\u0441\\u0443, \\u0437\\u0430\\u043f\\u0447\\u0430\\u0441\\u0442\\u044f\\u043c \\u0438 \\u0440\\u0430\\u0441\\u0445\\u043e\\u0434\\u043d\\u0438\\u043a\\u0430\\u043c \\u0434\\u043b\\u044f \\u044d\\u0442\\u043e\\u0433\\u043e \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0430?');
+    const currentLineupMessage = ru('\\u0410 TOR KM2000ie \\u0435\\u0449\\u0435 \\u0432\\u044b\\u043f\\u0443\\u0441\\u043a\\u0430\\u0435\\u0442\\u0441\\u044f \\u0438\\u043b\\u0438 \\u044d\\u0442\\u043e \\u0441\\u0442\\u0430\\u0440\\u0430\\u044f \\u043c\\u043e\\u0434\\u0435\\u043b\\u044c?');
 
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(
-      ru('\\u0410 \\u0447\\u0442\\u043e \\u043f\\u043e \\u0441\\u0435\\u0440\\u0432\\u0438\\u0441\\u0443, \\u0437\\u0430\\u043f\\u0447\\u0430\\u0441\\u0442\\u044f\\u043c \\u0438 \\u0440\\u0430\\u0441\\u0445\\u043e\\u0434\\u043d\\u0438\\u043a\\u0430\\u043c \\u0434\\u043b\\u044f \\u044d\\u0442\\u043e\\u0433\\u043e \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0430?'),
+      serviceAndSparesMessage,
       baseAutoPlan,
       result
     )).toBe(false);
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(
-      ru('\\u0410 TOR KM2000ie \\u0435\\u0449\\u0435 \\u0432\\u044b\\u043f\\u0443\\u0441\\u043a\\u0430\\u0435\\u0442\\u0441\\u044f \\u0438\\u043b\\u0438 \\u044d\\u0442\\u043e \\u0441\\u0442\\u0430\\u0440\\u0430\\u044f \\u043c\\u043e\\u0434\\u0435\\u043b\\u044c?'),
+      currentLineupMessage,
       baseAutoPlan,
+      result
+    )).toBe(false);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      serviceAndSparesMessage,
+      clarifyingTextOnlyPlan,
+      result
+    )).toBe(false);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      currentLineupMessage,
+      clarifyingTextOnlyPlan,
       result
     )).toBe(false);
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(

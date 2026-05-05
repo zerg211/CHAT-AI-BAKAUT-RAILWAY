@@ -1490,9 +1490,14 @@ function shouldForceStructuredSelectionCards(userMessage: string, plan: Assistan
 }
 
 function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
-  return plan.action === 'answer_question' &&
+  const answerQuestionWithAutoCards = plan.action === 'answer_question' &&
     plan.cardPolicy === 'auto' &&
-    (plan.answerMode === 'short' || plan.answerMode === 'unknown') &&
+    (plan.answerMode === 'short' || plan.answerMode === 'unknown');
+  const clarifyingTextOnlyContradictedByReliableSelection = plan.action === 'ask_clarifying_question' &&
+    plan.cardPolicy === 'textOnly' &&
+    (plan.answerMode === 'short' || plan.answerMode === 'unknown');
+
+  return (answerQuestionWithAutoCards || clarifyingTextOnlyContradictedByReliableSelection) &&
     result.trace?.canRecommendFromSelection === true &&
     result.visibleProducts.length > 0 &&
     result.matchedProducts.length > 0 &&
