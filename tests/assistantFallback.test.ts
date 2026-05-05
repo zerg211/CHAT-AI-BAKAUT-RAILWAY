@@ -144,6 +144,7 @@ describe('assistant OpenAI failure fallback', () => {
     expect(payload.answer).toContain(ru('\\u041e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435'));
     expect(payload.answer).toContain(ru('\\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435'));
     expect(payload.answer).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443'));
+    expect(payload.answer).not.toContain(ru('\\u041e\\u0440\\u0438\\u0435\\u043d\\u0442\\u0438\\u0440'));
   });
 
   it('persists a human-safe answer with product cards and heuristic memory when OpenAI calls fail', async () => {

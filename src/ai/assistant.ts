@@ -4489,8 +4489,9 @@ export class AssistantService {
       const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
         ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
         : null;
+      const leadTotalPrice = fallbackDetectPurchaseIntent(input.userMessage) ? bundleTotalPrice : null;
       const autoLeadResult = await this.createLeadFromChatContact(session, history, cards, input.userMessage, session.needState);
-      const answer = deterministicLeadCollectionAnswer(cards, bundleTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult));
+      const answer = deterministicLeadCollectionAnswer(cards, leadTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult));
       if (answer) await input.onDelta?.(answer);
       const assistantMessage = await this.conversations.addMessage({
         sessionId: input.sessionId,
