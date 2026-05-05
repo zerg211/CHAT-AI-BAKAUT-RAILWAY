@@ -6,7 +6,7 @@ export const fromEscaped = (value: string) => JSON.parse(`"${value}"`) as string
 export const weightRegex = new RegExp(String.raw`(\d{2,4})\s*(?:\u043a\u0433|kg)`, 'i');
 export const powerRegex = new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430)`, 'i');
 export const powerRangeRegex = new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:-|–|—|\u0434\u043e)\s*(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430)`, 'i');
-export const budgetMaxRegex = new RegExp(String.raw`(?:\u0434\u043e|budget\s*(?:up\s*to)?|max|maximum|<=?)\s*(\d+(?:[,.]\d+)?)\s*(?:\u0442\u044b\u0441(?:\u044f\u0447)?|\u0442\.?\s*\u0440\.?|\u0440\u0443\u0431|rub|₽)?`, 'i');
+export const budgetMaxRegex = new RegExp(String.raw`(?:\u0434\u043e|\u0437\u0430|\u0432\s+\u043f\u0440\u0435\u0434\u0435\u043b\u0430\u0445|\u0432\s+\u0440\u0430\u043c\u043a\u0430\u0445|\u043d\u0435\s+\u0434\u043e\u0440\u043e\u0436\u0435|budget\s*(?:up\s*to)?|max|maximum|<=?)\s*(\d+(?:[,.]\d+)?)\s*(?:\u0442\u044b\u0441(?:\u044f\u0447)?|\u0442\.?\s*\u0440\.?|\u0440\u0443\u0431|rub|₽)?`, 'i');
 export const plateTerms = ['vibroplity', 'vibroplita', 'виброплит', fromEscaped('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442')];
 export const generatorTerms = ['generator', 'generatory', 'генерат', 'электростанц', fromEscaped('\\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442'), fromEscaped('\\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446')];
 export const rammerTerms = ['rammer', 'трамбовк', 'виброног', fromEscaped('\\u0442\\u0440\\u0430\\u043c\\u0431\\u043e\\u0432\\u043a'), fromEscaped('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043d\\u043e\\u0433')];
@@ -558,7 +558,7 @@ export function parseBudgetMax(text: string) {
     if (/^\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430|\u0432\u0442|w|\u0432\u0430\u0442\u0442|\u043a\u0433|kg|\u043c\u043c|mm|\u0441\u043c|cm)(?=$|[\s,.;:!?)]|-)/iu.test(after)) continue;
 
     const local = `${before} ${matchedText} ${after}`;
-    const hasMoneyContext = /(?:\u0431\u044e\u0434\u0436\u0435\u0442|\u0446\u0435\u043d|\u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442|\u0440\u0443\u0431|₽|\u0442\u044b\u0441|\u0442\.?\s*\u0440|rub|budget|price|cost)/iu.test(local);
+    const hasMoneyContext = /(?:\u0431\u044e\u0434\u0436\u0435\u0442|\u0446\u0435\u043d|\u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442|\u0440\u0443\u0431|₽|\u0442\u044b\u0441|\u0442\.?\s*\u0440|rub|budget|price|cost|\u0437\u0430\s*\d|\u0432\s+\u043f\u0440\u0435\u0434\u0435\u043b\u0430\u0445\s*\d|\u0432\s+\u0440\u0430\u043c\u043a\u0430\u0445\s*\d|\u043d\u0435\s+\u0434\u043e\u0440\u043e\u0436\u0435\s*\d)/iu.test(local);
     if (!hasMoneyContext) continue;
 
     if (value < 1000 || /(?:тыс|т\.?\s*р)/iu.test(matchedText)) return Math.round(value * 1000);
@@ -568,7 +568,7 @@ export function parseBudgetMax(text: string) {
 }
 
 export function hasBudgetSignal(text: string) {
-  return /(?:бюджет|цена|цене|стоимост|руб|₽|тыс|т\.?\s*р|rub|budget|price|cost)/iu.test(text);
+  return /(?:бюджет|цена|цене|стоимост|руб|₽|тыс|т\.?\s*р|rub|budget|price|cost|\bза\s*\d|в\s+пределах\s*\d|в\s+рамках\s*\d|не\s+дороже\s*\d)/iu.test(text);
 }
 
 export function hasExplicitGeneratorPowerRequest(text: string) {

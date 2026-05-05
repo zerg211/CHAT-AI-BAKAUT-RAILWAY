@@ -4226,6 +4226,11 @@ describe('recommendation ranking', () => {
     expect(parseBudgetMax('Нужен генератор до 1,5 кВт без бюджета.')).toBeUndefined();
   });
 
+  it('parses catalog availability budget phrasing with za and within', () => {
+    expect(parseBudgetMax(ru('\\u0427\\u0442\\u043e \\u043d\\u0435\\u0442\\u0443 \\u0437\\u0430 30 000 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u043e\\u0432 2 \\u043a\\u0432\\u0442 \\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0445?'))).toBe(30_000);
+    expect(parseBudgetMax(ru('\\u041d\\u0443\\u0436\\u0435\\u043d \\u0437\\u0430\\u043a\\u0440\\u044b\\u0442\\u044b\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0432 \\u043f\\u0440\\u0435\\u0434\\u0435\\u043b\\u0430\\u0445 35 000 \\u0440\\u0443\\u0431\\u043b\\u0435\\u0439'))).toBe(35_000);
+  });
+
   it('keeps extra suitable cards in payload when only two should be initially visible', () => {
     const products = Array.from({ length: 12 }, (_, index) =>
       productWithSpecs(`g${index}`, `Generator gasoline ${4 + index / 10} kW`, 50_000 + index, `https://example.test/catalog/generators/g${index}`, {})

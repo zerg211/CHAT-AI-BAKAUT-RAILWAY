@@ -2012,6 +2012,16 @@ function deterministicCatalogSliceAnswer(slice: StructuredCatalogSlice, cards: P
       return `${card.name}${weight ? ` (${weight} кг)` : ''}${card.price ? ` - ${rubPrice(card.price)}` : ''}`;
     });
     const intro = `В каталоге по диапазону ${range} нашлось ${slice.totalMatched} подходящ${slice.totalMatched === 1 ? 'ая позиция' : 'их позиций'}.`;
+    const budgetMax = slice.constraints.budgetMax;
+    const visibleWithinBudget = budgetMax
+      ? visible.filter((card) => typeof card.price === 'number' && card.price <= budgetMax * 1.02).length
+      : 0;
+    const budgetVariantWord = visibleWithinBudget === 1 ? 'вариант' : visibleWithinBudget >= 2 && visibleWithinBudget <= 4 ? 'варианта' : 'вариантов';
+    const finalIntro = budgetMax && visible.length && visibleWithinBudget < visible.length
+      ? visibleWithinBudget > 0
+        ? `В бюджет до ${rubPrice(budgetMax)} проходит ${visibleWithinBudget} ${budgetVariantWord}; остальные карточки показываю как ближайшие компромиссы.`
+        : `Точных карточек в бюджет до ${rubPrice(budgetMax)} не вижу; показываю ближайшие компромиссы.`
+      : intro;
     const list = names.length ? `Показываю ${names.length}: ${names.join('; ')}.` : '';
     const productIntent = slice.constraints.productIntent;
     const tail = productIntent === 'generator'
@@ -2025,7 +2035,7 @@ function deterministicCatalogSliceAnswer(slice: StructuredCatalogSlice, cards: P
         : slice.totalMatched > MAX_PRODUCT_CARDS
           ? 'Остальные подходящие варианты оставляю за кнопкой "Показать еще".'
           : 'Чтобы точнее выбрать из них, уточните главное ограничение: цена, габариты или режим работы?';
-    return [intro, list, tail].filter(Boolean).join('\n\n');
+    return [finalIntro, list, tail].filter(Boolean).join('\n\n');
   }
 
   const exact = (slice.exactCatalogMatches ?? slice.products).slice(0, 10);
