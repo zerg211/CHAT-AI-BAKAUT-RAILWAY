@@ -288,15 +288,22 @@ export interface CustomerNeedState {
   lastSummary: string;
 }
 
+export interface CardDisplayOptions {
+  initialVisibleCount?: number;
+}
+
 export interface ChatResponsePayload {
   answer: string;
   needState: CustomerNeedState;
   productCards: ProductCard[];
+  cardDisplay?: CardDisplayOptions;
   usedWebSearch: boolean;
   leadRequested?: boolean;
+  leadCreated?: boolean;
   assistantMessageId?: string;
   metadata?: {
     selection?: ProductSelectionMetadata;
+    cardDisplay?: CardDisplayOptions;
     [key: string]: unknown;
   };
 }

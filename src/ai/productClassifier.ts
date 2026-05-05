@@ -141,10 +141,87 @@ export const plateAccessoryTerms = [
   fromEscaped('\\u0432\\u0443\\u043b\\u043a\\u0430\\u043b\\u0430\\u043d')
 ];
 
+// Product-card role guard terms. These classify catalogue items, not buyer intent.
+// They exist to stop accessories/spares/consumables from being rendered as core
+// machines when the LLM asks for a whole product class such as a виброплита.
+export const spareAccessoryTerms = [
+  'accessory',
+  'spare',
+  'spares',
+  'parts',
+  'filter',
+  'belt',
+  fromEscaped('\\u0437\\u0430\\u043f\\u0447\\u0430\\u0441\\u0442'),
+  fromEscaped('\\u0440\\u0430\\u0441\\u0445\\u043e\\u0434\\u043d\\u0438\\u043a'),
+  fromEscaped('\\u0444\\u0438\\u043b\\u044c\\u0442\\u0440'),
+  fromEscaped('\\u0440\\u0435\\u043c\\u0435\\u043d'),
+  fromEscaped('\\u0440\\u0435\\u043c\\u0435\\u043d\\u044c'),
+  fromEscaped('\\u043c\\u0430\\u0441\\u043b'),
+  fromEscaped('\\u043f\\u043e\\u0434\\u043e\\u0433\\u0440\\u0435\\u0432'),
+  fromEscaped('\\u0431\\u0430\\u043a'),
+  fromEscaped('\\u043a\\u0440\\u044b\\u0448\\u043a'),
+  fromEscaped('\\u0441\\u0432\\u0435\\u0447'),
+  fromEscaped('\\u043a\\u0430\\u0440\\u0431\\u044e\\u0440\\u0430\\u0442'),
+  fromEscaped('\\u043a\\u043e\\u0432\\u0440\\u0438\\u043a'),
+  fromEscaped('\\u043a\\u043e\\u0432\\u0435\\u0440'),
+  fromEscaped('\\u043d\\u0430\\u043a\\u043b\\u0430\\u0434\\u043a'),
+  fromEscaped('\\u043a\\u043e\\u043c\\u043f\\u043b\\u0435\\u043a\\u0442'),
+  fromEscaped('\\u0430\\u0432\\u0440')
+];
+
 
 export function containsAny(text: string, terms: string[]) {
   const lower = text.toLowerCase();
   return terms.some((term) => lower.includes(term));
+}
+
+function hasAccessoryCategorySignal(category: string) {
+  return /(?:запчаст|расходник|аксессуар|комплектующ|сервис|масл|кожух|фильтр|ремн|ремен|свеч|карбюратор)/iu.test(category);
+}
+
+function startsWithAnyWord(text: string, words: string[]) {
+  const source = text.trim().toLowerCase();
+  return words.some((word) => new RegExp(`^${word}(?:\\b|\\s|$)`, 'iu').test(source));
+}
+
+function hasCoreMachineTitleSignal(title: string) {
+  return startsWithAnyWord(title, [
+    'виброплита',
+    'генератор',
+    'электростанция',
+    'бензорез',
+    'резчик',
+    'швонарезчик',
+    'вибротрамбовка',
+    'трамбовка',
+    'виброкаток',
+    'каток',
+    'затирочная',
+    'затирочная машина'
+  ]) || /^(?:vibroplita|generator|cutter|rammer|roller|trowel)\b/i.test(title.trim());
+}
+
+function hasAccessoryTitleForm(title: string) {
+  const normalized = title.trim().toLowerCase();
+  if (/(?:\b|^)(?:фильтр|ремень|свеча|карбюратор|коврик|ковер|накладка|кожух|бак|крышка|подогрев|амортизатор|система\s+смачивания)\b/iu.test(normalized)) {
+    return true;
+  }
+  if (/^(?:комплект\s+(?:сервис|обслуживан|расходник|запчаст)|блок\s+авр|авр\s+для)\b/iu.test(normalized)) {
+    return true;
+  }
+  return /(?:для\s+(?:виброплит|генератор|бензорез|резчик|швонарез|трамбовк|двигател))/iu.test(normalized) &&
+    /(?:фильтр|ремень|свеч|карбюратор|коврик|кожух|бак|крышк|подогрев|накладк|комплект|авр|амортизатор)/iu.test(normalized);
+}
+
+function hasCoreMachineCategorySignal(category: string) {
+  return !hasAccessoryCategorySignal(category) && (
+    containsAny(category, plateTerms) ||
+    containsAny(category, generatorTerms) ||
+    containsAny(category, rammerTerms) ||
+    containsAny(category, cutterTerms) ||
+    containsAny(category, rollerTerms) ||
+    containsAny(category, trowelTerms)
+  );
 }
 
 export function oilViscosities(text: string) {
@@ -454,13 +531,26 @@ export function parseDesiredPowerRange(text: string) {
 }
 
 export function parseBudgetMax(text: string) {
-  const match = text.match(budgetMaxRegex);
-  if (!match) return undefined;
-  const value = Number(match[1].replace(',', '.'));
-  if (!Number.isFinite(value) || value <= 0) return undefined;
-  const matchedText = match[0].toLowerCase();
-  if (value < 1000 || /тыс|т\.?\s*р/.test(matchedText)) return Math.round(value * 1000);
-  return Math.round(value);
+  const matcher = new RegExp(budgetMaxRegex.source, 'giu');
+  for (const match of text.matchAll(matcher)) {
+    const value = Number(match[1].replace(',', '.'));
+    if (!Number.isFinite(value) || value <= 0) continue;
+
+    const index = match.index ?? 0;
+    const end = index + match[0].length;
+    const matchedText = match[0].toLowerCase();
+    const before = text.slice(Math.max(0, index - 45), index).toLowerCase();
+    const after = text.slice(end, Math.min(text.length, end + 30)).toLowerCase();
+    if (/^\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430|\u0432\u0442|w|\u0432\u0430\u0442\u0442|\u043a\u0433|kg|\u043c\u043c|mm|\u0441\u043c|cm)(?=$|[\s,.;:!?)]|-)/iu.test(after)) continue;
+
+    const local = `${before} ${matchedText} ${after}`;
+    const hasMoneyContext = /(?:\u0431\u044e\u0434\u0436\u0435\u0442|\u0446\u0435\u043d|\u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442|\u0440\u0443\u0431|₽|\u0442\u044b\u0441|\u0442\.?\s*\u0440|rub|budget|price|cost)/iu.test(local);
+    if (!hasMoneyContext) continue;
+
+    if (value < 1000 || /(?:тыс|т\.?\s*р)/iu.test(matchedText)) return Math.round(value * 1000);
+    return Math.round(value);
+  }
+  return undefined;
 }
 
 export function hasBudgetSignal(text: string) {
@@ -585,18 +675,24 @@ function classifyProductUncached(product: Product) {
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+  const titleText = String(product.name ?? '').toLowerCase();
   const category = String(product.category ?? '').toLowerCase();
+  const hasCoreTitleSignal = hasCoreMachineTitleSignal(titleText);
+  const hasCoreCategorySignal = hasCoreMachineCategorySignal(category);
+  const hasStrongCoreRoleEvidence = hasCoreTitleSignal || hasCoreCategorySignal;
+  const hasAccessoryRoleEvidence = hasAccessoryCategorySignal(category) || hasAccessoryTitleForm(titleText);
   const isOilProduct = hasOilProductSignal(classText);
   const isIncompatibleOil = isOilProduct && containsAny(text, incompatibleOilTerms);
   const isEngineOil = isOilProduct && !isIncompatibleOil && (containsAny(text, fourStrokeOilTerms) || containsAny(category, oilTerms));
-  const isPlateAccessory = containsAny(classText, plateAccessoryTerms) && containsAny(text, plateTerms);
+  const isGenericAccessoryProduct = hasAccessoryRoleEvidence && !hasStrongCoreRoleEvidence;
+  const isPlateAccessory = containsAny(text, plateTerms) && (containsAny(classText, plateAccessoryTerms) || isGenericAccessoryProduct);
   const isGeneratorOil = (isOilProduct && containsAny(text, generatorTerms)) ||
     /масло\s+для\s+генератор|generator.?oil|10w-?40|5w-?30|sae\s*\d/i.test(text);
   const catalogGeneratorOil = (isOilProduct && containsAny(text, generatorTerms)) ||
     /generator.?oil|10w-?40|5w-?30|sae\s*\d/i.test(classText);
   const classHasGenerator = containsAny(classText, generatorTerms);
   const standaloneGeneratorAccessory = /(?:кожухи\s+для\s+генератора|^кожух\b|блок(?:и)?\s+авр|подогрев|фильтр|ремень|расходник|масло\s+для\s+генератор)/i.test(classText);
-  const isAccessory = isPlateAccessory || catalogGeneratorOil || containsAny(classText, accessoryTerms) ||
+  const isAccessory = isPlateAccessory || catalogGeneratorOil || (containsAny(classText, accessoryTerms) && !hasStrongCoreRoleEvidence) ||
     (standaloneGeneratorAccessory && !/(?:^|\s)(?:генератор|электростанц)/i.test(classText));
   const isWeldingGenerator = containsAny(classText, weldingTerms) || category.includes('сварочные генераторы');
   const isConcreteVibrator = /(?:вибратор|vibrator|vibratory)/iu.test(classText) && !containsAny(classText, generatorTerms);
@@ -628,7 +724,7 @@ function classifyProductUncached(product: Product) {
     isEngineOil,
     isPlateAccessory,
     isWeldingGenerator,
-    isPlate: containsAny(classText, plateTerms) && !isPlateAccessory,
+    isPlate: containsAny(classText, plateTerms) && !isPlateAccessory && (!isGenericAccessoryProduct || hasStrongCoreRoleEvidence),
     isRammer: containsAny(classText, rammerTerms),
     isRoller,
     isCutter: containsAny(classText, cutterTerms),

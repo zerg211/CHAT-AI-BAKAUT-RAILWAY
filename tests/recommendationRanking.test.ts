@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AssistantService, assistantTestHooks } from '../src/ai/assistant.js';
 import { emptyNeedState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
+import { classifyProduct, isCoreEquipment, parseBudgetMax } from '../src/ai/productClassifier.js';
 import type { ProductSelectionCriteria } from '../src/shared/types.js';
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
@@ -119,6 +120,159 @@ async function rank(message: string, products: ReturnType<typeof product>[]) {
 }
 
 describe('recommendation ranking', () => {
+  it('classifies core machines with ambiguous kit words by product evidence, not flat blacklist terms', () => {
+    const corePlate = brandedProduct(
+      'plate-kit',
+      ru('Виброплита бензиновая ТСС VP80 комплект'),
+      ru('ТСС'),
+      ru('Виброплиты'),
+      100000,
+      'https://example.test/plate-kit'
+    );
+    const coreGenerator = brandedProduct(
+      'generator-kit',
+      ru('Генератор бензиновый ТСС комплект'),
+      ru('ТСС'),
+      ru('Генераторы'),
+      100000,
+      'https://example.test/generator-kit'
+    );
+    const plateFilter = brandedProduct(
+      'plate-filter',
+      ru('Фильтр воздушный для виброплиты'),
+      ru('ТСС'),
+      ru('Запчасти для виброплит'),
+      900,
+      'https://example.test/plate-filter'
+    );
+    const plateBelt = brandedProduct(
+      'plate-belt',
+      ru('Ремень привода виброплиты'),
+      ru('ТСС'),
+      ru('Расходники и запчасти для виброплит'),
+      1400,
+      'https://example.test/plate-belt'
+    );
+    const serviceKit = brandedProduct(
+      'service-kit',
+      ru('Комплект сервиса K 770'),
+      'Husqvarna',
+      ru('Расходники'),
+      7722,
+      'https://example.test/service-kit'
+    );
+
+    expect(classifyProduct(corePlate)).toMatchObject({ isPlate: true, isPlateAccessory: false });
+    expect(isCoreEquipment(corePlate)).toBe(true);
+    expect(classifyProduct(coreGenerator)).toMatchObject({ isGenerator: true, isGeneratorAccessory: false });
+    expect(isCoreEquipment(coreGenerator)).toBe(true);
+    expect(classifyProduct(plateFilter)).toMatchObject({ isPlate: false, isPlateAccessory: true });
+    expect(isCoreEquipment(plateFilter)).toBe(false);
+    expect(classifyProduct(plateBelt)).toMatchObject({ isPlate: false, isPlateAccessory: true });
+    expect(isCoreEquipment(plateBelt)).toBe(false);
+    expect(isCoreEquipment(serviceKit)).toBe(false);
+  });
+
+  it('keeps planner context broad when buyer words mention both whole equipment and related spares', async () => {
+    const corePlate = brandedProduct(
+      'plate-core',
+      ru('Виброплита бензиновая ТСС VP80'),
+      ru('ТСС'),
+      ru('Виброплиты'),
+      68000,
+      'https://example.test/plate-core'
+    );
+    const plateBelt = brandedProduct(
+      'plate-belt',
+      ru('Ремень привода виброплиты ТСС VP80'),
+      ru('ТСС'),
+      ru('Расходники и запчасти для виброплит'),
+      1400,
+      'https://example.test/plate-belt'
+    );
+    const assistant = new AssistantService(undefined as never, new FakeProducts([plateBelt, corePlate] as any) as never);
+
+    const context = await assistant.findPlannerContextProducts(
+      ru('Нужна виброплита VP80, и сразу ремень к ней тоже посмотрите'),
+      emptyNeedState()
+    );
+
+    expect(context.map((item) => item.id)).toEqual(expect.arrayContaining(['plate-core', 'plate-belt']));
+  });
+
+  it('does not render vibroplate spares as core vibroplates when LLM asks for whole equipment', async () => {
+    const corePlate = brandedProduct(
+      'vibro-core',
+      ru('Виброплита бензиновая TSS VP80'),
+      'TSS',
+      ru('Виброплиты'),
+      68000,
+      'https://example.test/vibro-core/'
+    );
+    const airFilter = brandedProduct(
+      'plate-filter',
+      ru('Фильтр воздушный для виброплиты TSS VP80'),
+      'TSS',
+      ru('Запчасти для виброплит'),
+      900,
+      'https://example.test/plate-filter/'
+    );
+    const driveBelt = brandedProduct(
+      'plate-belt',
+      ru('Ремень привода виброплиты TSS VP80'),
+      'TSS',
+      ru('Расходники и запчасти для виброплит'),
+      1400,
+      'https://example.test/plate-belt/'
+    );
+    const assistant = new AssistantService(undefined as never, new FakeProducts([airFilter, driveBelt, corePlate] as any) as never);
+    const state = emptyNeedState();
+    const plan = baseTurnPlan({
+      catalogSearchQuery: ru('подбор целой виброплиты под задачу покупателя'),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        selectionConfidence: 0.92,
+        shouldShowCards: true,
+        cardDisplayMode: 'exact_matches'
+      },
+      answerGuidance: ru('Покупатель просит целую виброплиту, не запчасти и не расходники.')
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      ru('Нужна виброплита для дорожек на участке, что взять?'),
+      state,
+      plan,
+      [airFilter, driveBelt, corePlate] as any
+    );
+
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['vibro-core']);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['vibro-core']);
+    expect((result.trace.diagnosticRejectedProducts as Array<{ productId: string }>).map((item) => item.productId)).toEqual(expect.arrayContaining(['plate-filter', 'plate-belt']));
+    expect(result.state.rejectedProducts?.map((item) => item.productId) ?? []).toEqual([]);
+  });
+
+  it('keeps invalid-planner fallback text-only instead of doing keyword product routing', () => {
+    const plan = assistantTestHooks.fallbackTurnPlan({
+      userMessage: ru('Нужна виброплита для дорожек'),
+      needState: emptyNeedState(),
+      baseQuery: ru('Нужна виброплита для дорожек')
+    });
+
+    expect(plan.action).toBe('answer_question');
+    expect(plan.answerMode).toBe('short');
+    expect(plan.cardPolicy).toBe('textOnly');
+    expect(plan.selectionState.shouldShowCards).toBe(false);
+    expect(plan.selectedProductIds).toEqual([]);
+    expect(plan.answerGuidance).toContain('Не делай keyword-подбор');
+  });
+
   it('keeps LLM previous-selection scope from introducing new catalogue products', async () => {
     const currentMain = productWithSpecs('current-main', ru('Генератор бензиновый SUMEC SU4500i 4.5 kW'), 82000, 'https://example.test/current-main/', {
       'Номинальная мощность': '4.5 кВт',
@@ -1100,7 +1254,7 @@ describe('recommendation ranking', () => {
     expect(slice?.products.map((item) => item.id)).toEqual(['lf80lat']);
   });
 
-  it('aligns cards with the concrete model named in the final answer', () => {
+  it('does not mutate final cards when the final answer mentions another valid candidate', () => {
     const message = 'need benzin generator 5-6 kw';
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
     const products = [
@@ -1163,9 +1317,82 @@ describe('recommendation ranking', () => {
       } as any
     );
 
-    expect(result.cards[0].id).toBe('b');
-    expect(result.diagnostics.addedCardIds).toEqual(['b']);
-    expect(result.diagnostics.firstCardAligned).toBe(true);
+    expect(result.cards.map((card) => card.id)).toEqual(['a']);
+    expect(result.diagnostics.mentionedProductIds).toEqual(['b']);
+    expect(result.diagnostics.outsideFinalCardIds).toEqual(['b']);
+    expect(result.diagnostics.addedCardIds).toEqual([]);
+    expect(result.diagnostics.reordered).toBe(false);
+    expect(result.diagnostics.firstCardAligned).toBe(false);
+  });
+
+  it('repairs answer text instead of changing final cards when a non-final product is mentioned', () => {
+    const message = 'need benzin generator 5-6 kw';
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
+    const products = [
+      product('a', 'Generator benzin Alpha 5.5 kw', 55000, 'https://example.test/a'),
+      product('b', 'Generator benzin Bravo 6.0 kw', 65000, 'https://example.test/b')
+    ];
+    const cards = assistantTestHooks.cardsFromPlan([products[0]], state, message, {
+      action: 'recommend_products',
+      catalogSearchQuery: message,
+      selectedProductIds: [],
+      needsWebSearch: false,
+      missingInformation: [],
+      answerGuidance: ''
+    } as any);
+    const plan = {
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'auto',
+      contextScope: 'activeNeed',
+      searchScope: 'focusedNeed',
+      catalogSearchQuery: message,
+      selectedProductIds: [],
+      requiredProductTraits: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'unknown',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        nominalPowerKwMin: 5,
+        nominalPowerKwMax: 6,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: ''
+      },
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        compatibilityTargetProduct: '',
+        mustHaveTraits: [],
+        niceToHaveTraits: [],
+        excludedClasses: [],
+        brandConstraint: '',
+        exactModelConstraint: '',
+        isAccessoryFollowUp: false,
+        selectionConfidence: 0.9,
+        shouldShowCards: true,
+        cardDisplayMode: 'exact_matches'
+      },
+      needsWebSearch: false,
+      missingInformation: [],
+      answerGuidance: ''
+    } as any;
+
+    const repaired = assistantTestHooks.repairAnswerForFinalCards(
+      'Best option here is Generator benzin Bravo 6.0 kw.',
+      cards,
+      products,
+      state,
+      message,
+      plan
+    );
+
+    expect(repaired).toContain('Generator benzin Alpha 5.5 kw');
+    expect(repaired).not.toContain('Generator benzin Bravo 6.0 kw');
   });
 
   it('does not expose uncarded candidates to product recommendation answer context', () => {
@@ -1215,7 +1442,7 @@ describe('recommendation ranking', () => {
     expect(products.map((item) => item.id)).toEqual(['fact']);
   });
 
-  it('forces cards for reliable structured catalog selections even when planner made the turn text-only', () => {
+  it('does not force cards for reliable structured catalog selections when planner made the turn text-only', () => {
     const state = mergeProductSelectionState(emptyNeedState().selectionState, {
       targetProductClass: 'generator',
       hardConstraints: {
@@ -1249,7 +1476,7 @@ describe('recommendation ranking', () => {
       'show all suitable generator options for this load',
       plan,
       result as any
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it('uses normalized selection constraints for structured card slices instead of stale planner traits', () => {
@@ -1431,6 +1658,58 @@ describe('recommendation ranking', () => {
       answerMode: 'short',
       needsWebSearch: false
     })).toBe(false);
+  });
+
+  it('routes shown-card main/backup follow-ups back to product cards, not current-lineup fact checks', () => {
+    const message = ru('\\u0412\\u044b\\u0431\\u0435\\u0440\\u0438\\u0442\\u0435 \\u0438\\u0437 \\u044d\\u0442\\u0438\\u0445 \\u043a\\u0430\\u0440\\u0442\\u043e\\u0447\\u0435\\u043a \\u043e\\u0434\\u0438\\u043d \\u043e\\u0441\\u043d\\u043e\\u0432\\u043d\\u043e\\u0439 \\u0432\\u0430\\u0440\\u0438\\u0430\\u043d\\u0442 \\u0438 \\u043e\\u0434\\u0438\\u043d \\u0437\\u0430\\u043f\\u0430\\u0441\\u043d\\u043e\\u0439, \\u043e\\u0441\\u0442\\u0430\\u043b\\u044c\\u043d\\u044b\\u0435 \\u043f\\u0443\\u0441\\u0442\\u044c \\u0431\\u0443\\u0434\\u0443\\u0442 \\u0432 \\u041f\\u043e\\u043a\\u0430\\u0437\\u0430\\u0442\\u044c \\u0435\\u0449\\u0435.');
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'unknown',
+      cardPolicy: 'auto',
+      selectedProductIds: [],
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        shouldShowCards: false
+      }
+    });
+    const state = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 6,
+        exactModelTokens: [],
+        mustHaveTraits: [],
+        excludedClasses: []
+      },
+      confidence: 0.86
+    });
+    const result = {
+      matchedProducts: [product('g1', 'Generator gasoline 5 kW', 50_000, 'https://example.test/g1')],
+      state,
+      confidence: 0.86
+    } as any;
+
+    expect(assistantTestHooks.isProductCardSelectionFollowUp(message)).toBe(true);
+    expect(assistantTestHooks.shouldUseCurrentLineupStyle(message, plan)).toBe(false);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(true);
+  });
+
+  it('does not invent random cards when a shown-card follow-up has lost selection context', () => {
+    const message = ru('\\u0412\\u044b\\u0431\\u0435\\u0440\\u0438\\u0442\\u0435 \\u0438\\u0437 \\u044d\\u0442\\u0438\\u0445 \\u043a\\u0430\\u0440\\u0442\\u043e\\u0447\\u0435\\u043a \\u043e\\u0434\\u0438\\u043d \\u043e\\u0441\\u043d\\u043e\\u0432\\u043d\\u043e\\u0439 \\u0438 \\u043e\\u0434\\u0438\\u043d \\u0437\\u0430\\u043f\\u0430\\u0441\\u043d\\u043e\\u0439.');
+    const result = assistantTestHooks.selectCardsFromPlan([
+      product('oil', 'Engine oil 10W-40', 640, 'https://example.test/oil'),
+      product('disc', 'Diamond blade 110 mm', 713, 'https://example.test/disc')
+    ], emptyNeedState(), message, baseTurnPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts'
+    }));
+
+    expect(result.cards).toHaveLength(0);
+    expect(result.diagnostics.fallbackReason).toBe('card_followup_without_previous_selection');
   });
 
   it('does not let text fallback override a structured planner product intent', () => {
@@ -3075,6 +3354,18 @@ describe('recommendation ranking', () => {
 
     expect(repaired).toContain('около 4 кВт');
     expect(repaired).toContain('от 4 кВт');
+
+    const repairedClass = assistantTestHooks.repairGeneratorLoadMinimumText(ru('\\u041f\\u043e \\u0432\\u0430\\u0448\\u0435\\u0439 \\u043d\\u0430\\u0433\\u0440\\u0443\\u0437\\u043a\\u0435 \\u044f \\u0431\\u044b \\u0441\\u043c\\u043e\\u0442\\u0440\\u0435\\u043b \\u043d\\u0430 \\u043a\\u043b\\u0430\\u0441\\u0441 **5 \\u043a\\u0412\\u0442 \\u043d\\u043e\\u043c\\u0438\\u043d\\u0430\\u043b / 6+ \\u043a\\u0412\\u0442 \\u043c\\u0430\\u043a\\u0441\\u0438\\u043c\\u0443\\u043c**.'), {
+      items: [],
+      totalRunningKw: 1.6,
+      requiredStartingKw: 3.8,
+      requiredNominalKw: 4,
+      simultaneousStarting: true,
+      calculation: '',
+      confidence: 0.82
+    });
+    expect(repairedClass).toContain('4 кВт');
+    expect(repairedClass).not.toContain('5 кВт номинал / 6+');
   });
 
   it('does not reintroduce reversed power ranges after generator load repair', () => {
@@ -3123,6 +3414,23 @@ describe('recommendation ranking', () => {
     expect(repaired).toContain('минимум: 4 кВт');
     expect(repaired).toContain('SUMEC SU7700E 5 кВт');
     expect(repaired).not.toContain('SUMEC SU7700E 4 кВт');
+  });
+
+  it('does not let answer text call the calculated 4 kW class borderline', () => {
+    const repaired = assistantTestHooks.repairGeneratorLoadMinimumText('Для вашей нагрузки я бы смотрел от 5 кВт номинала. Модели на 4 кВт здесь уже скорее компромисс, а не уверенный выбор.', {
+      items: [],
+      totalRunningKw: 1.6,
+      requiredStartingKw: 3.2,
+      requiredNominalKw: 4,
+      simultaneousStarting: false,
+      calculation: '',
+      confidence: 0.82
+    });
+
+    expect(repaired).toContain('4 кВт по номиналу здесь является расчетным минимумом');
+    expect(repaired).toContain('4 кВт номинала как расчетный минимум');
+    expect(repaired).not.toContain('на грани');
+    expect(repaired).not.toContain('компромисс');
   });
 
   it('does not allow a non-first visible card to be called the first card', () => {
@@ -3304,6 +3612,208 @@ describe('recommendation ranking', () => {
     const result = await assistant.selectProductsForTurn('Need vibroplita under 100000 rub, up to 90 kg, easy to transport.', emptyNeedState(), plan, products);
 
     expect(result.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'mid', 'near-budget']);
+  });
+
+  it('keeps previous-selection cards when fresh optional traits would reject them', () => {
+    const selectedInverter = productWithSpecs(
+      'su4500i',
+      ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 \\u0438\\u043d\\u0432\\u0435\\u0440\\u0442\\u043e\\u0440\\u043d\\u044b\\u0439 SUMEC SU4500i (4,0 \\u043a\\u0412\\u0442)'),
+      69_990,
+      'https://example.test/su4500i',
+      { [ru('\\u0422\\u0438\\u043f')]: ru('\\u0438\\u043d\\u0432\\u0435\\u0440\\u0442\\u043e\\u0440\\u043d\\u044b\\u0439') }
+    );
+    const selectedConventional = productWithSpecs(
+      'su7700',
+      ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 SUMEC SU7700 (5,0 \\u043a\\u0412\\u0442) \\u043e\\u0442\\u043a\\u0440\\u044b\\u0442\\u0430\\u044f \\u0440\\u0430\\u043c\\u0430'),
+      36_500,
+      'https://example.test/su7700',
+      { [ru('\\u041d\\u043e\\u043c\\u0438\\u043d\\u0430\\u043b\\u044c\\u043d\\u0430\\u044f \\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c')]: '5,0 kW' }
+    );
+    const baseSelection = emptyNeedState().selectionState;
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(baseSelection, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          ...baseSelection.hardConstraints,
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          enclosure: 'enclosed',
+          conventionalGenerator: true,
+          provenance: { enclosure: 'planner', conventionalGenerator: 'planner' }
+        }
+      })
+    };
+    const plan = baseTurnPlan({
+      searchScope: 'previousSelectionOnly',
+      selectedProductIds: ['su4500i', 'su7700'],
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        enclosure: 'enclosed',
+        conventionalGenerator: true
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        cardDisplayMode: 'structured_selection'
+      }
+    });
+
+    const result = assistantTestHooks.selectCardsFromPlan(
+      [selectedInverter, selectedConventional] as any,
+      state as any,
+      ru('\\u0418\\u0437 \\u044d\\u0442\\u0438\\u0445 \\u0434\\u0432\\u0443\\u0445 \\u043e\\u0441\\u0442\\u0430\\u0432\\u044c \\u043e\\u0434\\u0438\\u043d \\u043e\\u0441\\u043d\\u043e\\u0432\\u043d\\u043e\\u0439 \\u0438 \\u043e\\u0434\\u0438\\u043d \\u0437\\u0430\\u043f\\u0430\\u0441\\u043d\\u043e\\u0439.'),
+      plan,
+      { cardLimit: 2 }
+    );
+
+    expect(result.cards.map((card: { id: string }) => card.id)).toEqual(['su4500i', 'su7700']);
+    expect(result.diagnostics.selectedRejectedCount).toBe(0);
+  });
+
+  it('does not parse appliance power as the budget ceiling', () => {
+    expect(parseBudgetMax('Нужен генератор: инструмент до 1,5 кВт. Бюджет до 80 тысяч.')).toBe(80_000);
+    expect(parseBudgetMax('Нужен генератор до 1,5 кВт без бюджета.')).toBeUndefined();
+  });
+
+  it('keeps extra suitable cards in payload when only two should be initially visible', () => {
+    const products = Array.from({ length: 12 }, (_, index) =>
+      productWithSpecs(`g${index}`, `Generator gasoline ${4 + index / 10} kW`, 50_000 + index, `https://example.test/catalog/generators/g${index}`, {})
+    );
+    const result = assistantTestHooks.selectCardsFromPlan(
+      products as any,
+      emptyNeedState(),
+      'Подбери один основной генератор и один запасной, остальное можно под Показать еще',
+      baseTurnPlan({
+        requiredProductTraits: {
+          ...baseTurnPlan().requiredProductTraits,
+          productIntent: 'generator',
+          productRole: 'coreProduct'
+        }
+      }),
+      { cardLimit: 50, respectRequestedCardLimit: false }
+    );
+
+    expect(result.cards).toHaveLength(12);
+  });
+
+  it('treats occasional tool use separately in generator load selection', async () => {
+    const fourKw = productWithSpecs('four-kw', 'Генератор бензиновый 4.0 kW', 72_000, 'https://example.test/generators/four', {
+      'Номинальная мощность': '4.0 кВт',
+      'Максимальная мощность': '4.4 кВт'
+    });
+    const fiveKw = productWithSpecs('five-kw', 'Генератор бензиновый 5.0 kW', 79_000, 'https://example.test/generators/five', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const oversized = productWithSpecs('oversized', 'Генератор бензиновый ТСС 7.8 kW', 95_000, 'https://example.test/generators/oversized', {
+      'Номинальная мощность': '7.8 кВт',
+      'Максимальная мощность': '8.0 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([oversized, fiveKw, fourKw] as any) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Нужен бензиновый генератор 220 В для дачи. Одновременно холодильник 300 Вт, обычный поверхностный насос 1 кВт, свет 300 Вт и иногда инструмент до 1,5 кВт. Бюджет до 80 тысяч.',
+      emptyNeedState(),
+      plan,
+      [oversized, fiveKw, fourKw] as any
+    );
+
+    expect(result.state.hardConstraints.budgetMax).toBe(80_000);
+    expect(result.state.loadProfile?.requiredNominalKw).toBe(4);
+    expect(result.state.loadProfile?.items.some((item) => item.kind === 'handheld_tool')).toBe(false);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['four-kw', 'five-kw']);
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('oversized');
+  });
+
+  it('keeps household vibroplate selection in light affordable models when no weight or budget is given', async () => {
+    const heavy = product('heavy', 'Виброплита реверсивная дизельная 900 кг', 2_600_000, 'https://example.test/catalog/vibroplity/heavy/');
+    const mid = product('mid', 'Виброплита прямоходная бензиновая 95 кг', 90_000, 'https://example.test/catalog/vibroplity/mid/');
+    const light = product('light', 'Виброплита прямоходная бензиновая 65 кг', 60_000, 'https://example.test/catalog/vibroplity/light/');
+    const assistant = new AssistantService(undefined as never, new FakeProducts([heavy, mid, light] as any) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Нужна виброплита для дорожек на участке, что взять?',
+      emptyNeedState(),
+      plan,
+      [heavy, mid, light] as any
+    );
+
+    expect(result.state.hardConstraints.weightKgMax).toBe(120);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['light', 'mid']);
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('heavy');
+  });
+
+  it('ignores planner brand constraints for household vibroplates unless the buyer named the brand', async () => {
+    const cheap = brandedProduct('cheap', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u043f\\u0440\\u044f\\u043c\\u043e\\u0445\\u043e\\u0434\\u043d\\u0430\\u044f STEM Techno 50 \\u043a\\u0433'), 'STEM', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'), 35_500, 'https://example.test/catalog/vibroplity/stem/');
+    const expensiveBrand = brandedProduct('husqvarna', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Husqvarna LF 50 LAT 56 \\u043a\\u0433'), 'Husqvarna', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'), 220_000, 'https://example.test/catalog/vibroplity/husqvarna/');
+    const assistant = new AssistantService(undefined as never, new FakeProducts([expensiveBrand, cheap] as any) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'plate',
+        currentProductClass: 'plate',
+        brandConstraint: 'Husqvarna',
+        rankingPreference: 'premium'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      ru('\\u041d\\u0443\\u0436\\u043d\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0434\\u043e\\u0440\\u043e\\u0436\\u0435\\u043a \\u043d\\u0430 \\u0443\\u0447\\u0430\\u0441\\u0442\\u043a\\u0435, \\u0447\\u0442\\u043e \\u0432\\u0437\\u044f\\u0442\\u044c?'),
+      emptyNeedState(),
+      plan,
+      [expensiveBrand, cheap] as any
+    );
+
+    expect(result.state.hardConstraints.brandConstraint).toBeFalsy();
+    expect(result.state.rankingPreference).toBe('cheapest');
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['cheap', 'husqvarna']);
+  });
+
+  it('answers contact handling directly when a handoff turn already contains a contact', () => {
+    const answer = assistantTestHooks.deterministicLeadCollectionAnswer([], null, {
+      hasProvidedContact: true,
+      asksContactHandling: true
+    });
+
+    expect(answer).toContain(ru('\\u041a\\u043e\\u043d\\u0442\\u0430\\u043a\\u0442 \\u0432 \\u0441\\u043e\\u043e\\u0431\\u0449\\u0435\\u043d\\u0438\\u0438 \\u0432\\u0438\\u0436\\u0443'));
+    expect(answer).toContain(ru('\\u0437\\u0430\\u044f\\u0432\\u043a\\u0430 \\u0430\\u0432\\u0442\\u043e\\u043c\\u0430\\u0442\\u0438\\u0447\\u0435\\u0441\\u043a\\u0438 \\u043d\\u0435 \\u0441\\u043e\\u0437\\u0434\\u0430\\u043d\\u0430'));
+    expect(answer).toContain(ru('\\u0437\\u0430\\u043f\\u043e\\u043b\\u043d\\u0438\\u0442\\u0435 \\u0444\\u043e\\u0440\\u043c\\u0443'));
+  });
+
+  it('does not force the lead form after an automatic chat lead is created', () => {
+    const answer = assistantTestHooks.deterministicLeadCollectionAnswer([], null, {
+      hasProvidedContact: true,
+      asksContactHandling: true,
+      autoLead: { created: true, emailStatus: 'sent_email' }
+    });
+
+    expect(answer).toContain('заявку сформировал');
+    expect(answer).toContain('кратким содержанием диалога');
+    expect(answer).not.toContain('заполните форму');
   });
 
   it('uses web verification for technical model comparisons with unverified specs', () => {

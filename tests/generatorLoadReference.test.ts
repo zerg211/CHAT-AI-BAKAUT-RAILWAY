@@ -34,14 +34,26 @@ describe('generator load reference table', () => {
   });
 
   it('classifies unknown handheld tools into cautious estimated electrical load items', () => {
-    const detections = classifyGeneratorLoadText('Нужен генератор: свет и иногда болгарка или дрель, мощность не знаю');
+    const detections = classifyGeneratorLoadText('Нужен генератор: свет и болгарка или дрель, мощность не знаю');
     expect(detections.map((item) => item.reference.id)).toEqual(expect.arrayContaining(['angle_grinder', 'handheld_drill', 'lighting_led']));
 
-    const items = generatorReferenceLoadItemsFromText('Нужен генератор: свет и иногда болгарка или дрель, мощность не знаю');
+    const items = generatorReferenceLoadItemsFromText('Нужен генератор: свет и болгарка или дрель, мощность не знаю');
     expect(items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'handheld_tool', name: 'ручной электроинструмент', runningKw: 1.5, startingKw: 3, source: 'estimated_average' }),
       expect.objectContaining({ kind: 'lighting', name: 'свет', runningKw: 0.5, startingKw: 0.5, source: 'estimated_average' })
     ]));
+  });
+
+  it('keeps occasional handheld tools out of the simultaneous active load', () => {
+    const text = 'Нужен генератор: свет и иногда болгарка или дрель, мощность не знаю';
+    const detections = classifyGeneratorLoadText(text);
+    expect(detections.filter((item) => ['angle_grinder', 'handheld_drill'].includes(item.reference.id)).every((item) => item.role === 'staged')).toBe(true);
+
+    const items = generatorReferenceLoadItemsFromText(text);
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'lighting', name: 'свет', runningKw: 0.5, startingKw: 0.5, source: 'estimated_average' })
+    ]));
+    expect(items.some((item) => item.kind === 'handheld_tool')).toBe(false);
   });
 
   it('does not invent power for fully unknown/high-risk named equipment', () => {

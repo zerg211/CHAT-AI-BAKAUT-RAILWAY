@@ -36,6 +36,7 @@ export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, signal?
 }
 
 export async function createEmbedding(text: string, signal?: AbortSignal) {
+  if (config.NODE_ENV === 'test') return null;
   const client = createOpenAIClient();
   if (!client) return null;
   return withRetry(async () => {

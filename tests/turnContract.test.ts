@@ -188,8 +188,7 @@ describe('turn contract resolver', () => {
       [otherProduct] as any,
       needState,
       'Подбери бензиновый генератор 5 кВт до 100 тысяч',
-      basePlan as any,
-      4
+      basePlan as any
     );
 
     expect(result.cards.map((card: { id: string }) => card.id)).toEqual(['main-card']);

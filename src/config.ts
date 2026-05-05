@@ -8,6 +8,31 @@ const optionalSecret = z.preprocess(
   z.string().min(8).optional()
 );
 
+const optionalString = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.string().optional()
+);
+
+const optionalUrl = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.string().url().optional()
+);
+
+const optionalPositiveInt = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.coerce.number().int().positive().optional()
+);
+
+const defaultPositiveInt = (defaultValue: number) => z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.coerce.number().int().positive().default(defaultValue)
+);
+
+const emailHttpMethod = z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.enum(['POST', 'PUT']).default('POST')
+);
+
 const reasoningEffort = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 
 function booleanFlag(defaultValue: boolean) {
@@ -48,16 +73,23 @@ const schema = z.object({
   OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(true),
   CATALOG_BASE_URL: z.string().url().default('https://bakautprof.ru'),
   CATALOG_MAX_PAGES: z.coerce.number().int().positive().default(300),
-  EMAIL_HTTP_URL: z.string().url().optional(),
-  EMAIL_HTTP_METHOD: z.enum(['POST', 'PUT']).default('POST'),
-  EMAIL_HTTP_AUTH_HEADER: z.string().optional(),
-  EMAIL_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
-  EMAIL_FROM: z.string().optional(),
-  LEADS_TO_EMAIL: z.string().optional(),
-  CORS_ORIGINS: z.string().optional()
+  EMAIL_HTTP_URL: optionalUrl,
+  EMAIL_HTTP_METHOD: emailHttpMethod,
+  EMAIL_HTTP_AUTH_HEADER: optionalString,
+  EMAIL_HTTP_TIMEOUT_MS: defaultPositiveInt(10000),
+  EMAIL_FROM: optionalString,
+  LEADS_TO_EMAIL: optionalString,
+  RESEND_API_KEY: optionalSecret,
+  RESEND_FROM: optionalString,
+  RESEND_TIMEOUT_MS: optionalPositiveInt,
+  LEAD_EMAIL_TO: optionalString,
+  LEAD_EMAIL: optionalString,
+  CORS_ORIGINS: optionalString
 });
 
 const parsedConfig = schema.parse(process.env);
+const resendEmailUrl = parsedConfig.RESEND_API_KEY ? 'https://api.resend.com/emails' : undefined;
+const resendAuthHeader = parsedConfig.RESEND_API_KEY ? `Authorization: Bearer ${parsedConfig.RESEND_API_KEY}` : undefined;
 const primaryModel = parsedConfig.OPENAI_ANSWER_MODEL
   || parsedConfig.MODEL
   || parsedConfig.OPENAI_MODEL
@@ -70,6 +102,11 @@ const normalizeReasoningEffort = (value: z.infer<typeof reasoningEffort>) =>
 
 export const config = {
   ...parsedConfig,
+  EMAIL_HTTP_URL: parsedConfig.EMAIL_HTTP_URL || resendEmailUrl,
+  EMAIL_HTTP_AUTH_HEADER: parsedConfig.EMAIL_HTTP_AUTH_HEADER || resendAuthHeader,
+  EMAIL_HTTP_TIMEOUT_MS: parsedConfig.RESEND_TIMEOUT_MS || parsedConfig.EMAIL_HTTP_TIMEOUT_MS,
+  EMAIL_FROM: parsedConfig.EMAIL_FROM || parsedConfig.RESEND_FROM,
+  LEADS_TO_EMAIL: parsedConfig.LEADS_TO_EMAIL || parsedConfig.LEAD_EMAIL_TO || parsedConfig.LEAD_EMAIL,
   OPENAI_MODEL: parsedConfig.OPENAI_MODEL || primaryModel,
   OPENAI_ANSWER_MODEL: primaryModel,
   OPENAI_PLANNER_MODEL: plannerModel,

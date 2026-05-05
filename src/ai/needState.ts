@@ -327,7 +327,9 @@ export function heuristicNeedUpdate(message: string): Partial<CustomerNeedState>
   ];
 
   for (const signal of explicitSignals) {
-    if (signal.re.test(message)) update.explicitNeeds?.push(item(signal.value, message, 0.72));
+    // Lexical extraction is only a low-authority memory hint. The LLM planner owns
+    // product intent and turn action; these hints must not drive catalogue routing.
+    if (signal.re.test(message)) update.explicitNeeds?.push(item(signal.value, message, 0.31));
   }
 
   const implicitSignals = [

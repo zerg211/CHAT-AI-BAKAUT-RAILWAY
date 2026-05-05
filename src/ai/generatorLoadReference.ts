@@ -612,6 +612,21 @@ function mentionRoleForReference(text: string, reference: GeneratorReferenceEntr
   const nonSimultaneous = /(?:не\s+(?:буду|планирую|собираюсь|нужно|надо)?[^.!?;\n]{0,90}(?:одновременно|вместе|разом|сразу)|(?:одновременно|вместе|разом|сразу)[^.!?;\n]{0,90}не\s+(?:буду|планирую|собираюсь|нужно|надо)?|(?:по\s+очереди|отдельно|не\s+в\s+один\s+момент))/iu.test(relevantText);
   if (nonSimultaneous) return { role: 'staged', evidence: relevantText };
 
+  const occasionalUse = matchingClauses.some((clause) => {
+    const matchIndex = reference.aliases
+      .map((alias) => clause.search(alias))
+      .filter((index) => index >= 0)
+      .sort((a, b) => a - b)[0];
+    if (matchIndex === undefined) return false;
+    const before = clause.slice(Math.max(0, matchIndex - 45), matchIndex);
+    const after = clause.slice(matchIndex, Math.min(clause.length, matchIndex + 45));
+    return /(?:иногда|периодически|время\s+от\s+времени|по\s+необходимости|occasionally|sometimes|from\s+time\s+to\s+time|as\s+needed)\s+[\p{L}\d\s-]{0,35}$/iu.test(before) ||
+      /^[\p{L}\d\s-]{0,20}(?:иногда|периодически|occasionally|sometimes|as\s+needed)/iu.test(after);
+  });
+  const explicitlySimultaneous = /(?:одновременно|вместе|разом|сразу)/iu.test(relevantText);
+  const occasionalUseCanStage = !['resistive_light_load', 'small_electronics_load'].includes(reference.loadClass);
+  if (occasionalUseCanStage && occasionalUse && !explicitlySimultaneous) return { role: 'staged', evidence: relevantText };
+
   if (/^(?:а\s+)?(?:что|как|почему|сколько|какой|какая|какие)\b/iu.test(normalized) && !/(?:будет|буду|надо|нужно|добавлю|подключить|запитать|работать)/iu.test(normalized)) {
     return { role: 'context', evidence: relevantText };
   }

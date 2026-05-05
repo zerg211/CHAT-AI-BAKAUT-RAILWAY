@@ -9,5 +9,10 @@ playwright-report/
 logs/
 .agent/
 .claude/
+.hermes/
+.hermes-admin-api-key
+data/
+tmp-*.mjs
+tmp-live-logs/
 *.log
 local-live-tests/

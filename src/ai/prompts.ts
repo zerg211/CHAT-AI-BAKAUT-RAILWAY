@@ -1,4 +1,5 @@
 import type { CatalogPage, CustomerNeedState, DataConflict, Message, Product } from '../shared/types.js';
+import { classifyProduct, isCoreEquipment } from './productClassifier.js';
 
 const FINAL_CONTEXT_HISTORY_LIMIT = 4;
 const FINAL_CONTEXT_HISTORY_CONTENT_LIMIT = 700;
@@ -73,12 +74,21 @@ function compactProduct(product: Product, mode: AssistantContextMode) {
     ? FINAL_CONTEXT_PRODUCT_DESCRIPTION_LIMIT
     : COMPACT_CONTEXT_PRODUCT_DESCRIPTION_LIMIT;
   const description = truncateText(product.description, descriptionLimit);
+  const flags = classifyProduct(product);
+  const roleHint = isCoreEquipment(product)
+    ? 'coreProduct'
+    : flags.isEngineOil || flags.isGeneratorOil
+      ? 'consumable'
+      : flags.isGeneratorAccessory || flags.isPlateAccessory
+        ? 'accessory'
+        : 'unknown';
 
   return {
     id: product.id,
     name: product.name,
     brand: product.brand,
     category: product.category,
+    roleHint,
     price: product.price,
     currency: product.currency,
     sourceUrl: mode === 'expanded' ? product.sourceUrl : undefined,

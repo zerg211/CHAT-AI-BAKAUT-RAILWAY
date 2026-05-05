@@ -2,7 +2,7 @@ import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { streamChatMessage } from './chatStream';
 import { submitLead } from './leadSubmit';
-import type { ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
+import type { CardDisplayOptions, ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
 import './styles.css';
 
 type ChatMessage = {
@@ -12,6 +12,7 @@ type ChatMessage = {
   content: string;
   createdAt: string;
   cards?: ProductCard[];
+  cardDisplay?: CardDisplayOptions;
   leadRequested?: boolean;
   status?: 'sending' | 'done' | 'stopped' | 'error';
   progress?: string;
@@ -364,19 +365,22 @@ async function sendAssistantFeedback(sessionId: string, messageId: string, ratin
 const INITIAL_VISIBLE_CARDS = 7;
 const SHOW_ALL_CARD_COUNT = 10;
 
-function ProductCards({ cards }: { cards: ProductCard[] }) {
+function ProductCards({ cards, initialVisibleCount }: { cards: ProductCard[]; initialVisibleCount?: number }) {
   const [expanded, setExpanded] = useState(false);
   if (!cards.length) return null;
 
-  const initialCount = cards.length <= SHOW_ALL_CARD_COUNT ? cards.length : INITIAL_VISIBLE_CARDS;
+  const initialCount = initialVisibleCount
+    ? Math.max(1, Math.min(cards.length, Math.floor(initialVisibleCount)))
+    : cards.length <= SHOW_ALL_CARD_COUNT ? cards.length : INITIAL_VISIBLE_CARDS;
   const visibleCards = expanded ? cards : cards.slice(0, initialCount);
   const hiddenCount = Math.max(0, cards.length - visibleCards.length);
+  const countLabel = cards.length >= 50 ? `показано ${cards.length}` : `${cards.length} шт.`;
 
   return (
     <div className="product-panel" aria-label="Подобранные товары">
       <div className="product-panel-head">
         <span>Подходящие варианты</span>
-        <span>{cards.length} шт.</span>
+        <span>{countLabel}</span>
       </div>
       <div className="product-grid">
         {visibleCards.map((card) => (
@@ -795,6 +799,7 @@ function AdminApp() {
                 {detail.messages.map((message) => {
                   const metadata = message.metadata as {
                     productCards?: ProductCard[];
+                    cardDisplay?: CardDisplayOptions;
                     usedWebSearch?: boolean;
                     feedback?: { rating?: FeedbackRating; createdAt?: string };
                     cardSelection?: { fallbackSuppressed?: boolean; fallbackReason?: string; rankedCount?: number; selectedRejectedCount?: number };
@@ -815,7 +820,7 @@ function AdminApp() {
                           {typeof metadata.cardSelection?.rankedCount === 'number' ? <span>ranked: {metadata.cardSelection.rankedCount}</span> : null}
                         </div>
                       ) : null}
-                      {metadata.productCards?.length ? <ProductCards cards={metadata.productCards} /> : null}
+                      {metadata.productCards?.length ? <ProductCards cards={metadata.productCards} initialVisibleCount={metadata.cardDisplay?.initialVisibleCount} /> : null}
                     </article>
                   );
                 })}
@@ -975,6 +980,7 @@ function App() {
               content: message.content || payload?.answer || 'Ответ сформирован, но текст не был передан. Повторите запрос.',
               serverId: payload?.assistantMessageId,
               cards: payload?.productCards?.length ? payload.productCards : message.cards,
+              cardDisplay: payload?.cardDisplay ?? payload?.metadata?.cardDisplay ?? message.cardDisplay,
               leadRequested: payload?.leadRequested,
               progress: undefined,
               status: 'done'
@@ -1094,7 +1100,7 @@ function App() {
                 ) : null}
               </div>
             ) : null}
-            {message.cards ? <ProductCards cards={message.cards} /> : null}
+            {message.cards ? <ProductCards cards={message.cards} initialVisibleCount={message.cardDisplay?.initialVisibleCount} /> : null}
           </div>
         ))}
         <div ref={endRef} />

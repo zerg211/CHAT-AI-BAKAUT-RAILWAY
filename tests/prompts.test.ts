@@ -90,6 +90,7 @@ describe('assistant prompt guardrails', () => {
 
     expect(context.contextMode).toBe('compact');
     expect(context.conversationHistory).toHaveLength(4);
+    expect(context.catalogCandidates[0]?.roleHint).toBe('coreProduct');
     expect(context.catalogCandidates[0]?.summary?.length).toBeLessThanOrEqual(223);
     expect(Object.keys(context.catalogCandidates[0]?.specs ?? {})).toHaveLength(7);
     expect(context.knowledgePages[0]?.contentExcerpt).toBeUndefined();
