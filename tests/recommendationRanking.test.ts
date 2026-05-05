@@ -273,6 +273,25 @@ describe('recommendation ranking', () => {
     expect(plan.answerGuidance).toContain('Не делай keyword-подбор');
   });
 
+  it('does not force fallback product cards from voltage-only evidence', async () => {
+    const generator = productWithSpecs('generator-220', 'Generator gasoline 3.0 kW 220 V', 54000, 'https://example.test/generator-220/', {
+      voltage: '220 V'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([generator] as any) as never);
+    const message = '220 V';
+    const plan = assistantTestHooks.fallbackTurnPlan({
+      userMessage: message,
+      needState: emptyNeedState(),
+      baseQuery: message
+    });
+
+    const result = await assistant.selectProductsForTurn(message, emptyNeedState(), plan, [generator] as any);
+
+    expect(result.state.targetProductClass).toBe('unknown');
+    expect(result.state.hardConstraints.singlePhase220).toBe(true);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(false);
+  });
+
   it('keeps LLM previous-selection scope from introducing new catalogue products', async () => {
     const currentMain = productWithSpecs('current-main', ru('Генератор бензиновый SUMEC SU4500i 4.5 kW'), 82000, 'https://example.test/current-main/', {
       'Номинальная мощность': '4.5 кВт',
@@ -1452,7 +1471,11 @@ describe('recommendation ranking', () => {
         nominalPowerKwMax: 7,
         exactModelTokens: [],
         mustHaveTraits: [],
-        excludedClasses: []
+        excludedClasses: [],
+        provenance: {
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
       },
       confidence: 0.8
     });
@@ -3196,6 +3219,46 @@ describe('recommendation ranking', () => {
     expect(withBudget.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'mid', 'near-budget']);
   });
 
+  it('keeps planner-selected best fit ahead of a cheaper tie when no cheap preference was requested', async () => {
+    const products = [
+      productWithSpecs('cheap', 'Generator gasoline Fit 5.0 kW', 50_000, 'https://example.test/catalog/generators/cheap', {}),
+      productWithSpecs('best-fit', 'Generator gasoline Fit 5.0 kW electric start low noise', 90_000, 'https://example.test/catalog/generators/best-fit', {
+        start: 'electric starter'
+      })
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const baseHardConstraints: ProductSelectionCriteria = {
+      productIntent: 'generator',
+      productRole: 'coreProduct',
+      nominalPowerKwMin: 5,
+      nominalPowerKwMax: 6,
+      exactModelTokens: [],
+      mustHaveTraits: [],
+      excludedClasses: []
+    };
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: baseHardConstraints,
+        confidence: 0.8
+      })
+    };
+    const plan = baseTurnPlan({
+      selectedProductIds: ['best-fit'],
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('show suitable generator options', state, plan, products);
+
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['best-fit', 'cheap']);
+  });
+
   it('enforces LLM-planned hard traits against planner-selected cards', async () => {
     const products = [
       productWithSpecs('diesel', 'Генератор дизельный ENERGO ED5.0/230-KL (4,5 кВт)', 203_111, 'https://example.test/catalog/dizelnye_generatory/ed5-kl/', {}),
@@ -3239,7 +3302,7 @@ describe('recommendation ranking', () => {
     const cards = assistantTestHooks.cardsFromPlan(products, { ...state, selectionState: result.state }, message, plan);
 
     expect(result.state.hardConstraints.fuel).toBe('gasoline');
-    expect(result.matchedProducts.map((item) => item.id)).toEqual(['honda4000', 'honda5000']);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['honda5000', 'honda4000']);
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('diesel');
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('manual');
     expect(cards.map((item) => item.id)).not.toContain('diesel');
@@ -3760,6 +3823,74 @@ describe('recommendation ranking', () => {
     expect(result.state.hardConstraints.weightKgMax).toBe(120);
     expect(result.matchedProducts.map((item) => item.id)).toEqual(['light', 'mid']);
     expect(result.matchedProducts.map((item) => item.id)).not.toContain('heavy');
+  });
+
+  it('resets stale generator load when the buyer switches to a vibroplate need', async () => {
+    const plate = product('plate', 'Виброплита прямоходная бензиновая 80 кг', 75_000, 'https://example.test/catalog/vibroplity/plate/');
+    const generator = productWithSpecs('generator', 'Generator gasoline electric start 3.0 kW', 54_000, 'https://example.test/catalog/generators/generator/', {});
+    const assistant = new AssistantService(undefined as never, new FakeProducts([generator, plate] as any) as never);
+    const previousSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      compatibilityTargetProduct: { kind: 'boiler', evidence: 'котел 150 Вт' },
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 2,
+        nominalPowerKwMax: 3.5,
+        maxPowerKwMin: 1.9,
+        provenance: {
+          nominalPowerKwMin: 'inferred_from_load',
+          nominalPowerKwMax: 'inferred_from_load',
+          maxPowerKwMin: 'inferred_from_load'
+        }
+      },
+      loadProfile: {
+        items: [{
+          kind: 'boiler',
+          name: 'котел',
+          count: 1,
+          runningKw: 0.15,
+          startingKw: 0.15,
+          source: 'explicit_user',
+          evidence: 'котел 150 Вт'
+        }],
+        totalRunningKw: 0.15,
+        requiredNominalKw: 2,
+        requiredStartingKw: 0.15,
+        simultaneousStarting: false
+      }
+    });
+    const state = { ...emptyNeedState(), selectionState: previousSelection };
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'unknown',
+        productRole: 'unknown'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Теперь нужна виброплита для дорожки: щебень и песок, 35 квадратов, проходы узкие.',
+      state,
+      plan,
+      [generator, plate] as any
+    );
+
+    expect(result.state.targetProductClass).toBe('plate');
+    expect(result.state.hardConstraints.productIntent).toBe('plate');
+    expect(result.state.loadProfile).toBeUndefined();
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['plate']);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      'Теперь нужна виброплита для дорожки: щебень и песок, 35 квадратов, проходы узкие.',
+      assistantTestHooks.fallbackTurnPlan({
+        userMessage: 'Теперь нужна виброплита для дорожки: щебень и песок, 35 квадратов, проходы узкие.',
+        needState: state,
+        baseQuery: ''
+      }),
+      result
+    )).toBe(true);
   });
 
   it('ignores planner brand constraints for household vibroplates unless the buyer named the brand', async () => {

@@ -113,7 +113,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
     } catch (error) {
       const message = controller.signal.aborted
         ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
-        : error instanceof Error ? error.message : String(error);
+        : 'Сейчас не удалось надежно сформировать ответ. Повторите запрос или оставьте контакты в форме — менеджер БАКАУТ продолжит консультацию.';
+      if (!controller.signal.aborted) {
+        app.log.warn({ sessionId: params.id, error: error instanceof Error ? error.message : String(error) }, 'chat generation failed');
+      }
       send('error', { error: message });
     } finally {
       if (statusTimer) clearInterval(statusTimer);

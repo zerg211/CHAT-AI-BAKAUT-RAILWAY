@@ -5,7 +5,7 @@ import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, Cust
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
-import { emptyNeedState, emptyProductSelectionState, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
+import { emptyNeedState, emptyProductSelectionState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 import {
   fromEscaped, weightRegex, powerRegex, powerRangeRegex, budgetMaxRegex,
   plateTerms, generatorTerms, rammerTerms, cutterTerms, diamondBladeTerms,
@@ -63,6 +63,39 @@ interface GenerateAnswerInput {
   userMessage: string;
   onDelta?: (text: string) => void | Promise<void>;
   signal?: AbortSignal;
+}
+
+type AiFallbackDiagnostic = {
+  used: boolean;
+  reason?: string;
+};
+
+type AiGenerationDiagnostics = {
+  needExtractionFallback: AiFallbackDiagnostic;
+  turnPlanningFallback: AiFallbackDiagnostic;
+  answerGenerationFallback: AiFallbackDiagnostic;
+};
+
+type AiFallbackStage = keyof AiGenerationDiagnostics;
+
+function emptyAiGenerationDiagnostics(): AiGenerationDiagnostics {
+  return {
+    needExtractionFallback: { used: false },
+    turnPlanningFallback: { used: false },
+    answerGenerationFallback: { used: false }
+  };
+}
+
+function aiFailureReason(error: unknown, fallback = 'unknown_error') {
+  if (typeof error === 'string') return error;
+  const details = safeError(error);
+  return details.code || details.message || (details.status ? `status_${details.status}` : fallback);
+}
+
+function markAiFallback(diagnostics: AiGenerationDiagnostics | undefined, stage: AiFallbackStage, error: unknown, fallback?: string) {
+  const entry = { used: true, reason: aiFailureReason(error, fallback) };
+  if (diagnostics) diagnostics[stage] = entry;
+  return entry;
 }
 
 type WebCitation = {
@@ -1437,14 +1470,35 @@ function planAllowsCatalogSelectionOverride(plan: AssistantTurnPlan) {
 }
 
 function shouldForceStructuredSelectionCards(userMessage: string, plan: AssistantTurnPlan, result: ProductSelectionResult) {
+  const latestIntent = inferProductIntent(userMessage);
+  const fallbackPlanner = /Служебный планировщик/u.test(plan.answerGuidance);
+  const explicitLatestIntent = fallbackPlanner && latestIntent !== 'unknown' && latestIntent === result.state.targetProductClass;
+  const fallbackGroundedSelection = fallbackPlanner &&
+    (explicitLatestIntent || hasUserGroundedSelectionEvidence(result.state)) &&
+    (result.state.hardConstraints.productIntent !== 'generator' || hasReliableGeneratorSelectionBasis(result.state));
   return result.matchedProducts.length > 0 &&
-    (planAllowsCatalogSelectionOverride(plan) || isProductCardSelectionFollowUp(userMessage)) &&
+    (planAllowsCatalogSelectionOverride(plan) || isProductCardSelectionFollowUp(userMessage) || fallbackGroundedSelection) &&
     hasReliableGeneratorSelectionBasis(result.state) &&
     !hasEstimatedPumpLoad(result.state) &&
     result.confidence >= 0.55 &&
     !isLeadPlan(plan) &&
     !shouldUseCurrentLineupStyle(userMessage, plan) &&
     !shouldUseDetailedFactStyle(userMessage, plan, 0);
+}
+
+function hasUserGroundedSelectionEvidence(state: ProductSelectionState) {
+  const activeIntent = state.targetProductClass !== 'unknown'
+    ? state.targetProductClass
+    : state.hardConstraints.productIntent;
+  if (activeIntent === 'unknown') return false;
+  const provenance = state.hardConstraints.provenance ?? {};
+  const groundedConstraint = Object.entries(provenance).some(([key, value]) =>
+    key !== 'singlePhase220' &&
+    (value === 'explicit_user' || value === 'inferred_from_load' || value === 'previous_selection')
+  );
+  return groundedConstraint ||
+    Boolean(state.loadProfile?.requiredNominalKw) ||
+    Boolean(state.hardConstraints.exactModelTokens.length || state.hardConstraints.exactModelConstraint);
 }
 
 function fallbackDetectPurchaseIntent(text: string) {
@@ -1861,9 +1915,18 @@ function deterministicCatalogSliceAnswer(slice: StructuredCatalogSlice, cards: P
     });
     const intro = `В каталоге по диапазону ${range} нашлось ${slice.totalMatched} подходящ${slice.totalMatched === 1 ? 'ая позиция' : 'их позиций'}.`;
     const list = names.length ? `Показываю ${names.length}: ${names.join('; ')}.` : '';
-    const tail = slice.totalMatched > MAX_PRODUCT_CARDS
-      ? 'Остальные подходящие варианты оставляю за кнопкой "Показать еще". Чтобы сузить выбор, уточните: нужна прямоходная плита для небольших работ или реверсивная для более плотного грунта и объема?'
-      : 'Чтобы точнее выбрать из них, уточните: чаще будете работать по песку/щебню или по асфальту?';
+    const productIntent = slice.constraints.productIntent;
+    const tail = productIntent === 'generator'
+      ? slice.totalMatched > visible.length
+        ? 'Остальные подходящие варианты оставляю за кнопкой "Показать еще". Для финального выбора по генератору уточните, что важнее: запас мощности, тип запуска, шум или цена.'
+        : 'Для финального выбора по генератору уточните, есть ли жесткие требования по запуску, шуму, весу и запасу мощности.'
+      : productIntent === 'plate'
+        ? slice.totalMatched > MAX_PRODUCT_CARDS
+          ? 'Остальные подходящие варианты оставляю за кнопкой "Показать еще". Чтобы сузить выбор, уточните: нужна прямоходная плита для небольших работ или реверсивная для более плотного грунта и объема?'
+          : 'Чтобы точнее выбрать из них, уточните: чаще будете работать по песку/щебню или по асфальту?'
+        : slice.totalMatched > MAX_PRODUCT_CARDS
+          ? 'Остальные подходящие варианты оставляю за кнопкой "Показать еще".'
+          : 'Чтобы точнее выбрать из них, уточните главное ограничение: цена, габариты или режим работы?';
     return [intro, list, tail].filter(Boolean).join('\n\n');
   }
 
@@ -1924,9 +1987,10 @@ function uniqueList(values: Array<string | undefined | null>, limit: number) {
 function productIntentFromSelection(state: ProductSelectionState, plan: AssistantTurnPlan, profile: ProductFitProfile): ProductIntent {
   if (plan.selectionState.targetProductClass !== 'unknown') return plan.selectionState.targetProductClass;
   if (plan.requiredProductTraits.productIntent !== 'unknown') return plan.requiredProductTraits.productIntent;
+  if (profile.intent !== 'unknown') return profile.intent;
   if (state.targetProductClass !== 'unknown') return state.targetProductClass as ProductIntent;
   if (state.hardConstraints.productIntent !== 'unknown') return state.hardConstraints.productIntent as ProductIntent;
-  return profile.intent;
+  return 'unknown';
 }
 
 function rankingPreferenceFromText(text: string): ProductRankingPreference | undefined {
@@ -2383,12 +2447,14 @@ function explicitCriteriaFromTurn(
       hard.provenance!.budgetMax = 'explicit_user';
     }
   }
-  const compatibilityTarget = mergeCompatibilityTarget(current.compatibilityTargetProduct, compatibilityTargetFromText(userMessage));
+  const compatibilityTarget = targetProductClass === 'generator'
+    ? mergeCompatibilityTarget(current.compatibilityTargetProduct, compatibilityTargetFromText(userMessage))
+    : undefined;
   const loadProfile = targetProductClass === 'generator'
     ? generatorLoadProfileFromText(userMessage, current.loadProfile, compatibilityTarget)
     : undefined;
   const loadProfileOverridesPlannerPower = Boolean(loadProfile?.requiredNominalKw && !hasExplicitGeneratorPowerRequest(userMessage));
-  const plannerPower = !loadProfileOverridesPlannerPower && (
+  const plannerPower = targetProductClass === 'generator' && !loadProfileOverridesPlannerPower && (
     plannerTraits.nominalPowerKwMin ||
     plannerTraits.nominalPowerKwMax ||
     plannerTraits.maxPowerKwMin ||
@@ -2402,9 +2468,9 @@ function explicitCriteriaFromTurn(
         source: 'planner' as const
       }
     : undefined;
-  const desiredPower = !plannerPower && loadProfile?.requiredNominalKw
+  const desiredPower = targetProductClass === 'generator' && !plannerPower && loadProfile?.requiredNominalKw
     ? { min: loadProfile.requiredNominalKw, max: Math.max(loadProfile.requiredNominalKw + 1.5, loadProfile.requiredNominalKw), source: 'inferred_from_load' as const }
-    : !plannerPower ? activePowerFromLoadText(userMessage) ?? (
+    : targetProductClass === 'generator' && !plannerPower ? activePowerFromLoadText(userMessage) ?? (
       current.compatibilityTargetProduct?.kind && hasExplicitPowerText(userMessage)
         ? (() => {
             const kw = singlePowerKwFromText(userMessage);
@@ -2707,7 +2773,7 @@ function sortSelectionProducts(
       const aWithin = aPrice > 0 && aPrice <= budgetMax;
       const bWithin = bPrice > 0 && bPrice <= budgetMax;
       if (aWithin !== bWithin) return aWithin ? -1 : 1;
-      if (aWithin && bWithin && aPrice !== bPrice && preference !== 'premium') return aPrice - bPrice;
+      if (aWithin && bWithin && aPrice !== bPrice && preference === 'cheapest') return aPrice - bPrice;
     }
     if (preference === 'cheapest') {
       const price = Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
@@ -2715,10 +2781,6 @@ function sortSelectionProducts(
     }
     if (preference === 'premium') {
       const price = Number(b.product.price ?? -1) - Number(a.product.price ?? -1);
-      if (price !== 0) return price;
-    }
-    if (!preference) {
-      const price = Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
       if (price !== 0) return price;
     }
     const score = b.score - a.score;
@@ -2910,6 +2972,59 @@ function repairAnswerCardText(answer: string, cards: ProductCard[], plan: Assist
     return `${prefix}\n\n${clean}`;
   }
   return clean;
+}
+
+function formatKwValue(value?: number | null) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '';
+  const rounded = Math.round(value * 10) / 10;
+  return (Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)).replace('.', ',');
+}
+
+function deterministicAnswerGenerationFallback(input: {
+  cards: ProductCard[];
+  selectionResult: ProductSelectionResult;
+  structuredCatalogSlice: StructuredCatalogSlice | null;
+  finalCards: FinalCardsDecision;
+}) {
+  const catalogAnswer = input.structuredCatalogSlice
+    ? deterministicCatalogSliceAnswer(input.structuredCatalogSlice, input.cards)
+    : '';
+  if (catalogAnswer.trim()) return catalogAnswer;
+
+  const lines: string[] = [];
+  const load = input.selectionResult.state.loadProfile;
+  if (load?.requiredNominalKw) {
+    const nominal = formatKwValue(load.requiredNominalKw);
+    const starting = formatKwValue(load.requiredStartingKw);
+    lines.push(starting
+      ? `По указанной нагрузке ориентир для генератора: от ${nominal} кВт номинальной мощности, пусковая нагрузка около ${starting} кВт.`
+      : `По указанной нагрузке ориентир для генератора: от ${nominal} кВт номинальной мощности.`);
+  }
+
+  if (input.cards.length) {
+    const first = input.cards[0];
+    const priceText = typeof first.price === 'number'
+      ? ` за ${Math.round(first.price).toLocaleString('ru-RU')} ${first.currency ?? 'RUB'}`
+      : '';
+    lines.push(`Основной вариант по текущим критериям — ${first.name}${priceText}.`);
+
+    const visibleAlternativeCount = Math.max(2, input.finalCards.initialVisibleCount);
+    const alternatives = input.cards.slice(1, visibleAlternativeCount).map((card) => card.name).filter(Boolean);
+    if (alternatives.length) lines.push(`Запасной вариант: ${alternatives[0]}.`);
+
+    const hiddenCount = Math.max(0, input.finalCards.hiddenProductIds.length);
+    if (hiddenCount) lines.push(`Еще ${hiddenCount} подходящ${hiddenCount === 1 ? 'ий вариант' : 'их вариантов'} оставил под кнопкой "Показать еще".`);
+
+    const question = input.selectionResult.missingQuestions[0];
+    if (question) lines.push(`Чтобы точнее сузить выбор, уточните: ${question}`);
+    return lines.filter(Boolean).join('\n\n');
+  }
+
+  const question = input.selectionResult.missingQuestions[0];
+  if (question) {
+    return `По текущим данным пока не вижу надежной карточки, которую можно честно рекомендовать. Уточните: ${question}`;
+  }
+  return 'По текущим данным пока не вижу надежной карточки, которую можно честно рекомендовать. Опишите задачу, условия работы и важные ограничения — подберу вариант по каталогу.';
 }
 
 function deterministicFinalCardsAnswer(cards: ProductCard[]) {
@@ -3621,9 +3736,22 @@ export class AssistantService {
     }
   }
 
-  async updateNeedState(current: CustomerNeedState, historySummary: string | null | undefined, userMessage: string, history: Message[], signal?: AbortSignal) {
+  async updateNeedState(
+    current: CustomerNeedState,
+    historySummary: string | null | undefined,
+    userMessage: string,
+    history: Message[],
+    signal?: AbortSignal,
+    diagnostics?: AiGenerationDiagnostics
+  ) {
     const client = createOpenAIClient();
-    if (!client) throw new Error('AI service is unavailable');
+    const fallbackNeedState = (reason: unknown) => {
+      markAiFallback(diagnostics, 'needExtractionFallback', reason, 'need_extraction_failed');
+      const fallback = mergeNeedState(current, heuristicNeedUpdate(userMessage));
+      fallback.lastSummary = fallback.lastSummary || current.lastSummary || summarizeNeedState(fallback);
+      return fallback;
+    };
+    if (!client) return fallbackNeedState('no_openai_client');
 
     try {
       const needExtractionRequest = {
@@ -3717,9 +3845,7 @@ export class AssistantService {
     } catch (error) {
       if (signal?.aborted) throw new Error('AI need extraction aborted');
       console.warn('OpenAI need extraction failed', safeError(error));
-      const fallback = mergeNeedState(current, emptyNeedState());
-      fallback.lastSummary = current.lastSummary || summarizeNeedState(current);
-      return fallback;
+      return fallbackNeedState(error);
     }
   }
 
@@ -3733,9 +3859,13 @@ export class AssistantService {
     historySummary?: string | null;
     baseQuery: string;
     signal?: AbortSignal;
+    diagnostics?: AiGenerationDiagnostics;
   }) {
     const client = createOpenAIClient();
-    if (!client) throw new Error('AI service is unavailable');
+    if (!client) {
+      markAiFallback(input.diagnostics, 'turnPlanningFallback', 'no_openai_client', 'turn_planning_failed');
+      return fallbackTurnPlan(input);
+    }
 
     const deepPlanningReasoning = shouldUseDeepReasoningForPlanning(input.userMessage, input.conflicts);
     const planningProfile = resolveReasoningProfile(
@@ -3799,6 +3929,7 @@ export class AssistantService {
       const parsed = parseJsonObject(response.output_text || '{}', 'turn_planner');
       return coerceTurnPlan(parsed, input.baseQuery, input.userMessage);
     } catch (error) {
+      let finalError: unknown = error;
       if (planningProfile.model !== config.OPENAI_PLANNER_MODEL) {
         try {
           const fallbackResponse: any = await withRetry(
@@ -3813,11 +3944,13 @@ export class AssistantService {
           const parsed = parseJsonObject(fallbackResponse.output_text || '{}', 'turn_planner');
           return coerceTurnPlan(parsed, input.baseQuery, input.userMessage);
         } catch (fallbackError) {
+          finalError = fallbackError;
           console.warn('Deep planner fallback failed', safeError(fallbackError));
         }
       }
       if (input.signal?.aborted) throw new Error('AI turn planning aborted');
       console.warn('OpenAI turn planning failed', safeError(error));
+      markAiFallback(input.diagnostics, 'turnPlanningFallback', finalError, 'turn_planning_failed');
       return fallbackTurnPlan(input);
     }
   }
@@ -4335,14 +4468,14 @@ export class AssistantService {
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
     const consistencyGuard = getSessionGuard(input.sessionId);
     const traceTotal = traceTimer('generateAnswer', input.sessionId);
+    const aiDiagnostics = emptyAiGenerationDiagnostics();
 
     await this.conversations.addMessage({ sessionId: input.sessionId, role: 'user', content: input.userMessage });
     const client = createOpenAIClient();
-    if (!client) throw new Error('AI service is unavailable');
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
     const previousSelectionState = session.needState.selectionState;
-    let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal);
+    let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal, aiDiagnostics);
     if (shouldPreserveSelectionForFollowUp(input.userMessage, previousSelectionState)) {
       needState = {
         ...needState,
@@ -4371,7 +4504,8 @@ export class AssistantService {
       history,
       historySummary: session.historySummary,
       baseQuery,
-      signal: input.signal
+      signal: input.signal,
+      diagnostics: aiDiagnostics
     });
 
     const refinedCandidates = plan.catalogSearchQuery !== baseQuery
@@ -4403,7 +4537,7 @@ export class AssistantService {
     let allCandidates = [...byId.values()];
     const purchasePlan = purchasePlanIfNeeded(plan, allCandidates, history, needState, input.userMessage);
     let effectivePlan = purchasePlan.plan;
-    if (shouldEnrichGeneratorLoadReference(input.userMessage)) {
+    if (client && shouldEnrichGeneratorLoadReference(input.userMessage)) {
       await enrichGeneratorLoadReferenceFromWeb(client, input.userMessage, input.signal)
         .catch((error) => console.warn('Generator load reference enrichment failed', safeError(error)));
     }
@@ -4822,6 +4956,7 @@ export class AssistantService {
           : config.OPENAI_MAX_OUTPUT_TOKENS
     });
     const executeAnswerRequest = async (request: Record<string, unknown>, logStage: string) => {
+      if (!client) throw new Error('AI service is unavailable');
       let localAnswer = '';
       let localCompletedResponse: unknown;
       const stream = await client.responses.create(request, input.signal ? { signal: input.signal } : undefined);
@@ -4852,6 +4987,19 @@ export class AssistantService {
       }
       if (!localAnswer && localCompletedResponse) localAnswer = extractResponseText(localCompletedResponse);
       return { answer: localAnswer, completedResponse: localCompletedResponse };
+    };
+    const useDeterministicAnswerFallback = (error: unknown) => {
+      if (input.signal?.aborted) throw new Error('AI answer generation aborted');
+      const details = safeError(error);
+      markAiFallback(aiDiagnostics, 'answerGenerationFallback', error, 'answer_generation_failed');
+      console.warn('OpenAI answer generation failed; using deterministic catalog fallback', details);
+      answer = deterministicAnswerGenerationFallback({
+        cards,
+        selectionResult,
+        structuredCatalogSlice,
+        finalCards
+      });
+      completedResponse = null;
     };
 
     const answerRequest: Record<string, unknown> = buildAnswerRequest(answerProfile.model, answerProfile.effort);
@@ -4885,12 +5033,10 @@ export class AssistantService {
           completedResponse = result.completedResponse;
         } catch (fallbackError) {
           console.warn('Deep answer fallback failed', safeError(fallbackError));
-          console.warn('OpenAI answer generation failed', safeError(error));
-          throw new Error('AI answer generation failed');
+          useDeterministicAnswerFallback(error);
         }
       } else {
-        console.warn('OpenAI answer generation failed', safeError(error));
-        throw new Error('AI answer generation failed');
+        useDeterministicAnswerFallback(error);
       }
     }
 
@@ -4982,6 +5128,7 @@ export class AssistantService {
         signal: input.signal
       }).catch((error) => console.warn('Verified web fact storage failed', safeError(error)));
     }
+    const answerFallbackMetadata = aiDiagnostics.answerGenerationFallback;
 
     const assistantMessage = await this.conversations.addMessage({
       sessionId: input.sessionId,
@@ -5000,6 +5147,8 @@ export class AssistantService {
         searchScope: effectivePlan.searchScope,
         internalSources: extractUrlCitations(completedResponse).slice(0, 12),
         turnPlan: effectivePlan,
+        aiDiagnostics,
+        answerGenerationFallback: answerFallbackMetadata,
         cardSelection: cardSelection.diagnostics,
         cardContract: cardContract.diagnostics,
         productSelection: finalSelectionMetadata,
@@ -5038,7 +5187,10 @@ export class AssistantService {
       cardCount: cards.length,
       candidateCount: allCandidates.length,
       consistencyWarnings: consistencyWarnings.length,
-      usedWebSearch
+      usedWebSearch,
+      aiFallbackStages: Object.entries(aiDiagnostics)
+        .filter(([, diagnostic]) => diagnostic.used)
+        .map(([stage]) => stage)
     });
     console.log(`[Turn] session=${input.sessionId} duration=${totalDuration}ms cards=${cards.length} lead=${leadTemp.level}(${leadTemp.score})`);
 
@@ -5051,7 +5203,12 @@ export class AssistantService {
       leadRequested: purchasePlan.leadRequested && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
       assistantMessageId: assistantMessage.id,
-      metadata: { selection: finalSelectionMetadata, cardDisplay }
+      metadata: {
+        selection: finalSelectionMetadata,
+        cardDisplay,
+        aiDiagnostics,
+        answerGenerationFallback: answerFallbackMetadata
+      }
     };
   }
 

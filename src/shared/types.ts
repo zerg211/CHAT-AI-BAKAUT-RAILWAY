@@ -292,6 +292,17 @@ export interface CardDisplayOptions {
   initialVisibleCount?: number;
 }
 
+export interface AiFallbackDiagnostic {
+  used: boolean;
+  reason?: string;
+}
+
+export interface AiGenerationDiagnostics {
+  needExtractionFallback: AiFallbackDiagnostic;
+  turnPlanningFallback: AiFallbackDiagnostic;
+  answerGenerationFallback: AiFallbackDiagnostic;
+}
+
 export interface ChatResponsePayload {
   answer: string;
   needState: CustomerNeedState;
@@ -304,6 +315,8 @@ export interface ChatResponsePayload {
   metadata?: {
     selection?: ProductSelectionMetadata;
     cardDisplay?: CardDisplayOptions;
+    aiDiagnostics?: AiGenerationDiagnostics;
+    answerGenerationFallback?: AiFallbackDiagnostic;
     [key: string]: unknown;
   };
 }

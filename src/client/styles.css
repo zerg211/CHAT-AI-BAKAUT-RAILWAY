@@ -412,6 +412,32 @@ h1 {
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
 }
 
+.ai-diagnostics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(92%, 720px);
+  margin: 8px 0 0 30px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 185, 80, 0.34);
+  border-radius: var(--r-sm);
+  background: rgba(255, 185, 80, 0.09);
+  color: #ffd08a;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ai-diagnostics strong {
+  color: #ffe1a8;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ai-diagnostics span {
+  overflow-wrap: anywhere;
+}
+
 /* User: compact gradient pill */
 .user .bubble {
   padding: 11px 16px;
@@ -1590,6 +1616,12 @@ h1 {
   color: var(--text-1);
   font-size: 11px;
   font-weight: 600;
+}
+
+.admin-message-flags span.warn {
+  border-color: rgba(255, 185, 80, 0.34);
+  background: rgba(255, 185, 80, 0.09);
+  color: #ffd08a;
 }
 
 /* Placeholders */

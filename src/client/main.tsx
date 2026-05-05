@@ -2,7 +2,7 @@ import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { streamChatMessage } from './chatStream';
 import { submitLead } from './leadSubmit';
-import type { CardDisplayOptions, ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
+import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
 import './styles.css';
 
 type ChatMessage = {
@@ -14,6 +14,7 @@ type ChatMessage = {
   cards?: ProductCard[];
   cardDisplay?: CardDisplayOptions;
   leadRequested?: boolean;
+  metadata?: ChatResponsePayload['metadata'];
   status?: 'sending' | 'done' | 'stopped' | 'error';
   progress?: string;
   feedback?: FeedbackRating;
@@ -45,6 +46,43 @@ function isLoopbackHost(hostname: string) {
 function localAdminBaseUrl() {
   const isApiOrigin = isLoopbackHost(window.location.hostname) && (!window.location.port || window.location.port === '3010');
   return isApiOrigin ? '' : 'http://127.0.0.1:3010';
+}
+
+function shouldShowAiDiagnostics() {
+  return isLoopbackHost(window.location.hostname);
+}
+
+function shortDiagnosticReason(reason: unknown) {
+  const value = String(reason ?? '').trim();
+  if (!value) return 'unknown';
+  return value.length > 140 ? `${value.slice(0, 137)}...` : value;
+}
+
+function aiFallbackLabels(metadata?: ChatResponsePayload['metadata']) {
+  const diagnostics = metadata?.aiDiagnostics;
+  const labels: string[] = [];
+  if (diagnostics?.needExtractionFallback?.used) {
+    labels.push(`need: ${shortDiagnosticReason(diagnostics.needExtractionFallback.reason)}`);
+  }
+  if (diagnostics?.turnPlanningFallback?.used) {
+    labels.push(`planner: ${shortDiagnosticReason(diagnostics.turnPlanningFallback.reason)}`);
+  }
+  const answerFallback = diagnostics?.answerGenerationFallback ?? metadata?.answerGenerationFallback;
+  if (answerFallback?.used) {
+    labels.push(`answer: ${shortDiagnosticReason(answerFallback.reason)}`);
+  }
+  return labels;
+}
+
+function AiDiagnosticsBadge({ metadata }: { metadata?: ChatResponsePayload['metadata'] }) {
+  const labels = aiFallbackLabels(metadata);
+  if (!shouldShowAiDiagnostics() || !labels.length) return null;
+  return (
+    <div className="ai-diagnostics" title="Developer-only diagnostic. Hidden from normal production visitors.">
+      <strong>AI fallback</strong>
+      <span>{labels.join(' | ')}</span>
+    </div>
+  );
 }
 
 const ADMIN_SOURCES: Record<AdminSource, { label: string; baseUrl: string; storageKey: string; hint: string }> = {
@@ -803,7 +841,10 @@ function AdminApp() {
                     usedWebSearch?: boolean;
                     feedback?: { rating?: FeedbackRating; createdAt?: string };
                     cardSelection?: { fallbackSuppressed?: boolean; fallbackReason?: string; rankedCount?: number; selectedRejectedCount?: number };
+                    aiDiagnostics?: NonNullable<ChatResponsePayload['metadata']>['aiDiagnostics'];
+                    answerGenerationFallback?: NonNullable<ChatResponsePayload['metadata']>['answerGenerationFallback'];
                   };
+                  const answerFallback = metadata.aiDiagnostics?.answerGenerationFallback ?? metadata.answerGenerationFallback;
                   return (
                     <article className={`admin-message ${message.role}`} key={message.id}>
                       <div className="message-meta">
@@ -815,6 +856,9 @@ function AdminApp() {
                         <div className="admin-message-flags">
                           <span>web: {metadata.usedWebSearch ? 'да' : 'нет'}</span>
                           <span>fallback: {metadata.cardSelection?.fallbackSuppressed ? 'сработал стоп' : 'нет'}</span>
+                          {answerFallback?.used ? <span className="warn">answer fallback: {shortDiagnosticReason(answerFallback.reason)}</span> : null}
+                          {metadata.aiDiagnostics?.needExtractionFallback?.used ? <span className="warn">need fallback: {shortDiagnosticReason(metadata.aiDiagnostics.needExtractionFallback.reason)}</span> : null}
+                          {metadata.aiDiagnostics?.turnPlanningFallback?.used ? <span className="warn">planner fallback: {shortDiagnosticReason(metadata.aiDiagnostics.turnPlanningFallback.reason)}</span> : null}
                           {metadata.feedback?.rating ? <span>feedback: {metadata.feedback.rating}</span> : null}
                           {metadata.cardSelection?.fallbackReason ? <span>{metadata.cardSelection.fallbackReason}</span> : null}
                           {typeof metadata.cardSelection?.rankedCount === 'number' ? <span>ranked: {metadata.cardSelection.rankedCount}</span> : null}
@@ -982,6 +1026,7 @@ function App() {
               cards: payload?.productCards?.length ? payload.productCards : message.cards,
               cardDisplay: payload?.cardDisplay ?? payload?.metadata?.cardDisplay ?? message.cardDisplay,
               leadRequested: payload?.leadRequested,
+              metadata: payload?.metadata ?? message.metadata,
               progress: undefined,
               status: 'done'
             }
@@ -1070,6 +1115,7 @@ function App() {
                 </span>
               ) : null)}
             </div>
+            {message.role === 'assistant' ? <AiDiagnosticsBadge metadata={message.metadata} /> : null}
             {message.role === 'user' ? (
               <div className="message-actions">
                 <button type="button" onClick={() => editMessage(message.content)} disabled={busy}>
