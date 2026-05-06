@@ -27,7 +27,7 @@ describe('app', () => {
     expect(response.body).toContain('/widget?pageUrl=');
     expect(response.body).toContain('bakaut-ai-open');
     expect(response.body).toContain("sizeAtLeast(data.width, '640px', 640)");
-    expect(response.body).toContain("sizeAtLeast(data.height, '760px', 760)");
+    expect(response.body).toContain("sizeAtLeast(data.height, '820px', 820)");
     expect(response.body).toContain("Number(px[1]) < minPx");
   }, 15_000);
 });

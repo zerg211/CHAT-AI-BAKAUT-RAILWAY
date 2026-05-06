@@ -51,7 +51,7 @@ function embedScript(baseUrl: string) {
     return raw || fallback;
   }
   var width = sizeAtLeast(data.width, '640px', 640);
-  var height = sizeAtLeast(data.height, '760px', 760);
+  var height = sizeAtLeast(data.height, '820px', 820);
   function esc(value) {
     return String(value).replace(/[&<>"']/g, function(ch) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
