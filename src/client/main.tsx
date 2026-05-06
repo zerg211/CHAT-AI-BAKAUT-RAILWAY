@@ -41,7 +41,7 @@ type AdminConversationStats = {
   totalMessages: number;
 };
 
-type AdminFilter = 'all' | 'active' | 'withLeads' | 'empty';
+type AdminFilter = 'today' | 'all' | 'active' | 'withLeads' | 'empty';
 type AdminSource = 'local' | 'production';
 
 const PRODUCTION_ADMIN_BASE_URL = 'https://chat-ai-production-3057.up.railway.app';
@@ -167,6 +167,16 @@ function formatDateTime(value?: string | null) {
     hour: '2-digit',
     minute: '2-digit'
   }).format(new Date(value));
+}
+
+function isTodayDate(value?: string | null) {
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const today = new Date();
+  return date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate();
 }
 
 function shortText(value?: string | null, max = 120) {
@@ -565,7 +575,7 @@ function AdminApp() {
   const [detail, setDetail] = useState<AdminConversationDetail | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<AdminFilter>('all');
+  const [filter, setFilter] = useState<AdminFilter>('today');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [pendingDelete, setPendingDelete] = useState<ConversationSession | null>(null);
@@ -702,6 +712,10 @@ function AdminApp() {
     [sessionStats, sessions]
   );
   const emptySessionCount = sessionStats?.emptySessions ?? (sessions.length - sessions.filter((session) => session.messageCount > 0).length);
+  const todaySessionCount = useMemo(
+    () => sessions.filter((session) => session.messageCount > 0 && isTodayDate(session.latestMessageAt)).length,
+    [sessions]
+  );
   const filteredSessions = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return sessions.filter((session) => {
@@ -711,6 +725,7 @@ function AdminApp() {
       } else if (isEmpty) {
         return false;
       }
+      if (filter === 'today' && !isTodayDate(session.latestMessageAt)) return false;
       if (filter === 'active' && session.status !== 'active') return false;
       if (filter === 'withLeads' && !leadSessionIds.has(session.id)) return false;
       if (!normalized) return true;
@@ -787,6 +802,7 @@ function AdminApp() {
               onChange={(event) => setQuery(event.target.value)}
             />
             <div className="admin-filters" aria-label="Фильтры">
+              <button className={filter === 'today' ? 'active' : ''} type="button" onClick={() => setFilter('today')}>Сегодня</button>
               <button className={filter === 'all' ? 'active' : ''} type="button" onClick={() => setFilter('all')}>Диалоги</button>
               <button className={filter === 'active' ? 'active' : ''} type="button" onClick={() => setFilter('active')}>Активные</button>
               <button className={filter === 'withLeads' ? 'active' : ''} type="button" onClick={() => setFilter('withLeads')}>С заявкой</button>
@@ -796,7 +812,7 @@ function AdminApp() {
               Обновить
             </button>
             <p className="admin-count">
-              {currentSource.label}: с общением {mainSessionCount}, пустые {emptySessionCount}, показано {filteredSessions.length}
+              {currentSource.label}: сегодня {todaySessionCount}, с общением {mainSessionCount}, пустые {emptySessionCount}, показано {filteredSessions.length}
             </p>
           </div>
 
@@ -823,7 +839,7 @@ function AdminApp() {
             ))}
             {!filteredSessions.length ? (
               <p className="admin-empty">
-                {filter === 'empty' ? 'Пустых диалогов нет.' : 'Диалоги с общением не найдены.'}
+                {filter === 'empty' ? 'Пустых диалогов нет.' : filter === 'today' ? 'Сегодня диалоги с общением не найдены.' : 'Диалоги с общением не найдены.'}
               </p>
             ) : null}
           </div>
