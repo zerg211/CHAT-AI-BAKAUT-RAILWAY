@@ -44,8 +44,14 @@ function embedScript(baseUrl: string) {
   var managerRole = data.managerRole || 'Менеджер';
   var managerPhoto = data.managerPhoto || '';
   var position = data.position === 'left' ? 'left' : 'right';
-  var width = data.width || '640px';
-  var height = data.height || '760px';
+  function sizeAtLeast(value, fallback, minPx) {
+    var raw = String(value || fallback).trim();
+    var px = raw.match(/^(\\d+(?:\\.\\d+)?)px$/i);
+    if (px && Number(px[1]) < minPx) return minPx + 'px';
+    return raw || fallback;
+  }
+  var width = sizeAtLeast(data.width, '640px', 640);
+  var height = sizeAtLeast(data.height, '760px', 760);
   function esc(value) {
     return String(value).replace(/[&<>"']/g, function(ch) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
