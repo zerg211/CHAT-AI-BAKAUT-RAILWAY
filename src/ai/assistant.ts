@@ -2495,8 +2495,9 @@ function explicitCriteriaFromTurn(
 ) {
   const targetProductClass = productIntentFromSelection(current, plan, profile);
   const plannerTraits = plan.requiredProductTraits;
-  const rankingPreference = rankingPreferenceFromText(userMessage) ??
-    (targetProductClass === 'plate' && isSmallSitePlateNeed(activeText) && !hasBudgetSignal(userMessage) ? 'cheapest' : undefined);
+  const explicitRankingPreference = rankingPreferenceFromText(userMessage);
+  const rankingPreference = explicitRankingPreference ??
+    (targetProductClass !== 'unknown' && !hasBudgetSignal(userMessage) ? 'cheapest' : undefined);
   const rankingOnly = isRankingOnlyFollowUp(userMessage);
   const currentHard = current.activeRequirement ?? current.hardConstraints;
   const exactTokensFromMessage = expandModelTokenAliases(extractModelTokens(userMessage));
@@ -3503,7 +3504,8 @@ function leadContactContextWithAutoLead(userMessage: string, history: Message[],
 function deterministicLeadCollectionAnswer(
   cards: ProductCard[],
   totalPrice?: number | null,
-  contactContext: LeadContactContext = { hasProvidedContact: false, asksContactHandling: false }
+  contactContext: LeadContactContext = { hasProvidedContact: false, asksContactHandling: false },
+  userMessage = ''
 ) {
   const visibleCards = cards.slice(0, Math.max(1, Math.min(2, cards.length)));
   const names = visibleCards.map((card) => card.name).filter(Boolean);
@@ -3514,6 +3516,7 @@ function deterministicLeadCollectionAnswer(
     : 'выбранный вариант';
   const totalText = formatLeadPrice(totalPrice, cards.find((card) => card.currency)?.currency ?? 'RUB');
   const priceText = totalText ? ` Ориентир по сумме: ${totalText}.` : '';
+  const handoffContext = operationalHandoffContext(userMessage, itemsText);
   const contactText = contactContext.autoLead?.created
     ? 'Контакт получил, заявку сформировал и передал менеджеру вместе с кратким содержанием диалога. Менеджер сверит наличие, актуальную цену и доставку перед подтверждением.'
     : contactContext.autoLead?.missing === 'name'
@@ -3522,16 +3525,71 @@ function deterministicLeadCollectionAnswer(
     ? contactContext.asksContactHandling
       ? 'Контакт в сообщении вижу, но отдельная заявка автоматически не создана. Чтобы контакт точно попал в обработку, заполните форму; менеджер сможет сверить вопрос по этому диалогу.'
       : 'Контакт в сообщении вижу, но для надежной передачи менеджеру оставьте его в форме.'
-    : 'Оставьте имя и телефон в форме — специалист подтвердит наличие, актуальную цену и доставку.';
+    : 'Оставьте имя и телефон в форме — перезвоню уже с конкретным ответом про доставку, наличие или цену после проверки.';
   const leadStatusText = contactContext.autoLead?.created
     ? 'Заявку создал как обращение для менеджера; финальные условия менеджер подтвердит после проверки.'
     : 'Заявку уже созданной не считаю: финально её подтвердит менеджер после проверки.';
 
   return [
-    `Зафиксировал для проверки менеджером: ${itemsText}.`,
+    `Здравствуйте, сейчас ${handoffContext.verb} ${handoffContext.responsible} ${handoffContext.summary}.`,
     `${priceText}${contactText}`,
     leadStatusText
   ].join(' ');
+}
+
+function operationalHandoffContext(userMessage: string, fallbackItemsText: string) {
+  const normalized = userMessage.replace(/\s+/g, ' ').trim();
+  const lower = normalized.toLowerCase();
+  const asksDelivery = /доставк|логист/iu.test(lower);
+  const asksStock = /налич|в\s+наличии|на\s+складе/iu.test(lower);
+  const asksPrice = /актуальн\w*\s+цен|финальн\w*\s+цен|точн\w*\s+цен/iu.test(lower);
+  const asksDiscount = /скидк|спецуслов/iu.test(lower);
+  const asksTiming = /срок/iu.test(lower);
+  const destination = extractDeliveryDestination(normalized);
+  const itemFromMessage = extractOperationalItemFromMessage(normalized, destination);
+  const itemText = itemFromMessage || fallbackItemsText;
+  const topics = [
+    asksDelivery ? `стоимость доставки${destination ? ` в ${destination}` : ''}` : '',
+    asksStock ? 'наличие' : '',
+    asksPrice ? 'актуальную цену' : '',
+    asksDiscount ? 'возможные условия по скидке' : '',
+    asksTiming ? 'сроки' : ''
+  ].filter(Boolean);
+  const summary = topics.length
+    ? `${topics.join(', ')} по ${itemText}`
+    : `детали по ${itemText}`;
+  const responsible = asksDelivery && (asksStock || asksPrice || asksDiscount)
+    ? 'у логиста и менеджера'
+    : asksDelivery
+      ? 'у логиста'
+      : 'у менеджера';
+  return {
+    responsible,
+    verb: asksDelivery ? 'уточню' : 'проверю',
+    summary
+  };
+}
+
+function extractDeliveryDestination(text: string) {
+  const match = text.match(/(?:^|\s)(?:в|во|до)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z\s-]{1,80}?(?:край|область|республик[ауи]|район|округ|город|г\.\s*[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z\s-]{1,40}))(?:[,.!?;:]|\s|$)/u);
+  return match?.[1]?.replace(/\s+/g, ' ').trim();
+}
+
+function extractOperationalItemFromMessage(text: string, destination?: string) {
+  let source = text;
+  if (destination) {
+    const destinationIndex = source.toLowerCase().indexOf(destination.toLowerCase());
+    if (destinationIndex >= 0) source = source.slice(destinationIndex + destination.length);
+  }
+  source = source
+    .replace(/^[\s,.;:!?-]+/u, '')
+    .replace(/^(?:по|для|на)\s+/iu, '')
+    .replace(/(?:оставить|оставлю|могу\s+оставить|перезвон|свяжитесь|телефон|номер|контакт).*$/iu, '')
+    .trim();
+  if (source.length < 3) return '';
+  if (!/[А-ЯЁA-Zа-яёa-z]/u.test(source)) return '';
+  if (/^(?:а\s+)?(?:сколько|стоим|услов|есть\s+ли|точно|можно\s+ли)\b/iu.test(source)) return '';
+  return source.slice(0, 140).replace(/\s+/g, ' ').trim();
 }
 
 function resolveTurnContractForPlan(
@@ -4728,7 +4786,7 @@ export class AssistantService {
         : null;
       const leadTotalPrice = fallbackDetectPurchaseIntent(input.userMessage) ? bundleTotalPrice : null;
       const autoLeadResult = await this.createLeadFromChatContact(session, history, cards, input.userMessage, session.needState);
-      const answer = deterministicLeadCollectionAnswer(cards, leadTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult));
+      const answer = deterministicLeadCollectionAnswer(cards, leadTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult), input.userMessage);
       if (answer) await input.onDelta?.(answer);
       const assistantMessage = await this.conversations.addMessage({
         sessionId: input.sessionId,
@@ -5329,7 +5387,7 @@ export class AssistantService {
     }
 
     if (purchasePlan.leadRequested) {
-      answer = deterministicLeadCollectionAnswer(cards, bundleTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult));
+      answer = deterministicLeadCollectionAnswer(cards, bundleTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult), input.userMessage);
     } else try {
       const result = await executeAnswerRequest(answerRequest, 'answer');
       answer = result.answer;

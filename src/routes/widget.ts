@@ -44,8 +44,8 @@ function embedScript(baseUrl: string) {
   var managerRole = data.managerRole || 'Менеджер';
   var managerPhoto = data.managerPhoto || '';
   var position = data.position === 'left' ? 'left' : 'right';
-  var width = data.width || '390px';
-  var height = data.height || '620px';
+  var width = data.width || '640px';
+  var height = data.height || '760px';
   function esc(value) {
     return String(value).replace(/[&<>"']/g, function(ch) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
