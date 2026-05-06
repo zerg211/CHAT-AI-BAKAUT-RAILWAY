@@ -72,8 +72,15 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/admin/conversations', async (request) => {
-    const query = z.object({ limit: z.coerce.number().int().positive().max(500).default(100) }).parse(request.query);
-    return { sessions: await conversations.listSessions(query.limit) };
+    const query = z.object({
+      limit: z.coerce.number().int().positive().max(500).default(100),
+      filter: z.enum(['all', 'withMessages', 'empty']).default('all')
+    }).parse(request.query);
+    const [sessions, stats] = await Promise.all([
+      conversations.listSessions(query.limit, query.filter),
+      conversations.listSessionStats()
+    ]);
+    return { sessions, stats };
   });
 
   app.get('/api/admin/conversations/:id', async (request) => {
