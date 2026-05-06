@@ -209,6 +209,30 @@ export class ConversationRepository {
     return result.rowCount ?? 0;
   }
 
+  async deleteOldEmptyWidgetSessions(maxAgeHours = 24) {
+    const result = await this.db.query(
+      `DELETE FROM conversation_sessions s
+       WHERE s.page_url IS NOT NULL
+         AND s.created_at < now() - ($1 || ' hours')::interval
+         AND NOT EXISTS (
+           SELECT 1 FROM messages m WHERE m.session_id = s.id
+         )`,
+      [maxAgeHours]
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async deleteEmptyNonWidgetSessions() {
+    const result = await this.db.query(
+      `DELETE FROM conversation_sessions s
+       WHERE s.page_url IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM messages m WHERE m.session_id = s.id
+         )`
+    );
+    return result.rowCount ?? 0;
+  }
+
   async updateHistorySummary(sessionId: string, summary: string) {
     const result = await this.db.query(
       `UPDATE conversation_sessions
@@ -299,7 +323,36 @@ export class ConversationRepository {
     return result.rowCount ? mapSession(result.rows[0]) : null;
   }
 
-  async listSessions(limit = 100) {
+  async listSessionStats() {
+    const result = await this.db.query(
+      `WITH message_counts AS (
+         SELECT session_id, count(*) AS message_count
+         FROM messages
+         GROUP BY session_id
+       )
+       SELECT
+         count(*)::int AS total_sessions,
+         count(*) FILTER (WHERE coalesce(message_counts.message_count, 0) > 0)::int AS sessions_with_messages,
+         count(*) FILTER (WHERE coalesce(message_counts.message_count, 0) = 0)::int AS empty_sessions,
+         coalesce((SELECT count(*) FROM messages), 0)::int AS total_messages
+       FROM conversation_sessions s
+       LEFT JOIN message_counts ON message_counts.session_id = s.id`
+    );
+    const row = result.rows[0] ?? {};
+    return {
+      totalSessions: Number(row.total_sessions ?? 0),
+      sessionsWithMessages: Number(row.sessions_with_messages ?? 0),
+      emptySessions: Number(row.empty_sessions ?? 0),
+      totalMessages: Number(row.total_messages ?? 0)
+    };
+  }
+
+  async listSessions(limit = 100, filter: 'all' | 'withMessages' | 'empty' = 'all') {
+    const filterClause = filter === 'withMessages'
+      ? 'WHERE coalesce(message_counts.message_count, 0) > 0'
+      : filter === 'empty'
+        ? 'WHERE coalesce(message_counts.message_count, 0) = 0'
+        : '';
     const result = await this.db.query(
       `WITH latest AS (
          SELECT DISTINCT ON (session_id)
@@ -348,6 +401,7 @@ export class ConversationRepository {
        LEFT JOIN latest_assistant ON latest_assistant.session_id = s.id
        LEFT JOIN message_counts ON message_counts.session_id = s.id
        LEFT JOIN lead_counts ON lead_counts.session_id = s.id
+       ${filterClause}
        ORDER BY coalesce(latest.latest_message_at, s.created_at) DESC, s.conversation_number DESC
        LIMIT $1`,
       [limit]

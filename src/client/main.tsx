@@ -34,6 +34,13 @@ type AdminConversationDetail = {
   messages: Message[];
 };
 
+type AdminConversationStats = {
+  totalSessions: number;
+  sessionsWithMessages: number;
+  emptySessions: number;
+  totalMessages: number;
+};
+
 type AdminFilter = 'all' | 'active' | 'withLeads' | 'empty';
 type AdminSource = 'local' | 'production';
 
@@ -368,13 +375,15 @@ function getPageUrl() {
   return params.get('pageUrl') ?? document.referrer ?? window.location.href;
 }
 
-async function createSession() {
+async function createSession(createIfMissing = false) {
   const existing = sessionStorage.getItem('bakaut_session_id');
   if (existing) {
     const heartbeat = await fetch(`${apiBase}/api/chat/sessions/${existing}/heartbeat`, { method: 'POST' }).catch(() => null);
     if (heartbeat?.ok) return existing;
     sessionStorage.removeItem('bakaut_session_id');
   }
+
+  if (!createIfMissing) return null;
 
   const response = await fetch(`${apiBase}/api/chat/sessions`, {
     method: 'POST',
@@ -551,6 +560,7 @@ function AdminApp() {
   }));
   const [inputToken, setInputToken] = useState(() => storedAdminToken(initialAdminSource()));
   const [sessions, setSessions] = useState<ConversationSummary[]>([]);
+  const [sessionStats, setSessionStats] = useState<AdminConversationStats | null>(null);
   const [selectedId, setSelectedId] = useState('');
   const [detail, setDetail] = useState<AdminConversationDetail | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
@@ -585,6 +595,7 @@ function AdminApp() {
     setTokens((current) => ({ ...current, [source]: '' }));
     setInputToken('');
     setSessions([]);
+    setSessionStats(null);
     setLeads([]);
     setDetail(null);
     setSelectedId('');
@@ -625,23 +636,32 @@ function AdminApp() {
     setError('');
     try {
       const headers = { Authorization: `Bearer ${value}` };
-      const [conversationData, leadData] = await Promise.all([
-        fetch(`${target.baseUrl}/api/admin/conversations?limit=200`, { headers }),
+      const [conversationData, emptyConversationData, leadData] = await Promise.all([
+        fetch(`${target.baseUrl}/api/admin/conversations?limit=200&filter=withMessages`, { headers }),
+        fetch(`${target.baseUrl}/api/admin/conversations?limit=200&filter=empty`, { headers }),
         fetch(`${target.baseUrl}/api/admin/leads?limit=200`, { headers })
       ]);
-      if (conversationData.status === 401 || leadData.status === 401) throw new Error('Неверный пароль администратора');
+      if (conversationData.status === 401 || emptyConversationData.status === 401 || leadData.status === 401) throw new Error('Неверный пароль администратора');
       if (!conversationData.ok) throw new Error(await adminResponseError(conversationData, 'Не удалось загрузить данные'));
       if (!leadData.ok) throw new Error(await adminResponseError(leadData, 'Не удалось загрузить данные'));
-      const conversationsJson = await conversationData.json() as { sessions: ConversationSummary[] };
+      if (!emptyConversationData.ok) throw new Error(await adminResponseError(emptyConversationData, 'Не удалось загрузить пустые диалоги'));
+      const conversationsJson = await conversationData.json() as { sessions: ConversationSummary[]; stats?: AdminConversationStats };
+      const emptyConversationsJson = await emptyConversationData.json() as { sessions: ConversationSummary[]; stats?: AdminConversationStats };
       const leadsJson = await leadData.json() as { leads: Lead[] };
+      const mergedSessions = [
+        ...conversationsJson.sessions,
+        ...emptyConversationsJson.sessions.filter((emptySession) => !conversationsJson.sessions.some((session) => session.id === emptySession.id))
+      ];
       setTokens((current) => ({ ...current, [targetSource]: value }));
       sessionStorage.setItem(target.storageKey, value);
-      setSessions(conversationsJson.sessions);
+      setSessions(mergedSessions);
+      setSessionStats(conversationsJson.stats ?? emptyConversationsJson.stats ?? null);
       setLeads(leadsJson.leads);
       setSelectedId(conversationsJson.sessions.find((session) => session.messageCount > 0)?.id || '');
     } catch (loadError) {
       setError(adminLoadErrorMessage(loadError, targetSource));
       setSessions([]);
+      setSessionStats(null);
       setDetail(null);
     } finally {
       setLoading(false);
@@ -656,6 +676,7 @@ function AdminApp() {
     const nextToken = tokens[source] ?? '';
     setInputToken(nextToken);
     setSessions([]);
+    setSessionStats(null);
     setLeads([]);
     setDetail(null);
     setSelectedId('');
@@ -676,8 +697,11 @@ function AdminApp() {
   }, [selectedId, source, token]);
 
   const leadSessionIds = useMemo(() => new Set(leads.map((lead) => lead.sessionId).filter(Boolean)), [leads]);
-  const mainSessionCount = useMemo(() => sessions.filter((session) => session.messageCount > 0).length, [sessions]);
-  const emptySessionCount = sessions.length - mainSessionCount;
+  const mainSessionCount = useMemo(
+    () => sessionStats?.sessionsWithMessages ?? sessions.filter((session) => session.messageCount > 0).length,
+    [sessionStats, sessions]
+  );
+  const emptySessionCount = sessionStats?.emptySessions ?? (sessions.length - sessions.filter((session) => session.messageCount > 0).length);
   const filteredSessions = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return sessions.filter((session) => {
@@ -982,7 +1006,7 @@ function App() {
   }, [messages, busy]);
 
   async function submitText(text: string, options: { clearInput?: boolean } = { clearInput: true }) {
-    if (!text.trim() || !sessionId || busy) return;
+    if (!text.trim() || busy) return;
     const userText = text.trim();
     if (options.clearInput !== false) setInput('');
     setError('');
@@ -1004,7 +1028,10 @@ function App() {
     ]);
 
     try {
-      const payload = await streamChatMessage(apiBase, sessionId, userText, {
+      const activeSessionId = sessionId ?? await createSession(true);
+      if (!activeSessionId) throw new Error('Не удалось создать сессию чата');
+      if (activeSessionId !== sessionId) setSessionId(activeSessionId);
+      const payload = await streamChatMessage(apiBase, activeSessionId, userText, {
         onDelta: (delta) => {
           setMessages((current) => current.map((message) => (
             message.id === assistantId ? { ...message, content: message.content + delta, progress: undefined } : message
@@ -1121,7 +1148,7 @@ function App() {
                 <button type="button" onClick={() => editMessage(message.content)} disabled={busy}>
                   Исправить
                 </button>
-                <button type="button" onClick={() => submitText(message.content, { clearInput: false })} disabled={busy || !sessionId}>
+                <button type="button" onClick={() => submitText(message.content, { clearInput: false })} disabled={busy}>
                   Спросить снова
                 </button>
               </div>
@@ -1158,7 +1185,7 @@ function App() {
         {isStart ? (
           <div className="quick-actions" aria-label="Быстрые запросы">
             {quickPrompts.map((prompt) => (
-              <button key={prompt} type="button" onClick={() => setInput(prompt)} disabled={!sessionId || busy}>
+              <button key={prompt} type="button" onClick={() => setInput(prompt)} disabled={busy}>
                 {prompt}
               </button>
             ))}
@@ -1173,14 +1200,14 @@ function App() {
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) submit(event);
           }}
-          disabled={!sessionId || busy}
+          disabled={busy}
         />
         {busy ? (
           <button className="stop-button" type="button" onClick={stopGeneration}>
             Остановить
           </button>
         ) : null}
-        <button type="submit" disabled={!sessionId || busy || !input.trim()}>{busy ? '...' : 'Отправить'}</button>
+        <button type="submit" disabled={busy || !input.trim()}>{busy ? '...' : 'Отправить'}</button>
       </form>
 
       <LeadPanel sessionId={sessionId} latestQuestion={latestQuestion} autoOpenKey={leadAutoOpenKey} />

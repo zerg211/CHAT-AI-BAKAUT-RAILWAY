@@ -54,8 +54,12 @@ export async function buildApp() {
 
   const conversations = new ConversationRepository();
   setInterval(() => {
-    conversations.expireInactiveSessions().catch((error: unknown) => {
-      app.log.warn({ error: error instanceof Error ? error.message : String(error) }, 'failed to expire sessions');
+    Promise.all([
+      conversations.expireInactiveSessions(),
+      conversations.deleteOldEmptyWidgetSessions(),
+      conversations.deleteEmptyNonWidgetSessions()
+    ]).catch((error: unknown) => {
+      app.log.warn({ error: error instanceof Error ? error.message : String(error) }, 'failed to maintain sessions');
     });
   }, 60_000).unref();
 

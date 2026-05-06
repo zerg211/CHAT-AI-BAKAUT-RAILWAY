@@ -77,3 +77,42 @@ describe('ConversationRepository.updateAssistantFeedback', () => {
     });
   });
 });
+
+describe('ConversationRepository.deleteOldEmptyWidgetSessions', () => {
+  it('deletes only old widget sessions without messages', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 7, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.deleteOldEmptyWidgetSessions()).resolves.toBe(7);
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('DELETE FROM conversation_sessions'), [24]);
+    expect(query.mock.calls[0][0]).toContain('s.page_url IS NOT NULL');
+    expect(query.mock.calls[0][0]).toContain("s.created_at < now() - ($1 || ' hours')::interval");
+    expect(query.mock.calls[0][0]).toContain('NOT EXISTS');
+    expect(query.mock.calls[0][0]).toContain('FROM messages m WHERE m.session_id = s.id');
+  });
+
+  it('accepts a custom retention window in hours', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.deleteOldEmptyWidgetSessions(48);
+
+    expect(query).toHaveBeenCalledWith(expect.any(String), [48]);
+  });
+});
+
+describe('ConversationRepository.deleteEmptyNonWidgetSessions', () => {
+  it('deletes empty sessions without a widget page url immediately', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 3, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.deleteEmptyNonWidgetSessions()).resolves.toBe(3);
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('DELETE FROM conversation_sessions'));
+    expect(query.mock.calls[0][0]).toContain('s.page_url IS NULL');
+    expect(query.mock.calls[0][0]).toContain('NOT EXISTS');
+    expect(query.mock.calls[0][0]).toContain('FROM messages m WHERE m.session_id = s.id');
+    expect(query.mock.calls[0][0]).not.toContain("created_at < now()");
+  });
+});
