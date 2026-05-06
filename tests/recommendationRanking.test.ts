@@ -1203,6 +1203,38 @@ describe('recommendation ranking', () => {
     expect(result.matchedProducts.map((item) => item.id)).toEqual(['cheap-ok', 'expensive-ok']);
   });
 
+  it('sorts suitable products cheapest-first when no budget is stated', async () => {
+    const cheap = productWithSpecs('cheap-ok', 'Генератор бензиновый 5.0 kW базовый', 61_000, 'https://example.test/cheap-ok/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const expensive = productWithSpecs('expensive-ok', 'Генератор бензиновый 5.0 kW расширенный', 99_000, 'https://example.test/expensive-ok/', {
+      'Номинальная мощность': '5.0 кВт',
+      'Максимальная мощность': '5.5 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([expensive, cheap] as any) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        nominalPowerKwMin: 4.5,
+        nominalPowerKwMax: 5.5
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Нужен бензиновый генератор примерно 5 кВт для дома.',
+      emptyNeedState(),
+      plan,
+      [expensive, cheap] as any
+    );
+
+    expect(result.state.rankingPreference).toBe('cheapest');
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['cheap-ok', 'expensive-ok']);
+  });
+
   it('promotes portable plate compactors for any portability wording, not one fixed phrase', async () => {
     const message = ru('\\u041d\\u0443\\u0436\\u043d\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0434\\u0430\\u0447\\u0438, \\u0431\\u0443\\u0434\\u0443 \\u043e\\u0434\\u0438\\u043d \\u0442\\u0430\\u0441\\u043a\\u0430\\u0442\\u044c \\u0440\\u0443\\u043a\\u0430\\u043c\\u0438, \\u043d\\u0443\\u0436\\u043d\\u0430 \\u043d\\u0435 \\u0442\\u044f\\u0436\\u0435\\u043b\\u0430\\u044f \\u0438 \\u043a\\u043e\\u043c\\u043f\\u0430\\u043a\\u0442\\u043d\\u0430\\u044f');
     const { ranked } = await rank(message, [
@@ -2578,6 +2610,22 @@ describe('recommendation ranking', () => {
     expect(answer).toContain('Заявку уже созданной не считаю');
   });
 
+  it('answers delivery handoff like a manager using the accepted need', () => {
+    const answer = assistantTestHooks.deterministicLeadCollectionAnswer(
+      [],
+      null,
+      { hasProvidedContact: false, asksContactHandling: false },
+      'Подскажите пожалуйста приблизительную стоимость доставки в Краснодарский край... АВР для генератора BISON'
+    );
+
+    expect(answer).toContain('Здравствуйте');
+    expect(answer).toContain('уточню у логиста');
+    expect(answer).toContain('стоимость доставки в Краснодарский край');
+    expect(answer).toContain('АВР для генератора BISON');
+    expect(answer).toContain('Оставьте имя и телефон');
+    expect(answer).toContain('перезвон');
+  });
+
   it('treats buyer contact details after a hot selection as lead handoff instead of reopening catalog', () => {
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate('Нужен генератор для дома 5 кВт'));
     const products = [
@@ -3704,7 +3752,7 @@ describe('recommendation ranking', () => {
     expect(withBudget.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'mid', 'near-budget']);
   });
 
-  it('keeps planner-selected best fit ahead of a cheaper tie when no cheap preference was requested', async () => {
+  it('sorts planner-selected suitable products cheapest-first when no budget was requested', async () => {
     const products = [
       productWithSpecs('cheap', 'Generator gasoline Fit 5.0 kW', 50_000, 'https://example.test/catalog/generators/cheap', {}),
       productWithSpecs('best-fit', 'Generator gasoline Fit 5.0 kW electric start low noise', 90_000, 'https://example.test/catalog/generators/best-fit', {
@@ -3741,7 +3789,7 @@ describe('recommendation ranking', () => {
 
     const result = await assistant.selectProductsForTurn('show suitable generator options', state, plan, products);
 
-    expect(result.visibleProducts.map((item) => item.id)).toEqual(['best-fit', 'cheap']);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['cheap', 'best-fit']);
   });
 
   it('enforces LLM-planned hard traits against planner-selected cards', async () => {
