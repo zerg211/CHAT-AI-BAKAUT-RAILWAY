@@ -1319,12 +1319,12 @@ function productCardPriceRange(cards: ProductCard[]) {
 function answerContextProductsForCards(input: {
   answerNeedsFullCatalogContext: boolean;
   recommendationAnswer: boolean;
-  selectionHasEstimatedPump: boolean;
+  blockEstimatedPumpCards: boolean;
   cards: ProductCard[];
   candidates: Product[];
   cardSourceProducts: Product[];
 }) {
-  if (input.selectionHasEstimatedPump) return [];
+  if (input.blockEstimatedPumpCards) return [];
   if (input.answerNeedsFullCatalogContext && !input.recommendationAnswer) return input.candidates;
   const cardIds = new Set(input.cards.map((card) => card.id));
   if (!cardIds.size) return [];
@@ -1552,7 +1552,7 @@ function shouldForceStructuredSelectionCards(userMessage: string, plan: Assistan
   return result.matchedProducts.length > 0 &&
     (plannerAllowsCards || followUpRequestsCards || fallbackGroundedSelection || selectionResultCanDriveCards(plan, result, userMessage)) &&
     hasReliableGeneratorSelectionBasis(result.state) &&
-    !hasEstimatedPumpLoad(result.state) &&
+    !shouldBlockGeneratorCardsForEstimatedPump(result.state) &&
     result.confidence >= 0.55 &&
     !isLeadPlan(plan) &&
     (catalogShortlistTurn || !shouldUseCurrentLineupStyle(userMessage, plan)) &&
@@ -1579,7 +1579,7 @@ function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSe
     result.matchedProducts.length > 0 &&
     result.confidence >= 0.55 &&
     hasReliableGeneratorSelectionBasis(result.state) &&
-    !hasEstimatedPumpLoad(result.state) &&
+    !shouldBlockGeneratorCardsForEstimatedPump(result.state) &&
     !isLeadPlan(plan) &&
     (catalogShortlistTurn || !shouldUseCurrentLineupStyle(userMessage, plan)) &&
     !shouldUseDetailedFactStyle(userMessage, plan, 0) &&
@@ -2846,10 +2846,27 @@ function powerCriteriaFromSelection(criteria: ProductSelectionCriteria): Generat
 
 function productMeetsCalculatedLoad(product: Product, state: ProductSelectionState) {
   const required = state.loadProfile?.requiredNominalKw;
-  if (!required || state.hardConstraints.productIntent !== 'generator' || !isReliableGeneratorLoadProfile(state.loadProfile)) return true;
+  if (
+    !required ||
+    state.hardConstraints.productIntent !== 'generator' ||
+    (!isReliableGeneratorLoadProfile(state.loadProfile) && !hasPreliminaryGeneratorSelectionBasis(state))
+  ) return true;
   const power = extractGeneratorPowerForHardSelection(product);
   if (power.nominalKw === undefined) return false;
   return power.nominalKw >= required - 0.2 || (power.maxKw !== undefined && power.maxKw >= required + 0.5 && power.nominalKw >= required - 0.7);
+}
+
+function hasPreliminaryGeneratorSelectionBasis(state: ProductSelectionState) {
+  const hard = state.hardConstraints;
+  if (hard.productIntent !== 'generator') return true;
+  const profile = state.loadProfile;
+  if (!profile?.requiredNominalKw || !hasEstimatedPumpLoad(state)) return false;
+  const hasOtherLoad = (profile.items ?? []).some((item) =>
+    item.kind !== 'pump' &&
+    item.kind !== 'aggregate_load' &&
+    (item.runningKw ?? 0) > 0
+  );
+  return profile.requiredNominalKw >= 4 && hasOtherLoad;
 }
 
 function hasReliableGeneratorSelectionBasis(state: ProductSelectionState) {
@@ -2857,6 +2874,7 @@ function hasReliableGeneratorSelectionBasis(state: ProductSelectionState) {
   if (hard.productIntent !== 'generator') return true;
   if (hard.exactModelTokens.length || hard.exactModelConstraint) return true;
   if (isReliableGeneratorLoadProfile(state.loadProfile)) return true;
+  if (hasPreliminaryGeneratorSelectionBasis(state)) return true;
   const powerSources = [
     hard.provenance?.nominalPowerKwMin,
     hard.provenance?.nominalPowerKwMax,
@@ -2881,6 +2899,10 @@ function isReliableGeneratorLoadProfile(profile?: ProductGeneratorLoadProfile | 
 function hasEstimatedPumpLoad(state: ProductSelectionState) {
   return state.hardConstraints.productIntent === 'generator' &&
     (state.loadProfile?.items ?? []).some((item) => item.kind === 'pump' && item.source === 'estimated_average');
+}
+
+function shouldBlockGeneratorCardsForEstimatedPump(state: ProductSelectionState) {
+  return hasEstimatedPumpLoad(state) && !hasPreliminaryGeneratorSelectionBasis(state);
 }
 
 function productSelectionHardViolation(product: Product, state: ProductSelectionState, profile: ProductFitProfile) {
@@ -5263,6 +5285,7 @@ export class AssistantService {
     const selectionHard = selectionResult.state.hardConstraints;
     const selectionCanRecommend = hasReliableGeneratorSelectionBasis(selectionResult.state);
     const selectionHasEstimatedPump = hasEstimatedPumpLoad(selectionResult.state);
+    const blockEstimatedPumpCards = shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state);
     const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
       ? {
           source: selectionResult.trace.source === 'full_catalog_selection_engine' ? 'full_catalog_slice' : 'structured_constraints',
@@ -5365,7 +5388,7 @@ export class AssistantService {
         ].filter(Boolean).join('\n')
       };
     }
-    if (selectionHasEstimatedPump) {
+    if (blockEstimatedPumpCards) {
       effectivePlan = {
         ...effectivePlan,
         action: 'ask_clarifying_question',
@@ -5379,7 +5402,16 @@ export class AssistantService {
         ].filter(Boolean).join('\n')
       };
     }
-    if (!selectionHasEstimatedPump && selectionHard.productIntent === 'generator' && selectionResult.state.loadProfile?.requiredNominalKw) {
+    if (selectionHasEstimatedPump && !blockEstimatedPumpCards) {
+      effectivePlan = {
+        ...effectivePlan,
+        answerGuidance: [
+          effectivePlan.answerGuidance,
+          'Pump power is still unknown, but the dialogue already has enough context for a preliminary generator shortlist. Show suitable generator cards as preliminary options, mark the recommendation as not final until pump model/power is known, and prefer the lower-priced models that satisfy the calculated kW class instead of asking only another clarifying question.'
+        ].filter(Boolean).join('\n')
+      };
+    }
+    if (!blockEstimatedPumpCards && selectionHard.productIntent === 'generator' && selectionResult.state.loadProfile?.requiredNominalKw) {
       effectivePlan = {
         ...effectivePlan,
         answerGuidance: [
@@ -5519,7 +5551,7 @@ export class AssistantService {
     const productsForAnswer = answerContextProductsForCards({
       answerNeedsFullCatalogContext,
       recommendationAnswer,
-      selectionHasEstimatedPump,
+      blockEstimatedPumpCards,
       cards,
       candidates,
       cardSourceProducts: productsForCardSelection
@@ -5646,6 +5678,7 @@ export class AssistantService {
         : 'Стиль ответа сейчас важен: пиши короче и проще. Если карточки товаров будут показаны под ответом, текст должен быть коротким выводом, а не вторым каталогом: 3-4 коротких предложения максимум, не больше двух моделей в тексте, без полного перечисления карточек. Главный/лучший вариант в тексте обязан быть первой видимой карточкой productCardsVisibleFirst[0]. Остальные видимые модели можно называть только как альтернативы; скрытые за кнопкой “Показать еще” можно упомянуть только как дополнительные варианты. Без длинных вступлений, без канцелярита, без роботизированных фраз. Говори как живой менеджер: спокойно, понятно, по делу. Не показывай внешние ссылки, URL, домены и markdown-ссылки: web search используется только внутренне.';
     const answerStyleInstructions = [
       baseAnswerStyleInstructions,
+      'For gasoline-vs-diesel or generator reserve comparisons, answer by the buyer context and avoid exhaustive spare-parts tables unless the buyer explicitly asks for spare-part or consumable prices. Never list consumables irrelevant to the current product class; for portable generators do not include cutting discs, water nodes, or belts unless the concrete model actually uses them.',
       'For product recommendation turns, productCardsShown is the complete card payload and productCardsVisibleFirst is what the buyer sees before Show more. Name only productCardsVisibleFirst as direct recommendations. Do not name catalogCandidates or allSuitableProducts items as found/recommended unless they are also in productCardsShown; refer to productCardsBehindShowMore only as additional suitable options under Show more. If productCardsShown is empty, do not name any concrete model.',
       'When you say "selection" or "podborka", define the scope: "po tekushchim kriteriyam v kataloge". Do not mention allSuitableProductCount unless the buyer asks how many options there are or you must explain a broad catalog slice. If allSuitableProductCountIsCapped is true, never present the count as an exact total; say only that more options are available under Show more.',
       'Do not say an inverter generator is required while showing only conventional generator cards. If inverter is a hard requirement, conventional generators are not suitable; ask whether to broaden to conventional options. If inverter is only a preference, say explicitly that shown conventional cards are compromise options, not inverter models.',
