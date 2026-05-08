@@ -1,10 +1,14 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const started = new Date().toISOString();
 const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-bakautprof-production-agent-cycle.local.md`);
 const failurePath = path.join('local-live-tests', 'production-agent-cycle-failure.json');
+const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
 
 const turns = [
   {
@@ -118,13 +122,86 @@ function assertPhase(phase, answer, pageText) {
   }
 }
 
-async function waitInputEnabled(input, timeoutMs = 190_000) {
+async function waitInputEnabled(input, timeoutMs = 360_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await input.isEnabled().catch(() => false)) return;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error('Chat input did not become enabled before timeout.');
+}
+
+function metadataOf(message) {
+  if (!message?.metadata) return {};
+  if (typeof message.metadata === 'string') {
+    try {
+      return JSON.parse(message.metadata);
+    } catch {
+      return {};
+    }
+  }
+  return message.metadata;
+}
+
+function canonicalLoadKind(kind) {
+  const key = String(kind ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['fridge', 'refrigerator', 'холодильник'].includes(key)) return 'refrigerator';
+  if (['light', 'lights', 'lighting', 'led', 'led_light', 'освещение', 'свет'].includes(key)) return 'lighting';
+  if (['pump', 'well_pump', 'borehole_pump', 'surface_pump', 'submersible_pump', 'circulation_pump', 'drainage_pump', 'насос'].includes(key)) return 'pump';
+  if (['tool', 'power_tool', 'handheld_tool', 'angle_grinder', 'grinder', 'drill', 'saw', 'болгарка', 'инструмент'].includes(key)) return 'handheld_tool';
+  return key;
+}
+
+function assertNoDuplicateLoadKinds(loadProfile, phase) {
+  const seen = new Set();
+  for (const item of loadProfile?.items ?? []) {
+    const key = canonicalLoadKind(item.kind);
+    if (seen.has(key)) throw new Error(`Duplicate structured load kind ${key} in ${phase}: ${JSON.stringify(loadProfile.items)}`);
+    seen.add(key);
+  }
+}
+
+async function fetchProductionConversation(sessionId) {
+  const token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY;
+  if (!token) return null;
+  const response = await fetch(`${productionApiBase}/api/admin/conversations/${sessionId}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) throw new Error(`Production admin detail failed: ${response.status}`);
+  return response.json();
+}
+
+function assertProductionMetadata(detail) {
+  if (!detail) return ['SKIP: production metadata audit skipped because ADMIN_PASSWORD is not available.'];
+  const assistantMessages = detail.messages.filter((message) => message.role === 'assistant');
+  const notes = [];
+  assistantMessages.forEach((message, index) => {
+    const metadata = metadataOf(message);
+    const diagnostics = metadata.aiDiagnostics ?? {};
+    const usedFallbackStage = Object.entries(diagnostics).find(([, diagnostic]) => diagnostic?.used);
+    if (usedFallbackStage) {
+      throw new Error(`AI fallback diagnostics in production turn ${index + 1}: ${usedFallbackStage[0]} ${JSON.stringify(usedFallbackStage[1])}`);
+    }
+    const warnings = [
+      ...(metadata.validatorWarnings ?? []),
+      ...(metadata.turnContract?.validatorWarnings ?? [])
+    ];
+    if (warnings.includes('contract_source:legacy_text_fallback')) {
+      throw new Error(`Legacy text contract fallback in production turn ${index + 1}`);
+    }
+    const loadProfile = metadata.productSelection?.loadProfile;
+    assertNoDuplicateLoadKinds(loadProfile, `turn ${index + 1}`);
+  });
+
+  const genericPumpMetadata = metadataOf(assistantMessages[1]);
+  const genericPumpLoad = genericPumpMetadata.productSelection?.loadProfile;
+  if ((genericPumpLoad?.requiredNominalKw ?? 0) > 5.5) {
+    throw new Error(`Generic unknown pump turn overestimated nominal load: ${genericPumpLoad.requiredNominalKw} kW`);
+  }
+
+  notes.push('- PASS: production admin metadata has no AI fallback diagnostics or legacy text turn contracts.');
+  notes.push('- PASS: structured generator load profile has no duplicate pump/light/tool refinements.');
+  return notes;
 }
 
 async function collectMessages(frame) {
@@ -161,6 +238,7 @@ async function main() {
   });
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
   const steps = [];
+  let sessionId = null;
 
   try {
     await page.goto('https://bakautprof.ru/', { waitUntil: 'domcontentloaded', timeout: 90_000 });
@@ -189,6 +267,10 @@ async function main() {
       assertPhase(turn.phase, answer, pageText);
     }
 
+    sessionId = await frame.evaluate(() => sessionStorage.getItem('bakaut_session_id')).catch(() => null);
+    const detail = sessionId ? await fetchProductionConversation(sessionId) : null;
+    const metadataAuditNotes = assertProductionMetadata(detail);
+
     const transcript = steps.map((step) => `${step.user}\n${step.assistant}`).join('\n\n');
     if (!/генератор/iu.test(transcript)) throw new Error('Generator need was lost.');
     if (!/виброплит/iu.test(transcript)) throw new Error('Plate need was lost.');
@@ -212,12 +294,13 @@ async function main() {
       '- PASS: full production iframe path completed.',
       '- PASS: generic unknown pump did not produce generator cards.',
       '- PASS: typed pump produced only preliminary generator selection.',
-      '- PASS: comparison, multi-need memory, commercial handoff, and contact refusal checks passed.'
+      '- PASS: comparison, multi-need memory, commercial handoff, and contact refusal checks passed.',
+      ...metadataAuditNotes
     ].join('\n'), 'utf8');
 
     console.log(`PASS production live agent cycle. Protocol: ${protocolPath}`);
   } catch (error) {
-    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), steps }, null, 2), 'utf8');
+    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), sessionId, steps }, null, 2), 'utf8');
     throw error;
   } finally {
     await browser.close();

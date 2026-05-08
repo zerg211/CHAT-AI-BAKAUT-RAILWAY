@@ -187,6 +187,7 @@ export function buildNeedExtractorPrompt() {
         "evidence": string
       }],
       "simultaneousStarting": boolean,
+      "simultaneousStartingKinds": string[],
       "confidence": number,
       "removedKinds": string[]
     },
@@ -213,6 +214,7 @@ export function buildNeedExtractorPrompt() {
 - Если точная мощность бытового прибора неизвестна, но прибор назван, оставь его в items с source="estimated_average" и разумной бытовой оценкой. В evidence укажи, что это оценка из слов покупателя.
 - Для скважинного/поверхностного/циркуляционного/дренажного насоса различай тип по смыслу реплики. Если тип насоса неизвестен, name="pump", kind="pump", source="estimated_average", а в unknowns добавь вопрос про тип или мощность насоса.
 - simultaneousStarting=true только когда покупатель по смыслу говорит, что моторные нагрузки могут стартовать одновременно; иначе false.
+- simultaneousStartingKinds заполняй каноническими kind только для тех нагрузок, которые стартуют вместе по смыслу реплики. Например, "насос с холодильником могут включиться вместе" => ["pump","refrigerator"]; не добавляй "handheld_tool"/"tool", если покупатель не сказал, что инструмент стартует в тот же момент.
 - nominalPowerKwMin/Max в hardConstraints ставь только когда пользователь явно просит класс генератора или когда уже есть уверенный расчет loadProfile. Не завышай "на всякий случай".
 - Скрытые потребности допускаются только как вероятные выводы из слов покупателя; не заменяй ими явные факты.`;
 }

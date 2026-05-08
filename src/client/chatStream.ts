@@ -121,6 +121,12 @@ export async function streamChatMessage(
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const recoverOnError = options.recoverOnError !== false;
   let turnId: string | undefined;
+  let recoveryAttempted = false;
+  const recoverOnce = async (resolvedTurnId: string) => {
+    if (recoveryAttempted) throw new Error(FRIENDLY_FINAL_ERROR);
+    recoveryAttempted = true;
+    return recoverChatMessage(apiBase, sessionId, resolvedTurnId, handlers, signal, fetcher, idleTimeoutMs);
+  };
 
   const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
     method: 'POST',
@@ -134,13 +140,13 @@ export async function streamChatMessage(
     return await consumeSse(response, handlers, signal, idleTimeoutMs, async (event, data) => {
       if (event === 'turn') turnId = String(data.turnId ?? turnId ?? '');
       if (event === 'error' && recoverOnError && (data.turnId || turnId)) {
-        return recoverChatMessage(apiBase, sessionId, String(data.turnId ?? turnId), handlers, signal, fetcher, idleTimeoutMs);
+        return recoverOnce(String(data.turnId ?? turnId));
       }
     });
   } catch (error) {
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-    if (recoverOnError && turnId) {
-      return recoverChatMessage(apiBase, sessionId, turnId, handlers, signal, fetcher, idleTimeoutMs);
+    if (recoverOnError && turnId && !recoveryAttempted) {
+      return recoverOnce(turnId);
     }
     throw new Error(error instanceof Error && error.message ? error.message : FRIENDLY_FINAL_ERROR);
   }

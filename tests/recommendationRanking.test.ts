@@ -4225,6 +4225,53 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.shouldPromotePrimarySelectionCards(primarySelectionContract, plan, followUp, false)).toBe(true);
   });
 
+  it('merges LLM load-state updates as appliance refinements instead of duplicate loads', () => {
+    const initial = mergeProductSelectionState(emptyNeedState().selectionState, {
+      semanticSource: 'llm_need_extraction',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      loadProfile: {
+        items: [
+          { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.2, startingKw: 0.8, source: 'estimated_average', evidence: 'one fridge' },
+          { kind: 'pump', name: 'pump', count: 1, runningKw: 0.75, startingKw: 2, source: 'estimated_average', evidence: 'generic pump' },
+          { kind: 'lighting', name: 'lighting', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'estimated_average', evidence: 'lights' },
+          { kind: 'tool', name: 'tool', count: 1, runningKw: 1.5, startingKw: 3, source: 'estimated_average', evidence: 'tool' }
+        ],
+        simultaneousStarting: false,
+        simultaneousStartingKinds: [],
+        confidence: 0.6,
+        removedKinds: []
+      },
+      confidence: 0.6
+    });
+
+    const updated = mergeProductSelectionState(initial, {
+      semanticSource: 'llm_need_extraction',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      loadProfile: {
+        items: [
+          { kind: 'pump', name: 'borehole pump', count: 1, runningKw: 1.1, startingKw: 2.9, source: 'estimated_average', evidence: 'borehole pump' },
+          { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: 0.08, startingKw: 0.08, source: 'estimated_average', evidence: 'LED lights' },
+          { kind: 'handheld_tool', name: 'angle grinder', count: 1, runningKw: 1.2, startingKw: 2.2, source: 'explicit_user', evidence: 'angle grinder 1.2 kW' }
+        ],
+        simultaneousStarting: true,
+        simultaneousStartingKinds: ['pump', 'refrigerator'],
+        confidence: 0.7,
+        removedKinds: []
+      },
+      confidence: 0.7
+    });
+
+    expect(updated.loadProfile?.items.filter((item) => item.kind === 'pump')).toHaveLength(1);
+    expect(updated.loadProfile?.items.filter((item) => item.kind === 'lighting')).toHaveLength(1);
+    expect(updated.loadProfile?.items.filter((item) => ['tool', 'handheld_tool'].includes(item.kind))).toHaveLength(1);
+    expect(updated.loadProfile?.items.find((item) => item.kind === 'pump')?.name).toBe('borehole pump');
+    expect(updated.loadProfile?.simultaneousStartingKinds).toEqual(['pump', 'refrigerator']);
+    expect(updated.loadProfile?.requiredStartingKw).toBeCloseTo(5, 5);
+    expect(updated.loadProfile?.requiredNominalKw).toBe(5);
+  });
+
   it('does not treat a question about switching to 7-8 kW as a desired generator range', async () => {
     const products = [
       productWithSpecs('five', 'Генератор бензиновый SUMEC SU7700 5.0 kW', 42_490, 'https://example.test/catalog/generators/five', {}),

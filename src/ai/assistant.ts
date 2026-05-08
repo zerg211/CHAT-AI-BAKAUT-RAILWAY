@@ -6,6 +6,7 @@ import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, bui
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
 import { emptyNeedState, emptyProductSelectionState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
+import { calculateGeneratorLoadProfile as calculateStructuredGeneratorLoadProfile } from './loadProfile.js';
 import {
   fromEscaped, weightRegex, powerRegex, powerRangeRegex, budgetMaxRegex,
   plateTerms, generatorTerms, rammerTerms, cutterTerms, diamondBladeTerms,
@@ -455,12 +456,14 @@ function coerceGeneratorLoadProfile(value: unknown): ProductGeneratorLoadProfile
   const items = coerceElectricalLoadItems(object.items);
   const removedKinds = coerceStringList(object.removedKinds, 12);
   const simultaneousStarting = Boolean(object.simultaneousStarting);
-  const calculated = calculateGeneratorLoadProfile(items, simultaneousStarting);
+  const simultaneousStartingKinds = coerceStringList(object.simultaneousStartingKinds, 8);
+  const calculated = calculateGeneratorLoadProfile(items, simultaneousStarting, simultaneousStartingKinds);
   if (!calculated && !removedKinds.length) return undefined;
   return {
     ...(calculated ?? { items }),
     removedKinds: removedKinds.length ? removedKinds : calculated?.removedKinds,
     simultaneousStarting,
+    simultaneousStartingKinds,
     confidence: clamp01(object.confidence, calculated?.confidence ?? 0.5)
   };
 }
@@ -2645,29 +2648,15 @@ function loadItemKey(item: ProductElectricalLoadItem) {
   return `${item.kind}:${item.name ?? ''}`;
 }
 
-function calculateGeneratorLoadProfile(items: ProductElectricalLoadItem[], simultaneousStarting = false): ProductGeneratorLoadProfile | undefined {
-  const usable = items.filter((item) => item.count > 0 && (item.runningKw || item.startingKw));
-  if (!usable.length) return undefined;
-  const running = usable.reduce((sum, item) => sum + (item.runningKw ?? 0) * item.count, 0);
-  const startingExtra = usable.map((item) => Math.max(0, (item.startingKw ?? item.runningKw ?? 0) - (item.runningKw ?? 0)));
-  const maxStartingExtra = startingExtra.length
-    ? Math.max(...usable.map((item, index) => startingExtra[index] * item.count))
-    : 0;
-  const allStartingExtra = usable.reduce((sum, item, index) => sum + startingExtra[index] * item.count, 0);
-  const requiredStartingKw = running + (simultaneousStarting ? allStartingExtra : maxStartingExtra);
-  const requiredNominalKw = ceilPowerKw(requiredStartingKw, 0.5);
-  const calculation = usable
-    .map((item) => `${item.name ?? item.kind}: ${item.count} x ${item.runningKw ?? '?'} kW run / ${item.startingKw ?? item.runningKw ?? '?'} kW start`)
-    .join('; ');
-  return {
-    items: usable,
-    totalRunningKw: roundPowerKw(running),
-    requiredStartingKw: roundPowerKw(requiredStartingKw),
-    requiredNominalKw,
+function calculateGeneratorLoadProfile(
+  items: ProductElectricalLoadItem[],
+  simultaneousStarting = false,
+  simultaneousStartingKinds: string[] = []
+): ProductGeneratorLoadProfile | undefined {
+  return calculateStructuredGeneratorLoadProfile(items, {
     simultaneousStarting,
-    calculation,
-    confidence: usable.some((item) => item.source === 'explicit_user') ? 0.82 : 0.58
-  };
+    simultaneousStartingKinds
+  });
 }
 
 function inferredLoadPowerWindow(requiredNominalKw: number) {
@@ -5713,6 +5702,15 @@ export class AssistantService {
     if (aiDiagnostics.turnPlanningFallback.used) {
       throw aiStageFailure('turn planning', aiDiagnostics.turnPlanningFallback);
     }
+    if (!plan.agentDecision) {
+      const diagnostic = markAiFallback(
+        aiDiagnostics,
+        'turnPlanningFallback',
+        'missing_agent_decision',
+        'missing_agent_decision'
+      );
+      throw aiStageFailure('turn planning', diagnostic);
+    }
 
     const refinedCandidates = plan.catalogSearchQuery !== baseQuery
       ? await this.findProducts(input.userMessage, needState, plan.catalogSearchQuery, plan.requiredProductTraits, input.signal)
@@ -6547,7 +6545,7 @@ export class AssistantService {
     const existingAssistant = turn.assistantMessageId
       ? history.find((message) => message.id === turn.assistantMessageId && message.role === 'assistant')
       : null;
-    if (existingAssistant?.content?.trim() && turn.status === 'completed') {
+    if (existingAssistant?.content?.trim() && (turn.status === 'completed' || turn.status === 'recovered')) {
       await input.onDelta?.(existingAssistant.content);
       return {
         turnId: input.turnId,
@@ -6560,7 +6558,7 @@ export class AssistantService {
         metadata: {
           ...(existingAssistant.metadata ?? {}),
           turnId: input.turnId,
-          recoveryAttempts: 0
+          recoveryAttempts: turn.status === 'recovered' ? 1 : 0
         }
       };
     }
@@ -6940,10 +6938,11 @@ function loadProfileSchema() {
         }
       },
       simultaneousStarting: { type: 'boolean' },
+      simultaneousStartingKinds: { type: 'array', items: { type: 'string' }, maxItems: 8 },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       removedKinds: { type: 'array', items: { type: 'string' }, maxItems: 12 }
     },
-    required: ['items', 'simultaneousStarting', 'confidence', 'removedKinds']
+    required: ['items', 'simultaneousStarting', 'simultaneousStartingKinds', 'confidence', 'removedKinds']
   };
 }
 

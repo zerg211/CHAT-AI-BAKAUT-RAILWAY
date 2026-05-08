@@ -1,4 +1,5 @@
 import type { ActiveCustomerNeed, CustomerNeedState, NeedItem, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionState } from '../shared/types.js';
+import { calculateGeneratorLoadProfile, mergeElectricalLoadItems } from './loadProfile.js';
 
 function emptySelectionCriteria(): ProductSelectionCriteria {
   return {
@@ -212,19 +213,30 @@ function mergeLoadProfile(
   reset = false
 ): ProductSelectionState['loadProfile'] {
   if (!update) return reset ? undefined : current;
-  const removedKinds = new Set(update.removedKinds ?? []);
-  const baseItems = reset ? [] : (current?.items ?? []).filter((item) => !removedKinds.has(item.kind));
-  const byKey = new Map<string, NonNullable<ProductSelectionState['loadProfile']>['items'][number]>();
-  for (const item of baseItems) {
-    byKey.set(`${item.kind}:${item.name ?? ''}`, item);
-  }
-  for (const item of update.items ?? []) {
-    byKey.set(`${item.kind}:${item.name ?? ''}`, item);
-  }
+  const items = mergeElectricalLoadItems({
+    currentItems: reset ? [] : current?.items,
+    updateItems: update.items,
+    removedKinds: update.removedKinds
+  });
+  const simultaneousStarting = update.simultaneousStarting ?? (!reset && current?.simultaneousStarting) ?? false;
+  const simultaneousStartingKinds = update.simultaneousStartingKinds
+    ? uniqueStrings(update.simultaneousStartingKinds, 8)
+    : reset
+      ? []
+      : current?.simultaneousStartingKinds ?? [];
+  const recalculated = calculateGeneratorLoadProfile(items, {
+    simultaneousStarting,
+    simultaneousStartingKinds,
+    confidence: update.confidence ?? current?.confidence
+  });
   return {
     ...(!reset ? current ?? {} : {}),
     ...update,
-    items: [...byKey.values()].slice(-16)
+    ...(recalculated ?? {}),
+    items,
+    simultaneousStarting,
+    simultaneousStartingKinds,
+    removedKinds: update.removedKinds
   };
 }
 

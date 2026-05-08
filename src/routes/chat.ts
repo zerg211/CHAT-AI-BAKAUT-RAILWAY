@@ -23,7 +23,7 @@ const generationStatusMessages = [
   'Собираю короткий ответ с выводом и ценами...'
 ];
 
-const GENERATION_TIMEOUT_MS = 180_000;
+const GENERATION_TIMEOUT_MS = 120_000;
 
 function requestHash(sessionId: string, message: string) {
   return createHash('sha256').update(`${sessionId}\n${message.trim()}`).digest('hex');

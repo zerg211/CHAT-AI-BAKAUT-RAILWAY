@@ -212,6 +212,7 @@ export interface ProductGeneratorLoadProfile {
   requiredStartingKw?: number;
   requiredNominalKw?: number;
   simultaneousStarting?: boolean;
+  simultaneousStartingKinds?: string[];
   calculation?: string;
   confidence?: number;
   removedKinds?: string[];
