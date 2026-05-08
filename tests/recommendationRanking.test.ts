@@ -3156,12 +3156,22 @@ describe('recommendation ranking', () => {
       brandedProduct('hidden', 'TSS SGG 9000EHNA бензогенератор 8 кВт', 'ТСС', 'Генераторы', 98000, 'https://example.test/hidden')
     ];
     const plan = assistantTestHooks.purchasePlanIfNeeded(baseTurnPlan({
-      action: 'answer_question',
-      answerMode: 'directAnswer',
+      action: 'collect_lead',
+      answerMode: 'leadCollection',
       cardPolicy: 'textOnly',
-      followUpPolicy: 'auto',
+      followUpPolicy: 'collectLead',
       selectedProductIds: ['sumec', 'bison'],
-      catalogSearchQuery: 'SUMEC SU7700E BISON BS6500EP'
+      catalogSearchQuery: 'SUMEC SU7700E BISON BS6500EP',
+      agentDecision: {
+        answerTask: 'lead_handoff',
+        mustAnswerNow: ['confirm manager verification of availability and delivery'],
+        currentFocus: 'commercial',
+        cardsRole: 'primary',
+        leadAllowed: true,
+        leadAllowedReason: 'buyer provided contact and asks manager to verify commercial conditions',
+        errorRecoveryPriority: 'Ask manager handoff with selected products.',
+        confidence: 0.96
+      }
     }), products, [], state, 'Меня зовут Иван, телефон +7 999 123-45-67, пусть менеджер подтвердит наличие и доставку');
     const cards = assistantTestHooks.cardsFromPlan(products, state, 'Меня зовут Иван, телефон +7 999 123-45-67, пусть менеджер подтвердит наличие и доставку', plan.plan);
 

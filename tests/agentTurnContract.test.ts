@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveAgentTurnContract, applyAgentTurnContractToPlan, leadRefusalDetected } from '../src/ai/agentTurnContract.js';
+import { deriveAgentTurnContract, applyAgentTurnContractToPlan } from '../src/ai/agentTurnContract.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 
 const basePlan = {
@@ -31,19 +31,94 @@ describe('agent turn contract', () => {
     expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
   });
 
-  it('detects contact refusal and disables lead pressure', () => {
+  it('uses the LLM planner contract, not a phrase regex, to disable lead pressure', () => {
     const message = 'Номер пока не оставляю, сначала дайте итог по генератору и виброплите.';
+    const collectPlan = {
+      ...basePlan,
+      action: 'collect_lead',
+      answerMode: 'leadCollection',
+      followUpPolicy: 'collectLead',
+      agentDecision: {
+        answerTask: 'lead_handoff' as const,
+        mustAnswerNow: ['summarize generator need', 'summarize plate need'],
+        currentFocus: 'commercial',
+        cardsRole: 'none' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer wants the summary without a call/contact handoff now',
+        errorRecoveryPriority: 'Give the summary without asking for a phone.',
+        confidence: 0.93
+      }
+    };
     const contract = deriveAgentTurnContract({
       userMessage: message,
-      plan: { ...basePlan, action: 'collect_lead', answerMode: 'leadCollection', followUpPolicy: 'collectLead' },
+      plan: collectPlan,
       needState: emptyNeedState()
     });
-    const plan = applyAgentTurnContractToPlan(basePlan, contract);
+    const plan = applyAgentTurnContractToPlan(collectPlan, contract);
 
-    expect(leadRefusalDetected(message)).toBe(true);
     expect(contract.leadAllowed).toBe(false);
+    expect(contract.validatorWarnings).toContain('contract_source:llm_planner');
     expect(plan.action).toBe('answer_question');
     expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
+    expect(plan.cardPolicy).toBe('textOnly');
+  });
+
+  it('does not infer contact refusal from words when the planner says the meaning is different', () => {
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Пока без звонка цена на доставку вообще считается отдельно?',
+      plan: {
+        ...basePlan,
+        action: 'handoff_specialist',
+        answerMode: 'leadCollection',
+        followUpPolicy: 'collectLead',
+        agentDecision: {
+          answerTask: 'lead_handoff' as const,
+          mustAnswerNow: ['explain that delivery is calculated separately'],
+          currentFocus: 'commercial',
+          cardsRole: 'none' as const,
+          leadAllowed: true,
+          leadAllowedReason: 'buyer asks a delivery condition question and has not refused a later specialist handoff',
+          errorRecoveryPriority: 'Answer the delivery pricing limitation first.',
+          confidence: 0.82
+        }
+      },
+      needState: emptyNeedState()
+    });
+
+    expect(contract.leadAllowed).toBe(true);
+    expect(contract.leadAllowedReason).toContain('delivery');
+  });
+
+  it('keeps commercial handoff text-only when the planner says cards are not part of the turn', () => {
+    const commercialPlan = {
+      ...basePlan,
+      action: 'handoff_specialist',
+      answerMode: 'leadCollection',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'collectLead',
+      agentDecision: {
+        answerTask: 'lead_handoff' as const,
+        mustAnswerNow: ['answer delivery and discount limits before asking for contact'],
+        currentFocus: 'commercial',
+        cardsRole: 'none' as const,
+        leadAllowed: true,
+        leadAllowedReason: 'commercial conditions need specialist verification',
+        errorRecoveryPriority: 'Explain delivery/discount limits first.',
+        confidence: 0.9
+      }
+    };
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Есть доставка и скидка? Сколько будет комплект примерно?',
+      plan: commercialPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(commercialPlan, contract);
+
+    expect(contract.answerTask).toBe('lead_handoff');
+    expect(contract.cardsRole).toBe('none');
+    expect(plan.cardPolicy).toBe('textOnly');
+    expect(plan.selectionState.shouldShowCards).toBe(false);
+    expect(plan.followUpPolicy).toBe('collectLead');
   });
 
   it('promotes product-selection turns to card-capable recommendation plans', () => {

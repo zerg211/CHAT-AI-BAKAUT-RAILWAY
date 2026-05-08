@@ -296,12 +296,29 @@ export function buildTurnPlannerPrompt() {
     "shouldShowCards": boolean,
     "cardDisplayMode": "exact_matches" | "compatible_accessories" | "alternatives" | "preliminary" | "none"
   },
+  "agentDecision": {
+    "answerTask": "technical_explanation" | "comparison" | "product_selection" | "mixed" | "lead_handoff",
+    "mustAnswerNow": string[],
+    "currentFocus": string,
+    "cardsRole": "none" | "supporting" | "primary",
+    "leadAllowed": boolean,
+    "leadAllowedReason": string,
+    "errorRecoveryPriority": string,
+    "confidence": number
+  },
   "needsWebSearch": boolean,
   "missingInformation": string[],
   "answerGuidance": string
 }
 
 selectionState заполняй как рабочее состояние подбора, а не как текст ответа. currentProductClass - что уже обсуждали; targetProductClass - что надо подобрать сейчас; compatibilityTargetProduct - модель, к которой подбирают расходник/аксессуар; mustHaveTraits - жесткие критерии; niceToHaveTraits - желательные признаки; brandConstraint/exactModelConstraint - только если покупатель сам ограничил бренд или модель; cardDisplayMode выбирает смысл карточек: exact_matches, compatible_accessories, alternatives, preliminary или none.
+agentDecision - главный смысловой контракт хода. Заполняй его по смыслу последней реплики в контексте, а не по фразам:
+- answerTask: что сейчас должен сделать менеджер - объяснить технику, сравнить, подобрать товар, смешать ответ+подбор или передать коммерческий вопрос специалисту.
+- mustAnswerNow: конкретные вопросы покупателя, которые надо закрыть текстом до карточек. Не пиши общие шаблоны; формулируй смысл вопроса покупателя.
+- currentFocus: id activeNeed или класс потребности, которую сейчас обсуждаем. Если вопрос про виброплиту, не оставляй генератор только потому, что он был раньше.
+- cardsRole: primary только когда карточки являются главным шагом подбора/выбора; supporting когда они помогают после объяснения; none для доставки, скидки, наличия, сервиса, технического сравнения и отказа от контакта.
+- leadAllowed=false, если по смыслу покупатель сейчас не хочет звонок, заявку, форму или оставление контакта. Не ищи точную фразу: оцени намерение. Если покупатель просто спрашивает про доставку/скидку и не отказывался от контакта, leadAllowed=true, но сначала ответь, какие условия можно/нельзя точно назвать.
+- errorRecoveryPriority: что важнее всего ответить, если ответ оборвется.
 
 requiredProductTraits заполняй по смыслу реплики и состояния диалога, а не только по точным словам. productRole отделяет основной товар от аксессуара: если покупатель просит "генератор в кожухе", "закрытый генератор", "тихий генератор" - это productIntent generator, productRole coreProduct, enclosure enclosed; если просит "кожух для генератора", "АВР для генератора", "фильтр/ремень/масло для генератора" - это generatorAccessory или generatorOil и productRole accessory/consumable. Если покупатель просит удобный запуск без ручного дергания, запуск с ключа/кнопки или аналогичную потребность - startType должен быть electric. Если это не требуется, ставь any или unknown, не выдумывай.
 productIntent выбирай по текущей потребности: weldingGenerator для сварочного генератора 2-в-1, generatorOil для масла именно к генератору, engineOil для 4-тактного моторного масла к виброплите/трамбовке/резчику/генератору, generatorAccessory для кожухов/фильтров/АВР/других расходников, plateAccessory для ковриков/накладок к виброплите, trowel для затирочных машин, diamondCore для алмазных коронок, diamondBlade для дисков, roller для виброкатков. По маслу определяй, подходит ли оно по типу двигателя, SAE вязкости и классу; если не хватает одного параметра - задай один точный вопрос, а не отправляй покупателя в паспорт. Если покупатель указал точный бренд или модель, не добивай selectedProductIds товарами других брендов; аналоги нужны только если покупатель просит аналоги.

@@ -39,7 +39,7 @@ import { assessLeadTemperature, temperatureGuidance } from './leadTemperature.js
 import { traceTimer, emitTrace } from './tracing.js';
 import { enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
 import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
-import { applyAgentTurnContractToPlan, deriveAgentTurnContract, leadRefusalDetected } from './agentTurnContract.js';
+import { applyAgentTurnContractToPlan, deriveAgentTurnContract } from './agentTurnContract.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 import {
   buildTroubleshootingCaseDraft,
@@ -204,6 +204,10 @@ type AssistantTurnPlan = {
   selectedProductIds: string[];
   requiredProductTraits: RequiredProductTraits;
   selectionState: SelectionState;
+  agentDecision?: Partial<Pick<
+    AgentTurnContract,
+    'answerTask' | 'mustAnswerNow' | 'currentFocus' | 'cardsRole' | 'leadAllowed' | 'leadAllowedReason' | 'errorRecoveryPriority'
+  >> & { confidence?: number };
   needsWebSearch: boolean;
   missingInformation: string[];
   answerGuidance: string;
@@ -651,6 +655,41 @@ function coerceFollowUpPolicy(value: unknown): FollowUpPolicy {
   return allowed.includes(value as FollowUpPolicy) ? value as FollowUpPolicy : 'auto';
 }
 
+function coerceAgentAnswerTask(value: unknown): AgentTurnContract['answerTask'] {
+  const allowed: AgentTurnContract['answerTask'][] = [
+    'technical_explanation',
+    'comparison',
+    'product_selection',
+    'mixed',
+    'lead_handoff'
+  ];
+  return allowed.includes(value as AgentTurnContract['answerTask'])
+    ? value as AgentTurnContract['answerTask']
+    : 'mixed';
+}
+
+function coerceAgentCardsRole(value: unknown): AgentTurnContract['cardsRole'] {
+  const allowed: AgentTurnContract['cardsRole'][] = ['none', 'supporting', 'primary'];
+  return allowed.includes(value as AgentTurnContract['cardsRole'])
+    ? value as AgentTurnContract['cardsRole']
+    : 'none';
+}
+
+function coerceAgentDecision(value: any): AssistantTurnPlan['agentDecision'] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const confidence = Number(value.confidence);
+  return {
+    answerTask: coerceAgentAnswerTask(value.answerTask),
+    mustAnswerNow: coerceStringList(value.mustAnswerNow, 8),
+    currentFocus: String(value.currentFocus ?? '').trim().slice(0, 80),
+    cardsRole: coerceAgentCardsRole(value.cardsRole),
+    leadAllowed: typeof value.leadAllowed === 'boolean' ? value.leadAllowed : true,
+    leadAllowedReason: String(value.leadAllowedReason ?? '').trim().slice(0, 240),
+    errorRecoveryPriority: String(value.errorRecoveryPriority ?? '').trim().slice(0, 400),
+    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0
+  };
+}
+
 function coerceContextScope(value: unknown): ContextScope {
   const allowed: ContextScope[] = ['latestMessageOnly', 'activeNeed', 'previousSelection', 'fullSession'];
   return allowed.includes(value as ContextScope) ? value as ContextScope : 'activeNeed';
@@ -808,6 +847,7 @@ function coerceTurnPlan(value: any, baseQuery: string, latestUserMessage = baseQ
     selectedProductIds,
     requiredProductTraits,
     selectionState: coerceSelectionState(value?.selectionState, requiredProductTraits, requiredProductTraits.productIntent),
+    agentDecision: coerceAgentDecision(value?.agentDecision),
     needsWebSearch: Boolean(value?.needsWebSearch),
     missingInformation,
     answerGuidance: String(value?.answerGuidance ?? '').trim().slice(0, 2000)
@@ -4041,7 +4081,7 @@ function selectedPurchaseProductIds(products: Product[], history: Message[], sta
 }
 
 function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], history: Message[], state: CustomerNeedState, userMessage: string) {
-  if (leadRefusalDetected(userMessage)) {
+  if (plan.agentDecision?.leadAllowed === false) {
     return {
       leadRequested: false,
       plan: {
@@ -4056,13 +4096,12 @@ function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], hist
         },
         answerGuidance: [
           plan.answerGuidance,
-          'Покупатель явно отказался оставлять номер или заявку сейчас. Не дави на контактную форму; дай полезный итог и скажи, что коммерческие условия можно уточнить позже.'
+          'LLM planner determined that the buyer does not want a call/contact handoff now. Do not pressure the contact form; give the useful technical/commercial summary and say final commercial terms can be checked later.'
         ].filter(Boolean).join('\n')
       }
     };
   }
-  const fallbackLeadRequested = fallbackDetectLeadHandoffIntent(userMessage) || fallbackDetectOperationalHandoffQuestion(userMessage);
-  if (isLeadPlan(plan) && !fallbackLeadRequested && isTechnicalConsultationContinuation(userMessage)) {
+  if (isLeadPlan(plan) && isTechnicalConsultationContinuation(userMessage)) {
     return {
       leadRequested: false,
       plan: {
@@ -4083,7 +4122,7 @@ function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], hist
       }
     };
   }
-  const leadRequested = isLeadPlan(plan) || fallbackLeadRequested;
+  const leadRequested = isLeadPlan(plan);
   if (!leadRequested) return { plan, leadRequested };
 
   const selectedProductIds = selectedPurchaseProductIds(products, history, state, userMessage, plan);
@@ -5623,83 +5662,6 @@ export class AssistantService {
     const client = createOpenAIClient();
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
-    if (!leadRefusalDetected(input.userMessage) && (fallbackDetectOperationalHandoffQuestion(input.userMessage) || fallbackDetectLeadHandoffIntent(input.userMessage))) {
-      const previousProducts = lastShownProductCards(history);
-      const cards = productCards(previousProducts, session.needState, input.userMessage, undefined, MAX_PRODUCT_CARDS);
-      const initialVisibleCount = Math.min(cards.length, Math.max(1, Math.min(2, cards.length)));
-      const cardDisplay = cardDisplayOptions(initialVisibleCount, cards);
-      const bundleTotalPrice = reliableBundleTotal(cards, input.userMessage, session.needState);
-      const leadTotalPrice = fallbackDetectPurchaseIntent(input.userMessage) ? bundleTotalPrice : null;
-      const autoLeadResult = await this.createLeadFromChatContact(session, history, cards, input.userMessage, session.needState);
-      const answer = deterministicLeadCollectionAnswer(cards, leadTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult), input.userMessage);
-      if (answer) await input.onDelta?.(answer);
-      const assistantMessage = await this.conversations.addMessage({
-        sessionId: input.sessionId,
-        role: 'assistant',
-        content: answer,
-        metadata: {
-          productCards: cards,
-          cardDisplay,
-          usedWebSearch: false,
-          responseStyle: 'lead_collection',
-          answerMode: 'leadCollection',
-          cardPolicy: cards.length ? 'showProducts' : 'textOnly',
-          followUpPolicy: 'collectLead',
-          contextScope: 'previousSelection',
-          searchScope: 'previousSelectionOnly',
-          aiDiagnostics,
-          answerGenerationFallback: aiDiagnostics.answerGenerationFallback,
-          operationalHandoff: true,
-          autoLead: autoLeadResult ? {
-            created: autoLeadResult.created,
-            leadId: autoLeadResult.lead?.id,
-            emailStatus: autoLeadResult.emailStatus,
-            missing: autoLeadResult.missing,
-            error: autoLeadResult.error
-          } : undefined
-        }
-      });
-      if (input.turnId) {
-        await this.conversations.updateTurn({
-          sessionId: input.sessionId,
-          turnId: input.turnId,
-          status: 'completed',
-          stage: 'completed',
-          assistantMessageId: assistantMessage.id,
-          activeNeedsAfter: session.needState.activeNeeds ?? []
-        }).catch((error) => console.warn('Conversation turn completion update failed', safeError(error)));
-      }
-      this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
-      traceTotal({
-        leadTemperature: 'hot',
-        leadScore: 1,
-        cardCount: cards.length,
-        candidateCount: previousProducts.length,
-        consistencyWarnings: 0,
-        usedWebSearch: false,
-        operationalHandoff: true
-      });
-      return {
-        turnId: input.turnId,
-        answer,
-        needState: session.needState,
-        productCards: cards,
-        cardDisplay,
-        usedWebSearch: false,
-        leadRequested: !autoLeadResult?.created,
-        leadCreated: autoLeadResult?.created ?? false,
-        assistantMessageId: assistantMessage.id,
-        metadata: {
-          turnId: input.turnId,
-          activeNeedsBefore,
-          activeNeedsAfter: session.needState.activeNeeds ?? [],
-          cardDisplay,
-          aiDiagnostics,
-          answerGenerationFallback: aiDiagnostics.answerGenerationFallback,
-          operationalHandoff: true
-        }
-      };
-    }
     const previousSelectionState = session.needState.selectionState;
     let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal, aiDiagnostics);
     if (aiDiagnostics.needExtractionFallback.used) {
@@ -5858,8 +5820,9 @@ export class AssistantService {
       for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
       const selectionEngineRequestsCards = shouldForceStructuredSelectionCards(input.userMessage, effectivePlan, selectionResult);
       const primarySelectionRequestsCards = shouldPromotePrimarySelectionCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
-      const generatorSizingRequestsCards = shouldPromoteGeneratorSizingCards(input.userMessage, selectionResult, blockEstimatedPumpCards);
-      if ((agentTurnContract.cardsRole === 'primary' || generatorSizingRequestsCards) &&
+      const generatorSizingRequestsCards = agentTurnContract.cardsRole !== 'none' &&
+        shouldPromoteGeneratorSizingCards(input.userMessage, selectionResult, blockEstimatedPumpCards);
+      if ((agentTurnContract.cardsRole === 'primary' || (agentTurnContract.cardsRole === 'supporting' && generatorSizingRequestsCards)) &&
         (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = {
@@ -5948,7 +5911,7 @@ export class AssistantService {
         ].filter(Boolean).join('\n')
       };
     }
-    if (selectionHasEstimatedPump && !blockEstimatedPumpCards) {
+    if (selectionHasEstimatedPump && !blockEstimatedPumpCards && agentTurnContract.cardsRole !== 'none') {
       effectivePlan = {
         ...effectivePlan,
         answerGuidance: [
@@ -6082,7 +6045,9 @@ export class AssistantService {
           maxParagraphs: 2,
           maxBullets: 3,
           guidance: purchasePlan.leadRequested
-            ? 'The buyer is ready to proceed. Confirm the selected bundle shown in productCardsShown, mention item prices and the total from selectedBundleForLead when available, then ask them to leave name and phone in the opened form so a manager can verify availability/delivery and contact them. Do not say the order/lead is already created. Do not continue selecting alternatives.'
+            ? agentTurnContract.answerTask === 'lead_handoff'
+              ? 'The buyer is asking a commercial/specialist question, not necessarily buying now. First answer what is known: delivery/discount/availability/final terms require manager/logistics verification. If leadAllowed=true, ask for contact only as the next step for that verification. Do not show or re-list product cards unless cardsRole is primary. Do not treat this as a finalized order.'
+              : 'The buyer is ready to proceed. Confirm the selected bundle shown in productCardsShown, mention item prices and the total from selectedBundleForLead when available, then ask them to leave name and phone in the opened form so a manager can verify availability/delivery and contact them. Do not say the order/lead is already created. Do not continue selecting alternatives.'
             : [
                 'Answer like a human sales consultant. If productCardsShown is not empty, the text must be only a short conclusion: max 3-4 short sentences, max 2 model names, no full list of all cards. The main/best recommendation in text must be productCardsVisibleFirst[0]. Mention other visible cards only as alternatives. Do not call a lower card or hidden show-more card the best option. Do not end with a generic deferred offer like "if you want, I can continue"; give a finished recommendation for the current request.',
                 comparativeAnswerGuidance
@@ -6150,8 +6115,8 @@ export class AssistantService {
       })),
       productCardPriceRange: priceRangeForAnswer,
       generatorSizingPolicy,
-      allSuitableProductCount: blockEstimatedPumpCards ? 0 : selectionResult.matchedProducts.length || cards.length,
-      allSuitableProductCountIsCapped: !blockEstimatedPumpCards && selectionResult.matchedProducts.length >= FULL_SLICE_PRODUCT_CARDS,
+      allSuitableProductCount: undefined,
+      allSuitableProductCountIsCapped: undefined,
       allSuitableProducts: compactSuitableProductsForAnswer(
         suitableProductsForContext,
         visibleCardIdsForContext,
@@ -6170,7 +6135,6 @@ export class AssistantService {
       structuredCatalogSlice: !blockEstimatedPumpCards && structuredCatalogSlice
         ? {
             source: structuredCatalogSlice.source,
-            totalMatched: structuredCatalogSlice.totalMatched,
             visibleLimit: structuredCatalogSlice.visibleLimit,
             constraints: structuredCatalogSlice.constraints,
             exactCatalogMatches: (structuredCatalogSlice.exactCatalogMatches ?? []).slice(0, 20).map((product) => ({
@@ -6329,9 +6293,7 @@ export class AssistantService {
       }).catch((error) => console.warn('Conversation turn answering update failed', safeError(error)));
     }
 
-    if (purchasePlan.leadRequested) {
-      answer = deterministicLeadCollectionAnswer(cards, bundleTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult), input.userMessage);
-    } else try {
+    try {
       const result = await executeAnswerRequest(answerRequest, 'answer');
       answer = result.answer;
       completedResponse = result.completedResponse;
@@ -7235,6 +7197,40 @@ function turnPlanSchema() {
           'cardDisplayMode'
         ]
       },
+      agentDecision: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          answerTask: {
+            type: 'string',
+            enum: ['technical_explanation', 'comparison', 'product_selection', 'mixed', 'lead_handoff']
+          },
+          mustAnswerNow: {
+            type: 'array',
+            items: { type: 'string' },
+            maxItems: 8
+          },
+          currentFocus: { type: 'string' },
+          cardsRole: {
+            type: 'string',
+            enum: ['none', 'supporting', 'primary']
+          },
+          leadAllowed: { type: 'boolean' },
+          leadAllowedReason: { type: 'string' },
+          errorRecoveryPriority: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 1 }
+        },
+        required: [
+          'answerTask',
+          'mustAnswerNow',
+          'currentFocus',
+          'cardsRole',
+          'leadAllowed',
+          'leadAllowedReason',
+          'errorRecoveryPriority',
+          'confidence'
+        ]
+      },
       needsWebSearch: { type: 'boolean' },
       missingInformation: {
         type: 'array',
@@ -7253,6 +7249,7 @@ function turnPlanSchema() {
       'selectedProductIds',
       'requiredProductTraits',
       'selectionState',
+      'agentDecision',
       'needsWebSearch',
       'missingInformation',
       'answerGuidance'

@@ -59,6 +59,7 @@ const criticalTextPatterns = [
   /network error/i,
   /AI FALLBACK/i,
   /Connection error/i,
+  /Не смог надежно завершить ответ/iu,
   /ответ не успел|не успел сформироваться/i,
   /server finished without a done payload/i,
   /\bundefined\b|\bnull\b/i
@@ -199,11 +200,13 @@ function assertPhase(phase, answer, pageText) {
 
 function fallbackUsed(metadata) {
   const diagnostics = metadata?.aiDiagnostics ?? {};
+  const validatorWarnings = metadata?.validatorWarnings ?? metadata?.turnContract?.validatorWarnings ?? [];
   return Boolean(
     diagnostics.needExtractionFallback?.used ||
     diagnostics.turnPlanningFallback?.used ||
     diagnostics.answerGenerationFallback?.used ||
-    metadata?.answerGenerationFallback?.used
+    metadata?.answerGenerationFallback?.used ||
+    validatorWarnings.includes('contract_source:legacy_text_fallback')
   );
 }
 
@@ -307,6 +310,7 @@ async function main() {
       '- PASS: needExtractionFallback.used=false for every assistant turn.',
       '- PASS: turnPlanningFallback.used=false for every assistant turn.',
       '- PASS: answerGenerationFallback.used=false for every assistant turn.',
+      '- PASS: AgentTurnContract came from LLM planner, not legacy text fallback.',
       '- PASS: all conversation_turns completed.',
       '- PASS: UI did not show AI fallback diagnostics, network error, empty answer, or timeout text.',
       '- PASS: generator and plate needs were both retained through the final summary.'

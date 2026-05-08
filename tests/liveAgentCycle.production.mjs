@@ -47,6 +47,7 @@ const turns = [
 
 const criticalPatterns = [
   /network error/i,
+  /Не смог надежно завершить ответ/iu,
   /ответ не успел/iu,
   /не успел сформироваться/iu,
   /server finished without a done payload/i,
