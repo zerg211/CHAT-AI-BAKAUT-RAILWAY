@@ -4767,6 +4767,23 @@ export class AssistantService {
     }
   }
 
+  private async productCardsFromRecoveredSelection(state: CustomerNeedState, userMessage: string) {
+    const ids = uniqueList(state.selectionState?.selectedProductIds ?? [], FULL_SLICE_PRODUCT_CARDS);
+    if (!ids.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
+    const idSet = new Set(ids);
+    const catalog = await this.products.listProducts(5000).catch(() => []);
+    const byId = new Map(catalog.filter((product) => idSet.has(product.id)).map((product) => [product.id, product]));
+    const selectedProducts = ids.map((id) => byId.get(id)).filter((product): product is Product => Boolean(product));
+    if (!selectedProducts.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
+    const profile = buildProductFitProfile(state, userMessage);
+    const cards = productCards(selectedProducts, state, userMessage, profile, FULL_SLICE_PRODUCT_CARDS);
+    const initialVisibleCount = Math.min(cards.length, LARGE_SLICE_VISIBLE_CARDS);
+    return {
+      cards,
+      cardDisplay: cardDisplayOptions(initialVisibleCount, cards)
+    };
+  }
+
   async updateNeedState(
     current: CustomerNeedState,
     historySummary: string | null | undefined,
@@ -6564,6 +6581,13 @@ export class AssistantService {
     }
 
     const contract = (turn.plannerContract ?? null) as AgentTurnContract | null;
+    const recoveredSelection = await this.productCardsFromRecoveredSelection(session.needState, latestUser?.content ?? '');
+    const recoveredCardSummary = recoveredSelection.cards.slice(0, LARGE_SLICE_VISIBLE_CARDS).map((card) => ({
+      id: card.id,
+      name: card.name,
+      price: card.price,
+      category: card.category
+    }));
     const client = createOpenAIClient();
     let answer = '';
     let openAiError: unknown;
@@ -6575,6 +6599,9 @@ export class AssistantService {
           instructions: [
             buildSystemPrompt(),
             'Recover an interrupted chat answer. Do not repeat the user message. Finish the answer from the saved turn contract. Be concise and human. Do not show technical error codes to the buyer.',
+            recoveredSelection.cards.length
+              ? 'Validated product cards are being returned with this recovery payload. Treat them as already shown under the answer: give a short selection conclusion, name only the first one or two visible cards, and do not say you will select cards later.'
+              : '',
             contract
               ? `TurnContract: answerTask=${contract.answerTask}; cardsRole=${contract.cardsRole}; leadAllowed=${contract.leadAllowed}; mustAnswerNow=${contract.mustAnswerNow.join('; ') || contract.errorRecoveryPriority}.`
               : ''
@@ -6586,6 +6613,8 @@ export class AssistantService {
               conversationSummary: session.historySummary,
               activeNeeds: session.needState.activeNeeds,
               turnContract: contract,
+              productCardsShown: recoveredCardSummary,
+              productCardDisplay: recoveredSelection.cardDisplay,
               recentMessages: compactHistoryForAI(history, 10, 700)
             }))
           }],
@@ -6611,6 +6640,8 @@ export class AssistantService {
         recovered: true,
         recoveryAttempts: 1,
         turnContract: contract,
+        productCards: recoveredSelection.cards,
+        cardDisplay: recoveredSelection.cardDisplay,
         activeNeedsAfter: session.needState.activeNeeds ?? [],
         openAiError
       }
@@ -6630,7 +6661,8 @@ export class AssistantService {
       turnId: input.turnId,
       answer,
       needState: session.needState,
-      productCards: [],
+      productCards: recoveredSelection.cards,
+      cardDisplay: recoveredSelection.cardDisplay,
       usedWebSearch: false,
       leadRequested: false,
       assistantMessageId: assistantMessage.id,
@@ -6639,6 +6671,8 @@ export class AssistantService {
         recovered: true,
         recoveryAttempts: 1,
         turnContract: contract ?? undefined,
+        productCards: recoveredSelection.cards,
+        cardDisplay: recoveredSelection.cardDisplay,
         activeNeedsAfter: session.needState.activeNeeds ?? [],
         openAiError
       }
