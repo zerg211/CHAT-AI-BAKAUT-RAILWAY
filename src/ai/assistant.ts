@@ -4768,6 +4768,9 @@ export class AssistantService {
   }
 
   private async productCardsFromRecoveredSelection(state: CustomerNeedState, userMessage: string) {
+    if (state.selectionState?.targetProductClass === 'generator' && shouldBlockGeneratorCardsForEstimatedPump(state.selectionState)) {
+      return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
+    }
     const ids = uniqueList(state.selectionState?.selectedProductIds ?? [], FULL_SLICE_PRODUCT_CARDS);
     if (!ids.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
     const idSet = new Set(ids);
