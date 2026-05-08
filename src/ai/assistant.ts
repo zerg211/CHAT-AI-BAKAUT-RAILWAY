@@ -2861,6 +2861,7 @@ function hasPreliminaryGeneratorSelectionBasis(state: ProductSelectionState) {
   if (hard.productIntent !== 'generator') return true;
   const profile = state.loadProfile;
   if (!profile?.requiredNominalKw || !hasEstimatedPumpLoad(state)) return false;
+  if (!hasTypedEstimatedPumpLoad(state)) return false;
   const hasOtherLoad = (profile.items ?? []).some((item) =>
     item.kind !== 'pump' &&
     item.kind !== 'aggregate_load' &&
@@ -2899,6 +2900,14 @@ function isReliableGeneratorLoadProfile(profile?: ProductGeneratorLoadProfile | 
 function hasEstimatedPumpLoad(state: ProductSelectionState) {
   return state.hardConstraints.productIntent === 'generator' &&
     (state.loadProfile?.items ?? []).some((item) => item.kind === 'pump' && item.source === 'estimated_average');
+}
+
+function hasTypedEstimatedPumpLoad(state: ProductSelectionState) {
+  const pumpText = (state.loadProfile?.items ?? [])
+    .filter((item) => item.kind === 'pump' && item.source === 'estimated_average')
+    .map((item) => [item.name, item.evidence].filter(Boolean).join(' '))
+    .join(' ');
+  return /(?:скважин|погружн|глубин|поверхност|насосн\w*\s+станц|циркуляц|колодез|borehole|submersible|well\s+pump|surface\s+pump|booster|circulation)/iu.test(pumpText);
 }
 
 function shouldBlockGeneratorCardsForEstimatedPump(state: ProductSelectionState) {

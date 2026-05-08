@@ -769,7 +769,7 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.shouldForceStructuredSelectionCards('Need generator for a pump', plan, result)).toBe(false);
   });
 
-  it('allows preliminary generator cards when an unknown pump is only one load in a calculated home reserve need', () => {
+  it('does not promote generator cards when the pump type is unknown even with other home loads', () => {
     const fit = productWithSpecs('fit-5kw', 'Generator gasoline 5.5 kW 220 V', 64_000, 'https://example.test/generators/fit-5kw/', {
       nominalPower: '5.5 kW',
       maxPower: '6.0 kW'
@@ -785,12 +785,12 @@ describe('recommendation ranking', () => {
         items: [
           {
             kind: 'pump',
-            name: 'unknown borehole pump',
+            name: 'pump',
             count: 1,
             runningKw: 0.8,
             startingKw: 3.2,
             source: 'estimated_average',
-            evidence: 'pump without exact power'
+            evidence: 'pump, type and power unknown'
           },
           {
             kind: 'refrigerator',
@@ -812,7 +812,7 @@ describe('recommendation ranking', () => {
           }
         ],
         confidence: 0.68,
-        calculation: 'unknown pump, refrigerator, LED light, angle grinder',
+        calculation: 'generic pump, refrigerator, LED light, angle grinder',
         totalRunningKw: 2.25,
         requiredNominalKw: 5,
         requiredStartingKw: 6,
@@ -835,10 +835,85 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.selectionResultCanDriveCards(
       plan,
       result,
-      '220 V, unknown borehole pump, refrigerator, LED light, sometimes a 1.2 kW angle grinder'
+      '220 V, pump type unknown, refrigerator, LED light, sometimes a 1.2 kW angle grinder'
+    )).toBe(false);
+    expect(assistantTestHooks.shouldForceStructuredSelectionCards(
+      '220 V, pump type unknown, refrigerator, LED light, sometimes a 1.2 kW angle grinder',
+      plan,
+      result
+    )).toBe(false);
+  });
+
+  it('allows preliminary generator cards when the pump type is known but exact power is missing', () => {
+    const fit = productWithSpecs('fit-5kw', 'Generator gasoline 5.5 kW 220 V', 64_000, 'https://example.test/generators/fit-5kw/', {
+      nominalPower: '5.5 kW',
+      maxPower: '6.0 kW'
+    });
+    const pumpState = mergeProductSelectionState(reliableGeneratorSelectionResult().state, {
+      hardConstraints: {
+        ...reliableGeneratorSelectionResult().state.hardConstraints,
+        nominalPowerKwMin: 5,
+        nominalPowerKwMax: 6.5,
+        maxPowerKwMin: 6
+      },
+      loadProfile: {
+        items: [
+          {
+            kind: 'pump',
+            name: 'borehole pump',
+            count: 1,
+            runningKw: 0.8,
+            startingKw: 3.2,
+            source: 'estimated_average',
+            evidence: 'borehole pump without exact power'
+          },
+          {
+            kind: 'refrigerator',
+            name: 'refrigerator',
+            count: 1,
+            runningKw: 0.25,
+            startingKw: 0.9,
+            source: 'explicit_user',
+            evidence: 'one refrigerator'
+          },
+          {
+            kind: 'tool',
+            name: 'angle grinder',
+            count: 1,
+            runningKw: 1.2,
+            startingKw: 1.2,
+            source: 'explicit_user',
+            evidence: '1.2 kW angle grinder'
+          }
+        ],
+        confidence: 0.68,
+        calculation: 'borehole pump, refrigerator, LED light, angle grinder',
+        totalRunningKw: 2.25,
+        requiredNominalKw: 5,
+        requiredStartingKw: 6,
+        simultaneousStarting: false
+      } as any,
+      confidence: 0.72
+    });
+    const result = reliableGeneratorSelectionResult({
+      state: pumpState,
+      matchedProducts: [fit],
+      visibleProducts: [fit],
+      confidence: 0.72
+    });
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'auto'
+    });
+
+    expect(assistantTestHooks.selectionResultCanDriveCards(
+      plan,
+      result,
+      '220 V, borehole pump power unknown, refrigerator, LED light, sometimes a 1.2 kW angle grinder'
     )).toBe(true);
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(
-      '220 V, unknown borehole pump, refrigerator, LED light, sometimes a 1.2 kW angle grinder',
+      '220 V, borehole pump power unknown, refrigerator, LED light, sometimes a 1.2 kW angle grinder',
       plan,
       result
     )).toBe(true);

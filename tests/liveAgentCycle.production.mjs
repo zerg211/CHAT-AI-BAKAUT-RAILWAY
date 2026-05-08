@@ -2,51 +2,118 @@ import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+const started = new Date().toISOString();
+const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-bakautprof-production-agent-cycle.local.md`);
+const failurePath = path.join('local-live-tests', 'production-agent-cycle-failure.json');
+
 const turns = [
-  'Здравствуйте. Нужен генератор для дачи, но точные данные не знаю: холодильник, насос, свет, иногда инструмент.',
-  'Дом обычный 220 В. Насос не знаю какой, холодильник один, свет LED, иногда болгарка. Хочу без лишней переплаты.',
-  'А если взять дешевле и почти без запаса, чем рискую? И сравните бензиновый и дизельный для редких отключений.',
-  'Параллельно нужна виброплита для дорожек на участке. Плитка и песок, иногда щебень, таскать буду сам.',
-  'По виброплите что важнее: вес, глубина уплотнения или размер подошвы? Хочу понять эксплуатацию.',
-  'По генератору нужен ли автозапуск или АВР, если отключения редкие? Что придется обслуживать?',
-  'Есть ли доставка и скидка, и можно ли понять примерную сумму комплекта без точного заказа?',
-  'Номер пока не оставляю. Сначала дайте финальный итог: генератор отдельно, виброплита отдельно, что еще уточнить.',
-  'И коротко: что бы вы выбрали как менеджер, если я не хочу переплатить, но хочу без явного риска?'
+  {
+    phase: 'unclear_generator_need',
+    text: 'Здравствуйте. Нужен генератор для дачи на случай отключений. Точных цифр нет: холодильник, насос, свет и иногда инструмент. Не хочется переплачивать, но и промахнуться по мощности тоже не хочу.'
+  },
+  {
+    phase: 'generic_pump_unknown',
+    text: 'Дом обычный, 220 В. Насос не знаю какой, модель сейчас не скажу. Холодильник один, свет LED, иногда болгарка 1,2 кВт. Насос с холодильником могут включиться вместе.'
+  },
+  {
+    phase: 'typed_pump_preliminary_selection',
+    text: 'Уточнил: насос скважинный, 220 В, но мощность на шильдике сейчас посмотреть не могу. Уже можно прикинуть варианты генераторов: минимальный и с запасом?'
+  },
+  {
+    phase: 'comparison_and_reserve',
+    text: 'А если взять дешевле и почти без запаса, чем рискую на практике? И для редких отключений бензиновый или дизельный выгоднее?'
+  },
+  {
+    phase: 'second_need_plate',
+    text: 'Параллельно нужна виброплита для дорожек на участке. Будет плитка, песок, иногда немного щебня. Грузить и таскать чаще буду сам, поэтому слишком тяжелую не хочу.'
+  },
+  {
+    phase: 'plate_use_question',
+    text: 'По плите объясните просто: что важнее для моей задачи - вес, глубина уплотнения или размер подошвы?'
+  },
+  {
+    phase: 'generator_operation_question',
+    text: 'Вернусь к генератору: нужен ли автозапуск или АВР, если отключения редкие? И что обслуживать, чтобы бензиновый нормально заводился после простоя?'
+  },
+  {
+    phase: 'commercial_question',
+    text: 'А доставка и скидка есть? И примерно можно понять порядок суммы за генератор плюс виброплиту, если точные модели еще выбираем?'
+  },
+  {
+    phase: 'contact_refusal_summary',
+    text: 'Пока без звонка. Сначала хочу понять по технике: что сейчас брать по генератору, что по виброплите и какие данные еще надо уточнить.'
+  }
 ];
 
 const criticalPatterns = [
   /network error/i,
-  /ответ не успел/i,
-  /не успел сформироваться/i,
+  /ответ не успел/iu,
+  /не успел сформироваться/iu,
   /server finished without a done payload/i,
-  /undefined|null/i
+  /\bundefined\b|\bnull\b/i
 ];
 
 function latestAssistant(messages) {
   return [...messages].reverse().find((message) => message.role === 'assistant')?.text ?? '';
 }
 
-function assertNoCriticalFailures(messages) {
-  const transcript = messages.map((message) => message.text).join('\n\n');
+function hasGeneratorCardText(text) {
+  return /Генератор\s+бензиновый|Бензиновые генераторы/iu.test(text) && /\d[\d\s]*(?:RUB|₽)/iu.test(text);
+}
+
+function assertNoCriticalText(text, phase) {
   for (const pattern of criticalPatterns) {
-    if (pattern.test(transcript)) throw new Error(`Critical failure pattern found: ${pattern}`);
+    if (pattern.test(text)) throw new Error(`Critical failure pattern ${pattern} in ${phase}: ${text}`);
   }
-  if (!/генератор/i.test(transcript)) throw new Error('Generator need was lost.');
-  if (!/виброплит/i.test(transcript)) throw new Error('Plate need was lost.');
-  if (/номер пока не оставляю/i.test(transcript) && /оставьте.{0,80}(телефон|номер|контакт)/iu.test(latestAssistant(messages))) {
-    throw new Error('Lead pressure after explicit contact refusal.');
+}
+
+function assertPhase(phase, answer, pageText) {
+  assertNoCriticalText(answer, phase);
+  const combined = `${answer}\n${pageText}`;
+
+  if (phase === 'generic_pump_unknown') {
+    if (hasGeneratorCardText(combined)) {
+      throw new Error('Generic unknown pump produced generator cards before pump type or power was known.');
+    }
+    if (!/(тип|какой).{0,80}насос|насос.{0,80}(мощност|модель|шильдик|тип)/iu.test(answer)) {
+      throw new Error(`Generic pump answer did not ask for pump type/model/power: ${answer}`);
+    }
   }
-  const commercialAnswer = messages.find((message) =>
-    message.role === 'assistant' &&
-    /доставк|скидк|сумм|комплект|логист/iu.test(message.text)
-  );
-  if (commercialAnswer && /ориентир.{0,80}сумм/iu.test(commercialAnswer.text) && !/генератор/iu.test(commercialAnswer.text)) {
-    throw new Error('Bundle total was stated without a selected generator in the same commercial answer.');
+
+  if (phase === 'typed_pump_preliminary_selection') {
+    if (!hasGeneratorCardText(combined)) {
+      throw new Error('Typed pump context did not produce preliminary generator cards.');
+    }
+    if (!/(предвар|мощност|модель|шильдик|точн)/iu.test(answer)) {
+      throw new Error(`Typed pump selection did not mark the recommendation as preliminary/needs pump check: ${answer}`);
+    }
   }
-  const comparisonTurn = messages.find((message) => message.role === 'assistant' && /бензин|дизел|запас/iu.test(message.text));
-  if (!comparisonTurn) throw new Error('No assistant answer covered gasoline/diesel or reserve risk.');
-  if (/наш[её]л[ао]?\s+\d+\s+(?:позиц|вариант|товар)/iu.test(comparisonTurn.text) && !/бензин|дизел|запас/iu.test(comparisonTurn.text)) {
-    throw new Error('Comparison was replaced by catalog shortlist.');
+
+  if (phase === 'comparison_and_reserve') {
+    if (!/бензин/iu.test(answer) || !/дизел/iu.test(answer) || !/(запас|пуск|перегруз|напряж)/iu.test(answer)) {
+      throw new Error(`Comparison did not cover gasoline/diesel and reserve risk: ${answer}`);
+    }
+    if (/режущие диски|водяной узел/iu.test(answer)) {
+      throw new Error(`Generator comparison included irrelevant consumables: ${answer}`);
+    }
+  }
+
+  if (phase === 'commercial_question') {
+    if (/ориентир.{0,80}сумм/iu.test(answer) && !/генератор/iu.test(answer)) {
+      throw new Error(`Bundle total was stated without selected generator context: ${answer}`);
+    }
+    if (!/(доставк|логист|менеджер|услов)/iu.test(answer)) {
+      throw new Error(`Commercial answer did not separate delivery/discount conditions: ${answer}`);
+    }
+  }
+
+  if (phase === 'contact_refusal_summary') {
+    if (/остав(ь|ьте).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер)/iu.test(answer)) {
+      throw new Error(`Lead pressure after contact refusal: ${answer}`);
+    }
+    if (!/генератор/iu.test(answer) || !/виброплит/iu.test(answer)) {
+      throw new Error(`Final summary lost generator or plate need: ${answer}`);
+    }
   }
 }
 
@@ -66,64 +133,6 @@ async function collectMessages(frame) {
   })));
 }
 
-async function main() {
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: await resolveBrowserExecutable()
-  });
-  const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
-  const messages = [];
-  try {
-    await page.goto('https://bakautprof.ru/', { waitUntil: 'domcontentloaded', timeout: 90_000 });
-    const iframeElement = await page.locator('iframe[src*="chat-ai-production"], iframe[src*="railway"], iframe[src*="/widget"]').first();
-    await iframeElement.waitFor({ state: 'attached', timeout: 60_000 });
-    const frame = await iframeElement.contentFrame();
-    if (!frame) throw new Error('Chat iframe frame was not available.');
-
-    const openButton = frame.getByRole('button').filter({ hasText: /чат|консультант|задать|написать/i }).first();
-    await openButton.click({ timeout: 20_000 }).catch(() => undefined);
-    const input = frame.locator('textarea, input[type="text"]').first();
-    await input.waitFor({ state: 'visible', timeout: 60_000 });
-
-    for (const turn of turns) {
-      await input.waitFor({ state: 'visible', timeout: 60_000 });
-      await waitInputEnabled(input);
-      await input.fill(turn);
-      await input.press('Enter');
-      await waitInputEnabled(input);
-      await page.waitForTimeout(1000);
-      const currentMessages = await collectMessages(frame);
-      messages.splice(0, messages.length, ...currentMessages);
-      const answer = latestAssistant(messages);
-      if (!answer || criticalPatterns.some((pattern) => pattern.test(answer))) {
-        throw new Error(`Critical assistant answer after turn "${turn}": ${answer}`);
-      }
-      if (/доставк|скидк|сумм|комплект/iu.test(turn) && /ориентир.{0,80}сумм/iu.test(answer) && !/генератор/iu.test(answer)) {
-        throw new Error(`Bundle total was stated without selected generator after commercial turn: ${answer}`);
-      }
-    }
-
-    assertNoCriticalFailures(messages);
-    await fs.mkdir('local-live-tests', { recursive: true });
-    const file = path.join('local-live-tests', `${new Date().toISOString().slice(0, 10)}-bakautprof-production-agent-cycle.local.md`);
-    await fs.writeFile(file, [
-      '# Production embedded widget live agent-cycle',
-      '',
-      `URL: https://bakautprof.ru/`,
-      `Date: ${new Date().toISOString()}`,
-      '',
-      ...messages.map((message) => `**${message.role}:** ${message.text}`)
-    ].join('\n\n'), 'utf8');
-    console.log(`PASS production live agent cycle. Protocol: ${file}`);
-  } catch (error) {
-    await fs.mkdir('local-live-tests', { recursive: true });
-    await fs.writeFile(path.join('local-live-tests', 'production-agent-cycle-failure.json'), JSON.stringify({ error: String(error), messages }, null, 2), 'utf8');
-    throw error;
-  } finally {
-    await browser.close();
-  }
-}
-
 async function resolveBrowserExecutable() {
   const candidates = [
     process.env.PLAYWRIGHT_CHROME_PATH,
@@ -141,6 +150,77 @@ async function resolveBrowserExecutable() {
     }
   }
   return undefined;
+}
+
+async function main() {
+  await fs.mkdir('local-live-tests', { recursive: true });
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: await resolveBrowserExecutable()
+  });
+  const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
+  const steps = [];
+
+  try {
+    await page.goto('https://bakautprof.ru/', { waitUntil: 'domcontentloaded', timeout: 90_000 });
+    const iframeElement = page.locator('iframe[src*="chat-ai-production"], iframe[src*="railway"], iframe[src*="/widget"]').first();
+    await iframeElement.waitFor({ state: 'attached', timeout: 60_000 });
+    const frame = await iframeElement.contentFrame();
+    if (!frame) throw new Error('Chat iframe frame was not available.');
+
+    await frame.getByRole('button').filter({ hasText: /чат|консультант|задать|написать/i }).first().click({ timeout: 20_000 }).catch(() => undefined);
+    const input = frame.locator('textarea, input[type="text"]').first();
+    await input.waitFor({ state: 'visible', timeout: 60_000 });
+
+    for (const turn of turns) {
+      await input.waitFor({ state: 'visible', timeout: 60_000 });
+      await waitInputEnabled(input);
+      await input.fill(turn.text);
+      await input.press('Enter');
+      await waitInputEnabled(input);
+      await page.waitForTimeout(1000);
+
+      const messages = await collectMessages(frame);
+      const answer = latestAssistant(messages);
+      const pageText = await frame.locator('body').innerText().catch(() => '');
+      if (!answer) throw new Error(`Empty assistant answer after ${turn.phase}`);
+      assertPhase(turn.phase, answer, pageText);
+      steps.push({ phase: turn.phase, user: turn.text, assistant: answer });
+    }
+
+    const transcript = steps.map((step) => `${step.user}\n${step.assistant}`).join('\n\n');
+    if (!/генератор/iu.test(transcript)) throw new Error('Generator need was lost.');
+    if (!/виброплит/iu.test(transcript)) throw new Error('Plate need was lost.');
+
+    await fs.writeFile(protocolPath, [
+      '# Production embedded widget live agent-cycle',
+      '',
+      `URL: https://bakautprof.ru/`,
+      `Date: ${new Date().toISOString()}`,
+      '',
+      ...steps.flatMap((step, index) => [
+        `## Turn ${index + 1}: ${step.phase}`,
+        '',
+        `**User:** ${step.user}`,
+        '',
+        `**Assistant:** ${step.assistant}`
+      ]),
+      '',
+      '## Audit',
+      '',
+      '- PASS: full production iframe path completed.',
+      '- PASS: generic unknown pump did not produce generator cards.',
+      '- PASS: typed pump produced only preliminary generator selection.',
+      '- PASS: comparison, multi-need memory, commercial handoff, and contact refusal checks passed.'
+    ].join('\n'), 'utf8');
+
+    console.log(`PASS production live agent cycle. Protocol: ${protocolPath}`);
+  } catch (error) {
+    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), steps }, null, 2), 'utf8');
+    throw error;
+  } finally {
+    await browser.close();
+  }
 }
 
 main();
