@@ -184,8 +184,8 @@ async function main() {
       const answer = latestAssistant(messages);
       const pageText = await frame.locator('body').innerText().catch(() => '');
       if (!answer) throw new Error(`Empty assistant answer after ${turn.phase}`);
+      steps.push({ phase: turn.phase, user: turn.text, assistant: answer, pageText });
       assertPhase(turn.phase, answer, pageText);
-      steps.push({ phase: turn.phase, user: turn.text, assistant: answer });
     }
 
     const transcript = steps.map((step) => `${step.user}\n${step.assistant}`).join('\n\n');

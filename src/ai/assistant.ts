@@ -1560,6 +1560,22 @@ function shouldForceStructuredSelectionCards(userMessage: string, plan: Assistan
     !isTextOnlyFactualTurn(userMessage, plan);
 }
 
+function shouldPromotePrimarySelectionCards(
+  contract: AgentTurnContract,
+  plan: AssistantTurnPlan,
+  result: ProductSelectionResult,
+  blockEstimatedPumpCards: boolean
+) {
+  return contract.cardsRole === 'primary' &&
+    !isLeadPlan(plan) &&
+    !blockEstimatedPumpCards &&
+    result.trace?.canRecommendFromSelection === true &&
+    result.visibleProducts.length > 0 &&
+    result.matchedProducts.length > 0 &&
+    result.confidence >= 0.55 &&
+    hasReliableGeneratorSelectionBasis(result.state);
+}
+
 function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
   const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
   const answerQuestionWithAutoCards = plan.action === 'answer_question' &&
@@ -5383,8 +5399,9 @@ export class AssistantService {
       for (const product of structuredCatalogSlice.products) byId.set(product.id, product);
       for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
       const selectionEngineRequestsCards = shouldForceStructuredSelectionCards(input.userMessage, effectivePlan, selectionResult);
+      const primarySelectionRequestsCards = shouldPromotePrimarySelectionCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
       if (agentTurnContract.cardsRole === 'primary' &&
-        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards) &&
+        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = {
           ...effectivePlan,
@@ -6720,5 +6737,6 @@ export const assistantTestHooks = {
   isCatalogAvailabilityQuestion,
   isManufacturingStatusQuestion,
   pumpTypeFromText,
-  generatorLoadProfileFromText
+  generatorLoadProfileFromText,
+  shouldPromotePrimarySelectionCards
 };

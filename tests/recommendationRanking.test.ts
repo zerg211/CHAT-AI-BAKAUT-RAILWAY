@@ -3867,6 +3867,19 @@ describe('recommendation ranking', () => {
     expect(pump?.name).toBe('borehole pump');
     expect(pump?.evidence).toMatch(/скважин/i);
     expect(followUp.visibleProducts.length).toBeGreaterThan(0);
+    const primarySelectionContract = {
+      cardsRole: 'primary',
+      answerTask: 'product_selection',
+      mustAnswerNow: [],
+      activeNeeds: [],
+      currentFocus: 'generator',
+      leadAllowed: true,
+      leadAllowedReason: 'test',
+      errorRecoveryPriority: 'test',
+      validatorWarnings: []
+    } as never;
+    expect(assistantTestHooks.shouldPromotePrimarySelectionCards(primarySelectionContract, plan, initial, true)).toBe(false);
+    expect(assistantTestHooks.shouldPromotePrimarySelectionCards(primarySelectionContract, plan, followUp, false)).toBe(true);
   });
 
   it('does not treat a question about switching to 7-8 kW as a desired generator range', async () => {
