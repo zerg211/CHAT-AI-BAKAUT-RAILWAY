@@ -106,6 +106,22 @@ export function deriveAgentTurnContract(input: {
 }
 
 export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, contract: AgentTurnContract): T {
+  if (contract.answerTask === 'product_selection' && contract.cardsRole === 'primary' && contract.leadAllowed) {
+    return {
+      ...plan,
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      selectionState: {
+        ...plan.selectionState,
+        shouldShowCards: true
+      },
+      answerGuidance: [
+        (plan as { answerGuidance?: string }).answerGuidance,
+        'AgentTurnContract treats this turn as product selection. Use validated catalog selection as primary output and show product cards when validators allow it.'
+      ].filter(Boolean).join('\n')
+    };
+  }
   if (contract.answerTask === 'comparison' || contract.answerTask === 'technical_explanation') {
     return {
       ...plan,
