@@ -125,10 +125,20 @@ When the buyer confirms they want to take/order/buy the selected items, do not s
 }
 
 export function buildNeedExtractorPrompt() {
-  return `Извлеки из последней реплики покупателя обновление состояния потребности.
+  return `Ты семантический мозг обновления состояния покупателя для AI-менеджера БАКАУТ.
+Твоя задача - понять смысл последней реплики в контексте истории, а не искать слова по шаблону.
 
 Верни только валидный JSON по схеме:
 {
+  "activeNeeds": [{
+    "id": string,
+    "productClass": "generator" | "plate" | "rammer" | "cutter" | "commercial" | "unknown",
+    "summary": string,
+    "constraints": string[],
+    "openQuestions": string[],
+    "selectedProductIds": string[],
+    "status": "open" | "selected" | "paused" | "closed"
+  }],
   "explicitNeeds": [{"value": string, "evidence": string, "confidence": number}],
   "implicitNeeds": [{"value": string, "evidence": string, "confidence": number}],
   "constraints": [{"value": string, "evidence": string, "confidence": number}],
@@ -136,6 +146,52 @@ export function buildNeedExtractorPrompt() {
   "confirmedFacts": [{"value": string, "evidence": string, "confidence": number}],
   "uncertainInferences": [{"value": string, "evidence": string, "confidence": number}],
   "contradictions": [{"value": string, "evidence": string, "confidence": number}],
+  "selectionState": {
+    "currentProductClass": string,
+    "targetProductClass": string,
+    "hardConstraints": {
+      "productIntent": string,
+      "productRole": string,
+      "fuel": "gasoline" | "diesel" | "any" | "unknown",
+      "startType": "electric" | "manual" | "any" | "unknown",
+      "enclosure": "enclosed" | "open" | "any" | "unknown",
+      "conventionalGenerator": boolean | null,
+      "singlePhase220": boolean | null,
+      "budgetMax": number | null,
+      "weightKgMin": number | null,
+      "weightKgMax": number | null,
+      "diameterMmMin": number | null,
+      "diameterMmMax": number | null,
+      "nominalPowerKwMin": number | null,
+      "nominalPowerKwMax": number | null,
+      "maxPowerKwMin": number | null,
+      "maxPowerKwMax": number | null,
+      "brandConstraint": string,
+      "exactModelConstraint": string,
+      "mustHaveTraits": string[],
+      "excludedClasses": string[],
+      "powerReasoning": string
+    },
+    "softPreferences": { "...": "same shape as hardConstraints" },
+    "unknowns": string[],
+    "conflicts": string[],
+    "selectedProductIds": string[],
+    "loadProfile": {
+      "items": [{
+        "kind": string,
+        "name": string,
+        "count": number,
+        "runningKw": number | null,
+        "startingKw": number | null,
+        "source": "explicit_user" | "estimated_average" | "web_average" | "catalog_fact",
+        "evidence": string
+      }],
+      "simultaneousStarting": boolean,
+      "confidence": number,
+      "removedKinds": string[]
+    },
+    "confidence": number
+  },
   "featureSignals": {
     "portable": number,
     "homeUse": number,
@@ -148,7 +204,17 @@ export function buildNeedExtractorPrompt() {
   "lastSummary": string
 }
 
-Не придумывай. Скрытые потребности допускаются только как вероятные выводы из слов покупателя.`;
+Правила смысла:
+- Не придумывай потребность, но фиксируй явно названные товары, нагрузки, ограничения и неизвестные параметры.
+- activeNeeds веди отдельно: генератор, виброплита и коммерческие вопросы не должны перетирать друг друга.
+- Если покупатель говорит "нет цифр", "не знаю мощность", "точных данных нет", это НЕ означает, что названного прибора нет. Это означает, что мощность неизвестна.
+- Если покупатель явно говорит "насоса нет", "без насоса", тогда убери насос через loadProfile.removedKinds=["pump"].
+- Для генераторов заполняй selectionState.loadProfile как главный структурный источник нагрузок. Детерминированный код дальше только пересчитает суммы.
+- Если точная мощность бытового прибора неизвестна, но прибор назван, оставь его в items с source="estimated_average" и разумной бытовой оценкой. В evidence укажи, что это оценка из слов покупателя.
+- Для скважинного/поверхностного/циркуляционного/дренажного насоса различай тип по смыслу реплики. Если тип насоса неизвестен, name="pump", kind="pump", source="estimated_average", а в unknowns добавь вопрос про тип или мощность насоса.
+- simultaneousStarting=true только когда покупатель по смыслу говорит, что моторные нагрузки могут стартовать одновременно; иначе false.
+- nominalPowerKwMin/Max в hardConstraints ставь только когда пользователь явно просит класс генератора или когда уже есть уверенный расчет loadProfile. Не завышай "на всякий случай".
+- Скрытые потребности допускаются только как вероятные выводы из слов покупателя; не заменяй ими явные факты.`;
 }
 
 export function buildTurnPlannerPrompt() {

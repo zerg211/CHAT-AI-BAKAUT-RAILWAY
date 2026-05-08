@@ -661,10 +661,10 @@ export function generatorReferenceLoadItemsFromText(text: string): ProductElectr
   const items: ProductElectricalLoadItem[] = [];
   const evidence = text;
   if (detections.some((item) => item.reference.loadClass === 'resistive_light_load')) {
-    pushUniqueLoad(items, { kind: 'lighting', name: 'свет', count: 1, runningKw: 0.5, startingKw: 0.5, source: 'estimated_average', evidence });
+    pushUniqueLoad(items, { kind: 'lighting', name: 'свет', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence });
   }
   if (detections.some((item) => item.reference.loadClass === 'small_electronics_load')) {
-    pushUniqueLoad(items, { kind: 'small_electronics', name: 'мелкая электроника', count: 1, runningKw: 0.3, startingKw: 0.3, source: 'estimated_average', evidence });
+    pushUniqueLoad(items, { kind: 'small_electronics', name: 'мелкая электроника', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence });
   }
   if (detections.some((item) => item.reference.loadClass === 'handheld_tool_load')) {
     const startingKw = detections.some((item) => ['circular_saw', 'angle_grinder', 'rotary_hammer'].includes(item.reference.id)) ? 3 : 1.8;
@@ -676,7 +676,7 @@ export function generatorReferenceLoadItemsFromText(text: string): ProductElectr
     pushUniqueLoad(items, { kind: 'pump', name: 'насос', count: 1, runningKw: 0.8, startingKw: 3, source: 'estimated_average', evidence });
   }
   if (detections.some((item) => item.reference.id === 'refrigerator')) {
-    pushUniqueLoad(items, { kind: 'refrigerator', name: 'холодильник', count: 1, runningKw: 0.6, startingKw: 2, source: 'estimated_average', evidence });
+    pushUniqueLoad(items, { kind: 'refrigerator', name: 'холодильник', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence });
   }
   if (detections.some((item) => item.reference.id === 'freezer')) {
     pushUniqueLoad(items, { kind: 'freezer', name: 'морозильник', count: 1, runningKw: 1, startingKw: 3.5, source: 'estimated_average', evidence });

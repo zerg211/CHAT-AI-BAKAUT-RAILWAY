@@ -299,6 +299,7 @@ export function mergeProductSelectionState(
   const nextTarget = incomingTarget ?? (reset ? 'unknown' : base.targetProductClass);
 
   return {
+    semanticSource: update.semanticSource ?? base.semanticSource,
     currentProductClass: update.currentProductClass && update.currentProductClass !== 'unknown'
       ? update.currentProductClass
       : nextTarget !== 'unknown'

@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { AgentTurnContract, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, TroubleshootingCase } from '../shared/types.js';
+import type { ActiveCustomerNeed, AgentTurnContract, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
@@ -103,6 +103,10 @@ function markAiFallback(diagnostics: AiGenerationDiagnostics | undefined, stage:
   const entry = { used: true, reason: aiFailureReason(error, fallback) };
   if (diagnostics) diagnostics[stage] = entry;
   return entry;
+}
+
+function aiStageFailure(stage: string, diagnostic?: AiFallbackDiagnostic): Error {
+  return new Error(`AI ${stage} failed: ${diagnostic?.reason ?? 'unknown_error'}`);
 }
 
 type WebCitation = {
@@ -371,8 +375,192 @@ function toNeedItems(items: unknown) {
     .filter((item) => item.value.length > 0);
 }
 
+function clamp01(value: unknown, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.max(0, Math.min(1, number)) : fallback;
+}
+
+function shortText(value: unknown, limit: number) {
+  return String(value ?? '').trim().slice(0, limit);
+}
+
+function coerceActiveNeedProductClass(value: unknown): ActiveCustomerNeed['productClass'] {
+  return value === 'commercial' ? 'commercial' : coerceProductIntent(value);
+}
+
+function toActiveNeeds(value: unknown): ActiveCustomerNeed[] {
+  if (!Array.isArray(value)) return [];
+  const now = new Date().toISOString();
+  const allowedStatuses: ActiveCustomerNeed['status'][] = ['open', 'selected', 'paused', 'closed'];
+  const result: ActiveCustomerNeed[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as any;
+    const productClass = coerceActiveNeedProductClass(raw.productClass);
+    const summary = shortText(raw.summary, 240);
+    if (productClass === 'unknown' || !summary) continue;
+    const id = shortText(raw.id, 80) || productClass;
+    const status = allowedStatuses.includes(raw.status) ? raw.status as ActiveCustomerNeed['status'] : 'open';
+    result.push({
+      id,
+      productClass,
+      summary,
+      constraints: coerceStringList(raw.constraints, 16),
+      openQuestions: coerceStringList(raw.openQuestions, 12),
+      selectedProductIds: coerceStringList(raw.selectedProductIds, 16),
+      status,
+      updatedAt: now
+    });
+  }
+  return result;
+}
+
+function coerceElectricalLoadSource(value: unknown): ProductElectricalLoadItem['source'] {
+  const allowed: ProductElectricalLoadItem['source'][] = ['explicit_user', 'estimated_average', 'web_average', 'catalog_fact'];
+  return allowed.includes(value as ProductElectricalLoadItem['source'])
+    ? value as ProductElectricalLoadItem['source']
+    : 'estimated_average';
+}
+
+function coerceElectricalLoadItems(value: unknown): ProductElectricalLoadItem[] {
+  if (!Array.isArray(value)) return [];
+  const result: ProductElectricalLoadItem[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as any;
+    const kind = shortText(raw.kind, 60);
+    const runningKw = coerceNullableNumber(raw.runningKw) ?? undefined;
+    const startingKw = coerceNullableNumber(raw.startingKw) ?? undefined;
+    if (!kind || (!runningKw && !startingKw)) continue;
+    result.push({
+      kind,
+      name: shortText(raw.name, 100) || kind,
+      count: Math.max(1, Math.min(12, Math.round(Number(raw.count) || 1))),
+      runningKw,
+      startingKw,
+      source: coerceElectricalLoadSource(raw.source),
+      evidence: shortText(raw.evidence, 300)
+    });
+  }
+  return result.slice(0, 16);
+}
+
+function coerceGeneratorLoadProfile(value: unknown): ProductGeneratorLoadProfile | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const object = value as Record<string, unknown>;
+  const items = coerceElectricalLoadItems(object.items);
+  const removedKinds = coerceStringList(object.removedKinds, 12);
+  const simultaneousStarting = Boolean(object.simultaneousStarting);
+  const calculated = calculateGeneratorLoadProfile(items, simultaneousStarting);
+  if (!calculated && !removedKinds.length) return undefined;
+  return {
+    ...(calculated ?? { items }),
+    removedKinds: removedKinds.length ? removedKinds : calculated?.removedKinds,
+    simultaneousStarting,
+    confidence: clamp01(object.confidence, calculated?.confidence ?? 0.5)
+  };
+}
+
+function coerceCriteriaFromNeedExtraction(value: unknown, fallbackIntent: ProductIntent): ProductSelectionCriteria | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as any;
+  const traits = coerceRequiredProductTraits(raw);
+  const productIntent = traits.productIntent !== 'unknown' ? traits.productIntent : fallbackIntent;
+  const criteria: ProductSelectionCriteria = {
+    productIntent,
+    productRole: traits.productRole !== 'unknown' ? traits.productRole : productIntent === 'unknown' ? 'unknown' : 'coreProduct',
+    exactModelTokens: [],
+    exactModelTokenRoles: [],
+    mustHaveTraits: coerceStringList(raw.mustHaveTraits, 16),
+    excludedClasses: coerceProductIntentList(raw.excludedClasses, 16),
+    provenance: {}
+  };
+  const setNumber = (
+    key: 'budgetMax' | 'nominalPowerKwMin' | 'nominalPowerKwMax' | 'maxPowerKwMin' | 'maxPowerKwMax' | 'weightKgMin' | 'weightKgMax' | 'diameterMmMin' | 'diameterMmMax',
+    next: number | null
+  ) => {
+    if (next !== null) {
+      criteria[key] = next;
+      criteria.provenance![key] = 'planner';
+    }
+  };
+  setNumber('budgetMax', traits.budgetMax);
+  setNumber('nominalPowerKwMin', traits.nominalPowerKwMin);
+  setNumber('nominalPowerKwMax', traits.nominalPowerKwMax);
+  setNumber('maxPowerKwMin', traits.maxPowerKwMin);
+  setNumber('maxPowerKwMax', traits.maxPowerKwMax);
+  setNumber('weightKgMin', traits.weightKgMin);
+  setNumber('weightKgMax', traits.weightKgMax);
+  setNumber('diameterMmMin', traits.diameterMmMin);
+  setNumber('diameterMmMax', traits.diameterMmMax);
+  if (traits.fuel !== 'unknown') {
+    criteria.fuel = traits.fuel;
+    criteria.provenance!.fuel = 'planner';
+  }
+  if (traits.startType !== 'unknown') {
+    criteria.startType = traits.startType;
+    criteria.provenance!.startType = 'planner';
+  }
+  if (traits.enclosure !== 'unknown') {
+    criteria.enclosure = traits.enclosure;
+    criteria.provenance!.enclosure = 'planner';
+  }
+  if (traits.conventionalGenerator !== null) {
+    criteria.conventionalGenerator = traits.conventionalGenerator;
+    criteria.provenance!.conventionalGenerator = 'planner';
+  }
+  if (traits.singlePhase220 !== null) {
+    criteria.singlePhase220 = traits.singlePhase220;
+    criteria.provenance!.singlePhase220 = 'planner';
+  }
+  const brandConstraint = shortText(raw.brandConstraint, 80);
+  if (brandConstraint) {
+    criteria.brandConstraint = brandConstraint;
+    criteria.provenance!.brandConstraint = 'planner';
+  }
+  const exactModelConstraint = shortText(raw.exactModelConstraint, 120);
+  if (exactModelConstraint) {
+    criteria.exactModelConstraint = exactModelConstraint;
+    criteria.provenance!.exactModelConstraint = 'planner';
+  }
+  return criteria;
+}
+
+function coerceSelectionStateFromNeedExtraction(value: unknown): ProductSelectionState | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const object = value as Record<string, unknown>;
+  const loadProfile = coerceGeneratorLoadProfile(object.loadProfile);
+  const targetProductClass = coerceProductIntent(object.targetProductClass);
+  const currentProductClass = coerceProductIntent(object.currentProductClass);
+  const effectiveTarget = targetProductClass !== 'unknown'
+    ? targetProductClass
+    : loadProfile ? 'generator' : 'unknown';
+  const hardConstraints = coerceCriteriaFromNeedExtraction(object.hardConstraints, effectiveTarget);
+  const softPreferences = coerceCriteriaFromNeedExtraction(object.softPreferences, effectiveTarget);
+  const confidence = clamp01(object.confidence, loadProfile ? 0.58 : 0);
+  const hasUpdate = effectiveTarget !== 'unknown' ||
+    currentProductClass !== 'unknown' ||
+    Boolean(hardConstraints || softPreferences || loadProfile) ||
+    coerceStringList(object.unknowns, 16).length > 0;
+  if (!hasUpdate) return undefined;
+  return mergeProductSelectionState(emptyProductSelectionState(), {
+    semanticSource: 'llm_need_extraction',
+    currentProductClass: currentProductClass !== 'unknown' ? currentProductClass : effectiveTarget,
+    targetProductClass: effectiveTarget,
+    hardConstraints,
+    softPreferences,
+    unknowns: coerceStringList(object.unknowns, 16),
+    conflicts: coerceStringList(object.conflicts, 16),
+    selectedProductIds: coerceStringList(object.selectedProductIds, 16),
+    loadProfile,
+    confidence,
+    updatedAt: new Date().toISOString()
+  });
+}
+
 function coerceNeedUpdate(value: any): Partial<CustomerNeedState> {
   return {
+    activeNeeds: toActiveNeeds(value?.activeNeeds),
     explicitNeeds: toNeedItems(value?.explicitNeeds),
     implicitNeeds: toNeedItems(value?.implicitNeeds),
     constraints: toNeedItems(value?.constraints),
@@ -389,6 +577,7 @@ function coerceNeedUpdate(value: any): Partial<CustomerNeedState> {
       professionalDuty: Number(value?.featureSignals?.professionalDuty ?? 0),
       budgetSensitive: Number(value?.featureSignals?.budgetSensitive ?? 0)
     },
+    selectionState: coerceSelectionStateFromNeedExtraction(value?.selectionState),
     lastSummary: typeof value?.lastSummary === 'string' ? value.lastSummary : ''
   };
 }
@@ -744,7 +933,8 @@ function selectionText(selection?: ProductSelectionState | null) {
 
 function hasNegatedPumpLoad(text: string) {
   return /(?:насос\w*|pump)[^.!?;\n]{0,40}(?:нет|не\s+будет|не\s+планир|отсутств|исключ)/iu.test(text) ||
-    /(?:нет|не\s+будет|не\s+планир|без|отсутств|исключ)[^.!?;\n]{0,40}(?:насос\w*|pump)/iu.test(text);
+    /(?:без|отсутств(?:ует|уют)?|исключ(?:аем|ить)?)[^.!?;\n]{0,24}(?:насос\w*|pump)/iu.test(text) ||
+    /(?:нет|не\s+будет|не\s+планир\w*)\s+(?:у\s+\S+\s+)?(?:насос\w*|pump)/iu.test(text);
 }
 
 function estimatedGeneratorPowerFromLoads(text: string): GeneratorPowerProfile | undefined {
@@ -1574,6 +1764,19 @@ function shouldPromotePrimarySelectionCards(
     result.matchedProducts.length > 0 &&
     result.confidence >= 0.55 &&
     hasReliableGeneratorSelectionBasis(result.state);
+}
+
+function shouldPromoteGeneratorSizingCards(userMessage: string, result: ProductSelectionResult, blockEstimatedPumpCards: boolean) {
+  if (blockEstimatedPumpCards) return false;
+  if (result.state.hardConstraints.productIntent !== 'generator') return false;
+  if (result.trace?.canRecommendFromSelection !== true) return false;
+  if (!result.visibleProducts.length || !result.matchedProducts.length) return false;
+  if (result.confidence < 0.55 || !hasReliableGeneratorSelectionBasis(result.state)) return false;
+  const normalized = userMessage.toLowerCase();
+  const hasGenerator = /(?:генератор|бензогенератор|электростанц)/iu.test(normalized);
+  const asksSizingForSelection = /(?:минимальн|достаточн|класс|подбор|подбер|вариант|модел|покаж|смотреть|брать|подход|какой|посчита|рассчит)/iu.test(normalized);
+  const pureOperationQuestion = /(?:после\s+запуск|сколько\s+(?:примерно\s+)?остан|обслуж|авр|автозапуск|расход|масло|заводил|эксплуатац)/iu.test(normalized);
+  return hasGenerator && asksSizingForSelection && !pureOperationQuestion;
 }
 
 function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
@@ -2427,6 +2630,20 @@ function calculateGeneratorLoadProfile(items: ProductElectricalLoadItem[], simul
   };
 }
 
+function inferredLoadPowerWindow(requiredNominalKw: number) {
+  const maxStep = requiredNominalKw <= 2.5
+    ? 2
+    : requiredNominalKw <= 4
+      ? 1
+      : requiredNominalKw <= 5.5
+        ? 0.8
+        : 1;
+  return {
+    min: requiredNominalKw,
+    max: Math.round((requiredNominalKw + maxStep) * 10) / 10
+  };
+}
+
 function hasAffirmativeSimultaneousStarting(text: string) {
   const simultaneous = /(?:одновременно|вместе|разом|сразу)/iu.test(text);
   if (!simultaneous) return false;
@@ -2491,8 +2708,8 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
       kind: 'lighting',
       name: 'свет',
       count: 1,
-      runningKw: explicit ?? 0.8,
-      startingKw: explicit ?? 0.8,
+      runningKw: explicit ?? 0.2,
+      startingKw: explicit ?? 0.2,
       source: explicit ? 'explicit_user' : 'estimated_average',
       evidence: text
     };
@@ -2512,6 +2729,46 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
       evidence: explicit ? text : previous?.evidence ?? text
     };
     items.set(loadItemKey(item), item);
+  }
+
+  const existingHandheldTool = [...items.values()].find((item) => item.kind === 'handheld_tool');
+  if (existingHandheldTool) {
+    const handheldToolTerms = new RegExp(`(?:${[
+      ruChars(1073, 1086, 1083, 1075, 1072, 1088, 1082),
+      ruChars(1091, 1096, 1084),
+      ruChars(1076, 1088, 1077, 1083),
+      ruChars(1087, 1077, 1088, 1092, 1086, 1088, 1072, 1090),
+      ruChars(1087, 1080, 1083),
+      ruChars(1087, 1080, 1083, 1072),
+      ruChars(1080, 1085, 1089, 1090, 1088, 1091, 1084, 1077, 1085, 1090),
+      'grinder',
+      'drill',
+      'saw',
+      'tool'
+    ].join('|')})`, 'iu');
+    const toolCompetingLoadRe = new RegExp(`(?:${[
+      ruChars(1085, 1072, 1089, 1086, 1089),
+      ruChars(1093, 1086, 1083, 1086, 1076, 1080, 1083),
+      ruChars(1089, 1074, 1077, 1090),
+      ruChars(1083, 1072, 1084, 1087),
+      ruChars(1086, 1089, 1074, 1077, 1097),
+      'pump',
+      'fridge',
+      'refrigerator',
+      'light',
+      'led'
+    ].join('|')})`, 'iu');
+    const explicit = explicitLoadKwNearOwnMention(text, handheldToolTerms, toolCompetingLoadRe);
+    if (explicit) {
+      const item: ProductElectricalLoadItem = {
+        ...existingHandheldTool,
+        runningKw: explicit,
+        startingKw: Math.max(roundPowerKw(explicit * 1.8), roundPowerKw(explicit + 0.6)),
+        source: 'explicit_user',
+        evidence: text
+      };
+      items.set(loadItemKey(existingHandheldTool), item);
+    }
   }
 
   const negatedPumpLoad = hasNegatedPumpLoad(text);
@@ -2657,10 +2914,12 @@ function explicitCriteriaFromTurn(
 ) {
   const targetProductClass = productIntentFromSelection(current, plan, profile);
   const plannerTraits = plan.requiredProductTraits;
-  const explicitRankingPreference = rankingPreferenceFromText(userMessage);
+  const semanticSelectionReady = current.semanticSource === 'llm_need_extraction';
+  const allowLegacyTextFallback = !semanticSelectionReady;
+  const explicitRankingPreference = allowLegacyTextFallback ? rankingPreferenceFromText(userMessage) : undefined;
   const rankingPreference = explicitRankingPreference ??
-    (targetProductClass !== 'unknown' && !hasBudgetSignal(userMessage) ? 'cheapest' : undefined);
-  const rankingOnly = isRankingOnlyFollowUp(userMessage);
+    (targetProductClass !== 'unknown' && (allowLegacyTextFallback ? !hasBudgetSignal(userMessage) : !plannerTraits.budgetMax) ? 'cheapest' : undefined);
+  const rankingOnly = allowLegacyTextFallback ? isRankingOnlyFollowUp(userMessage) : plan.searchScope === 'broadenAlternatives';
   const currentHard = current.activeRequirement ?? current.hardConstraints;
   const exactTokensFromMessage = expandModelTokenAliases(extractModelTokens(userMessage));
   const exactTokenRoles = tokenRolesForTurn(exactTokensFromMessage, userMessage, targetProductClass);
@@ -2692,7 +2951,7 @@ function explicitCriteriaFromTurn(
     hard.weightKgMax = plannerTraits.weightKgMax ?? undefined;
     if (plannerTraits.weightKgMin) hard.provenance!.weightKgMin = 'planner';
     if (plannerTraits.weightKgMax) hard.provenance!.weightKgMax = 'planner';
-  } else {
+  } else if (allowLegacyTextFallback) {
     const weightRange = parseWeightNeedRangeKg(userMessage) ?? implicitPlateWeightRangeFromNeed(activeText, targetProductClass);
     if (!rankingOnly && weightRange) {
       hard.weightKgMin = weightRange.min;
@@ -2708,7 +2967,7 @@ function explicitCriteriaFromTurn(
     hard.diameterMmMax = plannerTraits.diameterMmMax ?? undefined;
     if (plannerTraits.diameterMmMin) hard.provenance!.diameterMmMin = 'planner';
     if (plannerTraits.diameterMmMax) hard.provenance!.diameterMmMax = 'planner';
-  } else {
+  } else if (allowLegacyTextFallback) {
     const dimensionRange = parseDimensionNeedRangeMm(userMessage);
     if (!rankingOnly && dimensionRange) {
       hard.diameterMmMin = dimensionRange.min;
@@ -2717,23 +2976,31 @@ function explicitCriteriaFromTurn(
       hard.provenance!.diameterMmMax = 'explicit_user';
     }
   }
-  if (!rankingOnly && plannerTraits.budgetMax && hasBudgetSignal(userMessage)) {
+  if (!rankingOnly && plannerTraits.budgetMax && (!allowLegacyTextFallback || hasBudgetSignal(userMessage))) {
     hard.budgetMax = plannerTraits.budgetMax;
     hard.provenance!.budgetMax = 'planner';
-  } else {
+  } else if (allowLegacyTextFallback) {
     const budgetMax = parseBudgetMax(userMessage);
     if (!rankingOnly && budgetMax) {
       hard.budgetMax = budgetMax;
       hard.provenance!.budgetMax = 'explicit_user';
     }
   }
+  const plannerCompatibilityTarget = shortText(plan.selectionState.compatibilityTargetProduct, 160);
+  const compatibilityUpdate = plannerCompatibilityTarget
+    ? { name: plannerCompatibilityTarget, evidence: 'planner' }
+    : allowLegacyTextFallback ? compatibilityTargetFromText(userMessage) : undefined;
   const compatibilityTarget = targetProductClass === 'generator'
-    ? mergeCompatibilityTarget(current.compatibilityTargetProduct, compatibilityTargetFromText(userMessage))
+    ? mergeCompatibilityTarget(current.compatibilityTargetProduct, compatibilityUpdate)
     : undefined;
   const loadProfile = targetProductClass === 'generator'
-    ? generatorLoadProfileFromText(userMessage, current.loadProfile, compatibilityTarget)
+    ? semanticSelectionReady
+      ? current.loadProfile
+      : allowLegacyTextFallback
+        ? generatorLoadProfileFromText(userMessage, current.loadProfile, compatibilityTarget)
+        : current.loadProfile
     : undefined;
-  const contextualGroundedPowerMin = targetProductClass === 'generator'
+  const contextualGroundedPowerMin = targetProductClass === 'generator' && allowLegacyTextFallback
     ? explicitGeneratorPowerRequestKw(conversationUserText)
     : undefined;
   const currentGroundedPowerMin = currentHard.productIntent === 'generator' &&
@@ -2744,7 +3011,7 @@ function explicitCriteriaFromTurn(
   const groundedPowerMin = Math.max(currentGroundedPowerMin ?? 0, contextualGroundedPowerMin ?? 0) || undefined;
   const loadProfileCanSetPower = isReliableGeneratorLoadProfile(loadProfile) &&
     (!groundedPowerMin || (loadProfile?.requiredNominalKw ?? 0) > groundedPowerMin);
-  const loadProfileOverridesPlannerPower = Boolean(loadProfileCanSetPower && !hasExplicitGeneratorPowerRequest(userMessage));
+  const loadProfileOverridesPlannerPower = Boolean(loadProfileCanSetPower && (semanticSelectionReady || !hasExplicitGeneratorPowerRequest(userMessage)));
   const plannerPower = targetProductClass === 'generator' && !loadProfileOverridesPlannerPower && (
     plannerTraits.nominalPowerKwMin ||
     plannerTraits.nominalPowerKwMax ||
@@ -2763,8 +3030,8 @@ function explicitCriteriaFromTurn(
     ? { min: contextualGroundedPowerMin, max: Math.round((contextualGroundedPowerMin + Math.max(1.5, contextualGroundedPowerMin * 0.08)) * 10) / 10, source: 'explicit_user' as const }
     : undefined;
   const desiredPower = targetProductClass === 'generator' && !plannerPower && !contextualPower && loadProfileCanSetPower && loadProfile?.requiredNominalKw
-    ? { min: loadProfile.requiredNominalKw, max: Math.max(loadProfile.requiredNominalKw + 1.5, loadProfile.requiredNominalKw), source: 'inferred_from_load' as const }
-    : targetProductClass === 'generator' && !plannerPower ? activePowerFromLoadText(userMessage) ?? (
+    ? { ...inferredLoadPowerWindow(loadProfile.requiredNominalKw), source: 'inferred_from_load' as const }
+    : targetProductClass === 'generator' && !plannerPower && allowLegacyTextFallback ? activePowerFromLoadText(userMessage) ?? (
       current.compatibilityTargetProduct?.kind && hasExplicitPowerText(userMessage)
         ? (() => {
             const kw = singlePowerKwFromText(userMessage);
@@ -2801,7 +3068,7 @@ function explicitCriteriaFromTurn(
       hard.maxPowerKwMin = loadProfile.requiredStartingKw;
       hard.provenance!.maxPowerKwMin = 'inferred_from_load';
     }
-  } else if (!rankingOnly && !currentHard.nominalPowerKwMin && !currentHard.nominalPowerKwMax && !currentHard.maxPowerKwMin && !currentHard.maxPowerKwMax) {
+  } else if (!rankingOnly && allowLegacyTextFallback && !currentHard.nominalPowerKwMin && !currentHard.nominalPowerKwMax && !currentHard.maxPowerKwMin && !currentHard.maxPowerKwMax) {
     if (hasExplicitPowerText(userMessage)) {
       if (plan.requiredProductTraits.nominalPowerKwMin) {
         hard.nominalPowerKwMin = plan.requiredProductTraits.nominalPowerKwMin;
@@ -2826,13 +3093,13 @@ function explicitCriteriaFromTurn(
     hard.fuel = plannerTraits.fuel;
     hard.provenance!.fuel = 'planner';
   }
-  const latestExplicitElectricStart = hasExplicitGeneratorElectricStartNeed(userMessage);
-  if (plannerTraits.startType === 'electric' && latestExplicitElectricStart) {
+  const latestExplicitElectricStart = allowLegacyTextFallback ? hasExplicitGeneratorElectricStartNeed(userMessage) : false;
+  if (plannerTraits.startType === 'electric') {
     hard.startType = plannerTraits.startType;
-    hard.provenance!.startType = 'explicit_user';
-  } else if (plannerTraits.startType === 'manual' && !latestExplicitElectricStart && /(?:\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u0434\u0435\u0440\u0433\u0430\u0442\u044c\s+\u0448\u043d\u0443\u0440|manual\s+start|recoil\s+start)/iu.test(userMessage)) {
+    hard.provenance!.startType = 'planner';
+  } else if (plannerTraits.startType === 'manual' && (semanticSelectionReady || /(?:\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u0434\u0435\u0440\u0433\u0430\u0442\u044c\s+\u0448\u043d\u0443\u0440|manual\s+start|recoil\s+start)/iu.test(userMessage))) {
     hard.startType = plannerTraits.startType;
-    hard.provenance!.startType = 'explicit_user';
+    hard.provenance!.startType = 'planner';
   }
   if (plannerTraits.enclosure === 'enclosed' || plannerTraits.enclosure === 'open') {
     hard.enclosure = plannerTraits.enclosure;
@@ -2853,22 +3120,22 @@ function explicitCriteriaFromTurn(
     hard.startType = 'electric';
     hard.provenance!.startType = 'explicit_user';
   }
-  if (!hard.enclosure && fallbackDetectGeneratorEnclosureSignal(userMessage)) {
+  if (!hard.enclosure && allowLegacyTextFallback && fallbackDetectGeneratorEnclosureSignal(userMessage)) {
     hard.enclosure = 'enclosed';
     hard.provenance!.enclosure = 'explicit_user';
   }
-  if (hard.conventionalGenerator === undefined && containsAny(userMessage, inverterTerms) && !isTermExplanationQuestion(userMessage)) {
+  if (hard.conventionalGenerator === undefined && allowLegacyTextFallback && containsAny(userMessage, inverterTerms) && !isTermExplanationQuestion(userMessage)) {
     hard.conventionalGenerator = false;
     hard.provenance!.conventionalGenerator = 'explicit_user';
   }
-  if (hard.conventionalGenerator === undefined && hasConventionalGeneratorSignal(userMessage)) {
+  if (hard.conventionalGenerator === undefined && allowLegacyTextFallback && hasConventionalGeneratorSignal(userMessage)) {
     hard.conventionalGenerator = true;
     hard.provenance!.conventionalGenerator = 'explicit_user';
   }
-  if (hard.singlePhase220 === undefined && containsAny(userMessage, singlePhaseTerms)) {
+  if (hard.singlePhase220 === undefined && allowLegacyTextFallback && containsAny(userMessage, singlePhaseTerms)) {
     hard.singlePhase220 = true;
     hard.provenance!.singlePhase220 = 'explicit_user';
-  } else if (hard.singlePhase220 === undefined && !currentHasGroundedSinglePhase && targetProductClass === 'generator' && hasHomeSinglePhaseLoadContext(userMessage)) {
+  } else if (hard.singlePhase220 === undefined && allowLegacyTextFallback && !currentHasGroundedSinglePhase && targetProductClass === 'generator' && hasHomeSinglePhaseLoadContext(userMessage)) {
     hard.singlePhase220 = true;
     hard.provenance!.singlePhase220 = 'inferred_from_load';
   }
@@ -2909,6 +3176,7 @@ function explicitCriteriaFromTurn(
   );
 
   return {
+    semanticSource: semanticSelectionReady ? 'llm_need_extraction' : allowLegacyTextFallback ? 'legacy_text_fallback' : 'planner',
     currentProductClass: targetProductClass,
     targetProductClass,
     activeRequirement: hasHardUpdate ? hard : undefined,
@@ -2953,18 +3221,33 @@ function productMeetsCalculatedLoad(product: Product, state: ProductSelectionSta
   return power.nominalKw >= required - 0.2 || (power.maxKw !== undefined && power.maxKw >= required + 0.5 && power.nominalKw >= required - 0.7);
 }
 
-function hasPreliminaryGeneratorSelectionBasis(state: ProductSelectionState) {
-  const hard = state.hardConstraints;
-  if (hard.productIntent !== 'generator') return true;
-  const profile = state.loadProfile;
-  if (!profile?.requiredNominalKw || !hasEstimatedPumpLoad(state)) return false;
-  if (!hasTypedEstimatedPumpLoad(state)) return false;
+function hasEstimatedPumpLoadProfile(profile?: ProductGeneratorLoadProfile | null) {
+  return (profile?.items ?? []).some((item) => item.kind === 'pump' && item.source === 'estimated_average');
+}
+
+function hasTypedEstimatedPumpLoadProfile(profile?: ProductGeneratorLoadProfile | null) {
+  const pumpText = (profile?.items ?? [])
+    .filter((item) => item.kind === 'pump' && item.source === 'estimated_average')
+    .map((item) => [item.name, item.evidence].filter(Boolean).join(' '))
+    .join(' ');
+  return pumpText.trim() ? pumpTypeFromText(pumpText) !== 'generic' : false;
+}
+
+function hasPreliminaryGeneratorSelectionBasisFromProfile(profile?: ProductGeneratorLoadProfile | null) {
+  if (!profile?.requiredNominalKw || !hasEstimatedPumpLoadProfile(profile)) return false;
+  if (!hasTypedEstimatedPumpLoadProfile(profile)) return false;
   const hasOtherLoad = (profile.items ?? []).some((item) =>
     item.kind !== 'pump' &&
     item.kind !== 'aggregate_load' &&
     (item.runningKw ?? 0) > 0
   );
   return profile.requiredNominalKw >= 4 && hasOtherLoad;
+}
+
+function hasPreliminaryGeneratorSelectionBasis(state: ProductSelectionState) {
+  const hard = state.hardConstraints;
+  if (hard.productIntent !== 'generator') return true;
+  return hasPreliminaryGeneratorSelectionBasisFromProfile(state.loadProfile);
 }
 
 function hasReliableGeneratorSelectionBasis(state: ProductSelectionState) {
@@ -2996,15 +3279,11 @@ function isReliableGeneratorLoadProfile(profile?: ProductGeneratorLoadProfile | 
 
 function hasEstimatedPumpLoad(state: ProductSelectionState) {
   return state.hardConstraints.productIntent === 'generator' &&
-    (state.loadProfile?.items ?? []).some((item) => item.kind === 'pump' && item.source === 'estimated_average');
+    hasEstimatedPumpLoadProfile(state.loadProfile);
 }
 
 function hasTypedEstimatedPumpLoad(state: ProductSelectionState) {
-  const pumpText = (state.loadProfile?.items ?? [])
-    .filter((item) => item.kind === 'pump' && item.source === 'estimated_average')
-    .map((item) => [item.name, item.evidence].filter(Boolean).join(' '))
-    .join(' ');
-  return pumpTypeFromText(pumpText) !== 'generic';
+  return hasTypedEstimatedPumpLoadProfile(state.loadProfile);
 }
 
 function shouldBlockGeneratorCardsForEstimatedPump(state: ProductSelectionState) {
@@ -3432,6 +3711,24 @@ function deterministicAnswerGenerationFallback(input: {
   structuredCatalogSlice: StructuredCatalogSlice | null;
   finalCards: FinalCardsDecision;
 }) {
+  if (shouldBlockGeneratorCardsForEstimatedPump(input.selectionResult.state)) {
+    const load = input.selectionResult.state.loadProfile;
+    const nominal = formatKwValue(load?.requiredNominalKw);
+    const starting = formatKwValue(load?.requiredStartingKw);
+    const question = input.selectionResult.missingQuestions[0] ||
+      'какой насос: скважинный или поверхностный, и есть ли мощность/модель на шильдике';
+    const lines = [
+      nominal
+        ? starting
+          ? `По текущим данным можно дать только предварительный расчет: около ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт. Это еще не финальный подбор генератора.`
+          : `По текущим данным можно дать только предварительный расчет: около ${nominal} кВт по номиналу. Это еще не финальный подбор генератора.`
+        : '',
+      'Карточки генераторов пока не показываю: насос есть, но его тип/мощность неизвестны, а именно насос задает главный пусковой риск.',
+      `Уточните: ${question}`
+    ].filter(Boolean);
+    return lines.join('\n\n');
+  }
+
   const catalogAnswer = input.structuredCatalogSlice
     ? deterministicCatalogSliceAnswer(input.structuredCatalogSlice, input.cards)
     : '';
@@ -3512,12 +3809,137 @@ function repairAnswerForFinalCards(
   return clean;
 }
 
-function repairGeneratorLoadMinimumText(answer: string, loadProfile?: ProductGeneratorLoadProfile) {
+type GeneratorSizingPolicy = {
+  calculatedMinimumNominalKw: number;
+  calculatedStartingKw?: number;
+  minimallySufficientNominalRangeKw: { min: number; max: number };
+  visibleCardNominalKw: number[];
+  visibleCardMaxKw: number[];
+  allowedMentionedPowerKwMax: number;
+};
+
+function generatorPowerFromCard(card: ProductCard) {
+  return extractGeneratorPowerForHardSelection(productFromCard(card));
+}
+
+function generatorSizingPolicyForAnswer(loadProfile?: ProductGeneratorLoadProfile | null, cards: ProductCard[] = []): GeneratorSizingPolicy | null {
+  const required = loadProfile?.requiredNominalKw;
+  if (!required || !Number.isFinite(required)) return null;
+  const window = inferredLoadPowerWindow(required);
+  const cardPowers = cards
+    .map(generatorPowerFromCard)
+    .filter((power) => power.nominalKw !== undefined || power.maxKw !== undefined);
+  const visibleCardNominalKw = cardPowers
+    .map((power) => power.nominalKw)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  const visibleCardMaxKw = cardPowers
+    .map((power) => power.maxKw)
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
+  return {
+    calculatedMinimumNominalKw: required,
+    calculatedStartingKw: loadProfile?.requiredStartingKw,
+    minimallySufficientNominalRangeKw: window,
+    visibleCardNominalKw,
+    visibleCardMaxKw,
+    allowedMentionedPowerKwMax: Math.max(window.max, ...visibleCardNominalKw, ...visibleCardMaxKw, required)
+  };
+}
+
+function extractKwMentions(text: string) {
+  return [...text.matchAll(/(\d+(?:[,.]\d+)?)\s*(?:[–—-]\s*(\d+(?:[,.]\d+)?))?\s*(?:кВт|kw)/giu)]
+    .map((match) => {
+      const first = Number(String(match[1]).replace(',', '.'));
+      const second = match[2] ? Number(String(match[2]).replace(',', '.')) : first;
+      if (!Number.isFinite(first) || !Number.isFinite(second)) return null;
+      return {
+        raw: match[0],
+        min: Math.min(first, second),
+        max: Math.max(first, second)
+      };
+    })
+    .filter((item): item is { raw: string; min: number; max: number } => Boolean(item));
+}
+
+function containsCalculatedMinimumMention(mentions: { min: number; max: number }[], required: number) {
+  return mentions.some((mention) => required >= mention.min - 0.25 && required <= mention.max + 0.25);
+}
+
+function deterministicGeneratorSizingAnswer(
+  loadProfile: ProductGeneratorLoadProfile,
+  cards: ProductCard[] = [],
+  options: { blockEstimatedPumpCards?: boolean; missingQuestion?: string } = {}
+) {
+  const nominal = formatKwValue(loadProfile.requiredNominalKw);
+  const starting = formatKwValue(loadProfile.requiredStartingKw);
+  const lines = [
+    options.blockEstimatedPumpCards
+      ? starting
+        ? `Пока это только предварительный расчет: около ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт.`
+        : `Пока это только предварительный расчет: около ${nominal} кВт по номиналу.`
+      : starting
+        ? `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт.`
+        : `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу.`
+  ];
+  if (options.blockEstimatedPumpCards) {
+    lines.push('Карточки генераторов пока не показываю: насос есть, но его тип/мощность неизвестны, а именно насос задает главный пусковой риск.');
+    lines.push(`Уточните: ${options.missingQuestion || 'какой насос стоит и какая у него мощность или модель'}.`);
+    return lines.join('\n\n');
+  }
+  const cardLines = cards
+    .slice(0, 3)
+    .map((card) => {
+      const power = generatorPowerFromCard(card);
+      const nominalPower = formatKwValue(power.nominalKw);
+      const maxPower = formatKwValue(power.maxKw);
+      const powerText = nominalPower
+        ? `, ${nominalPower} кВт номинал${maxPower ? ` / ${maxPower} кВт максимум` : ''}`
+        : '';
+      const priceText = typeof card.price === 'number'
+        ? `, ${Math.round(card.price).toLocaleString('ru-RU')} ${card.currency ?? 'RUB'}`
+        : '';
+      return `${card.name}${powerText}${priceText}`;
+    });
+  if (cardLines.length) {
+    lines.push(`По карточкам можно смотреть: ${cardLines.join('; ')}. Если мощность карточки выше расчета, это доступный вариант с запасом, а не новый расчетный минимум.`);
+  }
+  return lines.join('\n\n');
+}
+
+function repairGeneratorLoadMinimumText(
+  answer: string,
+  loadProfile?: ProductGeneratorLoadProfile,
+  options: { cards?: ProductCard[]; strictMinimumStatement?: boolean; blockEstimatedPumpCards?: boolean; missingQuestion?: string } = {}
+) {
   const required = loadProfile?.requiredNominalKw;
   if (!required || !Number.isFinite(required)) return answer;
+  if (loadProfile && options.blockEstimatedPumpCards) {
+    return sanitizeVisibleAnswerNumbers(deterministicGeneratorSizingAnswer(loadProfile, [], {
+      blockEstimatedPumpCards: true,
+      missingQuestion: options.missingQuestion
+    }));
+  }
   const formatted = Number.isInteger(required) ? String(required) : String(required).replace('.', ',');
+  const policy = generatorSizingPolicyForAnswer(loadProfile, options.cards ?? []);
+  const mentions = extractKwMentions(answer);
+  const unsupportedHigherPower = Boolean(policy && mentions.some((mention) => mention.max > policy.allowedMentionedPowerKwMax + 0.55));
+  const strictMinimumMissing = Boolean(
+    options.strictMinimumStatement &&
+    mentions.some((mention) => mention.max > required + 0.35) &&
+    !containsCalculatedMinimumMention(mentions, required)
+  );
+  if (loadProfile && (unsupportedHigherPower || strictMinimumMissing)) {
+    return sanitizeVisibleAnswerNumbers(deterministicGeneratorSizingAnswer(loadProfile, options.cards ?? []));
+  }
   let repaired = answer.replace(
-    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435|\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440(?:\s+\u043f\u043e\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0443)?|\u043d\u0443\u0436\u0435\u043d(?:\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440)?(?:\s+\u043e\u043a\u043e\u043b\u043e)?|\u0441\s+\u0437\u0430\u043f\u0430\u0441\u043e\u043c\s+\u043e\u0442)\s*[:\u2014-]?\s*)(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0412\u0442|kw)/giu,
+    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435)[^.?!\n]{0,80}?)(\d+(?:[,.]\d+)?)\s*((?:\u043a\u0412\u0442|kw))/giu,
+    (match, prefix: string, value: string, unit: string) => {
+      const parsed = Number(String(value).replace(',', '.'));
+      if (!Number.isFinite(parsed) || parsed <= required + 0.4) return match;
+      return `${prefix}${formatted} ${unit}`;
+    }
+  );
+  repaired = repaired.replace(
+    /((?:\u043c\u0438\u043d\u0438\u043c\u0443\u043c|\u043d\u0435\s+\u043d\u0438\u0436\u0435|\u043e\u0440\u0438\u0435\u043d\u0442\u0438\u0440(?:\s+\u043f\u043e\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u0443)?|\u043d\u0443\u0436\u0435\u043d(?:\s+\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440)?(?:\s+\u043e\u043a\u043e\u043b\u043e)?)\s*[:\u2014-]?\s*)(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0412\u0442|kw)/giu,
     (match, prefix: string, value: string) => {
       const parsed = Number(String(value).replace(',', '.'));
       if (!Number.isFinite(parsed) || parsed <= required + 0.4) return match;
@@ -4358,6 +4780,7 @@ export class AssistantService {
               type: 'object',
               additionalProperties: false,
               properties: {
+                activeNeeds: { type: 'array', items: activeNeedSchema(), maxItems: 8 },
                 explicitNeeds: { type: 'array', items: needItemSchema() },
                 implicitNeeds: { type: 'array', items: needItemSchema() },
                 constraints: { type: 'array', items: needItemSchema() },
@@ -4387,9 +4810,11 @@ export class AssistantService {
                     'budgetSensitive'
                   ]
                 },
+                selectionState: needExtractionSelectionStateSchema(),
                 lastSummary: { type: 'string' }
               },
               required: [
+                'activeNeeds',
                 'explicitNeeds',
                 'implicitNeeds',
                 'constraints',
@@ -4398,6 +4823,7 @@ export class AssistantService {
                 'uncertainInferences',
                 'contradictions',
                 'featureSignals',
+                'selectionState',
                 'lastSummary'
               ]
             }
@@ -4420,10 +4846,7 @@ export class AssistantService {
       }
       const parsed = parseJsonObject(outputText, 'need_extraction');
       const aiUpdate = coerceNeedUpdate(parsed);
-      const merged = mergeNeedState(
-        mergeNeedState(current, mergeNeedState(emptyNeedState(), aiUpdate)),
-        { activeNeeds: heuristicNeedUpdate(userMessage).activeNeeds ?? [] }
-      );
+      const merged = mergeNeedState(current, mergeNeedState(emptyNeedState(), aiUpdate));
       merged.lastSummary = parsed.lastSummary || summarizeNeedState(merged);
       return merged;
     } catch (error) {
@@ -5279,6 +5702,9 @@ export class AssistantService {
     }
     const previousSelectionState = session.needState.selectionState;
     let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal, aiDiagnostics);
+    if (aiDiagnostics.needExtractionFallback.used) {
+      throw aiStageFailure('need extraction', aiDiagnostics.needExtractionFallback);
+    }
     if (shouldPreserveSelectionForFollowUp(input.userMessage, previousSelectionState)) {
       needState = {
         ...needState,
@@ -5322,6 +5748,9 @@ export class AssistantService {
       signal: input.signal,
       diagnostics: aiDiagnostics
     });
+    if (aiDiagnostics.turnPlanningFallback.used) {
+      throw aiStageFailure('turn planning', aiDiagnostics.turnPlanningFallback);
+    }
 
     const refinedCandidates = plan.catalogSearchQuery !== baseQuery
       ? await this.findProducts(input.userMessage, needState, plan.catalogSearchQuery, plan.requiredProductTraits, input.signal)
@@ -5374,6 +5803,7 @@ export class AssistantService {
     }
     const visibleCardLimit = effectiveVisibleCardLimitFromConversation(input.userMessage, history);
     let turnContract = resolveTurnContractForPlan(effectivePlan);
+    const selectionStateBeforeProductSelection = needState.selectionState;
     const selectionResult = await this.selectProductsForTurn(
       input.userMessage,
       needState,
@@ -5391,7 +5821,13 @@ export class AssistantService {
     const selectionHard = selectionResult.state.hardConstraints;
     const selectionCanRecommend = hasReliableGeneratorSelectionBasis(selectionResult.state);
     const selectionHasEstimatedPump = hasEstimatedPumpLoad(selectionResult.state);
-    const blockEstimatedPumpCards = shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state);
+    const latestLoadProfileForPumpBlock = selectionStateBeforeProductSelection.loadProfile ?? selectionResult.state.loadProfile;
+    const latestTurnBlocksEstimatedPumpCards = Boolean(
+      latestLoadProfileForPumpBlock &&
+      hasEstimatedPumpLoadProfile(latestLoadProfileForPumpBlock) &&
+      !hasPreliminaryGeneratorSelectionBasisFromProfile(latestLoadProfileForPumpBlock)
+    );
+    const blockEstimatedPumpCards = shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state) || latestTurnBlocksEstimatedPumpCards;
     const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
       ? {
           source: selectionResult.trace.source === 'full_catalog_selection_engine' ? 'full_catalog_slice' : 'structured_constraints',
@@ -5422,8 +5858,9 @@ export class AssistantService {
       for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
       const selectionEngineRequestsCards = shouldForceStructuredSelectionCards(input.userMessage, effectivePlan, selectionResult);
       const primarySelectionRequestsCards = shouldPromotePrimarySelectionCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
-      if (agentTurnContract.cardsRole === 'primary' &&
-        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards) &&
+      const generatorSizingRequestsCards = shouldPromoteGeneratorSizingCards(input.userMessage, selectionResult, blockEstimatedPumpCards);
+      if ((agentTurnContract.cardsRole === 'primary' || generatorSizingRequestsCards) &&
+        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = {
           ...effectivePlan,
@@ -5460,7 +5897,9 @@ export class AssistantService {
           needsWebSearch: false,
           answerGuidance: [
             effectivePlan.answerGuidance,
-            'Use productSelection as the authoritative catalog selection for the current hard constraints. Name only visible cards as recommendations. If hiddenProductIds is not empty, mention show-more and ask one narrowing question from missingQuestions.'
+            generatorSizingRequestsCards
+              ? 'The buyer has supplied enough generator load context for a preliminary product selection. First answer the sizing calculation, then show visible generator cards as preliminary suitable options. Do not keep the turn text-only.'
+              : 'Use productSelection as the authoritative catalog selection for the current hard constraints. Name only visible cards as recommendations. If hiddenProductIds is not empty, mention show-more and ask one narrowing question from missingQuestions.'
           ].filter(Boolean).join('\n')
         };
       }
@@ -5523,7 +5962,7 @@ export class AssistantService {
         ...effectivePlan,
         answerGuidance: [
           effectivePlan.answerGuidance,
-          `Calculated generator load from current dialogue: minimum nominal power ${selectionResult.state.loadProfile.requiredNominalKw} kW, starting demand ${selectionResult.state.loadProfile.requiredStartingKw} kW. State these as the calculated minimum; do not state a higher minimum only because the first catalog card is more powerful.`
+          `Calculated generator load from current dialogue: minimum nominal power ${selectionResult.state.loadProfile.requiredNominalKw} kW, starting demand ${selectionResult.state.loadProfile.requiredStartingKw} kW. Use the calculated load as the minimum and treat catalog powers above it only as options when they are present in the selected cards or inside the structured sizing policy.`
         ].filter(Boolean).join('\n')
       };
     }
@@ -5667,9 +6106,12 @@ export class AssistantService {
     const priceRangeForAnswer = productCardPriceRange(cards);
     const visibleCardIdsForContext = new Set(cards.slice(0, finalCards.initialVisibleCount).map((card) => card.id));
     const shownCardIdsForContext = new Set(cards.map((card) => card.id));
-    const suitableProductsForContext = selectionResult.matchedProducts.length
+    const suitableProductsForContext = blockEstimatedPumpCards
+      ? []
+      : selectionResult.matchedProducts.length
       ? selectionResult.matchedProducts
       : productsForCardSelection.filter((product) => cardIdsForAnswer.has(product.id));
+    const generatorSizingPolicy = generatorSizingPolicyForAnswer(selectionResult.state.loadProfile, cards);
 
     const context = {
       ...buildAssistantContext({
@@ -5707,8 +6149,9 @@ export class AssistantService {
         price: card.price
       })),
       productCardPriceRange: priceRangeForAnswer,
-      allSuitableProductCount: selectionResult.matchedProducts.length || cards.length,
-      allSuitableProductCountIsCapped: selectionResult.matchedProducts.length >= FULL_SLICE_PRODUCT_CARDS,
+      generatorSizingPolicy,
+      allSuitableProductCount: blockEstimatedPumpCards ? 0 : selectionResult.matchedProducts.length || cards.length,
+      allSuitableProductCountIsCapped: !blockEstimatedPumpCards && selectionResult.matchedProducts.length >= FULL_SLICE_PRODUCT_CARDS,
       allSuitableProducts: compactSuitableProductsForAnswer(
         suitableProductsForContext,
         visibleCardIdsForContext,
@@ -5724,7 +6167,7 @@ export class AssistantService {
         weightKg: extractWeightKg(product),
         powerKw: extractPowerKw(product)
       })),
-      structuredCatalogSlice: structuredCatalogSlice
+      structuredCatalogSlice: !blockEstimatedPumpCards && structuredCatalogSlice
         ? {
             source: structuredCatalogSlice.source,
             totalMatched: structuredCatalogSlice.totalMatched,
@@ -5793,6 +6236,7 @@ export class AssistantService {
       'Do not use the phrase "hidden options" or Russian equivalents like "скрытые варианты"; say "additional suitable options are under Show more" or "I can expand the catalog selection". If productCardPriceRange is present and several suitable cards are shown, mention the catalog price range for the requested product type and stated need. For ordinary product comparisons, prefer short bullets over markdown tables unless exact tabular data is necessary.',
       'If answerContext.productSelection.loadProfile contains a pump item with source estimated_average, do not call any generator a final/best/first choice and do not say it will fit. Treat visible generator cards only as preliminary candidates, explain that pump startup is the risk, and ask for pump model, type, or power before final selection.',
       'For generator recommendations with answerContext.productSelection.loadProfile, state the calculated minimum from requiredNominalKw/requiredStartingKw separately from the visible catalog cards. Do not turn the first visible card power into the required class; if cards are more powerful than the calculated minimum, say they are catalog options with reserve.',
+      'For household generator load calculations, use answerContext.generatorSizingPolicy as the authority: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visibleCardNominalKw/visibleCardMaxKw are the only higher powers grounded by shown cards. Do not introduce a higher power class unless it is supported by the policy.',
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
       `AgentTurnContract: answerTask=${agentTurnContract.answerTask}; cardsRole=${agentTurnContract.cardsRole}; leadAllowed=${agentTurnContract.leadAllowed}. Must answer now before any cards: ${agentTurnContract.mustAnswerNow.join('; ') || agentTurnContract.errorRecoveryPriority}.`,
       factualVerificationGuidance,
@@ -5858,18 +6302,12 @@ export class AssistantService {
       if (!localAnswer && localCompletedResponse) localAnswer = extractResponseText(localCompletedResponse);
       return { answer: localAnswer, completedResponse: localCompletedResponse };
     };
-    const useDeterministicAnswerFallback = (error: unknown) => {
+    const failAnswerGeneration = (error: unknown): never => {
       if (input.signal?.aborted) throw new Error('AI answer generation aborted');
       const details = safeError(error);
       markAiFallback(aiDiagnostics, 'answerGenerationFallback', error, 'answer_generation_failed');
-      console.warn('OpenAI answer generation failed; using deterministic catalog fallback', details);
-      answer = deterministicAnswerGenerationFallback({
-        cards,
-        selectionResult,
-        structuredCatalogSlice,
-        finalCards
-      });
-      completedResponse = null;
+      console.warn('OpenAI answer generation failed; deferring to turn recovery', details);
+      throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
     };
 
     const answerRequest: Record<string, unknown> = buildAnswerRequest(answerProfile.model, answerProfile.effort);
@@ -5913,10 +6351,10 @@ export class AssistantService {
           completedResponse = result.completedResponse;
         } catch (fallbackError) {
           console.warn('Deep answer fallback failed', safeError(fallbackError));
-          useDeterministicAnswerFallback(error);
+          failAnswerGeneration(fallbackError);
         }
       } else {
-        useDeterministicAnswerFallback(error);
+        failAnswerGeneration(error);
       }
     }
 
@@ -5957,24 +6395,30 @@ export class AssistantService {
 
     if (!answer.trim()) {
       if (structuredCatalogSlice) {
-        answer = deterministicCatalogSliceAnswer(structuredCatalogSlice, cards);
+        console.warn('Structured catalog deterministic answer suppressed for empty AI answer; deferring to turn recovery', {
+          totalMatched: structuredCatalogSlice.totalMatched,
+          cards: cards.length
+        });
       }
     }
 
     if (!answer.trim()) {
-      const catalogFacts = typeof context.mandatoryCatalogLineupAlternativeFacts === 'string'
-        ? context.mandatoryCatalogLineupAlternativeFacts.trim()
-        : '';
-      answer = catalogFacts
-        ? `Не утверждаю текущий заводской статус без завершенной внешней проверки. По нашему каталогу для ориентира: ${catalogFacts}`
-        : 'Ответ не удалось надежно сформировать из проверенных данных. Повторите запрос короче, и я перепроверю по каталогу и внешним источникам.';
+      markAiFallback(aiDiagnostics, 'answerGenerationFallback', 'empty_answer', 'answer_generation_empty');
+      throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
     }
 
     const usedWebSearch = responseUsedWebSearch(completedResponse);
     const rawAnswer = answer;
     answer = sanitizeVisibleAnswer(answer, effectivePlan);
     answer = repairAnswerForFinalCards(answer, cards, productsForCardSelection, needState, input.userMessage, effectivePlan);
-    answer = repairGeneratorLoadMinimumText(answer, selectionResult.state.loadProfile);
+    answer = repairGeneratorLoadMinimumText(answer, selectionResult.state.loadProfile, {
+      cards,
+      strictMinimumStatement: recommendationAnswer || cards.length > 0,
+      blockEstimatedPumpCards,
+      missingQuestion: blockEstimatedPumpCards
+        ? 'какой насос стоит: скважинный, поверхностный, дренажный или насосная станция, и какая у него мощность/модель'
+        : selectionResult.missingQuestions[0]
+    });
     answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards, finalCards.initialVisibleCount);
     const cardContract = enforceAnswerCardContract(
       answer,
@@ -6191,13 +6635,11 @@ export class AssistantService {
         answer = extractResponseText(response).trim();
       } catch (error) {
         openAiError = safeError(error);
-        console.warn('Turn recovery failed; using safe human fallback', openAiError);
+        console.warn('Turn recovery failed', openAiError);
       }
     }
     if (!answer) {
-      answer = contract?.errorRecoveryPriority
-        ? `Ответ оборвался, но вопрос сохранен. Коротко по главному: ${contract.errorRecoveryPriority}. Если нужно, повторите вопрос одним сообщением, и я восстановлю консультацию по текущему подбору.`
-        : 'Не смог надежно завершить ответ, но вопрос сохранен. Можно повторить его одним сообщением или оставить контакт в форме, чтобы менеджер продолжил консультацию по этому диалогу.';
+      throw new Error(`AI turn recovery failed: ${openAiError ? JSON.stringify(openAiError).slice(0, 500) : 'empty_answer'}`);
     }
     await input.onDelta?.(answer);
     const assistantMessage = await this.conversations.addMessage({
@@ -6402,6 +6844,173 @@ function needItemSchema() {
       confidence: { type: 'number', minimum: 0, maximum: 1 }
     },
     required: ['value', 'evidence', 'confidence']
+  };
+}
+
+function productClassEnum(includeCommercial = false) {
+  return includeCommercial
+    ? [
+        'generator',
+        'weldingGenerator',
+        'generatorOil',
+        'engineOil',
+        'generatorAccessory',
+        'plateAccessory',
+        'plate',
+        'rammer',
+        'roller',
+        'cutter',
+        'diamondBlade',
+        'diamondCore',
+        'trowel',
+        'commercial',
+        'unknown'
+      ]
+    : [
+        'generator',
+        'weldingGenerator',
+        'generatorOil',
+        'engineOil',
+        'generatorAccessory',
+        'plateAccessory',
+        'plate',
+        'rammer',
+        'roller',
+        'cutter',
+        'diamondBlade',
+        'diamondCore',
+        'trowel',
+        'unknown'
+      ];
+}
+
+function activeNeedSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      id: { type: 'string' },
+      productClass: { type: 'string', enum: productClassEnum(true) },
+      summary: { type: 'string' },
+      constraints: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+      openQuestions: { type: 'array', items: { type: 'string' }, maxItems: 12 },
+      selectedProductIds: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+      status: { type: 'string', enum: ['open', 'selected', 'paused', 'closed'] }
+    },
+    required: ['id', 'productClass', 'summary', 'constraints', 'openQuestions', 'selectedProductIds', 'status']
+  };
+}
+
+function needExtractionCriteriaSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      productIntent: { type: 'string', enum: productClassEnum() },
+      productRole: { type: 'string', enum: ['coreProduct', 'accessory', 'consumable', 'unknown'] },
+      fuel: { type: 'string', enum: ['gasoline', 'diesel', 'any', 'unknown'] },
+      startType: { type: 'string', enum: ['electric', 'manual', 'any', 'unknown'] },
+      enclosure: { type: 'string', enum: ['enclosed', 'open', 'any', 'unknown'] },
+      conventionalGenerator: { type: ['boolean', 'null'] },
+      singlePhase220: { type: ['boolean', 'null'] },
+      budgetMax: { type: ['number', 'null'] },
+      weightKgMin: { type: ['number', 'null'] },
+      weightKgMax: { type: ['number', 'null'] },
+      diameterMmMin: { type: ['number', 'null'] },
+      diameterMmMax: { type: ['number', 'null'] },
+      nominalPowerKwMin: { type: ['number', 'null'] },
+      nominalPowerKwMax: { type: ['number', 'null'] },
+      maxPowerKwMin: { type: ['number', 'null'] },
+      maxPowerKwMax: { type: ['number', 'null'] },
+      brandConstraint: { type: 'string' },
+      exactModelConstraint: { type: 'string' },
+      mustHaveTraits: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+      excludedClasses: { type: 'array', items: { type: 'string', enum: productClassEnum() }, maxItems: 16 },
+      powerReasoning: { type: 'string' }
+    },
+    required: [
+      'productIntent',
+      'productRole',
+      'fuel',
+      'startType',
+      'enclosure',
+      'conventionalGenerator',
+      'singlePhase220',
+      'budgetMax',
+      'weightKgMin',
+      'weightKgMax',
+      'diameterMmMin',
+      'diameterMmMax',
+      'nominalPowerKwMin',
+      'nominalPowerKwMax',
+      'maxPowerKwMin',
+      'maxPowerKwMax',
+      'brandConstraint',
+      'exactModelConstraint',
+      'mustHaveTraits',
+      'excludedClasses',
+      'powerReasoning'
+    ]
+  };
+}
+
+function loadProfileSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array',
+        maxItems: 16,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            kind: { type: 'string' },
+            name: { type: 'string' },
+            count: { type: 'number' },
+            runningKw: { type: ['number', 'null'] },
+            startingKw: { type: ['number', 'null'] },
+            source: { type: 'string', enum: ['explicit_user', 'estimated_average', 'web_average', 'catalog_fact'] },
+            evidence: { type: 'string' }
+          },
+          required: ['kind', 'name', 'count', 'runningKw', 'startingKw', 'source', 'evidence']
+        }
+      },
+      simultaneousStarting: { type: 'boolean' },
+      confidence: { type: 'number', minimum: 0, maximum: 1 },
+      removedKinds: { type: 'array', items: { type: 'string' }, maxItems: 12 }
+    },
+    required: ['items', 'simultaneousStarting', 'confidence', 'removedKinds']
+  };
+}
+
+function needExtractionSelectionStateSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      currentProductClass: { type: 'string', enum: productClassEnum() },
+      targetProductClass: { type: 'string', enum: productClassEnum() },
+      hardConstraints: needExtractionCriteriaSchema(),
+      softPreferences: needExtractionCriteriaSchema(),
+      unknowns: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+      conflicts: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+      selectedProductIds: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+      loadProfile: loadProfileSchema(),
+      confidence: { type: 'number', minimum: 0, maximum: 1 }
+    },
+    required: [
+      'currentProductClass',
+      'targetProductClass',
+      'hardConstraints',
+      'softPreferences',
+      'unknowns',
+      'conflicts',
+      'selectedProductIds',
+      'loadProfile',
+      'confidence'
+    ]
   };
 }
 
@@ -6745,6 +7354,7 @@ export const assistantTestHooks = {
   shouldUseServiceCostStyle,
   shouldUseCurrentLineupStyle,
   isProductCardSelectionFollowUp,
+  coerceNeedUpdate,
   shouldUseDeepReasoningForPlanning,
   shouldUseDeepReasoningForAnswer,
   resolveReasoningProfile,
@@ -6756,12 +7366,15 @@ export const assistantTestHooks = {
   fallbackTurnPlan,
   repairAnswerCardText,
   repairGeneratorLoadMinimumText,
+  generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
+  deterministicAnswerGenerationFallback,
   reliableBundleTotal,
   isCatalogAvailabilityQuestion,
   isManufacturingStatusQuestion,
   pumpTypeFromText,
   generatorLoadProfileFromText,
   shouldPromotePrimarySelectionCards,
+  shouldPromoteGeneratorSizingCards,
   shouldBlockGeneratorCardsForEstimatedPump
 };

@@ -919,6 +919,319 @@ describe('recommendation ranking', () => {
     )).toBe(true);
   });
 
+  it('promotes generator sizing turns to preliminary cards when load context is enough', () => {
+    const fit = productWithSpecs('fit-5kw', 'Generator gasoline 5.0 kW 220 V', 64_000, 'https://example.test/generators/fit-5kw/', {
+      nominalPower: '5.0 kW',
+      maxPower: '5.5 kW'
+    });
+    const pumpState = mergeProductSelectionState(reliableGeneratorSelectionResult().state, {
+      hardConstraints: {
+        ...reliableGeneratorSelectionResult().state.hardConstraints,
+        productIntent: 'generator',
+        nominalPowerKwMin: 4.5,
+        nominalPowerKwMax: 5.3,
+        maxPowerKwMin: 4.1
+      },
+      loadProfile: {
+        items: [
+          {
+            kind: 'pump',
+            name: 'borehole pump',
+            count: 1,
+            runningKw: 1.1,
+            startingKw: 2.9,
+            source: 'estimated_average',
+            evidence: 'borehole pump without exact power'
+          },
+          {
+            kind: 'refrigerator',
+            name: 'refrigerator',
+            count: 1,
+            runningKw: 0.15,
+            startingKw: 1,
+            source: 'estimated_average',
+            evidence: 'one refrigerator'
+          },
+          {
+            kind: 'lighting',
+            name: 'LED light',
+            count: 1,
+            runningKw: 0.2,
+            startingKw: 0.2,
+            source: 'estimated_average',
+            evidence: 'LED light'
+          }
+        ],
+        confidence: 0.68,
+        calculation: 'borehole pump, refrigerator, LED light',
+        totalRunningKw: 1.45,
+        requiredNominalKw: 4.5,
+        requiredStartingKw: 4.1,
+        simultaneousStarting: true
+      } as any,
+      confidence: 0.72
+    });
+    const result = reliableGeneratorSelectionResult({
+      state: pumpState,
+      matchedProducts: [fit],
+      visibleProducts: [fit],
+      confidence: 0.72
+    });
+
+    expect(assistantTestHooks.shouldPromoteGeneratorSizingCards(
+      ru('\\u0423\\u0442\\u043e\\u0447\\u043d\\u0438\\u043b: \\u043d\\u0430\\u0441\\u043e\\u0441 \\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439 220 \\u0412. \\u041f\\u043e\\u0441\\u0447\\u0438\\u0442\\u0430\\u0439\\u0442\\u0435 \\u043c\\u0438\\u043d\\u0438\\u043c\\u0430\\u043b\\u044c\\u043d\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0442\\u043e\\u0447\\u043d\\u044b\\u0439 \\u043a\\u043b\\u0430\\u0441\\u0441 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0430.'),
+      result,
+      false
+    )).toBe(true);
+    expect(assistantTestHooks.shouldPromoteGeneratorSizingCards(
+      ru('\\u0415\\u0441\\u043b\\u0438 \\u0432\\u0437\\u044f\\u0442\\u044c \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 5,5 \\u043a\\u0412\\u0442, \\u0441\\u043a\\u043e\\u043b\\u044c\\u043a\\u043e \\u043e\\u0441\\u0442\\u0430\\u043d\\u0435\\u0442\\u0441\\u044f \\u043f\\u043e\\u0441\\u043b\\u0435 \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a\\u0430?'),
+      result,
+      false
+    )).toBe(false);
+  });
+
+  it('sizes household generator loads as minimally sufficient before reserve', () => {
+    const profile = assistantTestHooks.generatorLoadProfileFromText(ru('\\u0414\\u043e\\u043c 220 \\u0412. \\u0425\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u043e\\u0434\\u0438\\u043d, LED \\u0441\\u0432\\u0435\\u0442, \\u0438\\u043d\\u043e\\u0433\\u0434\\u0430 \\u0431\\u043e\\u043b\\u0433\\u0430\\u0440\\u043a\\u0430 1,2 \\u043a\\u0412\\u0442. \\u041d\\u0430\\u0441\\u043e\\u0441 \\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439, 220 \\u0412, \\u043d\\u0430\\u0441\\u043e\\u0441 \\u0441 \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a\\u043e\\u043c \\u043c\\u043e\\u0433\\u0443\\u0442 \\u0432\\u043a\\u043b\\u044e\\u0447\\u0438\\u0442\\u044c\\u0441\\u044f \\u0432\\u043c\\u0435\\u0441\\u0442\\u0435.'));
+
+    expect(profile?.totalRunningKw).toBe(1.5);
+    expect(profile?.requiredStartingKw).toBeCloseTo(4.1, 5);
+    expect(profile?.requiredNominalKw).toBe(4.5);
+    expect(profile?.simultaneousStarting).toBe(true);
+    const pump = profile?.items.find((item) => item.kind === 'pump');
+    const refrigerator = profile?.items.find((item) => item.kind === 'refrigerator');
+    const lighting = profile?.items.find((item) => item.kind === 'lighting');
+    expect(pump?.runningKw).toBe(1.1);
+    expect(pump?.startingKw).toBeCloseTo(2.9, 5);
+    expect(refrigerator).toEqual(expect.objectContaining({ runningKw: 0.15, startingKw: 1 }));
+    expect(lighting).toEqual(expect.objectContaining({ runningKw: 0.2, startingKw: 0.2 }));
+    expect(profile?.items.some((item) => item.kind === 'handheld_tool')).toBe(false);
+  });
+
+  it('does not treat missing exact numbers as an absent pump', () => {
+    const profile = assistantTestHooks.generatorLoadProfileFromText(ru('\\u041d\\u0443\\u0436\\u0435\\u043d \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440. \\u0422\\u043e\\u0447\\u043d\\u044b\\u0445 \\u0446\\u0438\\u0444\\u0440 \\u043d\\u0435\\u0442: \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a, \\u043d\\u0430\\u0441\\u043e\\u0441, LED \\u0441\\u0432\\u0435\\u0442.'));
+
+    expect(profile?.items.some((item) => item.kind === 'pump')).toBe(true);
+    expect(profile?.items.find((item) => item.kind === 'pump')).toEqual(expect.objectContaining({
+      source: 'estimated_average',
+      name: 'pump'
+    }));
+  });
+
+  it('accepts LLM need extraction as the semantic source for generator loads', () => {
+    const update = assistantTestHooks.coerceNeedUpdate({
+      activeNeeds: [{
+        id: 'generator',
+        productClass: 'generator',
+        summary: 'Подбор генератора для дома',
+        constraints: ['холодильник, насос, LED свет; точных цифр нет'],
+        openQuestions: ['тип или мощность насоса'],
+        selectedProductIds: [],
+        status: 'open'
+      }],
+      explicitNeeds: [],
+      implicitNeeds: [],
+      constraints: [],
+      importantCriteria: [],
+      confirmedFacts: [],
+      uncertainInferences: [],
+      contradictions: [],
+      featureSignals: {
+        portable: 0,
+        homeUse: 0.8,
+        compact: 0,
+        lowNoise: 0,
+        coldStart: 0,
+        professionalDuty: 0,
+        budgetSensitive: 0
+      },
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          ...baseTurnPlan().requiredProductTraits,
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          singlePhase220: true,
+          mustHaveTraits: [],
+          excludedClasses: [],
+          brandConstraint: '',
+          exactModelConstraint: ''
+        },
+        softPreferences: {
+          ...baseTurnPlan().requiredProductTraits,
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          mustHaveTraits: [],
+          excludedClasses: [],
+          brandConstraint: '',
+          exactModelConstraint: ''
+        },
+        unknowns: ['тип или мощность насоса'],
+        conflicts: [],
+        selectedProductIds: [],
+        loadProfile: {
+          items: [
+            {
+              kind: 'pump',
+              name: 'pump',
+              count: 1,
+              runningKw: 0.8,
+              startingKw: 2.1,
+              source: 'estimated_average',
+              evidence: 'точных цифр нет, но насос назван'
+            },
+            {
+              kind: 'refrigerator',
+              name: 'refrigerator',
+              count: 1,
+              runningKw: 0.15,
+              startingKw: 1,
+              source: 'estimated_average',
+              evidence: 'холодильник назван без точной мощности'
+            }
+          ],
+          simultaneousStarting: false,
+          confidence: 0.62,
+          removedKinds: []
+        },
+        confidence: 0.72
+      },
+      lastSummary: 'Покупателю нужен генератор; насос есть, но его мощность неизвестна.'
+    });
+
+    expect(update.selectionState?.semanticSource).toBe('llm_need_extraction');
+    expect(update.selectionState?.loadProfile?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'pump', name: 'pump', source: 'estimated_average' })
+    ]));
+    expect(update.selectionState?.unknowns).toContain('тип или мощность насоса');
+  });
+
+  it('keeps deterministic fallback from showing generator catalog when pump is generic unknown', () => {
+    const fit = productWithSpecs('fit-5kw', 'Generator gasoline 5.0 kW 220 V', 64_000, 'https://example.test/generators/fit-5kw/', {
+      nominalPower: '5.0 kW',
+      maxPower: '5.5 kW'
+    });
+    const pumpState = mergeProductSelectionState(reliableGeneratorSelectionResult().state, {
+      hardConstraints: {
+        ...reliableGeneratorSelectionResult().state.hardConstraints,
+        productIntent: 'generator',
+        nominalPowerKwMin: 2.5,
+        nominalPowerKwMax: 4.5,
+        maxPowerKwMin: 3.1
+      },
+      loadProfile: {
+        items: [
+          {
+            kind: 'pump',
+            name: 'pump',
+            count: 1,
+            runningKw: 0.8,
+            startingKw: 2.1,
+            source: 'estimated_average',
+            evidence: 'pump, exact type and power unknown'
+          },
+          {
+            kind: 'refrigerator',
+            name: 'refrigerator',
+            count: 1,
+            runningKw: 0.15,
+            startingKw: 1,
+            source: 'estimated_average',
+            evidence: 'one refrigerator'
+          }
+        ],
+        confidence: 0.6,
+        calculation: 'generic pump and refrigerator',
+        totalRunningKw: 0.95,
+        requiredNominalKw: 2.5,
+        requiredStartingKw: 3.1,
+        simultaneousStarting: true
+      } as any,
+      confidence: 0.65
+    });
+    const result = reliableGeneratorSelectionResult({
+      state: pumpState,
+      matchedProducts: [fit],
+      visibleProducts: [fit],
+      missingQuestions: [ru('\\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u0438\\u043b\\u0438 \\u0442\\u0438\\u043f \\u043d\\u0430\\u0441\\u043e\\u0441\\u0430')],
+      confidence: 0.65
+    });
+
+    const answer = assistantTestHooks.deterministicAnswerGenerationFallback({
+      cards: [],
+      selectionResult: result,
+      structuredCatalogSlice: {
+        source: 'structured_constraints',
+        products: [fit],
+        totalMatched: 50,
+        visibleLimit: 7,
+        constraints: {
+          productIntent: 'generator',
+          nominalPowerKwMin: 2.5,
+          nominalPowerKwMax: 4.5,
+          maxPowerKwMin: 3.1
+        }
+      },
+      finalCards: {
+        visibleProducts: [],
+        hiddenProducts: [fit],
+        cards: [],
+        initialVisibleCount: 0,
+        visibleProductIds: [],
+        hiddenProductIds: ['fit-5kw'],
+        source: 'textOnly'
+      }
+    } as any);
+
+    expect(answer).toContain(ru('\\u041a\\u0430\\u0440\\u0442\\u043e\\u0447\\u043a\\u0438 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u043e\\u0432 \\u043f\\u043e\\u043a\\u0430 \\u043d\\u0435 \\u043f\\u043e\\u043a\\u0430\\u0437\\u044b\\u0432\\u0430\\u044e'));
+    expect(answer).toContain(ru('\\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u0438\\u043b\\u0438 \\u0442\\u0438\\u043f \\u043d\\u0430\\u0441\\u043e\\u0441\\u0430'));
+    expect(answer).not.toContain('50');
+    expect(answer).not.toContain('fit-5kw');
+    expect(answer).not.toContain(fit.name);
+  });
+
+  it('repairs inflated household generator recommendations back to the calculated minimum', () => {
+    const answer = ru('\\u0421\\u043c\\u043e\\u0442\\u0440\\u0435\\u0442\\u044c \\u043b\\u0443\\u0447\\u0448\\u0435 6-8 \\u043a\\u0412\\u0442. \\u0412 \\u0438\\u0434\\u0435\\u0430\\u043b\\u0435 8 \\u043a\\u0412\\u0442.');
+    const repaired = assistantTestHooks.repairGeneratorLoadMinimumText(answer, {
+      items: [],
+      requiredNominalKw: 5,
+      requiredStartingKw: 4.3
+    });
+
+    expect(repaired).toContain(ru('\\u0420\\u0430\\u0441\\u0447\\u0435\\u0442\\u043d\\u044b\\u0439 \\u043c\\u0438\\u043d\\u0438\\u043c\\u0443\\u043c'));
+    expect(repaired).toContain('5 кВт');
+    expect(repaired).not.toMatch(/6-8|8\s*кВт/iu);
+  });
+
+  it('keeps higher generator powers when the sizing policy supports them', () => {
+    const visibleHighPowerCard = productWithSpecs(
+      'supported-85',
+      ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 Supported 8500 (8,5 \\u043a\\u0412\\u0442)'),
+      110_000,
+      'https://example.test/generators/supported-85/',
+      {
+        'Номинальная мощность': '8.5 кВт',
+        'Максимальная мощность': '9.0 кВт'
+      }
+    );
+    const loadProfile = {
+      items: [],
+      requiredNominalKw: 5,
+      requiredStartingKw: 4.3
+    };
+    const supportedByCard = ru('\\u0420\\u0430\\u0441\\u0447\\u0435\\u0442\\u043d\\u044b\\u0439 \\u043c\\u0438\\u043d\\u0438\\u043c\\u0443\\u043c 5 \\u043a\\u0412\\u0442. \\u0412 \\u043a\\u0430\\u0440\\u0442\\u043e\\u0447\\u043a\\u0430\\u0445 \\u0435\\u0441\\u0442\\u044c Supported 8500 \\u043d\\u0430 8,5 \\u043a\\u0412\\u0442.');
+    const supportedByLoad = ru('\\u0420\\u0430\\u0441\\u0447\\u0435\\u0442\\u043d\\u044b\\u0439 \\u043c\\u0438\\u043d\\u0438\\u043c\\u0443\\u043c 8,5 \\u043a\\u0412\\u0442.');
+
+    expect(assistantTestHooks.repairGeneratorLoadMinimumText(supportedByCard, loadProfile, {
+      cards: assistantTestHooks.cardsFromPlan([visibleHighPowerCard], emptyNeedState(), 'show supported generator', baseTurnPlan())
+    })).toContain('8,5 кВт');
+    expect(assistantTestHooks.repairGeneratorLoadMinimumText(supportedByLoad, {
+      items: [],
+      requiredNominalKw: 8.5,
+      requiredStartingKw: 8.2
+    })).toBe(supportedByLoad);
+  });
+
   it('keeps LLM previous-selection scope from introducing new catalogue products', async () => {
     const currentMain = productWithSpecs('current-main', ru('Генератор бензиновый SUMEC SU4500i 4.5 kW'), 82000, 'https://example.test/current-main/', {
       'Номинальная мощность': '4.5 кВт',
@@ -4233,7 +4546,7 @@ describe('recommendation ranking', () => {
     });
 
     expect(repaired).toContain('около 4 кВт');
-    expect(repaired).toContain('от 4 кВт');
+    expect(repaired).toContain('с запасом от 5 кВт');
 
     const repairedClass = assistantTestHooks.repairGeneratorLoadMinimumText(ru('\\u041f\\u043e \\u0432\\u0430\\u0448\\u0435\\u0439 \\u043d\\u0430\\u0433\\u0440\\u0443\\u0437\\u043a\\u0435 \\u044f \\u0431\\u044b \\u0441\\u043c\\u043e\\u0442\\u0440\\u0435\\u043b \\u043d\\u0430 \\u043a\\u043b\\u0430\\u0441\\u0441 **5 \\u043a\\u0412\\u0442 \\u043d\\u043e\\u043c\\u0438\\u043d\\u0430\\u043b / 6+ \\u043a\\u0412\\u0442 \\u043c\\u0430\\u043a\\u0441\\u0438\\u043c\\u0443\\u043c**.'), {
       items: [],

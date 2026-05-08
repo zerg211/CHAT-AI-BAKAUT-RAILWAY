@@ -8,10 +8,24 @@ export function createOpenAIClient() {
 
 function isRetryableError(error: unknown): boolean {
   if (error instanceof OpenAI.APIError) {
-    return error.status === 429 || error.status === 500 || error.status === 502 || error.status === 503;
+    return error.status === 408 ||
+      error.status === 429 ||
+      error.status === 500 ||
+      error.status === 502 ||
+      error.status === 503 ||
+      error.status === 504;
   }
+  if (error instanceof OpenAI.APIConnectionError) return true;
   if (error instanceof Error && error.name === 'AbortError') return false;
-  if (error instanceof Error && (error.message.includes('ECONNRESET') || error.message.includes('ETIMEDOUT'))) return true;
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    return message.includes('connection error') ||
+      message.includes('fetch failed') ||
+      message.includes('econnreset') ||
+      message.includes('etimedout') ||
+      message.includes('und_err') ||
+      message.includes('socket hang up');
+  }
   return false;
 }
 

@@ -264,6 +264,7 @@ export interface ProductSelectionCriteria {
 }
 
 export interface ProductSelectionState {
+  semanticSource?: 'llm_need_extraction' | 'legacy_text_fallback' | 'planner';
   currentProductClass: ProductSelectionClass;
   targetProductClass: ProductSelectionClass;
   activeRequirement?: ProductSelectionCriteria;

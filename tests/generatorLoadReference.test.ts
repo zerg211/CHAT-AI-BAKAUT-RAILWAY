@@ -40,7 +40,7 @@ describe('generator load reference table', () => {
     const items = generatorReferenceLoadItemsFromText('Нужен генератор: свет и болгарка или дрель, мощность не знаю');
     expect(items).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'handheld_tool', name: 'ручной электроинструмент', runningKw: 1.5, startingKw: 3, source: 'estimated_average' }),
-      expect.objectContaining({ kind: 'lighting', name: 'свет', runningKw: 0.5, startingKw: 0.5, source: 'estimated_average' })
+      expect.objectContaining({ kind: 'lighting', name: 'свет', runningKw: 0.2, startingKw: 0.2, source: 'estimated_average' })
     ]));
   });
 
@@ -51,7 +51,7 @@ describe('generator load reference table', () => {
 
     const items = generatorReferenceLoadItemsFromText(text);
     expect(items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'lighting', name: 'свет', runningKw: 0.5, startingKw: 0.5, source: 'estimated_average' })
+      expect.objectContaining({ kind: 'lighting', name: 'свет', runningKw: 0.2, startingKw: 0.2, source: 'estimated_average' })
     ]));
     expect(items.some((item) => item.kind === 'handheld_tool')).toBe(false);
   });
@@ -67,5 +67,13 @@ describe('generator load reference table', () => {
     expect(items).toEqual([
       expect.objectContaining({ kind: 'pump', name: 'скважинный насос', runningKw: 1.1, startingKw: 4, source: 'estimated_average' })
     ]);
+  });
+
+  it('uses minimally sufficient household defaults instead of oversized lighting/fridge loads', () => {
+    const items = generatorReferenceLoadItemsFromText('Нужен генератор для холодильника и LED света');
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'refrigerator', name: 'холодильник', runningKw: 0.25, startingKw: 1.2, source: 'estimated_average' }),
+      expect.objectContaining({ kind: 'lighting', name: 'свет', runningKw: 0.2, startingKw: 0.2, source: 'estimated_average' })
+    ]));
   });
 });

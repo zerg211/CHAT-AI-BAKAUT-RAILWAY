@@ -147,7 +147,7 @@ describe('assistant OpenAI failure fallback', () => {
     expect(payload.answer).not.toContain(ru('\\u041e\\u0440\\u0438\\u0435\\u043d\\u0442\\u0438\\u0440'));
   });
 
-  it('persists a human-safe answer with product cards and heuristic memory when OpenAI calls fail', async () => {
+  it('does not mask OpenAI failures as a normal catalog recommendation', async () => {
     openAiCreate.mockClear();
     const products = [
       testProduct('fit-1', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 3.0 kW \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u0440\\u0442'), 54_000, {
@@ -164,35 +164,12 @@ describe('assistant OpenAI failure fallback', () => {
     const conversations = new FakeConversations();
     const assistant = new AssistantService(conversations as never, new FakeProducts(products) as never);
 
-    const payload = await assistant.generateAnswer({
+    await expect(assistant.generateAnswer({
       sessionId: conversations.session.id,
       userMessage: ru('\\u041d\\u0443\\u0436\\u0435\\u043d \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430 220 \\u0412. \\u041a\\u043e\\u0442\\u0435\\u043b 150 \\u0412\\u0442, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u0438 \\u0441\\u0432\\u0435\\u0442 300 \\u0412\\u0442. \\u041d\\u0443\\u0436\\u0435\\u043d \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a \\u043a\\u043d\\u043e\\u043f\\u043a\\u043e\\u0439, \\u0447\\u0442\\u043e\\u0431\\u044b \\u0436\\u0435\\u043d\\u0430 \\u0441\\u0430\\u043c\\u0430 \\u0437\\u0430\\u043f\\u0443\\u0441\\u043a\\u0430\\u043b\\u0430, \\u0438 \\u043d\\u0435 \\u0448\\u0443\\u043c\\u043d\\u044b\\u0439.'),
       onDelta: vi.fn()
-    });
+    })).rejects.toThrow(/AI need extraction failed/);
 
-    expect(payload.answer).not.toContain('AI answer generation failed');
-    expect(payload.productCards.map((card) => card.id)).toEqual(['fit-1', 'fit-2']);
-    expect(payload.needState.explicitNeeds.length).toBeGreaterThan(0);
-    expect(payload.needState.implicitNeeds.length).toBeGreaterThan(0);
-    expect(payload.needState.featureSignals.homeUse).toBeGreaterThan(0);
-    expect(payload.needState.featureSignals.lowNoise).toBeGreaterThan(0);
-    expect(payload.metadata?.answerGenerationFallback).toMatchObject({ used: true });
-    expect(payload.metadata?.aiDiagnostics?.needExtractionFallback).toMatchObject({ used: true });
-    expect(payload.metadata?.aiDiagnostics?.turnPlanningFallback).toMatchObject({ used: true });
-    expect(payload.metadata?.aiDiagnostics?.answerGenerationFallback).toMatchObject({
-      used: true,
-      reason: 'unsupported_country_region_territory'
-    });
-    expect(payload.metadata?.finalCardsSource).toBe('selection');
-    expect(payload.metadata?.turnPlan).toMatchObject({ cardPolicy: 'showProducts' });
-    expect(payload.metadata?.cardSelection).toBeTruthy();
-    expect(payload.metadata?.cardContract).toBeTruthy();
-    const savedAssistant = conversations.messages.find((message) => message.role === 'assistant');
-    expect(savedAssistant?.metadata.productCards).toHaveLength(2);
-    expect(savedAssistant?.metadata.aiDiagnostics).toMatchObject({
-      needExtractionFallback: { used: true },
-      turnPlanningFallback: { used: true },
-      answerGenerationFallback: { used: true }
-    });
+    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
   });
 });
