@@ -3125,6 +3125,7 @@ describe('recommendation ranking', () => {
 
     expect(assistantTestHooks.shouldUseWebSearch(message, plan)).toBe(true);
     expect(assistantTestHooks.shouldUseDetailedFactStyle(message, plan, 0)).toBe(true);
+    expect(assistantTestHooks.shouldUseServiceCostStyle(message, plan, true)).toBe(true);
 
     expect(assistantTestHooks.shouldUseWebSearch(message, {
       ...plan,
@@ -3134,6 +3135,20 @@ describe('recommendation ranking', () => {
       followUpPolicy: 'auto',
       needsWebSearch: false
     })).toBe(false);
+  });
+
+  it('does not use service-cost style for gasoline/diesel reserve comparison without a service question', () => {
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'detailedFact',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'answerNowNoDeferredOffer',
+      catalogSearchQuery: ru('\\u0410 \\u0435\\u0441\\u043b\\u0438 \\u0432\\u0437\\u044f\\u0442\\u044c \\u0434\\u0435\\u0448\\u0435\\u0432\\u043b\\u0435 \\u0438 \\u043f\\u043e\\u0447\\u0442\\u0438 \\u0431\\u0435\\u0437 \\u0437\\u0430\\u043f\\u0430\\u0441\\u0430, \\u0447\\u0435\\u043c \\u0440\\u0438\\u0441\\u043a\\u0443\\u044e? \\u0414\\u043b\\u044f \\u0440\\u0435\\u0434\\u043a\\u0438\\u0445 \\u043e\\u0442\\u043a\\u043b\\u044e\\u0447\\u0435\\u043d\\u0438\\u0439 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d \\u0438\\u043b\\u0438 \\u0434\\u0438\\u0437\\u0435\\u043b\\u044c \\u0432\\u044b\\u0433\\u043e\\u0434\\u043d\\u0435\\u0435?')
+    });
+    const message = plan.catalogSearchQuery;
+
+    expect(assistantTestHooks.shouldUseDetailedFactStyle(message, plan, 0)).toBe(true);
+    expect(assistantTestHooks.shouldUseServiceCostStyle(message, plan, true)).toBe(false);
   });
 
   it('routes current-lineup and service comparisons to deeper reasoning', () => {

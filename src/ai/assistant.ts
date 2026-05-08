@@ -1714,6 +1714,11 @@ function shouldUseDetailedFactStyle(userMessage: string, plan: AssistantTurnPlan
   return fallbackDetectOwnershipCostQuestion(text) || /(?:подроб|развернут|таблиц|сравнени|ориентир)/iu.test(text);
 }
 
+function shouldUseServiceCostStyle(userMessage: string, plan: AssistantTurnPlan, detailedFactStyle: boolean) {
+  return detailedFactStyle &&
+    (plan.answerMode === 'serviceCostComparison' || fallbackDetectOwnershipCostQuestion(userMessage));
+}
+
 function shouldUseDeepReasoningForPlanning(userMessage: string, conflicts: DataConflict[]) {
   return fallbackDetectCurrentLineupQuestion(userMessage) ||
     fallbackDetectOwnershipCostQuestion(userMessage) ||
@@ -5562,6 +5567,7 @@ export class AssistantService {
       ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
       : null;
     const detailedFactStyle = shouldUseDetailedFactStyle(input.userMessage, effectivePlan, cards.length);
+    const serviceCostStyle = shouldUseServiceCostStyle(input.userMessage, effectivePlan, detailedFactStyle);
     const troubleshootingMemoryCanAnswer = troubleshootingMemory.length > 0;
     const mustUseWebSearch = shouldUseWebSearch(input.userMessage, effectivePlan) && !troubleshootingMemoryCanAnswer;
     const deepAnswerReasoning = shouldUseDeepReasoningForAnswer(
@@ -5612,7 +5618,7 @@ export class AssistantService {
             'Не показывай товарные карточки и не заканчивай предложением продолжить потом в любых формулировках вроде "дальше сравню", "дальше могу собрать", "могу проверить"; лучше дай следующий полезный шаг: если нужна новая техника - смотреть актуальную замену, если уже есть эта модель - можно оценить ремонт/запчасти.'
           ].join(' ')
         }
-      : detailedFactStyle
+      : serviceCostStyle
       ? {
           defaultLength: 'detailed',
           maxParagraphs: 6,
@@ -5775,7 +5781,7 @@ export class AssistantService {
     let completedResponse: unknown;
     const baseAnswerStyleInstructions = currentLineupStyle
       ? 'Стиль ответа сейчас важен: покупатель спрашивает, выпускается ли конкретная модель сейчас. Ответь прямо и коротко: сначала вывод по текущей линейке/производству, затем отдельно что есть в нашем каталоге по самой модели или запчастям, если catalogCandidates это подтверждают. Если модель уже не текущая, но есть явный successor или актуальная замена, обязательно укажи это отдельной фразой. Не превращай ответ в сервисное сравнение и не подтягивай старые модели из предыдущей темы, если последняя реплика их не просит. Не отправляй покупателя смотреть к дилеру как основной ответ: если нет заводского 100% подтверждения, скажи уровень уверенности и практический вывод. Не показывай товарные карточки. Не заканчивай предложением продолжить потом в любых формулировках вроде "могу дальше сравнить", "дальше могу собрать", "могу проверить"; дай практический следующий шаг для покупателя: новая техника или обслуживание уже имеющейся модели. Не показывай внешние ссылки, URL, домены и markdown-ссылки: web search используется только внутренне.'
-      : detailedFactStyle
+      : serviceCostStyle
         ? 'Стиль ответа сейчас важен: покупатель просит практическое сравнение по сервису, запчастям, расходникам или стоимости владения. Закрой вопрос в текущем ответе, без общего текста и без предложения продолжить потом. Дай только текстовый сравнительный ответ, без товарных карточек. Обязательная структура: короткий вывод; затем список или таблица расходников/запчастей по моделям; затем итог по стоимости владения. Сравни минимум воздушный фильтр, топливный фильтр/сетку, свечу, ремень, сервис-набор, режущие диски/круги, стартер, карбюратор/топливный узел, водяной узел или другие релевантные позиции. По каждой позиции дай цену в рублях: точную из каталога/поиска или рыночный диапазон/ориентир в ₽. Если точную цену найти нельзя, не пиши общий отказ; напиши ориентир или честно "не нашел уверенной цены" только для этой позиции. При поиске цен учитывай российские маркетплейсы, российские магазины запчастей и dyadko.ru. Если цена найдена в валюте на зарубежном источнике, переведи ее в рубли по актуальному или явно указанному курсу и пометь как ориентировочную. Не подменяй цены расходников ценой самой машины. Не показывай внешние ссылки, URL, домены и markdown-ссылки: web search используется только внутренне.'
         : 'Стиль ответа сейчас важен: пиши короче и проще. Если карточки товаров будут показаны под ответом, текст должен быть коротким выводом, а не вторым каталогом: 3-4 коротких предложения максимум, не больше двух моделей в тексте, без полного перечисления карточек. Главный/лучший вариант в тексте обязан быть первой видимой карточкой productCardsVisibleFirst[0]. Остальные видимые модели можно называть только как альтернативы; скрытые за кнопкой “Показать еще” можно упомянуть только как дополнительные варианты. Без длинных вступлений, без канцелярита, без роботизированных фраз. Говори как живой менеджер: спокойно, понятно, по делу. Не показывай внешние ссылки, URL, домены и markdown-ссылки: web search используется только внутренне.';
     const answerStyleInstructions = [
@@ -6736,6 +6742,7 @@ export const assistantTestHooks = {
   purchasePlanIfNeeded,
   shouldUseWebSearch,
   shouldUseDetailedFactStyle,
+  shouldUseServiceCostStyle,
   shouldUseCurrentLineupStyle,
   isProductCardSelectionFollowUp,
   shouldUseDeepReasoningForPlanning,
