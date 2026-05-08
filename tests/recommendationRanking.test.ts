@@ -3852,7 +3852,11 @@ describe('recommendation ranking', () => {
       undefined,
       2
     );
-    expect(initial.state.loadProfile?.items.find((item) => item.kind === 'pump')?.name).toBe('pump');
+    const initialPump = initial.state.loadProfile?.items.find((item) => item.kind === 'pump');
+    expect(initialPump?.name).toBe('pump');
+    expect(initialPump?.source).toBe('estimated_average');
+    expect(assistantTestHooks.pumpTypeFromText([initialPump?.name, initialPump?.evidence].filter(Boolean).join(' '))).toBe('generic');
+    expect(assistantTestHooks.shouldBlockGeneratorCardsForEstimatedPump(initial.state)).toBe(true);
 
     const followUp = await assistant.selectProductsForTurn(
       ru('\\u0423\\u0442\\u043e\\u0447\\u043d\\u0438\\u043b: \\u043d\\u0430\\u0441\\u043e\\u0441 \\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439, 220 \\u0412, \\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u043d\\u0435 \\u0437\\u043d\\u0430\\u044e. \\u041f\\u0440\\u0438\\u043a\\u0438\\u043d\\u044c\\u0442\\u0435 \\u0432\\u0430\\u0440\\u0438\\u0430\\u043d\\u0442\\u044b \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0430.'),
@@ -3866,6 +3870,7 @@ describe('recommendation ranking', () => {
 
     expect(pump?.name).toBe('borehole pump');
     expect(pump?.evidence).toMatch(/скважин/i);
+    expect(assistantTestHooks.shouldBlockGeneratorCardsForEstimatedPump(followUp.state)).toBe(false);
     expect(followUp.visibleProducts.length).toBeGreaterThan(0);
     const primarySelectionContract = {
       cardsRole: 'primary',

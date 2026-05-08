@@ -2519,7 +2519,24 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
   }
   const pumpMentionRe = new RegExp(`(?:${ruChars(1085, 1072, 1089, 1086, 1089)}|pump)`, 'iu');
   if (!negatedPumpLoad && (pumpMentionRe.test(lower) || compatibilityTarget?.kind === 'pump')) {
-    const explicit = explicitLoadKwNear(text, pumpMentionRe) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
+    const pumpCompetingLoadRe = new RegExp(`(?:${[
+      ruChars(1093, 1086, 1083, 1086, 1076, 1080, 1083),
+      ruChars(1089, 1074, 1077, 1090),
+      ruChars(1073, 1086, 1083, 1075, 1072, 1088, 1082),
+      ruChars(1080, 1085, 1089, 1090, 1088, 1091, 1084, 1077, 1085, 1090),
+      ruChars(1083, 1072, 1084, 1087),
+      ruChars(1086, 1089, 1074, 1077, 1097),
+      'fridge',
+      'refrigerator',
+      'light',
+      'led',
+      'grinder',
+      'tool'
+    ].join('|')})`, 'iu');
+    const focusedCompatibilityPower = compatibilityTarget?.kind === 'pump' && !pumpCompetingLoadRe.test(text)
+      ? singlePowerKwFromText(text)
+      : undefined;
+    const explicit = explicitLoadKwNearOwnMention(text, pumpMentionRe, pumpCompetingLoadRe) ?? focusedCompatibilityPower;
     const previous = [...items.values()].find((item) => item.kind === 'pump');
     const currentPumpType = pumpTypeFromText(lower);
     const previousPumpType = pumpTypeFromText([previous?.name, previous?.evidence].filter(Boolean).join(' '));
@@ -6738,5 +6755,6 @@ export const assistantTestHooks = {
   isManufacturingStatusQuestion,
   pumpTypeFromText,
   generatorLoadProfileFromText,
-  shouldPromotePrimarySelectionCards
+  shouldPromotePrimarySelectionCards,
+  shouldBlockGeneratorCardsForEstimatedPump
 };
