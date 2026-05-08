@@ -1,4 +1,4 @@
-import type { CatalogPage, CustomerNeedState, DataConflict, Message, Product } from '../shared/types.js';
+import type { CatalogPage, CustomerNeedState, DataConflict, Message, Product, TroubleshootingCase } from '../shared/types.js';
 import { classifyProduct, isCoreEquipment } from './productClassifier.js';
 
 const FINAL_CONTEXT_HISTORY_LIMIT = 4;
@@ -253,6 +253,7 @@ export function buildAssistantContext(input: {
   historySummary?: string | null;
   products: Product[];
   knowledgePages?: CatalogPage[];
+  troubleshootingCases?: TroubleshootingCase[];
   conflicts: DataConflict[];
   messages: Message[];
 }, options: { mode?: AssistantContextMode } = {}) {
@@ -283,6 +284,15 @@ export function buildAssistantContext(input: {
       sourceUrl: mode === 'expanded' ? page.sourceUrl : undefined,
       summary: truncateText(page.summary || page.content, pageSummaryLimit),
       contentExcerpt: pageContentLimit ? truncateText(page.content, pageContentLimit) : undefined
+    })),
+    troubleshootingCases: (input.troubleshootingCases ?? []).map((item) => ({
+      model: item.model,
+      faultCodes: item.faultCodes,
+      problemSummary: truncateText(item.problemSummary, 500),
+      verifiedAnswer: truncateText(item.answer, mode === 'expanded' ? 1600 : 700),
+      confidence: item.confidence,
+      sourceCount: item.sourceUrls.length,
+      semanticScore: item.semanticScore ?? undefined
     })),
     openDataConflicts: input.conflicts.map((conflict) => ({
       productId: conflict.productId,

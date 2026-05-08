@@ -16,6 +16,7 @@ describe('database schema migrations', () => {
     await repairRequiredSchema(client);
 
     expect(queries).toContain('ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS history_summary TEXT');
+    expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS troubleshooting_cases'))).toBe(true);
   });
 
   it('creates history_summary in the fresh database schema', async () => {
@@ -23,5 +24,15 @@ describe('database schema migrations', () => {
 
     expect(schema).toContain('CREATE TABLE IF NOT EXISTS conversation_sessions');
     expect(schema).toContain('history_summary text');
+  });
+
+  it('creates the troubleshooting memory schema', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '005_troubleshooting_cases.sql'), 'utf8');
+
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS troubleshooting_cases');
+    expect(schema).toContain('model_key text NOT NULL');
+    expect(schema).toContain('embedding vector(1536)');
+    expect(schema).toContain('UNIQUE(model_key, problem_key)');
+    expect(schema).not.toContain('GENERATED ALWAYS');
   });
 });

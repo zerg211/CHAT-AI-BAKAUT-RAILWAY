@@ -385,6 +385,10 @@ function getPageUrl() {
   return params.get('pageUrl') ?? document.referrer ?? window.location.href;
 }
 
+function createClientId() {
+  return globalThis.crypto?.randomUUID?.() ?? `visitor-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 async function createSession(createIfMissing = false) {
   const existing = sessionStorage.getItem('bakaut_session_id');
   if (existing) {
@@ -399,13 +403,13 @@ async function createSession(createIfMissing = false) {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      visitorId: localStorage.getItem('bakaut_visitor_id') ?? crypto.randomUUID(),
+      visitorId: localStorage.getItem('bakaut_visitor_id') ?? createClientId(),
       pageUrl: getPageUrl()
     })
   });
   if (!response.ok) throw new Error('Не удалось создать сессию');
   const data = (await response.json()) as { session: ConversationSession };
-  localStorage.setItem('bakaut_visitor_id', data.session.visitorId ?? crypto.randomUUID());
+  localStorage.setItem('bakaut_visitor_id', data.session.visitorId ?? createClientId());
   sessionStorage.setItem('bakaut_session_id', data.session.id);
   return data.session.id;
 }

@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken } from '../shared/types.js';
+import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
@@ -40,6 +40,10 @@ import { traceTimer, emitTrace } from './tracing.js';
 import { enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
 import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
+import {
+  buildTroubleshootingCaseDraft,
+  buildTroubleshootingSearchQuery
+} from './troubleshootingMemory.js';
 
 function cleanEmpty(obj: any): any {
   if (obj === null || obj === undefined || obj === '') return undefined;
@@ -102,6 +106,19 @@ type WebCitation = {
   url: string;
   title?: string;
   snippet?: string;
+};
+
+type TroubleshootingMemoryDecision = {
+  usable: boolean;
+  selectedCaseIds: string[];
+  confidence: number;
+  answerGuidance: string;
+};
+
+type TroubleshootingMemoryResult = {
+  cases: TroubleshootingCase[];
+  guidance: string;
+  confidence: number;
 };
 
 type AssistantTurnAction =
@@ -1592,7 +1609,7 @@ function hasUserGroundedSelectionEvidence(state: ProductSelectionState) {
 }
 
 function fallbackDetectPurchaseIntent(text: string) {
-  return /(?:\bbuy\b|\border\b|\btake\b|куплю|беру|возьму|давайте|оформ|заказ|в\s+заявк|оставлю\s+контакт|передайте\s+менеджеру)/iu.test(text);
+  return /(?:\bbuy\b|\border\b|\btake\b|куплю|(?:^|[^\p{L}])беру(?:$|[^\p{L}])|(?:^|[^\p{L}])возьму(?:$|[^\p{L}])|давайте|оформ|заказ|в\s+заявк|оставлю\s+контакт|передайте\s+менеджеру)/iu.test(text);
 }
 
 function fallbackDetectLeadHandoffIntent(text: string) {
@@ -1608,6 +1625,15 @@ function fallbackDetectOperationalHandoffQuestion(text: string) {
   const hasOperationalTerm = /(?:доставк|налич|в\s+наличии|на\s+складе|скидк|спецуслов|самовывоз|оплат|оформ|заказ|купить|забрать|актуальн\w*\s+цен|финальн\w*\s+цен|точн\w*\s+цен|срок[иов]*\s+(?:достав|получ))/iu.test(normalized);
   if (!hasOperationalTerm) return false;
   return /(?:сколько|стоим|услов|есть\s+ли|точно|можно\s+ли|могу\s+оставить|оставлю|перезвон|свяж|логист|менеджер|телефон|контакт)/iu.test(normalized);
+}
+
+function isTechnicalConsultationContinuation(text: string) {
+  const normalized = text.toLowerCase();
+  const technicalContext = /(?:электрик|пусков\w*\s+ток|тр[её]хфаз|3\s*фаз|фаз[аы]|нагрузк|мощност|квт|кв\b|прибор|генератор|расчет|рассчит)/iu.test(normalized);
+  if (!technicalContext) return false;
+  const asksForHandoff = /(?:перезвон|свяж|позвон|оставлю\s+контакт|оставить\s+контакт|передайте\s+менеджеру|оформ|заказ|купить|(?:^|[^\p{L}])беру(?:$|[^\p{L}])|(?:^|[^\p{L}])возьму(?:$|[^\p{L}])|доставк|налич|актуальн[\p{L}]*\s+цен|точн[\p{L}]*\s+цен)/iu.test(normalized);
+  if (asksForHandoff || hasLikelyContactText(text)) return false;
+  return /(?:без\s+электрик\w*\s+.*(?:не\s+выбер|не\s+подбер)|нуж[её]н\s+электрик|надо\s+с\s+электрик|электрик\s+.*(?:раскида|распредел|посчита)|пусков\w*\s+ток|суммарн\w*\s+мощност|общ\w*\s+нагрузк)/iu.test(normalized);
 }
 
 function fallbackDetectOwnershipCostQuestion(text: string) {
@@ -2155,6 +2181,12 @@ function hasExplicitPowerText(text: string) {
   return Boolean(parseDesiredPowerRange(text) || text.match(powerRegex));
 }
 
+function explicitGeneratorPowerRequestKw(text: string) {
+  const after = text.match(/(?:генератор|бензогенератор|электростанц)[^.!?\n]{0,80}?(\d+(?:[,.]\d+)?)\s*(кВт|kw|kva|ква)/iu);
+  const before = text.match(/(\d+(?:[,.]\d+)?)\s*(кВт|kw|kva|ква)[^.!?\n]{0,80}?(?:генератор|бензогенератор|электростанц)/iu);
+  return parseLoadPowerAmount(after?.[1] ?? before?.[1], after?.[2] ?? before?.[2]);
+}
+
 function hasCompatibilityTargetContext(text: string) {
   return /(?:кот[её]л|boiler|baxi|насос|pump|холодильник|fridge|инструмент|tool|двигател|engine|артикул\s+\S+)/iu.test(text);
 }
@@ -2257,6 +2289,17 @@ function parseLoadPowerAmount(value: string | undefined, unit: string | undefine
     : parsed;
 }
 
+function explicitAggregateLoadKwFromText(text: string) {
+  const normalized = text.replace(/\s+/g, ' ');
+  const loadContext = /(?:суммарн[\p{L}]*\s+(?:мощност|нагрузк)|общ[\p{L}]*\s+(?:мощност|нагрузк)|нагрузк[\p{L}]*|все\s+работающ[\p{L}]*\s+прибор|все\s+прибор[\p{L}]*|одновременно\s+работающ[\p{L}]*)/iu;
+  const unit = String.raw`(?:кВт|kw|kva|ква|кВ)`;
+  const after = normalized.match(new RegExp(String.raw`${loadContext.source}[^.!?\n]{0,90}?(\d+(?:[,.]\d+)?)\s*(${unit})`, 'iu'));
+  const before = normalized.match(new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(${unit})[^.!?\n]{0,90}?${loadContext.source}`, 'iu'));
+  const value = parseLoadPowerAmount(after?.[1] ?? before?.[1], after?.[2] ?? before?.[2]);
+  if (!value || value < 1) return undefined;
+  return value;
+}
+
 function explicitLoadKwNear(text: string, terms: RegExp) {
   const after = text.match(new RegExp(String.raw`${terms.source}[^.!?,;\n]{0,50}?(\d+(?:[,.]\d+)?)\s*(кВт|kw|Вт|w)`, 'iu'));
   const afterValue = parseLoadPowerAmount(after?.[1], after?.[2]);
@@ -2322,6 +2365,25 @@ function hasAffirmativeSimultaneousStarting(text: string) {
 
 function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLoadProfile, compatibilityTarget?: ProductSelectionState['compatibilityTargetProduct']) {
   const lower = text.toLowerCase();
+  const aggregateLoadKw = explicitAggregateLoadKwFromText(text);
+  const simultaneousStarting = hasAffirmativeSimultaneousStarting(text);
+  if (aggregateLoadKw) {
+    const profile = calculateGeneratorLoadProfile([{
+      kind: 'aggregate_load',
+      name: 'суммарная нагрузка',
+      count: 1,
+      runningKw: aggregateLoadKw,
+      startingKw: aggregateLoadKw,
+      source: 'explicit_user',
+      evidence: text
+    }], simultaneousStarting || current?.simultaneousStarting === true);
+    if (profile) {
+      profile.removedKinds = [...new Set((current?.items ?? []).map((item) => item.kind))];
+      profile.confidence = 0.9;
+      profile.calculation = `суммарная нагрузка: ${aggregateLoadKw} kW run / ${aggregateLoadKw} kW start`;
+    }
+    return profile;
+  }
   const items = new Map<string, ProductElectricalLoadItem>();
   for (const item of current?.items ?? []) items.set(loadItemKey(item), item);
   for (const item of generatorReferenceLoadItemsFromText(text)) {
@@ -2388,7 +2450,6 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
       if (existing.kind === 'pump') items.delete(key);
     }
   }
-  const simultaneousStarting = hasAffirmativeSimultaneousStarting(text);
   if (!negatedPumpLoad && (/(?:насос|pump)/iu.test(lower) || compatibilityTarget?.kind === 'pump')) {
     const explicit = explicitLoadKwNear(text, /(?:насос|pump)/iu) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
     const previous = [...items.values()].find((item) => item.kind === 'pump');
@@ -2491,7 +2552,8 @@ function explicitCriteriaFromTurn(
   userMessage: string,
   activeText: string,
   plan: AssistantTurnPlan,
-  profile: ProductFitProfile
+  profile: ProductFitProfile,
+  conversationUserText = ''
 ) {
   const targetProductClass = productIntentFromSelection(current, plan, profile);
   const plannerTraits = plan.requiredProductTraits;
@@ -2571,7 +2633,18 @@ function explicitCriteriaFromTurn(
   const loadProfile = targetProductClass === 'generator'
     ? generatorLoadProfileFromText(userMessage, current.loadProfile, compatibilityTarget)
     : undefined;
-  const loadProfileOverridesPlannerPower = Boolean(loadProfile?.requiredNominalKw && !hasExplicitGeneratorPowerRequest(userMessage));
+  const contextualGroundedPowerMin = targetProductClass === 'generator'
+    ? explicitGeneratorPowerRequestKw(conversationUserText)
+    : undefined;
+  const currentGroundedPowerMin = currentHard.productIntent === 'generator' &&
+    currentHard.nominalPowerKwMin &&
+    currentHard.provenance?.nominalPowerKwMin !== 'inferred_from_load'
+    ? currentHard.nominalPowerKwMin
+    : undefined;
+  const groundedPowerMin = Math.max(currentGroundedPowerMin ?? 0, contextualGroundedPowerMin ?? 0) || undefined;
+  const loadProfileCanSetPower = isReliableGeneratorLoadProfile(loadProfile) &&
+    (!groundedPowerMin || (loadProfile?.requiredNominalKw ?? 0) > groundedPowerMin);
+  const loadProfileOverridesPlannerPower = Boolean(loadProfileCanSetPower && !hasExplicitGeneratorPowerRequest(userMessage));
   const plannerPower = targetProductClass === 'generator' && !loadProfileOverridesPlannerPower && (
     plannerTraits.nominalPowerKwMin ||
     plannerTraits.nominalPowerKwMax ||
@@ -2586,7 +2659,10 @@ function explicitCriteriaFromTurn(
         source: 'planner' as const
       }
     : undefined;
-  const desiredPower = targetProductClass === 'generator' && !plannerPower && loadProfile?.requiredNominalKw
+  const contextualPower = targetProductClass === 'generator' && !plannerPower && contextualGroundedPowerMin && !loadProfileCanSetPower
+    ? { min: contextualGroundedPowerMin, max: Math.round((contextualGroundedPowerMin + Math.max(1.5, contextualGroundedPowerMin * 0.08)) * 10) / 10, source: 'explicit_user' as const }
+    : undefined;
+  const desiredPower = targetProductClass === 'generator' && !plannerPower && !contextualPower && loadProfileCanSetPower && loadProfile?.requiredNominalKw
     ? { min: loadProfile.requiredNominalKw, max: Math.max(loadProfile.requiredNominalKw + 1.5, loadProfile.requiredNominalKw), source: 'inferred_from_load' as const }
     : targetProductClass === 'generator' && !plannerPower ? activePowerFromLoadText(userMessage) ?? (
       current.compatibilityTargetProduct?.kind && hasExplicitPowerText(userMessage)
@@ -2615,12 +2691,13 @@ function explicitCriteriaFromTurn(
       hard.maxPowerKwMax = plannerPower.maxMax;
       hard.provenance!.maxPowerKwMax = 'planner';
     }
-  } else if (!rankingOnly && desiredPower) {
-    hard.nominalPowerKwMin = desiredPower.min;
-    hard.nominalPowerKwMax = desiredPower.max;
-    hard.provenance!.nominalPowerKwMin = desiredPower.source;
-    hard.provenance!.nominalPowerKwMax = desiredPower.source;
-    if (desiredPower.source === 'inferred_from_load' && loadProfile?.requiredStartingKw) {
+  } else if (!rankingOnly && (contextualPower || desiredPower)) {
+    const power = contextualPower ?? desiredPower!;
+    hard.nominalPowerKwMin = power.min;
+    hard.nominalPowerKwMax = power.max;
+    hard.provenance!.nominalPowerKwMin = power.source;
+    hard.provenance!.nominalPowerKwMax = power.source;
+    if (power.source === 'inferred_from_load' && loadProfile?.requiredStartingKw) {
       hard.maxPowerKwMin = loadProfile.requiredStartingKw;
       hard.provenance!.maxPowerKwMin = 'inferred_from_load';
     }
@@ -2766,7 +2843,7 @@ function powerCriteriaFromSelection(criteria: ProductSelectionCriteria): Generat
 
 function productMeetsCalculatedLoad(product: Product, state: ProductSelectionState) {
   const required = state.loadProfile?.requiredNominalKw;
-  if (!required || state.hardConstraints.productIntent !== 'generator') return true;
+  if (!required || state.hardConstraints.productIntent !== 'generator' || !isReliableGeneratorLoadProfile(state.loadProfile)) return true;
   const power = extractGeneratorPowerForHardSelection(product);
   if (power.nominalKw === undefined) return false;
   return power.nominalKw >= required - 0.2 || (power.maxKw !== undefined && power.maxKw >= required + 0.5 && power.nominalKw >= required - 0.7);
@@ -2776,8 +2853,26 @@ function hasReliableGeneratorSelectionBasis(state: ProductSelectionState) {
   const hard = state.hardConstraints;
   if (hard.productIntent !== 'generator') return true;
   if (hard.exactModelTokens.length || hard.exactModelConstraint) return true;
-  if (state.loadProfile?.requiredNominalKw) return true;
+  if (isReliableGeneratorLoadProfile(state.loadProfile)) return true;
+  const powerSources = [
+    hard.provenance?.nominalPowerKwMin,
+    hard.provenance?.nominalPowerKwMax,
+    hard.provenance?.maxPowerKwMin,
+    hard.provenance?.maxPowerKwMax
+  ];
+  const hasOnlyInferredLoadPower = powerSources.some((source) => source === 'inferred_from_load') &&
+    powerSources.every((source) => !source || source === 'inferred_from_load');
+  if (hasOnlyInferredLoadPower && !isReliableGeneratorLoadProfile(state.loadProfile)) return false;
   return Boolean(hard.nominalPowerKwMin || hard.nominalPowerKwMax || hard.maxPowerKwMin || hard.maxPowerKwMax);
+}
+
+function isReliableGeneratorLoadProfile(profile?: ProductGeneratorLoadProfile | null) {
+  if (!profile?.requiredNominalKw) return false;
+  const items = profile.items ?? [];
+  if (items.some((item) => item.kind === 'aggregate_load' && item.source === 'explicit_user')) return true;
+  if (items.some((item) => item.source === 'explicit_user') && (profile.confidence ?? 0) >= 0.75) return true;
+  const activeEstimatedItems = items.filter((item) => item.source === 'estimated_average' && item.runningKw && item.runningKw > 0);
+  return activeEstimatedItems.length >= 2 && (profile.totalRunningKw ?? 0) >= 0.8;
 }
 
 function hasEstimatedPumpLoad(state: ProductSelectionState) {
@@ -3393,7 +3488,29 @@ function selectedPurchaseProductIds(products: Product[], history: Message[], sta
 }
 
 function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], history: Message[], state: CustomerNeedState, userMessage: string) {
-  const leadRequested = isLeadPlan(plan) || fallbackDetectLeadHandoffIntent(userMessage) || fallbackDetectOperationalHandoffQuestion(userMessage);
+  const fallbackLeadRequested = fallbackDetectLeadHandoffIntent(userMessage) || fallbackDetectOperationalHandoffQuestion(userMessage);
+  if (isLeadPlan(plan) && !fallbackLeadRequested && isTechnicalConsultationContinuation(userMessage)) {
+    return {
+      leadRequested: false,
+      plan: {
+        ...plan,
+        action: 'ask_clarifying_question' as AssistantTurnAction,
+        answerMode: 'short' as AnswerMode,
+        followUpPolicy: 'askClarifyingQuestion' as FollowUpPolicy,
+        cardPolicy: 'textOnly' as CardPolicy,
+        selectionState: {
+          ...plan.selectionState,
+          shouldShowCards: false,
+          cardDisplayMode: 'none' as CardDisplayMode
+        },
+        answerGuidance: [
+          plan.answerGuidance,
+          'Покупатель продолжает технический подбор, а не оформляет заявку. Не проси контакты только из-за упоминания электрика. Проверь расчет нагрузки, фазы, пусковые токи и задай следующий уточняющий вопрос.'
+        ].filter(Boolean).join('\n')
+      }
+    };
+  }
+  const leadRequested = isLeadPlan(plan) || fallbackLeadRequested;
   if (!leadRequested) return { plan, leadRequested };
 
   const selectedProductIds = selectedPurchaseProductIds(products, history, state, userMessage, plan);
@@ -3525,16 +3642,16 @@ function deterministicLeadCollectionAnswer(
     ? contactContext.asksContactHandling
       ? 'Контакт в сообщении вижу, но отдельная заявка автоматически не создана. Чтобы контакт точно попал в обработку, заполните форму; менеджер сможет сверить вопрос по этому диалогу.'
       : 'Контакт в сообщении вижу, но для надежной передачи менеджеру оставьте его в форме.'
-    : 'Оставьте имя и телефон в форме — перезвоню уже с конкретным ответом про доставку, наличие или цену после проверки.';
+    : 'Оставьте контакты в форме. Напишите имя и телефон — перезвоню уже с готовым ответом.';
   const leadStatusText = contactContext.autoLead?.created
     ? 'Заявку создал как обращение для менеджера; финальные условия менеджер подтвердит после проверки.'
-    : 'Заявку уже созданной не считаю: финально её подтвердит менеджер после проверки.';
+    : '';
 
   return [
     `Здравствуйте, сейчас ${handoffContext.verb} ${handoffContext.responsible} ${handoffContext.summary}.`,
     `${priceText}${contactText}`,
     leadStatusText
-  ].join(' ');
+  ].filter(Boolean).join(' ');
 }
 
 function operationalHandoffContext(userMessage: string, fallbackItemsText: string) {
@@ -3546,18 +3663,19 @@ function operationalHandoffContext(userMessage: string, fallbackItemsText: strin
   const asksDiscount = /скидк|спецуслов/iu.test(lower);
   const asksTiming = /срок/iu.test(lower);
   const destination = extractDeliveryDestination(normalized);
-  const itemFromMessage = extractOperationalItemFromMessage(normalized, destination);
-  const itemText = itemFromMessage || fallbackItemsText;
+  const itemText = fallbackItemsText === 'выбранный вариант' ? '' : fallbackItemsText;
   const topics = [
-    asksDelivery ? `стоимость доставки${destination ? ` в ${destination}` : ''}` : '',
+    asksDelivery ? `стоимость доставки${destination ? ` в ${destination}` : ''} и саму доставку` : '',
     asksStock ? 'наличие' : '',
     asksPrice ? 'актуальную цену' : '',
     asksDiscount ? 'возможные условия по скидке' : '',
     asksTiming ? 'сроки' : ''
   ].filter(Boolean);
   const summary = topics.length
-    ? `${topics.join(', ')} по ${itemText}`
-    : `детали по ${itemText}`;
+    ? `${topics.join(', ')}${itemText ? ` по ${itemText}` : ''}`
+    : itemText
+      ? `детали по ${itemText}`
+      : 'детали по вашему запросу';
   const responsible = asksDelivery && (asksStock || asksPrice || asksDiscount)
     ? 'у логиста и менеджера'
     : asksDelivery
@@ -3571,25 +3689,11 @@ function operationalHandoffContext(userMessage: string, fallbackItemsText: strin
 }
 
 function extractDeliveryDestination(text: string) {
-  const match = text.match(/(?:^|\s)(?:в|во|до)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z\s-]{1,80}?(?:край|область|республик[ауи]|район|округ|город|г\.\s*[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z\s-]{1,40}))(?:[,.!?;:]|\s|$)/u);
-  return match?.[1]?.replace(/\s+/g, ' ').trim();
-}
+  const regionMatch = text.match(/(?:^|\s)(?:в|во|до)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z\s-]{1,80}?(?:край|область|республик[ауи]|район|округ|город|г\.\s*[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z\s-]{1,40}))(?:[,.!?;:]|\s|$)/u);
+  if (regionMatch?.[1]) return regionMatch[1].replace(/\s+/g, ' ').trim();
 
-function extractOperationalItemFromMessage(text: string, destination?: string) {
-  let source = text;
-  if (destination) {
-    const destinationIndex = source.toLowerCase().indexOf(destination.toLowerCase());
-    if (destinationIndex >= 0) source = source.slice(destinationIndex + destination.length);
-  }
-  source = source
-    .replace(/^[\s,.;:!?-]+/u, '')
-    .replace(/^(?:по|для|на)\s+/iu, '')
-    .replace(/(?:оставить|оставлю|могу\s+оставить|перезвон|свяжитесь|телефон|номер|контакт).*$/iu, '')
-    .trim();
-  if (source.length < 3) return '';
-  if (!/[А-ЯЁA-Zа-яёa-z]/u.test(source)) return '';
-  if (/^(?:а\s+)?(?:сколько|стоим|услов|есть\s+ли|точно|можно\s+ли)\b/iu.test(source)) return '';
-  return source.slice(0, 140).replace(/\s+/g, ' ').trim();
+  const cityMatch = text.match(/(?:доставк\w*|логист\w*)[\s\S]{0,120}?(?:в|во|до)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]{2,40})(?:[,.!?;:]|\s|$)/u);
+  return cityMatch?.[1]?.replace(/\s+/g, ' ').trim();
 }
 
 function resolveTurnContractForPlan(
@@ -3919,6 +4023,8 @@ function stripDeferredOfferTail(answer: string) {
     .replace(/\n{1,2}(?:Я\s+)?(?:могу|могу\s+дальше|дальше\s+могу)\s+(?:разложить|сравнить|подобрать|посмотреть|проверить)[\s\S]{0,500}$/iu, '')
     .replace(/(?:^|(?<=[.!?])\s+)(?:Если\s+[^.!?\n]{0,180},?\s+)?(?:я\s+)?(?:дальше\s+)?могу\s+(?:быстро\s+)?(?:собрать|разложить|сравнить|подобрать|посмотреть|проверить|дать)[\s\S]{0,500}$/iu, '')
     .replace(/(?:^|(?<=[.!?])\s+)Если\s+(?:хотите|хочешь),?\s+(?:следующим\s+сообщением\s+)?(?:я\s+)?могу\s+(?:сразу\s+)?(?:собрать|разложить|сравнить|подобрать|посмотреть|проверить|дать)[\s\S]{0,500}$/iu, '')
+    .replace(/(?:^|(?<=[.!?])\s+)Если\s+(?:хотите|хочешь),?\s+(?:я\s+)?могу\s+(?:дальше\s+)?помочь[\s\S]{0,500}$/iu, '')
+    .replace(/(?:^|(?<=[.!?])\s+)Если\s+(?:хотите|хочешь),?\s+дальше\s+помогу[\s\S]{0,500}$/iu, '')
     .replace(/(?:^|(?<=[.!?])\s+)Если\s+(?:хотите|хочешь),?\s+дальше\s+(?:лучше\s+)?(?:смотреть|подбирать|сравнивать|проверять|искать)[\s\S]{0,500}$/iu, '');
 }
 
@@ -4138,6 +4244,7 @@ export class AssistantService {
     needState: CustomerNeedState;
     products: Product[];
     knowledgePages: Awaited<ReturnType<ProductRepository['searchCatalogPages']>>;
+    troubleshootingCases?: TroubleshootingCase[];
     conflicts: Awaited<ReturnType<ProductRepository['getOpenConflictsForProducts']>>;
     history: Message[];
     historySummary?: string | null;
@@ -4184,6 +4291,15 @@ export class AssistantService {
             sourceUrl: page.sourceUrl,
             summary: truncateForAI(page.summary, PLANNER_PAGE_SUMMARY_LIMIT),
             contentExcerpt: truncateForAI(page.content, PLANNER_PAGE_CONTENT_LIMIT)
+          })),
+          troubleshootingMemory: (input.troubleshootingCases ?? []).slice(0, 3).map((item) => ({
+            model: item.model,
+            faultCodes: item.faultCodes,
+            problemSummary: truncateForAI(item.problemSummary, 500),
+            verifiedAnswer: truncateForAI(item.answer, 1200),
+            confidence: item.confidence,
+            sourceCount: item.sourceUrls.length,
+            semanticScore: item.semanticScore ?? undefined
           })),
           openDataConflicts: input.conflicts
         }))
@@ -4236,6 +4352,107 @@ export class AssistantService {
       console.warn('OpenAI turn planning failed', safeError(error));
       markAiFallback(input.diagnostics, 'turnPlanningFallback', finalError, 'turn_planning_failed');
       return fallbackTurnPlan(input);
+    }
+  }
+
+  async findTroubleshootingMemory(userMessage: string, retrievalQuery?: string, signal?: AbortSignal): Promise<TroubleshootingMemoryResult> {
+    const text = [userMessage, retrievalQuery].filter(Boolean).join(' ');
+    const query = buildTroubleshootingSearchQuery(text);
+    if (!query.modelKeys.length) return { cases: [], guidance: '', confidence: 0 };
+    const embedding = await createEmbedding(text, signal).catch(() => null);
+    const matches = await this.products.searchTroubleshootingCases({
+      query: text,
+      modelKeys: query.modelKeys,
+      faultCodes: query.faultCodes,
+      embedding,
+      limit: 4
+    }).catch(() => []);
+    if (!matches.length) return { cases: [], guidance: '', confidence: 0 };
+    const decision = await this.decideTroubleshootingMemoryUse(userMessage, matches, signal);
+    if (!decision.usable || decision.confidence < 0.72) return { cases: [], guidance: '', confidence: decision.confidence };
+    const selectedIds = new Set(decision.selectedCaseIds);
+    return {
+      cases: matches.filter((item) => selectedIds.has(item.id)).slice(0, 3),
+      guidance: decision.answerGuidance,
+      confidence: decision.confidence
+    };
+  }
+
+  async decideTroubleshootingMemoryUse(userMessage: string, candidates: TroubleshootingCase[], signal?: AbortSignal): Promise<TroubleshootingMemoryDecision> {
+    const client = createOpenAIClient();
+    if (!client || !candidates.length) {
+      return { usable: false, selectedCaseIds: [], confidence: 0, answerGuidance: '' };
+    }
+
+    try {
+      const response: any = await withRetry(() => client.responses.create({
+        model: config.OPENAI_PLANNER_MODEL,
+        reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
+        input: [
+          {
+            role: 'system',
+            content: [
+              'You are a semantic memory router for a sales/support assistant.',
+              'Decide whether one or more stored troubleshooting cases answer the buyer latest question by meaning.',
+              'Retrieval already found candidates by model/text; do not accept a case just because words, model tokens, or an error code overlap.',
+              'Accept only when the equipment/model identity and the actual problem/symptom are the same or directly equivalent.',
+              'Reject when the same model is mentioned but the fault, symptom, operating condition, or buyer need differs.',
+              'If accepted, provide short answerGuidance telling the final assistant to use the stored verified case as internal checked memory and not repeat web search.'
+            ].join(' ')
+          },
+          {
+            role: 'user',
+            content: yaml.dump(cleanEmpty({
+              latestUserMessage: userMessage,
+              candidates: candidates.map((item) => ({
+                id: item.id,
+                model: item.model,
+                faultCodes: item.faultCodes,
+                problemSummary: truncateForAI(item.problemSummary, 700),
+                verifiedAnswer: truncateForAI(item.answer, 1200),
+                confidence: item.confidence,
+                semanticScore: item.semanticScore ?? undefined,
+                sourceCount: item.sourceUrls.length
+              }))
+            }))
+          }
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'troubleshooting_memory_decision',
+            strict: true,
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                usable: { type: 'boolean' },
+                selectedCaseIds: { type: 'array', items: { type: 'string' } },
+                confidence: { type: 'number', minimum: 0, maximum: 1 },
+                answerGuidance: { type: 'string' }
+              },
+              required: ['usable', 'selectedCaseIds', 'confidence', 'answerGuidance']
+            }
+          }
+        },
+        max_output_tokens: 900
+      }, signal ? { signal } : undefined), 2, signal);
+      logOpenAIUsage('troubleshooting_memory_router', config.OPENAI_PLANNER_MODEL, response);
+      const parsed = parseJsonObject(response.output_text || '{}', 'troubleshooting_memory_router');
+      const allowedIds = new Set(candidates.map((item) => item.id));
+      const selectedCaseIds = Array.isArray(parsed.selectedCaseIds)
+        ? parsed.selectedCaseIds.filter((id: unknown): id is string => typeof id === 'string' && allowedIds.has(id))
+        : [];
+      return {
+        usable: Boolean(parsed.usable) && selectedCaseIds.length > 0,
+        selectedCaseIds,
+        confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0,
+        answerGuidance: typeof parsed.answerGuidance === 'string' ? parsed.answerGuidance.trim().slice(0, 1200) : ''
+      };
+    } catch (error) {
+      if (signal?.aborted) throw new Error('Troubleshooting memory routing aborted');
+      console.warn('Troubleshooting memory routing failed', safeError(error));
+      return { usable: false, selectedCaseIds: [], confidence: 0, answerGuidance: '' };
     }
   }
 
@@ -4339,9 +4556,9 @@ export class AssistantService {
     conversationUserText = ''
   ): Promise<ProductSelectionResult> {
     const currentSelection = state.selectionState ?? emptyProductSelectionState();
-    const activeText = [userMessage, plan.catalogSearchQuery, stateText(state, '')].filter(Boolean).join(' ');
+    const activeText = [userMessage, plan.catalogSearchQuery, conversationUserText, stateText(state, '')].filter(Boolean).join(' ');
     const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
-    const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile);
+    const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile, conversationUserText);
     let selectionState = mergeProductSelectionState(currentSelection, selectionUpdate);
     selectionState = clearUngroundedGeneratorElectricStart(
       selectionState,
@@ -4861,12 +5078,15 @@ export class AssistantService {
     const baseQuery = productSearchText(input.userMessage, needState);
     const preliminaryCandidates = await this.findPlannerContextProducts(input.userMessage, needState, baseQuery, input.signal);
     const preliminaryKnowledgePages = await this.findKnowledgePages(input.userMessage, needState, baseQuery, input.signal);
+    const troubleshootingMemoryResult = await this.findTroubleshootingMemory(input.userMessage, baseQuery, input.signal);
+    const troubleshootingMemory = troubleshootingMemoryResult.cases;
     const preliminaryConflicts = await this.products.getOpenConflictsForProducts(preliminaryCandidates.map((product) => product.id));
     const plan = await this.planAssistantTurn({
       userMessage: input.userMessage,
       needState,
       products: preliminaryCandidates,
       knowledgePages: preliminaryKnowledgePages,
+      troubleshootingCases: troubleshootingMemory,
       conflicts: preliminaryConflicts,
       history,
       historySummary: session.historySummary,
@@ -5092,7 +5312,8 @@ export class AssistantService {
       ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
       : null;
     const detailedFactStyle = shouldUseDetailedFactStyle(input.userMessage, effectivePlan, cards.length);
-    const mustUseWebSearch = shouldUseWebSearch(input.userMessage, effectivePlan);
+    const troubleshootingMemoryCanAnswer = troubleshootingMemory.length > 0;
+    const mustUseWebSearch = shouldUseWebSearch(input.userMessage, effectivePlan) && !troubleshootingMemoryCanAnswer;
     const deepAnswerReasoning = shouldUseDeepReasoningForAnswer(
       effectivePlan,
       currentLineupStyle,
@@ -5107,6 +5328,12 @@ export class AssistantService {
     } as const;
     const comparativeAnswerGuidance = effectivePlan.searchScope === 'broadenAlternatives'
       ? 'When the buyer compares alternatives against a named model, use catalogComparisonDiagnostics as authoritative for comparative claims: say cheaper only when isCheaper is true, say more powerful only when isMorePowerful is true, and if no alternative is both cheaper and more powerful, say that directly before listing tradeoffs.'
+      : '';
+    const troubleshootingMemoryGuidance = troubleshootingMemory.length
+      ? [
+          'answerContext.troubleshootingCases contains previously verified troubleshooting answers selected by the LLM semantic memory router for the same model/problem. Use it as internal checked memory. Answer from that memory without claiming a new web check; do not show source URLs/domains.',
+          troubleshootingMemoryResult.guidance
+        ].filter(Boolean).join(' ')
       : '';
     const factualVerificationGuidance = currentLineupStyle
       ? 'For current-lineup/manufacturing-status questions, do a multi-source proof analysis. Check current manufacturer/catalog evidence, support/manuals/parts evidence, official distributor/current dealer evidence, and used/archive/discontinued/replacement evidence. Do not turn "not found in the current catalog" into a definitive discontinued claim by itself. If proof is incomplete, state the known facts and confidence level. Do not call an alternative a successor/replacement unless the source explicitly supports that; otherwise call it a current alternative in the same class and distinguish single-direction from reversible plates. Cross-check source-mentioned alternatives against catalogLineupAlternatives/catalogCandidates and mention concrete in-catalog alternatives with prices when available. Catalog-only alternatives prove sale/support presence, not current factory production. If a same-family catalog item near the questioned model is not supported by web evidence as current, call it "есть в нашем каталоге", not "актуальная замена". If mandatoryCatalogLineupAlternativeFacts is non-empty, use it as the compact catalog facts block and include its concrete RUB prices in the answer. If catalogLineupAlternatives has several items, name the best 1-3 by relevance and price and use catalogLineupAlternativeGroups for one compact sentence about other source-mentioned families and their RUB price floors, especially if they are higher-price, reversible, battery/electric, or only broadly same-class.'
@@ -5194,6 +5421,7 @@ export class AssistantService {
         historySummary: session.historySummary,
         products: productsForAnswer,
         knowledgePages,
+        troubleshootingCases: troubleshootingMemory,
         conflicts,
         messages: history
       }, {
@@ -5277,6 +5505,12 @@ export class AssistantService {
       catalogLineupAlternativeGroups: catalogLineupAlternativeGroupsContext(catalogLineupAlternatives),
       mandatoryCatalogLineupAlternativeFacts: mandatoryCatalogLineupAlternativeFacts(input.userMessage, catalogLineupAlternatives),
       factualVerificationPolicy,
+      troubleshootingMemoryDecision: troubleshootingMemory.length
+        ? {
+            confidence: troubleshootingMemoryResult.confidence,
+            guidance: troubleshootingMemoryResult.guidance
+          }
+        : null,
       responseStyle
     };
     const answerInputPayload = {
@@ -5303,6 +5537,7 @@ export class AssistantService {
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
       factualVerificationGuidance,
       comparativeAnswerGuidance,
+      troubleshootingMemoryGuidance,
       effectivePlan.followUpPolicy === 'answerNowNoDeferredOffer' && !currentLineupStyle && !detailedFactStyle
         ? 'Планировщик запретил отложенный хвост ответа: не заканчивай предложением "могу дальше проверить/сравнить/подобрать"; дай законченный ответ на текущий вопрос.'
         : ''
@@ -5503,6 +5738,10 @@ export class AssistantService {
         signal: input.signal
       }).catch((error) => console.warn('Verified web fact storage failed', safeError(error)));
     }
+    if (troubleshootingMemoryCanAnswer) {
+      await this.products.markTroubleshootingCasesUsed(troubleshootingMemory.map((item) => item.id))
+        .catch((error) => console.warn('Troubleshooting memory usage update failed', safeError(error)));
+    }
     const answerFallbackMetadata = aiDiagnostics.answerGenerationFallback;
 
     const assistantMessage = await this.conversations.addMessage({
@@ -5514,6 +5753,9 @@ export class AssistantService {
         cardDisplay,
         usedWebSearch,
         webSearchRequired: mustUseWebSearch,
+        troubleshootingMemoryUsed: troubleshootingMemoryCanAnswer,
+        troubleshootingMemoryIds: troubleshootingMemory.map((item) => item.id),
+        troubleshootingMemoryConfidence: troubleshootingMemoryResult.confidence,
         responseStyle: currentLineupStyle ? 'current_lineup' : detailedFactStyle ? 'detailed_factual' : 'short',
         answerMode: effectivePlan.answerMode,
         cardPolicy: effectivePlan.cardPolicy,
@@ -5642,6 +5884,22 @@ export class AssistantService {
         snippet: citation.snippet,
         verdict: { answerExcerpt: input.answer.slice(0, 1200) }
       });
+    }
+
+    const troubleshootingCase = buildTroubleshootingCaseDraft({
+      userMessage: input.userMessage,
+      answer: input.answer,
+      sourceUrls: citations.map((citation) => citation.url),
+      sourceTitles: citations.map((citation) => citation.title ?? '').filter(Boolean)
+    });
+    if (troubleshootingCase) {
+      const embedding = await createEmbedding([
+        troubleshootingCase.model,
+        (troubleshootingCase.faultCodes ?? []).join(' '),
+        troubleshootingCase.problemSummary,
+        troubleshootingCase.answer
+      ].filter(Boolean).join('\n'), input.signal).catch(() => null);
+      await this.products.upsertTroubleshootingCase(troubleshootingCase, embedding ?? undefined);
     }
 
     const client = createOpenAIClient();

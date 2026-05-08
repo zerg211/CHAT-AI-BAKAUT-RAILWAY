@@ -12,7 +12,9 @@ import type {
   Message,
   MessageRole,
   Product,
-  ProductFact
+  ProductFact,
+  TroubleshootingCase,
+  TroubleshootingCaseInput
 } from '../shared/types.js';
 import { emptyNeedState } from '../ai/needState.js';
 
@@ -79,6 +81,26 @@ function mapProduct(row: QueryResultRow): Product {
     description: row.description,
     specs: row.specs ?? {},
     raw: row.raw ?? {}
+  };
+}
+
+function mapTroubleshootingCase(row: QueryResultRow): TroubleshootingCase {
+  return {
+    id: row.id,
+    model: row.model,
+    modelKey: row.model_key,
+    faultCodes: row.fault_codes ?? [],
+    problemSummary: row.problem_summary,
+    problemKey: row.problem_key,
+    answer: row.answer,
+    sourceUrls: row.source_urls ?? [],
+    sourceTitles: row.source_titles ?? [],
+    confidence: Number(row.confidence ?? 0),
+    firstSeenMessage: row.first_seen_message ?? null,
+    hitCount: Number(row.hit_count ?? 0),
+    semanticScore: row.semantic_score === null || row.semantic_score === undefined ? null : Number(row.semantic_score),
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
   };
 }
 
@@ -531,6 +553,114 @@ export class ProductRepository {
     }
 
     await this.refreshConflicts(productId);
+  }
+
+  async upsertTroubleshootingCase(input: TroubleshootingCaseInput, embedding?: number[]) {
+    const vector = embedding ? `[${embedding.join(',')}]` : null;
+    const result = await this.db.query(
+      `INSERT INTO troubleshooting_cases(
+         model, model_key, fault_codes, problem_summary, problem_key, answer,
+         source_urls, source_titles, confidence, embedding, first_seen_message
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector, $11)
+       ON CONFLICT (model_key, problem_key) DO UPDATE SET
+         model = EXCLUDED.model,
+         fault_codes = EXCLUDED.fault_codes,
+         problem_summary = EXCLUDED.problem_summary,
+         answer = EXCLUDED.answer,
+         source_urls = EXCLUDED.source_urls,
+         source_titles = EXCLUDED.source_titles,
+         confidence = GREATEST(troubleshooting_cases.confidence, EXCLUDED.confidence),
+         embedding = coalesce(EXCLUDED.embedding, troubleshooting_cases.embedding),
+         first_seen_message = coalesce(troubleshooting_cases.first_seen_message, EXCLUDED.first_seen_message),
+         updated_at = now()
+       RETURNING *`,
+      [
+        input.model,
+        input.modelKey,
+        input.faultCodes ?? [],
+        input.problemSummary,
+        input.problemKey,
+        input.answer,
+        input.sourceUrls ?? [],
+        input.sourceTitles ?? [],
+        input.confidence ?? 0.75,
+        vector,
+        input.firstSeenMessage ?? null
+      ]
+    );
+    return mapTroubleshootingCase(result.rows[0]);
+  }
+
+  async searchTroubleshootingCases(input: {
+    query: string;
+    modelKeys?: string[];
+    faultCodes?: string[];
+    embedding?: number[] | null;
+    limit?: number;
+  }) {
+    const normalized = input.query.trim();
+    const modelKeys = input.modelKeys ?? [];
+    const faultCodes = input.faultCodes ?? [];
+    const vector = input.embedding ? `[${input.embedding.join(',')}]` : null;
+    const result = await this.db.query(
+      `WITH ranked AS (
+         SELECT *,
+           CASE
+             WHEN $4::vector IS NOT NULL AND embedding IS NOT NULL THEN 1 - (embedding <=> $4::vector)
+             ELSE NULL
+           END AS semantic_score,
+           CASE
+             WHEN $1 <> '' THEN ts_rank_cd(
+               to_tsvector(
+                 'russian',
+                 coalesce(model, '') || ' ' ||
+                 coalesce(array_to_string(fault_codes, ' '), '') || ' ' ||
+                 coalesce(problem_summary, '') || ' ' ||
+                 coalesce(answer, '')
+               ),
+               websearch_to_tsquery('russian', $1)
+             )
+             ELSE 0
+           END AS text_rank,
+           CASE WHEN model_key = ANY($2::text[]) THEN 1 ELSE 0 END AS model_match,
+           CASE WHEN fault_codes && $3::text[] THEN 1 ELSE 0 END AS fault_match
+         FROM troubleshooting_cases
+         WHERE
+           ($2::text[] <> '{}'::text[] AND model_key = ANY($2::text[]))
+           OR ($3::text[] <> '{}'::text[] AND fault_codes && $3::text[])
+           OR (
+             $1 <> ''
+             AND to_tsvector(
+               'russian',
+               coalesce(model, '') || ' ' ||
+               coalesce(array_to_string(fault_codes, ' '), '') || ' ' ||
+               coalesce(problem_summary, '') || ' ' ||
+               coalesce(answer, '')
+             ) @@ websearch_to_tsquery('russian', $1)
+           )
+           OR ($4::vector IS NOT NULL AND embedding IS NOT NULL)
+       )
+       SELECT *
+       FROM ranked
+       ORDER BY model_match DESC, fault_match DESC, semantic_score DESC NULLS LAST, text_rank DESC, updated_at DESC
+       LIMIT $5`,
+      [normalized, modelKeys, faultCodes, vector, input.limit ?? 4]
+    );
+    return result.rows.map(mapTroubleshootingCase);
+  }
+
+  async markTroubleshootingCasesUsed(ids: string[]) {
+    if (!ids.length) return 0;
+    const result = await this.db.query(
+      `UPDATE troubleshooting_cases
+       SET hit_count = hit_count + 1,
+           last_used_at = now(),
+           updated_at = now()
+       WHERE id = ANY($1::uuid[])`,
+      [ids]
+    );
+    return result.rowCount ?? 0;
   }
 
   async upsertCatalogPage(input: CatalogPageInput, embedding?: number[]) {

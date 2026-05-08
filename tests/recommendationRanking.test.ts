@@ -2606,8 +2606,8 @@ describe('recommendation ranking', () => {
     expect(answer).toContain('SUMEC SU7700E');
     expect(answer).toContain('BISON BS6500EP');
     expect(answer).toContain('98 090 ₽');
-    expect(answer).toContain('Оставьте имя и телефон');
-    expect(answer).toContain('Заявку уже созданной не считаю');
+    expect(answer).toContain('Напишите имя и телефон');
+    expect(answer).not.toContain('Заявку уже созданной не считаю');
   });
 
   it('answers delivery handoff like a manager using the accepted need', () => {
@@ -2621,8 +2621,9 @@ describe('recommendation ranking', () => {
     expect(answer).toContain('Здравствуйте');
     expect(answer).toContain('уточню у логиста');
     expect(answer).toContain('стоимость доставки в Краснодарский край');
-    expect(answer).toContain('АВР для генератора BISON');
-    expect(answer).toContain('Оставьте имя и телефон');
+    expect(answer).not.toContain('по выбранному товару');
+    expect(answer).not.toContain('АВР для генератора BISON');
+    expect(answer).toContain('Напишите имя и телефон');
     expect(answer).toContain('перезвон');
   });
 
@@ -4186,6 +4187,158 @@ describe('recommendation ranking', () => {
     expect(result.state.loadProfile?.items.find((item) => item.kind === 'pump')?.runningKw).toBe(1.1);
     expect(result.state.loadProfile?.requiredNominalKw).toBe(4);
     expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit']);
+  });
+
+  it('keeps a grounded 30 kW generator need when the buyer gives 25 kW aggregate load with a unit typo', async () => {
+    const products = [
+      productWithSpecs('weak', 'Generator gasoline 4.0 kW', 30_000, 'https://example.test/generators/weak', {}),
+      productWithSpecs('small', 'Generator diesel 20.0 kW', 300_000, 'https://example.test/generators/small', {}),
+      productWithSpecs('fit', 'Generator diesel 30.0 kW', 500_000, 'https://example.test/generators/fit', {}),
+      productWithSpecs('oversized', 'Generator diesel 50.0 kW', 900_000, 'https://example.test/generators/oversized', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const previousSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      targetProductClass: 'generator',
+      currentProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 30,
+        nominalPowerKwMax: 32,
+        provenance: {
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
+      },
+      confidence: 0.8
+    });
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Суммарная мощность всех работающих приборов 25 кВ одновременно, электрик раскидает их на три фазы, пусковые токи чайник/гриль/микроволновка/противоток бассейна.',
+      { ...emptyNeedState(), selectionState: previousSelection },
+      plan,
+      products
+    );
+
+    expect(result.state.loadProfile?.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'aggregate_load', runningKw: 25, source: 'explicit_user' })
+    ]));
+    expect(result.state.loadProfile?.requiredNominalKw).toBe(25);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBe(30);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit']);
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('oversized');
+  });
+
+  it('uses explicit aggregate load instead of estimating one listed appliance', async () => {
+    const products = [
+      productWithSpecs('weak', 'Generator gasoline 4.0 kW', 30_000, 'https://example.test/generators/weak', {}),
+      productWithSpecs('fit', 'Generator diesel 25.0 kW', 450_000, 'https://example.test/generators/fit', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Общая нагрузка 25 кВт, одновременно работают приборы: чайник, микроволновка и насос бассейна.',
+      emptyNeedState(),
+      plan,
+      products
+    );
+
+    expect(result.state.loadProfile?.requiredNominalKw).toBe(25);
+    expect(result.state.loadProfile?.items.map((item) => item.kind)).toEqual(['aggregate_load']);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBe(25);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['fit']);
+  });
+
+  it('preserves an earlier raw 30 kW generator request when a follow-up gives lower aggregate load', async () => {
+    const products = [
+      productWithSpecs('load-only', 'Generator diesel 25.0 kW', 450_000, 'https://example.test/generators/load-only', {}),
+      productWithSpecs('requested', 'Generator diesel 30.0 kW', 520_000, 'https://example.test/generators/requested', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'подбор дизельного генератора для помещения',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Общая нагрузка 25 кВт, электрик раскидает по трем фазам.',
+      emptyNeedState(),
+      plan,
+      products,
+      undefined,
+      undefined,
+      'Нужен генератор на 30 кВт, в помещение, с охлаждением, зимой до -20.'
+    );
+
+    expect(result.state.loadProfile?.requiredNominalKw).toBe(25);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBe(30);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['requested']);
+  });
+
+  it('does not treat one estimated appliance as a reliable generator selection basis', async () => {
+    const products = [
+      productWithSpecs('weak', 'Generator gasoline 4.0 kW', 30_000, 'https://example.test/generators/weak', {}),
+      productWithSpecs('big', 'Generator diesel 30.0 kW', 500_000, 'https://example.test/generators/big', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Пока понятно только что будет чайник, остальную нагрузку электрик считает.',
+      emptyNeedState(),
+      plan,
+      products
+    );
+
+    expect(result.state.loadProfile?.items.length).toBe(1);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBeUndefined();
+    expect(result.missingQuestions.length).toBeGreaterThan(0);
+    expect(result.rejectedProducts.find((item) => item.productId === 'big')?.reason ?? '').not.toContain('above 4');
+  });
+
+  it('does not convert a technical electrician remark into lead collection', () => {
+    const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate('Нужен генератор на 30 кВт, в помещение, зимой до -20.'));
+    const plan = assistantTestHooks.purchasePlanIfNeeded(baseTurnPlan({
+      action: 'collect_lead',
+      answerMode: 'leadCollection',
+      followUpPolicy: 'collectLead',
+      cardPolicy: 'textOnly',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    }), [], [], state, 'Суммарная мощность всех работающих приборов 25 кВт одновременно, электрик раскидает их на три фазы, поняла что без электрика я генератор не выберу');
+
+    expect(plan.leadRequested).toBe(false);
+    expect(plan.plan.action).toBe('ask_clarifying_question');
+    expect(plan.plan.followUpPolicy).toBe('askClarifyingQuestion');
+    expect(plan.plan.answerGuidance).toContain('технический подбор');
   });
 
   it('sorts budgeted catalog matches from the budget ceiling downward', async () => {

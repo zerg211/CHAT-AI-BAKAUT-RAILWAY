@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConversationRepository } from '../src/db/repositories.js';
+import { ConversationRepository, ProductRepository } from '../src/db/repositories.js';
 
 function sessionRow() {
   const now = new Date('2026-04-27T08:00:00.000Z');
@@ -114,5 +114,76 @@ describe('ConversationRepository.deleteEmptyNonWidgetSessions', () => {
     expect(query.mock.calls[0][0]).toContain('NOT EXISTS');
     expect(query.mock.calls[0][0]).toContain('FROM messages m WHERE m.session_id = s.id');
     expect(query.mock.calls[0][0]).not.toContain("created_at < now()");
+  });
+});
+
+function troubleshootingRow() {
+  const now = new Date('2026-04-27T08:00:00.000Z');
+  return {
+    id: 'case-id',
+    model: 'АД 30С-Т400-1РКМ1',
+    model_key: 'ад30ст4001ркм1',
+    fault_codes: ['A25'],
+    problem_summary: 'Не глушится, ошибка A25',
+    problem_key: 'a25__не_глушится',
+    answer: 'Проверить цепь STOP.',
+    source_urls: ['https://example.com/manual.pdf'],
+    source_titles: ['Manual'],
+    confidence: '0.86',
+    first_seen_message: 'message',
+    hit_count: 2,
+    semantic_score: 0.9,
+    created_at: now,
+    updated_at: now
+  };
+}
+
+describe('ProductRepository troubleshooting memory', () => {
+  it('upserts a verified troubleshooting case', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [troubleshootingRow()] });
+    const repository = new ProductRepository({ query } as never);
+
+    const item = await repository.upsertTroubleshootingCase({
+      model: 'АД 30С-Т400-1РКМ1',
+      modelKey: 'ад30ст4001ркм1',
+      faultCodes: ['A25'],
+      problemSummary: 'Не глушится, ошибка A25',
+      problemKey: 'a25__не_глушится',
+      answer: 'Проверить цепь STOP.',
+      sourceUrls: ['https://example.com/manual.pdf'],
+      sourceTitles: ['Manual'],
+      confidence: 0.86,
+      firstSeenMessage: 'message'
+    }, [0.1, 0.2]);
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('INSERT INTO troubleshooting_cases'), expect.any(Array));
+    expect(query.mock.calls[0][0]).toContain('ON CONFLICT (model_key, problem_key) DO UPDATE');
+    expect(item).toMatchObject({
+      id: 'case-id',
+      faultCodes: ['A25'],
+      semanticScore: 0.9
+    });
+  });
+
+  it('searches troubleshooting cases by model, fault code, text, and embedding', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [troubleshootingRow()] });
+    const repository = new ProductRepository({ query } as never);
+
+    const results = await repository.searchTroubleshootingCases({
+      query: 'ошибка A25 не глушится',
+      modelKeys: ['ад30ст4001ркм1'],
+      faultCodes: ['A25'],
+      embedding: [0.1, 0.2],
+      limit: 3
+    });
+
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('FROM troubleshooting_cases'), [
+      'ошибка A25 не глушится',
+      ['ад30ст4001ркм1'],
+      ['A25'],
+      '[0.1,0.2]',
+      3
+    ]);
+    expect(results[0]).toMatchObject({ modelKey: 'ад30ст4001ркм1' });
   });
 });

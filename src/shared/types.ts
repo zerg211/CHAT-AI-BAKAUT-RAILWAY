@@ -76,6 +76,37 @@ export interface ProductFact {
   confidence: number;
 }
 
+export interface TroubleshootingCase {
+  id: string;
+  model: string;
+  modelKey: string;
+  faultCodes: string[];
+  problemSummary: string;
+  problemKey: string;
+  answer: string;
+  sourceUrls: string[];
+  sourceTitles: string[];
+  confidence: number;
+  firstSeenMessage?: string | null;
+  hitCount: number;
+  semanticScore?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TroubleshootingCaseInput {
+  model: string;
+  modelKey: string;
+  faultCodes?: string[];
+  problemSummary: string;
+  problemKey: string;
+  answer: string;
+  sourceUrls?: string[];
+  sourceTitles?: string[];
+  confidence?: number;
+  firstSeenMessage?: string;
+}
+
 export interface CatalogPage {
   id: string;
   sourceUrl: string;
