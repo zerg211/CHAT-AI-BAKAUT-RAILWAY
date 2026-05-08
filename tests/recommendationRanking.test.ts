@@ -3827,6 +3827,48 @@ describe('recommendation ranking', () => {
     expect(followUp.state.hardConstraints.nominalPowerKwMin).toBeLessThan(7);
   });
 
+  it('updates a previous generic pump load when the buyer later names the pump type', async () => {
+    const products = [
+      productWithSpecs('five', 'Generator gasoline SUMEC SU7700 5.0 kW', 42_490, 'https://example.test/catalog/generators/five', {}),
+      productWithSpecs('six', 'Generator gasoline A-iPower LITE AP6500E 6.0 kW', 56_900, 'https://example.test/catalog/generators/six', {})
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'auto',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      }
+    });
+
+    const initial = await assistant.selectProductsForTurn(
+      ru('\\u0414\\u043e\\u043c 220 \\u0412, \\u043d\\u0430\\u0441\\u043e\\u0441 \\u043d\\u0435 \\u0437\\u043d\\u0430\\u044e \\u043a\\u0430\\u043a\\u043e\\u0439, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a, \\u0441\\u0432\\u0435\\u0442, \\u0431\\u043e\\u043b\\u0433\\u0430\\u0440\\u043a\\u0430 1,2 \\u043a\\u0412\\u0442.'),
+      emptyNeedState(),
+      plan,
+      products,
+      undefined,
+      2
+    );
+    expect(initial.state.loadProfile?.items.find((item) => item.kind === 'pump')?.name).toBe('pump');
+
+    const followUp = await assistant.selectProductsForTurn(
+      ru('\\u0423\\u0442\\u043e\\u0447\\u043d\\u0438\\u043b: \\u043d\\u0430\\u0441\\u043e\\u0441 \\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439, 220 \\u0412, \\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u043d\\u0435 \\u0437\\u043d\\u0430\\u044e. \\u041f\\u0440\\u0438\\u043a\\u0438\\u043d\\u044c\\u0442\\u0435 \\u0432\\u0430\\u0440\\u0438\\u0430\\u043d\\u0442\\u044b \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0430.'),
+      { ...emptyNeedState(), selectionState: initial.state },
+      plan,
+      products,
+      undefined,
+      2
+    );
+    const pump = followUp.state.loadProfile?.items.find((item) => item.kind === 'pump');
+
+    expect(pump?.name).toBe('borehole pump');
+    expect(pump?.evidence).toMatch(/скважин/i);
+    expect(followUp.visibleProducts.length).toBeGreaterThan(0);
+  });
+
   it('does not treat a question about switching to 7-8 kW as a desired generator range', async () => {
     const products = [
       productWithSpecs('five', 'Генератор бензиновый SUMEC SU7700 5.0 kW', 42_490, 'https://example.test/catalog/generators/five', {}),

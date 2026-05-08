@@ -2320,10 +2320,57 @@ function explicitLoadKwNearOwnMention(text: string, terms: RegExp, competingTerm
 }
 
 function pumpRunningKwEstimate(text: string) {
-  if (/(?:скважин|глубин|borehole|well)/iu.test(text)) return 1.1;
-  if (/(?:циркул|отоп|circulation)/iu.test(text)) return 0.12;
-  if (/(?:дренаж|фекал|sewage|drainage)/iu.test(text)) return 0.75;
+  const type = pumpTypeFromText(text);
+  if (type === 'borehole') return 1.1;
+  if (type === 'circulation') return 0.12;
+  if (type === 'drainage') return 0.75;
   return 0.8;
+}
+
+function ruChars(...codes: number[]) {
+  return String.fromCharCode(...codes);
+}
+
+function hasTextTerm(text: string, terms: string[]) {
+  const lower = text.toLowerCase();
+  return terms.some((term) => lower.includes(term));
+}
+
+function pumpTypeFromText(text: string) {
+  if (hasTextTerm(text, [
+    ruChars(1089, 1082, 1074, 1072, 1078, 1080, 1085),
+    ruChars(1075, 1083, 1091, 1073, 1080, 1085),
+    ruChars(1087, 1086, 1075, 1088, 1091, 1078, 1085),
+    'borehole',
+    'well pump',
+    'submersible'
+  ])) return 'borehole';
+  if (hasTextTerm(text, [
+    ruChars(1087, 1086, 1074, 1077, 1088, 1093, 1085, 1086, 1089, 1090),
+    ruChars(1085, 1072, 1089, 1086, 1089, 1085),
+    'surface pump',
+    'booster'
+  ])) return 'surface';
+  if (hasTextTerm(text, [
+    ruChars(1094, 1080, 1088, 1082, 1091, 1083),
+    ruChars(1086, 1090, 1086, 1087),
+    'circulation'
+  ])) return 'circulation';
+  if (hasTextTerm(text, [
+    ruChars(1076, 1088, 1077, 1085, 1072, 1078),
+    ruChars(1092, 1077, 1082, 1072, 1083),
+    'sewage',
+    'drainage'
+  ])) return 'drainage';
+  return 'generic';
+}
+
+function pumpNameFromType(type: string) {
+  if (type === 'borehole') return 'borehole pump';
+  if (type === 'surface') return 'surface pump';
+  if (type === 'circulation') return 'circulation pump';
+  if (type === 'drainage') return 'drainage pump';
+  return 'pump';
 }
 
 function pumpStartingKwEstimate(runningKw: number) {
@@ -2448,34 +2495,46 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
 
   const negatedPumpLoad = hasNegatedPumpLoad(text);
   const removedKinds = negatedPumpLoad ? ['pump'] : [];
+  let replacedPumpLoad = false;
   if (negatedPumpLoad) {
     for (const [key, existing] of [...items.entries()]) {
       if (existing.kind === 'pump') items.delete(key);
     }
   }
-  if (!negatedPumpLoad && (/(?:насос|pump)/iu.test(lower) || compatibilityTarget?.kind === 'pump')) {
-    const explicit = explicitLoadKwNear(text, /(?:насос|pump)/iu) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
+  const pumpMentionRe = new RegExp(`(?:${ruChars(1085, 1072, 1089, 1086, 1089)}|pump)`, 'iu');
+  if (!negatedPumpLoad && (pumpMentionRe.test(lower) || compatibilityTarget?.kind === 'pump')) {
+    const explicit = explicitLoadKwNear(text, pumpMentionRe) ?? (compatibilityTarget?.kind === 'pump' ? singlePowerKwFromText(text) : undefined);
     const previous = [...items.values()].find((item) => item.kind === 'pump');
-    const runningKw = explicit ?? previous?.runningKw ?? pumpRunningKwEstimate(lower);
+    const currentPumpType = pumpTypeFromText(lower);
+    const previousPumpType = pumpTypeFromText([previous?.name, previous?.evidence].filter(Boolean).join(' '));
+    const currentHasPumpType = currentPumpType !== 'generic';
+    const runningKw = explicit ?? (currentHasPumpType ? pumpRunningKwEstimate(lower) : previous?.runningKw ?? pumpRunningKwEstimate(lower));
     const item: ProductElectricalLoadItem = {
       kind: 'pump',
-      name: compatibilityTarget?.kind === 'pump' ? compatibilityTarget.name ?? 'pump' : 'pump',
+      name: compatibilityTarget?.kind === 'pump'
+        ? compatibilityTarget.name ?? pumpNameFromType(currentPumpType)
+        : currentHasPumpType
+          ? pumpNameFromType(currentPumpType)
+          : previousPumpType !== 'generic'
+            ? pumpNameFromType(previousPumpType)
+            : previous?.name ?? 'pump',
       count: 1,
       runningKw,
       startingKw: explicit
         ? pumpStartingKwEstimate(explicit)
         : pumpStartingKwEstimate(runningKw),
-      source: explicit ? 'explicit_user' : previous?.source ?? 'estimated_average',
-      evidence: explicit ? text : previous?.evidence ?? text
+      source: explicit ? 'explicit_user' : 'estimated_average',
+      evidence: explicit || currentHasPumpType ? text : previous?.evidence ?? text
     };
     for (const [key, existing] of [...items.entries()]) {
       if (existing.kind === 'pump') items.delete(key);
     }
+    replacedPumpLoad = true;
     items.set(loadItemKey(item), item);
   }
 
   const profile = calculateGeneratorLoadProfile([...items.values()], simultaneousStarting || current?.simultaneousStarting === true);
-  if (profile && removedKinds.length) profile.removedKinds = removedKinds;
+  if (profile && (removedKinds.length || replacedPumpLoad)) profile.removedKinds = [...new Set([...removedKinds, ...(replacedPumpLoad ? ['pump'] : [])])];
   return profile;
 }
 
@@ -2907,7 +2966,7 @@ function hasTypedEstimatedPumpLoad(state: ProductSelectionState) {
     .filter((item) => item.kind === 'pump' && item.source === 'estimated_average')
     .map((item) => [item.name, item.evidence].filter(Boolean).join(' '))
     .join(' ');
-  return /(?:скважин|погружн|глубин|поверхност|насосн\w*\s+станц|циркуляц|колодез|borehole|submersible|well\s+pump|surface\s+pump|booster|circulation)/iu.test(pumpText);
+  return pumpTypeFromText(pumpText) !== 'generic';
 }
 
 function shouldBlockGeneratorCardsForEstimatedPump(state: ProductSelectionState) {
@@ -6659,5 +6718,7 @@ export const assistantTestHooks = {
   deterministicLeadCollectionAnswer,
   reliableBundleTotal,
   isCatalogAvailabilityQuestion,
-  isManufacturingStatusQuestion
+  isManufacturingStatusQuestion,
+  pumpTypeFromText,
+  generatorLoadProfileFromText
 };
