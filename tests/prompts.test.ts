@@ -35,6 +35,7 @@ describe('assistant prompt guardrails', () => {
   it('builds a compact final-answer context for low-token turns', () => {
     const context = buildAssistantContext({
       needState: {
+        activeNeeds: [],
         explicitNeeds: [{ value: 'generator 5-6 kW', evidence: 'user', confidence: 0.9, updatedAt: 'now' }],
         implicitNeeds: [],
         constraints: [{ value: 'inverter enclosed budget', evidence: 'user', confidence: 0.8, updatedAt: 'now' }],

@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, TroubleshootingCase } from '../shared/types.js';
+import type { AgentTurnContract, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
@@ -39,6 +39,7 @@ import { assessLeadTemperature, temperatureGuidance } from './leadTemperature.js
 import { traceTimer, emitTrace } from './tracing.js';
 import { enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
 import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
+import { applyAgentTurnContractToPlan, deriveAgentTurnContract, leadRefusalDetected } from './agentTurnContract.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 import {
   buildTroubleshootingCaseDraft,
@@ -65,6 +66,8 @@ function cleanEmpty(obj: any): any {
 interface GenerateAnswerInput {
   sessionId: string;
   userMessage: string;
+  turnId?: string;
+  skipUserMessage?: boolean;
   onDelta?: (text: string) => void | Promise<void>;
   signal?: AbortSignal;
 }
@@ -3488,6 +3491,26 @@ function selectedPurchaseProductIds(products: Product[], history: Message[], sta
 }
 
 function purchasePlanIfNeeded(plan: AssistantTurnPlan, products: Product[], history: Message[], state: CustomerNeedState, userMessage: string) {
+  if (leadRefusalDetected(userMessage)) {
+    return {
+      leadRequested: false,
+      plan: {
+        ...plan,
+        action: 'answer_question' as AssistantTurnAction,
+        answerMode: plan.answerMode === 'leadCollection' ? 'short' as AnswerMode : plan.answerMode,
+        followUpPolicy: 'answerNowNoDeferredOffer' as FollowUpPolicy,
+        selectionState: {
+          ...plan.selectionState,
+          shouldShowCards: false,
+          cardDisplayMode: 'none' as CardDisplayMode
+        },
+        answerGuidance: [
+          plan.answerGuidance,
+          'Покупатель явно отказался оставлять номер или заявку сейчас. Не дави на контактную форму; дай полезный итог и скажи, что коммерческие условия можно уточнить позже.'
+        ].filter(Boolean).join('\n')
+      }
+    };
+  }
   const fallbackLeadRequested = fallbackDetectLeadHandoffIntent(userMessage) || fallbackDetectOperationalHandoffQuestion(userMessage);
   if (isLeadPlan(plan) && !fallbackLeadRequested && isTechnicalConsultationContinuation(userMessage)) {
     return {
@@ -3541,6 +3564,38 @@ function formatLeadPrice(value?: number | null, currency = 'RUB') {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '';
   const rounded = Math.round(value).toLocaleString('ru-RU');
   return currency === 'RUB' ? `${rounded} ₽` : `${rounded} ${currency}`;
+}
+
+function requestedBundleClasses(text: string, state?: CustomerNeedState): Set<ProductSelectionClass> {
+  const classes = new Set<ProductSelectionClass>();
+  const normalized = text.toLowerCase();
+  if (/(?:\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u043d\u0446)/iu.test(normalized)) classes.add('generator');
+  if (/(?:\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|\u043f\u043b\u0438\u0442\u0443)/iu.test(normalized)) classes.add('plate');
+  for (const need of state?.activeNeeds ?? []) {
+    if (need.status !== 'closed' && need.productClass !== 'commercial') classes.add(need.productClass as ProductSelectionClass);
+  }
+  return classes;
+}
+
+function cardProductClass(card: ProductCard): ProductSelectionClass {
+  const text = `${card.name} ${card.category ?? ''}`.toLowerCase();
+  if (/(?:\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u043d\u0446)/iu.test(text)) return 'generator';
+  if (/(?:\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442)/iu.test(text)) return 'plate';
+  if (/(?:\u0442\u0440\u0430\u043c\u0431\u043e\u0432|\u0432\u0438\u0431\u0440\u043e\u043d\u043e\u0433)/iu.test(text)) return 'rammer';
+  if (/(?:\u0440\u0435\u0437\u0447\u0438\u043a|\u0448\u0432\u043e\u043d\u0430\u0440\u0435\u0437)/iu.test(text)) return 'cutter';
+  return 'unknown';
+}
+
+function reliableBundleTotal(cards: ProductCard[], userMessage: string, state?: CustomerNeedState) {
+  if (!cards.length || !cards.every((card) => typeof card.price === 'number')) return null;
+  const requested = requestedBundleClasses(userMessage, state);
+  if (requested.size > 1) {
+    const covered = new Set(cards.map(cardProductClass));
+    for (const productClass of requested) {
+      if (!covered.has(productClass)) return null;
+    }
+  }
+  return cards.reduce((total, card) => total + (card.price ?? 0), 0);
 }
 
 type LeadContactContext = {
@@ -4988,19 +5043,30 @@ export class AssistantService {
     const consistencyGuard = getSessionGuard(input.sessionId);
     const traceTotal = traceTimer('generateAnswer', input.sessionId);
     const aiDiagnostics = emptyAiGenerationDiagnostics();
+    const activeNeedsBefore = session.needState.activeNeeds ?? [];
 
-    await this.conversations.addMessage({ sessionId: input.sessionId, role: 'user', content: input.userMessage });
+    const userMessage = input.skipUserMessage
+      ? null
+      : await this.conversations.addMessage({ sessionId: input.sessionId, role: 'user', content: input.userMessage });
+    if (input.turnId && userMessage) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'received',
+        stage: 'received',
+        userMessageId: userMessage.id,
+        activeNeedsBefore
+      }).catch((error) => console.warn('Conversation turn receive update failed', safeError(error)));
+    }
     const client = createOpenAIClient();
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
-    if (fallbackDetectOperationalHandoffQuestion(input.userMessage) || fallbackDetectLeadHandoffIntent(input.userMessage)) {
+    if (!leadRefusalDetected(input.userMessage) && (fallbackDetectOperationalHandoffQuestion(input.userMessage) || fallbackDetectLeadHandoffIntent(input.userMessage))) {
       const previousProducts = lastShownProductCards(history);
       const cards = productCards(previousProducts, session.needState, input.userMessage, undefined, MAX_PRODUCT_CARDS);
       const initialVisibleCount = Math.min(cards.length, Math.max(1, Math.min(2, cards.length)));
       const cardDisplay = cardDisplayOptions(initialVisibleCount, cards);
-      const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
-        ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
-        : null;
+      const bundleTotalPrice = reliableBundleTotal(cards, input.userMessage, session.needState);
       const leadTotalPrice = fallbackDetectPurchaseIntent(input.userMessage) ? bundleTotalPrice : null;
       const autoLeadResult = await this.createLeadFromChatContact(session, history, cards, input.userMessage, session.needState);
       const answer = deterministicLeadCollectionAnswer(cards, leadTotalPrice, leadContactContextWithAutoLead(input.userMessage, history, autoLeadResult), input.userMessage);
@@ -5031,6 +5097,16 @@ export class AssistantService {
           } : undefined
         }
       });
+      if (input.turnId) {
+        await this.conversations.updateTurn({
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          status: 'completed',
+          stage: 'completed',
+          assistantMessageId: assistantMessage.id,
+          activeNeedsAfter: session.needState.activeNeeds ?? []
+        }).catch((error) => console.warn('Conversation turn completion update failed', safeError(error)));
+      }
       this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
       traceTotal({
         leadTemperature: 'hot',
@@ -5042,6 +5118,7 @@ export class AssistantService {
         operationalHandoff: true
       });
       return {
+        turnId: input.turnId,
         answer,
         needState: session.needState,
         productCards: cards,
@@ -5051,6 +5128,9 @@ export class AssistantService {
         leadCreated: autoLeadResult?.created ?? false,
         assistantMessageId: assistantMessage.id,
         metadata: {
+          turnId: input.turnId,
+          activeNeedsBefore,
+          activeNeedsAfter: session.needState.activeNeeds ?? [],
           cardDisplay,
           aiDiagnostics,
           answerGenerationFallback: aiDiagnostics.answerGenerationFallback,
@@ -5072,6 +5152,15 @@ export class AssistantService {
       };
     }
     await this.conversations.updateNeedState(input.sessionId, needState);
+    if (input.turnId) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'need_extracted',
+        stage: 'need_extracted',
+        activeNeedsAfter: needState.activeNeeds ?? []
+      }).catch((error) => console.warn('Conversation turn need update failed', safeError(error)));
+    }
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
 
@@ -5124,6 +5213,22 @@ export class AssistantService {
     let allCandidates = [...byId.values()];
     const purchasePlan = purchasePlanIfNeeded(plan, allCandidates, history, needState, input.userMessage);
     let effectivePlan = purchasePlan.plan;
+    const agentTurnContract = deriveAgentTurnContract({
+      userMessage: input.userMessage,
+      plan: effectivePlan,
+      needState
+    });
+    effectivePlan = applyAgentTurnContractToPlan(effectivePlan, agentTurnContract);
+    if (input.turnId) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'planned',
+        stage: 'planned',
+        plannerContract: agentTurnContract,
+        activeNeedsAfter: needState.activeNeeds ?? []
+      }).catch((error) => console.warn('Conversation turn plan update failed', safeError(error)));
+    }
     if (client && shouldEnrichGeneratorLoadReference(input.userMessage)) {
       await enrichGeneratorLoadReferenceFromWeb(client, input.userMessage, input.signal)
         .catch((error) => console.warn('Generator load reference enrichment failed', safeError(error)));
@@ -5176,7 +5281,8 @@ export class AssistantService {
       for (const product of structuredCatalogSlice.products) byId.set(product.id, product);
       for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
       const selectionEngineRequestsCards = shouldForceStructuredSelectionCards(input.userMessage, effectivePlan, selectionResult);
-      if ((planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards) &&
+      if (agentTurnContract.cardsRole === 'primary' &&
+        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = {
           ...effectivePlan,
@@ -5273,6 +5379,7 @@ export class AssistantService {
     }
     turnContract = resolveTurnContractForPlan(effectivePlan);
     effectivePlan = applyResolvedTurnContractToPlan(effectivePlan, turnContract);
+    effectivePlan = applyAgentTurnContractToPlan(effectivePlan, agentTurnContract);
     const currentLineupStyle = shouldUseCurrentLineupStyle(input.userMessage, effectivePlan);
     const catalogLineupAlternatives = currentLineupStyle
       ? await this.findCatalogLineupAlternatives(input.userMessage, needState, allCandidates)
@@ -5305,9 +5412,7 @@ export class AssistantService {
     const finalCards = finalCardsDecisionFromCards(cardSelection.cards, selectionResult, effectivePlan, initialVisibleCount);
     const cards: ProductCard[] = finalCards.cards;
     const cardDisplay = cardDisplayOptions(finalCards.initialVisibleCount, cards);
-    const bundleTotalPrice = cards.length && cards.every((card) => typeof card.price === 'number')
-      ? cards.reduce((total, card) => total + (card.price ?? 0), 0)
-      : null;
+    const bundleTotalPrice = reliableBundleTotal(cards, input.userMessage, needState);
     const autoLeadResult = purchasePlan.leadRequested
       ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
       : null;
@@ -5485,6 +5590,7 @@ export class AssistantService {
           }
         : null,
       cardSelectionDiagnostics: cardSelection.diagnostics,
+      agentTurnContract,
       leadRequested: purchasePlan.leadRequested && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
       selectedBundleForLead: purchasePlan.leadRequested
@@ -5515,6 +5621,7 @@ export class AssistantService {
     };
     const answerInputPayload = {
       turnPlan: compactTurnPlanForAnswer(effectivePlan),
+      agentTurnContract,
       answerContext: context,
       latestUserMessage: input.userMessage
     };
@@ -5535,6 +5642,7 @@ export class AssistantService {
       'If answerContext.productSelection.loadProfile contains a pump item with source estimated_average, do not call any generator a final/best/first choice and do not say it will fit. Treat visible generator cards only as preliminary candidates, explain that pump startup is the risk, and ask for pump model, type, or power before final selection.',
       'For generator recommendations with answerContext.productSelection.loadProfile, state the calculated minimum from requiredNominalKw/requiredStartingKw separately from the visible catalog cards. Do not turn the first visible card power into the required class; if cards are more powerful than the calculated minimum, say they are catalog options with reserve.',
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
+      `AgentTurnContract: answerTask=${agentTurnContract.answerTask}; cardsRole=${agentTurnContract.cardsRole}; leadAllowed=${agentTurnContract.leadAllowed}. Must answer now before any cards: ${agentTurnContract.mustAnswerNow.join('; ') || agentTurnContract.errorRecoveryPriority}.`,
       factualVerificationGuidance,
       comparativeAnswerGuidance,
       troubleshootingMemoryGuidance,
@@ -5619,6 +5727,16 @@ export class AssistantService {
         search_context_size: searchContextSize
       }];
       answerRequest.tool_choice = { type: 'web_search_preview' };
+    }
+
+    if (input.turnId) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'answering',
+        stage: 'answering',
+        plannerContract: agentTurnContract
+      }).catch((error) => console.warn('Conversation turn answering update failed', safeError(error)));
     }
 
     if (purchasePlan.leadRequested) {
@@ -5764,6 +5882,13 @@ export class AssistantService {
         searchScope: effectivePlan.searchScope,
         internalSources: extractUrlCitations(completedResponse).slice(0, 12),
         turnPlan: effectivePlan,
+        turnId: input.turnId,
+        turnContract: agentTurnContract,
+        activeNeedsBefore,
+        activeNeedsAfter: needState.activeNeeds ?? [],
+        cardsRole: agentTurnContract.cardsRole,
+        leadAllowed: agentTurnContract.leadAllowed,
+        validatorWarnings: agentTurnContract.validatorWarnings,
         aiDiagnostics,
         answerGenerationFallback: answerFallbackMetadata,
         cardSelection: cardSelection.diagnostics,
@@ -5787,6 +5912,17 @@ export class AssistantService {
           : null
       }
     });
+    if (input.turnId) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'completed',
+        stage: 'completed',
+        assistantMessageId: assistantMessage.id,
+        plannerContract: agentTurnContract,
+        activeNeedsAfter: needState.activeNeeds ?? []
+      }).catch((error) => console.warn('Conversation turn completion update failed', safeError(error)));
+    }
 
     this.maybeSummarizeHistory(input.sessionId, history.concat(assistantMessage), session.historySummary).catch(() => {});
 
@@ -5812,6 +5948,7 @@ export class AssistantService {
     console.log(`[Turn] session=${input.sessionId} duration=${totalDuration}ms cards=${cards.length} lead=${leadTemp.level}(${leadTemp.score})`);
 
     return {
+      turnId: input.turnId,
       answer,
       needState,
       productCards: cards,
@@ -5821,14 +5958,135 @@ export class AssistantService {
       leadCreated: autoLeadResult?.created ?? false,
       assistantMessageId: assistantMessage.id,
       metadata: {
+        turnId: input.turnId,
         selection: finalSelectionMetadata,
         cardDisplay,
         finalCardsSource: finalCards.source,
         turnPlan: compactTurnPlanForAnswer(effectivePlan),
+        turnContract: agentTurnContract,
+        activeNeedsBefore,
+        activeNeedsAfter: needState.activeNeeds ?? [],
+        cardsRole: agentTurnContract.cardsRole,
+        leadAllowed: agentTurnContract.leadAllowed,
+        validatorWarnings: agentTurnContract.validatorWarnings,
         cardSelection: cardSelection.diagnostics,
         cardContract: cardContract.diagnostics,
         aiDiagnostics,
         answerGenerationFallback: answerFallbackMetadata
+      }
+    };
+  }
+
+  async recoverTurn(input: { sessionId: string; turnId: string; onDelta?: (text: string) => void | Promise<void>; signal?: AbortSignal }): Promise<ChatResponsePayload> {
+    const session = await this.conversations.getSession(input.sessionId);
+    if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
+    const turn = await this.conversations.getTurn(input.sessionId, input.turnId);
+    if (!turn) throw new Error('Conversation turn not found');
+    const history = await this.conversations.listMessages(input.sessionId, 80);
+    const latestUser = turn.userMessageId
+      ? history.find((message) => message.id === turn.userMessageId)
+      : [...history].reverse().find((message) => message.role === 'user');
+    const existingAssistant = turn.assistantMessageId
+      ? history.find((message) => message.id === turn.assistantMessageId && message.role === 'assistant')
+      : null;
+    if (existingAssistant?.content?.trim() && turn.status === 'completed') {
+      await input.onDelta?.(existingAssistant.content);
+      return {
+        turnId: input.turnId,
+        answer: existingAssistant.content,
+        needState: session.needState,
+        productCards: (existingAssistant.metadata?.productCards as ProductCard[] | undefined) ?? [],
+        cardDisplay: existingAssistant.metadata?.cardDisplay as CardDisplayOptions | undefined,
+        usedWebSearch: Boolean(existingAssistant.metadata?.usedWebSearch),
+        assistantMessageId: existingAssistant.id,
+        metadata: {
+          ...(existingAssistant.metadata ?? {}),
+          turnId: input.turnId,
+          recoveryAttempts: 0
+        }
+      };
+    }
+
+    const contract = (turn.plannerContract ?? null) as AgentTurnContract | null;
+    const client = createOpenAIClient();
+    let answer = '';
+    let openAiError: unknown;
+    if (client && latestUser) {
+      try {
+        const response: any = await client.responses.create({
+          model: config.OPENAI_ANSWER_MODEL,
+          reasoning: { effort: config.OPENAI_ANSWER_REASONING_EFFORT },
+          instructions: [
+            buildSystemPrompt(),
+            'Recover an interrupted chat answer. Do not repeat the user message. Finish the answer from the saved turn contract. Be concise and human. Do not show technical error codes to the buyer.',
+            contract
+              ? `TurnContract: answerTask=${contract.answerTask}; cardsRole=${contract.cardsRole}; leadAllowed=${contract.leadAllowed}; mustAnswerNow=${contract.mustAnswerNow.join('; ') || contract.errorRecoveryPriority}.`
+              : ''
+          ].filter(Boolean).join('\n\n'),
+          input: [{
+            role: 'user',
+            content: yaml.dump(cleanEmpty({
+              latestUserMessage: latestUser.content,
+              conversationSummary: session.historySummary,
+              activeNeeds: session.needState.activeNeeds,
+              turnContract: contract,
+              recentMessages: compactHistoryForAI(history, 10, 700)
+            }))
+          }],
+          max_output_tokens: 1200
+        }, input.signal ? { signal: input.signal } : undefined);
+        logOpenAIUsage('answer_recovery', config.OPENAI_ANSWER_MODEL, response);
+        answer = extractResponseText(response).trim();
+      } catch (error) {
+        openAiError = safeError(error);
+        console.warn('Turn recovery failed; using safe human fallback', openAiError);
+      }
+    }
+    if (!answer) {
+      answer = contract?.errorRecoveryPriority
+        ? `Ответ оборвался, но вопрос сохранен. Коротко по главному: ${contract.errorRecoveryPriority}. Если нужно, повторите вопрос одним сообщением, и я восстановлю консультацию по текущему подбору.`
+        : 'Не смог надежно завершить ответ, но вопрос сохранен. Можно повторить его одним сообщением или оставить контакт в форме, чтобы менеджер продолжил консультацию по этому диалогу.';
+    }
+    await input.onDelta?.(answer);
+    const assistantMessage = await this.conversations.addMessage({
+      sessionId: input.sessionId,
+      role: 'assistant',
+      content: answer,
+      metadata: {
+        turnId: input.turnId,
+        recovered: true,
+        recoveryAttempts: 1,
+        turnContract: contract,
+        activeNeedsAfter: session.needState.activeNeeds ?? [],
+        openAiError
+      }
+    });
+    await this.conversations.updateTurn({
+      sessionId: input.sessionId,
+      turnId: input.turnId,
+      status: 'recovered',
+      stage: 'recovered',
+      assistantMessageId: assistantMessage.id,
+      errorCode: openAiError ? 'recovery_openai_failed' : null,
+      errorMessage: openAiError ? JSON.stringify(openAiError).slice(0, 1000) : null,
+      activeNeedsAfter: session.needState.activeNeeds ?? []
+    }).catch((error) => console.warn('Conversation turn recovery update failed', safeError(error)));
+
+    return {
+      turnId: input.turnId,
+      answer,
+      needState: session.needState,
+      productCards: [],
+      usedWebSearch: false,
+      leadRequested: false,
+      assistantMessageId: assistantMessage.id,
+      metadata: {
+        turnId: input.turnId,
+        recovered: true,
+        recoveryAttempts: 1,
+        turnContract: contract ?? undefined,
+        activeNeedsAfter: session.needState.activeNeeds ?? [],
+        openAiError
       }
     };
   }
@@ -6346,6 +6604,7 @@ export const assistantTestHooks = {
   repairAnswerCardText,
   repairGeneratorLoadMinimumText,
   deterministicLeadCollectionAnswer,
+  reliableBundleTotal,
   isCatalogAvailabilityQuestion,
   isManufacturingStatusQuestion
 };

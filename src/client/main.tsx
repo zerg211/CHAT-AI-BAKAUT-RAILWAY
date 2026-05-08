@@ -1085,19 +1085,20 @@ function App() {
           message.id === assistantId ? { ...message, content: message.content || 'Ответ остановлен.', status: 'stopped' } : message
         )));
       } else {
+        const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не удалось получить ответ/i.test(submitError.message)
+          ? submitError.message
+          : 'Не смог надежно завершить ответ, вопрос сохранен; можно повторить или оставить контакт.';
         setMessages((current) => current.map((message) => (
           message.id === assistantId
             ? {
                 ...message,
-                content: submitError instanceof Error
-                  ? submitError.message
-                  : 'AI-сервис недоступен. Ответ ассистента не сформирован.',
+                content: message.content || safeMessage,
                 progress: undefined,
                 status: 'error'
               }
             : message
         )));
-      setError('AI-сервис недоступен. Ответ ассистента не сформирован.');
+      setError(safeMessage);
       }
     } finally {
       setBusy(false);

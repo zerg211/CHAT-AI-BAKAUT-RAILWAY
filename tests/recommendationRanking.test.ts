@@ -2627,6 +2627,45 @@ describe('recommendation ranking', () => {
     expect(answer).toContain('перезвон');
   });
 
+  it('does not calculate a bundle total when generator and plate needs are active but cards cover only plates', () => {
+    let state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate('Нужен генератор для дачи'));
+    state = mergeNeedState(state, heuristicNeedUpdate('Параллельно нужна виброплита для дорожек'));
+    const cards = [
+      {
+        id: 'plate-1',
+        name: 'Виброплита прямоходная бензиновая ТСС TSS-WP70TL',
+        category: 'Виброплиты',
+        price: 38766,
+        currency: 'RUB',
+        sourceUrl: 'https://example.test/plate-1',
+        specs: {},
+        reasons: [],
+        caveats: [],
+        imageUrl: null
+      },
+      {
+        id: 'plate-2',
+        name: 'Виброплита прямоходная бензиновая STEM Techno SPC 162ES',
+        category: 'Виброплиты',
+        price: 42000,
+        currency: 'RUB',
+        sourceUrl: 'https://example.test/plate-2',
+        specs: {},
+        reasons: [],
+        caveats: [],
+        imageUrl: null
+      }
+    ];
+
+    const total = assistantTestHooks.reliableBundleTotal(
+      cards,
+      'Есть ли доставка и скидка, и можно ли понять примерную сумму комплекта без точного заказа?',
+      state
+    );
+
+    expect(total).toBeNull();
+  });
+
   it('treats buyer contact details after a hot selection as lead handoff instead of reopening catalog', () => {
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate('Нужен генератор для дома 5 кВт'));
     const products = [

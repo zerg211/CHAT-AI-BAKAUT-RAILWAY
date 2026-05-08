@@ -1,4 +1,4 @@
-import type { CustomerNeedState, NeedItem, ProductSelectionCriteria, ProductSelectionState } from '../shared/types.js';
+import type { ActiveCustomerNeed, CustomerNeedState, NeedItem, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionState } from '../shared/types.js';
 
 function emptySelectionCriteria(): ProductSelectionCriteria {
   return {
@@ -31,6 +31,7 @@ export function emptyProductSelectionState(): ProductSelectionState {
 
 export function emptyNeedState(): CustomerNeedState {
   return {
+    activeNeeds: [],
     explicitNeeds: [],
     implicitNeeds: [],
     constraints: [],
@@ -134,6 +135,75 @@ function mergeSignals(
 
 function uniqueStrings(values: Array<string | undefined | null>, limit: number) {
   return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, limit);
+}
+
+function activeNeedId(productClass: ProductSelectionClass | 'commercial') {
+  return productClass;
+}
+
+function mergeActiveNeeds(
+  current: ActiveCustomerNeed[] | undefined,
+  update: ActiveCustomerNeed[] | undefined,
+  scopeChanged = false
+) {
+  const byId = new Map<string, ActiveCustomerNeed>();
+  for (const need of current ?? []) {
+    byId.set(need.id, { ...need });
+  }
+  for (const need of update ?? []) {
+    const existing = byId.get(need.id);
+    byId.set(need.id, {
+      ...(existing ?? need),
+      ...need,
+      constraints: uniqueStrings([...(existing?.constraints ?? []), ...(need.constraints ?? [])], 16),
+      openQuestions: uniqueStrings([...(existing?.openQuestions ?? []), ...(need.openQuestions ?? [])], 12),
+      selectedProductIds: uniqueStrings([...(existing?.selectedProductIds ?? []), ...(need.selectedProductIds ?? [])], 16),
+      status: need.status ?? existing?.status ?? 'open',
+      updatedAt: need.updatedAt ?? existing?.updatedAt ?? nowIso()
+    });
+  }
+  const needs = [...byId.values()];
+  return scopeChanged
+    ? needs.map((need) => need.status === 'open' ? { ...need, status: 'paused' as const, updatedAt: nowIso() } : need)
+    : needs;
+}
+
+function activeNeed(productClass: ProductSelectionClass | 'commercial', summary: string, evidence: string): ActiveCustomerNeed {
+  return {
+    id: activeNeedId(productClass),
+    productClass,
+    summary,
+    constraints: evidence ? [evidence] : [],
+    openQuestions: [],
+    selectedProductIds: [],
+    status: 'open',
+    updatedAt: nowIso()
+  };
+}
+
+export function activeNeedsFromMessage(message: string, selectionState?: ProductSelectionState): ActiveCustomerNeed[] {
+  const needs: ActiveCustomerNeed[] = [];
+  const push = (productClass: ProductSelectionClass | 'commercial', summary: string) => {
+    if (!needs.some((need) => need.id === activeNeedId(productClass))) {
+      needs.push(activeNeed(productClass, summary, message));
+    }
+  };
+  if (re(String.raw`(?:\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u043d\u0446)`).test(message)) push('generator', labels.generator);
+  if (re(String.raw`(?:\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|\u043f\u043b\u0438\u0442\u0443)`).test(message)) push('plate', labels.plate);
+  if (re(String.raw`(?:\u0442\u0440\u0430\u043c\u0431\u043e\u0432\u043a|\u0432\u0438\u0431\u0440\u043e\u043d\u043e\u0433)`).test(message)) push('rammer', labels.rammer);
+  if (re(String.raw`(?:\u0440\u0435\u0437\u0447\u0438\u043a|\u0448\u0432\u043e\u043d\u0430\u0440\u0435\u0437)`).test(message)) push('cutter', labels.cutter);
+  if (re(String.raw`(?:\u0434\u043e\u0441\u0442\u0430\u0432\u043a|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u0438\u0434\u043a|\u0441\u043f\u0435\u0446\u0443\u0441\u043b\u043e\u0432|\u043e\u043f\u043b\u0430\u0442|\u0437\u0430\u043a\u0430\u0437|\u043a\u0443\u043f\u0438\u0442)`).test(message)) {
+    push('commercial', labels.availability);
+  }
+  const targetClass = selectionState?.targetProductClass && selectionState.targetProductClass !== 'unknown'
+    ? selectionState.targetProductClass
+    : selectionState?.currentProductClass && selectionState.currentProductClass !== 'unknown'
+      ? selectionState.currentProductClass
+      : undefined;
+  if (targetClass && !needs.some((need) => need.id === targetClass)) {
+    push(targetClass, labels[targetClass as keyof typeof labels] ?? targetClass);
+  }
+  return needs;
 }
 
 function mergeLoadProfile(
@@ -270,6 +340,7 @@ export function mergeNeedState(current: CustomerNeedState, update: Partial<Custo
   const signalFactor = scopeChanged ? 0.25 : 1;
   const activeCurrent = scopeChanged
     ? {
+        activeNeeds: current.activeNeeds,
         explicitNeeds: replacementHasExplicitNeed ? decayItems(current.explicitNeeds, itemFactor, 0.3) : current.explicitNeeds,
         implicitNeeds: decayItems(current.implicitNeeds, itemFactor, 0.3),
         constraints: decayItems(current.constraints, itemFactor, 0.3),
@@ -280,6 +351,7 @@ export function mergeNeedState(current: CustomerNeedState, update: Partial<Custo
       }
     : current;
   return {
+    activeNeeds: mergeActiveNeeds(activeCurrent.activeNeeds, update.activeNeeds, scopeChanged),
     explicitNeeds: mergeItems(activeCurrent.explicitNeeds, update.explicitNeeds ?? []),
     implicitNeeds: mergeItems(activeCurrent.implicitNeeds, update.implicitNeeds ?? []),
     constraints: mergeItems(activeCurrent.constraints, update.constraints ?? []),
@@ -299,6 +371,7 @@ function item(value: string, evidence: string, confidence: number): NeedItem {
 
 export function heuristicNeedUpdate(message: string): Partial<CustomerNeedState> {
   const update: Partial<CustomerNeedState> = {
+    activeNeeds: activeNeedsFromMessage(message),
     explicitNeeds: [],
     implicitNeeds: [],
     constraints: [],

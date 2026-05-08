@@ -6,6 +6,7 @@ import type {
   CatalogPageInput,
   ConversationSummary,
   ConversationSession,
+  ConversationTurn,
   CustomerNeedState,
   DataConflict,
   Lead,
@@ -81,6 +82,25 @@ function mapProduct(row: QueryResultRow): Product {
     description: row.description,
     specs: row.specs ?? {},
     raw: row.raw ?? {}
+  };
+}
+
+function mapConversationTurn(row: QueryResultRow): ConversationTurn {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    userMessageId: row.user_message_id ?? null,
+    assistantMessageId: row.assistant_message_id ?? null,
+    status: row.status,
+    requestHash: row.request_hash,
+    stage: row.stage ?? null,
+    errorCode: row.error_code ?? null,
+    errorMessage: row.error_message ?? null,
+    plannerContract: row.planner_contract ?? null,
+    activeNeedsBefore: row.active_needs_before ?? null,
+    activeNeedsAfter: row.active_needs_after ?? null,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
   };
 }
 
@@ -291,6 +311,92 @@ export class ConversationRepository {
       [input.sessionId]
     );
     return mapMessage(result.rows[0]);
+  }
+
+  async createTurn(input: {
+    sessionId: string;
+    id?: string;
+    requestHash: string;
+    status?: ConversationTurn['status'];
+    stage?: string;
+    activeNeedsBefore?: unknown;
+  }) {
+    const existing = await this.db.query(
+      `SELECT * FROM conversation_turns
+       WHERE session_id = $1
+         AND request_hash = $2
+         AND status IN ('received', 'need_extracted', 'planned', 'answering', 'completed', 'recovered')
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [input.sessionId, input.requestHash]
+    );
+    if (existing.rowCount) return mapConversationTurn(existing.rows[0]);
+
+    const result = await this.db.query(
+      `INSERT INTO conversation_turns(id, session_id, request_hash, status, stage, active_needs_before)
+       VALUES (coalesce($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6)
+       ON CONFLICT (id) DO UPDATE
+       SET request_hash = EXCLUDED.request_hash,
+           status = EXCLUDED.status,
+           stage = EXCLUDED.stage,
+           active_needs_before = EXCLUDED.active_needs_before,
+           updated_at = now()
+       RETURNING *`,
+      [input.id ?? null, input.sessionId, input.requestHash, input.status ?? 'received', input.stage ?? null, input.activeNeedsBefore ?? null]
+    );
+    return mapConversationTurn(result.rows[0]);
+  }
+
+  async getTurn(sessionId: string, turnId: string) {
+    const result = await this.db.query(
+      'SELECT * FROM conversation_turns WHERE session_id = $1 AND id = $2',
+      [sessionId, turnId]
+    );
+    return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
+  }
+
+  async updateTurn(input: {
+    sessionId: string;
+    turnId: string;
+    status?: ConversationTurn['status'];
+    stage?: string | null;
+    userMessageId?: string | null;
+    assistantMessageId?: string | null;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+    plannerContract?: unknown;
+    activeNeedsBefore?: unknown;
+    activeNeedsAfter?: unknown;
+  }) {
+    const result = await this.db.query(
+      `UPDATE conversation_turns
+       SET status = coalesce($3, status),
+           stage = coalesce($4, stage),
+           user_message_id = coalesce($5::uuid, user_message_id),
+           assistant_message_id = coalesce($6::uuid, assistant_message_id),
+           error_code = coalesce($7, error_code),
+           error_message = coalesce($8, error_message),
+           planner_contract = coalesce($9::jsonb, planner_contract),
+           active_needs_before = coalesce($10::jsonb, active_needs_before),
+           active_needs_after = coalesce($11::jsonb, active_needs_after),
+           updated_at = now()
+       WHERE session_id = $1 AND id = $2
+       RETURNING *`,
+      [
+        input.sessionId,
+        input.turnId,
+        input.status ?? null,
+        input.stage ?? null,
+        input.userMessageId ?? null,
+        input.assistantMessageId ?? null,
+        input.errorCode ?? null,
+        input.errorMessage ?? null,
+        input.plannerContract === undefined ? null : input.plannerContract,
+        input.activeNeedsBefore === undefined ? null : input.activeNeedsBefore,
+        input.activeNeedsAfter === undefined ? null : input.activeNeedsAfter
+      ]
+    );
+    return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
   }
 
   async updateAssistantFeedback(input: {

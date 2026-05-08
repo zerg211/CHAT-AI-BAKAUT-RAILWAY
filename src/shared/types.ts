@@ -283,6 +283,19 @@ export interface ProductSelectionState {
   updatedAt?: string;
 }
 
+export type ActiveNeedStatus = 'open' | 'selected' | 'paused' | 'closed';
+
+export interface ActiveCustomerNeed {
+  id: string;
+  productClass: ProductSelectionClass | 'commercial';
+  summary: string;
+  constraints: string[];
+  openQuestions: string[];
+  selectedProductIds: string[];
+  status: ActiveNeedStatus;
+  updatedAt: string;
+}
+
 export interface ProductSelectionMetadata {
   matchedProductIds: string[];
   visibleProductIds: string[];
@@ -299,6 +312,7 @@ export interface ProductSelectionMetadata {
 }
 
 export interface CustomerNeedState {
+  activeNeeds: ActiveCustomerNeed[];
   explicitNeeds: NeedItem[];
   implicitNeeds: NeedItem[];
   constraints: NeedItem[];
@@ -319,6 +333,57 @@ export interface CustomerNeedState {
   lastSummary: string;
 }
 
+export type TurnLifecycleStatus =
+  | 'received'
+  | 'need_extracted'
+  | 'planned'
+  | 'answering'
+  | 'completed'
+  | 'failed'
+  | 'recovered';
+
+export type AgentAnswerTask =
+  | 'technical_explanation'
+  | 'comparison'
+  | 'product_selection'
+  | 'mixed'
+  | 'lead_handoff';
+
+export type AgentCardsRole = 'none' | 'supporting' | 'primary';
+
+export interface AgentTurnContract {
+  answerTask: AgentAnswerTask;
+  mustAnswerNow: string[];
+  activeNeeds: Array<{
+    id: string;
+    productClass: ProductSelectionClass | 'commercial';
+    summary: string;
+  }>;
+  currentFocus: string;
+  cardsRole: AgentCardsRole;
+  leadAllowed: boolean;
+  leadAllowedReason: string;
+  errorRecoveryPriority: string;
+  validatorWarnings: string[];
+}
+
+export interface ConversationTurn {
+  id: string;
+  sessionId: string;
+  userMessageId?: string | null;
+  assistantMessageId?: string | null;
+  status: TurnLifecycleStatus;
+  requestHash: string;
+  stage?: string | null;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  plannerContract?: AgentTurnContract | Record<string, unknown> | null;
+  activeNeedsBefore?: ActiveCustomerNeed[] | null;
+  activeNeedsAfter?: ActiveCustomerNeed[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CardDisplayOptions {
   initialVisibleCount?: number;
 }
@@ -335,6 +400,7 @@ export interface AiGenerationDiagnostics {
 }
 
 export interface ChatResponsePayload {
+  turnId?: string;
   answer: string;
   needState: CustomerNeedState;
   productCards: ProductCard[];
@@ -347,6 +413,15 @@ export interface ChatResponsePayload {
     selection?: ProductSelectionMetadata;
     cardDisplay?: CardDisplayOptions;
     aiDiagnostics?: AiGenerationDiagnostics;
+    turnId?: string;
+    turnContract?: AgentTurnContract;
+    activeNeedsBefore?: ActiveCustomerNeed[];
+    activeNeedsAfter?: ActiveCustomerNeed[];
+    cardsRole?: AgentCardsRole;
+    leadAllowed?: boolean;
+    validatorWarnings?: string[];
+    recoveryAttempts?: number;
+    openAiError?: unknown;
     answerGenerationFallback?: AiFallbackDiagnostic;
     [key: string]: unknown;
   };

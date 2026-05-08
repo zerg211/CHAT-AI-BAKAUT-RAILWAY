@@ -11,6 +11,7 @@
     "start": "node dist/server/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
+    "test:live:production": "node tests/liveAgentCycle.production.mjs",
     "test:watch": "vitest",
     "migrate": "tsx src/db/migrate.ts",
     "catalog:sync": "tsx src/scripts/syncCatalog.ts",

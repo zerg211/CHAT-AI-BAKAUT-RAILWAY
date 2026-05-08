@@ -10,10 +10,13 @@ type FetchLike = typeof fetch;
 export type ChatStreamOptions = {
   fetcher?: FetchLike;
   idleTimeoutMs?: number;
+  recoverOnError?: boolean;
 };
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000;
-const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя. Попробуйте отправить сообщение ещё раз или оставьте контакты — менеджер БАКАУТ продолжит подбор.';
+const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя.';
+const RECOVERING_STATUS = 'Ответ оборвался, восстанавливаю...';
+const FRIENDLY_FINAL_ERROR = 'Не смог надежно завершить ответ, вопрос сохранен; можно повторить или оставить контакт.';
 
 function parseSseEvent(rawEvent: string) {
   const lines = rawEvent.split('\n');
@@ -37,9 +40,7 @@ async function readWithIdleWatchdog(
     return await Promise.race([
       reader.read(),
       new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          reject(new Error(STREAM_TIMEOUT_MESSAGE));
-        }, idleTimeoutMs);
+        timeoutId = setTimeout(() => reject(new Error(STREAM_TIMEOUT_MESSAGE)), idleTimeoutMs);
         signal?.addEventListener('abort', () => {
           if (timeoutId) clearTimeout(timeoutId);
           reader.cancel().catch(() => undefined);
@@ -52,24 +53,14 @@ async function readWithIdleWatchdog(
   }
 }
 
-export async function streamChatMessage(
-  apiBase: string,
-  sessionId: string,
-  message: string,
+async function consumeSse(
+  response: Response,
   handlers: ChatStreamHandlers,
-  signal?: AbortSignal,
-  options: ChatStreamOptions = {}
+  signal: AbortSignal | undefined,
+  idleTimeoutMs: number,
+  onEvent?: (event: string, data: Record<string, unknown>) => Promise<ChatResponsePayload | void> | ChatResponsePayload | void
 ) {
-  const fetcher = options.fetcher ?? fetch;
-  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
-  const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message }),
-    signal
-  });
-  if (!response.ok || !response.body) throw new Error('Не удалось получить ответ');
-
+  if (!response.body) throw new Error(FRIENDLY_FINAL_ERROR);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -85,13 +76,72 @@ export async function streamChatMessage(
     for (const rawEvent of events) {
       const parsed = parseSseEvent(rawEvent);
       if (!parsed) continue;
+      const delegated = await onEvent?.(parsed.event, parsed.data);
+      if (delegated) return delegated;
       if (parsed.event === 'delta') handlers.onDelta(parsed.data.delta ?? '');
       if (parsed.event === 'status') handlers.onStatus?.(parsed.data.status ?? '');
       if (parsed.event === 'done') donePayload = parsed.data as ChatResponsePayload;
-      if (parsed.event === 'error') throw new Error(parsed.data.error ?? 'Ошибка ответа');
+      if (parsed.event === 'error') throw new Error(parsed.data.error ?? FRIENDLY_FINAL_ERROR);
     }
   }
 
   if (!donePayload) throw new Error('Server finished without a done payload');
   return donePayload;
+}
+
+async function recoverChatMessage(
+  apiBase: string,
+  sessionId: string,
+  turnId: string,
+  handlers: ChatStreamHandlers,
+  signal: AbortSignal | undefined,
+  fetcher: FetchLike,
+  idleTimeoutMs: number
+) {
+  handlers.onStatus?.(RECOVERING_STATUS);
+  const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages/${turnId}/recover`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+    signal
+  });
+  if (!response.ok || !response.body) throw new Error(FRIENDLY_FINAL_ERROR);
+  return consumeSse(response, handlers, signal, idleTimeoutMs);
+}
+
+export async function streamChatMessage(
+  apiBase: string,
+  sessionId: string,
+  message: string,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+  options: ChatStreamOptions = {}
+) {
+  const fetcher = options.fetcher ?? fetch;
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
+  const recoverOnError = options.recoverOnError !== false;
+  let turnId: string | undefined;
+
+  const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message }),
+    signal
+  });
+  if (!response.ok || !response.body) throw new Error('Не удалось получить ответ');
+
+  try {
+    return await consumeSse(response, handlers, signal, idleTimeoutMs, async (event, data) => {
+      if (event === 'turn') turnId = String(data.turnId ?? turnId ?? '');
+      if (event === 'error' && recoverOnError && (data.turnId || turnId)) {
+        return recoverChatMessage(apiBase, sessionId, String(data.turnId ?? turnId), handlers, signal, fetcher, idleTimeoutMs);
+      }
+    });
+  } catch (error) {
+    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+    if (recoverOnError && turnId) {
+      return recoverChatMessage(apiBase, sessionId, turnId, handlers, signal, fetcher, idleTimeoutMs);
+    }
+    throw new Error(error instanceof Error && error.message ? error.message : FRIENDLY_FINAL_ERROR);
+  }
 }
