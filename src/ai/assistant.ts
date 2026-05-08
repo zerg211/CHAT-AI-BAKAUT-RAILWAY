@@ -3568,7 +3568,15 @@ function formatLeadPrice(value?: number | null, currency = 'RUB') {
 
 function requestedBundleClasses(text: string, state?: CustomerNeedState): Set<ProductSelectionClass> {
   const classes = new Set<ProductSelectionClass>();
-  const normalized = text.toLowerCase();
+  const stateText = [
+    state?.lastSummary,
+    ...(state?.activeNeeds ?? []).map((need) => `${need.productClass} ${need.summary} ${need.constraints.join(' ')}`),
+    ...(state?.explicitNeeds ?? []).map((need) => `${need.value} ${need.evidence}`),
+    ...(state?.implicitNeeds ?? []).map((need) => `${need.value} ${need.evidence}`),
+    ...(state?.constraints ?? []).map((need) => `${need.value} ${need.evidence}`),
+    ...(state?.importantCriteria ?? []).map((need) => `${need.value} ${need.evidence}`)
+  ].filter(Boolean).join(' ');
+  const normalized = `${text} ${stateText}`.toLowerCase();
   if (/(?:\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u043d\u0446)/iu.test(normalized)) classes.add('generator');
   if (/(?:\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|\u043f\u043b\u0438\u0442\u0443)/iu.test(normalized)) classes.add('plate');
   for (const need of state?.activeNeeds ?? []) {
@@ -4284,7 +4292,10 @@ export class AssistantService {
       }
       const parsed = parseJsonObject(outputText, 'need_extraction');
       const aiUpdate = coerceNeedUpdate(parsed);
-      const merged = mergeNeedState(current, mergeNeedState(emptyNeedState(), aiUpdate));
+      const merged = mergeNeedState(
+        mergeNeedState(current, mergeNeedState(emptyNeedState(), aiUpdate)),
+        { activeNeeds: heuristicNeedUpdate(userMessage).activeNeeds ?? [] }
+      );
       merged.lastSummary = parsed.lastSummary || summarizeNeedState(merged);
       return merged;
     } catch (error) {
