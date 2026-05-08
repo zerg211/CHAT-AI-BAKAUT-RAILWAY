@@ -4772,13 +4772,20 @@ export class AssistantService {
       return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
     }
     const ids = uniqueList(state.selectionState?.selectedProductIds ?? [], FULL_SLICE_PRODUCT_CARDS);
-    if (!ids.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
     const idSet = new Set(ids);
     const catalog = await this.products.listProducts(5000).catch(() => []);
     const byId = new Map(catalog.filter((product) => idSet.has(product.id)).map((product) => [product.id, product]));
-    const selectedProducts = ids.map((id) => byId.get(id)).filter((product): product is Product => Boolean(product));
-    if (!selectedProducts.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
+    let selectedProducts = ids.map((id) => byId.get(id)).filter((product): product is Product => Boolean(product));
     const profile = buildProductFitProfile(state, userMessage);
+    if (!selectedProducts.length && state.selectionState?.targetProductClass !== 'unknown') {
+      selectedProducts = diversifyRankedProducts(
+        catalog
+          .filter((product) => productMatchesSelectionCriteria(product, state.selectionState, profile))
+          .map((product) => ({ product, score: recommendationScore(product, state, userMessage, profile) })),
+        FULL_SLICE_PRODUCT_CARDS
+      );
+    }
+    if (!selectedProducts.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
     const cards = productCards(selectedProducts, state, userMessage, profile, FULL_SLICE_PRODUCT_CARDS);
     const initialVisibleCount = Math.min(cards.length, LARGE_SLICE_VISIBLE_CARDS);
     return {
@@ -6591,6 +6598,10 @@ export class AssistantService {
       price: card.price,
       category: card.category
     }));
+    const recoveryGeneratorSizingPolicy = generatorSizingPolicyForAnswer(
+      session.needState.selectionState?.loadProfile,
+      recoveredSelection.cards
+    );
     const client = createOpenAIClient();
     let answer = '';
     let openAiError: unknown;
@@ -6605,6 +6616,9 @@ export class AssistantService {
             recoveredSelection.cards.length
               ? 'Validated product cards are being returned with this recovery payload. Treat them as already shown under the answer: give a short selection conclusion, name only the first one or two visible cards, and do not say you will select cards later.'
               : '',
+            recoveryGeneratorSizingPolicy
+              ? 'For generator sizing recovery, answerContext.generatorSizingPolicy is authoritative: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visible card powers are catalog options. Do not introduce a higher generator class unless it is supported by this policy.'
+              : '',
             contract
               ? `TurnContract: answerTask=${contract.answerTask}; cardsRole=${contract.cardsRole}; leadAllowed=${contract.leadAllowed}; mustAnswerNow=${contract.mustAnswerNow.join('; ') || contract.errorRecoveryPriority}.`
               : ''
@@ -6618,6 +6632,18 @@ export class AssistantService {
               turnContract: contract,
               productCardsShown: recoveredCardSummary,
               productCardDisplay: recoveredSelection.cardDisplay,
+              productSelection: selectionMetadata({
+                state: session.needState.selectionState,
+                matchedProducts: [],
+                visibleProducts: [],
+                hiddenProducts: [],
+                comparisonProducts: [],
+                rejectedProducts: [],
+                confidence: session.needState.selectionState?.confidence ?? 0,
+                missingQuestions: session.needState.selectionState?.unknowns ?? [],
+                trace: { source: 'recovery_selection_state' }
+              }),
+              generatorSizingPolicy: recoveryGeneratorSizingPolicy,
               recentMessages: compactHistoryForAI(history, 10, 700)
             }))
           }],
