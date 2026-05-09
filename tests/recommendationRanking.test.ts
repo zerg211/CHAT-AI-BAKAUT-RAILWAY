@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AssistantService, assistantTestHooks } from '../src/ai/assistant.js';
 import { emptyNeedState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
 import { classifyProduct, fallbackDetectGeneratorEnclosureSignal, isCoreEquipment, parseBudgetMax, productMatchesRequestedBrand, requestedBrandKeysFromProducts } from '../src/ai/productClassifier.js';
-import type { ProductSelectionCriteria } from '../src/shared/types.js';
+import type { CustomerNeedState, ProductSelectionCriteria, SemanticMemory, SemanticRequirement } from '../src/shared/types.js';
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
 
@@ -108,6 +108,33 @@ function baseTurnPlan(overrides: Record<string, unknown> = {}) {
     answerGuidance: '',
     ...overrides
   } as any;
+}
+
+function semanticRequirement(overrides: Partial<SemanticRequirement> & Pick<SemanticRequirement, 'id' | 'kind'>): SemanticRequirement {
+  return {
+    value: {},
+    status: 'active',
+    strictness: 'targetRange',
+    evidence: overrides.id,
+    source: 'explicit_user',
+    replacesRequirementIds: [],
+    updatedAt: '2026-05-09T00:00:00.000Z',
+    ...overrides
+  };
+}
+
+function withSemanticMemory(state: CustomerNeedState, memory: Partial<SemanticMemory>): CustomerNeedState {
+  return {
+    ...state,
+    semanticMemory: {
+      ...emptyNeedState().semanticMemory,
+      ...memory,
+      selectionPolicy: {
+        ...emptyNeedState().semanticMemory.selectionPolicy,
+        ...(memory.selectionPolicy ?? {})
+      }
+    }
+  };
 }
 
 async function rank(message: string, products: ReturnType<typeof product>[]) {
@@ -3861,6 +3888,216 @@ describe('recommendation ranking', () => {
 
     expect(tokens.map((token) => token.toLowerCase())).toContain('ap6500e');
     expect(tokens.join(' ')).not.toMatch(/220|230|5-6|kw/i);
+  });
+
+  it('does not treat weight ranges as exact model tokens', () => {
+    const message = ru('\\u0418\\u043d\\u0442\\u0435\\u0440\\u0435\\u0441\\u0443\\u0435\\u0442 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0430\\u0441\\u0444\\u0430\\u043b\\u044c\\u0442\\u0430 90-100\\u043a\\u0433');
+
+    expect(assistantTestHooks.parseWeightNeedRangeKg(message)).toEqual({ min: 90, max: 100 });
+    expect(assistantTestHooks.extractModelTokens(message)).toEqual([]);
+  });
+
+  it('supersedes replaced semantic requirements instead of keeping conflicting active ranges', () => {
+    const initial = mergeNeedState(emptyNeedState(), {
+      semanticMemory: {
+        ...emptyNeedState().semanticMemory,
+        activeRequirementIds: ['weight-90-100'],
+        requirements: [
+          semanticRequirement({
+            id: 'weight-90-100',
+            kind: 'weightKg',
+            value: { min: 90, max: 100, unit: 'kg', text: '90-100 kg' }
+          })
+        ],
+        selectionPolicy: {
+          primaryRequirementIds: ['weight-90-100'],
+          alternativeMode: 'afterPrimary',
+          explanationRequired: true
+        }
+      }
+    });
+    const changed = mergeNeedState(initial, {
+      semanticMemory: {
+        ...emptyNeedState().semanticMemory,
+        activeRequirementIds: ['weight-100-120'],
+        requirements: [
+          semanticRequirement({
+            id: 'weight-100-120',
+            kind: 'weightKg',
+            value: { min: 100, max: 120, unit: 'kg', text: '100-120 kg' },
+            replacesRequirementIds: ['weight-90-100']
+          })
+        ],
+        selectionPolicy: {
+          primaryRequirementIds: ['weight-100-120'],
+          alternativeMode: 'afterPrimary',
+          explanationRequired: true
+        }
+      }
+    });
+
+    expect(changed.semanticMemory.activeRequirementIds).toEqual(['weight-100-120']);
+    expect(changed.semanticMemory.requirements.find((item) => item.id === 'weight-90-100')?.status).toBe('superseded');
+    expect(changed.semanticMemory.requirements.find((item) => item.id === 'weight-100-120')?.status).toBe('active');
+  });
+
+  it('keeps the full plate-selection cycle aligned when the buyer returns from 100+ kg to 90-100 kg', async () => {
+    const products = [
+      productWithSpecs('redverg107', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 REDVERG RD-29265 (107 \\u043a\\u0433)'), 59_990, 'https://example.test/catalog/vibroplity/redverg_107/', { weight: '107 kg', waterTank: '14 l' }),
+      productWithSpecs('champion103', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 CHAMPION PC1151FT (103 \\u043a\\u0433)'), 70_490, 'https://example.test/catalog/vibroplity/champion_103/', { weight: '103 kg' }),
+      productWithSpecs('bps1550', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Wacker Neuson BPS 1550 Gw-c CE (91 \\u043a\\u0433)'), 160_000, 'https://example.test/catalog/vibroplity/bps_1550/', { weight: '91 kg', waterTank: '10 l' }),
+      productWithSpecs('mp15', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Wacker Neuson MP15-CE (83 \\u043a\\u0433) 0630338'), 154_000, 'https://example.test/catalog/vibroplity/mp15_ce/', { weight: '83 kg', article: '0630338' }),
+      productWithSpecs('lf95', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Husqvarna LF 80 LAT (95 \\u043a\\u0433)'), 255_000, 'https://example.test/catalog/vibroplity/lf80lat/', { weight: '95 kg' })
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    let state = emptyNeedState();
+
+    const initialMessage = ru('\\u0418\\u043d\\u0442\\u0435\\u0440\\u0435\\u0441\\u0443\\u0435\\u0442 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0430\\u0441\\u0444\\u0430\\u043b\\u044c\\u0442\\u0430 90-100\\u043a\\u0433');
+    state = withSemanticMemory(state, {
+      activeRequirementIds: ['class-plate', 'task-asphalt', 'weight-90-100'],
+      requirements: [
+        semanticRequirement({ id: 'class-plate', kind: 'productClass', value: { productClass: 'plate', text: 'plate' } }),
+        semanticRequirement({ id: 'task-asphalt', kind: 'task', value: { text: 'asphalt work' } }),
+        semanticRequirement({ id: 'weight-90-100', kind: 'weightKg', value: { min: 90, max: 100, unit: 'kg', text: '90-100 kg' } })
+      ],
+      selectionPolicy: { primaryRequirementIds: ['weight-90-100'], alternativeMode: 'afterPrimary', explanationRequired: true }
+    });
+    const initial = await assistant.selectProductsForTurn(initialMessage, state, baseTurnPlan({
+      catalogSearchQuery: initialMessage,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 90,
+        weightKgMax: 100
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        mustHaveTraits: ['asphalt work']
+      }
+    }), products);
+    state = { ...state, selectionState: initial.state };
+
+    expect(initial.state.hardConstraints.weightKgMin).toBe(90);
+    expect(initial.state.hardConstraints.weightKgMax).toBe(100);
+    expect(initial.state.hardConstraints.exactModelTokens).toEqual([]);
+    const initialIds = initial.visibleProducts.map((item) => item.id);
+    expect(initialIds).toEqual(expect.arrayContaining(['bps1550', 'lf95']));
+    expect(Math.max(initialIds.indexOf('bps1550'), initialIds.indexOf('lf95'))).toBeLessThan(initialIds.indexOf('champion103'));
+    expect(Math.max(initialIds.indexOf('bps1550'), initialIds.indexOf('lf95'))).toBeLessThan(initialIds.indexOf('redverg107'));
+
+    const heavierMessage = ru('\\u0425\\u043e\\u0440\\u043e\\u0448\\u043e, \\u0434\\u0430\\u0432\\u0430\\u0439 \\u0447\\u0443\\u0442\\u044c \\u0431\\u043e\\u043b\\u044c\\u0448\\u0435 100\\u043a\\u0433');
+    state = withSemanticMemory(state, {
+      activeRequirementIds: ['class-plate', 'task-asphalt', 'weight-100-120'],
+      requirements: [
+        semanticRequirement({ id: 'class-plate', kind: 'productClass', value: { productClass: 'plate', text: 'plate' } }),
+        semanticRequirement({ id: 'task-asphalt', kind: 'task', value: { text: 'asphalt work' } }),
+        semanticRequirement({ id: 'weight-90-100', kind: 'weightKg', value: { min: 90, max: 100, unit: 'kg', text: '90-100 kg' }, status: 'superseded' }),
+        semanticRequirement({ id: 'weight-100-120', kind: 'weightKg', value: { min: 100, max: 120, unit: 'kg', text: '100-120 kg' }, strictness: 'strictOnly', replacesRequirementIds: ['weight-90-100'] })
+      ],
+      selectionPolicy: { primaryRequirementIds: ['weight-100-120'], alternativeMode: 'none', explanationRequired: true }
+    });
+    const heavier = await assistant.selectProductsForTurn(heavierMessage, state, baseTurnPlan({
+      catalogSearchQuery: heavierMessage,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 100,
+        weightKgMax: 120
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        mustHaveTraits: ['asphalt work']
+      }
+    }), products);
+    state = { ...state, selectionState: heavier.state };
+
+    expect(heavier.state.hardConstraints.weightKgMin).toBe(100);
+    expect(heavier.state.hardConstraints.weightKgMax).toBe(120);
+    expect(heavier.visibleProducts.map((item) => item.id)).toEqual(expect.arrayContaining(['redverg107', 'champion103']));
+    expect(heavier.visibleProducts.map((item) => item.id)).not.toContain('bps1550');
+
+    const availabilityMessage = ru('\\u041d\\u0438\\u0447\\u0435\\u0433\\u043e \\u043d\\u0435 \\u043f\\u043e\\u043d\\u0438\\u043c\\u0430\\u044e!!! \\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 BPS 1550 WACKER \\u0435\\u0441\\u0442\\u044c \\u0443 \\u0432\\u0430\\u0441? \\u0418\\u043b\\u0438 MP-15 CE ??? \\u042f \\u0438\\u0437\\u043d\\u0430\\u0447\\u0430\\u043b\\u044c\\u043d\\u043e \\u0437\\u0430\\u043f\\u0440\\u043e\\u0441\\u0438\\u043b \\u043f\\u043b\\u0438\\u0442\\u0443 90-100\\u043a\\u0433');
+    state = withSemanticMemory(state, {
+      activeRequirementIds: ['class-plate', 'task-asphalt', 'weight-90-100-return'],
+      requirements: [
+        semanticRequirement({ id: 'class-plate', kind: 'productClass', value: { productClass: 'plate', text: 'plate' } }),
+        semanticRequirement({ id: 'task-asphalt', kind: 'task', value: { text: 'asphalt work' } }),
+        semanticRequirement({ id: 'weight-100-120', kind: 'weightKg', value: { min: 100, max: 120, unit: 'kg', text: '100-120 kg' }, status: 'superseded' }),
+        semanticRequirement({ id: 'weight-90-100-return', kind: 'weightKg', value: { min: 90, max: 100, unit: 'kg', text: '90-100 kg' }, replacesRequirementIds: ['weight-100-120'] })
+      ],
+      mentionedProducts: [
+        { token: 'BPS 1550', normalizedToken: 'bps1550', role: 'availabilityCheck', status: 'unresolved', productIds: [], evidence: availabilityMessage, updatedAt: '2026-05-09T00:00:00.000Z' },
+        { token: 'MP-15 CE', normalizedToken: 'mp15ce', role: 'availabilityCheck', status: 'unresolved', productIds: [], evidence: availabilityMessage, updatedAt: '2026-05-09T00:00:00.000Z' }
+      ],
+      selectionPolicy: { primaryRequirementIds: ['weight-90-100-return'], alternativeMode: 'afterPrimary', explanationRequired: true }
+    });
+    const corrected = await assistant.selectProductsForTurn(availabilityMessage, state, baseTurnPlan({
+      catalogSearchQuery: availabilityMessage,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 90,
+        weightKgMax: 100
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        mustHaveTraits: ['asphalt work']
+      }
+    }), products);
+
+    expect(corrected.state.hardConstraints.weightKgMin).toBe(90);
+    expect(corrected.state.hardConstraints.weightKgMax).toBe(100);
+    expect(corrected.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(corrected.visibleProducts.map((item) => item.id)).toContain('bps1550');
+    expect(corrected.visibleProducts.map((item) => item.id).indexOf('redverg107')).toBeGreaterThan(corrected.visibleProducts.map((item) => item.id).indexOf('bps1550'));
+    expect(corrected.visibleProducts.map((item) => item.id).indexOf('champion103')).toBeGreaterThan(corrected.visibleProducts.map((item) => item.id).indexOf('bps1550'));
+    expect(corrected.comparisonProducts.map((item) => item.id)).toContain('mp15');
+    expect(corrected.rejectedProducts.find((item) => item.productId === 'mp15')?.reason).toContain('below 90 kg');
+    expect(state.semanticMemory.activeRequirementIds).toContain('weight-90-100-return');
+    expect(state.semanticMemory.requirements.find((item) => item.id === 'weight-100-120')?.status).toBe('superseded');
+    expect(state.semanticMemory.mentionedProducts.map((item) => [item.token, item.role])).toEqual(expect.arrayContaining([
+      ['BPS 1550', 'availabilityCheck'],
+      ['MP-15 CE', 'availabilityCheck']
+    ]));
+
+    const fallbackProducts = products.filter((product) => !['bps1550', 'lf95'].includes(product.id));
+    const fallbackAssistant = new AssistantService(undefined as never, new FakeProducts(fallbackProducts) as never);
+    const fallbackState = withSemanticMemory(emptyNeedState(), {
+      activeRequirementIds: ['class-plate', 'task-asphalt', 'weight-90-100'],
+      requirements: [
+        semanticRequirement({ id: 'class-plate', kind: 'productClass', value: { productClass: 'plate', text: 'plate' } }),
+        semanticRequirement({ id: 'task-asphalt', kind: 'task', value: { text: 'asphalt work' } }),
+        semanticRequirement({ id: 'weight-90-100', kind: 'weightKg', value: { min: 90, max: 100, unit: 'kg', text: '90-100 kg' }, strictness: 'fallbackAllowed' })
+      ],
+      selectionPolicy: { primaryRequirementIds: ['weight-90-100'], alternativeMode: 'fallbackOnly', explanationRequired: true }
+    });
+    const fallback = await fallbackAssistant.selectProductsForTurn(initialMessage, fallbackState, baseTurnPlan({
+      catalogSearchQuery: initialMessage,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 90,
+        weightKgMax: 100
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        mustHaveTraits: ['asphalt work']
+      }
+    }), fallbackProducts);
+
+    expect(fallback.visibleProducts.map((item) => item.id)).toEqual(expect.arrayContaining(['champion103', 'redverg107']));
   });
 
   it('does not classify a concrete vibrator with 380V in the name as a generator', async () => {

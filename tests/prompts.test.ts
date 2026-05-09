@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { emptyProductSelectionState } from '../src/ai/needState.js';
+import { emptyNeedState, emptyProductSelectionState } from '../src/ai/needState.js';
 import { buildAssistantContext, buildSystemPrompt, buildTurnPlannerPrompt } from '../src/ai/prompts.js';
 
 describe('assistant prompt guardrails', () => {
@@ -35,6 +35,7 @@ describe('assistant prompt guardrails', () => {
   it('builds a compact final-answer context for low-token turns', () => {
     const context = buildAssistantContext({
       needState: {
+        ...emptyNeedState(),
         activeNeeds: [],
         explicitNeeds: [{ value: 'generator 5-6 kW', evidence: 'user', confidence: 0.9, updatedAt: 'now' }],
         implicitNeeds: [],

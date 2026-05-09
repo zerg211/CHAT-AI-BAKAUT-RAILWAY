@@ -28,6 +28,33 @@ function compactNeedItems(items: CustomerNeedState[keyof Pick<CustomerNeedState,
   }));
 }
 
+function compactSemanticMemory(state: CustomerNeedState, mode: AssistantContextMode) {
+  const requirementLimit = mode === 'expanded' ? 10 : 6;
+  const productLimit = mode === 'expanded' ? 10 : 6;
+  const memory = state.semanticMemory;
+  return {
+    activeRequirementIds: memory.activeRequirementIds,
+    requirements: memory.requirements.slice(-requirementLimit).map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      value: item.value,
+      status: item.status,
+      strictness: item.strictness,
+      source: item.source,
+      replacesRequirementIds: item.replacesRequirementIds,
+      evidence: truncateText(item.evidence, 160)
+    })),
+    mentionedProducts: memory.mentionedProducts.slice(-productLimit).map((item) => ({
+      token: item.token,
+      role: item.role,
+      status: item.status,
+      productIds: item.productIds,
+      evidence: truncateText(item.evidence, 160)
+    })),
+    selectionPolicy: memory.selectionPolicy
+  };
+}
+
 function compactNeedState(state: CustomerNeedState, mode: AssistantContextMode) {
   const limit = mode === 'expanded' ? 5 : 3;
   const activeSignals = Object.fromEntries(
@@ -43,7 +70,8 @@ function compactNeedState(state: CustomerNeedState, mode: AssistantContextMode) 
     facts: compactNeedItems(state.confirmedFacts, mode === 'expanded' ? 5 : 3),
     uncertain: compactNeedItems(state.uncertainInferences, mode === 'expanded' ? 4 : 2),
     contradictions: compactNeedItems(state.contradictions, mode === 'expanded' ? 4 : 2),
-    signals: activeSignals
+    signals: activeSignals,
+    semanticMemory: compactSemanticMemory(state, mode)
   };
 }
 
@@ -193,6 +221,34 @@ export function buildNeedExtractorPrompt() {
     },
     "confidence": number
   },
+  "semanticMemory": {
+    "version": 1,
+    "activeRequirementIds": string[],
+    "requirements": [{
+      "id": string,
+      "kind": "productClass" | "task" | "weightKg" | "budgetRub" | "powerKw" | "diameterMm" | "brand",
+      "value": {"text": string, "min": number | null, "max": number | null, "unit": string, "productClass": string, "brand": string},
+      "status": "active" | "superseded" | "rejected" | "paused",
+      "strictness": "strictOnly" | "targetRange" | "fallbackAllowed",
+      "evidence": string,
+      "source": "explicit_user" | "llm_inference" | "catalog_fact",
+      "replacesRequirementIds": string[]
+    }],
+    "mentionedProducts": [{
+      "token": string,
+      "normalizedToken": string,
+      "role": "targetProduct" | "availabilityCheck" | "comparison" | "example" | "compatibilityTarget",
+      "status": "unresolved" | "foundInCatalog" | "notFound" | "notMatchingRequirement",
+      "productIds": string[],
+      "evidence": string
+    }],
+    "selectionPolicy": {
+      "primaryRequirementIds": string[],
+      "alternativeMode": "none" | "afterPrimary" | "fallbackOnly",
+      "explanationRequired": boolean
+    },
+    "botCommitments": [{"kind": "availability" | "recommendation" | "constraint" | "fact", "text": string, "productIds": string[], "evidence": string}]
+  },
   "featureSignals": {
     "portable": number,
     "homeUse": number,
@@ -327,8 +383,11 @@ productIntent выбирай по текущей потребности: welding
 Для генераторов различай номинальную и максимальную мощность. Если считаешь нагрузку по приборам, указывай диапазон так, чтобы maxPowerKw отражал пусковой пик с запасом, а nominalPowerKw - длительную рабочую нагрузку. Не завышай номинал: свет + холодильник + бытовой насос обычно не требуют 6 кВт номинальной мощности, особенно если запуск не одновременный.
 The planner is the semantic brain for product selection. Infer hard constraints from meaning, including refusals, changed requirements, and "not this kind" corrections, then encode them in requiredProductTraits and selectionState. selectedProductIds must contain only products that satisfy those semantic constraints; do not expect downstream card code to fix your product choice.
 When the buyer gives budget, weight, or diameter constraints, encode them directly in requiredProductTraits as budgetMax, weightKgMin/weightKgMax, and diameterMmMin/diameterMmMax. If the buyer gives an approximate single value, use a practical narrow range and explain the assumption in answerGuidance. Leave these fields null when they are not real constraints.
+Interpret bare numbers by dialogue meaning, not by text shape: in a plate-compactor selection after "90-100" or "100-120" the number is usually a weight range; in a generator selection it may be power; near "руб/тыс/бюджет/цена" it is budget; near "мм/диаметр/диск" it is size. Do not put numeric ranges like "90-100кг", "100-120", "3-5кВт", or "400-500мм" into exactModelConstraint, exactModelTokens, selectedProductIds, or model-focused fields unless the buyer clearly names a model/brand/article around that number.
+When the buyer returns to an earlier numeric requirement or corrects the current range, make the corrected range the active hard constraint and drop the previous conflicting range from the active requirement.
 For generators with a pump/motor load: if pump power is known, recalculate the load and reject previously considered models that no longer have enough running/starting reserve. If pump power is unknown, ask for pump model/type or use a cautious average by pump type and mark the recommendation as preliminary; do not present a weak final model as certain.
 For technical comparisons involving noise, THD, AVR, waveform/sine quality, consumption, exact inverter/conventional type, or similar specs: set needsWebSearch=true unless those facts are already in catalog candidates. In answerGuidance require the final assistant to separate verified facts from general engineering inference.
+For "есть у вас?" / availability questions, first determine whether the product itself is present in catalog candidates, exact catalog lookup, or verified web search. If it is found, answer that the product/card is generally present in the catalog, then separately say that live stock/warehouse availability must be checked by a manager. If it is not found, say you do not see the exact product card in the current catalog context; do not use a canned availability answer without checking the catalog evidence first.
 For plate compactors: do not require reversible travel for small paths/paving slabs unless the buyer asks for reverse, deep compaction, professional duty, or heavy soil work. If transport by one person matters, prefer lighter models or wheel kits and explain any tradeoff.
 selectedProductIds заполняй только id из preliminaryCatalogCandidates, максимум 10. Если покупатель уже выбрал комплект или просит оформить/купить/взять товар, ставь action collect_lead и выбирай только позиции этого комплекта: основную технику и конкретный расходник нужного объема, без альтернатив. Если подходящих товаров больше 4, выбирай более широкий набор по разным брендам и моделям, но без нерелевантных позиций. answerGuidance - краткая инструкция финальному ассистенту, без текста для покупателя.`;
 }

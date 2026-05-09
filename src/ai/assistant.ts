@@ -1,11 +1,11 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { ActiveCustomerNeed, AgentTurnContract, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, TroubleshootingCase } from '../shared/types.js';
+import type { ActiveCustomerNeed, AgentTurnContract, BotCommitment, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, MentionedProductMemory, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
-import { emptyNeedState, emptyProductSelectionState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
+import { emptyNeedState, emptyProductSelectionState, emptySemanticMemory, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 import { calculateGeneratorLoadProfile as calculateStructuredGeneratorLoadProfile } from './loadProfile.js';
 import {
   fromEscaped, weightRegex, powerRegex, powerRangeRegex, budgetMaxRegex,
@@ -565,6 +565,142 @@ function coerceSelectionStateFromNeedExtraction(value: unknown): ProductSelectio
   });
 }
 
+function coerceSemanticRequirementKind(value: unknown): SemanticRequirementKind | undefined {
+  const allowed: SemanticRequirementKind[] = ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand'];
+  return allowed.includes(value as SemanticRequirementKind) ? value as SemanticRequirementKind : undefined;
+}
+
+function coerceSemanticRequirementStatus(value: unknown): SemanticRequirementStatus {
+  const allowed: SemanticRequirementStatus[] = ['active', 'superseded', 'rejected', 'paused'];
+  return allowed.includes(value as SemanticRequirementStatus) ? value as SemanticRequirementStatus : 'active';
+}
+
+function coerceSemanticRequirementStrictness(value: unknown): SemanticRequirementStrictness {
+  const allowed: SemanticRequirementStrictness[] = ['strictOnly', 'targetRange', 'fallbackAllowed'];
+  return allowed.includes(value as SemanticRequirementStrictness) ? value as SemanticRequirementStrictness : 'targetRange';
+}
+
+function coerceSemanticMemorySource(value: unknown): SemanticMemorySource {
+  const allowed: SemanticMemorySource[] = ['explicit_user', 'llm_inference', 'catalog_fact'];
+  return allowed.includes(value as SemanticMemorySource) ? value as SemanticMemorySource : 'llm_inference';
+}
+
+function coerceSemanticValue(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object') return {};
+  const raw = value as Record<string, unknown>;
+  const result: Record<string, unknown> = {};
+  for (const key of ['text', 'min', 'max', 'unit', 'productClass', 'brand', 'amount']) {
+    const item = raw[key];
+    if (item === null || item === undefined || item === '') continue;
+    if (typeof item === 'number' && Number.isFinite(item)) result[key] = item;
+    if (typeof item === 'string') result[key] = shortText(item, 160);
+    if (typeof item === 'boolean') result[key] = item;
+  }
+  return result;
+}
+
+function coerceSemanticRequirements(value: unknown): SemanticRequirement[] {
+  if (!Array.isArray(value)) return [];
+  const now = new Date().toISOString();
+  const result: SemanticRequirement[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const kind = coerceSemanticRequirementKind(raw.kind);
+    if (!kind) continue;
+    const id = shortText(raw.id, 96) || `${kind}:${result.length}`;
+    result.push({
+      id,
+      kind,
+      value: coerceSemanticValue(raw.value),
+      status: coerceSemanticRequirementStatus(raw.status),
+      strictness: coerceSemanticRequirementStrictness(raw.strictness),
+      evidence: shortText(raw.evidence, 300),
+      source: coerceSemanticMemorySource(raw.source),
+      replacesRequirementIds: coerceStringList(raw.replacesRequirementIds, 24),
+      updatedAt: now
+    });
+  }
+  return result.slice(0, 40);
+}
+
+function coerceMentionedProductRole(value: unknown): MentionedProductMemory['role'] {
+  const allowed: MentionedProductMemory['role'][] = ['targetProduct', 'availabilityCheck', 'comparison', 'example', 'compatibilityTarget'];
+  return allowed.includes(value as MentionedProductMemory['role']) ? value as MentionedProductMemory['role'] : 'targetProduct';
+}
+
+function coerceMentionedProductStatus(value: unknown): MentionedProductMemory['status'] {
+  const allowed: MentionedProductMemory['status'][] = ['unresolved', 'foundInCatalog', 'notFound', 'notMatchingRequirement'];
+  return allowed.includes(value as MentionedProductMemory['status']) ? value as MentionedProductMemory['status'] : 'unresolved';
+}
+
+function coerceMentionedProducts(value: unknown): MentionedProductMemory[] {
+  if (!Array.isArray(value)) return [];
+  const now = new Date().toISOString();
+  const result: MentionedProductMemory[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const token = shortText(raw.token, 120);
+    if (!token) continue;
+    const normalizedToken = compactModelText(shortText(raw.normalizedToken, 120) || token);
+    result.push({
+      token,
+      normalizedToken,
+      role: coerceMentionedProductRole(raw.role),
+      status: coerceMentionedProductStatus(raw.status),
+      productIds: coerceStringList(raw.productIds, 24),
+      evidence: shortText(raw.evidence, 300),
+      updatedAt: now
+    });
+  }
+  return result.slice(0, 40);
+}
+
+function coerceSemanticAlternativeMode(value: unknown): SemanticSelectionPolicy['alternativeMode'] {
+  const allowed: SemanticSelectionPolicy['alternativeMode'][] = ['none', 'afterPrimary', 'fallbackOnly'];
+  return allowed.includes(value as SemanticSelectionPolicy['alternativeMode']) ? value as SemanticSelectionPolicy['alternativeMode'] : 'none';
+}
+
+function coerceBotCommitments(value: unknown): BotCommitment[] {
+  if (!Array.isArray(value)) return [];
+  const now = new Date().toISOString();
+  const allowed: BotCommitment['kind'][] = ['availability', 'recommendation', 'constraint', 'fact'];
+  const result: BotCommitment[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const raw = item as Record<string, unknown>;
+    const kind = allowed.includes(raw.kind as BotCommitment['kind']) ? raw.kind as BotCommitment['kind'] : undefined;
+    const text = shortText(raw.text, 260);
+    if (!kind || !text) continue;
+    result.push({
+      kind,
+      text,
+      productIds: coerceStringList(raw.productIds, 16),
+      evidence: shortText(raw.evidence, 300),
+      updatedAt: now
+    });
+  }
+  return result.slice(-30);
+}
+
+function coerceSemanticMemory(value: unknown): SemanticMemory | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = value as Record<string, unknown>;
+  return {
+    version: 1,
+    activeRequirementIds: coerceStringList(raw.activeRequirementIds, 64),
+    requirements: coerceSemanticRequirements(raw.requirements),
+    mentionedProducts: coerceMentionedProducts(raw.mentionedProducts),
+    selectionPolicy: {
+      primaryRequirementIds: coerceStringList((raw.selectionPolicy as Record<string, unknown> | undefined)?.primaryRequirementIds, 64),
+      alternativeMode: coerceSemanticAlternativeMode((raw.selectionPolicy as Record<string, unknown> | undefined)?.alternativeMode),
+      explanationRequired: Boolean((raw.selectionPolicy as Record<string, unknown> | undefined)?.explanationRequired)
+    },
+    botCommitments: coerceBotCommitments(raw.botCommitments)
+  };
+}
+
 function coerceNeedUpdate(value: any): Partial<CustomerNeedState> {
   return {
     activeNeeds: toActiveNeeds(value?.activeNeeds),
@@ -585,8 +721,165 @@ function coerceNeedUpdate(value: any): Partial<CustomerNeedState> {
       budgetSensitive: Number(value?.featureSignals?.budgetSensitive ?? 0)
     },
     selectionState: coerceSelectionStateFromNeedExtraction(value?.selectionState),
+    semanticMemory: coerceSemanticMemory(value?.semanticMemory),
     lastSummary: typeof value?.lastSummary === 'string' ? value.lastSummary : ''
   };
+}
+
+function activeSemanticRequirements(memory: SemanticMemory | undefined, kind?: SemanticRequirementKind) {
+  if (!memory) return [] as SemanticRequirement[];
+  const activeIds = new Set(memory.activeRequirementIds ?? []);
+  return (memory.requirements ?? []).filter((item) =>
+    item.status === 'active' &&
+    (!activeIds.size || activeIds.has(item.id)) &&
+    (!kind || item.kind === kind)
+  );
+}
+
+function semanticNumber(value: Record<string, unknown>, key: 'min' | 'max' | 'amount') {
+  const number = Number(value[key]);
+  return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function semanticText(value: Record<string, unknown>, key: 'text' | 'productClass' | 'brand') {
+  return typeof value[key] === 'string' ? String(value[key]).trim() : '';
+}
+
+function applySemanticMemoryToSelectionState(selectionState: ProductSelectionState, memory: SemanticMemory | undefined): ProductSelectionState {
+  const requirements = activeSemanticRequirements(memory);
+  if (!requirements.length && !(memory?.mentionedProducts ?? []).length) return selectionState;
+
+  let hardConstraints: ProductSelectionCriteria = {
+    ...selectionState.hardConstraints,
+    exactModelTokens: [...selectionState.hardConstraints.exactModelTokens],
+    exactModelTokenRoles: [...(selectionState.hardConstraints.exactModelTokenRoles ?? [])],
+    mustHaveTraits: [...selectionState.hardConstraints.mustHaveTraits],
+    excludedClasses: [...selectionState.hardConstraints.excludedClasses],
+    provenance: { ...(selectionState.hardConstraints.provenance ?? {}) }
+  };
+  let currentProductClass = selectionState.currentProductClass;
+  let targetProductClass = selectionState.targetProductClass;
+
+  for (const requirement of requirements) {
+    const value = requirement.value ?? {};
+    if (requirement.kind === 'productClass') {
+      const productClass = coerceProductIntent(semanticText(value, 'productClass') || semanticText(value, 'text'));
+      if (productClass !== 'unknown') {
+        currentProductClass = currentProductClass !== 'unknown' ? currentProductClass : productClass;
+        targetProductClass = productClass;
+        hardConstraints.productIntent = productClass;
+      }
+    }
+    if (requirement.kind === 'task') {
+      const task = semanticText(value, 'text');
+      if (task) hardConstraints.mustHaveTraits = uniqueList([...hardConstraints.mustHaveTraits, task], 24);
+    }
+    if (requirement.kind === 'weightKg') {
+      const min = semanticNumber(value, 'min');
+      const max = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
+      hardConstraints = {
+        ...hardConstraints,
+        weightKgMin: min,
+        weightKgMax: max,
+        provenance: {
+          ...(hardConstraints.provenance ?? {}),
+          weightKgMin: min !== undefined ? 'planner' : hardConstraints.provenance?.weightKgMin,
+          weightKgMax: max !== undefined ? 'planner' : hardConstraints.provenance?.weightKgMax
+        }
+      };
+    }
+    if (requirement.kind === 'budgetRub') {
+      const budget = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
+      if (budget) {
+        hardConstraints.budgetMax = budget;
+        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), budgetMax: 'planner' };
+      }
+    }
+    if (requirement.kind === 'powerKw') {
+      const min = semanticNumber(value, 'min');
+      const max = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
+      hardConstraints = {
+        ...hardConstraints,
+        nominalPowerKwMin: min,
+        nominalPowerKwMax: max,
+        provenance: {
+          ...(hardConstraints.provenance ?? {}),
+          nominalPowerKwMin: min !== undefined ? 'planner' : hardConstraints.provenance?.nominalPowerKwMin,
+          nominalPowerKwMax: max !== undefined ? 'planner' : hardConstraints.provenance?.nominalPowerKwMax
+        }
+      };
+    }
+    if (requirement.kind === 'diameterMm') {
+      const min = semanticNumber(value, 'min');
+      const max = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
+      hardConstraints = {
+        ...hardConstraints,
+        diameterMmMin: min,
+        diameterMmMax: max,
+        provenance: {
+          ...(hardConstraints.provenance ?? {}),
+          diameterMmMin: min !== undefined ? 'planner' : hardConstraints.provenance?.diameterMmMin,
+          diameterMmMax: max !== undefined ? 'planner' : hardConstraints.provenance?.diameterMmMax
+        }
+      };
+    }
+    if (requirement.kind === 'brand') {
+      const brand = semanticText(value, 'brand') || semanticText(value, 'text');
+      if (brand) {
+        hardConstraints.brandConstraint = brand;
+        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), brandConstraint: 'planner' };
+      }
+    }
+  }
+
+  for (const product of memory?.mentionedProducts ?? []) {
+    if (!product.token) continue;
+    if (product.role === 'targetProduct') {
+      hardConstraints.exactModelTokens = uniqueList([...hardConstraints.exactModelTokens, product.token], 16);
+    } else if (product.role === 'availabilityCheck' || product.role === 'comparison') {
+      hardConstraints.exactModelTokenRoles = [
+        ...(hardConstraints.exactModelTokenRoles ?? []),
+        { value: product.token, role: 'comparisonProduct' as const, evidence: product.evidence }
+      ].filter((item, index, all) => all.findIndex((candidate) => candidate.value === item.value && candidate.role === item.role) === index).slice(0, 24);
+    } else if (product.role === 'compatibilityTarget') {
+      hardConstraints.exactModelTokenRoles = [
+        ...(hardConstraints.exactModelTokenRoles ?? []),
+        { value: product.token, role: 'compatibilityTarget' as const, evidence: product.evidence }
+      ].filter((item, index, all) => all.findIndex((candidate) => candidate.value === item.value && candidate.role === item.role) === index).slice(0, 24);
+    }
+  }
+
+  return {
+    ...selectionState,
+    semanticSource: 'llm_need_extraction',
+    currentProductClass,
+    targetProductClass,
+    hardConstraints,
+    activeRequirement: {
+      ...(selectionState.activeRequirement ?? hardConstraints),
+      ...hardConstraints
+    }
+  };
+}
+
+function semanticAlternativeMode(memory: SemanticMemory | undefined) {
+  const active = activeSemanticRequirements(memory).filter((item) =>
+    ['weightKg', 'budgetRub', 'powerKw', 'diameterMm'].includes(item.kind)
+  );
+  if (!active.length) return { mode: memory?.selectionPolicy?.alternativeMode ?? 'none' as const, hasNumeric: false, strictOnly: false };
+  if (memory?.selectionPolicy?.alternativeMode && memory.selectionPolicy.alternativeMode !== 'none') {
+    return { mode: memory.selectionPolicy.alternativeMode, hasNumeric: true, strictOnly: false };
+  }
+  if (active.some((item) => item.strictness === 'fallbackAllowed')) return { mode: 'fallbackOnly' as const, hasNumeric: true, strictOnly: false };
+  if (active.some((item) => item.strictness === 'targetRange')) return { mode: 'afterPrimary' as const, hasNumeric: true, strictOnly: false };
+  return { mode: 'none' as const, hasNumeric: true, strictOnly: true };
+}
+
+function semanticMentionTokens(memory: SemanticMemory | undefined, roles: MentionedProductMemory['role'][]) {
+  const allowedRoles = new Set(roles);
+  return uniqueList((memory?.mentionedProducts ?? [])
+    .filter((item) => allowedRoles.has(item.role))
+    .map((item) => item.token), 32);
 }
 
 function coerceProductIntent(value: unknown): ProductIntent {
@@ -3618,6 +3911,50 @@ function selectionMetadata(result: ProductSelectionResult): ProductSelectionMeta
   };
 }
 
+function productMatchesMemoryToken(product: Product, token: string) {
+  const needle = compactModelText(token);
+  return Boolean(needle && compactModelText(productFullText(product)).includes(needle));
+}
+
+function reconcileSemanticMemoryWithSelection(memory: SemanticMemory | undefined, result: ProductSelectionResult): SemanticMemory {
+  const current = memory ?? emptySemanticMemory();
+  if (!current.mentionedProducts.length) return current;
+  const products = mergeProductsById([], [
+    ...result.matchedProducts,
+    ...result.visibleProducts,
+    ...result.hiddenProducts,
+    ...result.comparisonProducts
+  ]);
+  const rejectedIds = new Set(result.rejectedProducts.map((item) => item.productId));
+  return {
+    ...current,
+    mentionedProducts: current.mentionedProducts.map((item) => {
+      const matches = products.filter((product) => productMatchesMemoryToken(product, item.token));
+      if (!matches.length) return item;
+      return {
+        ...item,
+        productIds: uniqueList([...item.productIds, ...matches.map((product) => product.id)], 24),
+        status: matches.some((product) => rejectedIds.has(product.id)) ? 'notMatchingRequirement' : 'foundInCatalog',
+        updatedAt: new Date().toISOString()
+      };
+    })
+  };
+}
+
+function memoryDecisionSummary(before: SemanticMemory | undefined, after: SemanticMemory | undefined) {
+  return {
+    activeRequirementIdsBefore: before?.activeRequirementIds ?? [],
+    activeRequirementIdsAfter: after?.activeRequirementIds ?? [],
+    mentionedProducts: (after?.mentionedProducts ?? []).map((item) => ({
+      token: item.token,
+      role: item.role,
+      status: item.status,
+      productIds: item.productIds
+    })),
+    selectionPolicy: after?.selectionPolicy
+  };
+}
+
 function initialVisibleCardCountForCards(cards: ProductCard[], selectionResult: ProductSelectionResult, visibleCardLimit?: number) {
   if (!cards.length) return 0;
   const fallback = Math.min(cards.length, LARGE_SLICE_VISIBLE_CARDS);
@@ -4992,6 +5329,7 @@ export class AssistantService {
                   ]
                 },
                 selectionState: needExtractionSelectionStateSchema(),
+                semanticMemory: semanticMemorySchema(),
                 lastSummary: { type: 'string' }
               },
               required: [
@@ -5005,6 +5343,7 @@ export class AssistantService {
                 'contradictions',
                 'featureSignals',
                 'selectionState',
+                'semanticMemory',
                 'lastSummary'
               ]
             }
@@ -5358,6 +5697,7 @@ export class AssistantService {
     const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
     const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile, conversationUserText);
     let selectionState = mergeProductSelectionState(currentSelection, selectionUpdate);
+    selectionState = applySemanticMemoryToSelectionState(selectionState, state.semanticMemory);
     selectionState = clearUngroundedGeneratorElectricStart(
       selectionState,
       [userMessage, conversationUserText, needEvidenceText(state)].filter(Boolean).join(' ')
@@ -5400,8 +5740,13 @@ export class AssistantService {
       (plan.cardPolicy !== 'textOnly' || catalogShortlistTurn) &&
       (contract?.render.cards !== 'none' || catalogShortlistTurn);
     const tokenRoles = selectionState.hardConstraints.exactModelTokenRoles ?? [];
-    const comparisonTokens = tokenRoles.filter((token) => token.role === 'comparisonProduct').map((token) => token.value);
-    const targetTokens = selectionState.hardConstraints.exactModelTokens;
+    const memoryComparisonTokens = semanticMentionTokens(state.semanticMemory, ['availabilityCheck', 'comparison']);
+    const memoryTargetTokens = semanticMentionTokens(state.semanticMemory, ['targetProduct']);
+    const comparisonTokens = uniqueList([
+      ...tokenRoles.filter((token) => token.role === 'comparisonProduct').map((token) => token.value),
+      ...memoryComparisonTokens
+    ], 32);
+    const targetTokens = uniqueList([...selectionState.hardConstraints.exactModelTokens, ...memoryTargetTokens], 32);
     const lookupTokens = uniqueList([...targetTokens, ...comparisonTokens], 32);
     const exactProducts = lookupTokens.length
       ? await this.products.searchProductsByModelTokens(lookupTokens, 80).catch(() => [])
@@ -5524,7 +5869,11 @@ export class AssistantService {
       effectiveSelectionState.hardConstraints.diameterMmMin ||
       effectiveSelectionState.hardConstraints.diameterMmMax
     );
-    const catalogShortlistAlternativeLimit = catalogShortlistTurn || rangeFallbackTurn
+    const semanticAlternatives = semanticAlternativeMode(state.semanticMemory);
+    const semanticShouldAddAlternatives = semanticAlternatives.mode === 'afterPrimary' ||
+      (semanticAlternatives.mode === 'fallbackOnly' && !matchedProducts.length);
+    const semanticBlocksAlternatives = semanticAlternatives.hasNumeric && semanticAlternatives.strictOnly;
+    const catalogShortlistAlternativeLimit = !semanticBlocksAlternatives && (catalogShortlistTurn || rangeFallbackTurn || semanticShouldAddAlternatives)
       ? Math.max(0, LARGE_SLICE_VISIBLE_CARDS - matchedProducts.length)
       : 0;
     const catalogShortlistAlternatives = catalogShortlistAlternativeLimit
@@ -5594,6 +5943,12 @@ export class AssistantService {
         targetProductClass: effectiveSelectionState.targetProductClass,
         hardConstraints: effectiveSelectionState.hardConstraints,
         comparisonTokens,
+        semanticMemory: {
+          activeRequirementIds: state.semanticMemory?.activeRequirementIds ?? [],
+          selectionPolicy: state.semanticMemory?.selectionPolicy,
+          alternativeMode: semanticAlternatives.mode,
+          strictOnly: semanticAlternatives.strictOnly
+        },
         rankingPreference: effectiveSelectionState.rankingPreference,
         totalSourceProducts: sourceProducts.length,
         totalMatched: matchedProducts.length,
@@ -5800,6 +6155,7 @@ export class AssistantService {
     const traceTotal = traceTimer('generateAnswer', input.sessionId);
     const aiDiagnostics = emptyAiGenerationDiagnostics();
     const activeNeedsBefore = session.needState.activeNeeds ?? [];
+    const semanticMemoryBefore = session.needState.semanticMemory;
 
     const userMessage = input.skipUserMessage
       ? null
@@ -5940,10 +6296,15 @@ export class AssistantService {
       recentUserConversationText(history)
     );
     for (const product of selectionResult.comparisonProducts) byId.set(product.id, product);
-    if (JSON.stringify(selectionResult.state) !== JSON.stringify(needState.selectionState)) {
-      needState = { ...needState, selectionState: selectionResult.state };
+    const semanticMemoryAfterSelection = reconcileSemanticMemoryWithSelection(needState.semanticMemory, selectionResult);
+    if (
+      JSON.stringify(selectionResult.state) !== JSON.stringify(needState.selectionState) ||
+      JSON.stringify(semanticMemoryAfterSelection) !== JSON.stringify(needState.semanticMemory)
+    ) {
+      needState = { ...needState, selectionState: selectionResult.state, semanticMemory: semanticMemoryAfterSelection };
       await this.conversations.updateNeedState(input.sessionId, needState);
     }
+    const memoryDecisions = memoryDecisionSummary(semanticMemoryBefore, needState.semanticMemory);
     const selectionHard = selectionResult.state.hardConstraints;
     const selectionCanRecommend = hasReliableGeneratorSelectionBasis(selectionResult.state);
     const selectionHasEstimatedPump = hasEstimatedPumpLoad(selectionResult.state);
@@ -6564,6 +6925,7 @@ export class AssistantService {
       totalMatched: Math.max(selectionResult.matchedProducts.length, finalCards.cards.length),
       selectionTrace: {
         ...(selectionMetadata(selectionResult).selectionTrace ?? {}),
+        memoryDecisions,
         finalCardsSource: finalCards.source,
         initialVisibleCardCount: finalCards.initialVisibleCount
       }
@@ -6608,6 +6970,9 @@ export class AssistantService {
         turnContract: agentTurnContract,
         activeNeedsBefore,
         activeNeedsAfter: needState.activeNeeds ?? [],
+        semanticMemoryBefore,
+        semanticMemoryAfter: needState.semanticMemory,
+        memoryDecisions,
         cardsRole: agentTurnContract.cardsRole,
         leadAllowed: agentTurnContract.leadAllowed,
         validatorWarnings: agentTurnContract.validatorWarnings,
@@ -6688,6 +7053,9 @@ export class AssistantService {
         turnContract: agentTurnContract,
         activeNeedsBefore,
         activeNeedsAfter: needState.activeNeeds ?? [],
+        semanticMemoryBefore,
+        semanticMemoryAfter: needState.semanticMemory,
+        memoryDecisions,
         cardsRole: agentTurnContract.cardsRole,
         leadAllowed: agentTurnContract.leadAllowed,
         validatorWarnings: agentTurnContract.validatorWarnings,
@@ -7191,6 +7559,93 @@ function needExtractionSelectionStateSchema() {
       'loadProfile',
       'confidence'
     ]
+  };
+}
+
+function semanticMemorySchema() {
+  const semanticValueSchema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      text: { type: 'string' },
+      min: { type: ['number', 'null'] },
+      max: { type: ['number', 'null'] },
+      unit: { type: 'string' },
+      productClass: { type: 'string' },
+      brand: { type: 'string' },
+      amount: { type: ['number', 'null'] }
+    },
+    required: ['text', 'min', 'max', 'unit', 'productClass', 'brand', 'amount']
+  };
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      version: { type: 'number', enum: [1] },
+      activeRequirementIds: { type: 'array', items: { type: 'string' }, maxItems: 64 },
+      requirements: {
+        type: 'array',
+        maxItems: 40,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            kind: { type: 'string', enum: ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand'] },
+            value: semanticValueSchema,
+            status: { type: 'string', enum: ['active', 'superseded', 'rejected', 'paused'] },
+            strictness: { type: 'string', enum: ['strictOnly', 'targetRange', 'fallbackAllowed'] },
+            evidence: { type: 'string' },
+            source: { type: 'string', enum: ['explicit_user', 'llm_inference', 'catalog_fact'] },
+            replacesRequirementIds: { type: 'array', items: { type: 'string' }, maxItems: 24 }
+          },
+          required: ['id', 'kind', 'value', 'status', 'strictness', 'evidence', 'source', 'replacesRequirementIds']
+        }
+      },
+      mentionedProducts: {
+        type: 'array',
+        maxItems: 40,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            token: { type: 'string' },
+            normalizedToken: { type: 'string' },
+            role: { type: 'string', enum: ['targetProduct', 'availabilityCheck', 'comparison', 'example', 'compatibilityTarget'] },
+            status: { type: 'string', enum: ['unresolved', 'foundInCatalog', 'notFound', 'notMatchingRequirement'] },
+            productIds: { type: 'array', items: { type: 'string' }, maxItems: 24 },
+            evidence: { type: 'string' }
+          },
+          required: ['token', 'normalizedToken', 'role', 'status', 'productIds', 'evidence']
+        }
+      },
+      selectionPolicy: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          primaryRequirementIds: { type: 'array', items: { type: 'string' }, maxItems: 64 },
+          alternativeMode: { type: 'string', enum: ['none', 'afterPrimary', 'fallbackOnly'] },
+          explanationRequired: { type: 'boolean' }
+        },
+        required: ['primaryRequirementIds', 'alternativeMode', 'explanationRequired']
+      },
+      botCommitments: {
+        type: 'array',
+        maxItems: 30,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            kind: { type: 'string', enum: ['availability', 'recommendation', 'constraint', 'fact'] },
+            text: { type: 'string' },
+            productIds: { type: 'array', items: { type: 'string' }, maxItems: 16 },
+            evidence: { type: 'string' }
+          },
+          required: ['kind', 'text', 'productIds', 'evidence']
+        }
+      }
+    },
+    required: ['version', 'activeRequirementIds', 'requirements', 'mentionedProducts', 'selectionPolicy', 'botCommitments']
   };
 }
 

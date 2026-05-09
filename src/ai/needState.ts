@@ -1,4 +1,16 @@
-import type { ActiveCustomerNeed, CustomerNeedState, NeedItem, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionState } from '../shared/types.js';
+import type {
+  ActiveCustomerNeed,
+  BotCommitment,
+  CustomerNeedState,
+  MentionedProductMemory,
+  NeedItem,
+  ProductSelectionClass,
+  ProductSelectionCriteria,
+  ProductSelectionState,
+  SemanticMemory,
+  SemanticRequirement,
+  SemanticSelectionPolicy
+} from '../shared/types.js';
 import { calculateGeneratorLoadProfile, mergeElectricalLoadItems } from './loadProfile.js';
 
 function emptySelectionCriteria(): ProductSelectionCriteria {
@@ -30,9 +42,25 @@ export function emptyProductSelectionState(): ProductSelectionState {
   };
 }
 
+export function emptySemanticMemory(): SemanticMemory {
+  return {
+    version: 1,
+    activeRequirementIds: [],
+    requirements: [],
+    mentionedProducts: [],
+    selectionPolicy: {
+      primaryRequirementIds: [],
+      alternativeMode: 'none',
+      explanationRequired: false
+    },
+    botCommitments: []
+  };
+}
+
 export function emptyNeedState(): CustomerNeedState {
   return {
     activeNeeds: [],
+    semanticMemory: emptySemanticMemory(),
     explicitNeeds: [],
     implicitNeeds: [],
     constraints: [],
@@ -136,6 +164,132 @@ function mergeSignals(
 
 function uniqueStrings(values: Array<string | undefined | null>, limit: number) {
   return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, limit);
+}
+
+function semanticMemoryOrEmpty(memory: Partial<SemanticMemory> | undefined | null): SemanticMemory {
+  const empty = emptySemanticMemory();
+  return {
+    version: 1,
+    activeRequirementIds: uniqueStrings(memory?.activeRequirementIds ?? [], 64),
+    requirements: (memory?.requirements ?? []).filter((item): item is SemanticRequirement => Boolean(item?.id && item.kind)),
+    mentionedProducts: (memory?.mentionedProducts ?? []).filter((item): item is MentionedProductMemory => Boolean(item?.token || item?.normalizedToken)),
+    selectionPolicy: {
+      ...empty.selectionPolicy,
+      ...(memory?.selectionPolicy ?? {}),
+      primaryRequirementIds: uniqueStrings(memory?.selectionPolicy?.primaryRequirementIds ?? [], 64),
+      alternativeMode: memory?.selectionPolicy?.alternativeMode ?? empty.selectionPolicy.alternativeMode,
+      explanationRequired: Boolean(memory?.selectionPolicy?.explanationRequired)
+    },
+    botCommitments: (memory?.botCommitments ?? []).filter((item): item is BotCommitment => Boolean(item?.kind && item.text)).slice(-30)
+  };
+}
+
+function mergeSemanticSelectionPolicy(
+  current: SemanticSelectionPolicy,
+  update: Partial<SemanticSelectionPolicy> | undefined,
+  activeRequirementIds: string[]
+): SemanticSelectionPolicy {
+  const primaryRequirementIds = update
+    ? uniqueStrings(update.primaryRequirementIds ?? activeRequirementIds, 64)
+    : current.primaryRequirementIds.length
+      ? current.primaryRequirementIds
+      : activeRequirementIds;
+  return {
+    primaryRequirementIds: primaryRequirementIds.filter((id) => activeRequirementIds.includes(id)),
+    alternativeMode: update?.alternativeMode ?? current.alternativeMode,
+    explanationRequired: update?.explanationRequired ?? current.explanationRequired
+  };
+}
+
+function mentionedProductKey(product: MentionedProductMemory) {
+  const normalized = normalizeText(product.normalizedToken || product.token);
+  return `${normalized}:${product.role}`;
+}
+
+export function mergeSemanticMemory(
+  currentMemory: Partial<SemanticMemory> | undefined,
+  updateMemory: Partial<SemanticMemory> | undefined
+): SemanticMemory {
+  const current = semanticMemoryOrEmpty(currentMemory);
+  if (!updateMemory) return current;
+  const update = semanticMemoryOrEmpty(updateMemory);
+  const now = nowIso();
+  const requirements = new Map<string, SemanticRequirement>();
+  for (const requirement of current.requirements) {
+    requirements.set(requirement.id, { ...requirement, replacesRequirementIds: uniqueStrings(requirement.replacesRequirementIds ?? [], 32) });
+  }
+
+  const replacedIds = new Set<string>();
+  for (const requirement of update.requirements) {
+    for (const replacedId of requirement.replacesRequirementIds ?? []) replacedIds.add(replacedId);
+  }
+
+  for (const replacedId of replacedIds) {
+    const existing = requirements.get(replacedId);
+    if (existing) requirements.set(replacedId, { ...existing, status: 'superseded', updatedAt: now });
+  }
+
+  for (const requirement of update.requirements) {
+    const existing = requirements.get(requirement.id);
+    if (requirement.status === 'active') {
+      for (const candidate of requirements.values()) {
+        if (
+          candidate.id !== requirement.id &&
+          candidate.kind === requirement.kind &&
+          candidate.status === 'active' &&
+          !requirement.replacesRequirementIds?.includes(candidate.id)
+        ) {
+          requirements.set(candidate.id, { ...candidate, status: 'superseded', updatedAt: requirement.updatedAt || now });
+        }
+      }
+    }
+    requirements.set(requirement.id, {
+      ...(existing ?? requirement),
+      ...requirement,
+      value: requirement.value && typeof requirement.value === 'object' ? requirement.value : {},
+      replacesRequirementIds: uniqueStrings(requirement.replacesRequirementIds ?? existing?.replacesRequirementIds ?? [], 32),
+      updatedAt: requirement.updatedAt || existing?.updatedAt || now
+    });
+  }
+
+  const requirementList = [...requirements.values()].slice(-80);
+  const activeRequirementIds = uniqueStrings(
+    [
+      ...(update.activeRequirementIds.length ? update.activeRequirementIds : current.activeRequirementIds),
+      ...requirementList.filter((item) => item.status === 'active').map((item) => item.id)
+    ],
+    64
+  ).filter((id) => requirementList.some((item) => item.id === id && item.status === 'active'));
+
+  const mentionedProducts = new Map<string, MentionedProductMemory>();
+  for (const product of current.mentionedProducts) mentionedProducts.set(mentionedProductKey(product), { ...product });
+  for (const product of update.mentionedProducts) {
+    const normalizedToken = normalizeText(product.normalizedToken || product.token);
+    const key = `${normalizedToken}:${product.role}`;
+    const existing = mentionedProducts.get(key);
+    mentionedProducts.set(key, {
+      ...(existing ?? product),
+      ...product,
+      normalizedToken,
+      productIds: uniqueStrings([...(existing?.productIds ?? []), ...(product.productIds ?? [])], 24),
+      evidence: product.evidence || existing?.evidence || '',
+      updatedAt: product.updatedAt || existing?.updatedAt || now
+    });
+  }
+
+  const commitments = [
+    ...current.botCommitments,
+    ...update.botCommitments.map((item) => ({ ...item, productIds: uniqueStrings(item.productIds ?? [], 16), updatedAt: item.updatedAt || now }))
+  ].filter((item, index, all) => all.findIndex((candidate) => candidate.kind === item.kind && candidate.text === item.text) === index).slice(-30);
+
+  return {
+    version: 1,
+    activeRequirementIds,
+    requirements: requirementList,
+    mentionedProducts: [...mentionedProducts.values()].slice(-40),
+    selectionPolicy: mergeSemanticSelectionPolicy(current.selectionPolicy, update.selectionPolicy, activeRequirementIds),
+    botCommitments: commitments
+  };
 }
 
 function activeNeedId(productClass: ProductSelectionClass | 'commercial') {
@@ -354,6 +508,7 @@ export function mergeNeedState(current: CustomerNeedState, update: Partial<Custo
   const activeCurrent = scopeChanged
     ? {
         activeNeeds: current.activeNeeds,
+        semanticMemory: current.semanticMemory,
         explicitNeeds: replacementHasExplicitNeed ? decayItems(current.explicitNeeds, itemFactor, 0.3) : current.explicitNeeds,
         implicitNeeds: decayItems(current.implicitNeeds, itemFactor, 0.3),
         constraints: decayItems(current.constraints, itemFactor, 0.3),
@@ -365,6 +520,7 @@ export function mergeNeedState(current: CustomerNeedState, update: Partial<Custo
     : current;
   return {
     activeNeeds: mergeActiveNeeds(activeCurrent.activeNeeds, update.activeNeeds, scopeChanged),
+    semanticMemory: mergeSemanticMemory(activeCurrent.semanticMemory, update.semanticMemory),
     explicitNeeds: mergeItems(activeCurrent.explicitNeeds, update.explicitNeeds ?? []),
     implicitNeeds: mergeItems(activeCurrent.implicitNeeds, update.implicitNeeds ?? []),
     constraints: mergeItems(activeCurrent.constraints, update.constraints ?? []),

@@ -23,7 +23,32 @@ type Db = Pool | PoolClient;
 
 function mapNeedState(value: unknown): CustomerNeedState {
   if (!value || typeof value !== 'object') return emptyNeedState();
-  return { ...emptyNeedState(), ...(value as Partial<CustomerNeedState>) };
+  const empty = emptyNeedState();
+  const raw = value as Partial<CustomerNeedState>;
+  return {
+    ...empty,
+    ...raw,
+    semanticMemory: {
+      ...empty.semanticMemory,
+      ...(raw.semanticMemory ?? {}),
+      selectionPolicy: {
+        ...empty.semanticMemory.selectionPolicy,
+        ...(raw.semanticMemory?.selectionPolicy ?? {})
+      }
+    },
+    selectionState: {
+      ...empty.selectionState,
+      ...(raw.selectionState ?? {}),
+      hardConstraints: {
+        ...empty.selectionState.hardConstraints,
+        ...(raw.selectionState?.hardConstraints ?? {})
+      },
+      softPreferences: {
+        ...empty.selectionState.softPreferences,
+        ...(raw.selectionState?.softPreferences ?? {})
+      }
+    }
+  };
 }
 
 function mapSession(row: QueryResultRow): ConversationSession {

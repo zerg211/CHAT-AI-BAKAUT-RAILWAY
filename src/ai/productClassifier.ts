@@ -442,6 +442,7 @@ export function isTechnicalSpecToken(token: string) {
   const normalized = token.trim().toLowerCase().replace(/\s+/g, '');
   const compact = compactModelText(token);
   if (!compact) return true;
+  if (/^\d+(?:[,.]\d+)?(?:-|–|—|\/|\u0434\u043e|to)\d+(?:[,.]\d+)?(?:kg|\u043a\u0433|kw|\u043a\u0432\u0442|kva|\u043a\u0432\u0430|mm|\u043c\u043c|cm|\u0441\u043c|v|\u0432|w|\u0432\u0442)?$/iu.test(normalized)) return true;
   if (/^(?:under|over|upto|to|до|от|около|about|around|max|maximum|min|minimum)\d{1,7}$/iu.test(compact)) return true;
   if (/^(?:plate|generator|cutter|core|blade|vibroplate|виброплит[аы]?|генератор|диск|коронка|резчик)\s*\d{1,4}$/iu.test(token.trim())) return true;
   if (/\b(?:generator|генератор|электростанц)\b.*?\d{2,4}\s*[vв]\b/iu.test(token)) return true;

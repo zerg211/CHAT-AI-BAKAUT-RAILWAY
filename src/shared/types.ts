@@ -175,11 +175,64 @@ export type ProductSelectionRole = 'coreProduct' | 'accessory' | 'consumable' | 
 export type ProductSelectionConstraintSource = 'explicit_user' | 'inferred_from_load' | 'catalog_fact' | 'previous_selection' | 'planner';
 export type ProductSelectionTokenRole = 'targetProduct' | 'comparisonProduct' | 'compatibilityTarget' | 'ignored';
 export type ProductRankingPreference = 'cheapest' | 'balanced' | 'premium';
+export type SemanticRequirementKind = 'productClass' | 'task' | 'weightKg' | 'budgetRub' | 'powerKw' | 'diameterMm' | 'brand';
+export type SemanticRequirementStatus = 'active' | 'superseded' | 'rejected' | 'paused';
+export type SemanticRequirementStrictness = 'strictOnly' | 'targetRange' | 'fallbackAllowed';
+export type SemanticMemorySource = 'explicit_user' | 'llm_inference' | 'catalog_fact';
+export type MentionedProductRole = 'targetProduct' | 'availabilityCheck' | 'comparison' | 'example' | 'compatibilityTarget';
+export type MentionedProductStatus = 'unresolved' | 'foundInCatalog' | 'notFound' | 'notMatchingRequirement';
+export type SemanticAlternativeMode = 'none' | 'afterPrimary' | 'fallbackOnly';
+export type BotCommitmentKind = 'availability' | 'recommendation' | 'constraint' | 'fact';
 
 export interface ProductSelectionToken {
   value: string;
   role: ProductSelectionTokenRole;
   evidence?: string;
+}
+
+export interface SemanticRequirement {
+  id: string;
+  kind: SemanticRequirementKind;
+  value: Record<string, unknown>;
+  status: SemanticRequirementStatus;
+  strictness: SemanticRequirementStrictness;
+  evidence: string;
+  source: SemanticMemorySource;
+  replacesRequirementIds: string[];
+  updatedAt: string;
+}
+
+export interface MentionedProductMemory {
+  token: string;
+  normalizedToken: string;
+  role: MentionedProductRole;
+  status: MentionedProductStatus;
+  productIds: string[];
+  evidence: string;
+  updatedAt: string;
+}
+
+export interface SemanticSelectionPolicy {
+  primaryRequirementIds: string[];
+  alternativeMode: SemanticAlternativeMode;
+  explanationRequired: boolean;
+}
+
+export interface BotCommitment {
+  kind: BotCommitmentKind;
+  text: string;
+  productIds: string[];
+  evidence: string;
+  updatedAt: string;
+}
+
+export interface SemanticMemory {
+  version: 1;
+  activeRequirementIds: string[];
+  requirements: SemanticRequirement[];
+  mentionedProducts: MentionedProductMemory[];
+  selectionPolicy: SemanticSelectionPolicy;
+  botCommitments: BotCommitment[];
 }
 
 export interface ProductSelectionRejection {
@@ -315,6 +368,7 @@ export interface ProductSelectionMetadata {
 
 export interface CustomerNeedState {
   activeNeeds: ActiveCustomerNeed[];
+  semanticMemory: SemanticMemory;
   explicitNeeds: NeedItem[];
   implicitNeeds: NeedItem[];
   constraints: NeedItem[];
