@@ -211,6 +211,12 @@ async function collectMessages(frame) {
   })));
 }
 
+async function readWidgetSessionId(page) {
+  const chatFrame = page.frames().find((candidate) => /chat-ai-production|railway|\/widget/iu.test(candidate.url()));
+  if (!chatFrame) return null;
+  return chatFrame.evaluate(() => sessionStorage.getItem('bakaut_session_id')).catch(() => null);
+}
+
 async function resolveBrowserExecutable() {
   const candidates = [
     process.env.PLAYWRIGHT_CHROME_PATH,
@@ -267,7 +273,7 @@ async function main() {
       assertPhase(turn.phase, answer, pageText);
     }
 
-    sessionId = await frame.evaluate(() => sessionStorage.getItem('bakaut_session_id')).catch(() => null);
+    sessionId = await readWidgetSessionId(page);
     const detail = sessionId ? await fetchProductionConversation(sessionId) : null;
     const metadataAuditNotes = assertProductionMetadata(detail);
 
