@@ -6592,6 +6592,10 @@ export class AssistantService {
 
     const contract = (turn.plannerContract ?? null) as AgentTurnContract | null;
     const recoveredSelection = await this.productCardsFromRecoveredSelection(session.needState, latestUser?.content ?? '');
+    const recoveryBlocksEstimatedPumpCards = Boolean(
+      session.needState.selectionState?.targetProductClass === 'generator' &&
+      shouldBlockGeneratorCardsForEstimatedPump(session.needState.selectionState)
+    );
     const recoveredCardSummary = recoveredSelection.cards.slice(0, LARGE_SLICE_VISIBLE_CARDS).map((card) => ({
       id: card.id,
       name: card.name,
@@ -6616,6 +6620,9 @@ export class AssistantService {
             recoveredSelection.cards.length
               ? 'Validated product cards are being returned with this recovery payload. Treat them as already shown under the answer: give a short selection conclusion, name only the first one or two visible cards, and do not say you will select cards later.'
               : '',
+            recoveryBlocksEstimatedPumpCards
+              ? 'The current generator selection is blocked because the pump is present but its type/model/power is still unknown. Do not show or promise product cards. Give only a preliminary load orientation and ask specifically for pump type, model, or power as the next critical question.'
+              : '',
             recoveryGeneratorSizingPolicy
               ? 'For generator sizing recovery, answerContext.generatorSizingPolicy is authoritative: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visible card powers are catalog options. Do not introduce a higher generator class unless it is supported by this policy.'
               : '',
@@ -6632,6 +6639,9 @@ export class AssistantService {
               turnContract: contract,
               productCardsShown: recoveredCardSummary,
               productCardDisplay: recoveredSelection.cardDisplay,
+              generatorCardBlockReason: recoveryBlocksEstimatedPumpCards
+                ? 'pump_present_but_type_model_power_unknown'
+                : undefined,
               productSelection: selectionMetadata({
                 state: session.needState.selectionState,
                 matchedProducts: [],
