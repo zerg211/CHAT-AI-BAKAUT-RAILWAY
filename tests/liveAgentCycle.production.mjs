@@ -104,6 +104,9 @@ function assertPhase(phase, answer, pageText) {
   }
 
   if (phase === 'commercial_question') {
+    if (/Подходящие варианты|Открыть карточку/iu.test(answer)) {
+      throw new Error(`Commercial answer produced product cards instead of terms/summary only: ${answer}`);
+    }
     if (/ориентир.{0,80}сумм/iu.test(answer) && !/генератор/iu.test(answer)) {
       throw new Error(`Bundle total was stated without selected generator context: ${answer}`);
     }
@@ -113,6 +116,9 @@ function assertPhase(phase, answer, pageText) {
   }
 
   if (phase === 'contact_refusal_summary') {
+    if (/Подходящие варианты|Открыть карточку/iu.test(answer)) {
+      throw new Error(`Final no-contact summary produced product cards instead of a technical summary: ${answer}`);
+    }
     if (/остав(ь|ьте).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер)/iu.test(answer)) {
       throw new Error(`Lead pressure after contact refusal: ${answer}`);
     }
