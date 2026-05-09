@@ -2374,6 +2374,20 @@ function lastShownProductCards(history: Message[]) {
   return [];
 }
 
+function allShownProductCards(history: Message[]) {
+  const byId = new Map<string, Product>();
+  for (const message of history) {
+    if (message.role !== 'assistant') continue;
+    const cards = (message.metadata as { productCards?: unknown })?.productCards;
+    if (!Array.isArray(cards) || cards.length === 0) continue;
+    for (const card of cards) {
+      if (!card || typeof card !== 'object' || typeof (card as ProductCard).id !== 'string' || typeof (card as ProductCard).name !== 'string') continue;
+      byId.set((card as ProductCard).id, productFromCard(card as ProductCard));
+    }
+  }
+  return [...byId.values()];
+}
+
 function recentConversationText(history: Message[], maxMessages = 10) {
   return history.slice(-maxMessages).map((message) => message.content).filter(Boolean).join(' ');
 }
@@ -4723,6 +4737,46 @@ function leadQuestionSummary(userMessage: string, history: Message[], state: Cus
   ].filter(Boolean).join('\n\n').slice(0, 3500);
 }
 
+function lowestPricedProduct(products: Product[]) {
+  return products
+    .filter((product) => typeof product.price === 'number' && Number.isFinite(product.price))
+    .sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER))[0];
+}
+
+function buildHumanRecoveryFallbackAnswer(input: {
+  latestUserMessage: string;
+  history: Message[];
+  state: CustomerNeedState;
+}) {
+  const text = input.latestUserMessage.toLowerCase();
+  const commercialQuestion = /(?:доставк|скидк|сумм|стоимост|цена|комплект|налич)/iu.test(text);
+  if (!commercialQuestion) {
+    const activeNeeds = (input.state.activeNeeds ?? []).map((need) => need.summary).filter(Boolean).slice(0, 2);
+    return activeNeeds.length
+      ? `По текущему состоянию вижу такие задачи: ${activeNeeds.join('; ')}. Чтобы продолжить точно, напишите следующий уточняющий вопрос — контекст сохранен.`
+      : 'Контекст вопроса сохранен. Напишите уточнение еще раз коротко, и я продолжу подбор без потери предыдущих вводных.';
+  }
+
+  const shown = allShownProductCards(input.history);
+  const generator = lowestPricedProduct(shown.filter((product) => productMatchesIntent(product, 'generator')));
+  const plate = lowestPricedProduct(shown.filter((product) => productMatchesIntent(product, 'plate')));
+  const generatorPart = generator?.price
+    ? `по генератору нижний ориентир из уже показанных карточек — ${generator.name}, ${rubPrice(generator.price)}`
+    : 'по генератору точную позицию еще надо зафиксировать';
+  const platePart = plate?.price
+    ? `по виброплите нижний ориентир из уже показанных карточек — ${plate.name}, ${rubPrice(plate.price)}`
+    : 'по виброплите точную позицию еще надо зафиксировать';
+  const total = generator?.price && plate?.price
+    ? `Если брать именно эти нижние варианты, ориентир комплекта получается от ${rubPrice(generator.price + plate.price)}.`
+    : 'Точную сумму комплекта пока не считаю: одна или обе модели еще не выбраны окончательно.';
+
+  return [
+    'Доставка есть, но стоимость, срок и скидку нужно проверять по городу, наличию и выбранным моделям — это уже зона менеджера/логистики.',
+    `${generatorPart}; ${platePart}.`,
+    total
+  ].join('\n\n');
+}
+
 export class AssistantService {
   constructor(
     private readonly conversations = new ConversationRepository(),
@@ -6667,7 +6721,11 @@ export class AssistantService {
       }
     }
     if (!answer) {
-      throw new Error(`AI turn recovery failed: ${openAiError ? JSON.stringify(openAiError).slice(0, 500) : 'empty_answer'}`);
+      answer = buildHumanRecoveryFallbackAnswer({
+        latestUserMessage: latestUser?.content ?? '',
+        history,
+        state: session.needState
+      });
     }
     await input.onDelta?.(answer);
     const assistantMessage = await this.conversations.addMessage({
