@@ -3478,6 +3478,25 @@ function catalogShortlistAlternativeScore(product: Product, state: ProductSelect
   if (hard.fuel === 'diesel' && flags.isGasoline) return null;
 
   let score = 0;
+  if (hard.weightKgMin || hard.weightKgMax) {
+    const weight = extractWeightKg(product);
+    if (weight === undefined) {
+      score += 140;
+    } else {
+      if (hard.weightKgMin && weight < hard.weightKgMin) score += (hard.weightKgMin - weight) * 18;
+      if (hard.weightKgMax && weight > hard.weightKgMax) score += (weight - hard.weightKgMax) * 10;
+    }
+  }
+  if (hard.diameterMmMin || hard.diameterMmMax) {
+    const dimension = extractDimensionMm(product);
+    if (dimension === undefined) {
+      score += 140;
+    } else {
+      if (hard.diameterMmMin && dimension < hard.diameterMmMin) score += (hard.diameterMmMin - dimension) * 1.2;
+      if (hard.diameterMmMax && dimension > hard.diameterMmMax) score += (dimension - hard.diameterMmMax) * 1.2;
+    }
+  }
+
   if (hard.startType === 'electric' && !flags.hasElectricStart) score += 280;
   if (hard.enclosure === 'enclosed' && !flags.hasGeneratorEnclosureSignal) score += 360;
   if (hard.enclosure === 'open' && flags.hasGeneratorEnclosureSignal && !flags.hasOpenFrameSignal) score += 240;
@@ -3532,12 +3551,14 @@ function nearestCatalogShortlistAlternatives(
   matchedProducts: Product[],
   state: ProductSelectionState,
   profile: ProductFitProfile,
-  limit: number
+  limit: number,
+  excludedProductIds = new Set<string>()
 ) {
   if (limit <= 0) return [];
   const matchedIds = new Set(matchedProducts.map((product) => product.id));
   const scored = products
     .filter((product) => !matchedIds.has(product.id))
+    .filter((product) => !excludedProductIds.has(product.id))
     .map((product) => {
       const score = catalogShortlistAlternativeScore(product, state, profile);
       return score === null ? null : { product, score };
@@ -4777,6 +4798,10 @@ function buildHumanRecoveryFallbackAnswer(input: {
   ].join('\n\n');
 }
 
+function shouldSkipRecoveryCatalogCards(message: string) {
+  return /(?:доставк|скидк|сумм|стоимост|цена|комплект|налич|без\s+звонк|без\s+контакт|номер|телефон|итог)/iu.test(message);
+}
+
 export class AssistantService {
   constructor(
     private readonly conversations = new ConversationRepository(),
@@ -4832,12 +4857,59 @@ export class AssistantService {
     let selectedProducts = ids.map((id) => byId.get(id)).filter((product): product is Product => Boolean(product));
     const profile = buildProductFitProfile(state, userMessage);
     if (!selectedProducts.length && state.selectionState?.targetProductClass !== 'unknown') {
-      selectedProducts = diversifyRankedProducts(
-        catalog
-          .filter((product) => productMatchesSelectionCriteria(product, state.selectionState, profile))
-          .map((product) => ({ product, score: recommendationScore(product, state, userMessage, profile) })),
-        FULL_SLICE_PRODUCT_CARDS
-      );
+      const hard = state.selectionState.hardConstraints;
+      const intent = state.selectionState.targetProductClass as ProductIntent;
+      const recoveryPlan: AssistantTurnPlan = {
+        action: 'recommend_products',
+        answerMode: 'productRecommendation',
+        cardPolicy: 'showProducts',
+        followUpPolicy: 'askClarifyingQuestion',
+        contextScope: 'activeNeed',
+        searchScope: 'focusedNeed',
+        catalogSearchQuery: userMessage,
+        selectedProductIds: [],
+        requiredProductTraits: {
+          ...emptyRequiredProductTraits(),
+          productIntent: intent,
+          productRole: hard.productRole !== 'unknown' ? hard.productRole : 'coreProduct',
+          fuel: hard.fuel ?? 'unknown',
+          startType: hard.startType ?? 'unknown',
+          enclosure: hard.enclosure ?? 'unknown',
+          conventionalGenerator: hard.conventionalGenerator ?? null,
+          singlePhase220: hard.singlePhase220 ?? null,
+          budgetMax: hard.budgetMax ?? null,
+          weightKgMin: hard.weightKgMin ?? null,
+          weightKgMax: hard.weightKgMax ?? null,
+          diameterMmMin: hard.diameterMmMin ?? null,
+          diameterMmMax: hard.diameterMmMax ?? null,
+          nominalPowerKwMin: hard.nominalPowerKwMin ?? null,
+          nominalPowerKwMax: hard.nominalPowerKwMax ?? null,
+          maxPowerKwMin: hard.maxPowerKwMin ?? null,
+          maxPowerKwMax: hard.maxPowerKwMax ?? null,
+          provenance: hard.provenance
+        },
+        selectionState: {
+          currentProductClass: intent,
+          targetProductClass: intent,
+          compatibilityTargetProduct: state.selectionState.compatibilityTargetProduct?.name ?? '',
+          mustHaveTraits: hard.mustHaveTraits ?? [],
+          niceToHaveTraits: state.selectionState.softPreferences?.mustHaveTraits ?? [],
+          excludedClasses: hard.excludedClasses as ProductIntent[],
+          brandConstraint: hard.brandConstraint ?? '',
+          exactModelConstraint: hard.exactModelConstraint ?? '',
+          isAccessoryFollowUp: false,
+          selectionConfidence: state.selectionState.confidence,
+          shouldShowCards: true,
+          cardDisplayMode: 'structured_selection'
+        },
+        needsWebSearch: false,
+        missingInformation: state.selectionState.unknowns ?? [],
+        answerGuidance: 'Recovery catalog selection from validated structured need state.'
+      };
+      const selection = await this.selectProductsForTurn(userMessage, state, recoveryPlan, catalog, undefined, LARGE_SLICE_VISIBLE_CARDS);
+      selectedProducts = selection.visibleProducts.length
+        ? selection.visibleProducts
+        : selection.matchedProducts.slice(0, LARGE_SLICE_VISIBLE_CARDS);
     }
     if (!selectedProducts.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
     const cards = productCards(selectedProducts, state, userMessage, profile, FULL_SLICE_PRODUCT_CARDS);
@@ -5446,11 +5518,24 @@ export class AssistantService {
       !effectiveSelectionState.hardConstraints.budgetMax) {
       matchedProducts = [...matchedProducts].sort((a, b) => Number(a.price ?? Number.MAX_SAFE_INTEGER) - Number(b.price ?? Number.MAX_SAFE_INTEGER));
     }
-    const catalogShortlistAlternativeLimit = catalogShortlistTurn
+    const rangeFallbackTurn = !matchedProducts.length && Boolean(
+      effectiveSelectionState.hardConstraints.weightKgMin ||
+      effectiveSelectionState.hardConstraints.weightKgMax ||
+      effectiveSelectionState.hardConstraints.diameterMmMin ||
+      effectiveSelectionState.hardConstraints.diameterMmMax
+    );
+    const catalogShortlistAlternativeLimit = catalogShortlistTurn || rangeFallbackTurn
       ? Math.max(0, LARGE_SLICE_VISIBLE_CARDS - matchedProducts.length)
       : 0;
     const catalogShortlistAlternatives = catalogShortlistAlternativeLimit
-      ? nearestCatalogShortlistAlternatives(sourceProducts, matchedProducts, effectiveSelectionState, effectiveSelectionProfile, catalogShortlistAlternativeLimit)
+      ? nearestCatalogShortlistAlternatives(
+          sourceProducts,
+          matchedProducts,
+          effectiveSelectionState,
+          effectiveSelectionProfile,
+          catalogShortlistAlternativeLimit,
+          new Set(exactComparisonProducts.map((product) => product.id))
+        )
       : [];
     if (catalogShortlistAlternatives.length) {
       matchedProducts = mergeProductsById([], [...matchedProducts, ...catalogShortlistAlternatives]);
@@ -6644,8 +6729,11 @@ export class AssistantService {
       };
     }
 
+    const latestUserText = latestUser?.content ?? '';
     const contract = (turn.plannerContract ?? null) as AgentTurnContract | null;
-    const recoveredSelection = await this.productCardsFromRecoveredSelection(session.needState, latestUser?.content ?? '');
+    const recoveredSelection = shouldSkipRecoveryCatalogCards(latestUserText)
+      ? { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined }
+      : await this.productCardsFromRecoveredSelection(session.needState, latestUserText);
     const recoveryBlocksEstimatedPumpCards = Boolean(
       session.needState.selectionState?.targetProductClass === 'generator' &&
       shouldBlockGeneratorCardsForEstimatedPump(session.needState.selectionState)
@@ -6687,7 +6775,7 @@ export class AssistantService {
           input: [{
             role: 'user',
             content: yaml.dump(cleanEmpty({
-              latestUserMessage: latestUser.content,
+              latestUserMessage: latestUserText,
               conversationSummary: session.historySummary,
               activeNeeds: session.needState.activeNeeds,
               turnContract: contract,
@@ -6722,7 +6810,7 @@ export class AssistantService {
     }
     if (!answer) {
       answer = buildHumanRecoveryFallbackAnswer({
-        latestUserMessage: latestUser?.content ?? '',
+        latestUserMessage: latestUserText,
         history,
         state: session.needState
       });
