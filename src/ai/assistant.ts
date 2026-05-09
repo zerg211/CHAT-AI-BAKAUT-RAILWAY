@@ -3284,7 +3284,7 @@ function hasPreliminaryGeneratorSelectionBasisFromProfile(profile?: ProductGener
     item.kind !== 'aggregate_load' &&
     (item.runningKw ?? 0) > 0
   );
-  return profile.requiredNominalKw >= 4 && hasOtherLoad;
+  return profile.requiredNominalKw >= 3.5 && hasOtherLoad;
 }
 
 function hasPreliminaryGeneratorSelectionBasis(state: ProductSelectionState) {
