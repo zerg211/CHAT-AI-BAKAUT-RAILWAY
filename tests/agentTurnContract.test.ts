@@ -147,6 +147,48 @@ describe('agent turn contract', () => {
     expect(plan.selectionState.shouldShowCards).toBe(true);
   });
 
+  it('upgrades contradictory catalog lookup contracts to show matching cards', () => {
+    const contradictoryPlan = {
+      ...basePlan,
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      selectedProductIds: [],
+      selectionState: {
+        shouldShowCards: false
+      },
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'pure_availability' as const,
+        catalogAction: 'find_matching_products' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['show matching TSS generator variants from the catalog'],
+        currentFocus: 'generator',
+        cardsRole: 'none' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer asks for variants, not contact',
+        errorRecoveryPriority: 'show catalog variants first',
+        confidence: 0.91
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: '\u0410 \u0447\u0442\u043e \u0435\u0441\u0442\u044c \u043e\u0442 8 \u0434\u043e 10 \u043a\u0412\u0442?',
+      plan: contradictoryPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(contradictoryPlan, contract);
+
+    expect(contract.catalogAction).toBe('find_matching_products');
+    expect(contract.productCardsPolicy).toBe('show_matching_products');
+    expect(contract.cardsRole).toBe('primary');
+    expect(contract.validatorWarnings).toContain('product_cards_policy_upgraded_from_catalog_action');
+    expect(plan.action).toBe('recommend_products');
+    expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.selectionState.shouldShowCards).toBe(true);
+  });
+
   it('keeps product selection with delivery as catalog/card work even when contact handoff is refused', () => {
     const mixedPlan = {
       ...basePlan,

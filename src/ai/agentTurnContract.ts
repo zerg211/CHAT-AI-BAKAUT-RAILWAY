@@ -124,13 +124,18 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     : taskType === 'pure_delivery' || taskType === 'pure_availability' || taskType === 'product_selection_with_delivery' || taskType === 'product_selection_with_availability'
       ? 'explain_manager_required'
       : 'none';
-  const productCardsPolicy = productCardsPolicies.includes(decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>)
+  const rawProductCardsPolicy = productCardsPolicies.includes(decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>)
     ? decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>
     : catalogAction === 'exact_model_lookup'
       ? 'show_exact_matches'
       : catalogAction === 'find_matching_products'
         ? 'show_matching_products'
         : 'none';
+  const productCardsPolicy = rawProductCardsPolicy === 'none' && catalogAction === 'exact_model_lookup'
+    ? 'show_exact_matches'
+    : rawProductCardsPolicy === 'none' && catalogAction === 'find_matching_products'
+      ? 'show_matching_products'
+      : rawProductCardsPolicy;
   const answerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
     ? decision.answerTask as AgentTurnContract['answerTask']
     : taskType === 'comparison'
@@ -171,6 +176,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   }
   if (cardsRole === 'primary' && plan.cardPolicy === 'textOnly') {
     validatorWarnings.push('llm_contract_wants_cards_but_plan_text_only');
+  }
+  if (rawProductCardsPolicy === 'none' && productCardsPolicy !== 'none') {
+    validatorWarnings.push('product_cards_policy_upgraded_from_catalog_action');
   }
 
   return {
