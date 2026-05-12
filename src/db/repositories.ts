@@ -21,6 +21,10 @@ import { emptyNeedState } from '../ai/needState.js';
 
 type Db = Pool | PoolClient;
 
+function jsonbParam(value: unknown) {
+  return value === undefined || value === null ? null : JSON.stringify(value);
+}
+
 function mapNeedState(value: unknown): CustomerNeedState {
   if (!value || typeof value !== 'object') return emptyNeedState();
   const empty = emptyNeedState();
@@ -219,9 +223,9 @@ export class ConversationRepository {
   async createSession(input: { visitorId?: string; pageUrl?: string; userAgent?: string }) {
     const inserted = await this.db.query(
       `INSERT INTO conversation_sessions(visitor_id, page_url, user_agent, need_state, title)
-       VALUES ($1, $2, $3, $4, 'Диалог')
+       VALUES ($1, $2, $3, $4::jsonb, 'Диалог')
        RETURNING *`,
-      [input.visitorId ?? null, input.pageUrl ?? null, input.userAgent ?? null, emptyNeedState()]
+      [input.visitorId ?? null, input.pageUrl ?? null, input.userAgent ?? null, jsonbParam(emptyNeedState())]
     );
     const result = await this.db.query(
       `UPDATE conversation_sessions
@@ -314,10 +318,10 @@ export class ConversationRepository {
   async updateNeedState(sessionId: string, needState: CustomerNeedState) {
     const result = await this.db.query(
       `UPDATE conversation_sessions
-       SET need_state = $2, updated_at = now()
+       SET need_state = $2::jsonb, updated_at = now()
        WHERE id = $1
        RETURNING *`,
-      [sessionId, needState]
+      [sessionId, jsonbParam(needState)]
     );
     return mapSession(result.rows[0]);
   }
@@ -325,9 +329,9 @@ export class ConversationRepository {
   async addMessage(input: { sessionId: string; role: MessageRole; content: string; metadata?: Record<string, unknown> }) {
     const result = await this.db.query(
       `INSERT INTO messages(session_id, role, content, metadata)
-       VALUES ($1, $2, $3, $4)
+       VALUES ($1, $2, $3, $4::jsonb)
        RETURNING *`,
-      [input.sessionId, input.role, input.content, input.metadata ?? {}]
+      [input.sessionId, input.role, input.content, jsonbParam(input.metadata ?? {})]
     );
     await this.db.query(
       `UPDATE conversation_sessions
@@ -359,7 +363,7 @@ export class ConversationRepository {
 
     const result = await this.db.query(
       `INSERT INTO conversation_turns(id, session_id, request_hash, status, stage, active_needs_before)
-       VALUES (coalesce($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6)
+       VALUES (coalesce($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6::jsonb)
        ON CONFLICT (id) DO UPDATE
        SET request_hash = EXCLUDED.request_hash,
            status = EXCLUDED.status,
@@ -367,7 +371,14 @@ export class ConversationRepository {
            active_needs_before = EXCLUDED.active_needs_before,
            updated_at = now()
        RETURNING *`,
-      [input.id ?? null, input.sessionId, input.requestHash, input.status ?? 'received', input.stage ?? null, input.activeNeedsBefore ?? null]
+      [
+        input.id ?? null,
+        input.sessionId,
+        input.requestHash,
+        input.status ?? 'received',
+        input.stage ?? null,
+        jsonbParam(input.activeNeedsBefore)
+      ]
     );
     return mapConversationTurn(result.rows[0]);
   }
@@ -416,9 +427,9 @@ export class ConversationRepository {
         input.assistantMessageId ?? null,
         input.errorCode ?? null,
         input.errorMessage ?? null,
-        input.plannerContract === undefined ? null : input.plannerContract,
-        input.activeNeedsBefore === undefined ? null : input.activeNeedsBefore,
-        input.activeNeedsAfter === undefined ? null : input.activeNeedsAfter
+        jsonbParam(input.plannerContract),
+        jsonbParam(input.activeNeedsBefore),
+        jsonbParam(input.activeNeedsAfter)
       ]
     );
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
@@ -442,10 +453,10 @@ export class ConversationRepository {
       [
         input.messageId,
         input.sessionId,
-        {
+        jsonbParam({
           rating: input.rating,
           createdAt: new Date().toISOString()
-        }
+        })
       ]
     );
     return result.rowCount ? mapMessage(result.rows[0]) : null;

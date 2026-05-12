@@ -68,8 +68,9 @@ describe('ConversationRepository.updateAssistantFeedback', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining('jsonb_set'), [
       'message-id',
       'session-id',
-      expect.objectContaining({ rating: 'negative' })
+      expect.any(String)
     ]);
+    expect(JSON.parse(query.mock.calls[0][1][2])).toMatchObject({ rating: 'negative' });
     expect(message).toMatchObject({
       id: 'message-id',
       sessionId: 'session-id',
@@ -114,6 +115,50 @@ describe('ConversationRepository.deleteEmptyNonWidgetSessions', () => {
     expect(query.mock.calls[0][0]).toContain('NOT EXISTS');
     expect(query.mock.calls[0][0]).toContain('FROM messages m WHERE m.session_id = s.id');
     expect(query.mock.calls[0][0]).not.toContain("created_at < now()");
+  });
+});
+
+describe('ConversationRepository turn JSON storage', () => {
+  it('serializes top-level arrays and objects before passing jsonb params to pg', async () => {
+    const now = new Date('2026-04-27T08:00:00.000Z');
+    const turnRow = {
+      id: 'turn-id',
+      session_id: 'session-id',
+      user_message_id: null,
+      assistant_message_id: null,
+      status: 'planned',
+      request_hash: 'hash',
+      stage: 'planned',
+      error_code: null,
+      error_message: null,
+      planner_contract: { taskType: 'product_selection_with_availability' },
+      active_needs_before: [{ summary: 'before' }],
+      active_needs_after: [{ summary: 'after' }],
+      created_at: now,
+      updated_at: now
+    };
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValue({ rowCount: 1, rows: [turnRow] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.createTurn({
+      sessionId: 'session-id',
+      requestHash: 'hash',
+      status: 'received',
+      activeNeedsBefore: [{ summary: 'before' }]
+    });
+    await repository.updateTurn({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      status: 'planned',
+      plannerContract: { taskType: 'product_selection_with_availability' },
+      activeNeedsAfter: [{ summary: 'after' }]
+    });
+
+    expect(query.mock.calls[1][1][5]).toBe(JSON.stringify([{ summary: 'before' }]));
+    expect(query.mock.calls[2][1][8]).toBe(JSON.stringify({ taskType: 'product_selection_with_availability' }));
+    expect(query.mock.calls[2][1][10]).toBe(JSON.stringify([{ summary: 'after' }]));
   });
 });
 

@@ -339,6 +339,8 @@ const PLANNER_HISTORY_CONTENT_LIMIT = 700;
 const PLANNER_PRODUCT_DESCRIPTION_LIMIT = 900;
 const PLANNER_PAGE_SUMMARY_LIMIT = 600;
 const PLANNER_PAGE_CONTENT_LIMIT = 1200;
+const PLANNER_JSON_OUTPUT_TOKEN_MIN = 8000;
+const JSON_RETRY_OUTPUT_TOKEN_MIN = 12000;
 
 function jsonOutputTokenLimit(value: number) {
   return Math.max(value, MIN_JSON_OUTPUT_TOKENS);
@@ -368,12 +370,44 @@ function parseJsonObject(outputText: string | undefined, stage: string) {
   try {
     return JSON.parse(cleaned);
   } catch (e) {
-    if (e instanceof SyntaxError && cleaned.includes('{')) {
-      // In case of token truncation, try to return empty object to prevent hard crash
-      console.warn(`[${stage}] Invalid JSON structure. Returning empty object to gracefully recover. Error: ${e.message}`);
-      return {};
-    }
-    throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(`${stage} returned invalid JSON: ${message}`);
+  }
+}
+
+function responseTextForJson(response: unknown) {
+  const value = response as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
+  try {
+    if (typeof value.output_text === 'string' && value.output_text.trim()) return value.output_text;
+  } catch {
+    // Some SDK response helpers throw when the response was incomplete.
+  }
+  const directText = value.output?.[0]?.content?.[0]?.text;
+  if (typeof directText === 'string' && directText.trim()) return directText;
+  return extractResponseText(response);
+}
+
+async function createStructuredJsonResponse(
+  client: ReturnType<typeof createOpenAIClient>,
+  request: Record<string, unknown>,
+  stage: string,
+  signal?: AbortSignal
+) {
+  if (!client) throw new Error('OpenAI client is not configured');
+  const send = (body: Record<string, unknown>) =>
+    withRetry(() => client.responses.create(body as any, signal ? { signal } : undefined), 2, signal);
+  const response = await send(request);
+  try {
+    return { response, parsed: parseJsonObject(responseTextForJson(response), stage) };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    console.warn(`[${stage}] Structured JSON parse failed; retrying with a larger output budget`, safeError(error));
+    const currentMax = Number(request.max_output_tokens ?? 0);
+    const retryResponse = await send({
+      ...request,
+      max_output_tokens: Math.max(currentMax * 2, JSON_RETRY_OUTPUT_TOKEN_MIN)
+    });
+    return { response: retryResponse, parsed: parseJsonObject(responseTextForJson(retryResponse), stage) };
   }
 }
 
@@ -5489,20 +5523,13 @@ export class AssistantService {
         },
         max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_NEED_MAX_OUTPUT_TOKENS), 8000)
       };
-      const response: any = await withRetry(
-        () => client.responses.create(needExtractionRequest, signal ? { signal } : undefined),
-        2, signal
+      const { response, parsed } = await createStructuredJsonResponse(
+        client,
+        needExtractionRequest,
+        'need_extraction',
+        signal
       );
       logOpenAIUsage('need_extraction', config.OPENAI_PLANNER_MODEL, response);
-      // output_text may throw on an incomplete response (finish_reason: 'length')
-      // in strict JSON schema mode — guard with try/catch before parsing.
-      let outputText: string | undefined;
-      try {
-        outputText = response.output_text ?? response.output?.[0]?.content?.[0]?.text;
-      } catch {
-        outputText = response.output?.[0]?.content?.[0]?.text;
-      }
-      const parsed = parseJsonObject(outputText, 'need_extraction');
       const aiUpdate = coerceNeedUpdate(parsed);
       const merged = mergeNeedState(current, mergeNeedState(emptyNeedState(), aiUpdate));
       merged.lastSummary = parsed.lastSummary || summarizeNeedState(merged);
@@ -5592,31 +5619,33 @@ export class AssistantService {
           schema: turnPlanSchema()
         }
       },
-      max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS), 4000)
+      max_output_tokens: Math.max(jsonOutputTokenLimit(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS), PLANNER_JSON_OUTPUT_TOKEN_MIN)
     };
 
     try {
-      const response: any = await withRetry(
-        () => client.responses.create(plannerRequest, input.signal ? { signal: input.signal } : undefined),
-        2, input.signal
+      const { response, parsed } = await createStructuredJsonResponse(
+        client,
+        plannerRequest,
+        'turn_planner',
+        input.signal
       );
       logOpenAIUsage('turn_planner', planningProfile.model, response);
-      const parsed = parseJsonObject(response.output_text || '{}', 'turn_planner');
       return coerceTurnPlan(parsed, input.baseQuery, input.userMessage);
     } catch (error) {
       let finalError: unknown = error;
       if (planningProfile.model !== config.OPENAI_PLANNER_MODEL) {
         try {
-          const fallbackResponse: any = await withRetry(
-            () => client.responses.create({
+          const { response: fallbackResponse, parsed } = await createStructuredJsonResponse(
+            client,
+            {
               ...plannerRequest,
               model: config.OPENAI_PLANNER_MODEL,
               reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT }
-            }, input.signal ? { signal: input.signal } : undefined),
-            2, input.signal
+            },
+            'turn_planner',
+            input.signal
           );
           logOpenAIUsage('turn_planner_fallback', config.OPENAI_PLANNER_MODEL, fallbackResponse);
-          const parsed = parseJsonObject(fallbackResponse.output_text || '{}', 'turn_planner');
           return coerceTurnPlan(parsed, input.baseQuery, input.userMessage);
         } catch (fallbackError) {
           finalError = fallbackError;
@@ -5713,7 +5742,7 @@ export class AssistantService {
         max_output_tokens: 900
       }, signal ? { signal } : undefined), 2, signal);
       logOpenAIUsage('troubleshooting_memory_router', config.OPENAI_PLANNER_MODEL, response);
-      const parsed = parseJsonObject(response.output_text || '{}', 'troubleshooting_memory_router');
+      const parsed = parseJsonObject(responseTextForJson(response), 'troubleshooting_memory_router');
       const allowedIds = new Set(candidates.map((item) => item.id));
       const selectedCaseIds = Array.isArray(parsed.selectedCaseIds)
         ? parsed.selectedCaseIds.filter((id: unknown): id is string => typeof id === 'string' && allowedIds.has(id))
