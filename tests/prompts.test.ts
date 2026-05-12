@@ -32,6 +32,14 @@ describe('assistant prompt guardrails', () => {
     expect(prompt).toContain('переводить зарубежные цены в рубли');
   });
 
+  it('requires concrete technical questions to be answered before clarifying missing inputs', () => {
+    const prompt = buildTurnPlannerPrompt();
+
+    expect(prompt).toContain('For concrete technical questions or comparisons with incomplete inputs');
+    expect(prompt).toContain('do not plan a clarification-only answer');
+    expect(prompt).toContain("answer the buyer's concrete question before clarifying");
+  });
+
   it('builds a compact final-answer context for low-token turns', () => {
     const context = buildAssistantContext({
       needState: {

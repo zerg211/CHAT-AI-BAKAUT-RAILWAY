@@ -2778,6 +2778,51 @@ function uniqueList(values: Array<string | undefined | null>, limit: number) {
   return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].slice(0, limit);
 }
 
+function knownProductIntent(value: ProductIntent | undefined | null): value is ProductIntent {
+  return Boolean(value && value !== 'unknown');
+}
+
+function activeProductIntentsForSelectionState(state: ProductSelectionState) {
+  return new Set([
+    state.targetProductClass as ProductIntent,
+    state.currentProductClass as ProductIntent,
+    state.hardConstraints.productIntent as ProductIntent,
+    state.activeRequirement?.productIntent as ProductIntent | undefined
+  ].filter(knownProductIntent));
+}
+
+function removeActiveIntentExclusions(excludedClasses: ProductIntent[] | undefined, activeIntents: Set<ProductIntent>) {
+  if (!activeIntents.size) return uniqueList(excludedClasses ?? [], 24) as ProductIntent[];
+  return uniqueList((excludedClasses ?? []).filter((intent) => !activeIntents.has(intent)), 24) as ProductIntent[];
+}
+
+function sanitizeCriteriaSelfExclusions(criteria: ProductSelectionCriteria, activeIntents: Set<ProductIntent>): ProductSelectionCriteria {
+  const excludedClasses = removeActiveIntentExclusions(criteria.excludedClasses as ProductIntent[], activeIntents);
+  return excludedClasses.length === criteria.excludedClasses.length
+    ? criteria
+    : { ...criteria, excludedClasses };
+}
+
+function sanitizeSelfExcludingSelectionState(state: ProductSelectionState): ProductSelectionState {
+  const activeIntents = activeProductIntentsForSelectionState(state);
+  if (!activeIntents.size) return state;
+  return {
+    ...state,
+    hardConstraints: sanitizeCriteriaSelfExclusions(state.hardConstraints, activeIntents),
+    softPreferences: sanitizeCriteriaSelfExclusions(state.softPreferences, activeIntents),
+    activeRequirement: state.activeRequirement
+      ? sanitizeCriteriaSelfExclusions(state.activeRequirement, activeIntents)
+      : state.activeRequirement
+  };
+}
+
+function effectiveExcludedClassesForState(state: ProductSelectionState) {
+  return removeActiveIntentExclusions(
+    state.hardConstraints.excludedClasses as ProductIntent[],
+    activeProductIntentsForSelectionState(state)
+  );
+}
+
 function productIntentFromSelection(state: ProductSelectionState, plan: AssistantTurnPlan, profile: ProductFitProfile): ProductIntent {
   if (plan.selectionState.targetProductClass !== 'unknown') return plan.selectionState.targetProductClass;
   if (plan.requiredProductTraits.productIntent !== 'unknown') return plan.requiredProductTraits.productIntent;
@@ -3343,7 +3388,10 @@ function explicitCriteriaFromTurn(
         : 'coreProduct',
     exactModelTokens: targetExactTokens,
     exactModelTokenRoles: exactTokenRoles,
-    excludedClasses: plan.selectionState.excludedClasses,
+    excludedClasses: removeActiveIntentExclusions(
+      plan.selectionState.excludedClasses,
+      new Set([targetProductClass].filter(knownProductIntent))
+    ),
     mustHaveTraits: [],
     provenance: {}
   };
@@ -3705,7 +3753,7 @@ function productSelectionHardViolation(product: Product, state: ProductSelection
   const flags = classifyProduct(product);
   if (hard.productIntent !== 'unknown' && !productMatchesIntent(product, hard.productIntent as ProductIntent)) return `product class is not ${hard.productIntent}`;
   if (hard.productRole === 'coreProduct' && !isCoreEquipment(product)) return 'product is not core equipment';
-  const excludedClass = hard.excludedClasses.find((intent) => productMatchesIntent(product, intent as ProductIntent));
+  const excludedClass = effectiveExcludedClassesForState(state).find((intent) => productMatchesIntent(product, intent as ProductIntent));
   if (excludedClass) return `product belongs to excluded class ${excludedClass}`;
   if (hard.fuel === 'gasoline' && flags.isDiesel) return 'diesel product violates gasoline-only constraint';
   if (hard.fuel === 'diesel' && flags.isGasoline) return 'gasoline product violates diesel-only constraint';
@@ -3838,7 +3886,7 @@ function catalogShortlistAlternativeScore(product: Product, state: ProductSelect
   const hard = state.hardConstraints;
   if (hard.productIntent !== 'unknown' && !productMatchesIntent(product, hard.productIntent as ProductIntent)) return null;
   if (hard.productRole === 'coreProduct' && !isCoreEquipment(product)) return null;
-  if (hard.excludedClasses.some((intent) => productMatchesIntent(product, intent as ProductIntent))) return null;
+  if (effectiveExcludedClassesForState(state).some((intent) => productMatchesIntent(product, intent as ProductIntent))) return null;
   if (hard.brandConstraint) {
     const requested = new Set([normalizeBrandKey(hard.brandConstraint)].filter((item) => item.length >= 3));
     if (requested.size && !productMatchesRequestedBrand(product, requested)) return null;
@@ -5132,6 +5180,18 @@ function shouldSuppressLeadRequestFromContract(contract: AgentTurnContract) {
   return selectionWithCommercialCheck && contract.commercialAction === 'explain_manager_required';
 }
 
+function isCurrentLevelTechnicalTurn(contract: AgentTurnContract) {
+  return contract.answerTask === 'technical_explanation' ||
+    contract.answerTask === 'comparison' ||
+    contract.taskType === 'technical_answer' ||
+    contract.taskType === 'comparison';
+}
+
+function technicalCurrentLevelAnswerGuidance(contract: AgentTurnContract) {
+  if (!isCurrentLevelTechnicalTurn(contract)) return '';
+  return 'For this technical/comparison turn, do not answer only by asking for exact model, power, duty cycle, or other missing inputs. First answer the buyer question at the highest truthful specificity available: general engineering comparison, typical tradeoffs, fit by use case, or bounded practical conclusion. Clearly mark what is general and what depends on exact model/data. Ask at most two precise clarifying questions only after the direct answer.';
+}
+
 function stripLeadPressureTail(answer: string) {
   const leadAskRe = /(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,120}(?:\u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435|\u043e\u0441\u0442\u0430\u0432\u044c\u0442\u0435|\u0443\u043a\u0430\u0436\u0438\u0442\u0435|\u043f\u0440\u0438\u0448\u043b\u0438\u0442\u0435|\u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435)[^.!?\n]{0,180}(?:\u0438\u043c\u044f|\u0442\u0435\u043b\u0435\u0444\u043e\u043d|\u043d\u043e\u043c\u0435\u0440|\u043a\u043e\u043d\u0442\u0430\u043a\u0442)[^.!?\n]*[.!?]?)/giu;
   const leadSetupRe = /(?:^|(?<=[.!?])\s+)(?:\u0415\u0441\u043b\u0438\s+\u0445\u043e\u0442\u0438\u0442\u0435,\s+)?(?:\u044f\s+)?(?:\u043f\u0435\u0440\u0435\u0434\u0430\u043c|\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044e|\u043e\u0444\u043e\u0440\u043c\u0438\u043c|\u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u043c)[^.!?\n]{0,180}(?:\u0437\u0430\u044f\u0432|\u0440\u0430\u0441\u0447\u0435\u0442|\u043e\u0444\u043e\u0440\u043c)[^.!?\n]*[.!?]?/giu;
@@ -5833,6 +5893,7 @@ export class AssistantService {
         rankingPreference: selectionState.rankingPreference ?? 'cheapest'
       };
     }
+    selectionState = sanitizeSelfExcludingSelectionState(selectionState);
     const selectionProfile = buildProductFitProfile({ ...state, selectionState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
     let effectiveSelectionState = selectionState;
     let effectiveSelectionProfile = selectionProfile;
@@ -6836,6 +6897,7 @@ export class AssistantService {
       'For household generator load calculations, use answerContext.generatorSizingPolicy as the authority: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visibleCardNominalKw/visibleCardMaxKw are the only higher powers grounded by shown cards. Do not introduce a higher power class unless it is supported by the policy.',
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
       `AgentTurnContract: answerTask=${agentTurnContract.answerTask}; cardsRole=${agentTurnContract.cardsRole}; leadAllowed=${agentTurnContract.leadAllowed}. Must answer now before any cards: ${agentTurnContract.mustAnswerNow.join('; ') || agentTurnContract.errorRecoveryPriority}.`,
+      technicalCurrentLevelAnswerGuidance(agentTurnContract),
       suppressLeadRequestByContract
         ? 'The semantic contract does not allow a contact handoff as the answer action for this turn. You may say final availability, delivery price, discount, or logistics terms require manager/logistics verification, but do not ask the buyer for name, phone, contact, callback, or a form. Keep product selection moving from catalog cards.'
         : '',
@@ -7281,7 +7343,8 @@ export class AssistantService {
               : '',
             contract
               ? `TurnContract: answerTask=${contract.answerTask}; cardsRole=${contract.cardsRole}; leadAllowed=${contract.leadAllowed}; mustAnswerNow=${contract.mustAnswerNow.join('; ') || contract.errorRecoveryPriority}.`
-              : ''
+              : '',
+            contract ? technicalCurrentLevelAnswerGuidance(contract) : ''
           ].filter(Boolean).join('\n\n'),
           input: [{
             role: 'user',
@@ -8210,7 +8273,9 @@ export const assistantTestHooks = {
   repairAnswerCardText,
   repairGeneratorLoadMinimumText,
   shouldSuppressLeadRequestFromContract,
+  technicalCurrentLevelAnswerGuidance,
   stripLeadPressureTail,
+  sanitizeSelfExcludingSelectionState,
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
   deterministicAnswerGenerationFallback,
