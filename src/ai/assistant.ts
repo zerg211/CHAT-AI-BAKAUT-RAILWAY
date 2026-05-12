@@ -5210,6 +5210,23 @@ function stripLeadPressureTail(answer: string) {
   return cleaned || answer.trim();
 }
 
+function ensureCommercialManagerVerification(answer: string, contract: AgentTurnContract) {
+  if (contract.commercialAction !== 'explain_manager_required') return answer;
+  const mentionsCommercialTerm = /(?:\u0434\u043e\u0441\u0442\u0430\u0432\u043a|\u043b\u043e\u0433\u0438\u0441\u0442|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u0441\u043a\u0438\u0434\u043a|\u0441\u0440\u043e\u043a|\u043e\u0442\u0433\u0440\u0443\u0437|\u0441\u043f\u0435\u0446\u0443\u0441\u043b\u043e\u0432|\u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442|\u0446\u0435\u043d[а\u0430]|\u0442\u0435\u0440\u043c\u0438\u043d\u0430\u043b|\u0442\u0440\u0430\u043d\u0441\u043f\u043e\u0440\u0442\u043d)/iu.test(answer);
+  if (!mentionsCommercialTerm) return answer;
+  if (/(?:\u043b\u043e\u0433\u0438\u0441\u0442|\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440|\u0441\u043f\u0435\u0446\u0438\u0430\u043b\u0438\u0441\u0442|\u043f\u0440\u043e\u0444\u0438\u043b\u044c\u043d\w*\s+\u0441\u043e\u0442\u0440\u0443\u0434\u043d)/iu.test(answer)) return answer;
+  const delivery = /(?:\u0434\u043e\u0441\u0442\u0430\u0432\u043a|\u0442\u0435\u0440\u043c\u0438\u043d\u0430\u043b|\u0442\u0440\u0430\u043d\u0441\u043f\u043e\u0440\u0442\u043d|\u0434\u043e\s+\u0434\u0432\u0435\u0440|\u0434\u043e\s+\u0415\u0439\u0441\u043a)/iu.test(answer);
+  const availability = /(?:\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437)/iu.test(answer);
+  const sentence = delivery
+    ? ' Точную стоимость и условия доставки должен подтвердить менеджер или логистика по адресу и способу отправки.'
+    : availability
+      ? ' Точное наличие и возможность отгрузки должен подтвердить менеджер по актуальному складу.'
+      : ' Точные коммерческие условия должен подтвердить менеджер.';
+  const trimmed = answer.trim();
+  if (!trimmed) return sentence.trim();
+  return `${trimmed}${/[.!?]$/u.test(trimmed) ? '' : '.'}${sentence}`;
+}
+
 function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
   let cleaned = answer
     .replace(/[^]*/g, '')
@@ -7088,6 +7105,7 @@ export class AssistantService {
     if (suppressLeadRequestByContract) {
       answer = stripLeadPressureTail(answer);
     }
+    answer = ensureCommercialManagerVerification(answer, agentTurnContract);
     answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards, finalCards.initialVisibleCount);
     const cardContract = enforceAnswerCardContract(
       answer,
@@ -7423,6 +7441,12 @@ export class AssistantService {
         history,
         state: session.needState
       });
+    }
+    if (contract) {
+      answer = ensureCommercialManagerVerification(
+        shouldSuppressLeadRequestFromContract(contract) ? stripLeadPressureTail(answer) : answer,
+        contract
+      );
     }
     await input.onDelta?.(answer);
     const assistantMessage = await this.conversations.addMessage({
@@ -8314,6 +8338,7 @@ export const assistantTestHooks = {
   technicalCurrentLevelAnswerGuidance,
   commercialManagerVerificationGuidance,
   stripLeadPressureTail,
+  ensureCommercialManagerVerification,
   sanitizeSelfExcludingSelectionState,
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
