@@ -7305,7 +7305,35 @@ export class AssistantService {
     }
 
     const latestUserText = latestUser?.content ?? '';
-    const contract = (turn.plannerContract ?? null) as AgentTurnContract | null;
+    const storedContract = (turn.plannerContract ?? null) as AgentTurnContract | null;
+    const recoveryAiDiagnostics = emptyAiGenerationDiagnostics();
+    const recoveryBaseQuery = productSearchText(latestUserText, session.needState);
+    const recoveryPlan = !storedContract && latestUserText
+      ? await this.planAssistantTurn({
+          userMessage: latestUserText,
+          needState: session.needState,
+          products: [],
+          knowledgePages: [],
+          troubleshootingCases: [],
+          conflicts: [],
+          history,
+          historySummary: session.historySummary,
+          baseQuery: recoveryBaseQuery,
+          signal: input.signal,
+          diagnostics: recoveryAiDiagnostics
+        }).catch((error) => {
+          markAiFallback(recoveryAiDiagnostics, 'turnPlanningFallback', error, 'recovery_turn_planning_failed');
+          console.warn('Recovery turn planning failed', safeError(error));
+          return null;
+        })
+      : null;
+    const contract = storedContract ?? (recoveryPlan?.agentDecision
+      ? deriveAgentTurnContract({
+          userMessage: latestUserText,
+          plan: recoveryPlan,
+          needState: session.needState
+        })
+      : null);
     const contractDisallowsRecoveryCards = contract !== null &&
       (contract.cardsRole === 'none' ||
         contract.catalogAction === 'none' ||
@@ -7406,6 +7434,7 @@ export class AssistantService {
         recovered: true,
         recoveryAttempts: 1,
         turnContract: contract,
+        aiDiagnostics: recoveryAiDiagnostics,
         productCards: recoveredSelection.cards,
         cardDisplay: recoveredSelection.cardDisplay,
         activeNeedsAfter: session.needState.activeNeeds ?? [],
@@ -7418,6 +7447,7 @@ export class AssistantService {
       status: 'recovered',
       stage: 'recovered',
       assistantMessageId: assistantMessage.id,
+      plannerContract: contract ?? undefined,
       errorCode: openAiError ? 'recovery_openai_failed' : null,
       errorMessage: openAiError ? JSON.stringify(openAiError).slice(0, 1000) : null,
       activeNeedsAfter: session.needState.activeNeeds ?? []
@@ -7437,6 +7467,7 @@ export class AssistantService {
         recovered: true,
         recoveryAttempts: 1,
         turnContract: contract ?? undefined,
+        aiDiagnostics: recoveryAiDiagnostics,
         productCards: recoveredSelection.cards,
         cardDisplay: recoveredSelection.cardDisplay,
         activeNeedsAfter: session.needState.activeNeeds ?? [],
