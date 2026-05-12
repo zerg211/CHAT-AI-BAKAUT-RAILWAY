@@ -5212,19 +5212,15 @@ function stripLeadPressureTail(answer: string) {
 
 function ensureCommercialManagerVerification(answer: string, contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return answer;
-  const mentionsCommercialTerm = /(?:\u0434\u043e\u0441\u0442\u0430\u0432\u043a|\u043b\u043e\u0433\u0438\u0441\u0442|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u0441\u043a\u0438\u0434\u043a|\u0441\u0440\u043e\u043a|\u043e\u0442\u0433\u0440\u0443\u0437|\u0441\u043f\u0435\u0446\u0443\u0441\u043b\u043e\u0432|\u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442|\u0446\u0435\u043d[а\u0430]|\u0442\u0435\u0440\u043c\u0438\u043d\u0430\u043b|\u0442\u0440\u0430\u043d\u0441\u043f\u043e\u0440\u0442\u043d)/iu.test(answer);
-  if (!mentionsCommercialTerm) return answer;
-  if (/(?:\u043b\u043e\u0433\u0438\u0441\u0442|\u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440|\u0441\u043f\u0435\u0446\u0438\u0430\u043b\u0438\u0441\u0442|\u043f\u0440\u043e\u0444\u0438\u043b\u044c\u043d\w*\s+\u0441\u043e\u0442\u0440\u0443\u0434\u043d)/iu.test(answer)) return answer;
-  const delivery = /(?:\u0434\u043e\u0441\u0442\u0430\u0432\u043a|\u0442\u0435\u0440\u043c\u0438\u043d\u0430\u043b|\u0442\u0440\u0430\u043d\u0441\u043f\u043e\u0440\u0442\u043d|\u0434\u043e\s+\u0434\u0432\u0435\u0440|\u0434\u043e\s+\u0415\u0439\u0441\u043a)/iu.test(answer);
-  const availability = /(?:\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437)/iu.test(answer);
-  const sentence = delivery
+  const sentence = contract.taskType === 'pure_delivery' || contract.taskType === 'product_selection_with_delivery'
     ? ' Точную стоимость и условия доставки должен подтвердить менеджер или логистика по адресу и способу отправки.'
-    : availability
+    : contract.taskType === 'pure_availability' || contract.taskType === 'product_selection_with_availability'
       ? ' Точное наличие и возможность отгрузки должен подтвердить менеджер по актуальному складу.'
       : ' Точные коммерческие условия должен подтвердить менеджер.';
   const trimmed = answer.trim();
   if (!trimmed) return sentence.trim();
-  return `${trimmed}${/[.!?]$/u.test(trimmed) ? '' : '.'}${sentence}`;
+  const hasTerminalPunctuation = trimmed.endsWith('.') || trimmed.endsWith('!') || trimmed.endsWith('?');
+  return `${trimmed}${hasTerminalPunctuation ? '' : '.'}${sentence}`;
 }
 
 function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
@@ -5279,50 +5275,6 @@ function leadQuestionSummary(userMessage: string, history: Message[], state: Cus
     selectedProducts ? `Показанные/выбранные позиции: ${selectedProducts}` : '',
     recentDialogue ? `Последние сообщения:\n${recentDialogue}` : ''
   ].filter(Boolean).join('\n\n').slice(0, 3500);
-}
-
-function lowestPricedProduct(products: Product[]) {
-  return products
-    .filter((product) => typeof product.price === 'number' && Number.isFinite(product.price))
-    .sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER))[0];
-}
-
-function buildHumanRecoveryFallbackAnswer(input: {
-  latestUserMessage: string;
-  history: Message[];
-  state: CustomerNeedState;
-}) {
-  const text = input.latestUserMessage.toLowerCase();
-  const commercialQuestion = /(?:доставк|скидк|сумм|стоимост|цена|комплект|налич)/iu.test(text);
-  if (!commercialQuestion) {
-    const activeNeeds = (input.state.activeNeeds ?? []).map((need) => need.summary).filter(Boolean).slice(0, 2);
-    return activeNeeds.length
-      ? `По текущему состоянию вижу такие задачи: ${activeNeeds.join('; ')}. Чтобы продолжить точно, напишите следующий уточняющий вопрос — контекст сохранен.`
-      : 'Контекст вопроса сохранен. Напишите уточнение еще раз коротко, и я продолжу подбор без потери предыдущих вводных.';
-  }
-
-  const shown = allShownProductCards(input.history);
-  const generator = lowestPricedProduct(shown.filter((product) => productMatchesIntent(product, 'generator')));
-  const plate = lowestPricedProduct(shown.filter((product) => productMatchesIntent(product, 'plate')));
-  const generatorPart = generator?.price
-    ? `по генератору нижний ориентир из уже показанных карточек — ${generator.name}, ${rubPrice(generator.price)}`
-    : 'по генератору точную позицию еще надо зафиксировать';
-  const platePart = plate?.price
-    ? `по виброплите нижний ориентир из уже показанных карточек — ${plate.name}, ${rubPrice(plate.price)}`
-    : 'по виброплите точную позицию еще надо зафиксировать';
-  const total = generator?.price && plate?.price
-    ? `Если брать именно эти нижние варианты, ориентир комплекта получается от ${rubPrice(generator.price + plate.price)}.`
-    : 'Точную сумму комплекта пока не считаю: одна или обе модели еще не выбраны окончательно.';
-
-  return [
-    'Доставка есть, но стоимость, срок и скидку нужно проверять по городу, наличию и выбранным моделям — это уже зона менеджера/логистики.',
-    `${generatorPart}; ${platePart}.`,
-    total
-  ].join('\n\n');
-}
-
-function shouldSkipRecoveryCatalogCards(message: string) {
-  return /(?:доставк|скидк|сумм|стоимост|цена|комплект|налич|без\s+звонк|без\s+контакт|номер|телефон|итог)/iu.test(message);
 }
 
 export class AssistantService {
@@ -7345,18 +7297,30 @@ export class AssistantService {
           return null;
         })
       : null;
-    const contract = storedContract ?? (recoveryPlan?.agentDecision
+    const derivedRecoveryContract = recoveryPlan?.agentDecision
       ? deriveAgentTurnContract({
           userMessage: latestUserText,
           plan: recoveryPlan,
           needState: session.needState
         })
-      : null);
-    const contractDisallowsRecoveryCards = contract !== null &&
-      (contract.cardsRole === 'none' ||
-        contract.catalogAction === 'none' ||
-        contract.productCardsPolicy === 'none');
-    const recoveredSelection = contractDisallowsRecoveryCards || shouldSkipRecoveryCatalogCards(latestUserText)
+      : null;
+    const contract = storedContract ?? derivedRecoveryContract;
+    if (!contract) {
+      const diagnostic = recoveryAiDiagnostics.turnPlanningFallback.used
+        ? recoveryAiDiagnostics.turnPlanningFallback
+        : markAiFallback(
+            recoveryAiDiagnostics,
+            'turnPlanningFallback',
+            recoveryPlan ? 'missing_agent_decision' : 'missing_turn_contract',
+            'recovery_missing_turn_contract'
+          );
+      throw aiStageFailure('turn recovery planning', diagnostic);
+    }
+    const contractDisallowsRecoveryCards =
+      contract.cardsRole === 'none' ||
+      contract.catalogAction === 'none' ||
+      contract.productCardsPolicy === 'none';
+    const recoveredSelection = contractDisallowsRecoveryCards
       ? { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined }
       : await this.productCardsFromRecoveredSelection(session.needState, latestUserText);
     const recoveryBlocksEstimatedPumpCards = Boolean(
@@ -7436,18 +7400,18 @@ export class AssistantService {
       }
     }
     if (!answer) {
-      answer = buildHumanRecoveryFallbackAnswer({
-        latestUserMessage: latestUserText,
-        history,
-        state: session.needState
-      });
-    }
-    if (contract) {
-      answer = ensureCommercialManagerVerification(
-        shouldSuppressLeadRequestFromContract(contract) ? stripLeadPressureTail(answer) : answer,
-        contract
+      const diagnostic = markAiFallback(
+        recoveryAiDiagnostics,
+        'answerGenerationFallback',
+        openAiError ?? 'empty_recovery_answer',
+        'recovery_answer_generation_failed'
       );
+      throw aiStageFailure('answer recovery', diagnostic);
     }
+    answer = ensureCommercialManagerVerification(
+      shouldSuppressLeadRequestFromContract(contract) ? stripLeadPressureTail(answer) : answer,
+      contract
+    );
     await input.onDelta?.(answer);
     const assistantMessage = await this.conversations.addMessage({
       sessionId: input.sessionId,
