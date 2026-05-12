@@ -356,6 +356,10 @@ export function buildTurnPlannerPrompt() {
   },
   "agentDecision": {
     "answerTask": "technical_explanation" | "comparison" | "product_selection" | "mixed" | "lead_handoff",
+    "taskType": "pure_delivery" | "pure_availability" | "product_selection" | "product_selection_with_delivery" | "product_selection_with_availability" | "technical_answer" | "comparison" | "contact_refusal_continue_selection",
+    "catalogAction": "none" | "exact_model_lookup" | "find_matching_products" | "verify_catalog_absence",
+    "commercialAction": "none" | "explain_manager_required" | "offer_contact_after_answer",
+    "productCardsPolicy": "none" | "show_exact_matches" | "show_matching_products" | "supporting_only",
     "mustAnswerNow": string[],
     "currentFocus": string,
     "cardsRole": "none" | "supporting" | "primary",

@@ -632,6 +632,23 @@ export function productHasExactModel(product: Product, profile: ProductFitProfil
   return profile.exactModelTokens.some((token) => compact.includes(compactModelText(token)));
 }
 
+export type ProductPhaseProfile = 'single_220' | 'mixed_220_380' | 'three_phase_380' | 'unknown';
+
+export function generatorPhaseProfile(product: Product): ProductPhaseProfile {
+  const text = productFullText(product);
+  const compact = compactModelText(text);
+  const hasMixedVoltage = /(?:220|230)\s*[\/\\-]\s*(?:380|400)|(?:380|400)\s*[\/\\-]\s*(?:220|230)/iu.test(text) ||
+    /(?:220|230)(?:380|400)|(?:380|400)(?:220|230)/iu.test(compact);
+  if (hasMixedVoltage) return 'mixed_220_380';
+
+  const hasThreePhase = /(?:\b3\s*(?:phase|ph|фаз)|three[-\s]?phase|тр[её]х\s*фаз|тр[её]хфаз|3фаз)/iu.test(text);
+  const has380 = /(?:^|[^\d])(?:380|400)\s*(?:в|v|volt|вольт)?(?:[^\d]|$)/iu.test(text);
+  const has220 = /(?:^|[^\d])(?:220|230)\s*(?:в|v|volt|вольт)?(?:[^\d]|$)/iu.test(text) || containsAny(text, singlePhaseTerms);
+  if (hasThreePhase || (has380 && !has220)) return 'three_phase_380';
+  if (has220) return 'single_220';
+  return 'unknown';
+}
+
 export function strictExactModelTokens(value: string) {
   const tokens = extractModelTokens(value);
   const strict = new Set<string>();

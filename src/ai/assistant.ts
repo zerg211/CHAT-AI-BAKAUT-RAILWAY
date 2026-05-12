@@ -32,6 +32,7 @@ import {
   productFullText, productHasExactModel, strictExactModelTokens,
   productMatchesExactModelConstraint, classifyProduct,
   isCoreEquipment, isOilCard, productMentionedInText, strongProductMentionIndex,
+  generatorPhaseProfile,
   displayProductBrand, intentTextPatterns
 } from './productClassifier.js';
 import { getSessionGuard, cleanupSessionGuard } from './consistencyGuard.js';
@@ -1517,6 +1518,10 @@ function productFitPenalty(product: Product, profile: ProductFitProfile) {
     if (profile.wantsInverterGenerator && !flags.isInverter) return -170;
     if (profile.wantsConventionalGenerator && flags.isInverter) return -160;
     if (profile.wantsEnclosedGenerator && !flags.hasGeneratorEnclosureSignal) return -150;
+    if (profile.wantsSinglePhase220) {
+      const phase = generatorPhaseProfile(product);
+      if (phase === 'mixed_220_380' || phase === 'three_phase_380') return -220;
+    }
     if (profile.desiredPowerRange && powerKw !== undefined) {
       const { min, max } = profile.desiredPowerRange;
       if (powerKw < min - 0.4 || powerKw > max + 0.8) return -170;
@@ -1567,6 +1572,10 @@ function violatesHardRequiredTraits(product: Product, profile: ProductFitProfile
   if (profile.wantsInverterGenerator && !flags.isInverter) return true;
   if (profile.wantsConventionalGenerator && flags.isInverter) return true;
   if (profile.wantsEnclosedGenerator && !flags.hasGeneratorEnclosureSignal) return true;
+  if (profile.wantsSinglePhase220) {
+    const phase = generatorPhaseProfile(product);
+    if (phase === 'mixed_220_380' || phase === 'three_phase_380') return true;
+  }
   if (profile.wantsElectricStart && !flags.hasElectricStart) return true;
   const powerKw = extractPowerKw(product);
   if (profile.desiredPowerRange && powerKw !== undefined) {
@@ -3640,6 +3649,11 @@ function productSelectionHardViolation(product: Product, state: ProductSelection
   if (hard.enclosure === 'open' && flags.hasGeneratorEnclosureSignal && !flags.hasOpenFrameSignal) return 'product is enclosed but open execution is required';
   if (hard.conventionalGenerator === true && flags.isInverter) return 'inverter product violates conventional-generator constraint';
   if (hard.conventionalGenerator === false && !flags.isInverter && flags.isGenerator) return 'conventional product violates inverter-generator constraint';
+  if (hard.productIntent === 'generator' && hard.singlePhase220 === true) {
+    const phase = generatorPhaseProfile(product);
+    if (phase === 'mixed_220_380') return 'product is mixed 220/380 V, but buyer requested strict 220 V';
+    if (phase === 'three_phase_380') return 'product is three-phase/380 V, but buyer requested strict 220 V';
+  }
   if (hard.budgetMax) {
     const price = product.price;
     if (typeof price !== 'number') return `price is unknown under budget ${hard.budgetMax}`;
@@ -4193,6 +4207,10 @@ function repairAnswerForFinalCards(
   plan: AssistantTurnPlan
 ) {
   let clean = repairAnswerCardText(answer, cards, plan);
+  if (!cards.length && (plan.action === 'recommend_products' || plan.answerMode === 'productRecommendation')) {
+    const mentionedWithoutCards = products.some((product) => strongProductMentionIndex(product, clean) >= 0);
+    if (mentionedWithoutCards) return deterministicFinalCardsAnswer([]);
+  }
   const firstDiagnostics = detectAnswerCardContractViolation(clean, cards, products, state, userMessage, plan);
   if (!firstDiagnostics.outsideFinalCardIds.length) return clean;
 
@@ -5690,7 +5708,8 @@ export class AssistantService {
     baseCandidates: Product[],
     contract?: ResolvedTurnContract,
     visibleLimitOverride?: number,
-    conversationUserText = ''
+    conversationUserText = '',
+    options: { forceCatalogVerification?: boolean } = {}
   ): Promise<ProductSelectionResult> {
     const currentSelection = state.selectionState ?? emptyProductSelectionState();
     const activeText = [userMessage, plan.catalogSearchQuery, conversationUserText, stateText(state, '')].filter(Boolean).join(' ');
@@ -5735,10 +5754,10 @@ export class AssistantService {
     const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
     const shouldUseCatalog = canListProducts &&
       selectionState.targetProductClass !== 'unknown' &&
-      !isLeadPlan(plan) &&
+      (!isLeadPlan(plan) || options.forceCatalogVerification) &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
-      (plan.cardPolicy !== 'textOnly' || catalogShortlistTurn) &&
-      (contract?.render.cards !== 'none' || catalogShortlistTurn);
+      (plan.cardPolicy !== 'textOnly' || catalogShortlistTurn || options.forceCatalogVerification) &&
+      (contract?.render.cards !== 'none' || catalogShortlistTurn || options.forceCatalogVerification);
     const tokenRoles = selectionState.hardConstraints.exactModelTokenRoles ?? [];
     const memoryComparisonTokens = semanticMentionTokens(state.semanticMemory, ['availabilityCheck', 'comparison']);
     const memoryTargetTokens = semanticMentionTokens(state.semanticMemory, ['targetProduct']);
@@ -6293,7 +6312,8 @@ export class AssistantService {
       allCandidates,
       turnContract,
       visibleCardLimit,
-      recentUserConversationText(history)
+      recentUserConversationText(history),
+      { forceCatalogVerification: agentTurnContract.catalogAction !== undefined && agentTurnContract.catalogAction !== 'none' }
     );
     for (const product of selectionResult.comparisonProducts) byId.set(product.id, product);
     const semanticMemoryAfterSelection = reconcileSemanticMemoryWithSelection(needState.semanticMemory, selectionResult);
@@ -6930,6 +6950,31 @@ export class AssistantService {
         initialVisibleCardCount: finalCards.initialVisibleCount
       }
     };
+    if (input.turnId) {
+      const latestTurn = await this.conversations.getTurn(input.sessionId, input.turnId).catch(() => null);
+      if (latestTurn?.assistantMessageId && (latestTurn.status === 'completed' || latestTurn.status === 'recovered')) {
+        const latestMessages = await this.conversations.listMessages(input.sessionId, 80).catch(() => []);
+        const existingAssistant = latestMessages.find((message) => message.id === latestTurn.assistantMessageId && message.role === 'assistant');
+        if (existingAssistant?.content?.trim()) {
+          return {
+            turnId: input.turnId,
+            answer: existingAssistant.content,
+            needState,
+            productCards: (existingAssistant.metadata?.productCards as ProductCard[] | undefined) ?? [],
+            cardDisplay: existingAssistant.metadata?.cardDisplay as CardDisplayOptions | undefined,
+            usedWebSearch: Boolean(existingAssistant.metadata?.usedWebSearch),
+            leadRequested: Boolean(existingAssistant.metadata?.leadRequested),
+            leadCreated: Boolean(existingAssistant.metadata?.leadCreated),
+            assistantMessageId: existingAssistant.id,
+            metadata: {
+              ...(existingAssistant.metadata ?? {}),
+              turnId: input.turnId,
+              supersededMainAnswer: true
+            }
+          };
+        }
+      }
+    }
     if (answer) await input.onDelta?.(answer);
     if (usedWebSearch && completedResponse) {
       await this.storeVerifiedWebFindings({
@@ -7099,7 +7144,11 @@ export class AssistantService {
 
     const latestUserText = latestUser?.content ?? '';
     const contract = (turn.plannerContract ?? null) as AgentTurnContract | null;
-    const recoveredSelection = shouldSkipRecoveryCatalogCards(latestUserText)
+    const contractDisallowsRecoveryCards = contract !== null &&
+      (contract.cardsRole === 'none' ||
+        contract.catalogAction === 'none' ||
+        contract.productCardsPolicy === 'none');
+    const recoveredSelection = contractDisallowsRecoveryCards || shouldSkipRecoveryCatalogCards(latestUserText)
       ? { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined }
       : await this.productCardsFromRecoveredSelection(session.needState, latestUserText);
     const recoveryBlocksEstimatedPumpCards = Boolean(
@@ -7878,6 +7927,31 @@ function turnPlanSchema() {
             type: 'string',
             enum: ['technical_explanation', 'comparison', 'product_selection', 'mixed', 'lead_handoff']
           },
+          taskType: {
+            type: 'string',
+            enum: [
+              'pure_delivery',
+              'pure_availability',
+              'product_selection',
+              'product_selection_with_delivery',
+              'product_selection_with_availability',
+              'technical_answer',
+              'comparison',
+              'contact_refusal_continue_selection'
+            ]
+          },
+          catalogAction: {
+            type: 'string',
+            enum: ['none', 'exact_model_lookup', 'find_matching_products', 'verify_catalog_absence']
+          },
+          commercialAction: {
+            type: 'string',
+            enum: ['none', 'explain_manager_required', 'offer_contact_after_answer']
+          },
+          productCardsPolicy: {
+            type: 'string',
+            enum: ['none', 'show_exact_matches', 'show_matching_products', 'supporting_only']
+          },
           mustAnswerNow: {
             type: 'array',
             items: { type: 'string' },
@@ -7895,6 +7969,10 @@ function turnPlanSchema() {
         },
         required: [
           'answerTask',
+          'taskType',
+          'catalogAction',
+          'commercialAction',
+          'productCardsPolicy',
           'mustAnswerNow',
           'currentFocus',
           'cardsRole',

@@ -397,6 +397,65 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(false);
   });
 
+  it('rejects mixed 220/380 generators when the buyer explicitly requested strict 220 V', () => {
+    const mixedVoltage = productWithSpecs('mixed-voltage', 'TSS gasoline generator 8.0 kW 220/380 V', 120000, 'https://example.test/mixed-voltage', {
+      voltage: '220/380 V'
+    });
+    const singlePhase = productWithSpecs('single-phase', 'TSS gasoline generator 8.0 kW 220 V', 118000, 'https://example.test/single-phase', {
+      voltage: '220 V'
+    });
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        provenance: {
+          fuel: 'explicit_user',
+          singlePhase220: 'explicit_user'
+        }
+      }
+    });
+    const profile = assistantTestHooks.buildProductFitProfile(
+      { ...emptyNeedState(), selectionState },
+      'Need TSS gasoline generator 8-10 kW 220 V',
+      '',
+      baseTurnPlan().requiredProductTraits
+    );
+
+    expect(assistantTestHooks.productSelectionHardViolation(mixedVoltage as any, selectionState, profile)).toContain('220/380');
+    expect(assistantTestHooks.productSelectionHardViolation(singlePhase as any, selectionState, profile)).toBeNull();
+  });
+
+  it('does not leave concrete model names in product-recommendation text when no cards are shown', () => {
+    const candidate = productWithSpecs('candidate', 'TSS SGG 8000EH3NUA gasoline generator 220/380 V', 120000, 'https://example.test/candidate', {});
+    const answer = 'Подойдет TSS SGG 8000EH3NUA, это хороший вариант под ваш запрос.';
+    const repaired = assistantTestHooks.repairAnswerForFinalCards(
+      answer,
+      [],
+      [candidate] as any,
+      emptyNeedState(),
+      'Подберите генератор ТСС 8-10 кВт 220',
+      baseTurnPlan({
+        action: 'recommend_products',
+        answerMode: 'productRecommendation',
+        cardPolicy: 'showProducts',
+        requiredProductTraits: {
+          ...baseTurnPlan().requiredProductTraits,
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          singlePhase220: true
+        }
+      })
+    );
+
+    expect(repaired).not.toContain('SGG 8000EH3NUA');
+    expect(repaired.trim().length).toBeGreaterThan(0);
+  });
+
   it('promotes a reliable first-turn house generator selection to product cards', async () => {
     const products = [
       productWithSpecs('fit-1', 'Generator gasoline inverter 2.8 kW electric start enclosed', 72_000, 'https://example.test/generators/fit-1/', {
