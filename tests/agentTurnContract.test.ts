@@ -146,4 +146,48 @@ describe('agent turn contract', () => {
     expect(plan.cardPolicy).toBe('showProducts');
     expect(plan.selectionState.shouldShowCards).toBe(true);
   });
+
+  it('keeps product selection with delivery as catalog/card work even when contact handoff is refused', () => {
+    const mixedPlan = {
+      ...basePlan,
+      action: 'collect_lead',
+      answerMode: 'leadCollection',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'collectLead',
+      selectedProductIds: [],
+      selectionState: {
+        shouldShowCards: false
+      },
+      agentDecision: {
+        answerTask: 'mixed' as const,
+        taskType: 'product_selection_with_delivery' as const,
+        catalogAction: 'find_matching_products' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'show_matching_products' as const,
+        mustAnswerNow: ['select matching generators first', 'explain that delivery is calculated by logistics'],
+        currentFocus: 'generator',
+        cardsRole: 'primary' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer declined contact but still wants product selection',
+        errorRecoveryPriority: 'Continue selection without asking for phone.',
+        confidence: 0.95
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Подберите ТСС 8-10 кВт 220 и посчитайте доставку, номер пока не оставляю',
+      plan: mixedPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(mixedPlan, contract);
+
+    expect(contract.taskType).toBe('product_selection_with_delivery');
+    expect(contract.catalogAction).toBe('find_matching_products');
+    expect(contract.productCardsPolicy).toBe('show_matching_products');
+    expect(plan.action).toBe('recommend_products');
+    expect(plan.answerMode).toBe('productRecommendation');
+    expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
+    expect(plan.selectionState.shouldShowCards).toBe(true);
+  });
 });

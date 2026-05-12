@@ -406,9 +406,25 @@ export type AgentAnswerTask =
   | 'lead_handoff';
 
 export type AgentCardsRole = 'none' | 'supporting' | 'primary';
+export type AgentTaskType =
+  | 'pure_delivery'
+  | 'pure_availability'
+  | 'product_selection'
+  | 'product_selection_with_delivery'
+  | 'product_selection_with_availability'
+  | 'technical_answer'
+  | 'comparison'
+  | 'contact_refusal_continue_selection';
+export type AgentCatalogAction = 'none' | 'exact_model_lookup' | 'find_matching_products' | 'verify_catalog_absence';
+export type AgentCommercialAction = 'none' | 'explain_manager_required' | 'offer_contact_after_answer';
+export type AgentProductCardsPolicy = 'none' | 'show_exact_matches' | 'show_matching_products' | 'supporting_only';
 
 export interface AgentTurnContract {
   answerTask: AgentAnswerTask;
+  taskType?: AgentTaskType;
+  catalogAction?: AgentCatalogAction;
+  commercialAction?: AgentCommercialAction;
+  productCardsPolicy?: AgentProductCardsPolicy;
   mustAnswerNow: string[];
   activeNeeds: Array<{
     id: string;
