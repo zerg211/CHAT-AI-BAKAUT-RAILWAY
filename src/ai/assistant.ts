@@ -208,7 +208,17 @@ type AssistantTurnPlan = {
   selectionState: SelectionState;
   agentDecision?: Partial<Pick<
     AgentTurnContract,
-    'answerTask' | 'mustAnswerNow' | 'currentFocus' | 'cardsRole' | 'leadAllowed' | 'leadAllowedReason' | 'errorRecoveryPriority'
+    | 'answerTask'
+    | 'taskType'
+    | 'catalogAction'
+    | 'commercialAction'
+    | 'productCardsPolicy'
+    | 'mustAnswerNow'
+    | 'currentFocus'
+    | 'cardsRole'
+    | 'leadAllowed'
+    | 'leadAllowedReason'
+    | 'errorRecoveryPriority'
   >> & { confidence?: number };
   needsWebSearch: boolean;
   missingInformation: string[];
@@ -972,11 +982,66 @@ function coerceAgentCardsRole(value: unknown): AgentTurnContract['cardsRole'] {
     : 'none';
 }
 
+function coerceAgentTaskType(value: unknown): AgentTurnContract['taskType'] | undefined {
+  const allowed: NonNullable<AgentTurnContract['taskType']>[] = [
+    'pure_delivery',
+    'pure_availability',
+    'product_selection',
+    'product_selection_with_delivery',
+    'product_selection_with_availability',
+    'technical_answer',
+    'comparison',
+    'contact_refusal_continue_selection'
+  ];
+  return allowed.includes(value as NonNullable<AgentTurnContract['taskType']>)
+    ? value as NonNullable<AgentTurnContract['taskType']>
+    : undefined;
+}
+
+function coerceAgentCatalogAction(value: unknown): AgentTurnContract['catalogAction'] | undefined {
+  const allowed: NonNullable<AgentTurnContract['catalogAction']>[] = [
+    'none',
+    'exact_model_lookup',
+    'find_matching_products',
+    'verify_catalog_absence'
+  ];
+  return allowed.includes(value as NonNullable<AgentTurnContract['catalogAction']>)
+    ? value as NonNullable<AgentTurnContract['catalogAction']>
+    : undefined;
+}
+
+function coerceAgentCommercialAction(value: unknown): AgentTurnContract['commercialAction'] | undefined {
+  const allowed: NonNullable<AgentTurnContract['commercialAction']>[] = [
+    'none',
+    'explain_manager_required',
+    'offer_contact_after_answer'
+  ];
+  return allowed.includes(value as NonNullable<AgentTurnContract['commercialAction']>)
+    ? value as NonNullable<AgentTurnContract['commercialAction']>
+    : undefined;
+}
+
+function coerceAgentProductCardsPolicy(value: unknown): AgentTurnContract['productCardsPolicy'] | undefined {
+  const allowed: NonNullable<AgentTurnContract['productCardsPolicy']>[] = [
+    'none',
+    'show_exact_matches',
+    'show_matching_products',
+    'supporting_only'
+  ];
+  return allowed.includes(value as NonNullable<AgentTurnContract['productCardsPolicy']>)
+    ? value as NonNullable<AgentTurnContract['productCardsPolicy']>
+    : undefined;
+}
+
 function coerceAgentDecision(value: any): AssistantTurnPlan['agentDecision'] | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const confidence = Number(value.confidence);
   return {
     answerTask: coerceAgentAnswerTask(value.answerTask),
+    taskType: coerceAgentTaskType(value.taskType),
+    catalogAction: coerceAgentCatalogAction(value.catalogAction),
+    commercialAction: coerceAgentCommercialAction(value.commercialAction),
+    productCardsPolicy: coerceAgentProductCardsPolicy(value.productCardsPolicy),
     mustAnswerNow: coerceStringList(value.mustAnswerNow, 8),
     currentFocus: String(value.currentFocus ?? '').trim().slice(0, 80),
     cardsRole: coerceAgentCardsRole(value.cardsRole),
@@ -5059,6 +5124,27 @@ function stripDeferredOfferTail(answer: string) {
     .replace(/(?:^|(?<=[.!?])\s+)Если\s+(?:хотите|хочешь),?\s+дальше\s+(?:лучше\s+)?(?:смотреть|подбирать|сравнивать|проверять|искать)[\s\S]{0,500}$/iu, '');
 }
 
+function shouldSuppressLeadRequestFromContract(contract: AgentTurnContract) {
+  if (!contract.leadAllowed) return true;
+  const selectionWithCommercialCheck = contract.taskType === 'product_selection_with_delivery' ||
+    contract.taskType === 'product_selection_with_availability' ||
+    contract.taskType === 'contact_refusal_continue_selection';
+  return selectionWithCommercialCheck && contract.commercialAction === 'explain_manager_required';
+}
+
+function stripLeadPressureTail(answer: string) {
+  const leadAskRe = /(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,120}(?:\u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435|\u043e\u0441\u0442\u0430\u0432\u044c\u0442\u0435|\u0443\u043a\u0430\u0436\u0438\u0442\u0435|\u043f\u0440\u0438\u0448\u043b\u0438\u0442\u0435|\u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435)[^.!?\n]{0,180}(?:\u0438\u043c\u044f|\u0442\u0435\u043b\u0435\u0444\u043e\u043d|\u043d\u043e\u043c\u0435\u0440|\u043a\u043e\u043d\u0442\u0430\u043a\u0442)[^.!?\n]*[.!?]?)/giu;
+  const leadSetupRe = /(?:^|(?<=[.!?])\s+)(?:\u0415\u0441\u043b\u0438\s+\u0445\u043e\u0442\u0438\u0442\u0435,\s+)?(?:\u044f\s+)?(?:\u043f\u0435\u0440\u0435\u0434\u0430\u043c|\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044e|\u043e\u0444\u043e\u0440\u043c\u0438\u043c|\u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u043c)[^.!?\n]{0,180}(?:\u0437\u0430\u044f\u0432|\u0440\u0430\u0441\u0447\u0435\u0442|\u043e\u0444\u043e\u0440\u043c)[^.!?\n]*[.!?]?/giu;
+  const cleaned = answer
+    .replace(leadAskRe, '')
+    .replace(leadSetupRe, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return cleaned || answer.trim();
+}
+
 function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
   let cleaned = answer
     .replace(/[^]*/g, '')
@@ -6510,7 +6596,9 @@ export class AssistantService {
     const cards: ProductCard[] = finalCards.cards;
     const cardDisplay = cardDisplayOptions(finalCards.initialVisibleCount, cards);
     const bundleTotalPrice = reliableBundleTotal(cards, input.userMessage, needState);
-    const autoLeadResult = purchasePlan.leadRequested
+    const suppressLeadRequestByContract = shouldSuppressLeadRequestFromContract(agentTurnContract);
+    const leadRequestedForAnswer = purchasePlan.leadRequested && !suppressLeadRequestByContract;
+    const autoLeadResult = leadRequestedForAnswer
       ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
       : null;
     const detailedFactStyle = shouldUseDetailedFactStyle(input.userMessage, effectivePlan, cards.length);
@@ -6589,7 +6677,7 @@ export class AssistantService {
           defaultLength: 'short',
           maxParagraphs: 2,
           maxBullets: 3,
-          guidance: purchasePlan.leadRequested
+          guidance: leadRequestedForAnswer
             ? agentTurnContract.answerTask === 'lead_handoff'
               ? 'The buyer is asking a commercial/specialist question, not necessarily buying now. First answer what is known: delivery/discount/availability/final terms require manager/logistics verification. If leadAllowed=true, ask for contact only as the next step for that verification. Do not show or re-list product cards unless cardsRole is primary. Do not treat this as a finalized order.'
               : 'The buyer is ready to proceed. Confirm the selected bundle shown in productCardsShown, mention item prices and the total from selectedBundleForLead when available, then ask them to leave name and phone in the opened form so a manager can verify availability/delivery and contact them. Do not say the order/lead is already created. Do not continue selecting alternatives.'
@@ -6694,9 +6782,9 @@ export class AssistantService {
         : null,
       cardSelectionDiagnostics: cardSelection.diagnostics,
       agentTurnContract,
-      leadRequested: purchasePlan.leadRequested && !autoLeadResult?.created,
+      leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
-      selectedBundleForLead: purchasePlan.leadRequested
+      selectedBundleForLead: leadRequestedForAnswer
         ? {
             items: cards.map((card) => ({
               name: card.name,
@@ -6748,6 +6836,9 @@ export class AssistantService {
       'For household generator load calculations, use answerContext.generatorSizingPolicy as the authority: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visibleCardNominalKw/visibleCardMaxKw are the only higher powers grounded by shown cards. Do not introduce a higher power class unless it is supported by the policy.',
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
       `AgentTurnContract: answerTask=${agentTurnContract.answerTask}; cardsRole=${agentTurnContract.cardsRole}; leadAllowed=${agentTurnContract.leadAllowed}. Must answer now before any cards: ${agentTurnContract.mustAnswerNow.join('; ') || agentTurnContract.errorRecoveryPriority}.`,
+      suppressLeadRequestByContract
+        ? 'The semantic contract does not allow a contact handoff as the answer action for this turn. You may say final availability, delivery price, discount, or logistics terms require manager/logistics verification, but do not ask the buyer for name, phone, contact, callback, or a form. Keep product selection moving from catalog cards.'
+        : '',
       factualVerificationGuidance,
       comparativeAnswerGuidance,
       troubleshootingMemoryGuidance,
@@ -6926,6 +7017,9 @@ export class AssistantService {
         ? 'какой насос стоит: скважинный, поверхностный, дренажный или насосная станция, и какая у него мощность/модель'
         : selectionResult.missingQuestions[0]
     });
+    if (suppressLeadRequestByContract) {
+      answer = stripLeadPressureTail(answer);
+    }
     answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards, finalCards.initialVisibleCount);
     const cardContract = enforceAnswerCardContract(
       answer,
@@ -7086,7 +7180,7 @@ export class AssistantService {
       productCards: cards,
       cardDisplay,
       usedWebSearch,
-      leadRequested: purchasePlan.leadRequested && !autoLeadResult?.created,
+      leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
       assistantMessageId: assistantMessage.id,
       metadata: {
@@ -8111,9 +8205,12 @@ export const assistantTestHooks = {
   parseWeightNeedRangeKg,
   parseDimensionNeedRangeMm,
   extractModelTokens,
+  coerceTurnPlan,
   fallbackTurnPlan,
   repairAnswerCardText,
   repairGeneratorLoadMinimumText,
+  shouldSuppressLeadRequestFromContract,
+  stripLeadPressureTail,
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
   deterministicAnswerGenerationFallback,
