@@ -115,12 +115,12 @@ describe('agentic #876 internal cycle', () => {
         catalogAction: 'none',
         commercialAction: 'none',
         productCardsPolicy: 'none',
-        mustAnswerNow: ['compare Baudouin and Doosan only after concrete models are known'],
+        mustAnswerNow: ['compare Baudouin and Doosan at a general engine-family level, then ask for exact model indices'],
         currentFocus: 'engine comparison',
         cardsRole: 'none',
         leadAllowed: false,
         leadAllowedReason: 'buyer asked for technical comparison, not a call',
-        errorRecoveryPriority: 'ask for concrete engine models without cards',
+        errorRecoveryPriority: 'give the general comparison first, then ask for concrete engine models without cards',
         confidence: 0.94
       }
     });
@@ -136,6 +136,7 @@ describe('agentic #876 internal cycle', () => {
     expect(comparisonContract.productCardsPolicy).toBe('none');
     expect(comparisonApplied.action).toBe('answer_question');
     expect(comparisonApplied.cardPolicy).toBe('textOnly');
+    expect(assistantTestHooks.technicalCurrentLevelAnswerGuidance(comparisonContract)).toContain('do not answer only by asking for exact model');
 
     const availabilityPlan = rawPlan({
       action: 'handoff_specialist',
@@ -199,7 +200,7 @@ describe('agentic #876 internal cycle', () => {
         compatibilityTargetProduct: '',
         mustHaveTraits: ['TSS', 'single phase 220 V'],
         niceToHaveTraits: [],
-        excludedClasses: [],
+        excludedClasses: ['generator', 'weldingGenerator'],
         brandConstraint: 'TSS',
         exactModelConstraint: '',
         isAccessoryFollowUp: false,
@@ -244,6 +245,7 @@ describe('agentic #876 internal cycle', () => {
         singlePhase220: true,
         nominalPowerKwMin: 8,
         nominalPowerKwMax: 10,
+        excludedClasses: ['generator', 'weldingGenerator'],
         provenance: {
           fuel: 'explicit_user',
           singlePhase220: 'explicit_user',
@@ -273,6 +275,12 @@ describe('agentic #876 internal cycle', () => {
     expect(selection.visibleProducts.map((item) => item.id)).toContain('single-220');
     expect(selection.visibleProducts.map((item) => item.id)).not.toContain('mixed-220-380');
     expect(selection.visibleProducts.map((item) => item.id)).not.toContain('three-phase');
+    const selectionTrace = selection.trace as {
+      hardConstraints: { excludedClasses?: string[] };
+      diagnosticRejectedProducts: Array<{ productId: string; reason?: string | null }>;
+    };
+    expect(selectionTrace.hardConstraints.excludedClasses ?? []).not.toContain('generator');
+    expect(selectionTrace.diagnosticRejectedProducts.find((item) => item.productId === 'single-220')?.reason ?? '').not.toMatch(/excluded class generator/i);
     expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(selectionContract)).toBe(true);
 
     const leadPressure = ru('\\u041f\\u043e\\u0434 \\u0432\\u0430\\u0448 \\u0437\\u0430\\u043f\\u0440\\u043e\\u0441 \\u043f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 TSS SGG 10000EHA. \\u0414\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443 \\u0434\\u043e \\u0415\\u0439\\u0441\\u043a\\u0430 \\u043d\\u0443\\u0436\\u043d\\u043e \\u0443\\u0442\\u043e\\u0447\\u043d\\u044f\\u0442\\u044c \\u0443 \\u043b\\u043e\\u0433\\u0438\\u0441\\u0442\\u0438\\u043a\\u0438. \\u041d\\u0430\\u043f\\u0438\\u0448\\u0438\\u0442\\u0435 \\u0438\\u043c\\u044f \\u0438 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d, \\u043c\\u0435\\u043d\\u0435\\u0434\\u0436\\u0435\\u0440 \\u0443\\u0442\\u043e\\u0447\\u043d\\u0438\\u0442 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435 \\u0438 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443.');

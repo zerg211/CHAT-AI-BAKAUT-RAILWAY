@@ -51,9 +51,12 @@ function assertPhase(step) {
   assertNoCriticalText(answer, phase);
 
   if (expect === 'noCards') {
-    if (cardCount > 0 || hasCardUi(pageText)) throw new Error(`Engine comparison produced product cards in ${phase}.`);
+    if (cardCount > 0 || productText.trim()) throw new Error(`Engine comparison produced product cards in ${phase}.`);
     if (/Husqvarna|виброплит|алмазн/iu.test(pageText)) throw new Error(`Engine comparison leaked unrelated product context in ${phase}.`);
     if (!/(Baudouin|Doosan|двигател|бадуин|дусан)/iu.test(answer)) throw new Error(`Engine comparison lost topic: ${answer}`);
+    if (!/(in general|typically|usually|resource|service|spare|load|industrial|Baudouin[\s\S]{0,300}Doosan|Doosan[\s\S]{0,300}Baudouin|\u0432\s+\u0446\u0435\u043b\u043e\u043c|\u043e\u0431\u044b\u0447\u043d|\u0440\u0435\u0441\u0443\u0440\u0441|\u0441\u0435\u0440\u0432\u0438\u0441|\u0437\u0430\u043f\u0447\u0430\u0441\u0442|\u043d\u0430\u0433\u0440\u0443\u0437|\u043f\u0440\u043e\u043c\u044b\u0448\u043b)/iu.test(answer)) {
+      throw new Error(`Engine comparison was clarification-only instead of a useful general answer: ${answer}`);
+    }
   }
 
   if (expect === 'availability' && !/(налич|каталог|карточк|модель|ТСС|TSS)/iu.test(answer)) {
@@ -65,7 +68,7 @@ function assertPhase(step) {
   }
 
   if (expect === 'cards' || expect === 'cardsDelivery' || expect === 'cardsNoLeadPressure') {
-    if (cardCount < 1 && !hasCardUi(pageText)) throw new Error(`Expected catalog product cards in ${phase}, got none.`);
+    if (cardCount < 1) throw new Error(`Expected catalog product cards in ${phase}, got none.`);
     if (/220\s*\/\s*380|380\s*\/\s*220/iu.test(productText)) {
       throw new Error(`Strict 220 V selection exposed a mixed 220/380 product in ${phase}: ${productText}`);
     }
