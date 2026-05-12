@@ -5192,6 +5192,11 @@ function technicalCurrentLevelAnswerGuidance(contract: AgentTurnContract) {
   return 'For this technical/comparison turn, do not answer only by asking for exact model, power, duty cycle, or other missing inputs. First answer the buyer question at the highest truthful specificity available: general engineering comparison, typical tradeoffs, fit by use case, or bounded practical conclusion. Clearly mark what is general and what depends on exact model/data. Ask at most two precise clarifying questions only after the direct answer.';
 }
 
+function commercialManagerVerificationGuidance(contract: AgentTurnContract) {
+  if (contract.commercialAction !== 'explain_manager_required') return '';
+  return 'This turn includes a commercial fact that cannot be promised by the bot. If the answer mentions live stock, warehouse availability, delivery price, delivery terms, discounts, order timing, or special conditions, explicitly say that the final value/terms are checked by a manager or logistics. Do not replace that with a vague refusal like "I cannot name it"; keep the product/technical answer moving, and only ask for contact when the semantic contract allows it.';
+}
+
 function stripLeadPressureTail(answer: string) {
   const leadAskRe = /(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,120}(?:\u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435|\u043e\u0441\u0442\u0430\u0432\u044c\u0442\u0435|\u0443\u043a\u0430\u0436\u0438\u0442\u0435|\u043f\u0440\u0438\u0448\u043b\u0438\u0442\u0435|\u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435)[^.!?\n]{0,180}(?:\u0438\u043c\u044f|\u0442\u0435\u043b\u0435\u0444\u043e\u043d|\u043d\u043e\u043c\u0435\u0440|\u043a\u043e\u043d\u0442\u0430\u043a\u0442)[^.!?\n]*[.!?]?)/giu;
   const leadSetupRe = /(?:^|(?<=[.!?])\s+)(?:\u0415\u0441\u043b\u0438\s+\u0445\u043e\u0442\u0438\u0442\u0435,\s+)?(?:\u044f\s+)?(?:\u043f\u0435\u0440\u0435\u0434\u0430\u043c|\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044e|\u043e\u0444\u043e\u0440\u043c\u0438\u043c|\u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u043c)[^.!?\n]{0,180}(?:\u0437\u0430\u044f\u0432|\u0440\u0430\u0441\u0447\u0435\u0442|\u043e\u0444\u043e\u0440\u043c)[^.!?\n]*[.!?]?/giu;
@@ -6898,8 +6903,9 @@ export class AssistantService {
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
       `AgentTurnContract: answerTask=${agentTurnContract.answerTask}; cardsRole=${agentTurnContract.cardsRole}; leadAllowed=${agentTurnContract.leadAllowed}. Must answer now before any cards: ${agentTurnContract.mustAnswerNow.join('; ') || agentTurnContract.errorRecoveryPriority}.`,
       technicalCurrentLevelAnswerGuidance(agentTurnContract),
+      commercialManagerVerificationGuidance(agentTurnContract),
       suppressLeadRequestByContract
-        ? 'The semantic contract does not allow a contact handoff as the answer action for this turn. You may say final availability, delivery price, discount, or logistics terms require manager/logistics verification, but do not ask the buyer for name, phone, contact, callback, or a form. Keep product selection moving from catalog cards.'
+        ? 'The semantic contract does not allow a contact handoff as the answer action for this turn. If final availability, delivery price, discount, or logistics terms are mentioned, state that a manager/logistics must verify them, but do not ask the buyer for name, phone, contact, callback, or a form. Keep product selection moving from catalog cards.'
         : '',
       factualVerificationGuidance,
       comparativeAnswerGuidance,
@@ -7344,7 +7350,8 @@ export class AssistantService {
             contract
               ? `TurnContract: answerTask=${contract.answerTask}; cardsRole=${contract.cardsRole}; leadAllowed=${contract.leadAllowed}; mustAnswerNow=${contract.mustAnswerNow.join('; ') || contract.errorRecoveryPriority}.`
               : '',
-            contract ? technicalCurrentLevelAnswerGuidance(contract) : ''
+            contract ? technicalCurrentLevelAnswerGuidance(contract) : '',
+            contract ? commercialManagerVerificationGuidance(contract) : ''
           ].filter(Boolean).join('\n\n'),
           input: [{
             role: 'user',
@@ -8274,6 +8281,7 @@ export const assistantTestHooks = {
   repairGeneratorLoadMinimumText,
   shouldSuppressLeadRequestFromContract,
   technicalCurrentLevelAnswerGuidance,
+  commercialManagerVerificationGuidance,
   stripLeadPressureTail,
   sanitizeSelfExcludingSelectionState,
   generatorSizingPolicyForAnswer,
