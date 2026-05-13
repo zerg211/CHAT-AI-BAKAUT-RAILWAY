@@ -85,6 +85,19 @@ function assertPhase(step) {
     if (/тр[её]х\s*фаз|тр[её]хфаз|230\s*\/\s*400|220\s*\/\s*380|380\s*\/\s*220|380\s*В|400\s*В/iu.test(productText)) {
       throw new Error(`Strict 220 V selection exposed a mixed 220/380 product in ${phase}: ${productText}`);
     }
+    if (/12000|12[,.]0?\s*кВт|12\s*kW/iu.test(productText)) {
+      throw new Error(`Strict 8-10 kW selection exposed a 12 kW product in ${phase}: ${productText}`);
+    }
+  }
+
+  if (phase === 'range_availability_selection') {
+    const rangeEvidence = `${answer}\n${productText}`;
+    for (const required of [/SGG\s*9000ELA/iu, /SGG\s*10000EI/iu, /SGG\s*10000EHA/iu]) {
+      if (!required.test(rangeEvidence)) throw new Error(`8-10 kW TSS range omitted expected catalog model ${required}: ${rangeEvidence}`);
+    }
+    if (/12000|12[,.]0?\s*кВт|12\s*kW/iu.test(answer)) {
+      throw new Error(`8-10 kW range answer discussed 12 kW as a catalog variant: ${answer}`);
+    }
   }
 
   if (expect === 'cardsDelivery') {
@@ -119,8 +132,13 @@ async function collectMessages(frame) {
   })));
 }
 
-async function collectProductText(frame) {
-  return frame.locator('.product-card').evaluateAll((nodes) => nodes.map((node) => node.textContent?.replace(/\s+/g, ' ').trim() ?? '').join('\n')).catch(() => '');
+async function collectProductText(frame, skip = 0) {
+  return frame.locator('.product-card').evaluateAll((nodes, start) =>
+    nodes
+      .slice(Number(start) || 0)
+      .map((node) => node.textContent?.replace(/\s+/g, ' ').trim() ?? '')
+      .join('\n'), skip
+  ).catch(() => '');
 }
 
 async function readWidgetSessionId(page) {
@@ -212,6 +230,7 @@ async function main() {
     await frame.getByRole('button').filter({ hasText: /чат|консультант|задать|написать/i }).first().click({ timeout: 20_000 }).catch(() => undefined);
     const input = frame.locator('textarea, input[type="text"]').first();
     await input.waitFor({ state: 'visible', timeout: 60_000 });
+    let previousProductCardCount = await frame.locator('.product-card').count().catch(() => 0);
 
     for (const turn of turns) {
       await waitInputEnabled(input);
@@ -223,8 +242,10 @@ async function main() {
       const messages = await collectMessages(frame);
       const answer = latestAssistant(messages);
       const pageText = await frame.locator('body').innerText().catch(() => '');
-      const productText = await collectProductText(frame);
-      const cardCount = await frame.locator('.product-card').count().catch(() => 0);
+      const totalCardCount = await frame.locator('.product-card').count().catch(() => 0);
+      const productText = await collectProductText(frame, previousProductCardCount);
+      const cardCount = Math.max(0, totalCardCount - previousProductCardCount);
+      previousProductCardCount = totalCardCount;
       const step = { ...turn, answer, pageText, productText, cardCount };
       if (!answer) throw new Error(`Empty assistant answer after ${turn.phase}`);
       assertPhase(step);

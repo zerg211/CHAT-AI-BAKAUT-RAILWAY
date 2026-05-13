@@ -1789,6 +1789,103 @@ describe('recommendation ranking', () => {
     expect(result.matchedProducts[0]?.id).toBe('cheaper-new');
   });
 
+  it('does not cage a fresh catalog range selection inside stale previous generator cards', async () => {
+    const tss8 = productWithSpecs('tss-8', ru('Генератор бензиновый ТСС SGG 9000ELA (8,0 кВт)'), 95059, 'https://example.test/tss-8/', {
+      'Номинальная мощность': '8,0 кВт',
+      'Напряжение': '230 В',
+      'Число фаз': 'однофазные'
+    });
+    const tss9 = productWithSpecs('tss-9', ru('Генератор бензиновый инверторный ТСС SGG 10000EI (9,0 кВт)'), 153112, 'https://example.test/tss-9/', {
+      'Номинальная мощность': '9,0 кВт',
+      'Напряжение': '230 В',
+      'Число фаз': 'однофазные'
+    });
+    const tss10 = productWithSpecs('tss-10', ru('Генератор бензиновый ТСС SGG 10000EHA (10,0 кВт)'), 213941, 'https://example.test/tss-10/', {
+      'Номинальная мощность': '10,0 кВт',
+      'Напряжение': '230 В',
+      'Число фаз': 'однофазные'
+    });
+    const tss12 = productWithSpecs('tss-12', ru('Генератор бензиновый ТСС SGG 12000EHLA (12,0 кВт)'), 270006, 'https://example.test/tss-12/', {
+      'Номинальная мощность': '12,0 кВт',
+      'Напряжение': '230 В',
+      'Число фаз': 'однофазные'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([tss10, tss12, tss8, tss9] as any) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        selectedProductIds: ['tss-10', 'tss-12'],
+        matchedProductIds: ['tss-10', 'tss-12'],
+        previousCandidateProductIds: ['tss-10', 'tss-12'],
+        rankingPreference: 'cheapest',
+        confidence: 0.9,
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          exactModelTokenRoles: [],
+          mustHaveTraits: ['бренд ТСС', 'бензиновый', 'номинальная мощность 10 кВт', 'однофазный 220 В'],
+          excludedClasses: [],
+          fuel: 'gasoline',
+          startType: 'any',
+          enclosure: 'any',
+          conventionalGenerator: null,
+          singlePhase220: true,
+          brandConstraint: 'ТСС',
+          nominalPowerKwMin: 10,
+          provenance: {
+            fuel: 'planner',
+            singlePhase220: 'planner',
+            brandConstraint: 'planner',
+            nominalPowerKwMin: 'planner'
+          }
+        } as any
+      })
+    });
+    const plan = baseTurnPlan({
+      contextScope: 'previousSelection',
+      searchScope: 'previousSelectionOnly',
+      selectedProductIds: [],
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        nominalPowerKwMin: 10
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'ТСС',
+        mustHaveTraits: ['бренд ТСС', 'бензиновый', 'мощность 8-10 кВт', 'однофазный 220 В'],
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      },
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'find_matching_products',
+        currentFocus: 'TSS gasoline single-phase generator 8-10 kW',
+        mustAnswerNow: ['show all matching 8-10 kW TSS generators']
+      })
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'А что есть в наличии от 8 до 10 кВт?',
+      state,
+      plan,
+      [tss10, tss12] as any
+    );
+
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBe(8);
+    expect(result.state.hardConstraints.nominalPowerKwMax).toBe(10);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['tss-8', 'tss-9', 'tss-10']);
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('tss-12');
+    expect((result.trace as any).stalePreviousSelectionCageRepaired).toBe(true);
+  });
+
   it('sorts suitable products cheapest-first under a budget ceiling unless premium is requested', async () => {
     const cheap = productWithSpecs('cheap-ok', ru('Генератор бензиновый 5.0 kW бюджетный'), 61000, 'https://example.test/cheap-ok/', {
       'Номинальная мощность': '5.0 кВт',

@@ -3687,6 +3687,16 @@ function explicitCriteriaFromTurn(
   const loadProfileCanSetPower = isReliableGeneratorLoadProfile(loadProfile) &&
     (!groundedPowerMin || (loadProfile?.requiredNominalKw ?? 0) > groundedPowerMin);
   const loadProfileOverridesPlannerPower = Boolean(loadProfileCanSetPower && (semanticSelectionReady || !hasExplicitGeneratorPowerRequest(userMessage)));
+  const latestExplicitPowerRange = targetProductClass === 'generator'
+    ? parseDesiredPowerRange(userMessage)
+    : undefined;
+  const latestPowerRange = latestExplicitPowerRange
+    ? {
+        nominalMin: latestExplicitPowerRange.min,
+        nominalMax: latestExplicitPowerRange.max,
+        source: 'explicit_text' as const
+      }
+    : undefined;
   const plannerPower = targetProductClass === 'generator' && !loadProfileOverridesPlannerPower && (
     plannerTraits.nominalPowerKwMin ||
     plannerTraits.nominalPowerKwMax ||
@@ -3703,12 +3713,12 @@ function explicitCriteriaFromTurn(
     : undefined;
   const exactPowerFromLatestUser = plannerPowerRangeBroadensExplicitSinglePower(userMessage, plannerPower);
   const effectivePlannerPower: GeneratorPowerProfile | undefined = exactPowerFromLatestUser
-    ? {
+    ? latestPowerRange ?? {
         nominalMin: exactPowerFromLatestUser,
         nominalMax: exactPowerFromLatestUser,
         source: 'explicit_text' as const
       }
-    : plannerPower;
+    : latestPowerRange ?? plannerPower;
   const contextualPower = targetProductClass === 'generator' && !plannerPower && contextualGroundedPowerMin && !loadProfileCanSetPower
     ? { min: contextualGroundedPowerMin, max: Math.round((contextualGroundedPowerMin + Math.max(1.5, contextualGroundedPowerMin * 0.08)) * 10) / 10, source: 'explicit_user' as const }
     : undefined;
@@ -6242,7 +6252,19 @@ export class AssistantService {
           : await this.products.listProducts(5000).catch(() => []))
       : [];
     const unscopedSourceProducts = shouldUseCatalog ? mergeProductsById(allProducts, [...baseCandidates, ...exactTargetProducts]) : mergeProductsById(baseCandidates, exactTargetProducts);
-    const previousSelectionOnly = plan.searchScope === 'previousSelectionOnly';
+    const latestRangeOrLimit = Boolean(
+      parseDesiredPowerRange(userMessage) ||
+      parseWeightNeedRangeKg(userMessage) ||
+      parseDimensionNeedRangeMm(userMessage) ||
+      parseBudgetMax(userMessage)
+    );
+    const stalePreviousSelectionCage = plan.searchScope === 'previousSelectionOnly' &&
+      latestRangeOrLimit &&
+      plan.action === 'recommend_products' &&
+      plan.cardPolicy === 'showProducts' &&
+      plan.agentDecision?.catalogAction === 'find_matching_products' &&
+      !plan.selectedProductIds.length;
+    const previousSelectionOnly = plan.searchScope === 'previousSelectionOnly' && !stalePreviousSelectionCage;
     const currentVisibleSelectionIds = uniqueList([
       ...(contract?.selection.selectedProductIds ?? []),
       ...selectionState.selectedProductIds
@@ -6485,6 +6507,7 @@ export class AssistantService {
         totalComparison: comparisonProducts.length,
         exactLookupAlternative,
         exactLookupAlternativeIds: exactLookupAlternative ? matchedProducts.map((product) => product.id) : [],
+        stalePreviousSelectionCageRepaired: stalePreviousSelectionCage,
         diagnosticRejectedProducts,
         canRecommendFromSelection,
         catalogShortlistTurn,
