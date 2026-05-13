@@ -218,6 +218,50 @@ describe('agent turn contract', () => {
     expect(plan.selectionState.shouldShowCards).toBe(false);
   });
 
+  it('shows close catalog candidates as supporting cards for exact model lookup', () => {
+    const exactLookupPlan = {
+      ...basePlan,
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      selectedProductIds: ['bison-bs3250i'],
+      selectionState: {
+        shouldShowCards: false
+      },
+      answerGuidance: 'Точной модели BISON 3250 нет, не показывай карточки.',
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'pure_availability' as const,
+        catalogAction: 'exact_model_lookup' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['answer exact model availability and offer close catalog candidate'],
+        currentFocus: 'BISON 3250',
+        cardsRole: 'none' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer asked exact model availability only',
+        errorRecoveryPriority: 'show close candidate and ask whether it was meant',
+        confidence: 0.9
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'BISON 3250 есть у вас?',
+      plan: exactLookupPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(exactLookupPlan, contract);
+
+    expect(contract.catalogAction).toBe('exact_model_lookup');
+    expect(contract.productCardsPolicy).toBe('supporting_only');
+    expect(contract.cardsRole).toBe('supporting');
+    expect(contract.validatorWarnings).toContain('exact_lookup_candidate_cards_repaired');
+    expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.selectionState.shouldShowCards).toBe(true);
+    expect(plan.answerGuidance).not.toContain('не показывай карточки');
+    expect(plan.answerGuidance).toContain('close model');
+  });
+
   it('keeps product selection with delivery as catalog/card work even when contact handoff is refused', () => {
     const mixedPlan = {
       ...basePlan,

@@ -122,9 +122,12 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
       : catalogAction === 'find_matching_products'
         ? 'show_matching_products'
         : 'none';
+  const exactLookupHasSelectedCandidate = catalogAction === 'exact_model_lookup' && plan.selectedProductIds.length > 0;
   const productCardsPolicy = selectionTaskRequiresCatalog && rawProductCardsPolicy === 'none'
     ? 'show_matching_products'
-    : rawProductCardsPolicy;
+    : exactLookupHasSelectedCandidate && rawProductCardsPolicy === 'none'
+      ? 'supporting_only'
+      : rawProductCardsPolicy;
   const answerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
     ? decision.answerTask as AgentTurnContract['answerTask']
     : taskType === 'comparison'
@@ -171,6 +174,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   }
   if (selectionTaskRequiresCatalog && rawProductCardsPolicy !== productCardsPolicy) {
     validatorWarnings.push('selection_task_cards_policy_repaired');
+  }
+  if (exactLookupHasSelectedCandidate && rawProductCardsPolicy === 'none') {
+    validatorWarnings.push('exact_lookup_candidate_cards_repaired');
   }
   if (rawCommercialAction !== commercialAction) {
     validatorWarnings.push('commercial_action_repaired_for_manager_verification');
@@ -282,6 +288,26 @@ export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, con
         contract.leadAllowed
           ? 'AgentTurnContract treats this turn as product selection. Use validated catalog selection as primary output and show product cards when validators allow it.'
           : 'Buyer refused contact handoff, not catalog selection. Continue product selection with validated cards, but do not ask for a phone as the main answer.'
+      ].filter(Boolean).join('\n')
+    };
+  }
+  if (shouldShowCatalogCards) {
+    return {
+      ...plan,
+      action: plan.action === 'collect_lead' || plan.action === 'handoff_specialist' ? 'answer_question' : plan.action,
+      answerMode: plan.answerMode === 'leadCollection' ? 'short' : plan.answerMode,
+      cardPolicy: 'showProducts',
+      followUpPolicy: contract.leadAllowed ? plan.followUpPolicy : 'answerNowNoDeferredOffer',
+      selectionState: {
+        ...plan.selectionState,
+        shouldShowCards: true
+      },
+      answerGuidance: [
+        originalGuidance,
+        contractRepaired
+          ? 'AgentTurnContract found catalog candidates for an exact lookup. Show them as supporting alternatives, do not claim the conversation is finished by absence of the exact spelling, and ask whether the buyer meant the close model.'
+          : undefined,
+        'Use shown cards only as supporting catalog evidence for the direct answer; do not turn the answer into a broad product selection.'
       ].filter(Boolean).join('\n')
     };
   }

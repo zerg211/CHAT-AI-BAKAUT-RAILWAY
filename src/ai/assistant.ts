@@ -5008,16 +5008,16 @@ function deterministicLeadCollectionAnswer(
   const priceText = totalText ? ` Ориентир по сумме: ${totalText}.` : '';
   const handoffContext = operationalHandoffContext(userMessage, itemsText);
   const contactText = contactContext.autoLead?.created
-    ? 'Контакт получил, заявку сформировал и передал менеджеру вместе с кратким содержанием диалога. Менеджер сверит наличие, актуальную цену и доставку перед подтверждением.'
+    ? 'Контакт получил, заявку сформировал вместе с кратким содержанием диалога. Наличие, актуальную цену и доставку сверю перед подтверждением.'
     : contactContext.autoLead?.missing === 'name'
-      ? 'Контакт в сообщении вижу, но для заявки не хватает имени. Напишите имя или заполните форму, чтобы менеджер корректно взял запрос в работу.'
+      ? 'Контакт в сообщении вижу, но для заявки не хватает имени. Напишите имя или заполните форму, чтобы я корректно взял запрос в работу.'
       : contactContext.hasProvidedContact
     ? contactContext.asksContactHandling
-      ? 'Контакт в сообщении вижу, но отдельная заявка автоматически не создана. Чтобы контакт точно попал в обработку, заполните форму; менеджер сможет сверить вопрос по этому диалогу.'
-      : 'Контакт в сообщении вижу, но для надежной передачи менеджеру оставьте его в форме.'
+      ? 'Контакт в сообщении вижу, но отдельная заявка автоматически не создана. Чтобы контакт точно попал в обработку, заполните форму; вопрос сверю по этому диалогу.'
+      : 'Контакт в сообщении вижу, но для надежной обработки оставьте его в форме.'
     : 'Оставьте контакты в форме. Напишите имя и телефон — перезвоню уже с готовым ответом.';
   const leadStatusText = contactContext.autoLead?.created
-    ? 'Заявку создал как обращение для менеджера; финальные условия менеджер подтвердит после проверки.'
+    ? 'Заявку создал; финальные условия сверю после проверки.'
     : '';
 
   return [
@@ -5050,10 +5050,10 @@ function operationalHandoffContext(userMessage: string, fallbackItemsText: strin
       ? `детали по ${itemText}`
       : 'детали по вашему запросу';
   const responsible = asksDelivery && (asksStock || asksPrice || asksDiscount)
-    ? 'у логиста и менеджера'
+    ? 'через логистику и по складу'
     : asksDelivery
-      ? 'у логиста'
-      : 'у менеджера';
+      ? 'через логистику'
+      : 'по складу';
   return {
     responsible,
     verb: asksDelivery ? 'уточню' : 'проверю',
@@ -5140,6 +5140,18 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
   const currentNeedAllowsProduct = (product: Product) =>
     productMatchesSelectionCriteria(product, selectionState, profile) &&
     productFitPenalty(product, profile) >= 0;
+  const withoutExactModelConstraint = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
+    ...criteria,
+    exactModelConstraint: '',
+    exactModelTokens: []
+  });
+  const relaxedExactLookupState: ProductSelectionState = {
+    ...selectionState,
+    activeRequirement: selectionState.activeRequirement
+      ? withoutExactModelConstraint(selectionState.activeRequirement)
+      : selectionState.activeRequirement,
+    hardConstraints: withoutExactModelConstraint(selectionState.hardConstraints)
+  };
   const structuredSelectionMatchedIds = new Set(selectionState.matchedProductIds ?? []);
   const structuredSelectionAllowsSelectedProduct = (product: Product) =>
     structuredSelectionAuthoritative &&
@@ -5147,6 +5159,15 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     isCoreEquipment(product) &&
     (selectionState.targetProductClass === 'unknown' || productMatchesIntent(product, selectionState.targetProductClass as ProductIntent)) &&
     productFitPenalty(product, profile) > -260;
+  const exactLookupSelectedIds = new Set(
+    plan.agentDecision?.catalogAction === 'exact_model_lookup'
+      ? plan.selectedProductIds
+      : []
+  );
+  const exactLookupSelectedAlternative = (product: Product) =>
+    exactLookupSelectedIds.has(product.id) &&
+    productMatchesSelectionCriteria(product, relaxedExactLookupState, profile) &&
+    productFitPenalty(product, profile) >= 0;
 
   const isBroadenComparisonAnchor = (product: Product) =>
     plan.searchScope === 'broadenAlternatives' && productHasExactModel(product, profile);
@@ -5166,8 +5187,8 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     .filter((product) => previousSelectionOnly
       ? true
       : leadRequested || structuredSelectionAuthoritative
-      ? productMatchesSelectionCriteria(product, selectionState, profile) || structuredSelectionAllowsSelectedProduct(product)
-      : currentNeedAllowsProduct(product));
+      ? productMatchesSelectionCriteria(product, selectionState, profile) || structuredSelectionAllowsSelectedProduct(product) || exactLookupSelectedAlternative(product)
+      : currentNeedAllowsProduct(product) || exactLookupSelectedAlternative(product));
   if (!leadRequested && !preserveSelectedOrder) selectedCards.sort((a, b) => rankingScore(b) - rankingScore(a));
   const selectedRejectedCount = selected.length - selectedCards.length;
 
@@ -5453,7 +5474,7 @@ function buildCompactAnswerSystemPrompt() {
     'Answer in Russian, directly and naturally. Do not output JSON.',
     'Use only the provided answerContext for concrete product names, prices, specs, and catalog facts. If productCardsShown is present, those cards are the authoritative visible recommendations.',
     'For product-card turns, keep the text short: a practical conclusion, one main model if needed, and one brief tradeoff. Let the cards carry the full catalog list.',
-    'Do not claim live warehouse availability, delivery cost, discounts, special terms, or deadlines as final. Separate catalog presence from manager/logistics verification.',
+    'Do not claim live warehouse availability, delivery cost, discounts, special terms, or deadlines as final. Speak as the BAKAUT AI manager: separate catalog presence from your own stock/logistics verification wording, not from a third-person manager.',
     'Do not ask for name, phone, callback, or a form unless agentTurnContract.leadAllowed is true and the current task actually requires specialist follow-up.',
     'For technical or comparison turns, answer the buyer question first at the truthful general level, then mention what depends on exact model or conditions.',
     'If catalog matches are shown, do not say there are no matching products. If no trustworthy catalog product is provided, do not invent model names.'
@@ -5462,7 +5483,7 @@ function buildCompactAnswerSystemPrompt() {
 
 function commercialManagerVerificationGuidance(contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return '';
-  return 'This turn includes a commercial fact that cannot be promised by the bot. If the answer mentions live stock, warehouse availability, delivery price, delivery terms, discounts, order timing, or special conditions, explicitly say that the final value/terms are checked by a manager or logistics. Do not replace that with a vague refusal like "I cannot name it"; keep the product/technical answer moving, and only ask for contact when the semantic contract allows it.';
+  return 'This turn includes a commercial fact that cannot be promised as final from catalog data alone. If the answer mentions live stock, warehouse availability, delivery price, delivery terms, discounts, order timing, or special conditions, explicitly say it in first person as the BAKAUT AI manager: "актуальный склад сверю перед оформлением" or "доставку посчитаю по адресу через логистику". Do not write that a third-person manager must confirm it. Do not replace the useful answer with a vague refusal; keep the product/technical answer moving, and only ask for contact when the semantic contract allows it.';
 }
 
 function stripLeadPressureTail(answer: string) {
@@ -5480,17 +5501,18 @@ function stripLeadPressureTail(answer: string) {
 
 function ensureCommercialManagerVerification(answer: string, contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return answer;
+  const hasFirstPersonCheck = /(сверю|уточню|проверю|посчитаю|согласую|перед\s+оформлением)/iu.test(answer);
   const alreadyHasSpecialistVerification = (contract.taskType === 'pure_delivery' || contract.taskType === 'product_selection_with_delivery')
-    ? /(менеджер|логист)/iu.test(answer) && /(доставк|стоимост|услов|срок|адрес)/iu.test(answer)
+    ? ((hasFirstPersonCheck || /(логист)/iu.test(answer)) && /(доставк|стоимост|услов|срок|адрес|отправк)/iu.test(answer))
     : (contract.taskType === 'pure_availability' || contract.taskType === 'product_selection_with_availability')
-      ? /(менеджер|логист)/iu.test(answer) && /(налич|склад|отгруз|остат)/iu.test(answer)
-      : /(менеджер|специалист|логист)/iu.test(answer);
+      ? (hasFirstPersonCheck && /(налич|склад|отгруз|остат)/iu.test(answer))
+      : hasFirstPersonCheck || /(логист)/iu.test(answer);
   if (alreadyHasSpecialistVerification) return answer;
   const sentence = contract.taskType === 'pure_delivery' || contract.taskType === 'product_selection_with_delivery'
-    ? ' Точную стоимость и условия доставки должен подтвердить менеджер или логистика по адресу и способу отправки.'
+    ? ' Точную стоимость и условия доставки посчитаю по адресу и способу отправки через логистику.'
     : contract.taskType === 'pure_availability' || contract.taskType === 'product_selection_with_availability'
-      ? ' Точное наличие и возможность отгрузки должен подтвердить менеджер по актуальному складу.'
-      : ' Точные коммерческие условия должен подтвердить менеджер.';
+      ? ' Актуальный склад и возможность отгрузки сверю перед оформлением.'
+      : ' Точные коммерческие условия сверю перед оформлением.';
   const trimmed = answer.trim();
   if (!trimmed) return sentence.trim();
   const hasTerminalPunctuation = trimmed.endsWith('.') || trimmed.endsWith('!') || trimmed.endsWith('?');
@@ -5503,6 +5525,11 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, (_match, label: string) => visibleLinkLabel(label))
     .replace(/https?:\/\/\S+/gi, '')
     .replace(/\b(?:[\w-]+\.)+(?:ru|com|net|org|рф|su|io|dev|shop|site)\b(?:\/\S*)?/gi, '')
+    .replace(/Живое\s+складское\s+наличие\s+и\s+условия\s+проверяет\s+менеджер\.?/giu, 'Актуальный склад и условия отгрузки сверю перед оформлением.')
+    .replace(/Точное\s+наличие\s+и\s+возможность\s+отгрузки\s+должен\s+подтвердить\s+менеджер\s+по\s+актуальному\s+складу\.?/giu, 'Актуальный склад и возможность отгрузки сверю перед оформлением.')
+    .replace(/Точную\s+стоимость\s+и\s+условия\s+доставки\s+должен\s+подтвердить\s+менеджер\s+или\s+логистика\s+по\s+адресу\s+и\s+способу\s+отправки\.?/giu, 'Точную стоимость и условия доставки посчитаю по адресу и способу отправки через логистику.')
+    .replace(/Точные\s+коммерческие\s+условия\s+должен\s+подтвердить\s+менеджер\.?/giu, 'Точные коммерческие условия сверю перед оформлением.')
+    .replace(/Актуальный склад и условия отгрузки сверю перед оформлением\.\s*Актуальный склад и возможность отгрузки сверю перед оформлением\./giu, 'Актуальный склад и возможность отгрузки сверю перед оформлением.')
     .replace(/из\s+наличия/giu, 'из каталога')
     .replace(/(?:^|\n)\s*отлично,\s*беру\s+комплект:?/giu, '\nОк, комплект понятен:')
     .replace(/(?:^|\n)\s*беру\s+комплект:?/giu, '\nКомплект понятен:')
@@ -6991,7 +7018,7 @@ export class AssistantService {
             'В списке сравни минимум: воздушный фильтр, топливный фильтр/сетка, свеча, ремень, сервис-набор, режущие диски/круги, стартер, карбюратор/топливный узел, водяной узел или другие релевантные позиции.',
             'По каждой позиции дай цену в рублях: точную из каталога/поиска или рыночный диапазон/ориентир в ₽. Если точную цену найти нельзя, не пиши общий отказ; напиши ориентир или честно "не нашел уверенной цены" только для этой позиции.',
             'Не показывай карточки товаров для технического сравнения: карточки нужны для подбора/покупки, а здесь нужен только текстовый сравнительный ответ.',
-            'Если точные цены зависят от региона, дилера или артикула, не уходи в отказ. Дай проверенные ориентиры, диапазоны или относительное сравнение и отдельно скажи, что финальную смету менеджер проверит перед заказом.',
+            'Если точные цены зависят от региона, дилера или артикула, не уходи в отказ. Дай проверенные ориентиры, диапазоны или относительное сравнение и отдельно скажи от своего лица, что финальную смету сверишь перед заказом.',
             'Не подменяй стоимость расходников ценой самой машины. Если покупатель спрашивает про расходники и запчасти, сравни именно фильтры, свечи, ремни, диски, сервис-наборы, стартеры, карбюраторные/водяные узлы или другие релевантные позиции.',
             'При поиске цен на запчасти и расходники учитывай российские маркетплейсы, российские магазины запчастей и dyadko.ru, а не только зарубежные или официальные страницы.',
             'Если цена найдена в валюте на зарубежном источнике, переведи ее в рубли по актуальному или явно указанному курсу и пометь как ориентировочную.',
@@ -7005,8 +7032,8 @@ export class AssistantService {
           maxBullets: 3,
           guidance: leadRequestedForAnswer
             ? agentTurnContract.answerTask === 'lead_handoff'
-              ? 'The buyer is asking a commercial/specialist question, not necessarily buying now. First answer what is known: delivery/discount/availability/final terms require manager/logistics verification. If leadAllowed=true, ask for contact only as the next step for that verification. Do not show or re-list product cards unless cardsRole is primary. Do not treat this as a finalized order.'
-              : 'The buyer is ready to proceed. Confirm the selected bundle shown in productCardsShown, mention item prices and the total from selectedBundleForLead when available, then ask them to leave name and phone in the opened form so a manager can verify availability/delivery and contact them. Do not say the order/lead is already created. Do not continue selecting alternatives.'
+              ? 'The buyer is asking a commercial/specialist question, not necessarily buying now. First answer what is known: delivery/discount/availability/final terms require first-person stock/logistics verification by the BAKAUT AI manager. If leadAllowed=true, ask for contact only as the next step for that verification. Do not show or re-list product cards unless cardsRole is primary. Do not treat this as a finalized order.'
+              : 'The buyer is ready to proceed. Confirm the selected bundle shown in productCardsShown, mention item prices and the total from selectedBundleForLead when available, then ask them to leave name and phone in the opened form so you can verify availability/delivery and contact them. Do not say the order/lead is already created. Do not continue selecting alternatives.'
             : [
                 'Answer like a human sales consultant. If productCardsShown is not empty, the text must be only a short conclusion: max 3-4 short sentences, max 2 model names, no full list of all cards. The main/best recommendation in text must be productCardsVisibleFirst[0]. Mention other visible cards only as alternatives. Do not call a lower card or hidden show-more card the best option. Do not end with a generic deferred offer like "if you want, I can continue"; give a finished recommendation for the current request.',
                 comparativeAnswerGuidance
@@ -7165,7 +7192,7 @@ export class AssistantService {
       technicalCurrentLevelAnswerGuidance(agentTurnContract),
       commercialManagerVerificationGuidance(agentTurnContract),
       suppressLeadRequestByContract
-        ? 'The semantic contract does not allow a contact handoff as the answer action for this turn. If final availability, delivery price, discount, or logistics terms are mentioned, state that a manager/logistics must verify them, but do not ask the buyer for name, phone, contact, callback, or a form. Keep product selection moving from catalog cards.'
+        ? 'The semantic contract does not allow a contact handoff as the answer action for this turn. If final availability, delivery price, discount, or logistics terms are mentioned, state the check in first person as the BAKAUT AI manager, but do not ask the buyer for name, phone, contact, callback, or a form. Keep product selection moving from catalog cards.'
         : '',
       factualVerificationGuidance,
       comparativeAnswerGuidance,

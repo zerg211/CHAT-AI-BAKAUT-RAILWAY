@@ -3137,6 +3137,78 @@ describe('recommendation ranking', () => {
     expect(selection.diagnostics.fallbackReason).toBe('planner_selected_products_rejected_catalog_executor_used_ranked_matches');
   });
 
+  it('keeps a close selected candidate visible for exact model lookup when only the model suffix differs', () => {
+    const message = 'BISON 3250 есть у вас?';
+    const closeCandidate = {
+      ...productWithSpecs('bison-bs3250i', 'Генератор бензиновый инверторный BISON BS3250i', 42_900, 'https://example.test/bison-bs3250i', {
+        'производитель оборудования': 'BISON',
+        'мощность': '3,0 кВт'
+      }),
+      brand: 'BISON'
+    };
+    const otherBrand = {
+      ...productWithSpecs('tor-3250', 'Генератор бензиновый TOR 3250', 39_900, 'https://example.test/tor-3250', {
+        'производитель оборудования': 'TOR',
+        'мощность': '3,0 кВт'
+      }),
+      brand: 'TOR'
+    };
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      semanticSource: 'planner',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        brandConstraint: 'BISON',
+        exactModelConstraint: 'BISON 3250',
+        provenance: {
+          brandConstraint: 'planner',
+          exactModelConstraint: 'planner'
+        }
+      },
+      confidence: 0.9
+    });
+    const state = { ...emptyNeedState(), selectionState };
+    const selection = assistantTestHooks.selectCardsFromPlan([otherBrand, closeCandidate] as any, state, message, baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'showProducts',
+      selectedProductIds: ['bison-bs3250i'],
+      catalogSearchQuery: message,
+      agentDecision: {
+        answerTask: 'product_selection',
+        taskType: 'pure_availability',
+        catalogAction: 'exact_model_lookup',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'supporting_only',
+        mustAnswerNow: ['offer close catalog candidate'],
+        currentFocus: 'BISON 3250',
+        cardsRole: 'supporting',
+        leadAllowed: false,
+        leadAllowedReason: 'exact lookup only',
+        errorRecoveryPriority: 'ask whether close model was meant'
+      },
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'BISON',
+        exactModelConstraint: 'BISON 3250',
+        shouldShowCards: true
+      }
+    }));
+
+    expect(selection.cards.map((card) => card.id)).toEqual(['bison-bs3250i']);
+    expect(selection.diagnostics.selectedRejectedCount).toBe(0);
+  });
+
   it('keeps a strict brand request from being filled with other brands', () => {
     const message = 'Есть у вас генератор BISON на 5-6 кВт?';
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
@@ -3290,7 +3362,7 @@ describe('recommendation ranking', () => {
     );
 
     expect(answer).toContain('Здравствуйте');
-    expect(answer).toContain('уточню у логиста');
+    expect(answer).toContain('уточню через логистику');
     expect(answer).toContain('стоимость доставки в Краснодарский край');
     expect(answer).not.toContain('по выбранному товару');
     expect(answer).not.toContain('АВР для генератора BISON');
@@ -5833,6 +5905,25 @@ describe('recommendation ranking', () => {
     } as any);
 
     expect(result).toBe(answer);
+  });
+
+  it('appends commercial verification in first person, not as a third-person manager', () => {
+    const result = assistantTestHooks.ensureCommercialManagerVerification('BISON BS3250i в каталоге вижу как близкий вариант.', {
+      taskType: 'pure_availability',
+      commercialAction: 'explain_manager_required'
+    } as any);
+
+    expect(result).toContain('Актуальный склад и возможность отгрузки сверю перед оформлением.');
+    expect(result).not.toMatch(/должен подтвердить менеджер|проверяет менеджер/iu);
+  });
+
+  it('cleans stale third-person manager verification from visible answers', () => {
+    const cleaned = assistantTestHooks.sanitizeVisibleAnswer(
+      'Живое складское наличие и условия проверяет менеджер. Точное наличие и возможность отгрузки должен подтвердить менеджер по актуальному складу.'
+    );
+
+    expect(cleaned).toBe('Актуальный склад и возможность отгрузки сверю перед оформлением.');
+    expect(cleaned).not.toMatch(/менеджер/iu);
   });
 
   it('uses web verification for technical model comparisons with unverified specs', () => {

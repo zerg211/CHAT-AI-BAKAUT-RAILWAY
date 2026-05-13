@@ -1058,8 +1058,11 @@ function App() {
           )));
         },
         onStatus: (progress) => {
+          const recoveryRestart = /оборвался|восстанавливаю/iu.test(progress);
           setMessages((current) => current.map((message) => (
-            message.id === assistantId && !message.content ? { ...message, progress } : message
+            message.id === assistantId && (recoveryRestart || !message.content)
+              ? { ...message, content: recoveryRestart ? '' : message.content, progress }
+              : message
           )));
         }
       }, controller.signal);

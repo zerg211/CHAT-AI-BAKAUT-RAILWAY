@@ -76,8 +76,8 @@ function assertPhase(step) {
 
   if (expect === 'cardsDelivery') {
     if (!/доставк/iu.test(answer)) throw new Error(`Delivery turn did not answer delivery part: ${answer}`);
-    if (!/(логист|менеджер|уточн|услов|стоимост)/iu.test(answer)) {
-      throw new Error(`Delivery answer did not keep final terms with specialist/logistics: ${answer}`);
+    if (!/(логист|логистик|свер|провер|уточн|услов|стоимост)/iu.test(answer)) {
+      throw new Error(`Delivery answer did not keep final terms with first-person stock/logistics verification: ${answer}`);
     }
     assertNoLeadPressure(answer, phase);
   }
@@ -245,7 +245,7 @@ async function main() {
       '- PASS: production iframe #876 dialogue completed.',
       '- PASS: no unrelated cards for engine comparison.',
       '- PASS: strict 220 V selection did not expose mixed 220/380 products.',
-      '- PASS: delivery/availability answer kept manager/logistics verification without phone pressure.',
+      '- PASS: delivery/availability answer kept first-person stock/logistics verification without phone pressure.',
       '- PASS: production metadata contains new semantic contract fields and no AI fallback diagnostics.'
     ].join('\n'), 'utf8');
 

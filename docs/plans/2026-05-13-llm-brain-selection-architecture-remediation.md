@@ -249,3 +249,21 @@ Executor не решает, уместны ли карточки в диалог
 - Код может блокировать карточки по фактам, но не решает вместо LLM, когда они уместны.
 - Уточняющие вопросы выбирает LLM на основании uncertainties.
 - Проверка проведена через виджет на `bakautprof.ru`, не через localhost.
+
+## Дополнение 2026-05-13: exact model lookup и роль AI-менеджера
+
+Новая ошибка из production-диалога: на вопрос `BISON 3250 есть у вас?` LLM нашла близкий товар `BISON BS3250i`, но contract разрешил `productCardsPolicy=none`, а card executor отбрасывал близкую модель из-за точного несовпадения `BISON 3250` vs `BS3250i`. В результате покупатель видел тупик: "точной модели нет, есть близкий вариант, но это другая модель" без карточки и без нормального вопроса "эту модель имели в виду?".
+
+Исправление:
+- если `catalogAction=exact_model_lookup` и LLM выбрала близкий `selectedProductIds`, contract repair переводит карточки в `productCardsPolicy=supporting_only`, `cardsRole=supporting`;
+- при exact lookup selected-кандидат проходит deterministic проверку по всем hard constraints, кроме точного написания модели, чтобы показать близкую карточку как альтернативу, а не как точное совпадение;
+- answer guidance требует предложить близкую модель и спросить, ее ли покупатель имел в виду;
+- старые buyer-facing формулировки `менеджер подтвердит/проверяет` заменены на первую персону AI-менеджера: `вижу`, `сверю`, `проверю`, `посчитаю через логистику`;
+- frontend при recovery stream очищает частичный assistant bubble перед повторной отдачей ответа, чтобы покупатель не видел один и тот же текст два раза.
+
+Локальная проверка после исправления:
+- `npm.cmd test -- tests/agentTurnContract.test.ts tests/recommendationRanking.test.ts tests/prompts.test.ts` — PASS;
+- `npm.cmd test` — PASS, 19 файлов, 240 тестов;
+- `npm.cmd run build` — PASS.
+
+Production readiness: требуется деплой и живой прогон через виджет `https://bakautprof.ru/` с ручным аудитом ответа покупателя и metadata/code-аудитом. Без этого изменение не считается подтвержденным в production.
