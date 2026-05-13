@@ -5590,7 +5590,14 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
 
 function ensureLargeSliceShowMoreNote(answer: string, slice: StructuredCatalogSlice | null | undefined, cards: ProductCard[], initialVisibleCount = LARGE_SLICE_VISIBLE_CARDS) {
   if (cards.length <= initialVisibleCount) return answer;
-  if (/(?:\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c\s+\u0435\u0449|\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c\s+\u0435\u0449\u0435|show\s*more|\u043e\u0441\u0442\u0430\u043b\u044c\u043d)/iu.test(answer)) return answer;
+  const mentionsShowMore = /(?:\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c\s+\u0435\u0449|\u043f\u043e\u043a\u0430\u0437\u0430\u0442\u044c\s+\u0435\u0449\u0435|show\s*more|\u043e\u0441\u0442\u0430\u043b\u044c\u043d)/iu.test(answer);
+  if (mentionsShowMore) {
+    const hiddenCards = cards.slice(initialVisibleCount, Math.min(cards.length, initialVisibleCount + 3));
+    const mentionsHiddenCard = hiddenCards.some((card) => strongProductMentionIndex(productFromCard(card), answer) >= 0);
+    if (!hiddenCards.length || mentionsHiddenCard) return answer;
+    const hiddenNames = hiddenCards.map((card) => card.name).filter(Boolean).join('; ');
+    return hiddenNames ? `${answer.trim()}\n\nПод "Показать еще": ${hiddenNames}.` : answer;
+  }
   const visible = Math.min(slice?.visibleLimit ?? initialVisibleCount, initialVisibleCount, cards.length);
   const note = `Показываю первые ${visible} карточек, остальные подходящие варианты будут в "Показать еще".`;
   const paragraphs = answer.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);

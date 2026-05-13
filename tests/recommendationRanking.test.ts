@@ -2987,6 +2987,29 @@ describe('recommendation ranking', () => {
     expect(answer.endsWith('Уточните, нужна прямоходная или реверсивная?')).toBe(true);
   });
 
+  it('names hidden show-more cards when the answer only refers to them generically', () => {
+    const cards = [
+      { id: 'tss-8', name: 'Генератор бензиновый ТСС SGG 9000ELA (8,0 кВт)', category: 'Генераторы', price: 95059, specs: {}, reasons: [], caveats: [] },
+      { id: 'tss-9', name: 'Генератор бензиновый инверторный ТСС SGG 10000EI (9,0 кВт)', category: 'Генераторы', price: 153112, specs: {}, reasons: [], caveats: [] },
+      { id: 'tss-10', name: 'Генератор бензиновый ТСС SGG 10000EHA (10,0 кВт) 190009', category: 'Генераторы', price: 213941, specs: {}, reasons: [], caveats: [] }
+    ];
+
+    const answer = assistantTestHooks.ensureLargeSliceShowMoreNote(
+      'В текущем каталоге ТСС есть 3 генератора в диапазоне 8-10 кВт. 10 кВт тоже есть, он лежит под "Показать еще".',
+      {
+        source: 'structured_constraints',
+        products: [],
+        totalMatched: 3,
+        visibleLimit: 2,
+        constraints: { productIntent: 'generator' }
+      } as any,
+      cards as any,
+      2
+    );
+
+    expect(answer).toContain('SGG 10000EHA');
+  });
+
   it('keeps catalog availability questions out of current-lineup routing but respects explicit planner web search', () => {
     const message = ru('\\u0410 \\u0447\\u0442\\u043e \\u0440\\u0430\\u0437\\u0432\\u0435 \\u043d\\u0435\\u0442 \\u043f\\u043b\\u0438\\u0442 BPS 1550 WACKER? \\u0418\\u043b\\u0438 \\u043d\\u0435\\u0442 LAT 100 \\u0438\\u043b\\u0438 LAT 80 \\u043e\\u0442 HUSQVARNA?');
     const plan = {
