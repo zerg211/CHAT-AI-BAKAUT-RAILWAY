@@ -4136,6 +4136,10 @@ function catalogShortlistAlternativeScore(product: Product, state: ProductSelect
   const flags = classifyProduct(product);
   if (hard.fuel === 'gasoline' && flags.isDiesel) return null;
   if (hard.fuel === 'diesel' && flags.isGasoline) return null;
+  if (hard.productIntent === 'generator' && hard.singlePhase220 === true) {
+    const phase = generatorPhaseProfile(product);
+    if (phase === 'mixed_220_380' || phase === 'three_phase_380') return null;
+  }
 
   let score = 0;
   if (hard.weightKgMin || hard.weightKgMax) {

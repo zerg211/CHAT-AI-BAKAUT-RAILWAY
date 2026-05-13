@@ -74,9 +74,27 @@ function assertPhase(step) {
   if (expect === 'availability' && !/(налич|каталог|карточк|модель|ТСС|TSS)/iu.test(answer)) {
     throw new Error(`Availability lookup did not discuss catalog/availability evidence: ${answer}`);
   }
+  if (phase === 'exact_tss_availability_lookup') {
+    const availabilityEvidence = `${answer}\n${productText}`;
+    if (!/SGG\s*10000EHA|SGG\s*10000EH3A|SGG\s*11000E3Ui/iu.test(availabilityEvidence)) {
+      throw new Error(`TSS 10 kW lookup did not surface 10 kW catalog models: ${availabilityEvidence}`);
+    }
+    if (/SGG\s*8000|SGG\s*17000|15[,.]5\s*кВт/iu.test(productText)) {
+      throw new Error(`TSS 10 kW lookup exposed non-10 kW visible cards: ${productText}`);
+    }
+  }
 
   if (expect === 'selectionMayStart' && !/(220|однофаз|вариант|кВт|ТСС|TSS|уточн)/iu.test(answer)) {
     throw new Error(`220 V requirement was not acknowledged: ${answer}`);
+  }
+  if (phase === 'phase_requirement_220') {
+    const phaseEvidence = `${answer}\n${productText}`;
+    if (!/SGG\s*10000EHA/iu.test(phaseEvidence)) {
+      throw new Error(`220 V follow-up did not surface the matching one-phase 10 kW model: ${phaseEvidence}`);
+    }
+    if (/SGG\s*8000EH3|SGG\s*17000|тр[её]х\s*фаз|тр[её]хфаз|230\s*\/\s*400|380\s*В|400\s*В|15[,.]5\s*кВт/iu.test(productText)) {
+      throw new Error(`220 V follow-up exposed incompatible visible cards: ${productText}`);
+    }
   }
 
   if (expect === 'cards' || expect === 'cardsDelivery' || expect === 'cardsNoLeadPressure') {

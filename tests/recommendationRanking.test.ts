@@ -1810,7 +1810,17 @@ describe('recommendation ranking', () => {
       'Напряжение': '230 В',
       'Число фаз': 'однофазные'
     });
-    const assistant = new AssistantService(undefined as never, new FakeProducts([tss10, tss12, tss8, tss9] as any) as never);
+    const tss8ThreePhase = productWithSpecs('tss-8-3ph', ru('Генератор бензиновый ТСС SGG 8000EH3NUA (8,0 кВт)'), 90511, 'https://example.test/tss-8-3ph/', {
+      'Номинальная мощность': '8,0 кВт',
+      'Напряжение': '230/400 В',
+      'Число фаз': 'трехфазные'
+    });
+    const tss17ThreePhase = productWithSpecs('tss-17-3ph', ru('Генератор бензиновый ТСС SGG 17000EH3U (15,5 кВт)'), 380422, 'https://example.test/tss-17-3ph/', {
+      'Номинальная мощность': '15,5 кВт',
+      'Напряжение': '230/400 В',
+      'Число фаз': 'трехфазные'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([tss10, tss12, tss8ThreePhase, tss17ThreePhase, tss8, tss9] as any) as never);
     const state = mergeNeedState(emptyNeedState(), {
       selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
         currentProductClass: 'generator',
@@ -1876,13 +1886,15 @@ describe('recommendation ranking', () => {
       'А что есть в наличии от 8 до 10 кВт?',
       state,
       plan,
-      [tss10, tss12] as any
+      [tss10, tss12, tss8ThreePhase, tss17ThreePhase] as any
     );
 
     expect(result.state.hardConstraints.nominalPowerKwMin).toBe(8);
     expect(result.state.hardConstraints.nominalPowerKwMax).toBe(10);
     expect(result.matchedProducts.map((item) => item.id)).toEqual(['tss-8', 'tss-9', 'tss-10']);
     expect(result.matchedProducts.map((item) => item.id)).not.toContain('tss-12');
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('tss-8-3ph');
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('tss-17-3ph');
     expect((result.trace as any).stalePreviousSelectionCageRepaired).toBe(true);
   });
 
