@@ -1088,9 +1088,9 @@ function App() {
           message.id === assistantId ? { ...message, content: message.content || 'Ответ остановлен.', status: 'stopped' } : message
         )));
       } else {
-        const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не удалось получить ответ/i.test(submitError.message)
+        const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не смог надежно сформировать ответ|не удалось получить ответ/i.test(submitError.message)
           ? submitError.message
-          : 'Не смог надежно завершить ответ, вопрос сохранен; можно повторить или оставить контакт.';
+          : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
         setMessages((current) => current.map((message) => (
           message.id === assistantId
             ? {

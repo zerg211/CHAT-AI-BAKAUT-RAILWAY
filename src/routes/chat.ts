@@ -143,7 +143,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
       const message = controller.signal.aborted
         ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
-        : 'Сейчас не удалось надежно сформировать ответ. Повторите запрос или оставьте контакты в форме — менеджер БАКАУТ продолжит консультацию.';
+        : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
       if (!controller.signal.aborted) {
         app.log.warn({ sessionId: params.id, error: error instanceof Error ? error.message : String(error) }, 'chat generation failed');
       }
@@ -205,7 +205,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       send('error', {
         turnId: params.turnId,
         recoverable: false,
-        error: 'Не смог надежно завершить ответ, вопрос сохранен; можно повторить или оставить контакт.'
+        error: 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
       });
     } finally {
       clearTimeout(timeout);

@@ -16,7 +16,7 @@ export type ChatStreamOptions = {
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000;
 const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя.';
 const RECOVERING_STATUS = 'Ответ оборвался, восстанавливаю...';
-const FRIENDLY_FINAL_ERROR = 'Не смог надежно завершить ответ, вопрос сохранен; можно повторить или оставить контакт.';
+const FRIENDLY_FINAL_ERROR = 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
 
 function parseSseEvent(rawEvent: string) {
   const lines = rawEvent.split('\n');
