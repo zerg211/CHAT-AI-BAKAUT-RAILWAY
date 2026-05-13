@@ -267,3 +267,23 @@ Executor не решает, уместны ли карточки в диалог
 - `npm.cmd run build` — PASS.
 
 Production readiness: требуется деплой и живой прогон через виджет `https://bakautprof.ru/` с ручным аудитом ответа покупателя и metadata/code-аудитом. Без этого изменение не считается подтвержденным в production.
+
+## Дополнение 2026-05-13: повторный BISON-аудит после деплоя
+
+Живой прогон через виджет `https://bakautprof.ru/` показал частичный PASS и одну оставшуюся ошибку:
+
+- видимый ответ больше не дублировался;
+- формулировка `менеджер должен подтвердить` ушла, ответ говорил от лица AI-менеджера: `Актуальный склад и возможность отгрузки сверю перед оформлением`;
+- но карточка `BISON BS3250i` не была показана, потому что LLM снова поставила `catalogAction=verify_catalog_absence`, `productCardsPolicy=none`, `cardsRole=none` и не заполнила `selectedProductIds`, хотя в тексте упомянула `BS3250i`.
+
+Второе исправление:
+- `selectProductsForTurn` теперь при exact availability / catalog absence и model tokens ищет close same-brand/model-token alternatives в каталоге;
+- если точное написание не подтверждено, но найден близкий кандидат той же марки и класса, selection executor возвращает его как `exactLookupAlternative`, не как точное совпадение;
+- `shouldPromoteCatalogFactCheckedCards` разрешает показать такие карточки как supporting alternatives даже если LLM забыла card policy;
+- card selection теперь допускает selected alternatives и для `verify_catalog_absence`, не только для `exact_model_lookup`;
+- answer guidance требует: сказать, что точной карточки не видно, показать близкую карточку и спросить, ее ли покупатель имел в виду.
+
+Повторная локальная проверка:
+- `npm.cmd test -- tests/recommendationRanking.test.ts tests/agentTurnContract.test.ts tests/agenticCycle876.test.ts` — PASS;
+- `npm.cmd test` — PASS, 19 файлов, 241 тест;
+- `npm.cmd run build` — PASS.

@@ -2276,9 +2276,9 @@ function shouldPromoteCatalogFactCheckedCards(
 ) {
   const factCheckFoundCatalogProducts = contract.catalogAction === 'verify_catalog_absence' ||
     contract.catalogAction === 'exact_model_lookup';
+  const exactLookupAlternativeFound = result.trace?.exactLookupAlternative === true;
   return factCheckFoundCatalogProducts &&
-    contract.cardsRole !== 'none' &&
-    (contract.productCardsPolicy ?? 'none') !== 'none' &&
+    ((contract.cardsRole !== 'none' && (contract.productCardsPolicy ?? 'none') !== 'none') || exactLookupAlternativeFound) &&
     !isLeadPlan(plan) &&
     !blockEstimatedPumpCards &&
     !isCurrentLevelTechnicalTurn(contract) &&
@@ -2360,9 +2360,10 @@ function shouldPromoteGeneratorSizingCardsForContract(
 
 function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
   const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
+  const exactLookupAlternativeFound = result.trace?.exactLookupAlternative === true;
   return planContractRequestsProductCards(plan) &&
     (plan.cardPolicy === 'showProducts' || plan.selectionState.shouldShowCards || catalogShortlistTurn) &&
-    result.trace?.canRecommendFromSelection === true &&
+    (result.trace?.canRecommendFromSelection === true || exactLookupAlternativeFound) &&
     result.visibleProducts.length > 0 &&
     result.matchedProducts.length > 0 &&
     result.confidence >= 0.55 &&
@@ -5160,7 +5161,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     (selectionState.targetProductClass === 'unknown' || productMatchesIntent(product, selectionState.targetProductClass as ProductIntent)) &&
     productFitPenalty(product, profile) > -260;
   const exactLookupSelectedIds = new Set(
-    plan.agentDecision?.catalogAction === 'exact_model_lookup'
+    plan.agentDecision?.catalogAction === 'exact_model_lookup' || plan.agentDecision?.catalogAction === 'verify_catalog_absence'
       ? plan.selectedProductIds
       : []
   );
@@ -6270,6 +6271,58 @@ export class AssistantService {
       : effectiveSelectionState.rankingPreference === 'premium' || effectiveSelectionState.rankingPreference === 'balanced'
         ? diversifyRankedProducts(scored, Math.max(50, FULL_SLICE_PRODUCT_CARDS))
         : scored.slice(0, Math.max(50, FULL_SLICE_PRODUCT_CARDS)).map((item) => item.product);
+    const exactLookupWantsCloseAlternative = !matchedProducts.length &&
+      lookupTokens.length > 0 &&
+      (plan.agentDecision?.catalogAction === 'exact_model_lookup' || plan.agentDecision?.catalogAction === 'verify_catalog_absence');
+    const withoutExactModelConstraint = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
+      ...criteria,
+      exactModelConstraint: '',
+      exactModelTokens: []
+    });
+    const relaxedExactLookupState: ProductSelectionState = {
+      ...effectiveSelectionState,
+      activeRequirement: effectiveSelectionState.activeRequirement
+        ? withoutExactModelConstraint(effectiveSelectionState.activeRequirement)
+        : effectiveSelectionState.activeRequirement,
+      hardConstraints: withoutExactModelConstraint(effectiveSelectionState.hardConstraints)
+    };
+    const relaxedExactLookupProfile = exactLookupWantsCloseAlternative
+      ? buildProductFitProfile({ ...state, selectionState: relaxedExactLookupState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits)
+      : effectiveSelectionProfile;
+    const exactLookupAlternativeBrands = requestedBrandKeysFromProducts(
+      mergeProductsById(exactProducts, sourceProducts),
+      [
+        activeText,
+        effectiveSelectionState.hardConstraints.brandConstraint,
+        plan.selectionState?.brandConstraint ?? ''
+      ].join(' ')
+    );
+    const closeExactLookupAlternatives = exactLookupWantsCloseAlternative
+      ? sortSelectionProducts(
+          mergeProductsById(exactProducts, sourceProducts)
+            .filter((product) => isCoreEquipment(product))
+            .filter((product) => exactLookupAlternativeBrands.size === 0 || productMatchesRequestedBrand(product, exactLookupAlternativeBrands))
+            .filter((product) => productMatchesSelectionCriteria(product, relaxedExactLookupState, relaxedExactLookupProfile))
+            .filter((product) => productFitPenalty(product, relaxedExactLookupProfile) >= 0)
+            .filter((product) => {
+              const compact = compactModelText(productFullText(product));
+              return lookupTokens.some((token) => compact.includes(compactModelText(token)));
+            })
+            .map((product) => ({
+              product,
+              score: recommendationScore(product, { ...state, selectionState: relaxedExactLookupState }, userMessage, relaxedExactLookupProfile)
+            })),
+          effectiveSelectionState.rankingPreference,
+          effectiveSelectionState.hardConstraints.budgetMax
+        )
+        .slice(0, Math.max(1, Math.min(MAX_PRODUCT_CARDS, LARGE_SLICE_VISIBLE_CARDS)))
+        .map((item) => item.product)
+      : [];
+    const exactLookupAlternative = !matchedProducts.length && closeExactLookupAlternatives.length > 0;
+    if (exactLookupAlternative) {
+      matchedProducts = closeExactLookupAlternatives;
+      canRecommendFromSelection = true;
+    }
     const requestedVisibleLimit = visibleLimitOverride ?? requestedVisibleCardLimitFromText(userMessage);
     const shouldPinCurrentVisibleSelection = Boolean(
       requestedVisibleLimit &&
@@ -6400,6 +6453,8 @@ export class AssistantService {
         totalSourceProducts: sourceProducts.length,
         totalMatched: matchedProducts.length,
         totalComparison: comparisonProducts.length,
+        exactLookupAlternative,
+        exactLookupAlternativeIds: exactLookupAlternative ? matchedProducts.map((product) => product.id) : [],
         diagnosticRejectedProducts,
         canRecommendFromSelection,
         catalogShortlistTurn,
@@ -6825,7 +6880,9 @@ export class AssistantService {
           generatorSizingRequestsCards
             ? 'The buyer has supplied enough generator load context for a preliminary product selection. First answer the sizing calculation, then show visible generator cards as preliminary suitable options. Do not keep the turn text-only.'
             : catalogFactCheckRequestsCards
-              ? 'Catalog fact-check found products that satisfy the structured hard constraints, so do not answer as if the catalog has no matching product. Use productSelection as authoritative, show matching cards, and separate catalog presence from live stock/manager verification.'
+              ? selectionResult.trace?.exactLookupAlternative === true
+                ? 'Catalog fact-check did not prove the exact spelling, but found close same-brand/model-token catalog alternatives. Show those cards as supporting alternatives, say the exact card is not visible, and ask whether the buyer meant the close model. Separate catalog presence from first-person stock verification.'
+                : 'Catalog fact-check found products that satisfy the structured hard constraints, so do not answer as if the catalog has no matching product. Use productSelection as authoritative, show matching cards, and separate catalog presence from first-person stock/logistics verification.'
               : 'Use productSelection as the authoritative catalog selection for the current hard constraints. Name only visible cards as recommendations. If hiddenProductIds is not empty, mention show-more and ask one narrowing question from missingQuestions.'
         );
       }

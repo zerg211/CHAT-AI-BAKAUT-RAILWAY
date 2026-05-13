@@ -3209,6 +3209,85 @@ describe('recommendation ranking', () => {
     expect(selection.diagnostics.selectedRejectedCount).toBe(0);
   });
 
+  it('returns close same-brand model-token alternatives when exact lookup planner forgets selectedProductIds', async () => {
+    const message = 'BISON 3250 есть у вас?';
+    const closeCandidate = {
+      ...productWithSpecs('bison-bs3250i', 'Генератор бензиновый инверторный BISON BS3250i', 42_900, 'https://example.test/bison-bs3250i', {
+        'производитель оборудования': 'BISON',
+        'мощность': '3,0 кВт'
+      }),
+      brand: 'BISON'
+    };
+    const otherBrand = {
+      ...productWithSpecs('tor-3250', 'Генератор бензиновый TOR 3250', 39_900, 'https://example.test/tor-3250', {
+        'производитель оборудования': 'TOR',
+        'мощность': '3,0 кВт'
+      }),
+      brand: 'TOR'
+    };
+    const assistant = new AssistantService(undefined as never, new FakeProducts([closeCandidate, otherBrand] as any) as never);
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      semanticSource: 'planner',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        brandConstraint: 'BISON',
+        exactModelConstraint: 'BISON 3250',
+        exactModelTokens: ['3250'],
+        provenance: {
+          brandConstraint: 'planner',
+          exactModelConstraint: 'planner'
+        }
+      },
+      confidence: 0.9
+    });
+    const state = { ...emptyNeedState(), selectionState };
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      selectedProductIds: [],
+      catalogSearchQuery: message,
+      agentDecision: {
+        answerTask: 'product_selection',
+        taskType: 'pure_availability',
+        catalogAction: 'verify_catalog_absence',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['check exact model presence'],
+        currentFocus: 'BISON 3250',
+        cardsRole: 'none',
+        leadAllowed: false,
+        leadAllowedReason: 'exact lookup only',
+        errorRecoveryPriority: 'say exact card is absent'
+      },
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'BISON',
+        exactModelConstraint: 'BISON 3250',
+        shouldShowCards: false
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(message, state, plan, [closeCandidate, otherBrand] as any, undefined, undefined, '', {
+      forceCatalogVerification: true
+    });
+
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['bison-bs3250i']);
+    expect(result.trace.exactLookupAlternative).toBe(true);
+    expect(result.trace.exactLookupAlternativeIds).toEqual(['bison-bs3250i']);
+  });
+
   it('keeps a strict brand request from being filled with other brands', () => {
     const message = 'Есть у вас генератор BISON на 5-6 кВт?';
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));
