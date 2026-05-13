@@ -155,7 +155,7 @@ function buyerAudit(step) {
   if (!answer) issues.push('пустой ответ');
   if (duplicate) issues.push(`повтор длинного предложения: ${duplicate}`);
   if (/undefined|null|network error|server finished without a done payload/iu.test(answer)) issues.push('технический текст в ответе');
-  if (/менеджер.{0,80}(подтверд|провер|уточн|посчит)|должен.{0,80}менеджер|передам.{0,80}менеджер/iu.test(answer)) {
+  if (/менеджер.{0,80}(подтверд|провер|уточн|посчит)|должен.{0,80}менеджер|передам.{0,80}менеджер|через\s+менеджер|оформ\w*.{0,80}менеджер/iu.test(answer)) {
     issues.push('говорит про менеджера как про третье лицо, а должен отвечать от лица AI-менеджера');
   }
 

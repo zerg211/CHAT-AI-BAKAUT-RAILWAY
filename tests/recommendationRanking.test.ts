@@ -6232,7 +6232,8 @@ describe('recommendation ranking', () => {
       commercialAction: 'explain_manager_required'
     } as any);
 
-    expect(result).toBe(answer);
+    expect(result).toContain('Доставку и условия посчитаю по адресу через логистику.');
+    expect(result).not.toMatch(/менеджер/iu);
   });
 
   it('appends commercial verification in first person, not as a third-person manager', () => {
@@ -6252,6 +6253,15 @@ describe('recommendation ranking', () => {
 
     expect(cleaned).toBe('Актуальный склад и возможность отгрузки сверю перед оформлением.');
     expect(cleaned).not.toMatch(/менеджер/iu);
+  });
+
+  it('cleans third-person manager role from order process wording', () => {
+    const cleaned = assistantTestHooks.sanitizeVisibleAnswer(
+      'Если всё устраивает — дальше уже оформляем через менеджера.'
+    );
+
+    expect(cleaned).toBe('Если всё устраивает — дальше оформляем заказ.');
+    expect(cleaned).not.toMatch(/через\s+менеджер/iu);
   });
 
   it('does not treat a non-restrictive brand note as a hard brand', async () => {

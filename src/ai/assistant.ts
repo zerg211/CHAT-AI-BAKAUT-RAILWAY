@@ -5701,6 +5701,7 @@ function stripLeadPressureTail(answer: string) {
 
 function ensureCommercialManagerVerification(answer: string, contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return answer;
+  answer = sanitizeThirdPersonManagerRole(answer);
   const hasFirstPersonCheck = /(сверю|уточню|проверю|посчитаю|согласую|перед\s+оформлением)/iu.test(answer);
   const alreadyHasSpecialistVerification = (contract.taskType === 'pure_delivery' || contract.taskType === 'product_selection_with_delivery')
     ? ((hasFirstPersonCheck || /(логист)/iu.test(answer)) && /(доставк|стоимост|услов|срок|адрес|отправк)/iu.test(answer))
@@ -5717,6 +5718,35 @@ function ensureCommercialManagerVerification(answer: string, contract: AgentTurn
   if (!trimmed) return sentence.trim();
   const hasTerminalPunctuation = trimmed.endsWith('.') || trimmed.endsWith('!') || trimmed.endsWith('?');
   return `${trimmed}${hasTerminalPunctuation ? '' : '.'}${sentence}`;
+}
+
+function commercialFirstPersonReplacement(match: string) {
+  const lower = match.toLocaleLowerCase('ru');
+  if (/(достав|логист|срок|адрес|отправк)/iu.test(lower)) {
+    return 'Доставку и условия посчитаю по адресу через логистику.';
+  }
+  if (/(налич|склад|отгруз|остат)/iu.test(lower)) {
+    return 'Актуальный склад и возможность отгрузки сверю перед оформлением.';
+  }
+  if (/(скид|цен|услов|коммер)/iu.test(lower)) {
+    return 'Коммерческие условия сверю перед оформлением.';
+  }
+  if (/(оформ|заказ|покуп|беру|возьму)/iu.test(lower)) {
+    return 'Дальше оформим заказ.';
+  }
+  return 'Детали сверю перед оформлением.';
+}
+
+function sanitizeThirdPersonManagerRole(answer: string) {
+  return answer
+    .replace(/дальше\s+уже\s+оформляем\s+через\s+менеджера/giu, 'дальше оформляем заказ')
+    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}(?:менеджер[^.!?\n]{0,120}(?:подтверд|провер|уточн|посчит|свер)|(?:подтверд|провер|уточн|посчит|свер)[^.!?\n]{0,120}менеджер)[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
+    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}должен[^.!?\n]{0,120}менеджер[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
+    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}передам[^.!?\n]{0,120}менеджер[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
+    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}через\s+менеджер[а-я]*[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
+    .replace(/\s+([,.!?])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
@@ -5741,6 +5771,7 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
   if (plan?.followUpPolicy === 'answerNowNoDeferredOffer') {
     cleaned = stripDeferredOfferTail(cleaned);
   }
+  cleaned = sanitizeThirdPersonManagerRole(cleaned);
   return sanitizeVisibleAnswerNumbers(cleaned).trim();
 }
 
@@ -8065,6 +8096,7 @@ export class AssistantService {
       );
       throw aiStageFailure('answer recovery', diagnostic);
     }
+    answer = sanitizeVisibleAnswer(answer);
     answer = ensureCommercialManagerVerification(
       shouldSuppressLeadRequestFromContract(contract) ? stripLeadPressureTail(answer) : answer,
       contract
@@ -8963,6 +8995,7 @@ export const assistantTestHooks = {
   commercialManagerVerificationGuidance,
   stripLeadPressureTail,
   ensureCommercialManagerVerification,
+  sanitizeThirdPersonManagerRole,
   sanitizeSelfExcludingSelectionState,
   explicitCriteriaFromTurn,
   generatorSizingPolicyForAnswer,
