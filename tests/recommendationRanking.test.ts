@@ -6315,7 +6315,24 @@ describe('recommendation ranking', () => {
           enclosure: 'planner',
           conventionalGenerator: 'planner'
         }
-      }
+      },
+      loadProfile: {
+        items: [{
+          kind: 'pump',
+          name: 'pump',
+          count: 1,
+          runningKw: 0.75,
+          startingKw: 2,
+          source: 'estimated_average',
+          evidence: 'stale previous generator sizing'
+        }],
+        confidence: 0.77,
+        calculation: 'stale previous generator sizing',
+        totalRunningKw: 3,
+        requiredNominalKw: 4.5,
+        requiredStartingKw: 4.3,
+        simultaneousStarting: false
+      } as any
     });
     const state = { ...emptyNeedState(), selectionState: previousSelection };
     const plan = baseTurnPlan({
@@ -6342,6 +6359,125 @@ describe('recommendation ranking', () => {
 
     expect(result.trace.exactLookupAlternative).toBe(true);
     expect(result.matchedProducts.map((item) => item.id)).toEqual(['bison-bs3250i']);
+  });
+
+  it('renders exact lookup alternatives even when previous generator load is stronger than the model', () => {
+    const closeCandidate = productWithSpecs('bison-bs3250i', 'Generator gasoline inverter BISON BS3250i 3.0 kW 230 V single phase', 28_032, 'https://example.test/bison-bs3250i', {
+      voltage: '230 V',
+      nominalPower: '3.0 kW'
+    });
+    const staleSelection = mergeProductSelectionState(emptyProductSelectionState('generator'), {
+      targetProductClass: 'generator',
+      selectedProductIds: ['bison-bs3250i'],
+      hardConstraints: {
+        ...emptyProductSelectionState('generator').hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 6,
+        singlePhase220: true,
+        brandConstraint: 'BISON',
+        exactModelConstraint: 'Bison 3250',
+        exactModelTokens: ['Bison 3250'],
+        mustHaveTraits: [],
+        excludedClasses: [],
+        provenance: {
+          nominalPowerKwMin: 'planner',
+          nominalPowerKwMax: 'planner',
+          singlePhase220: 'planner',
+          brandConstraint: 'planner',
+          exactModelConstraint: 'planner'
+        }
+      },
+      loadProfile: {
+        items: [{
+          kind: 'pump',
+          name: 'pump',
+          count: 1,
+          runningKw: 0.75,
+          startingKw: 2,
+          source: 'estimated_average',
+          evidence: 'stale previous generator sizing'
+        }],
+        confidence: 0.77,
+        calculation: 'stale previous generator sizing',
+        totalRunningKw: 3,
+        requiredNominalKw: 4.5,
+        requiredStartingKw: 4.3,
+        simultaneousStarting: false
+      } as any
+    });
+    const state = { ...emptyNeedState(), selectionState: staleSelection };
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      selectedProductIds: ['bison-bs3250i'],
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'pure_availability',
+        catalogAction: 'exact_model_lookup',
+        productCardsPolicy: 'supporting_only',
+        cardsRole: 'supporting',
+        answerTask: 'technical_explanation'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'generator',
+        exactModelConstraint: 'Bison 3250',
+        shouldShowCards: true
+      }
+    });
+
+    const result = assistantTestHooks.selectCardsFromPlan(
+      [closeCandidate] as any,
+      state,
+      'A Bison 3250 available? Maybe I typed the model wrong.',
+      plan
+    );
+
+    expect(result.cards.map((card) => card.id)).toEqual(['bison-bs3250i']);
+  });
+
+  it('promotes close exact lookup cards even if the planner labeled the answer as technical text', () => {
+    const contract = productSelectionAgentDecision({
+      taskType: 'pure_availability',
+      answerTask: 'technical_explanation',
+      catalogAction: 'exact_model_lookup',
+      productCardsPolicy: 'none',
+      cardsRole: 'none'
+    });
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'detailedFact',
+      cardPolicy: 'textOnly',
+      agentDecision: contract
+    });
+    const result = {
+      trace: {
+        exactLookupAlternative: true,
+        canRecommendFromSelection: true
+      },
+      visibleProducts: [{ id: 'bison-bs3250i' }],
+      matchedProducts: [{ id: 'bison-bs3250i' }],
+      confidence: 0.78,
+      state: mergeProductSelectionState(emptyProductSelectionState('generator'), {
+        hardConstraints: {
+          ...emptyProductSelectionState('generator').hardConstraints,
+          productIntent: 'generator',
+          exactModelConstraint: 'Bison 3250',
+          exactModelTokens: ['Bison 3250'],
+          mustHaveTraits: [],
+          excludedClasses: []
+        }
+      })
+    } as any;
+
+    expect(assistantTestHooks.shouldPromoteCatalogFactCheckedCards(contract as any, plan, result, false)).toBe(true);
   });
 
   it('keeps stale generator memory from blocking a new plate catalog selection', async () => {

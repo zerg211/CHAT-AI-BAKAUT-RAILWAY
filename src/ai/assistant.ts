@@ -843,6 +843,82 @@ function productTextLooselyMatchesModelToken(productCompactText: string, token: 
     numberParts.every((part) => productCompactText.includes(part));
 }
 
+function withoutExactLookupContextConstraints(criteria: ProductSelectionCriteria): ProductSelectionCriteria {
+  const provenance = { ...(criteria.provenance ?? {}) };
+  delete provenance.brandConstraint;
+  delete provenance.exactModelConstraint;
+  delete provenance.nominalPowerKwMin;
+  delete provenance.nominalPowerKwMax;
+  delete provenance.maxPowerKwMin;
+  delete provenance.maxPowerKwMax;
+  delete provenance.weightKgMin;
+  delete provenance.weightKgMax;
+  delete provenance.diameterMmMin;
+  delete provenance.diameterMmMax;
+  delete provenance.budgetMax;
+  delete provenance.fuel;
+  delete provenance.startType;
+  delete provenance.enclosure;
+  delete provenance.conventionalGenerator;
+  delete provenance.singlePhase220;
+  return {
+    ...criteria,
+    brandConstraint: '',
+    exactModelConstraint: '',
+    exactModelTokens: [],
+    exactModelTokenRoles: [],
+    mustHaveTraits: [],
+    excludedClasses: [],
+    nominalPowerKwMin: undefined,
+    nominalPowerKwMax: undefined,
+    maxPowerKwMin: undefined,
+    maxPowerKwMax: undefined,
+    weightKgMin: undefined,
+    weightKgMax: undefined,
+    diameterMmMin: undefined,
+    diameterMmMax: undefined,
+    budgetMax: undefined,
+    fuel: undefined,
+    startType: undefined,
+    enclosure: undefined,
+    conventionalGenerator: undefined,
+    singlePhase220: undefined,
+    provenance
+  };
+}
+
+function exactLookupRelaxedSelectionState(state: ProductSelectionState): ProductSelectionState {
+  return {
+    ...state,
+    activeRequirement: state.activeRequirement
+      ? withoutExactLookupContextConstraints(state.activeRequirement)
+      : state.activeRequirement,
+    hardConstraints: withoutExactLookupContextConstraints(state.hardConstraints),
+    loadProfile: undefined
+  };
+}
+
+function exactLookupRelaxedTraits(traits: RequiredProductTraits): RequiredProductTraits {
+  return {
+    ...traits,
+    fuel: 'unknown',
+    startType: 'unknown',
+    enclosure: 'unknown',
+    conventionalGenerator: null,
+    singlePhase220: null,
+    budgetMax: null,
+    weightKgMin: null,
+    weightKgMax: null,
+    diameterMmMin: null,
+    diameterMmMax: null,
+    nominalPowerKwMin: null,
+    nominalPowerKwMax: null,
+    maxPowerKwMin: null,
+    maxPowerKwMax: null,
+    powerReasoning: ''
+  };
+}
+
 function intentAcceptsRequirementKind(intent: ProductIntent, kind: SemanticRequirementKind) {
   if (kind === 'powerKw' || kind === 'phase') return intent === 'generator' || intent === 'weldingGenerator';
   if (kind === 'weightKg') return ['plate', 'rammer', 'roller', 'trowel'].includes(intent);
@@ -2155,7 +2231,12 @@ function productReasons(product: Product, state: CustomerNeedState, criteria: st
   if (profile.intent === 'generator' && flags.isGenerator) {
     if (flags.isGasoline) reasons.push('Подходит по классу: бензиновый генератор для резервного питания');
     else reasons.push('Подходит по классу: генератор, а не аксессуар или другая техника');
-    if (powerKw !== undefined) reasons.push(`Мощность около ${powerKw} кВт соответствует заданному диапазону`);
+    if (powerKw !== undefined) {
+      const hasPowerCriterion = Boolean(profile.generatorPower || profile.desiredPowerRange);
+      reasons.push(hasPowerCriterion
+        ? `Мощность около ${powerKw} кВт соответствует заданному диапазону`
+        : `Мощность около ${powerKw} кВт`);
+    }
     if (profile.wantsEnclosedGenerator && flags.hasGeneratorEnclosureSignal) reasons.push('Есть признаки закрытого или шумозащитного исполнения');
     if (profile.wantsElectricStart && flags.hasElectricStart) reasons.push('Есть признаки запуска ключом/кнопкой');
   }
@@ -2357,7 +2438,7 @@ function shouldPromoteCatalogFactCheckedCards(
     ((contract.cardsRole !== 'none' && (contract.productCardsPolicy ?? 'none') !== 'none') || exactLookupAlternativeFound) &&
     !isLeadPlan(plan) &&
     !blockEstimatedPumpCards &&
-    !isCurrentLevelTechnicalTurn(contract) &&
+    (!isCurrentLevelTechnicalTurn(contract) || exactLookupAlternativeFound) &&
     result.trace?.canRecommendFromSelection === true &&
     result.visibleProducts.length > 0 &&
     result.matchedProducts.length > 0 &&
@@ -5259,19 +5340,6 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
   const currentNeedAllowsProduct = (product: Product) =>
     productMatchesSelectionCriteria(product, selectionState, profile) &&
     productFitPenalty(product, profile) >= 0;
-  const withoutExactModelConstraint = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
-    ...criteria,
-    brandConstraint: '',
-    exactModelConstraint: '',
-    exactModelTokens: []
-  });
-  const relaxedExactLookupState: ProductSelectionState = {
-    ...selectionState,
-    activeRequirement: selectionState.activeRequirement
-      ? withoutExactModelConstraint(selectionState.activeRequirement)
-      : selectionState.activeRequirement,
-    hardConstraints: withoutExactModelConstraint(selectionState.hardConstraints)
-  };
   const structuredSelectionMatchedIds = new Set(selectionState.matchedProductIds ?? []);
   const structuredSelectionAllowsSelectedProduct = (product: Product) =>
     structuredSelectionAuthoritative &&
@@ -5284,10 +5352,17 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
       ? plan.selectedProductIds
       : []
   );
+  const relaxedExactLookupState = exactLookupRelaxedSelectionState(selectionState);
+  const relaxedExactLookupProfile = buildProductFitProfile(
+    { ...state, selectionState: relaxedExactLookupState },
+    userMessage,
+    plan.catalogSearchQuery,
+    exactLookupRelaxedTraits(plan.requiredProductTraits)
+  );
   const exactLookupSelectedAlternative = (product: Product) =>
     exactLookupSelectedIds.has(product.id) &&
-    productMatchesSelectionCriteria(product, relaxedExactLookupState, profile) &&
-    productFitPenalty(product, profile) >= 0;
+    productMatchesSelectionCriteria(product, relaxedExactLookupState, relaxedExactLookupProfile) &&
+    productFitPenalty(product, relaxedExactLookupProfile) >= 0;
 
   const isBroadenComparisonAnchor = (product: Product) =>
     plan.searchScope === 'broadenAlternatives' && productHasExactModel(product, profile);
@@ -5349,7 +5424,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
         .filter((product) => matchesRequestedBrand(product))
         .filter((product) => productMatchesSelectionCriteria(product, selectionState, profile) || structuredSelectionAllowsSelectedProduct(product))
     ];
-    const cards = productCards(mergeProductsById([], structuredProducts), state, userMessage, profile, cardLimit);
+    const cards = productCards(mergeProductsById([], structuredProducts), state, userMessage, exactLookupSelectedIds.size ? relaxedExactLookupProfile : profile, cardLimit);
     return {
       cards,
       diagnostics: cardDiagnostics(
@@ -5372,7 +5447,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
       plan.selectedProductIds.length > 0;
     if (plannerSelectionIsAuthoritative) {
       const fallbackRanked = selectedCards.length ? [] : ranked;
-      const cards = productCards(selectedCards.length ? selectedCards : fallbackRanked, state, userMessage, profile, cardLimit);
+      const cards = productCards(selectedCards.length ? selectedCards : fallbackRanked, state, userMessage, exactLookupSelectedIds.size ? relaxedExactLookupProfile : profile, cardLimit);
       return {
         cards,
         diagnostics: cardDiagnostics(
@@ -5404,7 +5479,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
       : !leadRequested && shouldAppendRanked
       ? diversifyRankedProducts(combinedRaw.map((product) => ({ product, score: rankingScore(product) })).sort((a, b) => b.score - a.score), cardLimit)
       : combinedRaw;
-    const cards = productCards(combined, state, userMessage, profile, cardLimit);
+    const cards = productCards(combined, state, userMessage, exactLookupSelectedIds.size ? relaxedExactLookupProfile : profile, cardLimit);
     return {
       cards,
       diagnostics: cardDiagnostics(
@@ -6416,53 +6491,9 @@ export class AssistantService {
     const exactLookupWantsCloseAlternative = !matchedProducts.length &&
       lookupTokens.length > 0 &&
       (plan.agentDecision?.catalogAction === 'exact_model_lookup' || plan.agentDecision?.catalogAction === 'verify_catalog_absence');
-    const withoutExactLookupContextConstraints = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
-      const provenance = { ...(criteria.provenance ?? {}) };
-      delete provenance.brandConstraint;
-      delete provenance.exactModelConstraint;
-      delete provenance.nominalPowerKwMin;
-      delete provenance.nominalPowerKwMax;
-      delete provenance.maxPowerKwMin;
-      delete provenance.maxPowerKwMax;
-      delete provenance.weightKgMin;
-      delete provenance.weightKgMax;
-      delete provenance.diameterMmMin;
-      delete provenance.diameterMmMax;
-      delete provenance.fuel;
-      delete provenance.startType;
-      delete provenance.enclosure;
-      delete provenance.conventionalGenerator;
-      delete provenance.singlePhase220;
-      return {
-        ...criteria,
-        brandConstraint: '',
-        exactModelConstraint: '',
-        exactModelTokens: [],
-        nominalPowerKwMin: undefined,
-        nominalPowerKwMax: undefined,
-        maxPowerKwMin: undefined,
-        maxPowerKwMax: undefined,
-        weightKgMin: undefined,
-        weightKgMax: undefined,
-        diameterMmMin: undefined,
-        diameterMmMax: undefined,
-        fuel: undefined,
-        startType: undefined,
-        enclosure: undefined,
-        conventionalGenerator: undefined,
-        singlePhase220: undefined,
-        provenance
-      };
-    };
-    const relaxedExactLookupState: ProductSelectionState = {
-      ...effectiveSelectionState,
-      activeRequirement: effectiveSelectionState.activeRequirement
-        ? withoutExactLookupContextConstraints(effectiveSelectionState.activeRequirement)
-        : effectiveSelectionState.activeRequirement,
-      hardConstraints: withoutExactLookupContextConstraints(effectiveSelectionState.hardConstraints)
-    };
+    const relaxedExactLookupState = exactLookupRelaxedSelectionState(effectiveSelectionState);
     const relaxedExactLookupProfile = exactLookupWantsCloseAlternative
-      ? buildProductFitProfile({ ...state, selectionState: relaxedExactLookupState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits)
+      ? buildProductFitProfile({ ...state, selectionState: relaxedExactLookupState }, userMessage, plan.catalogSearchQuery, exactLookupRelaxedTraits(plan.requiredProductTraits))
       : effectiveSelectionProfile;
     const exactLookupAlternativeBrands = requestedBrandKeysFromProducts(
       mergeProductsById(exactProducts, sourceProducts),
