@@ -6447,7 +6447,7 @@ describe('recommendation ranking', () => {
     const contract = productSelectionAgentDecision({
       taskType: 'pure_availability',
       answerTask: 'technical_explanation',
-      catalogAction: 'exact_model_lookup',
+      catalogAction: 'verify_catalog_absence',
       productCardsPolicy: 'none',
       cardsRole: 'none'
     });
@@ -6462,8 +6462,9 @@ describe('recommendation ranking', () => {
         exactLookupAlternative: true,
         canRecommendFromSelection: true
       },
-      visibleProducts: [{ id: 'bison-bs3250i' }],
+      visibleProducts: [],
       matchedProducts: [{ id: 'bison-bs3250i' }],
+      hiddenProducts: [],
       confidence: 0.78,
       state: mergeProductSelectionState(emptyProductSelectionState('generator'), {
         hardConstraints: {
@@ -6478,6 +6479,11 @@ describe('recommendation ranking', () => {
     } as any;
 
     expect(assistantTestHooks.shouldPromoteCatalogFactCheckedCards(contract as any, plan, result, false)).toBe(true);
+    expect(assistantTestHooks.shouldPromoteCatalogFactCheckedCards(contract as any, plan, result, true)).toBe(false);
+
+    const promoted = assistantTestHooks.promotePlanToSelectionCatalogCards(plan, result, 'show close alternative') as any;
+    expect(promoted.selectedProductIds).toEqual(['bison-bs3250i']);
+    expect(promoted.cardPolicy).toBe('showProducts');
   });
 
   it('keeps stale generator memory from blocking a new plate catalog selection', async () => {

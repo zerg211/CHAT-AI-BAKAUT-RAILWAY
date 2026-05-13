@@ -2440,7 +2440,7 @@ function shouldPromoteCatalogFactCheckedCards(
     !blockEstimatedPumpCards &&
     (!isCurrentLevelTechnicalTurn(contract) || exactLookupAlternativeFound) &&
     result.trace?.canRecommendFromSelection === true &&
-    result.visibleProducts.length > 0 &&
+    (result.visibleProducts.length > 0 || (exactLookupAlternativeFound && result.matchedProducts.length > 0)) &&
     result.matchedProducts.length > 0 &&
     result.confidence >= 0.55 &&
     hasReliableGeneratorSelectionBasis(result.state);
@@ -2452,13 +2452,18 @@ function promotePlanToSelectionCatalogCards(
   guidance: string
 ): AssistantTurnPlan {
   const hard = result.state.hardConstraints;
+  const selectedProducts = result.visibleProducts.length
+    ? result.visibleProducts
+    : result.trace?.exactLookupAlternative === true
+      ? result.matchedProducts
+      : [];
   return {
     ...plan,
     action: 'recommend_products',
     answerMode: 'productRecommendation',
     cardPolicy: 'showProducts',
     followUpPolicy: result.hiddenProducts.length ? 'askClarifyingQuestion' : 'auto',
-    selectedProductIds: result.visibleProducts.map((product) => product.id),
+    selectedProductIds: selectedProducts.map((product) => product.id),
     requiredProductTraits: {
       ...plan.requiredProductTraits,
       productIntent: hard.productIntent,
@@ -7039,6 +7044,7 @@ export class AssistantService {
     const selectionHasEstimatedPump = hasEstimatedPumpLoad(selectionResult.state);
     const currentTurnCanBlockForEstimatedPump = selectionHard.productIntent === 'generator' &&
       agentTurnContract.catalogAction !== 'exact_model_lookup' &&
+      agentTurnContract.catalogAction !== 'verify_catalog_absence' &&
       agentTurnContract.taskType !== 'comparison' &&
       agentTurnContract.taskType !== 'technical_answer';
     const latestLoadProfileForPumpBlock = selectionStateBeforeProductSelection.loadProfile ?? selectionResult.state.loadProfile;
