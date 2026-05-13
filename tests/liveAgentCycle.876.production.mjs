@@ -144,6 +144,9 @@ function assertProductionMetadata(detail) {
 
   assistantMessages.forEach((message, index) => {
     const metadata = metadataOf(message);
+    if (metadata.recovered || metadata.answerGenerationFallback === true || metadata.answerGenerationFallback?.used || metadata.recoveryAttempts) {
+      throw new Error(`Production turn ${index + 1} used recovery/fallback path instead of normal agent flow.`);
+    }
     const diagnostics = metadata.aiDiagnostics ?? {};
     const usedFallbackStage = Object.entries(diagnostics).find(([, diagnostic]) => diagnostic?.used);
     if (usedFallbackStage) throw new Error(`AI fallback diagnostics in production turn ${index + 1}: ${usedFallbackStage[0]}`);

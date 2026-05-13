@@ -268,6 +268,7 @@ describe('agent turn contract', () => {
       action: 'answer_question',
       answerMode: 'short',
       cardPolicy: 'textOnly',
+      answerGuidance: 'Карточки не показывать, точных совпадений нет.',
       selectedProductIds: [],
       selectionState: {
         shouldShowCards: false
@@ -306,5 +307,7 @@ describe('agent turn contract', () => {
     ]));
     expect(plan.action).toBe('recommend_products');
     expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.answerGuidance).not.toContain('Карточки не показывать');
+    expect(plan.answerGuidance).toContain('Use the validated catalog selection');
   });
 });

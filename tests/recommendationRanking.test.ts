@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AssistantService, assistantTestHooks } from '../src/ai/assistant.js';
-import { emptyNeedState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
+import { emptyNeedState, emptyProductSelectionState, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
 import { classifyProduct, fallbackDetectGeneratorEnclosureSignal, isCoreEquipment, parseBudgetMax, productMatchesRequestedBrand, requestedBrandKeysFromProducts } from '../src/ai/productClassifier.js';
 import type { CustomerNeedState, ProductSelectionCriteria, SemanticMemory, SemanticRequirement } from '../src/shared/types.js';
 
@@ -5691,6 +5691,148 @@ describe('recommendation ranking', () => {
     expect(answer).toContain('заявку сформировал');
     expect(answer).toContain('кратким содержанием диалога');
     expect(answer).not.toContain('заполните форму');
+  });
+
+  it('keeps an exact single power request exact when planner tries to broaden it', () => {
+    const message = 'Есть в наличии ТСС 10 кВт бензин?';
+    const plan = baseTurnPlan({
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        commercialAction: 'explain_manager_required'
+      }),
+      catalogSearchQuery: 'ТСС бензиновый генератор около 10 кВт, варианты 8-12 кВт',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'any',
+        enclosure: 'any',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 12
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'ТСС',
+        mustHaveTraits: ['ТСС', 'бензин', '10 кВт'],
+        shouldShowCards: true
+      }
+    });
+    const current = emptyProductSelectionState();
+    const profile = assistantTestHooks.buildProductFitProfile(
+      { ...emptyNeedState(), selectionState: current },
+      message,
+      plan.catalogSearchQuery,
+      plan.requiredProductTraits
+    );
+
+    const next = assistantTestHooks.explicitCriteriaFromTurn(current, message, message, plan, profile, message);
+
+    expect(next.hardConstraints.nominalPowerKwMin).toBe(10);
+    expect(next.hardConstraints.nominalPowerKwMax).toBe(10);
+    expect(next.hardConstraints.provenance?.nominalPowerKwMin).toBe('explicit_user');
+    expect(next.hardConstraints.provenance?.nominalPowerKwMax).toBe('explicit_user');
+  });
+
+  it('puts exact power catalog matches ahead of cheaper nearby alternatives', async () => {
+    const message = 'Есть в наличии ТСС 10 кВт бензин?';
+    const near8 = productWithSpecs('tss-8', 'Генератор бензиновый ТСС SGG 9000ELA (8,0 кВт)', 95_059, 'https://example.test/tss-8', {
+      'производитель оборудования': 'ТСС',
+      'вид топлива': 'бензиновые',
+      'мощность номинальная при 220 в, квт': '8',
+      'max. мощность, квт': '8.5'
+    });
+    const exact10 = productWithSpecs('tss-10', 'Генератор бензиновый ТСС SGG 10000EHA (10,0 кВт)', 213_941, 'https://example.test/tss-10', {
+      'производитель оборудования': 'ТСС',
+      'вид топлива': 'бензиновые',
+      'мощность номинальная при 220 в, квт': '10',
+      'max. мощность, квт': '11'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([near8, exact10] as any) as never);
+    const plan = baseTurnPlan({
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        commercialAction: 'explain_manager_required'
+      }),
+      catalogSearchQuery: 'ТСС бензиновый генератор около 10 кВт, варианты 8-12 кВт',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'any',
+        enclosure: 'any',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 12
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'ТСС',
+        mustHaveTraits: ['ТСС', 'бензин', '10 кВт'],
+        shouldShowCards: true
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(message, emptyNeedState(), plan, [near8, exact10] as any);
+
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['tss-10']);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['tss-10']);
+  });
+
+  it('does not accept a planner conventional-generator hard constraint without evidence', () => {
+    const message = 'Нет, просто покажите варианты';
+    const plan = baseTurnPlan({
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability'
+      }),
+      catalogSearchQuery: 'бензиновый генератор ТСС 8-10 кВт, 220 В, однофазный',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'any',
+        enclosure: 'any',
+        conventionalGenerator: true,
+        singlePhase220: true,
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'ТСС',
+        mustHaveTraits: ['ТСС', 'бензин', '220 В', 'однофазный', '8-10 кВт'],
+        shouldShowCards: true
+      }
+    });
+    const current = emptyProductSelectionState();
+    const profile = assistantTestHooks.buildProductFitProfile(
+      { ...emptyNeedState(), selectionState: current },
+      message,
+      plan.catalogSearchQuery,
+      plan.requiredProductTraits
+    );
+
+    const next = assistantTestHooks.explicitCriteriaFromTurn(current, message, message, plan, profile, message);
+
+    expect(next.hardConstraints.conventionalGenerator).toBeUndefined();
+    expect(next.hardConstraints.provenance?.conventionalGenerator).toBeUndefined();
+  });
+
+  it('does not append duplicate manager/logistics verification text', () => {
+    const answer = 'Доставку до Ейска можно посчитать, но итог по доставке и срокам проверит менеджер/логистика.';
+    const result = assistantTestHooks.ensureCommercialManagerVerification(answer, {
+      taskType: 'product_selection_with_delivery',
+      commercialAction: 'explain_manager_required'
+    } as any);
+
+    expect(result).toBe(answer);
   });
 
   it('uses web verification for technical model comparisons with unverified specs', () => {

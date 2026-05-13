@@ -220,6 +220,8 @@ export function deriveAgentTurnContract(input: {
 }
 
 export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, contract: AgentTurnContract): T {
+  const contractRepaired = contract.validatorWarnings.some((warning) => warning.includes('_repaired'));
+  const originalGuidance = contractRepaired ? undefined : (plan as { answerGuidance?: string }).answerGuidance;
   const catalogRequiresCards = contract.productCardsPolicy === 'show_matching_products' ||
     contract.productCardsPolicy === 'show_exact_matches';
   const shouldRecommendFromCatalog = catalogRequiresCards &&
@@ -251,7 +253,10 @@ export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, con
         shouldShowCards: shouldShowCatalogCards || contract.cardsRole === 'primary'
       },
       answerGuidance: [
-        (plan as { answerGuidance?: string }).answerGuidance,
+        originalGuidance,
+        contractRepaired
+          ? 'AgentTurnContract repaired a contradictory planner decision. Ignore any earlier guidance that says not to show cards, claims no exact matches without catalog evidence, or asks to broaden before using validated catalog matches.'
+          : undefined,
         contract.leadAllowed
           ? 'AgentTurnContract treats this as a commercial/specialist handoff. Answer the buyer question first, do not show catalog cards unless cardsRole is primary, then ask for contact only if the specialist is needed for final delivery/discount/availability terms.'
           : 'Buyer does not want a call/contact handoff now. Answer the useful summary and do not ask for a phone as the main answer.'
@@ -270,7 +275,10 @@ export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, con
         shouldShowCards: true
       },
       answerGuidance: [
-        (plan as { answerGuidance?: string }).answerGuidance,
+        originalGuidance,
+        contractRepaired
+          ? 'AgentTurnContract repaired a contradictory planner decision. Use the validated catalog selection and do not repeat stale guidance that says cards should be hidden or matching products are absent.'
+          : undefined,
         contract.leadAllowed
           ? 'AgentTurnContract treats this turn as product selection. Use validated catalog selection as primary output and show product cards when validators allow it.'
           : 'Buyer refused contact handoff, not catalog selection. Continue product selection with validated cards, but do not ask for a phone as the main answer.'
@@ -289,7 +297,7 @@ export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, con
         shouldShowCards: contract.cardsRole !== 'none'
       },
       answerGuidance: [
-        (plan as { answerGuidance?: string }).answerGuidance,
+        originalGuidance,
         `AgentTurnContract requires answering now: ${contract.mustAnswerNow.join('; ') || contract.errorRecoveryPriority}. CardsRole=${contract.cardsRole}; cards cannot replace the text answer.`
       ].filter(Boolean).join('\n')
     };
@@ -305,7 +313,7 @@ export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, con
         shouldShowCards: contract.cardsRole === 'primary'
       },
       answerGuidance: [
-        (plan as { answerGuidance?: string }).answerGuidance,
+        originalGuidance,
         'Buyer refused to leave contact or form now. Give the useful technical/commercial summary and do not ask for a phone as the main answer.'
       ].filter(Boolean).join('\n')
     };

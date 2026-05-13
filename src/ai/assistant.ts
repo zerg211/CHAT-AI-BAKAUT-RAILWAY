@@ -1461,6 +1461,15 @@ function generatorPowerFromTraits(traits?: RequiredProductTraits): GeneratorPowe
   return range.nominalMin || range.nominalMax || range.maxMin || range.maxMax ? range : undefined;
 }
 
+function generatorPowerFromSelectionHardConstraints(hard: ProductSelectionCriteria): GeneratorPowerProfile | undefined {
+  const range: GeneratorPowerProfile = { source: 'explicit_text' };
+  if (hard.nominalPowerKwMin) range.nominalMin = hard.nominalPowerKwMin;
+  if (hard.nominalPowerKwMax) range.nominalMax = hard.nominalPowerKwMax;
+  if (hard.maxPowerKwMin) range.maxMin = hard.maxPowerKwMin;
+  if (hard.maxPowerKwMax) range.maxMax = hard.maxPowerKwMax;
+  return range.nominalMin || range.nominalMax || range.maxMin || range.maxMax ? range : undefined;
+}
+
 function normalizePowerRange(range?: GeneratorPowerProfile) {
   if (!range) return undefined;
   const normalized = { ...range };
@@ -1558,17 +1567,11 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
     hard.exactModelTokens.join(' ')
   ].filter(Boolean).join(' ')));
   const desiredPowerRange = plannerOrLedgerHasConstraints ? undefined : parseDesiredPowerRange(activeNeedText);
+  const hardGeneratorPower = generatorPowerFromSelectionHardConstraints(hard);
   const generatorPower = normalizePowerRange(
+    (plannerOrLedgerHasConstraints ? hardGeneratorPower : undefined) ??
     generatorPowerFromTraits(traits) ??
-    ((hard.nominalPowerKwMin || hard.nominalPowerKwMax || hard.maxPowerKwMin || hard.maxPowerKwMax)
-      ? {
-          nominalMin: hard.nominalPowerKwMin,
-          nominalMax: hard.nominalPowerKwMax,
-          maxMin: hard.maxPowerKwMin,
-          maxMax: hard.maxPowerKwMax,
-          source: 'explicit_text' as const
-        }
-      : undefined) ??
+    hardGeneratorPower ??
     (desiredPowerRange ? { nominalMin: desiredPowerRange.min, nominalMax: desiredPowerRange.max, source: 'explicit_text' } : undefined) ??
     (plannerOrLedgerHasConstraints ? undefined : estimatedGeneratorPowerFromLoads(activeNeedText))
   );
@@ -3044,10 +3047,45 @@ function hasExplicitPowerText(text: string) {
   return Boolean(parseDesiredPowerRange(text) || text.match(powerRegex));
 }
 
+function explicitSinglePowerKwConstraint(text: string) {
+  if (parseDesiredPowerRange(text)) return undefined;
+  if (/(?:около|примерн|порядк|ориентир|плюс\s*-?\s*минус|~|\bдо\s+\d|\bот\s+\d|\bfrom\s+\d[\d,.]*\s+to\s+\d|\bbetween\s+\d[\d,.]*\s+and\s+\d)/iu.test(text)) return undefined;
+  return singlePowerKwFromText(text);
+}
+
 function explicitGeneratorPowerRequestKw(text: string) {
   const after = text.match(/(?:генератор|бензогенератор|электростанц)[^.!?\n]{0,80}?(\d+(?:[,.]\d+)?)\s*(кВт|kw|kva|ква)/iu);
   const before = text.match(/(\d+(?:[,.]\d+)?)\s*(кВт|kw|kva|ква)[^.!?\n]{0,80}?(?:генератор|бензогенератор|электростанц)/iu);
   return parseLoadPowerAmount(after?.[1] ?? before?.[1], after?.[2] ?? before?.[2]);
+}
+
+function plannerPowerRangeBroadensExplicitSinglePower(userMessage: string, range?: GeneratorPowerProfile) {
+  const exactKw = explicitSinglePowerKwConstraint(userMessage);
+  if (!exactKw || !range) return undefined;
+  const nominalMin = range.nominalMin;
+  const nominalMax = range.nominalMax;
+  if (!nominalMin || !nominalMax) return undefined;
+  const width = Math.abs(nominalMax - nominalMin);
+  if (width <= 0.3) return undefined;
+  if (exactKw < Math.min(nominalMin, nominalMax) || exactKw > Math.max(nominalMin, nominalMax)) return undefined;
+  return exactKw;
+}
+
+function plannerConventionalGeneratorConstraintHasEvidence(value: boolean, userMessage: string, plan: AssistantTurnPlan, currentHard: ProductSelectionCriteria) {
+  if (currentHard.conventionalGenerator === value &&
+    (currentHard.provenance?.conventionalGenerator === 'explicit_user' || currentHard.provenance?.conventionalGenerator === 'previous_selection')) {
+    return true;
+  }
+  const evidenceText = [
+    userMessage,
+    plan.catalogSearchQuery,
+    plan.selectionState.mustHaveTraits.join(' '),
+    plan.selectionState.niceToHaveTraits.join(' '),
+    plan.requiredProductTraits.powerReasoning
+  ].filter(Boolean).join(' ');
+  return value
+    ? hasConventionalGeneratorSignal(evidenceText)
+    : containsAny(evidenceText, inverterTerms) && !isTermExplanationQuestion(evidenceText);
 }
 
 function hasCompatibilityTargetContext(text: string) {
@@ -3655,13 +3693,21 @@ function explicitCriteriaFromTurn(
     plannerTraits.maxPowerKwMax
   )
     ? {
-        nominalMin: plannerTraits.nominalPowerKwMin,
-        nominalMax: plannerTraits.nominalPowerKwMax,
-        maxMin: plannerTraits.maxPowerKwMin,
-        maxMax: plannerTraits.maxPowerKwMax,
+        nominalMin: plannerTraits.nominalPowerKwMin ?? undefined,
+        nominalMax: plannerTraits.nominalPowerKwMax ?? undefined,
+        maxMin: plannerTraits.maxPowerKwMin ?? undefined,
+        maxMax: plannerTraits.maxPowerKwMax ?? undefined,
         source: 'planner' as const
       }
     : undefined;
+  const exactPowerFromLatestUser = plannerPowerRangeBroadensExplicitSinglePower(userMessage, plannerPower);
+  const effectivePlannerPower: GeneratorPowerProfile | undefined = exactPowerFromLatestUser
+    ? {
+        nominalMin: exactPowerFromLatestUser,
+        nominalMax: exactPowerFromLatestUser,
+        source: 'explicit_text' as const
+      }
+    : plannerPower;
   const contextualPower = targetProductClass === 'generator' && !plannerPower && contextualGroundedPowerMin && !loadProfileCanSetPower
     ? { min: contextualGroundedPowerMin, max: Math.round((contextualGroundedPowerMin + Math.max(1.5, contextualGroundedPowerMin * 0.08)) * 10) / 10, source: 'explicit_user' as const }
     : undefined;
@@ -3677,21 +3723,21 @@ function explicitCriteriaFromTurn(
           })()
         : undefined
     ) : undefined;
-  if (!rankingOnly && plannerPower) {
-    if (plannerPower.nominalMin) {
-      hard.nominalPowerKwMin = plannerPower.nominalMin;
-      hard.provenance!.nominalPowerKwMin = 'planner';
+  if (!rankingOnly && effectivePlannerPower) {
+    if (effectivePlannerPower.nominalMin) {
+      hard.nominalPowerKwMin = effectivePlannerPower.nominalMin;
+      hard.provenance!.nominalPowerKwMin = exactPowerFromLatestUser ? 'explicit_user' : 'planner';
     }
-    if (plannerPower.nominalMax) {
-      hard.nominalPowerKwMax = plannerPower.nominalMax;
-      hard.provenance!.nominalPowerKwMax = 'planner';
+    if (effectivePlannerPower.nominalMax) {
+      hard.nominalPowerKwMax = effectivePlannerPower.nominalMax;
+      hard.provenance!.nominalPowerKwMax = exactPowerFromLatestUser ? 'explicit_user' : 'planner';
     }
-    if (plannerPower.maxMin) {
-      hard.maxPowerKwMin = plannerPower.maxMin;
+    if (effectivePlannerPower.maxMin) {
+      hard.maxPowerKwMin = effectivePlannerPower.maxMin;
       hard.provenance!.maxPowerKwMin = 'planner';
     }
-    if (plannerPower.maxMax) {
-      hard.maxPowerKwMax = plannerPower.maxMax;
+    if (effectivePlannerPower.maxMax) {
+      hard.maxPowerKwMax = effectivePlannerPower.maxMax;
       hard.provenance!.maxPowerKwMax = 'planner';
     }
   } else if (!rankingOnly && (contextualPower || desiredPower)) {
@@ -3741,7 +3787,8 @@ function explicitCriteriaFromTurn(
     hard.enclosure = plannerTraits.enclosure;
     hard.provenance!.enclosure = 'planner';
   }
-  if (plannerTraits.conventionalGenerator !== null) {
+  if (plannerTraits.conventionalGenerator !== null &&
+    plannerConventionalGeneratorConstraintHasEvidence(plannerTraits.conventionalGenerator, userMessage, plan, currentHard)) {
     hard.conventionalGenerator = plannerTraits.conventionalGenerator;
     hard.provenance!.conventionalGenerator = 'planner';
   }
@@ -5433,6 +5480,12 @@ function stripLeadPressureTail(answer: string) {
 
 function ensureCommercialManagerVerification(answer: string, contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return answer;
+  const alreadyHasSpecialistVerification = (contract.taskType === 'pure_delivery' || contract.taskType === 'product_selection_with_delivery')
+    ? /(менеджер|логист)/iu.test(answer) && /(доставк|стоимост|услов|срок|адрес)/iu.test(answer)
+    : (contract.taskType === 'pure_availability' || contract.taskType === 'product_selection_with_availability')
+      ? /(менеджер|логист)/iu.test(answer) && /(налич|склад|отгруз|остат)/iu.test(answer)
+      : /(менеджер|специалист|логист)/iu.test(answer);
+  if (alreadyHasSpecialistVerification) return answer;
   const sentence = contract.taskType === 'pure_delivery' || contract.taskType === 'product_selection_with_delivery'
     ? ' Точную стоимость и условия доставки должен подтвердить менеджер или логистика по адресу и способу отправки.'
     : contract.taskType === 'pure_availability' || contract.taskType === 'product_selection_with_availability'
@@ -8558,6 +8611,7 @@ export const assistantTestHooks = {
   stripLeadPressureTail,
   ensureCommercialManagerVerification,
   sanitizeSelfExcludingSelectionState,
+  explicitCriteriaFromTurn,
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
   deterministicAnswerGenerationFallback,
