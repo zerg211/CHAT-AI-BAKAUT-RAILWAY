@@ -6254,6 +6254,144 @@ describe('recommendation ranking', () => {
     expect(cleaned).not.toMatch(/менеджер/iu);
   });
 
+  it('does not treat a non-restrictive brand note as a hard brand', async () => {
+    const generator = productWithSpecs('bison-5', 'Generator gasoline BISON BS6500EP 5.0 kW 230 V single phase', 51_500, 'https://example.test/bison', {
+      voltage: '230 V',
+      nominalPower: '5.0 kW'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([generator] as any) as never);
+    const plan = baseTurnPlan({
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        singlePhase220: true,
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 6
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'generator',
+        brandConstraint: 'not important'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('Show cheaper generators 4-6 kW 220 V, brand is not important', emptyNeedState(), plan, [generator] as any);
+
+    expect(result.state.hardConstraints.brandConstraint ?? '').toBe('');
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['bison-5']);
+  });
+
+  it('lets exact model lookup bypass stale sizing and conventional-generator constraints', async () => {
+    const closeCandidate = productWithSpecs('bison-bs3250i', 'Generator gasoline inverter BISON BS3250i 3.0 kW 230 V single phase', 28_032, 'https://example.test/bison-bs3250i', {
+      voltage: '230 V',
+      nominalPower: '3.0 kW'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([closeCandidate] as any) as never);
+    const previousSelection = mergeProductSelectionState(emptyProductSelectionState('generator'), {
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyProductSelectionState('generator').hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 6,
+        conventionalGenerator: true,
+        exactModelTokens: [],
+        exactModelTokenRoles: [],
+        mustHaveTraits: [],
+        excludedClasses: [],
+        provenance: {
+          nominalPowerKwMin: 'planner',
+          nominalPowerKwMax: 'planner',
+          conventionalGenerator: 'planner'
+        }
+      }
+    });
+    const state = { ...emptyNeedState(), selectionState: previousSelection };
+    const plan = baseTurnPlan({
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'pure_availability',
+        catalogAction: 'exact_model_lookup',
+        productCardsPolicy: 'none'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'generator',
+        exactModelConstraint: 'Bison 3250'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('A Bison 3250 available? Maybe I typed the model wrong.', state, plan, [closeCandidate] as any, undefined, undefined, '', {
+      forceCatalogVerification: true
+    });
+
+    expect(result.trace.exactLookupAlternative).toBe(true);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['bison-bs3250i']);
+  });
+
+  it('keeps stale generator memory from blocking a new plate catalog selection', async () => {
+    const plate = productWithSpecs('plate-100', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 TSS VP100 100 \\u043a\\u0433'), 44_000, 'https://example.test/plate-100', {
+      weight: ru('100 \\u043a\\u0433')
+    });
+    const generator = productWithSpecs('generator-15', 'Diesel generator 15 kW 380 V', 500_000, 'https://example.test/generator-15', {
+      nominalPower: '15 kW',
+      voltage: '380 V'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([plate, generator] as any) as never);
+    const memory: SemanticMemory = {
+      version: 1,
+      activeRequirementIds: ['req_generator', 'req_power', 'req_plate', 'req_weight'],
+      requirements: [
+        semanticRequirement({ id: 'req_generator', kind: 'productClass', value: { text: 'generator', productClass: 'generator' } }),
+        semanticRequirement({ id: 'req_power', kind: 'powerKw', value: { min: 15, max: 20 } }),
+        semanticRequirement({ id: 'req_plate', kind: 'productClass', value: { text: 'plate', productClass: 'plate' } }),
+        semanticRequirement({ id: 'req_weight', kind: 'weightKg', value: { min: 90, max: 120 } })
+      ],
+      mentionedProducts: [
+        { role: 'targetProduct', token: 'Bison 3250', status: 'unresolved', evidence: 'earlier exact lookup', updatedAt: '2026-05-13T00:00:00.000Z', productIds: [], normalizedToken: 'bison3250' }
+      ],
+      selectionPolicy: {
+        primaryRequirementIds: ['req_plate', 'req_weight'],
+        alternativeMode: 'none',
+        explanationRequired: false
+      },
+      botCommitments: []
+    };
+    const state = { ...emptyNeedState(), semanticMemory: memory };
+    const plan = baseTurnPlan({
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 90,
+        weightKgMax: 120
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        targetProductClass: 'generator'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn('Show catalog vibratory plates 90-120 kg, preferably not the most expensive.', state, plan, [plate, generator] as any);
+
+    expect(result.state.hardConstraints.productIntent).toBe('plate');
+    expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBeUndefined();
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['plate-100']);
+  });
+
   it('uses web verification for technical model comparisons with unverified specs', () => {
     const plan = baseTurnPlan({
       answerMode: 'productRecommendation',

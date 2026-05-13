@@ -565,7 +565,7 @@ function coerceCriteriaFromNeedExtraction(value: unknown, fallbackIntent: Produc
     criteria.singlePhase220 = traits.singlePhase220;
     criteria.provenance!.singlePhase220 = 'planner';
   }
-  const brandConstraint = shortText(raw.brandConstraint, 80);
+  const brandConstraint = sanitizeBrandConstraintText(shortText(raw.brandConstraint, 80));
   if (brandConstraint) {
     criteria.brandConstraint = brandConstraint;
     criteria.provenance!.brandConstraint = 'planner';
@@ -790,7 +790,67 @@ function semanticText(value: Record<string, unknown>, key: 'text' | 'productClas
   return typeof value[key] === 'string' ? String(value[key]).trim() : '';
 }
 
-function applySemanticMemoryToSelectionState(selectionState: ProductSelectionState, memory: SemanticMemory | undefined): ProductSelectionState {
+function nonRestrictiveConstraintText(value?: string | null) {
+  const compact = compactModelText(String(value ?? ''));
+  if (!compact) return true;
+  return [
+    'any',
+    'all',
+    'none',
+    'no',
+    'notimportant',
+    'doesntmatter',
+    'любой',
+    'любая',
+    'любое',
+    'неважен',
+    'неважна',
+    'неважно',
+    'безразницы',
+    'брендневажен',
+    'марканеважна'
+  ].includes(compact);
+}
+
+function sanitizeBrandConstraintText(value?: string | null) {
+  const text = String(value ?? '').trim();
+  return nonRestrictiveConstraintText(text) ? '' : text;
+}
+
+function modelTokenGroundedInCurrentTurn(token: string, groundingText: string) {
+  const compactToken = compactModelText(token);
+  if (compactToken.length < 3) return false;
+  return compactModelText(groundingText).includes(compactToken);
+}
+
+function productTextLooselyMatchesModelToken(productCompactText: string, token: string) {
+  const compactToken = compactModelText(token);
+  if (compactToken.length < 3) return false;
+  if (productCompactText.includes(compactToken)) return true;
+  const parts = String(token)
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/gu)
+    .map((part) => compactModelText(part))
+    .filter((part) => part.length >= 3);
+  const letterParts = parts.filter((part) => /\p{L}/u.test(part));
+  const numberParts = parts.filter((part) => /\p{N}/u.test(part));
+  return Boolean(letterParts.length && numberParts.length) &&
+    letterParts.every((part) => productCompactText.includes(part)) &&
+    numberParts.every((part) => productCompactText.includes(part));
+}
+
+function intentAcceptsRequirementKind(intent: ProductIntent, kind: SemanticRequirementKind) {
+  if (kind === 'powerKw' || kind === 'phase') return intent === 'generator' || intent === 'weldingGenerator';
+  if (kind === 'weightKg') return ['plate', 'rammer', 'roller', 'trowel'].includes(intent);
+  if (kind === 'diameterMm') return ['diamondBlade', 'diamondCore', 'cutter', 'trowel'].includes(intent);
+  return true;
+}
+
+function applySemanticMemoryToSelectionState(
+  selectionState: ProductSelectionState,
+  memory: SemanticMemory | undefined,
+  groundingText = ''
+): ProductSelectionState {
   const requirements = activeSemanticRequirements(memory);
   if (!requirements.length && !(memory?.mentionedProducts ?? []).length) return selectionState;
 
@@ -804,6 +864,11 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
   };
   let currentProductClass = selectionState.currentProductClass;
   let targetProductClass = selectionState.targetProductClass;
+  const currentTurnTargetClass = selectionState.targetProductClass !== 'unknown'
+    ? selectionState.targetProductClass
+    : selectionState.hardConstraints.productIntent !== 'unknown'
+      ? selectionState.hardConstraints.productIntent
+      : undefined;
 
   for (const requirement of requirements) {
     const value = requirement.value ?? {};
@@ -811,8 +876,10 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
       const productClass = coerceProductIntent(semanticText(value, 'productClass') || semanticText(value, 'text'));
       if (productClass !== 'unknown') {
         currentProductClass = currentProductClass !== 'unknown' ? currentProductClass : productClass;
-        targetProductClass = productClass;
-        hardConstraints.productIntent = productClass;
+        if (!currentTurnTargetClass || currentTurnTargetClass === productClass) {
+          targetProductClass = productClass;
+          hardConstraints.productIntent = productClass;
+        }
       }
     }
     if (requirement.kind === 'task') {
@@ -820,6 +887,7 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
       if (task) hardConstraints.mustHaveTraits = uniqueList([...hardConstraints.mustHaveTraits, task], 24);
     }
     if (requirement.kind === 'weightKg') {
+      if (!intentAcceptsRequirementKind(targetProductClass, requirement.kind)) continue;
       const min = semanticNumber(value, 'min');
       const max = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
       hardConstraints = {
@@ -841,6 +909,7 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
       }
     }
     if (requirement.kind === 'powerKw') {
+      if (!intentAcceptsRequirementKind(targetProductClass, requirement.kind)) continue;
       const min = semanticNumber(value, 'min');
       const max = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
       hardConstraints = {
@@ -855,6 +924,7 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
       };
     }
     if (requirement.kind === 'diameterMm') {
+      if (!intentAcceptsRequirementKind(targetProductClass, requirement.kind)) continue;
       const min = semanticNumber(value, 'min');
       const max = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
       hardConstraints = {
@@ -869,7 +939,7 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
       };
     }
     if (requirement.kind === 'brand') {
-      const brand = semanticText(value, 'brand') || semanticText(value, 'text');
+      const brand = sanitizeBrandConstraintText(semanticText(value, 'brand') || semanticText(value, 'text'));
       if (brand && !hardConstraints.brandConstraint) {
         hardConstraints.brandConstraint = brand;
         hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), brandConstraint: 'planner' };
@@ -883,6 +953,7 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
       }
     }
     if (requirement.kind === 'phase') {
+      if (!intentAcceptsRequirementKind(targetProductClass, requirement.kind)) continue;
       const phaseText = semanticText(value, 'text').toLowerCase();
       if (phaseText === 'single_phase_220' || phaseText === '220' || phaseText === '220v') {
         hardConstraints.singlePhase220 = true;
@@ -894,6 +965,7 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
   for (const product of memory?.mentionedProducts ?? []) {
     if (!product.token) continue;
     if (product.role === 'targetProduct') {
+      if (!modelTokenGroundedInCurrentTurn(product.token, groundingText)) continue;
       hardConstraints.exactModelTokens = uniqueList([...hardConstraints.exactModelTokens, product.token], 16);
     } else if (product.role === 'availabilityCheck' || product.role === 'comparison') {
       hardConstraints.exactModelTokenRoles = [
@@ -1240,7 +1312,7 @@ function coerceSelectionState(value: any, traits: RequiredProductTraits, fallbac
     mustHaveTraits: coerceStringList(value.mustHaveTraits, 16),
     niceToHaveTraits: coerceStringList(value.niceToHaveTraits, 16),
     excludedClasses: coerceProductIntentList(value.excludedClasses, 16),
-    brandConstraint: String(value.brandConstraint ?? '').trim().slice(0, 80),
+    brandConstraint: sanitizeBrandConstraintText(String(value.brandConstraint ?? '').trim().slice(0, 80)),
     exactModelConstraint: String(value.exactModelConstraint ?? '').trim().slice(0, 120),
     isAccessoryFollowUp: Boolean(value.isAccessoryFollowUp) || traits.productRole === 'accessory' || traits.productRole === 'consumable',
     selectionConfidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : fallback.selectionConfidence,
@@ -2994,12 +3066,12 @@ function effectiveExcludedClassesForState(state: ProductSelectionState) {
 }
 
 function productIntentFromSelection(state: ProductSelectionState, plan: AssistantTurnPlan, profile: ProductFitProfile): ProductIntent {
-  if (plan.selectionState.targetProductClass !== 'unknown') return plan.selectionState.targetProductClass;
   if (plan.requiredProductTraits.productIntent !== 'unknown') return plan.requiredProductTraits.productIntent;
+  if (profile.intent !== 'unknown') return profile.intent;
+  if (plan.selectionState.targetProductClass !== 'unknown') return plan.selectionState.targetProductClass;
   if (state.targetProductClass !== 'unknown') return state.targetProductClass as ProductIntent;
   if (state.hardConstraints.productIntent !== 'unknown') return state.hardConstraints.productIntent as ProductIntent;
   if (plannerHasSemanticSelection(plan)) return 'unknown';
-  if (profile.intent !== 'unknown') return profile.intent;
   return 'unknown';
 }
 
@@ -3833,7 +3905,7 @@ function explicitCriteriaFromTurn(
     hard.singlePhase220 = true;
     hard.provenance!.singlePhase220 = 'inferred_from_load';
   }
-  const plannerBrandConstraint = plan.selectionState.brandConstraint.trim();
+  const plannerBrandConstraint = sanitizeBrandConstraintText(plan.selectionState.brandConstraint);
   if (
     plannerBrandConstraint &&
     !plannerBrandBelongsToCompatibilityTarget(plannerBrandConstraint, compatibilityTarget, targetProductClass)
@@ -6194,7 +6266,11 @@ export class AssistantService {
     const profile = buildProductFitProfile(state, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
     const selectionUpdate = explicitCriteriaFromTurn(currentSelection, userMessage, activeText, plan, profile, conversationUserText);
     let selectionState = mergeProductSelectionState(currentSelection, selectionUpdate);
-    selectionState = applySemanticMemoryToSelectionState(selectionState, state.semanticMemory);
+    selectionState = applySemanticMemoryToSelectionState(
+      selectionState,
+      state.semanticMemory,
+      [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
+    );
     selectionState = clearUngroundedGeneratorElectricStart(
       selectionState,
       [userMessage, conversationUserText, needEvidenceText(state)].filter(Boolean).join(' ')
@@ -6336,18 +6412,44 @@ export class AssistantService {
     const exactLookupWantsCloseAlternative = !matchedProducts.length &&
       lookupTokens.length > 0 &&
       (plan.agentDecision?.catalogAction === 'exact_model_lookup' || plan.agentDecision?.catalogAction === 'verify_catalog_absence');
-    const withoutExactModelConstraint = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
-      ...criteria,
-      brandConstraint: '',
-      exactModelConstraint: '',
-      exactModelTokens: []
-    });
+    const withoutExactLookupContextConstraints = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
+      const provenance = { ...(criteria.provenance ?? {}) };
+      delete provenance.brandConstraint;
+      delete provenance.exactModelConstraint;
+      delete provenance.nominalPowerKwMin;
+      delete provenance.nominalPowerKwMax;
+      delete provenance.maxPowerKwMin;
+      delete provenance.maxPowerKwMax;
+      delete provenance.weightKgMin;
+      delete provenance.weightKgMax;
+      delete provenance.diameterMmMin;
+      delete provenance.diameterMmMax;
+      delete provenance.conventionalGenerator;
+      delete provenance.singlePhase220;
+      return {
+        ...criteria,
+        brandConstraint: '',
+        exactModelConstraint: '',
+        exactModelTokens: [],
+        nominalPowerKwMin: undefined,
+        nominalPowerKwMax: undefined,
+        maxPowerKwMin: undefined,
+        maxPowerKwMax: undefined,
+        weightKgMin: undefined,
+        weightKgMax: undefined,
+        diameterMmMin: undefined,
+        diameterMmMax: undefined,
+        conventionalGenerator: undefined,
+        singlePhase220: undefined,
+        provenance
+      };
+    };
     const relaxedExactLookupState: ProductSelectionState = {
       ...effectiveSelectionState,
       activeRequirement: effectiveSelectionState.activeRequirement
-        ? withoutExactModelConstraint(effectiveSelectionState.activeRequirement)
+        ? withoutExactLookupContextConstraints(effectiveSelectionState.activeRequirement)
         : effectiveSelectionState.activeRequirement,
-      hardConstraints: withoutExactModelConstraint(effectiveSelectionState.hardConstraints)
+      hardConstraints: withoutExactLookupContextConstraints(effectiveSelectionState.hardConstraints)
     };
     const relaxedExactLookupProfile = exactLookupWantsCloseAlternative
       ? buildProductFitProfile({ ...state, selectionState: relaxedExactLookupState }, userMessage, plan.catalogSearchQuery, plan.requiredProductTraits)
@@ -6369,7 +6471,7 @@ export class AssistantService {
             .filter((product) => productFitPenalty(product, relaxedExactLookupProfile) >= 0)
             .filter((product) => {
               const compact = compactModelText(productFullText(product));
-              return lookupTokens.some((token) => compact.includes(compactModelText(token)));
+              return lookupTokens.some((token) => productTextLooselyMatchesModelToken(compact, token));
             })
             .map((product) => ({
               product,
@@ -6900,7 +7002,12 @@ export class AssistantService {
       hasEstimatedPumpLoadProfile(latestLoadProfileForPumpBlock) &&
       !hasPreliminaryGeneratorSelectionBasisFromProfile(latestLoadProfileForPumpBlock)
     );
-    const blockEstimatedPumpCards = shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state) || latestTurnBlocksEstimatedPumpCards;
+    const currentTurnExplicitCatalogPowerSelection = selectionHard.productIntent === 'generator' &&
+      agentTurnContract.catalogAction === 'find_matching_products' &&
+      agentTurnContract.productCardsPolicy !== 'none' &&
+      Boolean(parseDesiredPowerRange(input.userMessage) || hasExplicitGeneratorPowerRequest(input.userMessage));
+    const blockEstimatedPumpCards = !currentTurnExplicitCatalogPowerSelection &&
+      (shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state) || latestTurnBlocksEstimatedPumpCards);
     const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
       ? {
           source: selectionResult.trace.source === 'full_catalog_selection_engine' ? 'full_catalog_slice' : 'structured_constraints',
