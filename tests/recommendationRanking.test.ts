@@ -2420,6 +2420,7 @@ describe('recommendation ranking', () => {
     const parsed = assistantTestHooks.parseWeightNeedRangeKg('вес 100-150 кг, плюс-минус 10 кг можно');
 
     expect(parsed).toEqual({ min: 90, max: 160 });
+    expect(assistantTestHooks.parseWeightNeedRangeKg('А если взять 100-120 кг, сильно лучше будет?')).toEqual({ min: 100, max: 120 });
   });
 
   it('builds a full catalog slice for generator power constraints, not only plate weights', async () => {
@@ -6631,6 +6632,7 @@ describe('recommendation ranking', () => {
 
     expect(result.state.hardConstraints.exactModelConstraint).toBe('');
     expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.state.hardConstraints.singlePhase220).toBe(false);
     expect(result.state.hardConstraints.maxPowerKwMin).toBeUndefined();
     expect(result.state.loadProfile).toBeUndefined();
     expect(result.matchedProducts.map((item) => item.id)).toContain('diesel-16');

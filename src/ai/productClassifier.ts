@@ -489,7 +489,7 @@ export function expandModelTokenAliases(tokens: string[]) {
 
 export function parseWeightNeedRangeKg(text: string) {
   const normalized = text.replace(/\s+/g, ' ');
-  const range = normalized.match(/(\d{2,4})\s*(?:-|–|—|\u0434\u043e)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu);
+  const range = normalized.match(/(\d{2,4})\s*(?:[-\u2010-\u2015]|\u0434\u043e)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu);
   if (!range) return undefined;
   const a = Number(range[1]);
   const b = Number(range[2]);

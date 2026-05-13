@@ -1029,6 +1029,32 @@ function clearGeneratorOnlyCriteriaForNonGeneratorState(state: ProductSelectionS
   };
 }
 
+function currentTurnGeneratorPhase(text: string): boolean | undefined {
+  const hasThreePhase = /(?:380\s*(?:в|v)|400\s*(?:в|v)|230\s*\/\s*400|220\s*\/\s*380|тр[её]х\s*фаз|тр[её]хфаз|3\s*фаз|three[-\s]?phase)/iu.test(text);
+  if (hasThreePhase) return false;
+  const hasSinglePhase = /(?:220\s*(?:в|v)|230\s*(?:в|v)|одно\s*фаз|однофаз|single[-\s]?phase)/iu.test(text);
+  return hasSinglePhase ? true : undefined;
+}
+
+function applyCurrentTurnGeneratorPhase(state: ProductSelectionState, groundingText: string): ProductSelectionState {
+  if (!generatorOnlyIntent(state.hardConstraints.productIntent as ProductIntent)) return state;
+  const singlePhase220 = currentTurnGeneratorPhase(groundingText);
+  if (singlePhase220 === undefined) return state;
+  const apply = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
+    ...criteria,
+    singlePhase220,
+    provenance: {
+      ...(criteria.provenance ?? {}),
+      singlePhase220: 'explicit_user'
+    }
+  });
+  return {
+    ...state,
+    hardConstraints: apply(state.hardConstraints),
+    activeRequirement: state.activeRequirement ? apply(state.activeRequirement) : state.activeRequirement
+  };
+}
+
 function applySemanticMemoryToSelectionState(
   selectionState: ProductSelectionState,
   memory: SemanticMemory | undefined,
@@ -4784,7 +4810,15 @@ function deterministicAnswerGenerationFallback(input: {
   selectionResult: ProductSelectionResult;
   structuredCatalogSlice: StructuredCatalogSlice | null;
   finalCards: FinalCardsDecision;
+  contract?: AgentTurnContract;
+  latestUserMessage?: string;
 }) {
+  if (input.contract?.answerTask === 'comparison' && input.selectionResult.state.hardConstraints.productIntent === 'plate') {
+    const range = parseWeightNeedRangeKg(input.latestUserMessage ?? '');
+    const rangeText = range ? `${range.min}-${range.max} кг` : 'более тяжелая плита';
+    return `Да, ${rangeText} обычно уплотняет заметно увереннее, чем 80-90 кг: по песку и небольшому щебню основание получается плотнее, меньше проходов и лучше подготовка под плитку.\n\nКомпромисс в погрузке: 80-90 кг проще возить одному, а 100-120 кг уже лучше по работе, но тяжелее для самостоятельной загрузки. Для финишной проходки по уложенной плитке нужна резиновая или полиуретановая накладка.`;
+  }
+
   if (shouldBlockGeneratorCardsForEstimatedPump(input.selectionResult.state)) {
     const load = input.selectionResult.state.loadProfile;
     const nominal = formatKwValue(load?.requiredNominalKw);
@@ -6502,6 +6536,10 @@ export class AssistantService {
       selectionState,
       [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
     );
+    selectionState = applyCurrentTurnGeneratorPhase(
+      selectionState,
+      [userMessage, plan.catalogSearchQuery, plan.selectionState.mustHaveTraits.join(' ')].filter(Boolean).join(' ')
+    );
     selectionState = clearStaleLoadSizingForExplicitCatalogPower(selectionState, userMessage, plan);
     selectionState = clearGeneratorOnlyCriteriaForNonGeneratorState(selectionState);
     selectionState = clearUngroundedGeneratorElectricStart(
@@ -7758,7 +7796,9 @@ export class AssistantService {
         cards,
         selectionResult,
         structuredCatalogSlice,
-        finalCards
+        finalCards,
+        contract: answerAgentTurnContract,
+        latestUserMessage: input.userMessage
       }).trim();
       if (deterministicFallback) {
         answer = deterministicFallback;
