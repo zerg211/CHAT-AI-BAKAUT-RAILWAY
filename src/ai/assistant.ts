@@ -5,7 +5,7 @@ import type { ActiveCustomerNeed, AgentTurnContract, BotCommitment, CardDisplayO
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
-import { emptyNeedState, emptyProductSelectionState, emptySemanticMemory, heuristicNeedUpdate, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
+import { emptyNeedState, emptyProductSelectionState, emptySemanticMemory, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 import { calculateGeneratorLoadProfile as calculateStructuredGeneratorLoadProfile } from './loadProfile.js';
 import {
   fromEscaped, weightRegex, powerRegex, powerRangeRegex, budgetMaxRegex,
@@ -1160,6 +1160,30 @@ function emptyRequiredProductTraits(): RequiredProductTraits {
   };
 }
 
+function requiredTraitsHaveHardConstraints(traits?: RequiredProductTraits) {
+  if (!traits) return false;
+  return traits.productIntent !== 'unknown' ||
+    traits.productRole !== 'unknown' ||
+    traits.fuel !== 'unknown' ||
+    traits.startType !== 'unknown' ||
+    traits.enclosure !== 'unknown' ||
+    traits.conventionalGenerator !== null ||
+    traits.singlePhase220 !== null ||
+    traits.budgetMax !== null ||
+    traits.weightKgMin !== null ||
+    traits.weightKgMax !== null ||
+    traits.diameterMmMin !== null ||
+    traits.diameterMmMax !== null ||
+    traits.nominalPowerKwMin !== null ||
+    traits.nominalPowerKwMax !== null ||
+    traits.maxPowerKwMin !== null ||
+    traits.maxPowerKwMax !== null;
+}
+
+function plannerHasSemanticSelection(plan: AssistantTurnPlan) {
+  return Boolean(plan.agentDecision);
+}
+
 function coerceRequiredProductTraits(value: any): RequiredProductTraits {
   const fallback = emptyRequiredProductTraits();
   if (!value || typeof value !== 'object') return fallback;
@@ -1277,30 +1301,12 @@ function compactTurnPlanForAnswer(plan: AssistantTurnPlan): AssistantTurnPlan {
 
 function fallbackTurnPlan(input: { userMessage: string; needState: CustomerNeedState; baseQuery: string }): AssistantTurnPlan {
   const traits = emptyRequiredProductTraits();
-  const currentLineupQuestion = shouldUseCurrentLineupStyle(input.userMessage);
-  const ownershipCostQuestion = fallbackDetectOwnershipCostQuestion(input.userMessage);
-  const leadAction = fallbackDetectPurchaseIntent(input.userMessage);
-  const answerMode: AnswerMode = leadAction
-    ? 'leadCollection'
-    : currentLineupQuestion
-      ? 'currentLineup'
-      : ownershipCostQuestion
-        ? 'serviceCostComparison'
-        : 'short';
   return {
-    action: leadAction
-      ? 'collect_lead'
-      : ownershipCostQuestion || currentLineupQuestion
-        ? 'verify_with_web'
-        : 'answer_question',
-    answerMode,
+    action: 'answer_question',
+    answerMode: 'short',
     cardPolicy: 'textOnly',
-    followUpPolicy: answerMode === 'serviceCostComparison' || answerMode === 'currentLineup'
-      ? 'answerNowNoDeferredOffer'
-      : answerMode === 'leadCollection'
-        ? 'collectLead'
-        : 'auto',
-    contextScope: currentLineupQuestion ? 'latestMessageOnly' : 'activeNeed',
+    followUpPolicy: 'answerNowNoDeferredOffer',
+    contextScope: 'activeNeed',
     searchScope: 'focusedNeed',
     catalogSearchQuery: input.baseQuery,
     selectedProductIds: [],
@@ -1310,9 +1316,23 @@ function fallbackTurnPlan(input: { userMessage: string; needState: CustomerNeedS
       shouldShowCards: false,
       cardDisplayMode: 'none'
     },
+    agentDecision: {
+      answerTask: 'mixed',
+      taskType: 'technical_answer',
+      catalogAction: 'none',
+      commercialAction: 'none',
+      productCardsPolicy: 'none',
+      mustAnswerNow: [],
+      currentFocus: 'latest_message',
+      cardsRole: 'none',
+      leadAllowed: true,
+      leadAllowedReason: 'planner_fallback_text_only',
+      errorRecoveryPriority: 'The LLM planner did not return a valid semantic contract. Answer text-only from validated context; do not infer intent, select products, or show cards from phrase patterns.',
+      confidence: 0
+    },
     needsWebSearch: false,
     missingInformation: [],
-    answerGuidance: 'Служебный планировщик не вернул валидный JSON. Не делай keyword-подбор и не показывай карточки по словам реплики. Ответь по текущей реплике и сохраненному контексту; если для подбора товара не хватает надежного семантического плана, задай один полезный уточняющий вопрос.'
+    answerGuidance: 'Planner fallback: no valid LLM semantic contract. Не делай keyword-подбор. Keep the turn text-only, do not select catalog products, do not show cards, and do not infer intent from phrase patterns.'
   };
 }
 
@@ -1501,16 +1521,23 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
   const selection = state.selectionState ?? emptyProductSelectionState();
   const hard = selection.hardConstraints;
   const activeNeedText = [latestText, queryText, selectionText(selection)].filter(Boolean).join(' ') || stateMemoryText;
-  const latestIntent = inferProductIntent(latestText);
-  const queryIntent = inferProductIntent(queryText);
-  const memoryIntent = inferProductIntent([state.lastSummary, stateMemoryText].filter(Boolean).join(' '));
+  const plannerOrLedgerHasConstraints = selection.semanticSource === 'llm_need_extraction' ||
+    selection.semanticSource === 'planner';
+  const lexicalHintText = plannerOrLedgerHasConstraints ? '' : activeNeedText;
+  const latestIntent = plannerOrLedgerHasConstraints ? 'unknown' : inferProductIntent(latestText);
+  const queryIntent = plannerOrLedgerHasConstraints ? 'unknown' : inferProductIntent(queryText);
+  const memoryIntent = plannerOrLedgerHasConstraints
+    ? 'unknown'
+    : inferProductIntent([state.lastSummary, stateMemoryText].filter(Boolean).join(' '));
   const traitIntent = traits?.productIntent ?? 'unknown';
   const selectionIntent = selection.targetProductClass !== 'unknown' ? selection.targetProductClass : hard.productIntent;
-  const activeNeedLower = activeNeedText.toLowerCase();
+  const activeNeedLower = lexicalHintText.toLowerCase();
   const plannerKnowsProductRole = Boolean(traits && traits.productRole !== 'unknown');
   const plannerKnowsEnclosure = Boolean(traits && traits.enclosure !== 'unknown');
-  const explicitElectricStartNeed = hasExplicitGeneratorElectricStartNeed([latestText, queryText].filter(Boolean).join(' '));
-  const generatorInEnclosureRequest = !plannerKnowsEnclosure
+  const explicitElectricStartNeed = plannerOrLedgerHasConstraints
+    ? false
+    : hasExplicitGeneratorElectricStartNeed([latestText, queryText].filter(Boolean).join(' '));
+  const generatorInEnclosureRequest = !plannerOrLedgerHasConstraints && !plannerKnowsEnclosure
     ? fallbackDetectGeneratorEnclosureSignal(activeNeedLower)
     : false;
   const coreProductTrait = traits?.productRole === 'coreProduct' ||
@@ -1526,12 +1553,11 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
           ? selectionIntent
           : memoryIntent;
   const exactModelTokens = expandModelTokenAliases(extractModelTokens([
-    userMessage,
-    retrievalQuery,
+    ...(plannerOrLedgerHasConstraints ? [] : [userMessage, retrievalQuery]),
     hard.exactModelConstraint,
     hard.exactModelTokens.join(' ')
   ].filter(Boolean).join(' ')));
-  const desiredPowerRange = parseDesiredPowerRange(activeNeedText);
+  const desiredPowerRange = plannerOrLedgerHasConstraints ? undefined : parseDesiredPowerRange(activeNeedText);
   const generatorPower = normalizePowerRange(
     generatorPowerFromTraits(traits) ??
     ((hard.nominalPowerKwMin || hard.nominalPowerKwMax || hard.maxPowerKwMin || hard.maxPowerKwMax)
@@ -1544,7 +1570,7 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
         }
       : undefined) ??
     (desiredPowerRange ? { nominalMin: desiredPowerRange.min, nominalMax: desiredPowerRange.max, source: 'explicit_text' } : undefined) ??
-    estimatedGeneratorPowerFromLoads(activeNeedText)
+    (plannerOrLedgerHasConstraints ? undefined : estimatedGeneratorPowerFromLoads(activeNeedText))
   );
 
   return {
@@ -1552,21 +1578,21 @@ function buildProductFitProfile(state: CustomerNeedState, userMessage: string, r
     activeNeedText,
     requestedBrands: [],
     accessoryRequested: accessoryTrait ||
-      (!coreProductTrait && !plannerKnowsProductRole && (
-        (containsAny(activeNeedText, accessoryNeedTerms) && !generatorInEnclosureRequest && traits?.enclosure !== 'enclosed') ||
+      (!plannerOrLedgerHasConstraints && !coreProductTrait && !plannerKnowsProductRole && (
+        (containsAny(lexicalHintText, accessoryNeedTerms) && !generatorInEnclosureRequest && traits?.enclosure !== 'enclosed') ||
         fallbackDetectStandaloneGeneratorAccessoryRequest(activeNeedLower)
       )),
-    weldingRequested: containsAny(activeNeedText, weldingTerms),
-    wantsGasoline: hard.fuel === 'gasoline' || traits?.fuel === 'gasoline' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, gasolineTerms)),
-    wantsDiesel: hard.fuel === 'diesel' || traits?.fuel === 'diesel' || ((!traits || traits.fuel === 'unknown') && containsAny(activeNeedText, dieselTerms)),
-    wantsElectricStart: hard.startType === 'electric' || (traits?.startType === 'electric' && explicitElectricStartNeed) || ((!traits || traits.startType === 'unknown') && explicitElectricStartNeed),
-    wantsInverterGenerator: hard.conventionalGenerator === false || traits?.conventionalGenerator === false || ((!traits || traits.conventionalGenerator === null) && containsAny(activeNeedText, inverterTerms)),
+    weldingRequested: plannerOrLedgerHasConstraints ? intent === 'weldingGenerator' : containsAny(lexicalHintText, weldingTerms),
+    wantsGasoline: hard.fuel === 'gasoline' || traits?.fuel === 'gasoline' || (!plannerOrLedgerHasConstraints && (!traits || traits.fuel === 'unknown') && containsAny(lexicalHintText, gasolineTerms)),
+    wantsDiesel: hard.fuel === 'diesel' || traits?.fuel === 'diesel' || (!plannerOrLedgerHasConstraints && (!traits || traits.fuel === 'unknown') && containsAny(lexicalHintText, dieselTerms)),
+    wantsElectricStart: hard.startType === 'electric' || traits?.startType === 'electric' || ((!traits || traits.startType === 'unknown') && explicitElectricStartNeed),
+    wantsInverterGenerator: hard.conventionalGenerator === false || traits?.conventionalGenerator === false || (!plannerOrLedgerHasConstraints && (!traits || traits.conventionalGenerator === null) && containsAny(lexicalHintText, inverterTerms)),
     wantsEnclosedGenerator: hard.enclosure === 'enclosed' || traits?.enclosure === 'enclosed' || (!traits || traits.enclosure === 'unknown' ? generatorInEnclosureRequest : false),
-    wantsConventionalGenerator: hard.conventionalGenerator === true || traits?.conventionalGenerator === true || ((!traits || traits.conventionalGenerator === null) && hasConventionalGeneratorSignal(activeNeedText)),
-    wantsSinglePhase220: hard.singlePhase220 === true || traits?.singlePhase220 === true || ((!traits || traits.singlePhase220 === null) && containsAny(activeNeedText, singlePhaseTerms)),
+    wantsConventionalGenerator: hard.conventionalGenerator === true || traits?.conventionalGenerator === true || (!plannerOrLedgerHasConstraints && (!traits || traits.conventionalGenerator === null) && hasConventionalGeneratorSignal(lexicalHintText)),
+    wantsSinglePhase220: hard.singlePhase220 === true || traits?.singlePhase220 === true || (!plannerOrLedgerHasConstraints && (!traits || traits.singlePhase220 === null) && containsAny(lexicalHintText, singlePhaseTerms)),
     desiredPowerRange,
     generatorPower,
-    budgetMax: parseBudgetMax(activeNeedText) ?? hard.budgetMax,
+    budgetMax: traits?.budgetMax ?? hard.budgetMax ?? (plannerOrLedgerHasConstraints ? undefined : parseBudgetMax(activeNeedText)),
     exactModelTokens
   };
 }
@@ -1577,11 +1603,13 @@ function generatorPowerPenalty(product: Product, profile: ProductFitProfile) {
   const nominal = power.nominalKw;
   const max = power.maxKw;
   const range = profile.generatorPower;
-  const nominalUpperTolerance = range.source === 'estimated_load' ? 0.3 : 0.8;
-  const maxUpperTolerance = range.source === 'estimated_load' ? 0.5 : 1.0;
-  if (range.nominalMin && nominal !== undefined && nominal < range.nominalMin - 0.4) return -150;
+  const nominalLowerTolerance = range.source === 'estimated_load' ? 0.4 : 0;
+  const nominalUpperTolerance = range.source === 'estimated_load' ? 0.3 : 0;
+  const maxLowerTolerance = range.source === 'estimated_load' ? 0.5 : 0;
+  const maxUpperTolerance = range.source === 'estimated_load' ? 0.5 : 0;
+  if (range.nominalMin && nominal !== undefined && nominal < range.nominalMin - nominalLowerTolerance) return -150;
   if (range.nominalMax && nominal !== undefined && nominal > range.nominalMax + nominalUpperTolerance) return -150;
-  if (range.maxMin && max !== undefined && max < range.maxMin - 0.5) return -150;
+  if (range.maxMin && max !== undefined && max < range.maxMin - maxLowerTolerance) return -150;
   if (range.maxMax && max !== undefined && max > range.maxMax + maxUpperTolerance) return -90;
   return 0;
 }
@@ -2182,7 +2210,22 @@ function planAllowsCatalogSelectionOverride(plan: AssistantTurnPlan) {
   );
 }
 
+function planContractRequestsProductCards(plan: AssistantTurnPlan) {
+  const decision = plan.agentDecision;
+  if (!decision) return false;
+  if (decision.cardsRole === 'none') return false;
+  return decision.productCardsPolicy === 'show_matching_products' ||
+    decision.productCardsPolicy === 'show_exact_matches' ||
+    decision.productCardsPolicy === 'supporting_only';
+}
+
 function isCatalogShortlistTurn(userMessage: string, plan?: AssistantTurnPlan) {
+  if (plan?.agentDecision?.catalogAction) {
+    return plan.agentDecision.catalogAction === 'find_matching_products' ||
+      plan.agentDecision.catalogAction === 'exact_model_lookup' ||
+      plan.agentDecision.catalogAction === 'verify_catalog_absence';
+  }
+  if (plan?.agentDecision) return false;
   const catalogText = [userMessage, plan?.catalogSearchQuery].filter(Boolean).join(' ');
   const catalogAvailability = isCatalogAvailabilityQuestion(catalogText) && !isManufacturingStatusQuestion(userMessage);
   if (!catalogAvailability) return false;
@@ -2192,16 +2235,11 @@ function isCatalogShortlistTurn(userMessage: string, plan?: AssistantTurnPlan) {
 
 function shouldForceStructuredSelectionCards(userMessage: string, plan: AssistantTurnPlan, result: ProductSelectionResult) {
   const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
-  const latestIntent = inferProductIntent(userMessage);
-  const fallbackPlanner = /Служебный планировщик/u.test(plan.answerGuidance);
-  const explicitLatestIntent = fallbackPlanner && latestIntent !== 'unknown' && latestIntent === result.state.targetProductClass;
-  const fallbackGroundedSelection = fallbackPlanner &&
-    (explicitLatestIntent || hasUserGroundedSelectionEvidence(result.state)) &&
-    (result.state.hardConstraints.productIntent !== 'generator' || hasReliableGeneratorSelectionBasis(result.state));
-  const plannerAllowsCards = plan.cardPolicy !== 'textOnly' && planAllowsCatalogSelectionOverride(plan);
-  const followUpRequestsCards = plan.cardPolicy !== 'textOnly' && isProductCardSelectionFollowUp(userMessage);
+  const plannerAllowsCards = plan.cardPolicy !== 'textOnly' &&
+    planAllowsCatalogSelectionOverride(plan) &&
+    planContractRequestsProductCards(plan);
   return result.matchedProducts.length > 0 &&
-    (plannerAllowsCards || followUpRequestsCards || fallbackGroundedSelection || selectionResultCanDriveCards(plan, result, userMessage)) &&
+    (plannerAllowsCards || selectionResultCanDriveCards(plan, result, userMessage)) &&
     hasReliableGeneratorSelectionBasis(result.state) &&
     !shouldBlockGeneratorCardsForEstimatedPump(result.state) &&
     result.confidence >= 0.55 &&
@@ -2236,6 +2274,8 @@ function shouldPromoteCatalogFactCheckedCards(
   const factCheckFoundCatalogProducts = contract.catalogAction === 'verify_catalog_absence' ||
     contract.catalogAction === 'exact_model_lookup';
   return factCheckFoundCatalogProducts &&
+    contract.cardsRole !== 'none' &&
+    (contract.productCardsPolicy ?? 'none') !== 'none' &&
     !isLeadPlan(plan) &&
     !blockEstimatedPumpCards &&
     !isCurrentLevelTechnicalTurn(contract) &&
@@ -2293,32 +2333,32 @@ function promotePlanToSelectionCatalogCards(
 }
 
 function shouldPromoteGeneratorSizingCards(userMessage: string, result: ProductSelectionResult, blockEstimatedPumpCards: boolean) {
+  void userMessage;
+  return shouldPromoteGeneratorSizingCardsForContract(undefined, result, blockEstimatedPumpCards);
+}
+
+function shouldPromoteGeneratorSizingCardsForContract(
+  contract: AgentTurnContract | undefined,
+  result: ProductSelectionResult,
+  blockEstimatedPumpCards: boolean
+) {
+  if (!contract ||
+    contract.cardsRole === 'none' ||
+    (contract.catalogAction ?? 'none') === 'none' ||
+    (contract.productCardsPolicy ?? 'none') === 'none'
+  ) return false;
   if (blockEstimatedPumpCards) return false;
   if (result.state.hardConstraints.productIntent !== 'generator') return false;
   if (result.trace?.canRecommendFromSelection !== true) return false;
   if (!result.visibleProducts.length || !result.matchedProducts.length) return false;
   if (result.confidence < 0.55 || !hasReliableGeneratorSelectionBasis(result.state)) return false;
-  const normalized = userMessage.toLowerCase();
-  const hasGenerator = /(?:генератор|бензогенератор|электростанц)/iu.test(normalized);
-  const asksSizingForSelection = /(?:минимальн|достаточн|класс|подбор|подбер|вариант|модел|покаж|смотреть|брать|подход|какой|посчита|рассчит)/iu.test(normalized);
-  const pureOperationQuestion = /(?:после\s+запуск|сколько\s+(?:примерно\s+)?остан|обслуж|авр|автозапуск|расход|масло|заводил|эксплуатац)/iu.test(normalized);
-  return hasGenerator && asksSizingForSelection && !pureOperationQuestion;
+  return contract.cardsRole === 'primary' || contract.cardsRole === 'supporting';
 }
 
 function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
   const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
-  const answerQuestionWithAutoCards = plan.action === 'answer_question' &&
-    plan.cardPolicy === 'auto' &&
-    (plan.answerMode === 'short' || plan.answerMode === 'unknown');
-  const clarifyingTextOnlyContradictedByReliableSelection = plan.action === 'ask_clarifying_question' &&
-    plan.cardPolicy === 'textOnly' &&
-    (plan.answerMode === 'short' || plan.answerMode === 'unknown');
-  const catalogShortlistWithTextPlan = catalogShortlistTurn &&
-    (plan.action === 'answer_question' || plan.action === 'ask_clarifying_question' || plan.action === 'verify_with_web') &&
-    (plan.cardPolicy === 'auto' || plan.cardPolicy === 'textOnly') &&
-    (plan.answerMode === 'short' || plan.answerMode === 'unknown' || plan.answerMode === 'currentLineup');
-
-  return (answerQuestionWithAutoCards || clarifyingTextOnlyContradictedByReliableSelection || catalogShortlistWithTextPlan) &&
+  return planContractRequestsProductCards(plan) &&
+    (plan.cardPolicy === 'showProducts' || plan.selectionState.shouldShowCards || catalogShortlistTurn) &&
     result.trace?.canRecommendFromSelection === true &&
     result.visibleProducts.length > 0 &&
     result.matchedProducts.length > 0 &&
@@ -2413,6 +2453,12 @@ function shouldUseCurrentLineupStyle(userMessage: string, plan?: AssistantTurnPl
 }
 
 function shouldUseWebSearch(userMessage: string, plan: AssistantTurnPlan) {
+  if (plan.agentDecision) {
+    if (plan.needsWebSearch) return true;
+    if (plan.action === 'verify_with_web') return true;
+    if (plan.answerMode === 'currentLineup' || plan.answerMode === 'serviceCostComparison') return true;
+    return false;
+  }
   const planText = [
     plan.action,
     plan.catalogSearchQuery,
@@ -2429,6 +2475,10 @@ function shouldUseWebSearch(userMessage: string, plan: AssistantTurnPlan) {
 }
 
 function shouldUseDetailedFactStyle(userMessage: string, plan: AssistantTurnPlan, cardCount: number) {
+  if (plan.agentDecision) {
+    if (plan.answerMode === 'serviceCostComparison' || plan.answerMode === 'detailedFact') return true;
+    return false;
+  }
   if (plan.answerMode === 'serviceCostComparison' || plan.answerMode === 'detailedFact') return true;
   if (plan.answerMode === 'currentLineup') return false;
   if (plan.answerMode && plan.answerMode !== 'unknown') return false;
@@ -2942,9 +2992,10 @@ function effectiveExcludedClassesForState(state: ProductSelectionState) {
 function productIntentFromSelection(state: ProductSelectionState, plan: AssistantTurnPlan, profile: ProductFitProfile): ProductIntent {
   if (plan.selectionState.targetProductClass !== 'unknown') return plan.selectionState.targetProductClass;
   if (plan.requiredProductTraits.productIntent !== 'unknown') return plan.requiredProductTraits.productIntent;
-  if (profile.intent !== 'unknown') return profile.intent;
   if (state.targetProductClass !== 'unknown') return state.targetProductClass as ProductIntent;
   if (state.hardConstraints.productIntent !== 'unknown') return state.hardConstraints.productIntent as ProductIntent;
+  if (plannerHasSemanticSelection(plan)) return 'unknown';
+  if (profile.intent !== 'unknown') return profile.intent;
   return 'unknown';
 }
 
@@ -3485,15 +3536,26 @@ function explicitCriteriaFromTurn(
 ) {
   const targetProductClass = productIntentFromSelection(current, plan, profile);
   const plannerTraits = plan.requiredProductTraits;
-  const semanticSelectionReady = current.semanticSource === 'llm_need_extraction';
+  const semanticSelectionReady = current.semanticSource === 'llm_need_extraction' ||
+    current.semanticSource === 'planner' ||
+    plannerHasSemanticSelection(plan);
   const allowLegacyTextFallback = !semanticSelectionReady;
   const explicitRankingPreference = allowLegacyTextFallback ? rankingPreferenceFromText(userMessage) : undefined;
   const rankingPreference = explicitRankingPreference ??
-    (targetProductClass !== 'unknown' && (allowLegacyTextFallback ? !hasBudgetSignal(userMessage) : !plannerTraits.budgetMax) ? 'cheapest' : undefined);
+    (targetProductClass !== 'unknown' && !plannerTraits.budgetMax ? 'cheapest' : undefined);
   const rankingOnly = allowLegacyTextFallback ? isRankingOnlyFollowUp(userMessage) : plan.searchScope === 'broadenAlternatives';
   const currentHard = current.activeRequirement ?? current.hardConstraints;
-  const exactTokensFromMessage = expandModelTokenAliases(extractModelTokens(userMessage));
-  const exactTokenRoles = tokenRolesForTurn(exactTokensFromMessage, userMessage, targetProductClass);
+  const exactTokenSource = allowLegacyTextFallback
+    ? userMessage
+    : plan.selectionState.exactModelConstraint;
+  const exactTokensFromMessage = expandModelTokenAliases(extractModelTokens(exactTokenSource));
+  const exactTokenRoles = allowLegacyTextFallback
+    ? tokenRolesForTurn(exactTokensFromMessage, userMessage, targetProductClass)
+    : exactTokensFromMessage.map((value) => ({
+        value,
+        role: 'targetProduct' as const,
+        evidence: plan.selectionState.exactModelConstraint
+      }));
   const targetExactTokens = exactTokenRoles.filter((token) => token.role === 'targetProduct').map((token) => token.value);
   const hard: ProductSelectionCriteria = {
     productIntent: targetProductClass,
@@ -3716,14 +3778,14 @@ function explicitCriteriaFromTurn(
   const plannerBrandConstraint = plan.selectionState.brandConstraint.trim();
   if (
     plannerBrandConstraint &&
-    userExplicitlyRequestedBrand(userMessage, plannerBrandConstraint) &&
     !plannerBrandBelongsToCompatibilityTarget(plannerBrandConstraint, compatibilityTarget, targetProductClass)
   ) {
     hard.brandConstraint = plannerBrandConstraint;
+    hard.provenance!.brandConstraint = 'planner';
   }
-  if (plan.selectionState.exactModelConstraint.trim() && targetExactTokens.length) {
+  if (plan.selectionState.exactModelConstraint.trim()) {
     hard.exactModelConstraint = plan.selectionState.exactModelConstraint.trim();
-    hard.provenance!.exactModelConstraint = 'explicit_user';
+    hard.provenance!.exactModelConstraint = allowLegacyTextFallback ? 'explicit_user' : 'planner';
   }
   const hasHardUpdate = Boolean(
     targetProductClass !== 'unknown' ||
@@ -3750,7 +3812,9 @@ function explicitCriteriaFromTurn(
   );
 
   return {
-    semanticSource: semanticSelectionReady ? 'llm_need_extraction' : allowLegacyTextFallback ? 'legacy_text_fallback' : 'planner',
+    semanticSource: current.semanticSource === 'llm_need_extraction'
+      ? 'llm_need_extraction'
+      : allowLegacyTextFallback ? 'legacy_text_fallback' : 'planner',
     currentProductClass: targetProductClass,
     targetProductClass,
     activeRequirement: hasHardUpdate ? hard : undefined,
@@ -3913,13 +3977,15 @@ function productSelectionHardViolation(product: Product, state: ProductSelection
   const powerRange = powerCriteriaFromSelection(hard);
   if (powerRange) {
     const power = extractGeneratorPowerForHardSelection(product);
-    const nominalUpperTolerance = powerRange.source === 'estimated_load' ? 0.3 : 0.8;
-    const maxUpperTolerance = powerRange.source === 'estimated_load' ? 0.5 : 1.0;
+    const nominalLowerTolerance = powerRange.source === 'estimated_load' ? 0.4 : 0;
+    const nominalUpperTolerance = powerRange.source === 'estimated_load' ? 0.3 : 0;
+    const maxLowerTolerance = powerRange.source === 'estimated_load' ? 0.5 : 0;
+    const maxUpperTolerance = powerRange.source === 'estimated_load' ? 0.5 : 0;
     if ((powerRange.nominalMin || powerRange.nominalMax) && power.nominalKw === undefined) return 'nominal power is unknown';
     if ((powerRange.maxMin || powerRange.maxMax) && power.maxKw === undefined) return 'max power is unknown';
-    if (powerRange.nominalMin && power.nominalKw !== undefined && power.nominalKw < powerRange.nominalMin - 0.4) return `nominal power ${power.nominalKw} kW is below ${powerRange.nominalMin} kW`;
+    if (powerRange.nominalMin && power.nominalKw !== undefined && power.nominalKw < powerRange.nominalMin - nominalLowerTolerance) return `nominal power ${power.nominalKw} kW is below ${powerRange.nominalMin} kW`;
     if (powerRange.nominalMax && power.nominalKw !== undefined && power.nominalKw > powerRange.nominalMax + nominalUpperTolerance) return `nominal power ${power.nominalKw} kW is above ${powerRange.nominalMax} kW`;
-    if (powerRange.maxMin && power.maxKw !== undefined && power.maxKw < powerRange.maxMin - 0.5) return `max power ${power.maxKw} kW is below ${powerRange.maxMin} kW`;
+    if (powerRange.maxMin && power.maxKw !== undefined && power.maxKw < powerRange.maxMin - maxLowerTolerance) return `max power ${power.maxKw} kW is below ${powerRange.maxMin} kW`;
     if (powerRange.maxMax && power.maxKw !== undefined && power.maxKw > powerRange.maxMax + maxUpperTolerance) return `max power ${power.maxKw} kW is above ${powerRange.maxMax} kW`;
   }
   if (!productMeetsCalculatedLoad(product, state)) return `nominal power is below calculated load ${state.loadProfile?.requiredNominalKw} kW`;
@@ -4113,26 +4179,26 @@ function nearestCatalogShortlistAlternatives(
 
 function missingQuestionsForSelection(state: ProductSelectionState, totalMatched: number) {
   const hard = state.hardConstraints;
+  const uncertainties = [...state.unknowns];
   if (hard.productIntent === 'generator' && !hasReliableGeneratorSelectionBasis(state)) {
     return uniqueList([
-      'какие приборы будут подключаться и какая у них нагрузка в кВт/Вт',
-      'будут ли холодильники, насосы или другой моторный потребитель запускаться одновременно',
-      ...state.unknowns
+      ...uncertainties,
+      'catalog_uncertainty:generator_load_or_power_basis_missing'
     ], 4).slice(0, 2);
   }
   if (totalMatched <= LARGE_SLICE_VISIBLE_CARDS) return state.unknowns.slice(0, 2);
-  const questions = [...state.unknowns];
+  const questions = [...uncertainties];
   if (hard.productIntent === 'generator') {
-    if (!hard.nominalPowerKwMin && !hard.nominalPowerKwMax) questions.push('какая нужна рабочая мощность или какие приборы будут подключаться');
-    if (!hard.startType) questions.push('важен ли электростарт');
+    if (!hard.nominalPowerKwMin && !hard.nominalPowerKwMax) questions.push('catalog_uncertainty:generator_nominal_power_unspecified');
+    if (!hard.startType) questions.push('catalog_uncertainty:generator_start_type_unspecified');
   }
   if (['plate', 'rammer', 'roller'].includes(hard.productIntent)) {
-    if (!hard.weightKgMin && !hard.weightKgMax) questions.push('какой вес/класс уплотнения нужен');
-    questions.push('по какому основанию будете работать: песок/щебень, грунт, асфальт или плитка');
+    if (!hard.weightKgMin && !hard.weightKgMax) questions.push('catalog_uncertainty:compaction_weight_class_unspecified');
+    questions.push('catalog_uncertainty:compaction_material_unspecified');
   }
   if (['diamondBlade', 'diamondCore', 'cutter'].includes(hard.productIntent)) {
-    if (!hard.diameterMmMin && !hard.diameterMmMax) questions.push('какой диаметр оснастки нужен');
-    questions.push('по какому материалу будет резка или бурение');
+    if (!hard.diameterMmMin && !hard.diameterMmMax) questions.push('catalog_uncertainty:tooling_diameter_unspecified');
+    questions.push('catalog_uncertainty:cutting_material_unspecified');
   }
   return uniqueList(questions, 3);
 }
@@ -5565,8 +5631,10 @@ export class AssistantService {
     const client = createOpenAIClient();
     const fallbackNeedState = (reason: unknown) => {
       markAiFallback(diagnostics, 'needExtractionFallback', reason, 'need_extraction_failed');
-      const fallback = mergeNeedState(current, heuristicNeedUpdate(userMessage));
-      fallback.lastSummary = fallback.lastSummary || current.lastSummary || summarizeNeedState(fallback);
+      const fallback = {
+        ...current,
+        lastSummary: current.lastSummary || summarizeNeedState(current)
+      };
       return fallback;
     };
     if (!client) return fallbackNeedState('no_openai_client');
@@ -6167,7 +6235,7 @@ export class AssistantService {
     const semanticShouldAddAlternatives = semanticAlternatives.mode === 'afterPrimary' ||
       (semanticAlternatives.mode === 'fallbackOnly' && !matchedProducts.length);
     const semanticBlocksAlternatives = semanticAlternatives.hasNumeric && semanticAlternatives.strictOnly;
-    const catalogShortlistAlternativeLimit = !semanticBlocksAlternatives && (catalogShortlistTurn || rangeFallbackTurn || semanticShouldAddAlternatives)
+    const catalogShortlistAlternativeLimit = !semanticBlocksAlternatives && (rangeFallbackTurn || semanticShouldAddAlternatives)
       ? Math.max(0, LARGE_SLICE_VISIBLE_CARDS - matchedProducts.length)
       : 0;
     const catalogShortlistAlternatives = catalogShortlistAlternativeLimit
@@ -6662,7 +6730,7 @@ export class AssistantService {
       const primarySelectionRequestsCards = shouldPromotePrimarySelectionCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
       catalogFactCheckRequestsCards = shouldPromoteCatalogFactCheckedCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
       const generatorSizingRequestsCards = agentTurnContract.cardsRole !== 'none' &&
-        shouldPromoteGeneratorSizingCards(input.userMessage, selectionResult, blockEstimatedPumpCards);
+        shouldPromoteGeneratorSizingCardsForContract(agentTurnContract, selectionResult, blockEstimatedPumpCards);
       if ((agentTurnContract.cardsRole === 'primary' || (agentTurnContract.cardsRole === 'supporting' && generatorSizingRequestsCards) || catalogFactCheckRequestsCards) &&
         (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards || catalogFactCheckRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
@@ -8497,5 +8565,6 @@ export const assistantTestHooks = {
   shouldPromoteCatalogFactCheckedCards,
   promotePlanToSelectionCatalogCards,
   shouldPromoteGeneratorSizingCards,
+  shouldPromoteGeneratorSizingCardsForContract,
   shouldBlockGeneratorCardsForEstimatedPump
 };

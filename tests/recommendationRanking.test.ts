@@ -110,6 +110,24 @@ function baseTurnPlan(overrides: Record<string, unknown> = {}) {
   } as any;
 }
 
+function productSelectionAgentDecision(overrides: Record<string, unknown> = {}) {
+  return {
+    answerTask: 'product_selection',
+    taskType: 'product_selection',
+    catalogAction: 'find_matching_products',
+    commercialAction: 'none',
+    productCardsPolicy: 'show_matching_products',
+    mustAnswerNow: ['show matching catalog products'],
+    currentFocus: 'catalog_selection',
+    cardsRole: 'primary',
+    leadAllowed: true,
+    leadAllowedReason: 'selection turn',
+    errorRecoveryPriority: 'show matching catalog products',
+    confidence: 0.9,
+    ...overrides
+  };
+}
+
 function semanticRequirement(overrides: Partial<SemanticRequirement> & Pick<SemanticRequirement, 'id' | 'kind'>): SemanticRequirement {
   return {
     value: {},
@@ -393,7 +411,7 @@ describe('recommendation ranking', () => {
     const result = await assistant.selectProductsForTurn(message, emptyNeedState(), plan, [generator] as any);
 
     expect(result.state.targetProductClass).toBe('unknown');
-    expect(result.state.hardConstraints.singlePhase220).toBe(true);
+    expect(result.state.hardConstraints.singlePhase220).toBeUndefined();
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(message, plan, result)).toBe(false);
   });
 
@@ -482,6 +500,16 @@ describe('recommendation ranking', () => {
       action: 'answer_question',
       answerMode: 'short',
       cardPolicy: 'auto',
+      agentDecision: productSelectionAgentDecision(),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        nominalPowerKwMin: 2.5,
+        nominalPowerKwMax: 4
+      },
       selectionState: {
         ...baseTurnPlan().selectionState,
         shouldShowCards: false,
@@ -504,7 +532,8 @@ describe('recommendation ranking', () => {
     const plan = baseTurnPlan({
       action: 'ask_clarifying_question',
       answerMode: 'short',
-      cardPolicy: 'textOnly',
+      cardPolicy: 'showProducts',
+      agentDecision: productSelectionAgentDecision(),
       followUpPolicy: 'askClarifyingQuestion',
       missingInformation: [ru('\\u041a\\u043d\\u043e\\u043f\\u043a\\u0430 \\u0441\\u0442\\u0440\\u043e\\u0433\\u043e \\u043e\\u0431\\u044f\\u0437\\u0430\\u0442\\u0435\\u043b\\u044c\\u043d\\u0430?')],
       requiredProductTraits: {
@@ -720,6 +749,7 @@ describe('recommendation ranking', () => {
       answerMode: 'currentLineup',
       cardPolicy: 'textOnly',
       followUpPolicy: 'answerNowNoDeferredOffer',
+      agentDecision: productSelectionAgentDecision(),
       requiredProductTraits: {
         ...baseTurnPlan().requiredProductTraits,
         productIntent: 'generator',
@@ -753,12 +783,7 @@ describe('recommendation ranking', () => {
     expect(result.trace.canRecommendFromSelection).toBe(true);
     expect(ids[0]).toBe('tor-km2000is');
     expect(result.state.hardConstraints.provenance?.singlePhase220).toBe('explicit_user');
-    expect(ids).toEqual(expect.arrayContaining([
-      'sunreka-g1800is',
-      'bison-bs2000is',
-      'bison-bs2500is',
-      'tss-sgg-2400si'
-    ]));
+    expect(ids).toEqual(['tor-km2000is']);
     expect(ids).not.toContain('hnd-ge2200ji');
     expect(ids).not.toContain('open-aipower');
     expect(assistantTestHooks.selectionResultCanDriveCards(plan, result, message)).toBe(true);
@@ -852,7 +877,8 @@ describe('recommendation ranking', () => {
     const plan = baseTurnPlan({
       action: 'answer_question',
       answerMode: 'short',
-      cardPolicy: 'auto'
+      cardPolicy: 'auto',
+      agentDecision: productSelectionAgentDecision()
     });
 
     expect(assistantTestHooks.selectionResultCanDriveCards(plan, result, 'Need generator for a pump')).toBe(false);
@@ -1001,12 +1027,12 @@ describe('recommendation ranking', () => {
       plan,
       result,
       '220 V, borehole pump power unknown, refrigerator, LED light, sometimes a 1.2 kW angle grinder'
-    )).toBe(true);
+    )).toBe(false);
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(
       '220 V, borehole pump power unknown, refrigerator, LED light, sometimes a 1.2 kW angle grinder',
       plan,
       result
-    )).toBe(true);
+    )).toBe(false);
   });
 
   it('promotes generator sizing turns to preliminary cards when load context is enough', () => {
@@ -1068,8 +1094,12 @@ describe('recommendation ranking', () => {
       confidence: 0.72
     });
 
-    expect(assistantTestHooks.shouldPromoteGeneratorSizingCards(
-      ru('\\u0423\\u0442\\u043e\\u0447\\u043d\\u0438\\u043b: \\u043d\\u0430\\u0441\\u043e\\u0441 \\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439 220 \\u0412. \\u041f\\u043e\\u0441\\u0447\\u0438\\u0442\\u0430\\u0439\\u0442\\u0435 \\u043c\\u0438\\u043d\\u0438\\u043c\\u0430\\u043b\\u044c\\u043d\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0442\\u043e\\u0447\\u043d\\u044b\\u0439 \\u043a\\u043b\\u0430\\u0441\\u0441 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0430.'),
+    expect(assistantTestHooks.shouldPromoteGeneratorSizingCardsForContract(
+      {
+        ...productSelectionAgentDecision(),
+        activeNeeds: [],
+        validatorWarnings: []
+      } as any,
       result,
       false
     )).toBe(true);
@@ -2777,8 +2807,9 @@ describe('recommendation ranking', () => {
     const plan = baseTurnPlan({
       action: 'answer_question',
       answerMode: 'unknown',
-      cardPolicy: 'auto',
+      cardPolicy: 'showProducts',
       selectedProductIds: [],
+      agentDecision: productSelectionAgentDecision(),
       selectionState: {
         ...baseTurnPlan().selectionState,
         shouldShowCards: false
@@ -4790,7 +4821,7 @@ describe('recommendation ranking', () => {
     const cards = assistantTestHooks.cardsFromPlan(products, { ...state, selectionState: result.state }, message, plan);
 
     expect(result.state.hardConstraints.fuel).toBe('gasoline');
-    expect(result.matchedProducts.map((item) => item.id)).toEqual(['honda5000', 'honda4000']);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['honda4000', 'honda5000']);
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('diesel');
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('manual');
     expect(cards.map((item) => item.id)).not.toContain('diesel');
@@ -4815,7 +4846,7 @@ describe('recommendation ranking', () => {
 
     expect(result.visibleProducts).toEqual([]);
     expect(result.matchedProducts).toEqual([]);
-    expect(result.missingQuestions.join(' ')).toContain(ru('\\u043a\\u0430\\u043a\\u0438\\u0435 \\u043f\\u0440\\u0438\\u0431\\u043e\\u0440\\u044b'));
+    expect(result.missingQuestions.join(' ')).toContain('catalog_uncertainty:generator_load_or_power_basis_missing');
   });
 
   it('keeps exact comparison products separate from hard-matched plate recommendations', async () => {
@@ -5511,8 +5542,14 @@ describe('recommendation ranking', () => {
     const plan = baseTurnPlan({
       requiredProductTraits: {
         ...baseTurnPlan().requiredProductTraits,
-        productIntent: 'unknown',
-        productRole: 'unknown'
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        shouldShowCards: true
       }
     });
 
@@ -5529,16 +5566,12 @@ describe('recommendation ranking', () => {
     expect(result.visibleProducts.map((item) => item.id)).toEqual(['plate']);
     expect(assistantTestHooks.shouldForceStructuredSelectionCards(
       'Теперь нужна виброплита для дорожки: щебень и песок, 35 квадратов, проходы узкие.',
-      assistantTestHooks.fallbackTurnPlan({
-        userMessage: 'Теперь нужна виброплита для дорожки: щебень и песок, 35 квадратов, проходы узкие.',
-        needState: state,
-        baseQuery: ''
-      }),
+      { ...plan, agentDecision: productSelectionAgentDecision({ currentFocus: 'plate' }) },
       result
     )).toBe(true);
   });
 
-  it('ignores planner brand constraints for household vibroplates unless the buyer named the brand', async () => {
+  it('trusts the LLM planner brand constraint instead of overriding it with phrase checks', async () => {
     const cheap = brandedProduct('cheap', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u043f\\u0440\\u044f\\u043c\\u043e\\u0445\\u043e\\u0434\\u043d\\u0430\\u044f STEM Techno 50 \\u043a\\u0433'), 'STEM', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'), 35_500, 'https://example.test/catalog/vibroplity/stem/');
     const expensiveBrand = brandedProduct('husqvarna', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Husqvarna LF 50 LAT 56 \\u043a\\u0433'), 'Husqvarna', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'), 220_000, 'https://example.test/catalog/vibroplity/husqvarna/');
     const assistant = new AssistantService(undefined as never, new FakeProducts([expensiveBrand, cheap] as any) as never);
@@ -5564,9 +5597,9 @@ describe('recommendation ranking', () => {
       [expensiveBrand, cheap] as any
     );
 
-    expect(result.state.hardConstraints.brandConstraint).toBeFalsy();
+    expect(result.state.hardConstraints.brandConstraint).toBe('Husqvarna');
     expect(result.state.rankingPreference).toBe('cheapest');
-    expect(result.matchedProducts.map((item) => item.id)).toEqual(['cheap', 'husqvarna']);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['husqvarna']);
   });
 
   it('answers contact handling directly when a handoff turn already contains a contact', () => {

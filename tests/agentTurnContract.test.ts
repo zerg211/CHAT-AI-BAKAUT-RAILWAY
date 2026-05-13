@@ -177,7 +177,7 @@ describe('agent turn contract', () => {
     expect(plan.selectionState.shouldShowCards).toBe(true);
   });
 
-  it('upgrades contradictory catalog lookup contracts to show matching cards', () => {
+  it('does not upgrade contradictory catalog lookup contracts without LLM card policy', () => {
     const contradictoryPlan = {
       ...basePlan,
       action: 'answer_question',
@@ -211,12 +211,11 @@ describe('agent turn contract', () => {
     const plan = applyAgentTurnContractToPlan(contradictoryPlan, contract);
 
     expect(contract.catalogAction).toBe('find_matching_products');
-    expect(contract.productCardsPolicy).toBe('show_matching_products');
-    expect(contract.cardsRole).toBe('primary');
-    expect(contract.validatorWarnings).toContain('product_cards_policy_upgraded_from_catalog_action');
-    expect(plan.action).toBe('recommend_products');
-    expect(plan.cardPolicy).toBe('showProducts');
-    expect(plan.selectionState.shouldShowCards).toBe(true);
+    expect(contract.productCardsPolicy).toBe('none');
+    expect(contract.cardsRole).toBe('none');
+    expect(plan.action).toBe('answer_question');
+    expect(plan.cardPolicy).toBe('textOnly');
+    expect(plan.selectionState.shouldShowCards).toBe(false);
   });
 
   it('keeps product selection with delivery as catalog/card work even when contact handoff is refused', () => {

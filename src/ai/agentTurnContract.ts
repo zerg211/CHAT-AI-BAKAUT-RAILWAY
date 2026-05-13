@@ -101,18 +101,15 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     : taskType === 'pure_delivery' || taskType === 'pure_availability' || taskType === 'product_selection_with_delivery' || taskType === 'product_selection_with_availability'
       ? 'explain_manager_required'
       : 'none';
-  const rawProductCardsPolicy = productCardsPolicies.includes(decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>)
+  const hasExplicitProductCardsPolicy = productCardsPolicies.includes(decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>);
+  const rawProductCardsPolicy = hasExplicitProductCardsPolicy
     ? decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>
     : catalogAction === 'exact_model_lookup'
       ? 'show_exact_matches'
       : catalogAction === 'find_matching_products'
         ? 'show_matching_products'
         : 'none';
-  const productCardsPolicy = rawProductCardsPolicy === 'none' && catalogAction === 'exact_model_lookup'
-    ? 'show_exact_matches'
-    : rawProductCardsPolicy === 'none' && catalogAction === 'find_matching_products'
-      ? 'show_matching_products'
-      : rawProductCardsPolicy;
+  const productCardsPolicy = rawProductCardsPolicy;
   const answerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
     ? decision.answerTask as AgentTurnContract['answerTask']
     : taskType === 'comparison'
@@ -154,9 +151,6 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   if (cardsRole === 'primary' && plan.cardPolicy === 'textOnly') {
     validatorWarnings.push('llm_contract_wants_cards_but_plan_text_only');
   }
-  if (rawProductCardsPolicy === 'none' && productCardsPolicy !== 'none') {
-    validatorWarnings.push('product_cards_policy_upgraded_from_catalog_action');
-  }
 
   return {
     answerTask,
@@ -185,26 +179,24 @@ export function deriveAgentTurnContract(input: {
   if (semanticContract) return semanticContract;
 
   const validatorWarnings: string[] = ['contract_source:missing_llm_contract'];
-  const cardsRole: AgentTurnContract['cardsRole'] = plan.action === 'recommend_products' && plan.cardPolicy === 'showProducts'
-    ? 'supporting'
-    : 'none';
 
   return {
     answerTask: 'mixed',
+    catalogAction: 'none',
+    productCardsPolicy: 'none',
     mustAnswerNow: [],
     activeNeeds: compactActiveNeeds(needState),
     currentFocus: defaultCurrentFocus(needState),
-    cardsRole,
+    cardsRole: 'none',
     leadAllowed: true,
     leadAllowedReason: 'planner_missing_semantic_contract',
-    errorRecoveryPriority: 'Missing semantic turn contract. Use validated state and catalog facts; do not infer intent from phrase patterns.',
+    errorRecoveryPriority: 'Missing semantic turn contract. Answer text-only from validated context; do not infer product intent, select products, or show cards from phrase patterns.',
     validatorWarnings
   };
 }
 
 export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, contract: AgentTurnContract): T {
-  const catalogRequiresCards = contract.catalogAction === 'find_matching_products' ||
-    contract.productCardsPolicy === 'show_matching_products' ||
+  const catalogRequiresCards = contract.productCardsPolicy === 'show_matching_products' ||
     contract.productCardsPolicy === 'show_exact_matches';
   const shouldRecommendFromCatalog = catalogRequiresCards &&
     (contract.answerTask === 'product_selection' ||

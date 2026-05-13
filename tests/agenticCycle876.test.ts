@@ -544,12 +544,13 @@ describe('agentic #876 internal cycle', () => {
     const hardTrace = selection.trace.hardConstraints as { brandConstraint?: string; fuel?: string };
     expect(hardTrace.brandConstraint).toBe('TSS');
     expect(hardTrace.fuel).toBe('gasoline');
-    expect(assistantTestHooks.shouldPromoteCatalogFactCheckedCards(contract, plan, selection, false)).toBe(true);
+    expect(assistantTestHooks.shouldPromoteCatalogFactCheckedCards(contract, plan, selection, false)).toBe(false);
   });
 
   it('does not add out-of-range alternatives when the LLM selection policy is strict catalog matches only', async () => {
     const products = [
       product('tss-7', 'TSS SGG 7000Ei gasoline generator 7.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '7.0 kW' }, 'TSS'),
+      product('tss-7-8', 'TSS SGG 8000EHNA gasoline generator 7.8 kW 230 V single phase', { voltage: '230 V', nominalPower: '7.8 kW' }, 'TSS'),
       product('tss-8', 'TSS SGG 9000ELA gasoline generator 8.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '8.0 kW' }, 'TSS'),
       product('tss-9', 'TSS SGG 10000EI gasoline generator 9.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '9.0 kW' }, 'TSS'),
       product('tss-10', 'TSS SGG 10000EHA gasoline generator 10.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '10.0 kW' }, 'TSS'),
@@ -677,6 +678,7 @@ describe('agentic #876 internal cycle', () => {
 
     expect(selection.visibleProducts.map((item) => item.id)).toEqual(['tss-8', 'tss-9', 'tss-10']);
     expect(trace.catalogShortlistAlternativeIds).toEqual([]);
+    expect(selection.visibleProducts.map((item) => item.id)).not.toContain('tss-7-8');
     expect(trace.semanticMemory.alternativeMode).toBe('none');
     expect(trace.semanticMemory.strictOnly).toBe(true);
   });
