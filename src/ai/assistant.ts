@@ -870,7 +870,7 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
     }
     if (requirement.kind === 'brand') {
       const brand = semanticText(value, 'brand') || semanticText(value, 'text');
-      if (brand) {
+      if (brand && !hardConstraints.brandConstraint) {
         hardConstraints.brandConstraint = brand;
         hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), brandConstraint: 'planner' };
       }

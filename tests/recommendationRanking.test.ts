@@ -1898,6 +1898,74 @@ describe('recommendation ranking', () => {
     expect((result.trace as any).stalePreviousSelectionCageRepaired).toBe(true);
   });
 
+  it('lets the current planner brand override stale semantic memory brands from a comparison', async () => {
+    const tss = productWithSpecs('tss-10', ru('Генератор бензиновый ТСС SGG 10000EHA (10,0 кВт)'), 213941, 'https://example.test/tss-10/', {
+      'Номинальная мощность': '10,0 кВт',
+      'Напряжение': '230 В',
+      'Число фаз': 'однофазные'
+    });
+    const doosan = productWithSpecs('doosan-10', ru('Генератор дизельный Doosan 10 кВт'), 300000, 'https://example.test/doosan-10/', {
+      'Номинальная мощность': '10,0 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([doosan, tss] as any) as never);
+    const state = mergeNeedState(emptyNeedState(), {
+      semanticMemory: {
+        version: 1,
+        activeRequirementIds: ['req_old_doosan_brand'],
+        requirements: [
+          semanticRequirement({
+            id: 'req_old_doosan_brand',
+            kind: 'brand',
+            value: { brand: 'Doosan' }
+          })
+        ],
+        mentionedProducts: [],
+        selectionPolicy: {
+          primaryRequirementIds: ['req_old_doosan_brand'],
+          alternativeMode: 'none',
+          explanationRequired: false
+        },
+        botCommitments: []
+      } as SemanticMemory
+    });
+    const plan = baseTurnPlan({
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        nominalPowerKwMin: 10,
+        nominalPowerKwMax: 10
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'ТСС',
+        mustHaveTraits: ['бренд ТСС', 'бензиновый', '10 кВт', 'однофазный 220 В'],
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      },
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'find_matching_products',
+        currentFocus: 'TSS gasoline generator 10 kW'
+      })
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Есть в наличии ТСС 10 кВт бензин?',
+      state,
+      plan,
+      [doosan, tss] as any
+    );
+
+    expect(result.state.hardConstraints.brandConstraint).toBe('ТСС');
+    expect(result.matchedProducts.map((item) => item.id)).toContain('tss-10');
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('doosan-10');
+  });
+
   it('sorts suitable products cheapest-first under a budget ceiling unless premium is requested', async () => {
     const cheap = productWithSpecs('cheap-ok', ru('Генератор бензиновый 5.0 kW бюджетный'), 61000, 'https://example.test/cheap-ok/', {
       'Номинальная мощность': '5.0 кВт',
