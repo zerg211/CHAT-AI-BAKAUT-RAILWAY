@@ -114,6 +114,23 @@ function mapProduct(row: QueryResultRow): Product {
   };
 }
 
+const PRODUCT_RESPONSE_COLUMNS = [
+  'id',
+  'external_id',
+  'slug',
+  'source_url',
+  'name',
+  'brand',
+  'category',
+  'price',
+  'currency',
+  'image_url',
+  'description',
+  'specs'
+].join(', ');
+
+const PRODUCT_FILTER = `(raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')`;
+
 function mapConversationTurn(row: QueryResultRow): ConversationTurn {
   return {
     id: row.id,
@@ -910,12 +927,12 @@ export class ProductRepository {
     const normalized = query.trim();
     const tokens = searchTokens(normalized);
     const result = await this.db.query(
-      `SELECT *, ts_rank_cd(search_tsv, plainto_tsquery('russian', $1)) AS rank
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, ts_rank_cd(search_tsv, plainto_tsquery('russian', $1)) AS rank
        FROM products
-       WHERE (raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')
-         AND (
-           $1 = ''
-           OR search_tsv @@ websearch_to_tsquery('russian', $1)
+       WHERE ${PRODUCT_FILTER}
+          AND (
+            $1 = ''
+            OR search_tsv @@ websearch_to_tsquery('russian', $1)
            OR EXISTS (
              SELECT 1 FROM unnest($3::text[]) AS token
              WHERE lower(name) LIKE '%' || lower(token) || '%'
@@ -934,12 +951,12 @@ export class ProductRepository {
   async searchProductsByModelTokens(tokens: string[], limit = 20) {
     if (!tokens.length) return [];
     const result = await this.db.query(
-      `SELECT *
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}
        FROM products
-       WHERE (raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')
-         AND EXISTS (
-           SELECT 1 FROM unnest($1::text[]) AS token
-           WHERE lower(name) LIKE '%' || lower(token) || '%'
+       WHERE ${PRODUCT_FILTER}
+          AND EXISTS (
+            SELECT 1 FROM unnest($1::text[]) AS token
+            WHERE lower(name) LIKE '%' || lower(token) || '%'
               OR lower(coalesce(specs::text, '')) LIKE '%' || lower(token) || '%'
               OR lower(coalesce(source_url, '')) LIKE '%' || lower(replace(token, '-', '_')) || '%'
               OR regexp_replace(lower(name), '[^a-zа-яё0-9]+', '', 'g') LIKE '%' || regexp_replace(lower(token), '[^a-zа-яё0-9]+', '', 'g') || '%'
@@ -956,10 +973,10 @@ export class ProductRepository {
   async vectorSearch(embedding: number[], limit = 8) {
     const vector = `[${embedding.join(',')}]`;
     const result = await this.db.query(
-      `SELECT *, 1 - (embedding <=> $1::vector) AS score
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1 - (embedding <=> $1::vector) AS score
        FROM products
        WHERE embedding IS NOT NULL
-         AND (raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')
+          AND ${PRODUCT_FILTER}
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
       [vector, limit]
@@ -968,7 +985,7 @@ export class ProductRepository {
   }
 
   async listProducts(limit = 100) {
-    const result = await this.db.query('SELECT * FROM products ORDER BY updated_at DESC LIMIT $1', [limit]);
+    const result = await this.db.query(`SELECT ${PRODUCT_RESPONSE_COLUMNS} FROM products ORDER BY updated_at DESC LIMIT $1`, [limit]);
     return result.rows.map(mapProduct);
   }
 
@@ -977,7 +994,7 @@ export class ProductRepository {
       return this.listProducts(limit);
     }
     const conditions = patterns.map((_, i) => `(LOWER(name || ' ' || COALESCE(brand, '') || ' ' || COALESCE(category, '') || ' ' || COALESCE(description, '') || ' ' || COALESCE(source_url, '') || ' ' || COALESCE(specs::text, '')) LIKE $${i + 1})`);
-    const query = `SELECT * FROM products WHERE ${conditions.join(' OR ')} ORDER BY updated_at DESC LIMIT $${patterns.length + 1}`;
+    const query = `SELECT ${PRODUCT_RESPONSE_COLUMNS} FROM products WHERE ${conditions.join(' OR ')} ORDER BY updated_at DESC LIMIT $${patterns.length + 1}`;
     const params = [...patterns.map((p) => `%${p.toLowerCase()}%`), limit];
     const result = await this.db.query(query, params);
     return result.rows.map(mapProduct);

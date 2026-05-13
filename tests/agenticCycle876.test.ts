@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { AssistantService, assistantTestHooks } from '../src/ai/assistant.js';
 import { deriveAgentTurnContract, applyAgentTurnContractToPlan } from '../src/ai/agentTurnContract.js';
 import { emptyNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
-import type { Product } from '../src/shared/types.js';
+import type { CustomerNeedState, Product } from '../src/shared/types.js';
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
 
-function product(id: string, name: string, specs: Record<string, unknown>): Product {
+function product(id: string, name: string, specs: Record<string, unknown>, brand = 'TSS'): Product {
   return {
     id,
     name,
-    brand: 'TSS',
+    brand,
     category: 'Gasoline generators',
     price: 213_941,
     currency: 'RUB',
@@ -327,5 +327,399 @@ describe('agentic #876 internal cycle', () => {
     expect(refusalApplied.action).toBe('recommend_products');
     expect(refusalApplied.cardPolicy).toBe('showProducts');
     expect(refusalApplied.followUpPolicy).toBe('answerNowNoDeferredOffer');
+  });
+
+  it('does not persist comparison-only requirements as product selection constraints', () => {
+    const previousSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        brandConstraint: 'TSS',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        provenance: {
+          fuel: 'explicit_user',
+          brandConstraint: 'explicit_user',
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
+      },
+      confidence: 0.9
+    });
+    const contaminatedSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'diesel',
+        brandConstraint: 'Doosan',
+        provenance: {
+          fuel: 'planner',
+          brandConstraint: 'planner'
+        }
+      },
+      confidence: 0.72
+    });
+    const contaminatedMemory: CustomerNeedState['semanticMemory'] = {
+      ...emptyNeedState().semanticMemory,
+      activeRequirementIds: ['brand-doosan', 'fuel-diesel'],
+      requirements: [
+        {
+          id: 'brand-doosan',
+          kind: 'brand',
+          value: { text: 'Doosan' },
+          status: 'active',
+          strictness: 'strictOnly',
+          evidence: 'engine-family comparison mentioned Doosan',
+          source: 'llm_inference',
+          replacesRequirementIds: [],
+          updatedAt: '2026-05-13T00:00:00.000Z'
+        },
+        {
+          id: 'fuel-diesel',
+          kind: 'fuel',
+          value: { text: 'diesel' },
+          status: 'active',
+          strictness: 'strictOnly',
+          evidence: 'engine-family comparison mentioned diesel',
+          source: 'llm_inference',
+          replacesRequirementIds: [],
+          updatedAt: '2026-05-13T00:00:00.000Z'
+        }
+      ]
+    };
+    const previousState = { ...emptyNeedState(), selectionState: previousSelection };
+    const currentState = {
+      ...emptyNeedState(),
+      explicitNeeds: [
+        {
+          value: 'compare Baudouin and Doosan engines',
+          evidence: 'latest technical question',
+          confidence: 0.9,
+          updatedAt: '2026-05-13T00:00:00.000Z'
+        }
+      ],
+      selectionState: contaminatedSelection,
+      semanticMemory: contaminatedMemory
+    };
+    const plan = rawPlan({
+      agentDecision: {
+        answerTask: 'comparison',
+        taskType: 'comparison',
+        catalogAction: 'none',
+        commercialAction: 'none',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['compare engine families directly'],
+        currentFocus: 'engine comparison',
+        cardsRole: 'none',
+        leadAllowed: false,
+        leadAllowedReason: 'technical comparison only',
+        errorRecoveryPriority: 'answer comparison without product cards',
+        confidence: 0.94
+      }
+    });
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Compare Baudouin and Doosan engines',
+      plan,
+      needState: currentState
+    });
+    const frozen = assistantTestHooks.freezeSelectionContextForNonCatalogTurn(currentState, previousState, contract);
+
+    expect(assistantTestHooks.shouldFreezeSelectionContextForNonCatalogTurn(contract)).toBe(true);
+    expect(frozen.selectionState.hardConstraints.brandConstraint).toBe('TSS');
+    expect(frozen.selectionState.hardConstraints.fuel).toBe('gasoline');
+    expect(frozen.semanticMemory).toBe(previousState.semanticMemory);
+    expect(frozen.explicitNeeds).toBe(currentState.explicitNeeds);
+  });
+
+  it('preserves LLM-extracted brand and fuel constraints when a later planner omits them', async () => {
+    const products = [
+      product('tss-8', 'TSS SGG 9000ELA gasoline generator 8.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '8.0 kW' }, 'TSS'),
+      product('tss-10', 'TSS SGG 10000EHA gasoline generator 10.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '10.0 kW' }, 'TSS'),
+      product('other-8', 'Energo gasoline generator 8.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '8.0 kW' }, 'Energo'),
+      product('tss-diesel', 'TSS diesel generator 9.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '9.0 kW', fuel: 'diesel' }, 'TSS')
+    ];
+    const currentSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      semanticSource: 'llm_need_extraction',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        brandConstraint: 'TSS',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        provenance: {
+          fuel: 'explicit_user',
+          singlePhase220: 'explicit_user',
+          brandConstraint: 'explicit_user',
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
+      },
+      confidence: 0.95
+    });
+    const plan = rawPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      catalogSearchQuery: 'generators 8-10 kW',
+      requiredProductTraits: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'unknown',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        budgetMax: null,
+        weightKgMin: null,
+        weightKgMax: null,
+        diameterMmMin: null,
+        diameterMmMax: null,
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: 'range preserved from semantic memory'
+      },
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        compatibilityTargetProduct: '',
+        mustHaveTraits: [],
+        niceToHaveTraits: [],
+        excludedClasses: [],
+        brandConstraint: '',
+        exactModelConstraint: '',
+        isAccessoryFollowUp: false,
+        selectionConfidence: 0.82,
+        shouldShowCards: false,
+        cardDisplayMode: 'none'
+      },
+      agentDecision: {
+        answerTask: 'mixed',
+        taskType: 'pure_availability',
+        catalogAction: 'verify_catalog_absence',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['answer from catalog matches if any exist'],
+        currentFocus: 'generator',
+        cardsRole: 'none',
+        leadAllowed: true,
+        leadAllowedReason: 'availability needs manager verification',
+        errorRecoveryPriority: 'do not claim absence before catalog validation',
+        confidence: 0.88
+      }
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const contract = deriveAgentTurnContract({
+      userMessage: 'What is available from 8 to 10 kW?',
+      plan,
+      needState: { ...emptyNeedState(), selectionState: currentSelection }
+    });
+    const selection = await assistant.selectProductsForTurn(
+      'What is available from 8 to 10 kW?',
+      { ...emptyNeedState(), selectionState: currentSelection },
+      plan,
+      products,
+      assistantTestHooks.resolveTurnContractForPlan(plan),
+      undefined,
+      '',
+      { forceCatalogVerification: contract.catalogAction !== 'none' }
+    );
+
+    expect(selection.visibleProducts.map((item) => item.id)).toEqual(expect.arrayContaining(['tss-8', 'tss-10']));
+    expect(selection.visibleProducts.map((item) => item.id)).not.toContain('other-8');
+    expect(selection.visibleProducts.map((item) => item.id)).not.toContain('tss-diesel');
+    const hardTrace = selection.trace.hardConstraints as { brandConstraint?: string; fuel?: string };
+    expect(hardTrace.brandConstraint).toBe('TSS');
+    expect(hardTrace.fuel).toBe('gasoline');
+    expect(assistantTestHooks.shouldPromoteCatalogFactCheckedCards(contract, plan, selection, false)).toBe(true);
+  });
+
+  it('does not add out-of-range alternatives when the LLM selection policy is strict catalog matches only', async () => {
+    const products = [
+      product('tss-7', 'TSS SGG 7000Ei gasoline generator 7.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '7.0 kW' }, 'TSS'),
+      product('tss-8', 'TSS SGG 9000ELA gasoline generator 8.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '8.0 kW' }, 'TSS'),
+      product('tss-9', 'TSS SGG 10000EI gasoline generator 9.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '9.0 kW' }, 'TSS'),
+      product('tss-10', 'TSS SGG 10000EHA gasoline generator 10.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '10.0 kW' }, 'TSS'),
+      product('tss-12', 'TSS SGG 12000EHLA gasoline generator 12.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '12.0 kW' }, 'TSS')
+    ];
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      semanticSource: 'llm_need_extraction',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        brandConstraint: 'TSS',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        provenance: {
+          fuel: 'explicit_user',
+          singlePhase220: 'explicit_user',
+          brandConstraint: 'explicit_user',
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
+      },
+      confidence: 0.95
+    });
+    const semanticMemory: CustomerNeedState['semanticMemory'] = {
+      ...emptyNeedState().semanticMemory,
+      activeRequirementIds: ['power-8-10'],
+      requirements: [
+        {
+          id: 'power-8-10',
+          kind: 'powerKw',
+          value: { min: 8, max: 10, unit: 'kW', text: '8-10 kW', productClass: 'generator' },
+          status: 'active',
+          strictness: 'targetRange',
+          evidence: 'buyer asked what exists in catalog from 8 to 10 kW',
+          source: 'explicit_user',
+          replacesRequirementIds: [],
+          updatedAt: '2026-05-13T00:00:00.000Z'
+        }
+      ],
+      selectionPolicy: {
+        primaryRequirementIds: ['power-8-10'],
+        alternativeMode: 'none',
+        explanationRequired: false
+      }
+    };
+    const plan = rawPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      catalogSearchQuery: 'TSS gasoline generator 8-10 kW 220 V',
+      requiredProductTraits: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'any',
+        enclosure: 'any',
+        conventionalGenerator: null,
+        singlePhase220: true,
+        budgetMax: null,
+        weightKgMin: null,
+        weightKgMax: null,
+        diameterMmMin: null,
+        diameterMmMax: null,
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: 'buyer asked for catalog matches in a strict range'
+      },
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        compatibilityTargetProduct: '',
+        mustHaveTraits: [],
+        niceToHaveTraits: [],
+        excludedClasses: [],
+        brandConstraint: 'TSS',
+        exactModelConstraint: '',
+        isAccessoryFollowUp: false,
+        selectionConfidence: 0.95,
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      },
+      agentDecision: {
+        answerTask: 'product_selection',
+        taskType: 'product_selection',
+        catalogAction: 'find_matching_products',
+        commercialAction: 'none',
+        productCardsPolicy: 'show_matching_products',
+        mustAnswerNow: ['show catalog matches inside the requested range only'],
+        currentFocus: 'generator',
+        cardsRole: 'primary',
+        leadAllowed: false,
+        leadAllowedReason: 'buyer asked to show catalog variants only',
+        errorRecoveryPriority: 'do not add neighboring powers as matching cards',
+        confidence: 0.95
+      }
+    });
+    const contract = deriveAgentTurnContract({
+      userMessage: 'What TSS gasoline generators from 8 to 10 kW 220 V are in catalog?',
+      plan,
+      needState: { ...emptyNeedState(), selectionState, semanticMemory }
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const selection = await assistant.selectProductsForTurn(
+      'What TSS gasoline generators from 8 to 10 kW 220 V are in catalog?',
+      { ...emptyNeedState(), selectionState, semanticMemory },
+      applyAgentTurnContractToPlan(plan, contract),
+      products,
+      assistantTestHooks.resolveTurnContractForPlan(plan),
+      undefined,
+      '',
+      { forceCatalogVerification: true }
+    );
+
+    const trace = selection.trace as {
+      catalogShortlistAlternativeIds: string[];
+      semanticMemory: { alternativeMode: string; strictOnly: boolean };
+    };
+
+    expect(selection.visibleProducts.map((item) => item.id)).toEqual(['tss-8', 'tss-9', 'tss-10']);
+    expect(trace.catalogShortlistAlternativeIds).toEqual([]);
+    expect(trace.semanticMemory.alternativeMode).toBe('none');
+    expect(trace.semanticMemory.strictOnly).toBe(true);
+  });
+
+  it('revalidates recovered cards against the current range before rendering', async () => {
+    const products = [
+      product('tss-8', 'TSS SGG 9000ELA gasoline generator 8.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '8.0 kW' }),
+      product('tss-10', 'TSS SGG 10000EHA gasoline generator 10.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '10.0 kW' }),
+      product('tss-12', 'TSS SGG 12000EHLA gasoline generator 12.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '12.0 kW' })
+    ];
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        brandConstraint: 'TSS',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        provenance: {
+          fuel: 'explicit_user',
+          singlePhase220: 'explicit_user',
+          brandConstraint: 'explicit_user',
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
+      },
+      selectedProductIds: ['tss-10', 'tss-12'],
+      matchedProductIds: ['tss-10', 'tss-12'],
+      confidence: 0.95
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const recovered = await (assistant as unknown as {
+      productCardsFromRecoveredSelection: (state: ReturnType<typeof emptyNeedState>, userMessage: string) => Promise<{ cards: Array<{ id: string }> }>;
+    }).productCardsFromRecoveredSelection(
+      { ...emptyNeedState(), selectionState },
+      'What is available from 8 to 10 kW?'
+    );
+
+    expect(recovered.cards.map((card) => card.id)).toEqual(expect.arrayContaining(['tss-8', 'tss-10']));
+    expect(recovered.cards.map((card) => card.id)).not.toContain('tss-12');
   });
 });

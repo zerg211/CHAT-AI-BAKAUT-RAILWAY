@@ -175,7 +175,16 @@ export type ProductSelectionRole = 'coreProduct' | 'accessory' | 'consumable' | 
 export type ProductSelectionConstraintSource = 'explicit_user' | 'inferred_from_load' | 'catalog_fact' | 'previous_selection' | 'planner';
 export type ProductSelectionTokenRole = 'targetProduct' | 'comparisonProduct' | 'compatibilityTarget' | 'ignored';
 export type ProductRankingPreference = 'cheapest' | 'balanced' | 'premium';
-export type SemanticRequirementKind = 'productClass' | 'task' | 'weightKg' | 'budgetRub' | 'powerKw' | 'diameterMm' | 'brand';
+export type SemanticRequirementKind =
+  | 'productClass'
+  | 'task'
+  | 'weightKg'
+  | 'budgetRub'
+  | 'powerKw'
+  | 'diameterMm'
+  | 'brand'
+  | 'fuel'
+  | 'phase';
 export type SemanticRequirementStatus = 'active' | 'superseded' | 'rejected' | 'paused';
 export type SemanticRequirementStrictness = 'strictOnly' | 'targetRange' | 'fallbackAllowed';
 export type SemanticMemorySource = 'explicit_user' | 'llm_inference' | 'catalog_fact';

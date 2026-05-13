@@ -611,7 +611,7 @@ function coerceSelectionStateFromNeedExtraction(value: unknown): ProductSelectio
 }
 
 function coerceSemanticRequirementKind(value: unknown): SemanticRequirementKind | undefined {
-  const allowed: SemanticRequirementKind[] = ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand'];
+  const allowed: SemanticRequirementKind[] = ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand', 'fuel', 'phase'];
   return allowed.includes(value as SemanticRequirementKind) ? value as SemanticRequirementKind : undefined;
 }
 
@@ -875,6 +875,20 @@ function applySemanticMemoryToSelectionState(selectionState: ProductSelectionSta
         hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), brandConstraint: 'planner' };
       }
     }
+    if (requirement.kind === 'fuel') {
+      const fuelText = semanticText(value, 'text').toLowerCase();
+      if (fuelText === 'gasoline' || fuelText === 'diesel' || fuelText === 'any') {
+        hardConstraints.fuel = fuelText;
+        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), fuel: 'planner' };
+      }
+    }
+    if (requirement.kind === 'phase') {
+      const phaseText = semanticText(value, 'text').toLowerCase();
+      if (phaseText === 'single_phase_220' || phaseText === '220' || phaseText === '220v') {
+        hardConstraints.singlePhase220 = true;
+        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), singlePhase220: 'planner' };
+      }
+    }
   }
 
   for (const product of memory?.mentionedProducts ?? []) {
@@ -912,7 +926,10 @@ function semanticAlternativeMode(memory: SemanticMemory | undefined) {
     ['weightKg', 'budgetRub', 'powerKw', 'diameterMm'].includes(item.kind)
   );
   if (!active.length) return { mode: memory?.selectionPolicy?.alternativeMode ?? 'none' as const, hasNumeric: false, strictOnly: false };
-  if (memory?.selectionPolicy?.alternativeMode && memory.selectionPolicy.alternativeMode !== 'none') {
+  if (memory?.selectionPolicy?.alternativeMode) {
+    if (memory.selectionPolicy.alternativeMode === 'none') {
+      return { mode: 'none' as const, hasNumeric: true, strictOnly: true };
+    }
     return { mode: memory.selectionPolicy.alternativeMode, hasNumeric: true, strictOnly: false };
   }
   if (active.some((item) => item.strictness === 'fallbackAllowed')) return { mode: 'fallbackOnly' as const, hasNumeric: true, strictOnly: false };
@@ -2208,6 +2225,71 @@ function shouldPromotePrimarySelectionCards(
     result.matchedProducts.length > 0 &&
     result.confidence >= 0.55 &&
     hasReliableGeneratorSelectionBasis(result.state);
+}
+
+function shouldPromoteCatalogFactCheckedCards(
+  contract: AgentTurnContract,
+  plan: AssistantTurnPlan,
+  result: ProductSelectionResult,
+  blockEstimatedPumpCards: boolean
+) {
+  const factCheckFoundCatalogProducts = contract.catalogAction === 'verify_catalog_absence' ||
+    contract.catalogAction === 'exact_model_lookup';
+  return factCheckFoundCatalogProducts &&
+    !isLeadPlan(plan) &&
+    !blockEstimatedPumpCards &&
+    !isCurrentLevelTechnicalTurn(contract) &&
+    result.trace?.canRecommendFromSelection === true &&
+    result.visibleProducts.length > 0 &&
+    result.matchedProducts.length > 0 &&
+    result.confidence >= 0.55 &&
+    hasReliableGeneratorSelectionBasis(result.state);
+}
+
+function promotePlanToSelectionCatalogCards(
+  plan: AssistantTurnPlan,
+  result: ProductSelectionResult,
+  guidance: string
+): AssistantTurnPlan {
+  const hard = result.state.hardConstraints;
+  return {
+    ...plan,
+    action: 'recommend_products',
+    answerMode: 'productRecommendation',
+    cardPolicy: 'showProducts',
+    followUpPolicy: result.hiddenProducts.length ? 'askClarifyingQuestion' : 'auto',
+    selectedProductIds: result.visibleProducts.map((product) => product.id),
+    requiredProductTraits: {
+      ...plan.requiredProductTraits,
+      productIntent: hard.productIntent,
+      productRole: hard.productRole,
+      fuel: hard.fuel ?? 'unknown',
+      startType: hard.startType ?? 'unknown',
+      enclosure: hard.enclosure ?? 'unknown',
+      conventionalGenerator: hard.conventionalGenerator ?? null,
+      singlePhase220: hard.singlePhase220 ?? null,
+      budgetMax: hard.budgetMax ?? null,
+      nominalPowerKwMin: hard.nominalPowerKwMin ?? null,
+      nominalPowerKwMax: hard.nominalPowerKwMax ?? null,
+      maxPowerKwMin: hard.maxPowerKwMin ?? null,
+      maxPowerKwMax: hard.maxPowerKwMax ?? null,
+      provenance: hard.provenance ?? plan.requiredProductTraits.provenance,
+      weightKgMin: hard.weightKgMin ?? null,
+      weightKgMax: hard.weightKgMax ?? null,
+      diameterMmMin: hard.diameterMmMin ?? null,
+      diameterMmMax: hard.diameterMmMax ?? null
+    },
+    selectionState: {
+      ...plan.selectionState,
+      shouldShowCards: true,
+      cardDisplayMode: 'structured_selection'
+    },
+    needsWebSearch: false,
+    answerGuidance: [
+      plan.answerGuidance,
+      guidance
+    ].filter(Boolean).join('\n')
+  };
 }
 
 function shouldPromoteGeneratorSizingCards(userMessage: string, result: ProductSelectionResult, blockEstimatedPumpCards: boolean) {
@@ -5221,9 +5303,43 @@ function isCurrentLevelTechnicalTurn(contract: AgentTurnContract) {
     contract.taskType === 'comparison';
 }
 
+function shouldFreezeSelectionContextForNonCatalogTurn(contract: AgentTurnContract) {
+  return isCurrentLevelTechnicalTurn(contract) &&
+    (contract.catalogAction ?? 'none') === 'none' &&
+    (contract.productCardsPolicy ?? 'none') === 'none' &&
+    contract.cardsRole === 'none';
+}
+
+function freezeSelectionContextForNonCatalogTurn(
+  current: CustomerNeedState,
+  previous: CustomerNeedState,
+  contract: AgentTurnContract
+) {
+  if (!shouldFreezeSelectionContextForNonCatalogTurn(contract)) return current;
+  return {
+    ...current,
+    selectionState: previous.selectionState,
+    semanticMemory: previous.semanticMemory
+  };
+}
+
 function technicalCurrentLevelAnswerGuidance(contract: AgentTurnContract) {
   if (!isCurrentLevelTechnicalTurn(contract)) return '';
   return 'For this technical/comparison turn, do not answer only by asking for exact model, power, duty cycle, or other missing inputs. First answer the buyer question at the highest truthful specificity available: general engineering comparison, typical tradeoffs, fit by use case, or bounded practical conclusion. Clearly mark what is general and what depends on exact model/data. Ask at most two precise clarifying questions only after the direct answer.';
+}
+
+function buildCompactAnswerSystemPrompt() {
+  return [
+    'You are the BAKAUT AI sales consultant for construction and power equipment.',
+    'The upstream LLM planner and agentTurnContract are the semantic brain for the turn. Follow their task, catalogAction, cardsRole, leadAllowed, and mustAnswerNow exactly.',
+    'Answer in Russian, directly and naturally. Do not output JSON.',
+    'Use only the provided answerContext for concrete product names, prices, specs, and catalog facts. If productCardsShown is present, those cards are the authoritative visible recommendations.',
+    'For product-card turns, keep the text short: a practical conclusion, one main model if needed, and one brief tradeoff. Let the cards carry the full catalog list.',
+    'Do not claim live warehouse availability, delivery cost, discounts, special terms, or deadlines as final. Separate catalog presence from manager/logistics verification.',
+    'Do not ask for name, phone, callback, or a form unless agentTurnContract.leadAllowed is true and the current task actually requires specialist follow-up.',
+    'For technical or comparison turns, answer the buyer question first at the truthful general level, then mention what depends on exact model or conditions.',
+    'If catalog matches are shown, do not say there are no matching products. If no trustworthy catalog product is provided, do not invent model names.'
+  ].join('\n');
 }
 
 function commercialManagerVerificationGuidance(contract: AgentTurnContract) {
@@ -5365,7 +5481,16 @@ export class AssistantService {
     const byId = new Map(catalog.filter((product) => idSet.has(product.id)).map((product) => [product.id, product]));
     let selectedProducts = ids.map((id) => byId.get(id)).filter((product): product is Product => Boolean(product));
     const profile = buildProductFitProfile(state, userMessage);
-    if (!selectedProducts.length && state.selectionState?.targetProductClass !== 'unknown') {
+    const selectionState = state.selectionState ?? emptyProductSelectionState();
+    selectedProducts = selectedProducts.filter((product) => productMatchesSelectionCriteria(product, selectionState, profile));
+    const shouldRefreshFromCatalog = Boolean(state.selectionState && state.selectionState.targetProductClass !== 'unknown') &&
+      hasMaterialHardConstraints(selectionState) &&
+      (
+        !selectedProducts.length ||
+        Boolean(selectionState.hardConstraints.nominalPowerKwMin || selectionState.hardConstraints.nominalPowerKwMax) ||
+        (selectionState.matchedProductIds?.length ?? 0) > selectedProducts.length
+      );
+    if (shouldRefreshFromCatalog && state.selectionState) {
       const hard = state.selectionState.hardConstraints;
       const intent = state.selectionState.targetProductClass as ProductIntent;
       const recoveryPlan: AssistantTurnPlan = {
@@ -6325,6 +6450,7 @@ export class AssistantService {
     const aiDiagnostics = emptyAiGenerationDiagnostics();
     const activeNeedsBefore = session.needState.activeNeeds ?? [];
     const semanticMemoryBefore = session.needState.semanticMemory;
+    const needStateBeforeTurn = session.needState;
 
     const userMessage = input.skipUserMessage
       ? null
@@ -6403,7 +6529,15 @@ export class AssistantService {
       throw aiStageFailure('turn planning', diagnostic);
     }
 
-    const refinedCandidates = plan.catalogSearchQuery !== baseQuery
+    const preliminaryAgentTurnContract = deriveAgentTurnContract({
+      userMessage: input.userMessage,
+      plan,
+      needState
+    });
+    const skipRefinedCatalogLookup = shouldFreezeSelectionContextForNonCatalogTurn(preliminaryAgentTurnContract) &&
+      preliminaryAgentTurnContract.catalogAction === 'none' &&
+      preliminaryAgentTurnContract.cardsRole === 'none';
+    const refinedCandidates = plan.catalogSearchQuery !== baseQuery && !skipRefinedCatalogLookup
       ? await this.findProducts(input.userMessage, needState, plan.catalogSearchQuery, plan.requiredProductTraits, input.signal)
       : [];
     const byId = new Map<string, Product>();
@@ -6438,6 +6572,12 @@ export class AssistantService {
       needState
     });
     effectivePlan = applyAgentTurnContractToPlan(effectivePlan, agentTurnContract);
+    const freezeSelectionPersistence = shouldFreezeSelectionContextForNonCatalogTurn(agentTurnContract);
+    const needStateBeforeFreeze = needState;
+    needState = freezeSelectionContextForNonCatalogTurn(needState, needStateBeforeTurn, agentTurnContract);
+    if (needState !== needStateBeforeFreeze) {
+      await this.conversations.updateNeedState(input.sessionId, needState);
+    }
     if (input.turnId) {
       await this.conversations.updateTurn({
         sessionId: input.sessionId,
@@ -6466,13 +6606,17 @@ export class AssistantService {
       { forceCatalogVerification: agentTurnContract.catalogAction !== undefined && agentTurnContract.catalogAction !== 'none' }
     );
     for (const product of selectionResult.comparisonProducts) byId.set(product.id, product);
-    const semanticMemoryAfterSelection = reconcileSemanticMemoryWithSelection(needState.semanticMemory, selectionResult);
-    if (
-      JSON.stringify(selectionResult.state) !== JSON.stringify(needState.selectionState) ||
-      JSON.stringify(semanticMemoryAfterSelection) !== JSON.stringify(needState.semanticMemory)
-    ) {
-      needState = { ...needState, selectionState: selectionResult.state, semanticMemory: semanticMemoryAfterSelection };
-      await this.conversations.updateNeedState(input.sessionId, needState);
+    const semanticMemoryAfterSelection = freezeSelectionPersistence
+      ? needState.semanticMemory
+      : reconcileSemanticMemoryWithSelection(needState.semanticMemory, selectionResult);
+    if (!freezeSelectionPersistence) {
+      if (
+        JSON.stringify(selectionResult.state) !== JSON.stringify(needState.selectionState) ||
+        JSON.stringify(semanticMemoryAfterSelection) !== JSON.stringify(needState.semanticMemory)
+      ) {
+        needState = { ...needState, selectionState: selectionResult.state, semanticMemory: semanticMemoryAfterSelection };
+        await this.conversations.updateNeedState(input.sessionId, needState);
+      }
     }
     const memoryDecisions = memoryDecisionSummary(semanticMemoryBefore, needState.semanticMemory);
     const selectionHard = selectionResult.state.hardConstraints;
@@ -6510,56 +6654,27 @@ export class AssistantService {
           exactCatalogMatches: selectionHard.exactModelTokens.length ? selectionResult.matchedProducts : undefined
         }
       : null;
+    let catalogFactCheckRequestsCards = false;
     if (structuredCatalogSlice?.products.length) {
       for (const product of structuredCatalogSlice.products) byId.set(product.id, product);
       for (const product of structuredCatalogSlice.exactCatalogMatches ?? []) byId.set(product.id, product);
       const selectionEngineRequestsCards = shouldForceStructuredSelectionCards(input.userMessage, effectivePlan, selectionResult);
       const primarySelectionRequestsCards = shouldPromotePrimarySelectionCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
+      catalogFactCheckRequestsCards = shouldPromoteCatalogFactCheckedCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
       const generatorSizingRequestsCards = agentTurnContract.cardsRole !== 'none' &&
         shouldPromoteGeneratorSizingCards(input.userMessage, selectionResult, blockEstimatedPumpCards);
-      if ((agentTurnContract.cardsRole === 'primary' || (agentTurnContract.cardsRole === 'supporting' && generatorSizingRequestsCards)) &&
-        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards) &&
+      if ((agentTurnContract.cardsRole === 'primary' || (agentTurnContract.cardsRole === 'supporting' && generatorSizingRequestsCards) || catalogFactCheckRequestsCards) &&
+        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards || catalogFactCheckRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
-        effectivePlan = {
-          ...effectivePlan,
-          action: 'recommend_products',
-          answerMode: 'productRecommendation',
-          cardPolicy: 'showProducts',
-          followUpPolicy: selectionResult.hiddenProducts.length ? 'askClarifyingQuestion' : 'auto',
-          selectedProductIds: selectionResult.visibleProducts.map((product) => product.id),
-          requiredProductTraits: {
-            ...effectivePlan.requiredProductTraits,
-            productIntent: selectionHard.productIntent,
-            productRole: selectionHard.productRole,
-            fuel: selectionHard.fuel ?? 'unknown',
-            startType: selectionHard.startType ?? 'unknown',
-            enclosure: selectionHard.enclosure ?? 'unknown',
-            conventionalGenerator: selectionHard.conventionalGenerator ?? null,
-            singlePhase220: selectionHard.singlePhase220 ?? null,
-            budgetMax: selectionHard.budgetMax ?? null,
-            nominalPowerKwMin: selectionHard.nominalPowerKwMin ?? null,
-            nominalPowerKwMax: selectionHard.nominalPowerKwMax ?? null,
-            maxPowerKwMin: selectionHard.maxPowerKwMin ?? null,
-            maxPowerKwMax: selectionHard.maxPowerKwMax ?? null,
-            provenance: selectionHard.provenance ?? effectivePlan.requiredProductTraits.provenance,
-            weightKgMin: selectionHard.weightKgMin ?? null,
-            weightKgMax: selectionHard.weightKgMax ?? null,
-            diameterMmMin: selectionHard.diameterMmMin ?? null,
-            diameterMmMax: selectionHard.diameterMmMax ?? null
-          },
-          selectionState: {
-            ...effectivePlan.selectionState,
-            shouldShowCards: true,
-            cardDisplayMode: 'structured_selection'
-          },
-          needsWebSearch: false,
-          answerGuidance: [
-            effectivePlan.answerGuidance,
-            generatorSizingRequestsCards
-              ? 'The buyer has supplied enough generator load context for a preliminary product selection. First answer the sizing calculation, then show visible generator cards as preliminary suitable options. Do not keep the turn text-only.'
+        effectivePlan = promotePlanToSelectionCatalogCards(
+          effectivePlan,
+          selectionResult,
+          generatorSizingRequestsCards
+            ? 'The buyer has supplied enough generator load context for a preliminary product selection. First answer the sizing calculation, then show visible generator cards as preliminary suitable options. Do not keep the turn text-only.'
+            : catalogFactCheckRequestsCards
+              ? 'Catalog fact-check found products that satisfy the structured hard constraints, so do not answer as if the catalog has no matching product. Use productSelection as authoritative, show matching cards, and separate catalog presence from live stock/manager verification.'
               : 'Use productSelection as the authoritative catalog selection for the current hard constraints. Name only visible cards as recommendations. If hiddenProductIds is not empty, mention show-more and ask one narrowing question from missingQuestions.'
-          ].filter(Boolean).join('\n')
-        };
+        );
       }
       if (!isLeadPlan(effectivePlan) && structuredCatalogSlice.source === 'exact_model_lookup') {
         const hasCoreExact = structuredCatalogSlice.products.some((product) => isCoreEquipment(product));
@@ -6627,6 +6742,15 @@ export class AssistantService {
     turnContract = resolveTurnContractForPlan(effectivePlan);
     effectivePlan = applyResolvedTurnContractToPlan(effectivePlan, turnContract);
     effectivePlan = applyAgentTurnContractToPlan(effectivePlan, agentTurnContract);
+    if (catalogFactCheckRequestsCards && effectivePlan.cardPolicy === 'textOnly') {
+      effectivePlan = promotePlanToSelectionCatalogCards(
+        effectivePlan,
+        selectionResult,
+        'Catalog fact-check found matching products after the semantic contract marked the turn text-only. Keep the answer grounded in those catalog matches and show cards instead of claiming absence.'
+      );
+      turnContract = resolveTurnContractForPlan(effectivePlan);
+      effectivePlan = applyResolvedTurnContractToPlan(effectivePlan, turnContract);
+    }
     const currentLineupStyle = shouldUseCurrentLineupStyle(input.userMessage, effectivePlan);
     const catalogLineupAlternatives = currentLineupStyle
       ? await this.findCatalogLineupAlternatives(input.userMessage, needState, allCandidates)
@@ -6665,18 +6789,30 @@ export class AssistantService {
     const autoLeadResult = leadRequestedForAnswer
       ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
       : null;
-    const detailedFactStyle = shouldUseDetailedFactStyle(input.userMessage, effectivePlan, cards.length);
+    const productCardsAnswer = !isLeadPlan(effectivePlan) &&
+      cards.length > 0 &&
+      (agentTurnContract.cardsRole !== 'none' ||
+        effectivePlan.action === 'recommend_products' ||
+        effectivePlan.cardPolicy === 'showProducts' ||
+        effectivePlan.answerMode === 'productRecommendation');
+    const textOnlyTechnicalAnswer = freezeSelectionPersistence;
+    const answerCurrentLineupStyle = productCardsAnswer ? false : currentLineupStyle;
+    const detailedFactStyle = productCardsAnswer || textOnlyTechnicalAnswer
+      ? false
+      : shouldUseDetailedFactStyle(input.userMessage, effectivePlan, cards.length);
     const serviceCostStyle = shouldUseServiceCostStyle(input.userMessage, effectivePlan, detailedFactStyle);
     const troubleshootingMemoryCanAnswer = troubleshootingMemory.length > 0;
-    const mustUseWebSearch = shouldUseWebSearch(input.userMessage, effectivePlan) && !troubleshootingMemoryCanAnswer;
+    const mustUseWebSearch = productCardsAnswer || textOnlyTechnicalAnswer
+      ? false
+      : shouldUseWebSearch(input.userMessage, effectivePlan) && !troubleshootingMemoryCanAnswer;
     const deepAnswerReasoning = shouldUseDeepReasoningForAnswer(
       effectivePlan,
-      currentLineupStyle,
+      answerCurrentLineupStyle,
       detailedFactStyle,
       mustUseWebSearch,
       conflicts.length
     );
-    const answerComplexityScore = [currentLineupStyle, detailedFactStyle, mustUseWebSearch, conflicts.length > 0].filter(Boolean).length;
+    const answerComplexityScore = [answerCurrentLineupStyle, detailedFactStyle, mustUseWebSearch, conflicts.length > 0].filter(Boolean).length;
     const answerProfile = {
       model: config.OPENAI_ANSWER_MODEL,
       effort: config.OPENAI_ANSWER_REASONING_EFFORT
@@ -6690,7 +6826,7 @@ export class AssistantService {
           troubleshootingMemoryResult.guidance
         ].filter(Boolean).join(' ')
       : '';
-    const factualVerificationGuidance = currentLineupStyle
+    const factualVerificationGuidance = answerCurrentLineupStyle
       ? 'For current-lineup/manufacturing-status questions, do a multi-source proof analysis. Check current manufacturer/catalog evidence, support/manuals/parts evidence, official distributor/current dealer evidence, and used/archive/discontinued/replacement evidence. Do not turn "not found in the current catalog" into a definitive discontinued claim by itself. If proof is incomplete, state the known facts and confidence level. Do not call an alternative a successor/replacement unless the source explicitly supports that; otherwise call it a current alternative in the same class and distinguish single-direction from reversible plates. Cross-check source-mentioned alternatives against catalogLineupAlternatives/catalogCandidates and mention concrete in-catalog alternatives with prices when available. Catalog-only alternatives prove sale/support presence, not current factory production. If a same-family catalog item near the questioned model is not supported by web evidence as current, call it "есть в нашем каталоге", not "актуальная замена". If mandatoryCatalogLineupAlternativeFacts is non-empty, use it as the compact catalog facts block and include its concrete RUB prices in the answer. If catalogLineupAlternatives has several items, name the best 1-3 by relevance and price and use catalogLineupAlternativeGroups for one compact sentence about other source-mentioned families and their RUB price floors, especially if they are higher-price, reversible, battery/electric, or only broadly same-class.'
       : detailedFactStyle || effectivePlan.action === 'verify_with_web'
         ? 'For factual technical questions, separate confirmed facts from inference. Use web evidence to verify missing or conflicting facts, and keep uncertain parts explicitly marked as not confirmed.'
@@ -6698,11 +6834,11 @@ export class AssistantService {
     const factualVerificationPolicy = buildFactualVerificationPolicy({
       userMessage: input.userMessage,
       plan: effectivePlan,
-      currentLineupStyle,
+      currentLineupStyle: answerCurrentLineupStyle,
       detailedFactStyle
     });
-    const searchContextSize = webSearchContextSize(currentLineupStyle, detailedFactStyle, answerComplexityScore);
-    const responseStyle = currentLineupStyle
+    const searchContextSize = webSearchContextSize(answerCurrentLineupStyle, detailedFactStyle, answerComplexityScore);
+    const responseStyle = answerCurrentLineupStyle
       ? {
           defaultLength: 'short',
           maxParagraphs: 3,
@@ -6752,7 +6888,7 @@ export class AssistantService {
         };
 
     const cardIdsForAnswer = new Set(cards.map((card) => card.id));
-    const answerNeedsFullCatalogContext = currentLineupStyle ||
+    const answerNeedsFullCatalogContext = answerCurrentLineupStyle ||
       detailedFactStyle ||
       mustUseWebSearch ||
       effectivePlan.action === 'verify_with_web';
@@ -6883,7 +7019,7 @@ export class AssistantService {
 
     let answer = '';
     let completedResponse: unknown;
-    const baseAnswerStyleInstructions = currentLineupStyle
+    const baseAnswerStyleInstructions = answerCurrentLineupStyle
       ? 'Стиль ответа сейчас важен: покупатель спрашивает, выпускается ли конкретная модель сейчас. Ответь прямо и коротко: сначала вывод по текущей линейке/производству, затем отдельно что есть в нашем каталоге по самой модели или запчастям, если catalogCandidates это подтверждают. Если модель уже не текущая, но есть явный successor или актуальная замена, обязательно укажи это отдельной фразой. Не превращай ответ в сервисное сравнение и не подтягивай старые модели из предыдущей темы, если последняя реплика их не просит. Не отправляй покупателя смотреть к дилеру как основной ответ: если нет заводского 100% подтверждения, скажи уровень уверенности и практический вывод. Не показывай товарные карточки. Не заканчивай предложением продолжить потом в любых формулировках вроде "могу дальше сравнить", "дальше могу собрать", "могу проверить"; дай практический следующий шаг для покупателя: новая техника или обслуживание уже имеющейся модели. Не показывай внешние ссылки, URL, домены и markdown-ссылки: web search используется только внутренне.'
       : serviceCostStyle
         ? 'Стиль ответа сейчас важен: покупатель просит практическое сравнение по сервису, запчастям, расходникам или стоимости владения. Закрой вопрос в текущем ответе, без общего текста и без предложения продолжить потом. Дай только текстовый сравнительный ответ, без товарных карточек. Обязательная структура: короткий вывод; затем список или таблица расходников/запчастей по моделям; затем итог по стоимости владения. Сравни минимум воздушный фильтр, топливный фильтр/сетку, свечу, ремень, сервис-набор, режущие диски/круги, стартер, карбюратор/топливный узел, водяной узел или другие релевантные позиции. По каждой позиции дай цену в рублях: точную из каталога/поиска или рыночный диапазон/ориентир в ₽. Если точную цену найти нельзя, не пиши общий отказ; напиши ориентир или честно "не нашел уверенной цены" только для этой позиции. При поиске цен учитывай российские маркетплейсы, российские магазины запчастей и dyadko.ru. Если цена найдена в валюте на зарубежном источнике, переведи ее в рубли по актуальному или явно указанному курсу и пометь как ориентировочную. Не подменяй цены расходников ценой самой машины. Не показывай внешние ссылки, URL, домены и markdown-ссылки: web search используется только внутренне.'
@@ -6908,15 +7044,21 @@ export class AssistantService {
       factualVerificationGuidance,
       comparativeAnswerGuidance,
       troubleshootingMemoryGuidance,
-      effectivePlan.followUpPolicy === 'answerNowNoDeferredOffer' && !currentLineupStyle && !detailedFactStyle
+      effectivePlan.followUpPolicy === 'answerNowNoDeferredOffer' && !answerCurrentLineupStyle && !detailedFactStyle
         ? 'Планировщик запретил отложенный хвост ответа: не заканчивай предложением "могу дальше проверить/сравнить/подобрать"; дай законченный ответ на текущий вопрос.'
         : ''
     ].filter(Boolean).join('\n');
+    const useCompactAnswerRequest = productCardsAnswer ||
+      textOnlyTechnicalAnswer ||
+      (!answerCurrentLineupStyle &&
+      !serviceCostStyle &&
+      !detailedFactStyle &&
+      !mustUseWebSearch);
     const buildAnswerRequest = (model: string, effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh') => ({
       model,
       reasoning: { effort },
       instructions: [
-        buildSystemPrompt(),
+        useCompactAnswerRequest ? buildCompactAnswerSystemPrompt() : buildSystemPrompt(),
         buildOfftopicGuard(),
         consistencyGuard.buildConsistencyContext(),
         temperatureGuidance(assessLeadTemperature(input.userMessage, needState, history).level),
@@ -6928,7 +7070,7 @@ export class AssistantService {
           content: yaml.dump(cleanEmpty(answerInputPayload))
         }
       ],
-      stream: true,
+      ...(useCompactAnswerRequest ? {} : { stream: true }),
       max_output_tokens: detailedFactStyle
         ? Math.max(config.OPENAI_MAX_OUTPUT_TOKENS, 5000)
         : mustUseWebSearch
@@ -6939,6 +7081,14 @@ export class AssistantService {
       if (!client) throw new Error('AI service is unavailable');
       let localAnswer = '';
       let localCompletedResponse: unknown;
+      if (request.stream !== true) {
+        const response: any = await client.responses.create(request, input.signal ? { signal: input.signal } : undefined);
+        localCompletedResponse = response;
+        localAnswer = extractResponseText(response);
+        if (localAnswer && input.onDelta) await input.onDelta(localAnswer);
+        logOpenAIUsage(logStage, String(request.model ?? config.OPENAI_ANSWER_MODEL), response);
+        return { answer: localAnswer, completedResponse: localCompletedResponse };
+      }
       const stream = await client.responses.create(request, input.signal ? { signal: input.signal } : undefined);
       for await (const event of stream) {
         if (event.type === 'response.output_text.delta' && event.delta) {
@@ -7029,7 +7179,7 @@ export class AssistantService {
         answerMode: effectivePlan.answerMode,
         action: effectivePlan.action,
         mustUseWebSearch,
-        currentLineupStyle,
+        currentLineupStyle: answerCurrentLineupStyle,
         detailedFactStyle
       });
       try {
@@ -7164,7 +7314,7 @@ export class AssistantService {
         troubleshootingMemoryUsed: troubleshootingMemoryCanAnswer,
         troubleshootingMemoryIds: troubleshootingMemory.map((item) => item.id),
         troubleshootingMemoryConfidence: troubleshootingMemoryResult.confidence,
-        responseStyle: currentLineupStyle ? 'current_lineup' : detailedFactStyle ? 'detailed_factual' : 'short',
+        responseStyle: answerCurrentLineupStyle ? 'current_lineup' : detailedFactStyle ? 'detailed_factual' : 'short',
         answerMode: effectivePlan.answerMode,
         cardPolicy: effectivePlan.cardPolicy,
         followUpPolicy: effectivePlan.followUpPolicy,
@@ -7852,7 +8002,7 @@ function semanticMemorySchema() {
           additionalProperties: false,
           properties: {
             id: { type: 'string' },
-            kind: { type: 'string', enum: ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand'] },
+            kind: { type: 'string', enum: ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand', 'fuel', 'phase'] },
             value: semanticValueSchema,
             status: { type: 'string', enum: ['active', 'superseded', 'rejected', 'paused'] },
             strictness: { type: 'string', enum: ['strictOnly', 'targetRange', 'fallbackAllowed'] },
@@ -8329,6 +8479,8 @@ export const assistantTestHooks = {
   repairGeneratorLoadMinimumText,
   shouldSuppressLeadRequestFromContract,
   technicalCurrentLevelAnswerGuidance,
+  shouldFreezeSelectionContextForNonCatalogTurn,
+  freezeSelectionContextForNonCatalogTurn,
   commercialManagerVerificationGuidance,
   stripLeadPressureTail,
   ensureCommercialManagerVerification,
@@ -8342,6 +8494,8 @@ export const assistantTestHooks = {
   pumpTypeFromText,
   generatorLoadProfileFromText,
   shouldPromotePrimarySelectionCards,
+  shouldPromoteCatalogFactCheckedCards,
+  promotePlanToSelectionCatalogCards,
   shouldPromoteGeneratorSizingCards,
   shouldBlockGeneratorCardsForEstimatedPump
 };

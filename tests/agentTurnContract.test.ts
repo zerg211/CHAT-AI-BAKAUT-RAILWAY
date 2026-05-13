@@ -18,7 +18,23 @@ describe('agent turn contract', () => {
   it('keeps gasoline/diesel reserve comparison as answer-first instead of catalog shortlist', () => {
     const contract = deriveAgentTurnContract({
       userMessage: 'Сравните бензиновый и дизельный генератор для редких отключений, и какой риск если взять без запаса?',
-      plan: basePlan,
+      plan: {
+        ...basePlan,
+        agentDecision: {
+          answerTask: 'comparison' as const,
+          taskType: 'comparison' as const,
+          catalogAction: 'none' as const,
+          commercialAction: 'none' as const,
+          productCardsPolicy: 'none' as const,
+          mustAnswerNow: ['Compare gasoline vs diesel for the buyer context.', 'Explain the risk of selecting a generator without reserve.'],
+          currentFocus: 'generator comparison',
+          cardsRole: 'none' as const,
+          leadAllowed: true,
+          leadAllowedReason: 'technical comparison only',
+          errorRecoveryPriority: 'answer comparison first',
+          confidence: 0.94
+        }
+      },
       needState: emptyNeedState()
     });
     const plan = applyAgentTurnContractToPlan(basePlan, contract);
@@ -130,6 +146,20 @@ describe('agent turn contract', () => {
       selectedProductIds: [],
       selectionState: {
         shouldShowCards: false
+      },
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'product_selection' as const,
+        catalogAction: 'find_matching_products' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'show_matching_products' as const,
+        mustAnswerNow: ['show generator variants from the catalog'],
+        currentFocus: 'generator',
+        cardsRole: 'primary' as const,
+        leadAllowed: true,
+        leadAllowedReason: 'buyer asks for catalog variants',
+        errorRecoveryPriority: 'show product cards',
+        confidence: 0.93
       }
     };
     const contract = deriveAgentTurnContract({

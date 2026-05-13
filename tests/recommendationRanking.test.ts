@@ -404,6 +404,8 @@ describe('recommendation ranking', () => {
     const singlePhase = productWithSpecs('single-phase', 'TSS gasoline generator 8.0 kW 220 V', 118000, 'https://example.test/single-phase', {
       voltage: '220 V'
     });
+    const tssThreePhaseByModel = productWithSpecs('tss-e3', 'Генератор бензиновый ТСС SGG 10000EH3A (10,0 кВт)', 218000, 'https://example.test/tss-e3', {});
+    const tssNonE3Model = productWithSpecs('tss-en', 'Генератор бензиновый ТСС SGG 3200EN Duplex (3,2 кВт)', 37217, 'https://example.test/tss-en', {});
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',
       targetProductClass: 'generator',
@@ -427,6 +429,8 @@ describe('recommendation ranking', () => {
     );
 
     expect(assistantTestHooks.productSelectionHardViolation(mixedVoltage as any, selectionState, profile)).toContain('220/380');
+    expect(assistantTestHooks.productSelectionHardViolation(tssThreePhaseByModel as any, selectionState, profile)).toContain('three-phase');
+    expect(assistantTestHooks.productSelectionHardViolation(tssNonE3Model as any, selectionState, profile)).toBeNull();
     expect(assistantTestHooks.productSelectionHardViolation(singlePhase as any, selectionState, profile)).toBeNull();
   });
 
@@ -3947,6 +3951,7 @@ describe('recommendation ranking', () => {
 
     expect(tokens.map((token) => token.toLowerCase())).toContain('ap6500e');
     expect(tokens.join(' ')).not.toMatch(/220|230|5-6|kw/i);
+    expect(assistantTestHooks.extractModelTokens('What TSS gasoline generators from 8 to 10 kW 220 V are in catalog?')).toEqual([]);
   });
 
   it('does not treat weight ranges as exact model tokens', () => {
