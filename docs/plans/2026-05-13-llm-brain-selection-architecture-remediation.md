@@ -287,3 +287,20 @@ Production readiness: требуется деплой и живой прогон
 - `npm.cmd test -- tests/recommendationRanking.test.ts tests/agentTurnContract.test.ts tests/agenticCycle876.test.ts` — PASS;
 - `npm.cmd test` — PASS, 19 файлов, 241 тест;
 - `npm.cmd run build` — PASS.
+
+## Дополнение 2026-05-13: дублирование текста в виджете
+
+Повторный BISON-прогон через production widget показал, что DB-ответ хранится один раз, `recovery=false`, но покупатель в виджете видит повтор. Причина не в recovery, а в compact-answer ветке:
+
+- `executeAnswerRequest` для non-stream ответа сразу отправлял raw LLM text через `input.onDelta`;
+- затем после `sanitizeVisibleAnswer`, card contract guard и `ensureCommercialManagerVerification` финальный ответ отправлялся второй дельтой;
+- база сохраняла только финальный ответ, поэтому backend metadata выглядела чистой, а UI показывал склейку raw+final.
+
+Исправление:
+- ранняя отправка raw non-stream ответа удалена;
+- в SSE теперь уходит только финальный согласованный ответ после всех проверок.
+
+Проверка после исправления:
+- `npm.cmd test -- tests/recommendationRanking.test.ts tests/agentTurnContract.test.ts tests/agenticCycle876.test.ts` — PASS;
+- `npm.cmd test` — PASS, 19 файлов, 241 тест;
+- `npm.cmd run build` — PASS.

@@ -3161,7 +3161,7 @@ describe('recommendation ranking', () => {
         ...emptyNeedState().selectionState.hardConstraints,
         productIntent: 'generator',
         productRole: 'coreProduct',
-        brandConstraint: 'BISON',
+        brandConstraint: 'BISON 3250',
         exactModelConstraint: 'BISON 3250',
         provenance: {
           brandConstraint: 'planner',
@@ -3199,7 +3199,7 @@ describe('recommendation ranking', () => {
         ...baseTurnPlan().selectionState,
         currentProductClass: 'generator',
         targetProductClass: 'generator',
-        brandConstraint: 'BISON',
+        brandConstraint: 'BISON 3250',
         exactModelConstraint: 'BISON 3250',
         shouldShowCards: true
       }
@@ -3234,7 +3234,7 @@ describe('recommendation ranking', () => {
         ...emptyNeedState().selectionState.hardConstraints,
         productIntent: 'generator',
         productRole: 'coreProduct',
-        brandConstraint: 'BISON',
+        brandConstraint: 'BISON 3250',
         exactModelConstraint: 'BISON 3250',
         exactModelTokens: ['3250'],
         provenance: {
@@ -3273,7 +3273,7 @@ describe('recommendation ranking', () => {
         ...baseTurnPlan().selectionState,
         currentProductClass: 'generator',
         targetProductClass: 'generator',
-        brandConstraint: 'BISON',
+        brandConstraint: 'BISON 3250',
         exactModelConstraint: 'BISON 3250',
         shouldShowCards: false
       }

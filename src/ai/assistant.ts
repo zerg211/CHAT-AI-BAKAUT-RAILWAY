@@ -5143,6 +5143,7 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
     productFitPenalty(product, profile) >= 0;
   const withoutExactModelConstraint = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
     ...criteria,
+    brandConstraint: '',
     exactModelConstraint: '',
     exactModelTokens: []
   });
@@ -6276,6 +6277,7 @@ export class AssistantService {
       (plan.agentDecision?.catalogAction === 'exact_model_lookup' || plan.agentDecision?.catalogAction === 'verify_catalog_absence');
     const withoutExactModelConstraint = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
       ...criteria,
+      brandConstraint: '',
       exactModelConstraint: '',
       exactModelTokens: []
     });
@@ -7295,7 +7297,6 @@ export class AssistantService {
         const response: any = await client.responses.create(request, input.signal ? { signal: input.signal } : undefined);
         localCompletedResponse = response;
         localAnswer = extractResponseText(response);
-        if (localAnswer && input.onDelta) await input.onDelta(localAnswer);
         logOpenAIUsage(logStage, String(request.model ?? config.OPENAI_ANSWER_MODEL), response);
         return { answer: localAnswer, completedResponse: localCompletedResponse };
       }
