@@ -7006,8 +7006,12 @@ export class AssistantService {
     const selectionHard = selectionResult.state.hardConstraints;
     const selectionCanRecommend = hasReliableGeneratorSelectionBasis(selectionResult.state);
     const selectionHasEstimatedPump = hasEstimatedPumpLoad(selectionResult.state);
+    const currentTurnCanBlockForEstimatedPump = selectionHard.productIntent === 'generator' &&
+      agentTurnContract.catalogAction !== 'exact_model_lookup' &&
+      agentTurnContract.taskType !== 'comparison' &&
+      agentTurnContract.taskType !== 'technical_answer';
     const latestLoadProfileForPumpBlock = selectionStateBeforeProductSelection.loadProfile ?? selectionResult.state.loadProfile;
-    const latestTurnBlocksEstimatedPumpCards = Boolean(
+    const latestTurnBlocksEstimatedPumpCards = currentTurnCanBlockForEstimatedPump && Boolean(
       latestLoadProfileForPumpBlock &&
       hasEstimatedPumpLoadProfile(latestLoadProfileForPumpBlock) &&
       !hasPreliminaryGeneratorSelectionBasisFromProfile(latestLoadProfileForPumpBlock)
@@ -7016,7 +7020,8 @@ export class AssistantService {
       agentTurnContract.catalogAction === 'find_matching_products' &&
       agentTurnContract.productCardsPolicy !== 'none' &&
       Boolean(parseDesiredPowerRange(input.userMessage) || hasExplicitGeneratorPowerRequest(input.userMessage));
-    const blockEstimatedPumpCards = !currentTurnExplicitCatalogPowerSelection &&
+    const blockEstimatedPumpCards = currentTurnCanBlockForEstimatedPump &&
+      !currentTurnExplicitCatalogPowerSelection &&
       (shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state) || latestTurnBlocksEstimatedPumpCards);
     const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
       ? {
