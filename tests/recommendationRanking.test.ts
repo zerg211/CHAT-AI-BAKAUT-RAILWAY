@@ -831,7 +831,7 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.isCatalogShortlistTurn(message, plan)).toBe(true);
     expect(result.trace.canRecommendFromSelection).toBe(true);
     expect(ids[0]).toBe('tor-km2000is');
-    expect(result.state.hardConstraints.provenance?.singlePhase220).toBe('explicit_user');
+    expect(result.state.hardConstraints.provenance?.singlePhase220).toBe('planner');
     expect(ids).toEqual(['tor-km2000is']);
     expect(ids).not.toContain('hnd-ge2200ji');
     expect(ids).not.toContain('open-aipower');
@@ -6130,11 +6130,12 @@ describe('recommendation ranking', () => {
     );
 
     const next = assistantTestHooks.explicitCriteriaFromTurn(current, message, message, plan, profile, message);
+    const hard = next.hardConstraints!;
 
-    expect(next.hardConstraints.nominalPowerKwMin).toBe(10);
-    expect(next.hardConstraints.nominalPowerKwMax).toBe(10);
-    expect(next.hardConstraints.provenance?.nominalPowerKwMin).toBe('explicit_user');
-    expect(next.hardConstraints.provenance?.nominalPowerKwMax).toBe('explicit_user');
+    expect(hard.nominalPowerKwMin).toBe(10);
+    expect(hard.nominalPowerKwMax).toBe(10);
+    expect(hard.provenance?.nominalPowerKwMin).toBe('explicit_user');
+    expect(hard.provenance?.nominalPowerKwMax).toBe('explicit_user');
   });
 
   it('puts exact power catalog matches ahead of cheaper nearby alternatives', async () => {
@@ -6221,9 +6222,10 @@ describe('recommendation ranking', () => {
     );
 
     const next = assistantTestHooks.explicitCriteriaFromTurn(current, message, message, plan, profile, message);
+    const hard = next.hardConstraints!;
 
-    expect(next.hardConstraints.conventionalGenerator).toBeUndefined();
-    expect(next.hardConstraints.provenance?.conventionalGenerator).toBeUndefined();
+    expect(hard.conventionalGenerator).toBeUndefined();
+    expect(hard.provenance?.conventionalGenerator).toBeUndefined();
   });
 
   it('does not append duplicate manager/logistics verification text', () => {
@@ -6302,10 +6304,10 @@ describe('recommendation ranking', () => {
       nominalPower: '3.0 kW'
     });
     const assistant = new AssistantService(undefined as never, new FakeProducts([closeCandidate] as any) as never);
-    const previousSelection = mergeProductSelectionState(emptyProductSelectionState('generator'), {
+    const previousSelection = mergeProductSelectionState(emptyProductSelectionState(), {
       targetProductClass: 'generator',
       hardConstraints: {
-        ...emptyProductSelectionState('generator').hardConstraints,
+        ...emptyProductSelectionState().hardConstraints,
         productIntent: 'generator',
         productRole: 'coreProduct',
         fuel: 'gasoline',
@@ -6377,11 +6379,11 @@ describe('recommendation ranking', () => {
       voltage: '230 V',
       nominalPower: '3.0 kW'
     });
-    const staleSelection = mergeProductSelectionState(emptyProductSelectionState('generator'), {
+    const staleSelection = mergeProductSelectionState(emptyProductSelectionState(), {
       targetProductClass: 'generator',
       selectedProductIds: ['bison-bs3250i'],
       hardConstraints: {
-        ...emptyProductSelectionState('generator').hardConstraints,
+        ...emptyProductSelectionState().hardConstraints,
         productIntent: 'generator',
         productRole: 'coreProduct',
         fuel: 'gasoline',
@@ -6477,9 +6479,9 @@ describe('recommendation ranking', () => {
       matchedProducts: [{ id: 'bison-bs3250i' }],
       hiddenProducts: [],
       confidence: 0.78,
-      state: mergeProductSelectionState(emptyProductSelectionState('generator'), {
+      state: mergeProductSelectionState(emptyProductSelectionState(), {
         hardConstraints: {
-          ...emptyProductSelectionState('generator').hardConstraints,
+          ...emptyProductSelectionState().hardConstraints,
           productIntent: 'generator',
           exactModelConstraint: 'Bison 3250',
           exactModelTokens: ['Bison 3250'],
@@ -6562,10 +6564,10 @@ describe('recommendation ranking', () => {
       nominalPower: '3.0 kW',
       voltage: '230 V'
     });
-    const staleSelection = mergeProductSelectionState(emptyProductSelectionState('generator'), {
+    const staleSelection = mergeProductSelectionState(emptyProductSelectionState(), {
       targetProductClass: 'generator',
       hardConstraints: {
-        ...emptyProductSelectionState('generator').hardConstraints,
+        ...emptyProductSelectionState().hardConstraints,
         productIntent: 'generator',
         productRole: 'coreProduct',
         exactModelConstraint: 'Bison 3250',
@@ -6581,7 +6583,7 @@ describe('recommendation ranking', () => {
           nominalPowerKwMin: 'planner',
           nominalPowerKwMax: 'planner',
           maxPowerKwMin: 'inferred_from_load',
-          singlePhase220: 'planner'
+          singlePhase220: 'explicit_user'
         }
       },
       loadProfile: {
@@ -6633,6 +6635,9 @@ describe('recommendation ranking', () => {
     expect(result.state.hardConstraints.exactModelConstraint).toBe('');
     expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
     expect(result.state.hardConstraints.singlePhase220).toBe(false);
+    expect(result.state.hardConstraints.mustHaveTraits).toEqual(['дизельный', '380 В', '15-20 кВт']);
+    expect(result.state.hardConstraints.mustHaveTraits).not.toContain('для дачи');
+    expect(result.state.hardConstraints.mustHaveTraits).not.toContain('220 В');
     expect(result.state.hardConstraints.maxPowerKwMin).toBeUndefined();
     expect(result.state.loadProfile).toBeUndefined();
     expect(result.matchedProducts.map((item) => item.id)).toContain('diesel-16');
@@ -6646,10 +6651,10 @@ describe('recommendation ranking', () => {
     const plate100 = productWithSpecs('plate-100', 'Виброплита бензиновая ТСС VP100 100 кг', 52_000, 'https://example.test/plate-100', {
       weight: '100 кг'
     });
-    const staleSelection = mergeProductSelectionState(emptyProductSelectionState('plate'), {
+    const staleSelection = mergeProductSelectionState(emptyProductSelectionState(), {
       targetProductClass: 'plate',
       hardConstraints: {
-        ...emptyProductSelectionState('plate').hardConstraints,
+        ...emptyProductSelectionState().hardConstraints,
         productIntent: 'plate',
         productRole: 'coreProduct',
         fuel: 'diesel',

@@ -968,6 +968,83 @@ function clearUngroundedExactModelSelectionState(state: ProductSelectionState, g
   };
 }
 
+function plannerSelectionIsCurrentContract(plan: AssistantTurnPlan) {
+  if (!plannerHasSemanticSelection(plan)) return false;
+  const catalogAction = plan.agentDecision?.catalogAction;
+  return catalogAction === 'find_matching_products' ||
+    catalogAction === 'exact_model_lookup' ||
+    catalogAction === 'verify_catalog_absence' ||
+    plan.selectionState.shouldShowCards ||
+    plan.cardPolicy === 'showProducts';
+}
+
+function productIntentFromPlannerContract(plan: AssistantTurnPlan): ProductIntent {
+  const selectionTarget = coerceProductIntent(plan.selectionState.targetProductClass);
+  if (selectionTarget !== 'unknown') return selectionTarget;
+  const selectionCurrent = coerceProductIntent(plan.selectionState.currentProductClass);
+  if (selectionCurrent !== 'unknown') return selectionCurrent;
+  return plan.requiredProductTraits.productIntent;
+}
+
+function applyPlannerSelectionContract(state: ProductSelectionState, plan: AssistantTurnPlan): ProductSelectionState {
+  if (!plannerSelectionIsCurrentContract(plan)) return state;
+  const plannerTraits = plan.requiredProductTraits;
+  const productIntent = productIntentFromPlannerContract(plan);
+  const plannerMustHaveTraits = uniqueList([
+    ...plan.selectionState.mustHaveTraits,
+    ...plan.selectionState.niceToHaveTraits
+  ], 24);
+  const plannerBrand = sanitizeBrandConstraintText(plan.selectionState.brandConstraint);
+  const plannerExactModel = shortText(plan.selectionState.exactModelConstraint, 160).trim();
+  const syncCriteria = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
+    const provenance = { ...(criteria.provenance ?? {}) };
+    const next: ProductSelectionCriteria = {
+      ...criteria,
+      mustHaveTraits: plannerMustHaveTraits,
+      provenance
+    };
+
+    if (!plannerBrand) {
+      next.brandConstraint = '';
+      delete provenance.brandConstraint;
+    }
+    if (!plannerExactModel) {
+      next.exactModelConstraint = '';
+      next.exactModelTokens = [];
+      next.exactModelTokenRoles = [];
+      delete provenance.exactModelConstraint;
+    }
+
+    if (generatorOnlyIntent(productIntent)) {
+      if (plannerTraits.fuel === 'gasoline' || plannerTraits.fuel === 'diesel') {
+        next.fuel = plannerTraits.fuel;
+        provenance.fuel = 'planner';
+      } else {
+        next.fuel = undefined;
+        delete provenance.fuel;
+      }
+      if (plannerTraits.singlePhase220 !== null) {
+        const priorPhaseSource = criteria.provenance?.singlePhase220;
+        const priorPhaseStillMatches = criteria.singlePhase220 === plannerTraits.singlePhase220;
+        next.singlePhase220 = plannerTraits.singlePhase220;
+        provenance.singlePhase220 = priorPhaseSource === 'explicit_user' && priorPhaseStillMatches ? 'explicit_user' : 'planner';
+      } else {
+        next.singlePhase220 = undefined;
+        delete provenance.singlePhase220;
+      }
+    }
+
+    return next;
+  };
+
+  return {
+    ...state,
+    hardConstraints: syncCriteria(state.hardConstraints),
+    activeRequirement: state.activeRequirement ? syncCriteria(state.activeRequirement) : state.activeRequirement,
+    selectedProductIds: [...plan.selectedProductIds]
+  };
+}
+
 function clearStaleLoadSizingForExplicitCatalogPower(state: ProductSelectionState, userMessage: string, plan: AssistantTurnPlan): ProductSelectionState {
   if (!generatorOnlyIntent(state.hardConstraints.productIntent as ProductIntent)) return state;
   if (plan.agentDecision?.catalogAction !== 'find_matching_products') return state;
@@ -1036,16 +1113,19 @@ function currentTurnGeneratorPhase(text: string): boolean | undefined {
   return hasSinglePhase ? true : undefined;
 }
 
-function applyCurrentTurnGeneratorPhase(state: ProductSelectionState, groundingText: string): ProductSelectionState {
+function applyCurrentTurnGeneratorPhase(state: ProductSelectionState, groundingText: string, plannerSinglePhase?: boolean | null): ProductSelectionState {
   if (!generatorOnlyIntent(state.hardConstraints.productIntent as ProductIntent)) return state;
-  const singlePhase220 = currentTurnGeneratorPhase(groundingText);
+  const hasPlannerPhase = plannerSinglePhase !== undefined && plannerSinglePhase !== null;
+  const groundedPhase = currentTurnGeneratorPhase(groundingText);
+  const singlePhase220 = groundedPhase !== undefined ? groundedPhase : hasPlannerPhase ? plannerSinglePhase : undefined;
   if (singlePhase220 === undefined) return state;
+  const source = groundedPhase !== undefined ? 'explicit_user' : 'planner';
   const apply = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => ({
     ...criteria,
     singlePhase220,
     provenance: {
       ...(criteria.provenance ?? {}),
-      singlePhase220: 'explicit_user'
+      singlePhase220: source
     }
   });
   return {
@@ -4106,9 +4186,11 @@ function explicitCriteriaFromTurn(
   const currentHasGroundedSinglePhase = currentHard.singlePhase220 !== undefined &&
     currentHard.singlePhase220 !== null &&
     (currentHard.provenance?.singlePhase220 === 'explicit_user' || currentHard.provenance?.singlePhase220 === 'previous_selection');
-  if (generatorOnlyIntent(targetProductClass) && plannerTraits.singlePhase220 !== null && !currentHasGroundedSinglePhase) {
+  if (generatorOnlyIntent(targetProductClass) && plannerTraits.singlePhase220 !== null) {
     hard.singlePhase220 = plannerTraits.singlePhase220;
-    hard.provenance!.singlePhase220 = 'planner';
+    hard.provenance!.singlePhase220 = currentHasGroundedSinglePhase && currentHard.singlePhase220 === plannerTraits.singlePhase220
+      ? currentHard.provenance?.singlePhase220 ?? 'explicit_user'
+      : 'planner';
   }
   if (!hard.startType && latestExplicitElectricStart) {
     hard.startType = 'electric';
@@ -6532,13 +6614,15 @@ export class AssistantService {
       state.semanticMemory,
       [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
     );
+    selectionState = applyPlannerSelectionContract(selectionState, plan);
     selectionState = clearUngroundedExactModelSelectionState(
       selectionState,
       [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
     );
     selectionState = applyCurrentTurnGeneratorPhase(
       selectionState,
-      [userMessage, plan.catalogSearchQuery, plan.selectionState.mustHaveTraits.join(' ')].filter(Boolean).join(' ')
+      [userMessage, plan.catalogSearchQuery, plan.selectionState.mustHaveTraits.join(' ')].filter(Boolean).join(' '),
+      plan.requiredProductTraits.singlePhase220
     );
     selectionState = clearStaleLoadSizingForExplicitCatalogPower(selectionState, userMessage, plan);
     selectionState = clearGeneratorOnlyCriteriaForNonGeneratorState(selectionState);
