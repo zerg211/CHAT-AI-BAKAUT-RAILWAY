@@ -306,6 +306,50 @@ describe('agent turn contract', () => {
     expect(plan.selectionState.shouldShowCards).toBe(true);
   });
 
+  it('keeps delivery and discount explanation text-only when buyer asks order of work without choosing new products', () => {
+    const commercialPlan = {
+      ...basePlan,
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'answerNowNoDeferredOffer',
+      selectedProductIds: [],
+      selectionState: {
+        shouldShowCards: false
+      },
+      agentDecision: {
+        answerTask: 'lead_handoff' as const,
+        taskType: 'product_selection_with_delivery' as const,
+        catalogAction: 'none' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['explain delivery to Eysk', 'explain discount depends on final bundle'],
+        currentFocus: 'delivery and discount order',
+        cardsRole: 'none' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer explicitly does not want to leave a phone and asks only the order of work',
+        errorRecoveryPriority: 'answer delivery and discount process without showing a new catalog shortlist',
+        confidence: 0.92
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Доставка до Ейска и скидка есть, если брать генератор и виброплиту? Номер пока не оставляю, просто хочу понять порядок.',
+      plan: commercialPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(commercialPlan, contract);
+
+    expect(contract.answerTask).toBe('lead_handoff');
+    expect(contract.catalogAction).toBe('none');
+    expect(contract.productCardsPolicy).toBe('none');
+    expect(contract.cardsRole).toBe('none');
+    expect(contract.validatorWarnings).not.toContain('selection_task_cards_policy_repaired');
+    expect(plan.action).toBe('answer_question');
+    expect(plan.cardPolicy).toBe('textOnly');
+    expect(plan.selectionState.shouldShowCards).toBe(false);
+  });
+
   it('repairs delivery selection away from contact handoff when buyer is still choosing products', () => {
     const mixedPlan = {
       ...basePlan,

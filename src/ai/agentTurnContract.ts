@@ -84,21 +84,26 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   const taskType = taskTypes.includes(decision.taskType as NonNullable<AgentTurnContract['taskType']>)
     ? decision.taskType as NonNullable<AgentTurnContract['taskType']>
     : undefined;
-  const selectionTaskRequiresCatalog = taskType === 'product_selection' ||
+  const explicitAnswerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
+    ? decision.answerTask as AgentTurnContract['answerTask']
+    : undefined;
+  const deliverySelectionDefaultsToCatalog = explicitAnswerTask !== 'lead_handoff' && (
     taskType === 'product_selection_with_delivery' ||
-    taskType === 'product_selection_with_availability';
+    taskType === 'product_selection_with_availability'
+  );
+  const selectionTaskRequiresCatalog = taskType === 'product_selection' ||
+    deliverySelectionDefaultsToCatalog;
   const rawCatalogAction = catalogActions.includes(decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>)
     ? decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>
     : taskType === 'pure_delivery' || taskType === 'technical_answer' || taskType === 'comparison'
       ? 'none'
       : taskType === 'pure_availability'
         ? 'exact_model_lookup'
-        : taskType === 'product_selection' ||
-          taskType === 'product_selection_with_delivery' ||
-          taskType === 'product_selection_with_availability' ||
-          taskType === 'contact_refusal_continue_selection'
-          ? 'find_matching_products'
-          : undefined;
+          : taskType === 'product_selection' ||
+            deliverySelectionDefaultsToCatalog ||
+            taskType === 'contact_refusal_continue_selection'
+            ? 'find_matching_products'
+            : undefined;
   const catalogAction = selectionTaskRequiresCatalog && rawCatalogAction !== 'find_matching_products'
     ? 'find_matching_products'
     : rawCatalogAction;
@@ -128,9 +133,8 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     : exactLookupHasSelectedCandidate && rawProductCardsPolicy === 'none'
       ? 'supporting_only'
       : rawProductCardsPolicy;
-  const answerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
-    ? decision.answerTask as AgentTurnContract['answerTask']
-    : taskType === 'comparison'
+  const answerTask = explicitAnswerTask
+    ?? (taskType === 'comparison'
       ? 'comparison'
       : taskType === 'technical_answer'
         ? 'technical_explanation'
@@ -138,7 +142,7 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
           ? 'lead_handoff'
           : taskType === 'product_selection'
             ? 'product_selection'
-        : 'mixed';
+        : 'mixed');
   const selectionDeliveryStillSelecting = taskType === 'product_selection_with_delivery' && answerTask !== 'lead_handoff';
   const effectiveCommercialAction = selectionDeliveryStillSelecting && commercialAction === 'offer_contact_after_answer'
     ? 'explain_manager_required'
