@@ -84,7 +84,10 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   const taskType = taskTypes.includes(decision.taskType as NonNullable<AgentTurnContract['taskType']>)
     ? decision.taskType as NonNullable<AgentTurnContract['taskType']>
     : undefined;
-  const catalogAction = catalogActions.includes(decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>)
+  const selectionTaskRequiresCatalog = taskType === 'product_selection' ||
+    taskType === 'product_selection_with_delivery' ||
+    taskType === 'product_selection_with_availability';
+  const rawCatalogAction = catalogActions.includes(decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>)
     ? decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>
     : taskType === 'pure_delivery' || taskType === 'technical_answer' || taskType === 'comparison'
       ? 'none'
@@ -96,11 +99,21 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
           taskType === 'contact_refusal_continue_selection'
           ? 'find_matching_products'
           : undefined;
-  const commercialAction = commercialActions.includes(decision.commercialAction as NonNullable<AgentTurnContract['commercialAction']>)
+  const catalogAction = selectionTaskRequiresCatalog && rawCatalogAction !== 'find_matching_products'
+    ? 'find_matching_products'
+    : rawCatalogAction;
+  const rawCommercialAction = commercialActions.includes(decision.commercialAction as NonNullable<AgentTurnContract['commercialAction']>)
     ? decision.commercialAction as NonNullable<AgentTurnContract['commercialAction']>
     : taskType === 'pure_delivery' || taskType === 'pure_availability' || taskType === 'product_selection_with_delivery' || taskType === 'product_selection_with_availability'
       ? 'explain_manager_required'
       : 'none';
+  const commercialAction = (taskType === 'pure_delivery' ||
+    taskType === 'pure_availability' ||
+    taskType === 'product_selection_with_delivery' ||
+    taskType === 'product_selection_with_availability') &&
+    rawCommercialAction === 'none'
+    ? 'explain_manager_required'
+    : rawCommercialAction;
   const hasExplicitProductCardsPolicy = productCardsPolicies.includes(decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>);
   const rawProductCardsPolicy = hasExplicitProductCardsPolicy
     ? decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>
@@ -109,7 +122,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
       : catalogAction === 'find_matching_products'
         ? 'show_matching_products'
         : 'none';
-  const productCardsPolicy = rawProductCardsPolicy;
+  const productCardsPolicy = selectionTaskRequiresCatalog && rawProductCardsPolicy === 'none'
+    ? 'show_matching_products'
+    : rawProductCardsPolicy;
   const answerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
     ? decision.answerTask as AgentTurnContract['answerTask']
     : taskType === 'comparison'
@@ -150,6 +165,15 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   }
   if (cardsRole === 'primary' && plan.cardPolicy === 'textOnly') {
     validatorWarnings.push('llm_contract_wants_cards_but_plan_text_only');
+  }
+  if (selectionTaskRequiresCatalog && rawCatalogAction !== catalogAction) {
+    validatorWarnings.push('selection_task_catalog_action_repaired');
+  }
+  if (selectionTaskRequiresCatalog && rawProductCardsPolicy !== productCardsPolicy) {
+    validatorWarnings.push('selection_task_cards_policy_repaired');
+  }
+  if (rawCommercialAction !== commercialAction) {
+    validatorWarnings.push('commercial_action_repaired_for_manager_verification');
   }
 
   return {

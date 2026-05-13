@@ -261,4 +261,50 @@ describe('agent turn contract', () => {
     expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
     expect(plan.selectionState.shouldShowCards).toBe(true);
   });
+
+  it('repairs contradictory product-selection delivery contracts to run catalog execution', () => {
+    const contradictoryPlan = {
+      ...basePlan,
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      selectedProductIds: [],
+      selectionState: {
+        shouldShowCards: false
+      },
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'product_selection_with_delivery' as const,
+        catalogAction: 'verify_catalog_absence' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['select catalog products and explain delivery verification'],
+        currentFocus: 'generator',
+        cardsRole: 'none' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer is selecting, not leaving contact',
+        errorRecoveryPriority: 'do not skip catalog execution for selection turns',
+        confidence: 0.9
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Подберите ТСС 8-10 кВт 220 и посчитайте доставку',
+      plan: contradictoryPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(contradictoryPlan, contract);
+
+    expect(contract.catalogAction).toBe('find_matching_products');
+    expect(contract.productCardsPolicy).toBe('show_matching_products');
+    expect(contract.commercialAction).toBe('explain_manager_required');
+    expect(contract.cardsRole).toBe('primary');
+    expect(contract.validatorWarnings).toEqual(expect.arrayContaining([
+      'selection_task_catalog_action_repaired',
+      'selection_task_cards_policy_repaired',
+      'commercial_action_repaired_for_manager_verification'
+    ]));
+    expect(plan.action).toBe('recommend_products');
+    expect(plan.cardPolicy).toBe('showProducts');
+  });
 });

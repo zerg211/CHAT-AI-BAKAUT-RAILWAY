@@ -3069,6 +3069,74 @@ describe('recommendation ranking', () => {
     expect(selection.diagnostics.fallbackReason).toBe('no_relevant_cards_after_current_need_filters');
   });
 
+  it('runs catalog ranking when planner-selected products violate hard constraints', () => {
+    const message = 'Подберите ТСС бензиновый генератор 8-10 кВт 220 В';
+    const wrong = {
+      ...productWithSpecs('tss-7', 'Генератор бензиновый ТСС SGG 7000 (7,0 кВт) 220 В однофазный', 70_000, 'https://example.test/tss-7', {
+        'Напряжение': '220 В',
+        'Номинальная мощность': '7,0 кВт'
+      }),
+      brand: 'TSS'
+    };
+    const matching = {
+      ...productWithSpecs('tss-8', 'Генератор бензиновый ТСС SGG 9000ELA (8,0 кВт) 220 В однофазный', 95_000, 'https://example.test/tss-8', {
+        'Напряжение': '220 В',
+        'Номинальная мощность': '8,0 кВт'
+      }),
+      brand: 'TSS'
+    };
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      semanticSource: 'planner',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        brandConstraint: 'TSS',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        provenance: {
+          fuel: 'planner',
+          singlePhase220: 'planner',
+          brandConstraint: 'planner',
+          nominalPowerKwMin: 'planner',
+          nominalPowerKwMax: 'planner'
+        }
+      },
+      confidence: 0.9
+    });
+    const state = { ...emptyNeedState(), selectionState };
+
+    const selection = assistantTestHooks.selectCardsFromPlan([wrong, matching] as any, state, message, baseTurnPlan({
+      selectedProductIds: ['tss-7'],
+      catalogSearchQuery: message,
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: true,
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'TSS',
+        shouldShowCards: true
+      }
+    }));
+
+    expect(selection.cards.map((card) => card.id)).toEqual(['tss-8']);
+    expect(selection.diagnostics.selectedRejectedCount).toBe(1);
+    expect(selection.diagnostics.fallbackSuppressed).toBe(false);
+    expect(selection.diagnostics.fallbackReason).toBe('planner_selected_products_rejected_catalog_executor_used_ranked_matches');
+  });
+
   it('keeps a strict brand request from being filled with other brands', () => {
     const message = 'Есть у вас генератор BISON на 5-6 кВт?';
     const state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate(message));

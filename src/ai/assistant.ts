@@ -5183,16 +5183,21 @@ function selectCardsFromPlan(products: Product[], state: CustomerNeedState, user
       plan.searchScope !== 'broadenAlternatives' &&
       plan.selectedProductIds.length > 0;
     if (plannerSelectionIsAuthoritative) {
-      const cards = productCards(selectedCards, state, userMessage, profile, cardLimit);
+      const fallbackRanked = selectedCards.length ? [] : ranked;
+      const cards = productCards(selectedCards.length ? selectedCards : fallbackRanked, state, userMessage, profile, cardLimit);
       return {
         cards,
         diagnostics: cardDiagnostics(
           profile,
           selected.length,
           selectedRejectedCount,
-          ranked.length,
+          selectedCards.length ? ranked.length : fallbackRanked.length,
           cards.length === 0,
-          cards.length === 0 ? 'planner_selected_products_but_all_were_rejected_by_current_need' : undefined
+          selectedCards.length === 0
+            ? cards.length === 0
+              ? 'planner_selected_products_but_all_were_rejected_by_current_need'
+              : 'planner_selected_products_rejected_catalog_executor_used_ranked_matches'
+            : undefined
         )
       };
     }
