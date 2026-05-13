@@ -7370,6 +7370,13 @@ export class AssistantService {
       ? selectionResult.matchedProducts
       : productsForCardSelection.filter((product) => cardIdsForAnswer.has(product.id));
     const generatorSizingPolicy = generatorSizingPolicyForAnswer(loadProfileForAnswer, cards);
+    const compactCommercialHandoffAnswer = answerAgentTurnContract.answerTask === 'lead_handoff' &&
+      answerAgentTurnContract.commercialAction === 'explain_manager_required' &&
+      answerAgentTurnContract.catalogAction === 'none' &&
+      answerAgentTurnContract.cardsRole === 'none' &&
+      answerAgentTurnContract.productCardsPolicy === 'none' &&
+      !answerAgentTurnContract.leadAllowed &&
+      cards.length === 0;
 
     const context = {
       ...buildAssistantContext({
@@ -7473,7 +7480,16 @@ export class AssistantService {
     const answerInputPayload = {
       turnPlan: compactTurnPlanForAnswer(effectivePlan),
       agentTurnContract: answerAgentTurnContract,
-      answerContext: context,
+      answerContext: compactCommercialHandoffAnswer
+        ? {
+            responseStyle,
+            leadRequested: false,
+            leadCreated: false,
+            activeNeeds: answerAgentTurnContract.activeNeeds,
+            recentMessages: compactHistoryForAI(history, 8, 500),
+            commercialGuidance: 'Answer only the commercial process requested in mustAnswerNow. No product cards are shown for this turn. Speak in first person as the BAKAUT AI manager. Do not ask for phone/contact because leadAllowed=false.'
+          }
+        : context,
       latestUserMessage: input.userMessage
     };
 
@@ -7517,7 +7533,7 @@ export class AssistantService {
       !mustUseWebSearch);
     const buildAnswerRequest = (model: string, effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh') => ({
       model,
-      reasoning: { effort },
+      reasoning: { effort: compactCommercialHandoffAnswer ? 'none' : effort },
       instructions: [
         useCompactAnswerRequest ? buildCompactAnswerSystemPrompt() : buildSystemPrompt(),
         buildOfftopicGuard(),
@@ -7532,11 +7548,13 @@ export class AssistantService {
         }
       ],
       ...(useCompactAnswerRequest ? {} : { stream: true }),
-      max_output_tokens: detailedFactStyle
-        ? Math.max(config.OPENAI_MAX_OUTPUT_TOKENS, 5000)
-        : mustUseWebSearch
-          ? Math.max(config.OPENAI_MAX_OUTPUT_TOKENS, 2400)
-          : config.OPENAI_MAX_OUTPUT_TOKENS
+      max_output_tokens: compactCommercialHandoffAnswer
+        ? Math.min(config.OPENAI_MAX_OUTPUT_TOKENS, 700)
+        : detailedFactStyle
+          ? Math.max(config.OPENAI_MAX_OUTPUT_TOKENS, 5000)
+          : mustUseWebSearch
+            ? Math.max(config.OPENAI_MAX_OUTPUT_TOKENS, 2400)
+            : config.OPENAI_MAX_OUTPUT_TOKENS
     });
     const executeAnswerRequest = async (request: Record<string, unknown>, logStage: string) => {
       if (!client) throw new Error('AI service is unavailable');
