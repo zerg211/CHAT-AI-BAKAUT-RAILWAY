@@ -6275,7 +6275,7 @@ describe('recommendation ranking', () => {
       selectionState: {
         ...baseTurnPlan().selectionState,
         targetProductClass: 'generator',
-        brandConstraint: 'not important'
+        brandConstraint: 'brand not important'
       }
     });
 
@@ -6297,6 +6297,9 @@ describe('recommendation ranking', () => {
         ...emptyProductSelectionState('generator').hardConstraints,
         productIntent: 'generator',
         productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'manual',
+        enclosure: 'open',
         nominalPowerKwMin: 4,
         nominalPowerKwMax: 6,
         conventionalGenerator: true,
@@ -6307,6 +6310,9 @@ describe('recommendation ranking', () => {
         provenance: {
           nominalPowerKwMin: 'planner',
           nominalPowerKwMax: 'planner',
+          fuel: 'planner',
+          startType: 'planner',
+          enclosure: 'planner',
           conventionalGenerator: 'planner'
         }
       }

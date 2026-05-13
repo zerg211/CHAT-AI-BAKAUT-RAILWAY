@@ -799,7 +799,11 @@ function nonRestrictiveConstraintText(value?: string | null) {
     'none',
     'no',
     'notimportant',
+    'brandnotimportant',
+    'makenotimportant',
     'doesntmatter',
+    'branddoesntmatter',
+    'makedoesntmatter',
     'любой',
     'любая',
     'любое',
@@ -6424,6 +6428,9 @@ export class AssistantService {
       delete provenance.weightKgMax;
       delete provenance.diameterMmMin;
       delete provenance.diameterMmMax;
+      delete provenance.fuel;
+      delete provenance.startType;
+      delete provenance.enclosure;
       delete provenance.conventionalGenerator;
       delete provenance.singlePhase220;
       return {
@@ -6439,6 +6446,9 @@ export class AssistantService {
         weightKgMax: undefined,
         diameterMmMin: undefined,
         diameterMmMax: undefined,
+        fuel: undefined,
+        startType: undefined,
+        enclosure: undefined,
         conventionalGenerator: undefined,
         singlePhase220: undefined,
         provenance
