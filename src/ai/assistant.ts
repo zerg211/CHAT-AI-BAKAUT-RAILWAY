@@ -4457,6 +4457,34 @@ function repairAnswerCardText(answer: string, cards: ProductCard[], plan: Assist
   return clean;
 }
 
+function repairCardPhaseFactContradictions(answer: string, cards: ProductCard[]) {
+  if (!cards.length) return answer;
+  const singlePhaseProducts = cards
+    .map(productFromCard)
+    .filter((product) => generatorPhaseProfile(product) === 'single_220');
+  if (!singlePhaseProducts.length) return answer;
+
+  let lastMentionedSinglePhase: Product | null = null;
+  return answer.split(/(?<=[.!?\n])\s+/u).map((sentence) => {
+    const mentioned = singlePhaseProducts.find((product) => strongProductMentionIndex(product, sentence) >= 0);
+    if (mentioned) lastMentionedSinglePhase = mentioned;
+    const refersToPrevious = Boolean(lastMentionedSinglePhase && /^(?:но\s+)?он(?=$|[^\p{L}\p{N}_])/iu.test(sentence.trim()));
+    const target = mentioned ?? (refersToPrevious ? lastMentionedSinglePhase : null);
+    if (!target) return sentence;
+
+    const claimsThreePhase = /(?:тр[её]х\s*фаз|тр[её]хфаз|3\s*фаз|230\s*\/\s*400|220\s*\/\s*380|380\s*\/\s*220|380\s*в|400\s*в)/iu.test(sentence);
+    const deniesSinglePhase = /не\s+строго\s+однофазн|не\s+однофазн/iu.test(sentence);
+    if (!claimsThreePhase && !deniesSinglePhase) return sentence;
+
+    if (deniesSinglePhase || /^(?:но\s+)?он(?=$|[^\p{L}\p{N}_])/iu.test(sentence.trim())) {
+      return 'Он однофазный 230 В (рабочий класс 220 В).';
+    }
+    return sentence
+      .replace(/тр[её]х\s*фазн(?:ый|ая|ые)?|тр[её]хфазн(?:ый|ая|ые)?|3\s*фазн(?:ый|ая|ые)?/giu, 'однофазный')
+      .replace(/(?:230\s*\/\s*400|220\s*\/\s*380|380\s*\/\s*220|380|400)\s*В?/giu, '230 В');
+  }).join(' ');
+}
+
 function formatKwValue(value?: number | null) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return '';
   const rounded = Math.round(value * 10) / 10;
@@ -4549,7 +4577,7 @@ function repairAnswerForFinalCards(
   userMessage: string,
   plan: AssistantTurnPlan
 ) {
-  let clean = repairAnswerCardText(answer, cards, plan);
+  let clean = repairAnswerCardText(repairCardPhaseFactContradictions(answer, cards), cards, plan);
   if (!cards.length && (plan.action === 'recommend_products' || plan.answerMode === 'productRecommendation')) {
     const mentionedWithoutCards = products.some((product) => strongProductMentionIndex(product, clean) >= 0);
     if (mentionedWithoutCards) return deterministicFinalCardsAnswer([]);
@@ -5489,7 +5517,7 @@ function commercialManagerVerificationGuidance(contract: AgentTurnContract) {
 }
 
 function stripLeadPressureTail(answer: string) {
-  const leadAskRe = /(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,120}(?:\u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435|\u043e\u0441\u0442\u0430\u0432\u044c\u0442\u0435|\u0443\u043a\u0430\u0436\u0438\u0442\u0435|\u043f\u0440\u0438\u0448\u043b\u0438\u0442\u0435|\u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435)[^.!?\n]{0,180}(?:\u0438\u043c\u044f|\u0442\u0435\u043b\u0435\u0444\u043e\u043d|\u043d\u043e\u043c\u0435\u0440|\u043a\u043e\u043d\u0442\u0430\u043a\u0442)[^.!?\n]*[.!?]?)/giu;
+  const leadAskRe = /(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,120}(?:\u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435|\u043e\u0441\u0442\u0430\u0432\u044c\u0442\u0435|\u043e\u0441\u0442\u0430\u0432\u0438\u0442\u044c|\u0443\u043a\u0430\u0436\u0438\u0442\u0435|\u043f\u0440\u0438\u0448\u043b\u0438\u0442\u0435|\u0437\u0430\u043f\u043e\u043b\u043d\u0438\u0442\u0435)[^.!?\n]{0,180}(?:\u0438\u043c\u044f|\u0442\u0435\u043b\u0435\u0444\u043e\u043d|\u043d\u043e\u043c\u0435\u0440|\u043a\u043e\u043d\u0442\u0430\u043a\u0442)[^.!?\n]*[.!?]?)/giu;
   const leadSetupRe = /(?:^|(?<=[.!?])\s+)(?:\u0415\u0441\u043b\u0438\s+\u0445\u043e\u0442\u0438\u0442\u0435,\s+)?(?:\u044f\s+)?(?:\u043f\u0435\u0440\u0435\u0434\u0430\u043c|\u043e\u0442\u043f\u0440\u0430\u0432\u043b\u044e|\u043e\u0444\u043e\u0440\u043c\u0438\u043c|\u043f\u043e\u0434\u0433\u043e\u0442\u043e\u0432\u0438\u043c)[^.!?\n]{0,180}(?:\u0437\u0430\u044f\u0432|\u0440\u0430\u0441\u0447\u0435\u0442|\u043e\u0444\u043e\u0440\u043c)[^.!?\n]*[.!?]?/giu;
   const cleaned = answer
     .replace(leadAskRe, '')
@@ -8687,6 +8715,7 @@ export const assistantTestHooks = {
   coerceTurnPlan,
   fallbackTurnPlan,
   repairAnswerCardText,
+  repairCardPhaseFactContradictions,
   repairGeneratorLoadMinimumText,
   shouldSuppressLeadRequestFromContract,
   technicalCurrentLevelAnswerGuidance,

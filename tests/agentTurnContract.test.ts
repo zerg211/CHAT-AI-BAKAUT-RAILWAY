@@ -306,6 +306,50 @@ describe('agent turn contract', () => {
     expect(plan.selectionState.shouldShowCards).toBe(true);
   });
 
+  it('repairs delivery selection away from contact handoff when buyer is still choosing products', () => {
+    const mixedPlan = {
+      ...basePlan,
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'collectLead',
+      selectedProductIds: ['single-220'],
+      selectionState: {
+        shouldShowCards: true
+      },
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'product_selection_with_delivery' as const,
+        catalogAction: 'find_matching_products' as const,
+        commercialAction: 'offer_contact_after_answer' as const,
+        productCardsPolicy: 'show_matching_products' as const,
+        mustAnswerNow: ['show matching products and answer delivery limitation'],
+        currentFocus: 'generator with delivery',
+        cardsRole: 'primary' as const,
+        leadAllowed: true,
+        leadAllowedReason: 'delivery requested, but buyer has not chosen a product or contact handoff',
+        errorRecoveryPriority: 'show cards without contact pressure',
+        confidence: 0.92
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Подберите ТСС 8-10 кВт 220 и посчитайте доставку до Ейска',
+      plan: mixedPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(mixedPlan, contract);
+
+    expect(contract.commercialAction).toBe('explain_manager_required');
+    expect(contract.leadAllowed).toBe(false);
+    expect(contract.validatorWarnings).toEqual(expect.arrayContaining([
+      'delivery_selection_commercial_action_repaired',
+      'delivery_selection_lead_allowed_repaired'
+    ]));
+    expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
+    expect(plan.cardPolicy).toBe('showProducts');
+  });
+
   it('repairs contradictory product-selection delivery contracts to run catalog execution', () => {
     const contradictoryPlan = {
       ...basePlan,

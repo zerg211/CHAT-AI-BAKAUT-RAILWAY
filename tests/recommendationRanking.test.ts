@@ -478,6 +478,55 @@ describe('recommendation ranking', () => {
     expect(repaired.trim().length).toBeGreaterThan(0);
   });
 
+  it('repairs final answer phase text when it contradicts the visible single-phase generator card', () => {
+    const product = productWithSpecs(
+      'tss-9000ela',
+      'ТСС SGG 9000ELA бензиновый генератор 8 кВт',
+      116328,
+      'https://example.test/tss-sgg-9000ela/',
+      {
+        'напряжение': '230 В',
+        'число фаз': 'однофазные',
+        'мощность номинальная при 220 в': '8 кВт'
+      }
+    );
+    const cards = [{
+      id: product.id,
+      name: product.name,
+      category: product.category,
+      price: product.price,
+      currency: 'RUB',
+      sourceUrl: product.sourceUrl,
+      specs: product.specs,
+      reasons: [],
+      caveats: []
+    }];
+    const badAnswer = 'Ближайший вариант — ТСС SGG 9000ELA, 8 кВт. Но он трехфазный 230/400 В, не строго однофазный 220 В. Доставку до Ейска посчитаю через логистику.';
+
+    const repaired = assistantTestHooks.repairAnswerForFinalCards(
+      badAnswer,
+      cards,
+      [product] as any,
+      emptyNeedState(),
+      'Подберите ТСС 8-10 кВт 220 и посчитайте доставку до Ейска',
+      baseTurnPlan({
+        action: 'recommend_products',
+        answerMode: 'productRecommendation',
+        cardPolicy: 'showProducts',
+        requiredProductTraits: {
+          ...baseTurnPlan().requiredProductTraits,
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          singlePhase220: true
+        }
+      })
+    );
+
+    expect(repaired).toContain('ТСС SGG 9000ELA');
+    expect(repaired).toContain('однофазный 230 В');
+    expect(repaired).not.toMatch(/тр[её]хфаз|230\s*\/\s*400|не\s+строго\s+однофаз/iu);
+  });
+
   it('promotes a reliable first-turn house generator selection to product cards', async () => {
     const products = [
       productWithSpecs('fit-1', 'Generator gasoline inverter 2.8 kW electric start enclosed', 72_000, 'https://example.test/generators/fit-1/', {

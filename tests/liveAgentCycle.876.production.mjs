@@ -31,8 +31,20 @@ function latestAssistant(messages) {
 }
 
 function assertNoLeadPressure(answer, phase) {
-  if (/остав(ь|ьте).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер|имя)|как вас зовут|ваш номер/iu.test(answer)) {
+  if (/остав(?:ь|ьте|ить).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер|имя)|как вас зовут|ваш номер/iu.test(answer)) {
     throw new Error(`Lead pressure in ${phase}: ${answer}`);
+  }
+}
+
+function assertNoStrict220AnswerContradiction(answer, phase) {
+  const badSentences = answer
+    .split(/(?<=[.!?\n])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter((sentence) => /тр[её]х\s*фаз|тр[её]хфаз|230\s*\/\s*400|220\s*\/\s*380|380\s*\/\s*220|380\s*В|400\s*В/iu.test(sentence))
+    .filter((sentence) => !/(?:не\s+(?:показыв|бер[уеё]м|рассматрива|подход|нужн)|исключ|отсеял|только\s+однофаз|без\s+тр[её]хфаз)/iu.test(sentence));
+  if (badSentences.length) {
+    throw new Error(`Strict 220 V answer contradiction in ${phase}: ${badSentences.join(' ')}`);
   }
 }
 
@@ -69,7 +81,8 @@ function assertPhase(step) {
 
   if (expect === 'cards' || expect === 'cardsDelivery' || expect === 'cardsNoLeadPressure') {
     if (cardCount < 1) throw new Error(`Expected catalog product cards in ${phase}, got none.`);
-    if (/220\s*\/\s*380|380\s*\/\s*220/iu.test(productText)) {
+    assertNoStrict220AnswerContradiction(answer, phase);
+    if (/тр[её]х\s*фаз|тр[её]хфаз|230\s*\/\s*400|220\s*\/\s*380|380\s*\/\s*220|380\s*В|400\s*В/iu.test(productText)) {
       throw new Error(`Strict 220 V selection exposed a mixed 220/380 product in ${phase}: ${productText}`);
     }
   }

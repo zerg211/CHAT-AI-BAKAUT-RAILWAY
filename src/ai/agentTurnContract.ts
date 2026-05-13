@@ -138,7 +138,11 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
           ? 'lead_handoff'
           : taskType === 'product_selection'
             ? 'product_selection'
-            : 'mixed';
+        : 'mixed';
+  const selectionDeliveryStillSelecting = taskType === 'product_selection_with_delivery' && answerTask !== 'lead_handoff';
+  const effectiveCommercialAction = selectionDeliveryStillSelecting && commercialAction === 'offer_contact_after_answer'
+    ? 'explain_manager_required'
+    : commercialAction;
   const inferredCardsRole: AgentTurnContract['cardsRole'] = productCardsPolicy === 'show_matching_products'
     ? 'primary'
     : productCardsPolicy === 'show_exact_matches' || productCardsPolicy === 'supporting_only'
@@ -157,7 +161,8 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   const mustAnswerNow = Array.isArray(decision.mustAnswerNow)
     ? decision.mustAnswerNow.map((item) => String(item).trim()).filter(Boolean).slice(0, 8)
     : [];
-  const leadAllowed = typeof decision.leadAllowed === 'boolean' ? decision.leadAllowed : true;
+  const rawLeadAllowed = typeof decision.leadAllowed === 'boolean' ? decision.leadAllowed : true;
+  const leadAllowed = selectionDeliveryStillSelecting ? false : rawLeadAllowed;
   const validatorWarnings: string[] = ['contract_source:llm_planner'];
 
   if ((answerTask === 'comparison' || answerTask === 'technical_explanation') && plan.action === 'recommend_products') {
@@ -181,12 +186,18 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   if (rawCommercialAction !== commercialAction) {
     validatorWarnings.push('commercial_action_repaired_for_manager_verification');
   }
+  if (effectiveCommercialAction !== commercialAction) {
+    validatorWarnings.push('delivery_selection_commercial_action_repaired');
+  }
+  if (leadAllowed !== rawLeadAllowed) {
+    validatorWarnings.push('delivery_selection_lead_allowed_repaired');
+  }
 
   return {
     answerTask,
     taskType,
     catalogAction,
-    commercialAction,
+    commercialAction: effectiveCommercialAction,
     productCardsPolicy,
     mustAnswerNow,
     activeNeeds: compactActiveNeeds(state),
