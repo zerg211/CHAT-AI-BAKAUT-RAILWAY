@@ -356,11 +356,15 @@ async function main() {
     const detail = sessionId ? await fetchProductionConversation(sessionId) : null;
     if (detail) await fs.writeFile(detailPath, JSON.stringify(detail, null, 2), 'utf8');
     const assistantMessages = detail?.messages?.filter((message) => message.role === 'assistant') ?? [];
+    const turns = detail?.turns ?? [];
     const metadataAvailable = assistantMessages.length >= steps.length;
 
     const auditedSteps = steps.map((step, index) => {
+      const turnError = turns[index]?.errorCode
+        ? `turn error: ${turns[index].errorCode}${turns[index].stage ? `/${turns[index].stage}` : ''}`
+        : '';
       const code = metadataAvailable ? codeAudit(step, assistantMessages[index]) : {
-        issues: ['admin metadata недоступна или количество ходов не совпало'],
+        issues: ['admin metadata недоступна или количество ходов не совпало', turnError].filter(Boolean),
         contract: {},
         warnings: [],
         productCards: []

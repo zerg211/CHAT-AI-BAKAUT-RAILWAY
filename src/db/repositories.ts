@@ -408,6 +408,17 @@ export class ConversationRepository {
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
   }
 
+  async listTurns(sessionId: string, limit = 200) {
+    const result = await this.db.query(
+      `SELECT * FROM conversation_turns
+       WHERE session_id = $1
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [sessionId, limit]
+    );
+    return result.rows.map(mapConversationTurn);
+  }
+
   async updateTurn(input: {
     sessionId: string;
     turnId: string;

@@ -93,7 +93,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     }
     return {
       session,
-      messages: await conversations.listMessages(params.id, 200)
+      messages: await conversations.listMessages(params.id, 200),
+      turns: await conversations.listTurns(params.id, 200)
     };
   });
 
