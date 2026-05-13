@@ -40,6 +40,16 @@ describe('assistant prompt guardrails', () => {
     expect(prompt).toContain("answer the buyer's concrete question before clarifying");
   });
 
+  it('keeps catalog option availability as product selection with cards', () => {
+    const prompt = buildTurnPlannerPrompt();
+
+    expect(prompt).toContain('Decision boundary for availability vs selection');
+    expect(prompt).toContain('taskType="product_selection_with_availability"');
+    expect(prompt).toContain('productCardsPolicy="show_matching_products"');
+    expect(prompt).toContain('it does not mean text-only pure availability');
+    expect(prompt).toContain('Do not set catalogAction="verify_catalog_absence"');
+  });
+
   it('builds a compact final-answer context for low-token turns', () => {
     const context = buildAssistantContext({
       needState: {
