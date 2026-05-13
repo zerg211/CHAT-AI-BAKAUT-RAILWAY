@@ -7157,7 +7157,7 @@ export class AssistantService {
         ].filter(Boolean).join('\n')
       };
     }
-    if (!blockEstimatedPumpCards && selectionHard.productIntent === 'generator' && selectionResult.state.loadProfile?.requiredNominalKw) {
+    if (!blockEstimatedPumpCards && currentTurnCanBlockForEstimatedPump && selectionHard.productIntent === 'generator' && selectionResult.state.loadProfile?.requiredNominalKw) {
       effectivePlan = {
         ...effectivePlan,
         answerGuidance: [
@@ -7178,6 +7178,33 @@ export class AssistantService {
       turnContract = resolveTurnContractForPlan(effectivePlan);
       effectivePlan = applyResolvedTurnContractToPlan(effectivePlan, turnContract);
     }
+    const answerAgentTurnContract: AgentTurnContract = catalogFactCheckRequestsCards && selectionResult.trace?.exactLookupAlternative === true
+      ? {
+          ...agentTurnContract,
+          cardsRole: 'supporting',
+          productCardsPolicy: 'supporting_only',
+          validatorWarnings: uniqueList([
+            ...(agentTurnContract.validatorWarnings ?? []),
+            'exact_lookup_cards_policy_repaired_after_catalog_fact_check'
+          ], 12)
+        }
+      : agentTurnContract;
+    const baseSelectionMetadata = selectionMetadata(selectionResult);
+    const exposeLoadProfileToAnswer = currentTurnCanBlockForEstimatedPump || blockEstimatedPumpCards;
+    const loadProfileForAnswer = exposeLoadProfileToAnswer ? selectionResult.state.loadProfile : undefined;
+    const productSelectionForAnswer: ProductSelectionMetadata = !exposeLoadProfileToAnswer && baseSelectionMetadata.loadProfile
+      ? {
+          ...baseSelectionMetadata,
+          loadProfile: undefined,
+          selectionTrace: {
+            ...(baseSelectionMetadata.selectionTrace ?? {}),
+            loadProfileSuppressedForCurrentTurn: true
+          }
+        }
+      : baseSelectionMetadata;
+    const exactLookupAlternativeGuidance = selectionResult.trace?.exactLookupAlternative === true
+      ? 'For exact model lookup with close catalog alternatives, answer as a BAKAUT AI manager: say the exact model is not visible in the current catalog, show the closest in-catalog alternative from productCardsVisibleFirst, and ask whether this is the model the buyer meant. Do not stop at "not found" when close alternatives are available.'
+      : '';
     const currentLineupStyle = shouldUseCurrentLineupStyle(input.userMessage, effectivePlan);
     const catalogLineupAlternatives = currentLineupStyle
       ? await this.findCatalogLineupAlternatives(input.userMessage, needState, allCandidates)
@@ -7211,14 +7238,14 @@ export class AssistantService {
     const cards: ProductCard[] = finalCards.cards;
     const cardDisplay = cardDisplayOptions(finalCards.initialVisibleCount, cards);
     const bundleTotalPrice = reliableBundleTotal(cards, input.userMessage, needState);
-    const suppressLeadRequestByContract = shouldSuppressLeadRequestFromContract(agentTurnContract);
+    const suppressLeadRequestByContract = shouldSuppressLeadRequestFromContract(answerAgentTurnContract);
     const leadRequestedForAnswer = purchasePlan.leadRequested && !suppressLeadRequestByContract;
     const autoLeadResult = leadRequestedForAnswer
       ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
       : null;
     const productCardsAnswer = !isLeadPlan(effectivePlan) &&
       cards.length > 0 &&
-      (agentTurnContract.cardsRole !== 'none' ||
+      (answerAgentTurnContract.cardsRole !== 'none' ||
         effectivePlan.action === 'recommend_products' ||
         effectivePlan.cardPolicy === 'showProducts' ||
         effectivePlan.answerMode === 'productRecommendation');
@@ -7305,7 +7332,7 @@ export class AssistantService {
           maxParagraphs: 2,
           maxBullets: 3,
           guidance: leadRequestedForAnswer
-            ? agentTurnContract.answerTask === 'lead_handoff'
+            ? answerAgentTurnContract.answerTask === 'lead_handoff'
               ? 'The buyer is asking a commercial/specialist question, not necessarily buying now. First answer what is known: delivery/discount/availability/final terms require first-person stock/logistics verification by the BAKAUT AI manager. If leadAllowed=true, ask for contact only as the next step for that verification. Do not show or re-list product cards unless cardsRole is primary. Do not treat this as a finalized order.'
               : 'The buyer is ready to proceed. Confirm the selected bundle shown in productCardsShown, mention item prices and the total from selectedBundleForLead when available, then ask them to leave name and phone in the opened form so you can verify availability/delivery and contact them. Do not say the order/lead is already created. Do not continue selecting alternatives.'
             : [
@@ -7336,7 +7363,7 @@ export class AssistantService {
       : selectionResult.matchedProducts.length
       ? selectionResult.matchedProducts
       : productsForCardSelection.filter((product) => cardIdsForAnswer.has(product.id));
-    const generatorSizingPolicy = generatorSizingPolicyForAnswer(selectionResult.state.loadProfile, cards);
+    const generatorSizingPolicy = generatorSizingPolicyForAnswer(loadProfileForAnswer, cards);
 
     const context = {
       ...buildAssistantContext({
@@ -7382,7 +7409,7 @@ export class AssistantService {
         visibleCardIdsForContext,
         shownCardIdsForContext
       ),
-      productSelection: selectionMetadata(selectionResult),
+      productSelection: productSelectionForAnswer,
       comparisonProducts: selectionResult.comparisonProducts.slice(0, 12).map((product) => ({
         id: product.id,
         name: product.name,
@@ -7408,7 +7435,7 @@ export class AssistantService {
           }
         : null,
       cardSelectionDiagnostics: cardSelection.diagnostics,
-      agentTurnContract,
+      agentTurnContract: answerAgentTurnContract,
       leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
       selectedBundleForLead: leadRequestedForAnswer
@@ -7439,7 +7466,7 @@ export class AssistantService {
     };
     const answerInputPayload = {
       turnPlan: compactTurnPlanForAnswer(effectivePlan),
-      agentTurnContract,
+      agentTurnContract: answerAgentTurnContract,
       answerContext: context,
       latestUserMessage: input.userMessage
     };
@@ -7462,13 +7489,14 @@ export class AssistantService {
       'For generator recommendations with answerContext.productSelection.loadProfile, state the calculated minimum from requiredNominalKw/requiredStartingKw separately from the visible catalog cards. Do not turn the first visible card power into the required class; if cards are more powerful than the calculated minimum, say they are catalog options with reserve.',
       'For household generator load calculations, use answerContext.generatorSizingPolicy as the authority: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visibleCardNominalKw/visibleCardMaxKw are the only higher powers grounded by shown cards. Do not introduce a higher power class unless it is supported by the policy.',
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
-      `AgentTurnContract: answerTask=${agentTurnContract.answerTask}; cardsRole=${agentTurnContract.cardsRole}; leadAllowed=${agentTurnContract.leadAllowed}. Must answer now before any cards: ${agentTurnContract.mustAnswerNow.join('; ') || agentTurnContract.errorRecoveryPriority}.`,
-      technicalCurrentLevelAnswerGuidance(agentTurnContract),
-      commercialManagerVerificationGuidance(agentTurnContract),
+      `AgentTurnContract: answerTask=${answerAgentTurnContract.answerTask}; cardsRole=${answerAgentTurnContract.cardsRole}; leadAllowed=${answerAgentTurnContract.leadAllowed}. Must answer now before any cards: ${answerAgentTurnContract.mustAnswerNow.join('; ') || answerAgentTurnContract.errorRecoveryPriority}.`,
+      technicalCurrentLevelAnswerGuidance(answerAgentTurnContract),
+      commercialManagerVerificationGuidance(answerAgentTurnContract),
       suppressLeadRequestByContract
         ? 'The semantic contract does not allow a contact handoff as the answer action for this turn. If final availability, delivery price, discount, or logistics terms are mentioned, state the check in first person as the BAKAUT AI manager, but do not ask the buyer for name, phone, contact, callback, or a form. Keep product selection moving from catalog cards.'
         : '',
       factualVerificationGuidance,
+      exactLookupAlternativeGuidance,
       comparativeAnswerGuidance,
       troubleshootingMemoryGuidance,
       effectivePlan.followUpPolicy === 'answerNowNoDeferredOffer' && !answerCurrentLineupStyle && !detailedFactStyle
@@ -7567,7 +7595,7 @@ export class AssistantService {
         turnId: input.turnId,
         status: 'answering',
         stage: 'answering',
-        plannerContract: agentTurnContract
+        plannerContract: answerAgentTurnContract
       }).catch((error) => console.warn('Conversation turn answering update failed', safeError(error)));
     }
 
@@ -7651,7 +7679,7 @@ export class AssistantService {
     const rawAnswer = answer;
     answer = sanitizeVisibleAnswer(answer, effectivePlan);
     answer = repairAnswerForFinalCards(answer, cards, productsForCardSelection, needState, input.userMessage, effectivePlan);
-    answer = repairGeneratorLoadMinimumText(answer, selectionResult.state.loadProfile, {
+    answer = repairGeneratorLoadMinimumText(answer, loadProfileForAnswer, {
       cards,
       strictMinimumStatement: recommendationAnswer || cards.length > 0,
       blockEstimatedPumpCards,
@@ -7662,7 +7690,7 @@ export class AssistantService {
     if (suppressLeadRequestByContract) {
       answer = stripLeadPressureTail(answer);
     }
-    answer = ensureCommercialManagerVerification(answer, agentTurnContract);
+    answer = ensureCommercialManagerVerification(answer, answerAgentTurnContract);
     answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards, finalCards.initialVisibleCount);
     const cardContract = enforceAnswerCardContract(
       answer,
@@ -7673,7 +7701,7 @@ export class AssistantService {
       effectivePlan
     );
     const finalSelectionMetadata: ProductSelectionMetadata = {
-      ...selectionMetadata(selectionResult),
+      ...baseSelectionMetadata,
       matchedProductIds: selectionResult.matchedProducts.length
         ? selectionResult.matchedProducts.map((product) => product.id)
         : finalCards.cards.map((card) => card.id),
@@ -7681,7 +7709,7 @@ export class AssistantService {
       hiddenProductIds: finalCards.hiddenProductIds,
       totalMatched: Math.max(selectionResult.matchedProducts.length, finalCards.cards.length),
       selectionTrace: {
-        ...(selectionMetadata(selectionResult).selectionTrace ?? {}),
+        ...(baseSelectionMetadata.selectionTrace ?? {}),
         memoryDecisions,
         finalCardsSource: finalCards.source,
         initialVisibleCardCount: finalCards.initialVisibleCount
@@ -7749,15 +7777,15 @@ export class AssistantService {
         internalSources: extractUrlCitations(completedResponse).slice(0, 12),
         turnPlan: effectivePlan,
         turnId: input.turnId,
-        turnContract: agentTurnContract,
+        turnContract: answerAgentTurnContract,
         activeNeedsBefore,
         activeNeedsAfter: needState.activeNeeds ?? [],
         semanticMemoryBefore,
         semanticMemoryAfter: needState.semanticMemory,
         memoryDecisions,
-        cardsRole: agentTurnContract.cardsRole,
-        leadAllowed: agentTurnContract.leadAllowed,
-        validatorWarnings: agentTurnContract.validatorWarnings,
+        cardsRole: answerAgentTurnContract.cardsRole,
+        leadAllowed: answerAgentTurnContract.leadAllowed,
+        validatorWarnings: answerAgentTurnContract.validatorWarnings,
         aiDiagnostics,
         answerGenerationFallback: answerFallbackMetadata,
         cardSelection: cardSelection.diagnostics,
@@ -7788,7 +7816,7 @@ export class AssistantService {
         status: 'completed',
         stage: 'completed',
         assistantMessageId: assistantMessage.id,
-        plannerContract: agentTurnContract,
+        plannerContract: answerAgentTurnContract,
         activeNeedsAfter: needState.activeNeeds ?? []
       }).catch((error) => console.warn('Conversation turn completion update failed', safeError(error)));
     }
@@ -7832,15 +7860,15 @@ export class AssistantService {
         cardDisplay,
         finalCardsSource: finalCards.source,
         turnPlan: compactTurnPlanForAnswer(effectivePlan),
-        turnContract: agentTurnContract,
+        turnContract: answerAgentTurnContract,
         activeNeedsBefore,
         activeNeedsAfter: needState.activeNeeds ?? [],
         semanticMemoryBefore,
         semanticMemoryAfter: needState.semanticMemory,
         memoryDecisions,
-        cardsRole: agentTurnContract.cardsRole,
-        leadAllowed: agentTurnContract.leadAllowed,
-        validatorWarnings: agentTurnContract.validatorWarnings,
+        cardsRole: answerAgentTurnContract.cardsRole,
+        leadAllowed: answerAgentTurnContract.leadAllowed,
+        validatorWarnings: answerAgentTurnContract.validatorWarnings,
         cardSelection: cardSelection.diagnostics,
         cardContract: cardContract.diagnostics,
         aiDiagnostics,
