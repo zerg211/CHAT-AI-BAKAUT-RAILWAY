@@ -185,6 +185,10 @@ function buyerAudit(step) {
 
   if (step.phase === 'commercial_diesel_15_20kw_380') {
     if (!/дизель|380|15|20|кВт|ДГУ/iu.test(answer)) issues.push('не удержал коммерческую дизельную потребность 15-20 кВт 380 В');
+    if (!cards.length) issues.push('на прямой запрос по каталогу дизельных генераторов 15-20 кВт не показал карточки');
+    if (/расчетный минимум[^.]{0,80}4[,.]?5\s*кВт|пусковая нагрузка[^.]{0,80}4[,.]?1\s*кВт/iu.test(answer)) {
+      issues.push('протащил старый бытовой расчет мощности в новую коммерческую потребность');
+    }
     if (cards.length && /бензинов/iu.test(combinedCards) && !/дизель/iu.test(combinedCards)) {
       issues.push('показал бензиновые карточки на дизельный запрос');
     }
@@ -211,6 +215,7 @@ function buyerAudit(step) {
   if (step.phase === 'plate_catalog_90_120kg_cheap') {
     if (!cards.length) issues.push('на прямой запрос по каталогу виброплит 90-120 кг не показал карточки');
     if (/генератор/iu.test(combinedCards)) issues.push('в карточках виброплит появились генераторы');
+    if (cards.some((card) => /\b8[0-9]\s*кг\b/iu.test(card))) issues.push('в диапазон 90-120 кг попала карточка легче 90 кг');
     if (!/виброплит|90|100|120|кг|не сам|дешев/iu.test(combined)) issues.push('ответ/карточки не держат весовой диапазон и ценовой приоритет');
   }
 
@@ -226,7 +231,7 @@ function buyerAudit(step) {
   }
 
   if (step.phase === 'final_no_call_summary') {
-    if (!/генератор/iu.test(answer) || !/виброплит/iu.test(answer)) issues.push('финальный итог потерял одну из двух потребностей');
+    if (!/(генератор|ДГУ)/iu.test(answer) || !/виброплит/iu.test(answer)) issues.push('финальный итог потерял одну из двух потребностей');
     if (/остав(ь|ьте|ить).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер)/iu.test(answer)) {
       issues.push('в финальном no-call ответе снова просит контакт');
     }

@@ -926,6 +926,109 @@ function intentAcceptsRequirementKind(intent: ProductIntent, kind: SemanticRequi
   return true;
 }
 
+function generatorOnlyIntent(intent: ProductIntent) {
+  return intent === 'generator' || intent === 'weldingGenerator';
+}
+
+function clearUngroundedExactModelCriteria(criteria: ProductSelectionCriteria, groundingText: string): ProductSelectionCriteria {
+  const groundedTokens = (criteria.exactModelTokens ?? []).filter((token) => modelTokenGroundedInCurrentTurn(token, groundingText));
+  const exactModelConstraint = criteria.exactModelConstraint && modelTokenGroundedInCurrentTurn(criteria.exactModelConstraint, groundingText)
+    ? criteria.exactModelConstraint
+    : '';
+  const exactModelTokenRoles = (criteria.exactModelTokenRoles ?? []).filter((item) =>
+    item.role !== 'targetProduct' || modelTokenGroundedInCurrentTurn(item.value, groundingText)
+  );
+  if (
+    exactModelConstraint === criteria.exactModelConstraint &&
+    groundedTokens.length === (criteria.exactModelTokens ?? []).length &&
+    exactModelTokenRoles.length === (criteria.exactModelTokenRoles ?? []).length
+  ) {
+    return criteria;
+  }
+  const provenance = { ...(criteria.provenance ?? {}) };
+  if (!exactModelConstraint) delete provenance.exactModelConstraint;
+  return {
+    ...criteria,
+    exactModelConstraint,
+    exactModelTokens: groundedTokens,
+    exactModelTokenRoles,
+    provenance
+  };
+}
+
+function clearUngroundedExactModelSelectionState(state: ProductSelectionState, groundingText: string): ProductSelectionState {
+  const hardConstraints = clearUngroundedExactModelCriteria(state.hardConstraints, groundingText);
+  const activeRequirement = state.activeRequirement
+    ? clearUngroundedExactModelCriteria(state.activeRequirement, groundingText)
+    : state.activeRequirement;
+  return {
+    ...state,
+    hardConstraints,
+    activeRequirement
+  };
+}
+
+function clearStaleLoadSizingForExplicitCatalogPower(state: ProductSelectionState, userMessage: string, plan: AssistantTurnPlan): ProductSelectionState {
+  if (!generatorOnlyIntent(state.hardConstraints.productIntent as ProductIntent)) return state;
+  if (plan.agentDecision?.catalogAction !== 'find_matching_products') return state;
+  const hasExplicitPower = Boolean(parseDesiredPowerRange(userMessage) || hasExplicitGeneratorPowerRequest(userMessage));
+  if (!hasExplicitPower) return state;
+  const clearCriteria = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
+    const provenance = { ...(criteria.provenance ?? {}) };
+    const next = { ...criteria, provenance };
+    if (provenance.maxPowerKwMin === 'inferred_from_load') {
+      delete next.maxPowerKwMin;
+      delete provenance.maxPowerKwMin;
+    }
+    if (provenance.maxPowerKwMax === 'inferred_from_load') {
+      delete next.maxPowerKwMax;
+      delete provenance.maxPowerKwMax;
+    }
+    return next;
+  };
+  return {
+    ...state,
+    loadProfile: undefined,
+    hardConstraints: clearCriteria(state.hardConstraints),
+    activeRequirement: state.activeRequirement ? clearCriteria(state.activeRequirement) : state.activeRequirement
+  };
+}
+
+function clearGeneratorOnlyCriteriaForNonGeneratorState(state: ProductSelectionState): ProductSelectionState {
+  if (generatorOnlyIntent(state.hardConstraints.productIntent as ProductIntent)) return state;
+  const clearCriteria = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
+    const provenance = { ...(criteria.provenance ?? {}) };
+    delete provenance.fuel;
+    delete provenance.startType;
+    delete provenance.enclosure;
+    delete provenance.conventionalGenerator;
+    delete provenance.singlePhase220;
+    delete provenance.nominalPowerKwMin;
+    delete provenance.nominalPowerKwMax;
+    delete provenance.maxPowerKwMin;
+    delete provenance.maxPowerKwMax;
+    return {
+      ...criteria,
+      fuel: undefined,
+      startType: undefined,
+      enclosure: undefined,
+      conventionalGenerator: undefined,
+      singlePhase220: undefined,
+      nominalPowerKwMin: undefined,
+      nominalPowerKwMax: undefined,
+      maxPowerKwMin: undefined,
+      maxPowerKwMax: undefined,
+      provenance
+    };
+  };
+  return {
+    ...state,
+    loadProfile: undefined,
+    hardConstraints: clearCriteria(state.hardConstraints),
+    activeRequirement: state.activeRequirement ? clearCriteria(state.activeRequirement) : state.activeRequirement
+  };
+}
+
 function applySemanticMemoryToSelectionState(
   selectionState: ProductSelectionState,
   memory: SemanticMemory | undefined,
@@ -3782,8 +3885,16 @@ function explicitCriteriaFromTurn(
     excludedClasses: []
   };
 
+  const latestExplicitWeightRange = intentAcceptsRequirementKind(targetProductClass, 'weightKg')
+    ? parseWeightNeedRangeKg(userMessage)
+    : undefined;
   const plannerHasWeightRange = Boolean(plannerTraits.weightKgMin || plannerTraits.weightKgMax);
-  if (!rankingOnly && plannerHasWeightRange) {
+  if (!rankingOnly && latestExplicitWeightRange) {
+    hard.weightKgMin = latestExplicitWeightRange.min;
+    hard.weightKgMax = latestExplicitWeightRange.max;
+    hard.provenance!.weightKgMin = 'explicit_user';
+    hard.provenance!.weightKgMax = 'explicit_user';
+  } else if (!rankingOnly && plannerHasWeightRange) {
     hard.weightKgMin = plannerTraits.weightKgMin ?? undefined;
     hard.weightKgMax = plannerTraits.weightKgMax ?? undefined;
     if (plannerTraits.weightKgMin) hard.provenance!.weightKgMin = 'planner';
@@ -3944,23 +4055,24 @@ function explicitCriteriaFromTurn(
     }
   }
 
-  if (plannerTraits.fuel === 'gasoline' || plannerTraits.fuel === 'diesel') {
+  if (generatorOnlyIntent(targetProductClass) && (plannerTraits.fuel === 'gasoline' || plannerTraits.fuel === 'diesel')) {
     hard.fuel = plannerTraits.fuel;
     hard.provenance!.fuel = 'planner';
   }
   const latestExplicitElectricStart = allowLegacyTextFallback ? hasExplicitGeneratorElectricStartNeed(userMessage) : false;
-  if (plannerTraits.startType === 'electric') {
+  if (generatorOnlyIntent(targetProductClass) && plannerTraits.startType === 'electric') {
     hard.startType = plannerTraits.startType;
     hard.provenance!.startType = 'planner';
-  } else if (plannerTraits.startType === 'manual' && (semanticSelectionReady || /(?:\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u0434\u0435\u0440\u0433\u0430\u0442\u044c\s+\u0448\u043d\u0443\u0440|manual\s+start|recoil\s+start)/iu.test(userMessage))) {
+  } else if (generatorOnlyIntent(targetProductClass) && plannerTraits.startType === 'manual' && (semanticSelectionReady || /(?:\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0437\u0430\u043f\u0443\u0441\u043a|\u0440\u0443\u0447\u043d[\p{L}]*\s+\u0441\u0442\u0430\u0440\u0442\u0435\u0440|\u0434\u0435\u0440\u0433\u0430\u0442\u044c\s+\u0448\u043d\u0443\u0440|manual\s+start|recoil\s+start)/iu.test(userMessage))) {
     hard.startType = plannerTraits.startType;
     hard.provenance!.startType = 'planner';
   }
-  if (plannerTraits.enclosure === 'enclosed' || plannerTraits.enclosure === 'open') {
+  if (generatorOnlyIntent(targetProductClass) && (plannerTraits.enclosure === 'enclosed' || plannerTraits.enclosure === 'open')) {
     hard.enclosure = plannerTraits.enclosure;
     hard.provenance!.enclosure = 'planner';
   }
-  if (plannerTraits.conventionalGenerator !== null &&
+  if (generatorOnlyIntent(targetProductClass) &&
+    plannerTraits.conventionalGenerator !== null &&
     plannerConventionalGeneratorConstraintHasEvidence(plannerTraits.conventionalGenerator, userMessage, plan, currentHard)) {
     hard.conventionalGenerator = plannerTraits.conventionalGenerator;
     hard.provenance!.conventionalGenerator = 'planner';
@@ -3968,7 +4080,7 @@ function explicitCriteriaFromTurn(
   const currentHasGroundedSinglePhase = currentHard.singlePhase220 !== undefined &&
     currentHard.singlePhase220 !== null &&
     (currentHard.provenance?.singlePhase220 === 'explicit_user' || currentHard.provenance?.singlePhase220 === 'previous_selection');
-  if (plannerTraits.singlePhase220 !== null && !currentHasGroundedSinglePhase) {
+  if (generatorOnlyIntent(targetProductClass) && plannerTraits.singlePhase220 !== null && !currentHasGroundedSinglePhase) {
     hard.singlePhase220 = plannerTraits.singlePhase220;
     hard.provenance!.singlePhase220 = 'planner';
   }
@@ -6386,6 +6498,12 @@ export class AssistantService {
       state.semanticMemory,
       [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
     );
+    selectionState = clearUngroundedExactModelSelectionState(
+      selectionState,
+      [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
+    );
+    selectionState = clearStaleLoadSizingForExplicitCatalogPower(selectionState, userMessage, plan);
+    selectionState = clearGeneratorOnlyCriteriaForNonGeneratorState(selectionState);
     selectionState = clearUngroundedGeneratorElectricStart(
       selectionState,
       [userMessage, conversationUserText, needEvidenceText(state)].filter(Boolean).join(' ')
@@ -7227,7 +7345,12 @@ export class AssistantService {
         }
       : agentTurnContract;
     const baseSelectionMetadata = selectionMetadata(selectionResult);
-    const exposeLoadProfileToAnswer = currentTurnCanBlockForEstimatedPump || blockEstimatedPumpCards;
+    const loadProfileSupportsCurrentPower = selectionHard.provenance?.nominalPowerKwMin === 'inferred_from_load' ||
+      selectionHard.provenance?.nominalPowerKwMax === 'inferred_from_load' ||
+      selectionHard.provenance?.maxPowerKwMin === 'inferred_from_load' ||
+      selectionHard.provenance?.maxPowerKwMax === 'inferred_from_load';
+    const exposeLoadProfileToAnswer = blockEstimatedPumpCards ||
+      (currentTurnCanBlockForEstimatedPump && !currentTurnExplicitCatalogPowerSelection && loadProfileSupportsCurrentPower);
     const loadProfileForAnswer = exposeLoadProfileToAnswer ? selectionResult.state.loadProfile : undefined;
     const productSelectionForAnswer: ProductSelectionMetadata = !exposeLoadProfileToAnswer && baseSelectionMetadata.loadProfile
       ? {
@@ -7627,10 +7750,22 @@ export class AssistantService {
       if (!localAnswer && localCompletedResponse) localAnswer = extractResponseText(localCompletedResponse);
       return { answer: localAnswer, completedResponse: localCompletedResponse };
     };
-    const failAnswerGeneration = (error: unknown): never => {
+    const failAnswerGeneration = (error: unknown): void => {
       if (input.signal?.aborted) throw new Error('AI answer generation aborted');
       const details = safeError(error);
       markAiFallback(aiDiagnostics, 'answerGenerationFallback', error, 'answer_generation_failed');
+      const deterministicFallback = deterministicAnswerGenerationFallback({
+        cards,
+        selectionResult,
+        structuredCatalogSlice,
+        finalCards
+      }).trim();
+      if (deterministicFallback) {
+        answer = deterministicFallback;
+        completedResponse = undefined;
+        console.warn('OpenAI answer generation failed; using deterministic catalog fallback for current turn', details);
+        return;
+      }
       console.warn('OpenAI answer generation failed; deferring to turn recovery', details);
       throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
     };

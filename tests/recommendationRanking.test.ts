@@ -6550,6 +6550,152 @@ describe('recommendation ranking', () => {
     expect(result.matchedProducts.map((item) => item.id)).toEqual(['plate-100']);
   });
 
+  it('clears stale exact model and load sizing when a new generator catalog power range is explicit', async () => {
+    const diesel16 = productWithSpecs('diesel-16', 'Генератор дизельный TSS SDG 16000EHA 16 кВт 380 В', 420_000, 'https://example.test/diesel-16', {
+      nominalPower: '16 kW',
+      maxPower: '17 kW',
+      voltage: '380 V',
+      fuel: 'diesel'
+    });
+    const bison = productWithSpecs('bison-bs3250i', 'Генератор бензиновый инверторный BISON BS3250i 3.0 kW 230 V', 28_032, 'https://example.test/bison', {
+      nominalPower: '3.0 kW',
+      voltage: '230 V'
+    });
+    const staleSelection = mergeProductSelectionState(emptyProductSelectionState('generator'), {
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyProductSelectionState('generator').hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        exactModelConstraint: 'Bison 3250',
+        exactModelTokens: ['Bison 3250'],
+        nominalPowerKwMin: 4,
+        nominalPowerKwMax: 6,
+        maxPowerKwMin: 4.3,
+        singlePhase220: true,
+        mustHaveTraits: ['для дачи', '220 В'],
+        excludedClasses: [],
+        provenance: {
+          exactModelConstraint: 'planner',
+          nominalPowerKwMin: 'planner',
+          nominalPowerKwMax: 'planner',
+          maxPowerKwMin: 'inferred_from_load',
+          singlePhase220: 'planner'
+        }
+      },
+      loadProfile: {
+        items: [{
+          kind: 'pump',
+          name: 'pump',
+          count: 1,
+          runningKw: 0.75,
+          startingKw: 2,
+          source: 'estimated_average',
+          evidence: 'stale household pump'
+        }],
+        confidence: 0.77,
+        calculation: 'stale household load',
+        totalRunningKw: 3,
+        requiredNominalKw: 4.5,
+        requiredStartingKw: 4.3,
+        simultaneousStarting: false
+      } as any
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([diesel16, bison] as any) as never);
+    const message = 'Теперь другая задача: для бригады нужен дизельный генератор 15-20 кВт, 380 В. Что в каталоге есть?';
+    const plan = baseTurnPlan({
+      catalogSearchQuery: message,
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'find_matching_products',
+        productCardsPolicy: 'show_matching_products'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'diesel',
+        singlePhase220: false,
+        nominalPowerKwMin: 15,
+        nominalPowerKwMax: 20
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        mustHaveTraits: ['дизельный', '380 В', '15-20 кВт']
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(message, { ...emptyNeedState(), selectionState: staleSelection }, plan, [diesel16, bison] as any);
+
+    expect(result.state.hardConstraints.exactModelConstraint).toBe('');
+    expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.state.hardConstraints.maxPowerKwMin).toBeUndefined();
+    expect(result.state.loadProfile).toBeUndefined();
+    expect(result.matchedProducts.map((item) => item.id)).toContain('diesel-16');
+    expect(result.rejectedProducts.find((item) => item.productId === 'diesel-16')?.reason).toBeUndefined();
+  });
+
+  it('lets the latest explicit plate weight range override stale planner traits and generator fuel', async () => {
+    const plate83 = productWithSpecs('plate-83', 'Виброплита аккумуляторная Wacker APS1340we 83 кг', 298_060, 'https://example.test/plate-83', {
+      weight: '83 кг'
+    });
+    const plate100 = productWithSpecs('plate-100', 'Виброплита бензиновая ТСС VP100 100 кг', 52_000, 'https://example.test/plate-100', {
+      weight: '100 кг'
+    });
+    const staleSelection = mergeProductSelectionState(emptyProductSelectionState('plate'), {
+      targetProductClass: 'plate',
+      hardConstraints: {
+        ...emptyProductSelectionState('plate').hardConstraints,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        fuel: 'diesel',
+        weightKgMin: 80,
+        weightKgMax: 90,
+        mustHaveTraits: ['старый диапазон 80-90 кг'],
+        excludedClasses: [],
+        provenance: {
+          fuel: 'planner',
+          weightKgMin: 'planner',
+          weightKgMax: 'planner'
+        }
+      }
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([plate83, plate100] as any) as never);
+    const message = 'Покажите из каталога виброплиты 90-120 кг, желательно не самые дорогие.';
+    const plan = baseTurnPlan({
+      catalogSearchQuery: message,
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'find_matching_products',
+        productCardsPolicy: 'show_matching_products'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        fuel: 'diesel',
+        weightKgMin: 80,
+        weightKgMax: 90
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        mustHaveTraits: ['виброплита', 'вес 90-120 кг', 'не самый дорогой вариант']
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(message, { ...emptyNeedState(), selectionState: staleSelection }, plan, [plate83, plate100] as any);
+
+    expect(result.state.hardConstraints.weightKgMin).toBe(90);
+    expect(result.state.hardConstraints.weightKgMax).toBe(120);
+    expect(result.state.hardConstraints.fuel).toBeUndefined();
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['plate-100']);
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('plate-83');
+  });
+
   it('uses web verification for technical model comparisons with unverified specs', () => {
     const plan = baseTurnPlan({
       answerMode: 'productRecommendation',
