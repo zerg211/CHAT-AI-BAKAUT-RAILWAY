@@ -26,7 +26,7 @@ describe('app', () => {
     expect(response.body).toContain('data.chatSrc');
     expect(response.body).toContain('/widget?pageUrl=');
     expect(response.body).toContain('bakaut-ai-open');
-    expect(response.body).toContain('calc(124px + env(safe-area-inset-bottom,0px))');
+    expect(response.body).toContain('calc(184px + env(safe-area-inset-bottom,0px))');
     expect(response.body).toContain("sizeAtLeast(data.width, '640px', 640)");
     expect(response.body).toContain("sizeAtLeast(data.height, '820px', 820)");
     expect(response.body).toContain("Number(px[1]) < minPx");
