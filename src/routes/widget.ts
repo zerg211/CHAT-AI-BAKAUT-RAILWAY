@@ -110,7 +110,7 @@ function embedScript(baseUrl: string) {
     '#bakaut-ai-widget-frame{width:100%;height:100%;border:0;border-radius:12px;box-shadow:0 18px 48px rgba(15,23,42,.28);background:#fff;overflow:hidden}' +
     '#bakaut-ai-widget-close{position:absolute;top:-12px;right:-12px;width:32px;height:32px;border:0;border-radius:999px;background:#111827;color:#fff;font-size:24px;line-height:28px;box-shadow:0 10px 24px rgba(15,23,42,.28);cursor:pointer;z-index:2}' +
     '@keyframes bakautAiPulse{0%{box-shadow:0 0 0 0 rgba(20,184,166,.55)}70%{box-shadow:0 0 0 18px rgba(20,184,166,0)}100%{box-shadow:0 0 0 0 rgba(20,184,166,0)}}' +
-    '@media (max-width:640px){#bakaut-ai-widget-root{left:0!important;right:0!important;bottom:0!important}#bakaut-ai-widget-launcher{margin:0 12px 12px;min-width:0;width:calc(100vw - 24px)}#bakaut-ai-widget-panel{left:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100svh!important;max-width:none!important;max-height:none!important}#bakaut-ai-widget-frame{border-radius:0;box-shadow:none}#bakaut-ai-widget-close{top:10px;right:10px;background:rgba(15,23,42,.72)}}';
+    '@media (max-width:640px){#bakaut-ai-widget-root{left:0!important;right:0!important;bottom:0!important}#bakaut-ai-widget-launcher{margin:0 12px calc(84px + env(safe-area-inset-bottom,0px));min-width:0;width:calc(100vw - 24px)}#bakaut-ai-widget-panel{left:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100svh!important;max-width:none!important;max-height:none!important}#bakaut-ai-widget-frame{border-radius:0;box-shadow:none}#bakaut-ai-widget-close{top:10px;right:10px;background:rgba(15,23,42,.72)}}';
 
   launcher.addEventListener('click', function(){
     root.classList.add('bakaut-ai-open');
