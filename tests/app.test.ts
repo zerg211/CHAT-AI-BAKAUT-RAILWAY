@@ -30,8 +30,10 @@ describe('app', () => {
     expect(response.body).toContain('pointer-events:auto');
     expect(response.body).toContain('bakautAiQuestion');
     expect(response.body).toContain('bakaut-ai-widget-prompt');
-    expect(response.body).toContain('min-width:72px;width:72px;height:72px');
+    expect(response.body).toContain('right:32px');
+    expect(response.body).toContain('min-width:144px;width:144px;height:144px');
     expect(response.body).toContain('margin:0 18px calc(164px + env(safe-area-inset-bottom,0px)) auto');
+    expect(response.body).toContain('min-width:72px;width:72px;height:72px');
     expect(response.body).toContain('calc(164px + env(safe-area-inset-bottom,0px))');
     expect(response.body).toContain("sizeAtLeast(data.width, '640px', 640)");
     expect(response.body).toContain("sizeAtLeast(data.height, '820px', 820)");
