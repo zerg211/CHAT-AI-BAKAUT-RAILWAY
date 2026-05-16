@@ -5280,6 +5280,40 @@ function repairGeneratorLoadMinimumText(
   return sanitizeVisibleAnswerNumbers(repaired);
 }
 
+function hasExplicitSinglePhase220Constraint(state?: ProductSelectionState | null) {
+  const hard = state?.hardConstraints;
+  if (!hard || hard.productIntent !== 'generator' || hard.singlePhase220 !== true) return false;
+  const source = hard.provenance?.singlePhase220;
+  return source === 'explicit_user' || source === 'previous_selection';
+}
+
+function isExplicitPhaseReconfirmationSentence(sentence: string) {
+  const normalized = sentence.toLowerCase();
+  if (!/(?:220\s*\/\s*380|220\s*-\s*380|380\s*в|\b380\b)/iu.test(normalized)) return false;
+  if (!/(?:220\s*в|230\s*в|\b220\b|\b230\b|однофаз)/iu.test(normalized)) return false;
+  if (/(?:без|исключа|не\s+(?:беру|смотрю|рассматриваю|добавляю|включаю|предлагаю))/iu.test(normalized) && !normalized.includes('?')) {
+    return false;
+  }
+  return /[?]/u.test(sentence) ||
+    /(?:уточн|подтверд|нужн|строго|подойд|допустим|или|можно|рассматрива)/iu.test(normalized);
+}
+
+function repairExplicitPhaseReconfirmation(answer: string, state?: ProductSelectionState | null) {
+  if (!hasExplicitSinglePhase220Constraint(state)) return answer;
+  const segments = answer.split(/(\n+|(?<=[.!?])\s+)/u);
+  let removed = false;
+  const kept = segments.filter((segment) => {
+    if (!segment.trim() || /^\s+$/u.test(segment) || /^\n+$/u.test(segment)) return true;
+    if (!isExplicitPhaseReconfirmationSentence(segment)) return true;
+    removed = true;
+    return false;
+  });
+  if (!removed) return answer;
+  const repaired = kept.join('').replace(/\n{3,}/gu, '\n\n').trim();
+  const phaseAnchor = 'Фазность уже зафиксировал: показываю однофазные 220 В, без универсальных 220/380.';
+  return repaired ? `${phaseAnchor}\n\n${repaired}` : phaseAnchor;
+}
+
 function requestedVisibleCardLimitFromText(text: string): number | undefined {
   const normalized = text.toLowerCase().replace(/ё/g, 'е');
   const explicitTwo = /(?:один|1)\s+(?:основн|главн|перв)[^.!?\n]{0,80}(?:и|\+|,)[^.!?\n]{0,80}(?:один|1)\s+(?:запасн|альтернатив)/iu.test(normalized) ||
@@ -8198,6 +8232,7 @@ export class AssistantService {
         ? 'какой насос стоит: скважинный, поверхностный, дренажный или насосная станция, и какая у него мощность/модель'
         : selectionResult.missingQuestions[0]
     });
+    answer = repairExplicitPhaseReconfirmation(answer, selectionResult.state);
     if (suppressLeadRequestByContract) {
       answer = stripLeadPressureTail(answer);
     }
@@ -9776,6 +9811,7 @@ export const assistantTestHooks = {
   repairAnswerCardText,
   repairCardPhaseFactContradictions,
   repairGeneratorLoadMinimumText,
+  repairExplicitPhaseReconfirmation,
   shouldSuppressLeadRequestFromContract,
   technicalCurrentLevelAnswerGuidance,
   shouldFreezeSelectionContextForNonCatalogTurn,
