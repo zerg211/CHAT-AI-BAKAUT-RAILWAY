@@ -34,6 +34,12 @@ function isCommercialVerificationSentence(text: string) {
     /(?:\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043a\u043e\u043c\u043c\u0435\u0440\u0447|in\s+stock|delivery|shipping|discount|terms)/iu.test(text);
 }
 
+function hasCommercialTermsClaim(text: string) {
+  if (/(?:\u0441\u043a\u0438\u0434|\u043a\u043e\u043c\u043c\u0435\u0440\u0447|discount)/iu.test(text)) return true;
+  return /(?:\u0444\u0438\u043d\u0430\u043b\w*\s+)?\u0443\u0441\u043b\u043e\u0432|terms/iu.test(text) &&
+    /(?:\u0437\u0430\u043a\u0430\u0437|\u043e\u0444\u043e\u0440\u043c|\u043e\u043f\u043b\u0430\u0442|\u0434\u043e\u0441\u0442\u0430\u0432|\u0441\u043a\u043b\u0430\u0434|\u0446\u0435\u043d|\u0441\u043a\u0438\u0434|\u0441\u043f\u0435\u0446|\u043a\u043e\u043c\u043c\u0435\u0440\u0447|order|payment|delivery|shipping|price|discount|commercial|special)/iu.test(text);
+}
+
 function sentenceProductIds(sentence: string, cardManifest?: CardManifest) {
   const text = normalized(sentence);
   return (cardManifest?.items ?? [])
@@ -178,7 +184,7 @@ export function auditAnswerFactClaims(input: {
       });
     }
 
-    if (/(?:\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043a\u043e\u043c\u043c\u0435\u0440\u0447|discount|terms)/iu.test(sentence)) {
+    if (hasCommercialTermsClaim(sentence)) {
       const verified = hasVerificationWording(sentence);
       addClaim(claims, {
         kind: 'discount_or_terms',

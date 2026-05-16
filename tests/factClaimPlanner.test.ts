@@ -137,6 +137,18 @@ describe('fact claim planner', () => {
     ]));
   });
 
+  it('does not treat operating conditions as commercial terms', () => {
+    const audit = auditAnswerFactClaims({
+      answer: '\u0412\u044b\u0431\u043e\u0440 \u0437\u0430\u0432\u0438\u0441\u0438\u0442 \u043e\u0442 \u043c\u043e\u0449\u043d\u043e\u0441\u0442\u0438, \u0440\u0435\u0441\u0443\u0440\u0441\u0430, \u0441\u0435\u0440\u0432\u0438\u0441\u0430 \u0438 \u0443\u0441\u043b\u043e\u0432\u0438\u0439 \u044d\u043a\u0441\u043f\u043b\u0443\u0430\u0442\u0430\u0446\u0438\u0438.',
+      factClaimPlanner: buildFactClaimPlanner({ executionContract, requirementLedger })
+    });
+
+    expect(audit.claims).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'discount_or_terms' })
+    ]));
+    expect(audit.warnings).not.toContain('terms_claim_without_specialist_verification_wording');
+  });
+
   it('marks current-lineup claims as web-required when web is not allowed by the policy', () => {
     const audit = auditAnswerFactClaims({
       answer: 'Эта модель актуальна в текущей линейке производителя.',
