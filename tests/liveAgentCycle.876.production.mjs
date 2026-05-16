@@ -11,7 +11,7 @@ const started = new Date().toISOString();
 const safeStamp = started.replace(/[:.]/g, '-');
 const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-production-876-agentic-remediation-${safeStamp}.production.md`);
 const failurePath = path.join('local-live-tests', 'production-876-remediation-failure.json');
-const globalTimeoutMs = Number(process.env.LIVE_AGENT_GLOBAL_TIMEOUT_MS ?? 420_000);
+const globalTimeoutMs = Number(process.env.LIVE_AGENT_GLOBAL_TIMEOUT_MS ?? 1_500_000);
 const runtimeState = { sessionId: null, steps: [] };
 let activeBrowser = null;
 

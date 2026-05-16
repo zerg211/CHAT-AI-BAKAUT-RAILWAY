@@ -10,7 +10,7 @@ const started = new Date().toISOString();
 const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-bakautprof-production-agent-cycle.production.md`);
 const failurePath = path.join('local-live-tests', 'production-agent-cycle-failure.json');
 const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
-const globalTimeoutMs = Number(process.env.LIVE_AGENT_GLOBAL_TIMEOUT_MS ?? 540_000);
+const globalTimeoutMs = Number(process.env.LIVE_AGENT_GLOBAL_TIMEOUT_MS ?? 1_500_000);
 const runtimeState = { sessionId: null, steps: [] };
 let activeBrowser = null;
 

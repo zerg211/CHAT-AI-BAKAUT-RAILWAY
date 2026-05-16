@@ -4893,6 +4893,83 @@ function formatKwValue(value?: number | null) {
   return (Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)).replace('.', ',');
 }
 
+function isExplicitCommercialQuestion(message: string) {
+  return /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0441\u0443\u043c\u043c|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|\u043e\u0444\u043e\u0440\u043c|\u0437\u0430\u043a\u0430\u0437|delivery|shipping|discount|price|cost|stock|order|terms)/iu.test(message);
+}
+
+function shouldUseCommercialDeterministicFallback(contract: AgentTurnContract | undefined, message: string) {
+  if (contract?.commercialAction !== 'explain_manager_required') return false;
+  if (contract.answerTask === 'lead_handoff') return true;
+  if (contract.currentFocus === 'commercial') return true;
+  if (contract.taskType === 'pure_delivery' || contract.taskType === 'pure_availability') return true;
+  if (contract.taskType === 'product_selection_with_delivery' && isExplicitCommercialQuestion(message)) return true;
+  return isExplicitCommercialQuestion(message);
+}
+
+function commercialFallbackCandidates(input: {
+  cards: ProductCard[];
+  selectionResult: ProductSelectionResult;
+}) {
+  const byId = new Map<string, Product>();
+  const addProduct = (product: Product | ProductCard | undefined) => {
+    if (!product?.id || !product.name) return;
+    const normalized = 'reasons' in product ? productFromCard(product) : product;
+    byId.set(normalized.id, normalized);
+  };
+  input.cards.forEach(addProduct);
+  input.selectionResult.visibleProducts.forEach(addProduct);
+  input.selectionResult.matchedProducts.forEach(addProduct);
+  return [...byId.values()].filter((product) => typeof product.price === 'number' && Number.isFinite(product.price));
+}
+
+function cheapestProduct(products: Product[]) {
+  return [...products].sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER))[0];
+}
+
+function deterministicCommercialHandoffFallback(input: {
+  cards: ProductCard[];
+  selectionResult: ProductSelectionResult;
+  contract?: AgentTurnContract;
+  latestUserMessage?: string;
+}) {
+  const message = input.latestUserMessage ?? '';
+  if (!shouldUseCommercialDeterministicFallback(input.contract, message)) return '';
+
+  const candidates = commercialFallbackCandidates(input);
+  const generators = candidates.filter((product) => {
+    const flags = classifyProduct(product);
+    return flags.isGenerator || flags.isWeldingGenerator;
+  });
+  const plates = candidates.filter((product) => classifyProduct(product).isPlate);
+  const generator = cheapestProduct(generators);
+  const plate = cheapestProduct(plates);
+
+  const lines = [
+    'Доставка есть, но точную стоимость, сроки и условия посчитаю по адресу через логистику. Скидку и финальные коммерческие условия заранее не обещаю: их нужно сверить по выбранному комплекту перед оформлением.'
+  ];
+
+  if (generator && plate && typeof generator.price === 'number' && typeof plate.price === 'number') {
+    lines.push(`По видимым карточкам нижний ориентир комплекта: ${generator.name} (${rubPrice(generator.price)}) плюс ${plate.name} (${rubPrice(plate.price)}), вместе примерно от ${rubPrice(generator.price + plate.price)} без учета доставки и возможных финальных условий.`);
+  } else if (candidates.length) {
+    const sorted = [...candidates].sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
+    const min = sorted[0]?.price;
+    const max = sorted[sorted.length - 1]?.price;
+    if (typeof min === 'number' && typeof max === 'number' && min !== max) {
+      lines.push(`По текущим карточкам ценовой ориентир по отдельным позициям: от ${rubPrice(min)} до ${rubPrice(max)}. Общую сумму честно сложу после фиксации конкретного генератора и конкретной виброплиты.`);
+    } else if (typeof min === 'number') {
+      lines.push(`По текущей карточке ориентир по позиции: ${rubPrice(min)}. Общую сумму честно сложу после фиксации конкретного генератора и конкретной виброплиты.`);
+    }
+  } else {
+    lines.push('Порядок суммы честно назову после фиксации двух карточек: генератора и виброплиты. Без цен из выбранных карточек не буду придумывать итоговую сумму.');
+  }
+
+  if (!input.contract?.leadAllowed) {
+    lines.push('Пока можно продолжать без звонка: сначала доведем подбор до конкретной пары моделей, затем уже сверю коммерческую часть.');
+  }
+
+  return lines.join('\n\n');
+}
+
 function deterministicAnswerGenerationFallback(input: {
   cards: ProductCard[];
   selectionResult: ProductSelectionResult;
@@ -4901,6 +4978,9 @@ function deterministicAnswerGenerationFallback(input: {
   contract?: AgentTurnContract;
   latestUserMessage?: string;
 }) {
+  const commercialFallback = deterministicCommercialHandoffFallback(input);
+  if (commercialFallback) return commercialFallback;
+
   if (input.contract?.answerTask === 'comparison' && input.selectionResult.state.hardConstraints.productIntent === 'plate') {
     const range = parseWeightNeedRangeKg(input.latestUserMessage ?? '');
     const rangeText = range ? `${range.min}-${range.max} кг` : 'более тяжелая плита';
@@ -5937,6 +6017,12 @@ function stripLeadPressureTail(answer: string) {
 function ensureCommercialManagerVerification(answer: string, contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return answer;
   answer = sanitizeThirdPersonManagerRole(answer);
+  const commercialTextPresent = /(?:\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043a\u043e\u043c\u043c\u0435\u0440\u0447|in\s+stock|delivery|shipping|discount|terms)/iu.test(answer);
+  const pureCommercialTask = contract.taskType === 'pure_delivery' ||
+    contract.taskType === 'pure_availability' ||
+    contract.answerTask === 'lead_handoff' ||
+    contract.currentFocus === 'commercial';
+  if (!pureCommercialTask && !commercialTextPresent) return answer;
   const hasFirstPersonCheck = /(сверю|уточню|проверю|посчитаю|согласую|перед\s+оформлением)/iu.test(answer);
   const alreadyHasSpecialistVerification = (contract.taskType === 'pure_delivery' || contract.taskType === 'product_selection_with_delivery')
     ? ((hasFirstPersonCheck || /(логист)/iu.test(answer)) && /(доставк|стоимост|услов|срок|адрес|отправк)/iu.test(answer))
@@ -9446,6 +9532,7 @@ export const assistantTestHooks = {
   explicitCriteriaFromTurn,
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
+  deterministicCommercialHandoffFallback,
   deterministicAnswerGenerationFallback,
   reliableBundleTotal,
   isCatalogAvailabilityQuestion,
