@@ -46,6 +46,21 @@ function contactRefusalText(value: string) {
   return /(?:номер|телефон|контакт|звон|перезвон)[^.!?\n]{0,80}(?:не\s+(?:остав|даю|надо|нуж|хоч)|пока\s+не)|(?:не\s+(?:остав|даю|надо|нуж|хоч)[^.!?\n]{0,80}(?:номер|телефон|контакт|звон|перезвон))|(?:без|пока\s+без)\s+(?:звон|перезвон|контакт|телефон|номера)/iu.test(value);
 }
 
+function isGeneratorCatalogOptionRequest(userMessage: string, state: CustomerNeedState) {
+  const text = userMessage.toLocaleLowerCase('ru');
+  const generatorContext =
+    /(?:\u0433\u0435\u043d\u0435\u0440\u0430\u0442|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u043d\u0446|generator)/iu.test(text) ||
+    state.selectionState?.targetProductClass === 'generator' ||
+    state.selectionState?.currentProductClass === 'generator' ||
+    (state.activeNeeds ?? []).some((need) => need.status !== 'closed' && need.productClass === 'generator');
+  if (!generatorContext) return false;
+  const asksForCatalogOptions = /(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043a\u0430\u0440\u0442\u043e\u0447|\u043f\u043e\u0434\u0431\u0435\u0440|\u043f\u043e\u0441\u043c\u043e\u0442\u0440|\u0447\u0442\u043e\s+\u0432\u0437\u044f\u0442|\u043a\u0430\u043a\u043e\u0439\s+\u0432\u0437\u044f\u0442|\u043c\u043e\u0436\u043d\u043e\s+\u043f\u0440\u0438\u043a\u0438\u043d|\u0441\s+\u0437\u0430\u043f\u0430\u0441|\u043c\u0438\u043d\u0438\u043c\u0430\u043b)/iu.test(text);
+  if (!asksForCatalogOptions) return false;
+  const commercialOnly = /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u0441\u043a\u0438\u0434|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0443\u0441\u043b\u043e\u0432)/iu.test(text) &&
+    !/(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043f\u043e\u0434\u0431\u0435\u0440|\u0433\u0435\u043d\u0435\u0440\u0430\u0442)/iu.test(text);
+  return !commercialOnly;
+}
+
 function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState, userMessage: string): AgentTurnContract | null {
   const decision = plan.agentDecision;
   if (!decision) return null;
@@ -85,12 +100,24 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     'supporting_only'
   ];
   const cardsRoles: AgentTurnContract['cardsRole'][] = ['none', 'supporting', 'primary'];
-  const taskType = taskTypes.includes(decision.taskType as NonNullable<AgentTurnContract['taskType']>)
+  let taskType = taskTypes.includes(decision.taskType as NonNullable<AgentTurnContract['taskType']>)
     ? decision.taskType as NonNullable<AgentTurnContract['taskType']>
     : undefined;
-  const explicitAnswerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
+  let explicitAnswerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
     ? decision.answerTask as AgentTurnContract['answerTask']
     : undefined;
+  const generatorOptionSelectionRepair = isGeneratorCatalogOptionRequest(userMessage, state) &&
+    (taskType === 'comparison' ||
+      taskType === 'technical_answer' ||
+      explicitAnswerTask === 'comparison' ||
+      explicitAnswerTask === 'technical_explanation' ||
+      decision.catalogAction === 'none' ||
+      decision.productCardsPolicy === 'none' ||
+      decision.cardsRole === 'none');
+  if (generatorOptionSelectionRepair) {
+    taskType = 'product_selection';
+    explicitAnswerTask = 'mixed';
+  }
   const deliverySelectionDefaultsToCatalog = explicitAnswerTask !== 'lead_handoff' && (
     taskType === 'product_selection_with_delivery' ||
     taskType === 'product_selection_with_availability'
@@ -215,6 +242,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   }
   if (answerTask !== explicitAnswerTask && exactAvailabilityNeedsContact && leadAllowed) {
     validatorWarnings.push('availability_handoff_answer_task_repaired');
+  }
+  if (generatorOptionSelectionRepair) {
+    validatorWarnings.push('generator_option_selection_repaired');
   }
 
   return {

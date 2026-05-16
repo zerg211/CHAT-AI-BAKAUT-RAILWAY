@@ -521,4 +521,47 @@ describe('agent turn contract', () => {
     expect(plan.answerGuidance).not.toContain('Карточки не показывать');
     expect(plan.answerGuidance).toContain('Use the validated catalog selection');
   });
+
+  it('repairs generator option requests from text-only comparison into catalog selection with cards', () => {
+    const textOnlyComparisonPlan = {
+      ...basePlan,
+      action: 'answer_question',
+      answerMode: 'detailedFact',
+      cardPolicy: 'textOnly',
+      selectedProductIds: [],
+      selectionState: {
+        shouldShowCards: false
+      },
+      agentDecision: {
+        answerTask: 'comparison' as const,
+        taskType: 'comparison' as const,
+        catalogAction: 'none' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['estimate minimum and reserve generator power'],
+        currentFocus: 'generator power sizing',
+        cardsRole: 'none' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer is sizing generator options',
+        errorRecoveryPriority: 'answer sizing and keep selection moving',
+        confidence: 0.9
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Уточнил: насос скважинный 220 В, мощность не знаю. Уже можно прикинуть варианты генераторов: минимальный и с запасом?',
+      plan: textOnlyComparisonPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(textOnlyComparisonPlan, contract);
+
+    expect(contract.answerTask).toBe('mixed');
+    expect(contract.taskType).toBe('product_selection');
+    expect(contract.catalogAction).toBe('find_matching_products');
+    expect(contract.productCardsPolicy).toBe('show_matching_products');
+    expect(contract.cardsRole).toBe('primary');
+    expect(contract.validatorWarnings).toContain('generator_option_selection_repaired');
+    expect(plan.action).toBe('recommend_products');
+    expect(plan.cardPolicy).toBe('showProducts');
+  });
 });
