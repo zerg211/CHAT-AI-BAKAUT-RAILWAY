@@ -27,6 +27,15 @@ function railwayCommand(args, label) {
   };
 }
 
+function gitCommand(args, label) {
+  return {
+    command: 'git',
+    args,
+    label,
+    shell: process.platform === 'win32'
+  };
+}
+
 function truncate(value, maxLength = 3000) {
   const text = String(value ?? '');
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
@@ -223,6 +232,44 @@ async function runRailwayWithRetry(args, label, timeoutMs, maxAttempts = 3) {
 
 const railwayVersion = await runCaptured(railwayCommand(['--version'], 'Railway CLI version'), 30_000);
 const deployContext = await estimateDeployContext();
+if (deploymentMode === 'github_auto') {
+  const localHead = await runCaptured(gitCommand(['rev-parse', 'HEAD'], 'local git HEAD'), 30_000);
+  const branch = await runCaptured(gitCommand(['branch', '--show-current'], 'local git branch'), 30_000);
+  const branchName = branch.stdout.trim() || 'main';
+  const remoteHead = await runCaptured(gitCommand(['ls-remote', 'origin', `refs/heads/${branchName}`], `origin/${branchName} HEAD`), 60_000);
+  const localSha = localHead.stdout.trim();
+  const remoteSha = remoteHead.stdout.trim().split(/\s+/u)[0] ?? '';
+  const deploy = {
+    ok: localHead.ok && branch.ok && remoteHead.ok && Boolean(localSha) && localSha === remoteSha,
+    code: localSha && localSha === remoteSha ? 'github_auto_deploy_source_ready' : 'github_auto_deploy_source_mismatch',
+    class: 'github_auto',
+    localSha,
+    remoteSha,
+    branch: branchName,
+    stdout: `origin/${branchName}=${remoteSha}`
+  };
+  if (!deploy.ok) {
+    await writeArtifact({ ok: false, stage: 'github_auto_source', railwayVersion, deployContext, deploy });
+    console.log(JSON.stringify({ ok: false, artifactPath, stage: 'github_auto_source' }, null, 2));
+    process.exit(1);
+  }
+  const predeploy = await runCaptured(npmCommand(['run', 'test:remediation:predeploy'], 'local predeploy gate'), 8 * 60_000);
+  if (!predeploy.ok) {
+    await writeArtifact({ ok: false, stage: 'predeploy', railwayVersion, deployContext, deploy, predeploy });
+    console.log(JSON.stringify({ ok: false, artifactPath, stage: 'predeploy' }, null, 2));
+    process.exit(1);
+  }
+  const postdeploy = await runCaptured(npmCommand(['run', 'test:remediation:postdeploy'], 'postdeploy marker and live verification'), 20 * 60_000);
+  if (!postdeploy.ok) {
+    await writeArtifact({ ok: false, stage: 'postdeploy', railwayVersion, deployContext, deploy, predeploy, postdeploy });
+    console.log(JSON.stringify({ ok: false, artifactPath, stage: 'postdeploy' }, null, 2));
+    process.exit(1);
+  }
+  await writeArtifact({ ok: true, stage: 'complete', railwayVersion, deployContext, deploy, predeploy, postdeploy });
+  console.log(JSON.stringify({ ok: true, artifactPath, stage: 'complete', deploymentMode }, null, 2));
+  process.exit(0);
+}
+
 const skipRailwayStatus = process.env.REMEDIATION_SKIP_RAILWAY_STATUS === '1';
 const railwayStatus = skipRailwayStatus
   ? {
@@ -262,7 +309,7 @@ else {
     deployContext,
     railwayStatus,
     predeploy,
-    error: `Unsupported REMEDIATION_RAILWAY_MODE=${deploymentMode}. Use detach, ci, or json.`
+    error: `Unsupported REMEDIATION_RAILWAY_MODE=${deploymentMode}. Use detach, ci, json, or github_auto.`
   });
   console.log(JSON.stringify({ ok: false, artifactPath, stage: 'deploy_config' }, null, 2));
   process.exit(1);

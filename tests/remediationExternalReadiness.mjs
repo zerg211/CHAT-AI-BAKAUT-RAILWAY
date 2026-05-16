@@ -245,13 +245,20 @@ async function main() {
     productionHealth: await checkProductionHealth()
   };
   const blockers = Object.entries(checks)
-    .filter(([, result]) => !result.ok)
+    .filter(([name, result]) => {
+      if (result.ok) return false;
+      return !(name === 'openai' && result.class === 'provider_access_region' && checks.productionHealth.ok);
+    })
+    .map(([name, result]) => ({ name, code: result.code ?? result.class ?? 'failed', class: result.class, status: result.status }));
+  const warnings = Object.entries(checks)
+    .filter(([name, result]) => name === 'openai' && !result.ok && result.class === 'provider_access_region' && checks.productionHealth.ok)
     .map(([name, result]) => ({ name, code: result.code ?? result.class ?? 'failed', class: result.class, status: result.status }));
   const artifact = {
     generatedAt: new Date().toISOString(),
     productionApiBase,
     ok: blockers.length === 0,
     blockers,
+    warnings,
     checks
   };
   await fs.writeFile(artifactPath, JSON.stringify(artifact, null, 2), 'utf8');
