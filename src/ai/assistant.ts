@@ -5338,6 +5338,7 @@ function repairAvailabilityAnswerWithCatalogModels(
   const availabilityTurn = contract?.taskType === 'pure_availability' ||
     contract?.taskType === 'product_selection_with_availability';
   if (!availabilityTurn) return answer;
+  if (shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state)) return answer;
   const products = (selectionResult.visibleProducts.length
     ? selectionResult.visibleProducts
     : selectionResult.matchedProducts

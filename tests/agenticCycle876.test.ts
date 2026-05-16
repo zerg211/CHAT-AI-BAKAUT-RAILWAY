@@ -915,6 +915,65 @@ describe('agentic #876 internal cycle', () => {
     expect(repaired).toContain('SGG 10000EH3A');
   });
 
+  it('does not add catalog model names when estimated pump blocks generator cards', () => {
+    const products = [
+      product('sumec', 'SUMEC SU4500i gasoline generator 4.0 kW', { nominalPower: '4.0 kW' })
+    ];
+    const blockedState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator'
+      },
+      loadProfile: {
+        items: [{
+          kind: 'pump',
+          name: 'pump',
+          count: 1,
+          runningKw: 0.75,
+          startingKw: 2,
+          source: 'estimated_average',
+          evidence: 'pump type and power unknown'
+        }],
+        confidence: 0.7,
+        calculation: 'generic pump',
+        totalRunningKw: 0.75,
+        requiredNominalKw: 4,
+        requiredStartingKw: 2,
+        simultaneousStarting: false
+      }
+    });
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'product_selection_with_availability',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'none',
+      productCardsPolicy: 'none',
+      mustAnswerNow: [],
+      activeNeeds: [],
+      currentFocus: 'generator',
+      cardsRole: 'none',
+      leadAllowed: false,
+      leadAllowedReason: 'pump must be clarified first',
+      errorRecoveryPriority: 'do not show generator models yet',
+      validatorWarnings: []
+    };
+    const answer = ru('\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0438 \u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440\u043e\u0432 \u043f\u043e\u043a\u0430 \u043d\u0435 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e: \u043d\u0430\u0441\u043e\u0441 \u0435\u0441\u0442\u044c, \u043d\u043e \u0435\u0433\u043e \u0442\u0438\u043f/\u043c\u043e\u0449\u043d\u043e\u0441\u0442\u044c \u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b.');
+
+    expect(assistantTestHooks.repairAvailabilityAnswerWithCatalogModels(answer, contract, {
+      state: blockedState,
+      matchedProducts: products,
+      visibleProducts: products,
+      hiddenProducts: [],
+      comparisonProducts: [],
+      rejectedProducts: [],
+      missingQuestions: [],
+      confidence: 0.7,
+      trace: {}
+    })).toBe(answer);
+  });
+
   it('repairs phase reconfirmation when single-phase 220 V is already explicit', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',
