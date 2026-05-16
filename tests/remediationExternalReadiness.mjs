@@ -233,6 +233,43 @@ async function checkProductionHealth() {
   }
 }
 
+async function checkProductionOpenAiRuntime() {
+  const token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY;
+  if (!token) {
+    return { ok: false, code: 'missing_admin_token', class: 'authentication' };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(`${productionApiBase}/api/admin/runtime/openai`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    const body = await response.text();
+    let parsed = null;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      // Keep raw body in the artifact.
+    }
+    const runtimeClass = parsed?.error?.class ?? parsed?.class;
+    return {
+      ok: response.ok && parsed?.ok === true,
+      status: response.status,
+      class: response.ok ? runtimeClass ?? 'unknown' : classifyOpenAi(response.status, body),
+      code: parsed?.error?.code ?? parsed?.code,
+      answerModel: parsed?.answerModel,
+      plannerModel: parsed?.plannerModel,
+      error: parsed?.error,
+      body: response.ok ? undefined : truncate(body)
+    };
+  } catch (error) {
+    return { ok: false, code: 'production_openai_runtime_unavailable', class: 'network_or_runtime', error: String(error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function main() {
   await fs.mkdir('local-live-tests', { recursive: true });
   const railway = await railwayStatusCheckWithRetry();
@@ -242,7 +279,8 @@ async function main() {
     docker: await commandCheck('docker', ['info']),
     postgres: await checkPostgres(),
     openai: await checkOpenAi(),
-    productionHealth: await checkProductionHealth()
+    productionHealth: await checkProductionHealth(),
+    productionOpenAiRuntime: await checkProductionOpenAiRuntime()
   };
   const blockers = Object.entries(checks)
     .filter(([name, result]) => {
