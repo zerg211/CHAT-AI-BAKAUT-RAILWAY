@@ -5330,6 +5330,31 @@ function repairExplicitPhaseReconfirmation(answer: string, state?: ProductSelect
   return repaired ? `${phaseAnchor}\n\n${repaired}` : phaseAnchor;
 }
 
+function repairAvailabilityAnswerWithCatalogModels(
+  answer: string,
+  contract: AgentTurnContract | undefined,
+  selectionResult: ProductSelectionResult
+) {
+  const availabilityTurn = contract?.taskType === 'pure_availability' ||
+    contract?.taskType === 'product_selection_with_availability';
+  if (!availabilityTurn) return answer;
+  const products = (selectionResult.visibleProducts.length
+    ? selectionResult.visibleProducts
+    : selectionResult.matchedProducts
+  ).filter((product, index, all) => all.findIndex((item) => item.id === product.id) === index);
+  if (!products.length) return answer;
+  if (products.some((product) => strongProductMentionIndex(product, answer) >= 0)) return answer;
+
+  const modelLine = products
+    .slice(0, 3)
+    .map((product) => typeof product.price === 'number'
+      ? `${product.name} (${rubPrice(product.price)})`
+      : product.name)
+    .join('; ');
+  const catalogLine = `Конкретно в каталоге вижу: ${modelLine}.`;
+  return answer.trim() ? `${answer.trim()}\n\n${catalogLine}` : catalogLine;
+}
+
 function requestedVisibleCardLimitFromText(text: string): number | undefined {
   const normalized = text.toLowerCase().replace(/ё/g, 'е');
   if (/(?:сравн|отлич)/iu.test(normalized) &&
@@ -8265,6 +8290,7 @@ export class AssistantService {
         : selectionResult.missingQuestions[0]
     });
     answer = repairExplicitPhaseReconfirmation(answer, selectionResult.state);
+    answer = repairAvailabilityAnswerWithCatalogModels(answer, answerAgentTurnContract, selectionResult);
     if (suppressLeadRequestByContract) {
       answer = stripLeadPressureTail(answer);
     }
@@ -9844,6 +9870,7 @@ export const assistantTestHooks = {
   repairCardPhaseFactContradictions,
   repairGeneratorLoadMinimumText,
   repairExplicitPhaseReconfirmation,
+  repairAvailabilityAnswerWithCatalogModels,
   shouldSuppressLeadRequestFromContract,
   technicalCurrentLevelAnswerGuidance,
   shouldFreezeSelectionContextForNonCatalogTurn,

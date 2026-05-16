@@ -873,6 +873,48 @@ describe('agentic #876 internal cycle', () => {
     )).toBe(true);
   });
 
+  it('adds concrete model names to availability answers when the LLM only says it sees positions', () => {
+    const products = [
+      product('e3ui', 'TSS SGG 11000E3Ui gasoline generator 10.0 kW', { nominalPower: '10.0 kW' }),
+      product('eha', 'TSS SGG 10000EHA gasoline generator 10.0 kW', { nominalPower: '10.0 kW' }),
+      product('eh3a', 'TSS SGG 10000EH3A gasoline generator 10.0 kW', { nominalPower: '10.0 kW' })
+    ];
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'pure_availability',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'none',
+      mustAnswerNow: [],
+      activeNeeds: [],
+      currentFocus: 'generator',
+      cardsRole: 'none',
+      leadAllowed: false,
+      leadAllowedReason: 'availability check',
+      errorRecoveryPriority: 'name available catalog models',
+      validatorWarnings: []
+    };
+    const repaired = assistantTestHooks.repairAvailabilityAnswerWithCatalogModels(
+      ru('\u0414\u0430, \u0432 \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435 \u0432\u0438\u0436\u0443 3 \u043f\u043e\u0434\u0445\u043e\u0434\u044f\u0449\u0438\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438.'),
+      contract,
+      {
+        state: emptyNeedState().selectionState,
+        matchedProducts: products,
+        visibleProducts: products,
+        hiddenProducts: [],
+        comparisonProducts: [],
+        rejectedProducts: [],
+        missingQuestions: [],
+        confidence: 0.9,
+        trace: {}
+      }
+    );
+
+    expect(repaired).toContain('SGG 11000E3Ui');
+    expect(repaired).toContain('SGG 10000EHA');
+    expect(repaired).toContain('SGG 10000EH3A');
+  });
+
   it('repairs phase reconfirmation when single-phase 220 V is already explicit', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',
