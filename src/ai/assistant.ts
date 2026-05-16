@@ -9029,56 +9029,7 @@ export class AssistantService {
       shouldSuppressLeadRequestFromContract(contract) ? stripLeadPressureTail(answer) : answer,
       contract
     );
-    await input.onDelta?.(answer);
-    const assistantMessage = await this.conversations.addMessage({
-      sessionId: input.sessionId,
-      role: 'assistant',
-      content: answer,
-      metadata: {
-        turnId: input.turnId,
-        recovered: true,
-        recoveryAttempts: 1,
-        turnContract: contract,
-        aiDiagnostics: recoveryAiDiagnostics,
-        productCards: recoveredSelection.cards,
-        cardDisplay: recoveredSelection.cardDisplay,
-        activeNeedsAfter: session.needState.activeNeeds ?? [],
-        openAiError
-      }
-    });
-    await this.conversations.updateTurn({
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-      status: 'recovered',
-      stage: 'recovered',
-      assistantMessageId: assistantMessage.id,
-      plannerContract: contract ?? undefined,
-      errorCode: openAiError ? 'recovery_openai_failed' : null,
-      errorMessage: openAiError ? JSON.stringify(openAiError).slice(0, 1000) : null,
-      activeNeedsAfter: session.needState.activeNeeds ?? []
-    }).catch((error) => console.warn('Conversation turn recovery update failed', safeError(error)));
-
-    return {
-      turnId: input.turnId,
-      answer,
-      needState: session.needState,
-      productCards: recoveredSelection.cards,
-      cardDisplay: recoveredSelection.cardDisplay,
-      usedWebSearch: false,
-      leadRequested: false,
-      assistantMessageId: assistantMessage.id,
-      metadata: {
-        turnId: input.turnId,
-        recovered: true,
-        recoveryAttempts: 1,
-        turnContract: contract ?? undefined,
-        aiDiagnostics: recoveryAiDiagnostics,
-        productCards: recoveredSelection.cards,
-        cardDisplay: recoveredSelection.cardDisplay,
-        activeNeedsAfter: session.needState.activeNeeds ?? [],
-        openAiError
-      }
-    };
+    return completeRecoveredAnswer(answer, contract, recoveredSelection, openAiError);
   }
 
   private async maybeSummarizeHistory(sessionId: string, history: Message[], existingSummary?: string | null) {
