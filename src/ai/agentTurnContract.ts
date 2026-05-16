@@ -46,6 +46,14 @@ function contactRefusalText(value: string) {
   return /(?:номер|телефон|контакт|звон|перезвон)[^.!?\n]{0,80}(?:не\s+(?:остав|даю|надо|нуж|хоч)|пока\s+не)|(?:не\s+(?:остав|даю|надо|нуж|хоч)[^.!?\n]{0,80}(?:номер|телефон|контакт|звон|перезвон))|(?:без|пока\s+без)\s+(?:звон|перезвон|контакт|телефон|номера)/iu.test(value);
 }
 
+function contactRefusalTechnicalSummaryText(value: string) {
+  if (!contactRefusalText(value)) return false;
+  const asksTechnicalSummary = /(?:\u0438\u0442\u043e\u0433|\u043f\u043e\u0434\u0432\u0435\u0434|\u043a\u043e\u0440\u043e\u0442\u043a|\u043f\u043e\s+\u0442\u0435\u0445\u043d\u0438\u043a|\u0441\u043d\u0430\u0447\u0430\u043b\u0430\s+\u0445\u043e\u0447\u0443\s+\u043f\u043e\u043d\u044f\u0442|\u043a\u0430\u043a\u0438\u0435\s+\u0434\u0430\u043d\u043d\u044b\u0435|\u0447\u0442\u043e\s+[^.!?\n]{0,60}\s+\u0443\u0442\u043e\u0447\u043d|\u043f\u0435\u0440\u0435\u0434\s+\u0442\u043e\u0447\u043d\u044b\u043c\s+\u0432\u044b\u0431\u043e\u0440|\bsummary\b|\brecap\b|РёС‚РѕРі|РїРѕРґРІРµРґ|РєРѕСЂРѕС‚Рє|РїРѕ\s+С‚РµС…РЅРёРє|РєР°РєРёРµ\s+РґР°РЅРЅС‹Рµ|С‡С‚Рѕ\s+[^.!?\n]{0,60}\s+СѓС‚РѕС‡РЅ|РїРµСЂРµРґ\s+С‚РѕС‡РЅС‹Рј\s+РІС‹Р±РѕСЂ)/iu.test(value);
+  if (!asksTechnicalSummary) return false;
+  const explicitlyAsksCards = /(?:\u043f\u043e\u043a\u0430\u0436(?:\u0438|\u0438\u0442\u0435)|\u043a\u0430\u0440\u0442\u043e\u0447\u043a|\u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b|\u043f\u043e\u0434\u0431\u0435\u0440\u0438\s+\u043c\u043e\u0434\u0435\u043b|\u043f\u043e\u0434\u0431\u0435\u0440\u0438\u0442\u0435\s+\u043c\u043e\u0434\u0435\u043b|show\s+(?:cards|options|variants))/iu.test(value);
+  return !explicitlyAsksCards;
+}
+
 function isGeneratorCatalogOptionRequest(userMessage: string, state: CustomerNeedState) {
   const text = userMessage.toLocaleLowerCase('ru');
   const generatorContext =
@@ -106,7 +114,13 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   let explicitAnswerTask = answerTasks.includes(decision.answerTask as AgentTurnContract['answerTask'])
     ? decision.answerTask as AgentTurnContract['answerTask']
     : undefined;
-  const generatorOptionSelectionRepair = isGeneratorCatalogOptionRequest(userMessage, state) &&
+  const technicalSummaryNoCards = contactRefusalTechnicalSummaryText(userMessage);
+  if (technicalSummaryNoCards) {
+    taskType = 'contact_refusal_continue_selection';
+    explicitAnswerTask = 'technical_explanation';
+  }
+  const generatorOptionSelectionRepair = !technicalSummaryNoCards &&
+    isGeneratorCatalogOptionRequest(userMessage, state) &&
     (taskType === 'comparison' ||
       taskType === 'technical_answer' ||
       explicitAnswerTask === 'comparison' ||
@@ -125,8 +139,12 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   const selectionTaskRequiresCatalog = taskType === 'product_selection' ||
     deliverySelectionDefaultsToCatalog;
   const rawCatalogAction = catalogActions.includes(decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>)
-    ? decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>
-    : taskType === 'pure_delivery' || taskType === 'technical_answer' || taskType === 'comparison'
+    ? technicalSummaryNoCards
+      ? 'none'
+      : decision.catalogAction as NonNullable<AgentTurnContract['catalogAction']>
+    : technicalSummaryNoCards
+      ? 'none'
+      : taskType === 'pure_delivery' || taskType === 'technical_answer' || taskType === 'comparison'
       ? 'none'
       : taskType === 'pure_availability'
         ? 'exact_model_lookup'
@@ -152,7 +170,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     : rawCommercialAction;
   const hasExplicitProductCardsPolicy = productCardsPolicies.includes(decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>);
   const rawProductCardsPolicy = hasExplicitProductCardsPolicy
-    ? decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>
+    ? technicalSummaryNoCards
+      ? 'none'
+      : decision.productCardsPolicy as NonNullable<AgentTurnContract['productCardsPolicy']>
     : catalogAction === 'exact_model_lookup'
       ? 'show_exact_matches'
       : catalogAction === 'find_matching_products'
@@ -203,7 +223,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
           ? 'supporting'
           : 'none';
   const rawCardsRole = cardsRoles.includes(decision.cardsRole as AgentTurnContract['cardsRole'])
-    ? decision.cardsRole as AgentTurnContract['cardsRole']
+    ? technicalSummaryNoCards
+      ? 'none'
+      : decision.cardsRole as AgentTurnContract['cardsRole']
     : inferredCardsRole;
   const cardsRole = rawCardsRole === 'none' && productCardsPolicy !== 'none'
     ? inferredCardsRole
@@ -245,6 +267,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   }
   if (generatorOptionSelectionRepair) {
     validatorWarnings.push('generator_option_selection_repaired');
+  }
+  if (technicalSummaryNoCards) {
+    validatorWarnings.push('contact_refusal_summary_cards_suppressed');
   }
 
   return {

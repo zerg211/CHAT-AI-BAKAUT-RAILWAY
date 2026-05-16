@@ -79,6 +79,43 @@ describe('agent turn contract', () => {
     expect(plan.cardPolicy).toBe('textOnly');
   });
 
+  it('keeps no-contact technical summaries text-only even when planner tries to show previous cards', () => {
+    const message = 'Пока без звонка. Сначала хочу понять по технике: что сейчас брать по генератору, что по виброплите и какие данные еще надо уточнить.';
+    const planWithCards = {
+      ...basePlan,
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'product_selection' as const,
+        catalogAction: 'find_matching_products' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'show_matching_products' as const,
+        mustAnswerNow: ['summarize current generator and plate technical choice'],
+        currentFocus: 'technical_summary',
+        cardsRole: 'primary' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer explicitly refused a call and asks for a technical summary',
+        errorRecoveryPriority: 'summarize without contact handoff',
+        confidence: 0.86
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: message,
+      plan: planWithCards,
+      needState: emptyNeedState()
+    });
+    const applied = applyAgentTurnContractToPlan(planWithCards, contract);
+
+    expect(contract.taskType).toBe('contact_refusal_continue_selection');
+    expect(contract.answerTask).toBe('technical_explanation');
+    expect(contract.catalogAction).toBe('none');
+    expect(contract.productCardsPolicy).toBe('none');
+    expect(contract.cardsRole).toBe('none');
+    expect(contract.validatorWarnings).toContain('contact_refusal_summary_cards_suppressed');
+    expect(applied.cardPolicy).toBe('textOnly');
+    expect(applied.selectionState.shouldShowCards).toBe(false);
+  });
+
   it('does not infer contact refusal from words when the planner says the meaning is different', () => {
     const contract = deriveAgentTurnContract({
       userMessage: 'Пока без звонка цена на доставку вообще считается отдельно?',
