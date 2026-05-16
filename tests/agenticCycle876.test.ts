@@ -1115,6 +1115,32 @@ describe('agentic #876 internal cycle', () => {
     expect(repaired).not.toContain('380');
   });
 
+  it('removes 230/400 V detours after single-phase 220 V is active', () => {
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        singlePhase220: true,
+        provenance: {
+          singlePhase220: 'planner'
+        }
+      }
+    });
+    const answer = [
+      ru('\u0414\u0435\u0440\u0436\u0443 \u043f\u043e\u0434\u0431\u043e\u0440 \u043f\u043e\u0434 220 \u0412.'),
+      ru('\u0415\u0441\u043b\u0438 \u0436\u0435 \u0432\u0430\u043c \u043d\u0443\u0436\u0435\u043d \u0422\u0421\u0421 230/400 \u0412, \u044d\u0442\u043e \u0443\u0436\u0435 \u0434\u0440\u0443\u0433\u043e\u0439 \u043a\u043b\u0430\u0441\u0441 \u0438\u0441\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f, \u043d\u0435 220 \u0412.'),
+      ru('\u041f\u043e \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0435 \u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442\u044c \u0441\u0432\u0435\u0440\u044e \u0441 \u043b\u043e\u0433\u0438\u0441\u0442\u0438\u043a\u043e\u0439.')
+    ].join('\n\n');
+
+    const repaired = assistantTestHooks.repairExplicitPhaseReconfirmation(answer, selectionState);
+
+    expect(repaired).toContain(ru('\u0414\u0435\u0440\u0436\u0443 \u043f\u043e\u0434\u0431\u043e\u0440 \u043f\u043e\u0434 220 \u0412.'));
+    expect(repaired).toContain(ru('\u043b\u043e\u0433\u0438\u0441\u0442\u0438\u043a'));
+    expect(repaired).not.toContain('230/400');
+  });
+
   it('keeps phase clarification when 220 V was only inferred from load context', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',

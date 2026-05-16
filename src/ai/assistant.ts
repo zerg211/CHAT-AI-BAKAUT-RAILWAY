@@ -5317,7 +5317,7 @@ function hasExplicitSinglePhase220Constraint(state?: ProductSelectionState | nul
   const hard = state?.hardConstraints;
   if (!hard || hard.productIntent !== 'generator' || hard.singlePhase220 !== true) return false;
   const source = hard.provenance?.singlePhase220;
-  return source === 'explicit_user' || source === 'previous_selection';
+  return source === 'explicit_user' || source === 'previous_selection' || source === 'planner' || source === undefined;
 }
 
 function isExplicitPhaseReconfirmationSentence(sentence: string) {
