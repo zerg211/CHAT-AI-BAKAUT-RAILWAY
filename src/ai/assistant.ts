@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { ActiveCustomerNeed, AgentTurnContract, BotCommitment, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, MentionedProductMemory, Message, PostAnswerVerificationRecovery, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
+import type { ActiveCustomerNeed, AgentTurnContract, BotCommitment, CardDisplayOptions, CardManifest, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, ExecutionContract, FactClaimPlanner, GeneratorPowerProfile, Lead, LeadStateMachine, MentionedProductMemory, Message, PostAnswerVerificationRecovery, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, RequirementLedger, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
@@ -337,6 +337,8 @@ type FinalCardsDecision = {
 
 const MAX_PRODUCT_CARDS = 10;
 const FULL_SLICE_PRODUCT_CARDS = 50;
+const ANSWER_SUITABLE_PRODUCT_CONTEXT_LIMIT = 12;
+const ANSWER_HIDDEN_CARD_PREVIEW_LIMIT = 12;
 const LARGE_SLICE_VISIBLE_CARDS = 7;
 const PLANNER_CANDIDATE_LIMIT = 16;
 const MIN_JSON_OUTPUT_TOKENS = 2400;
@@ -2397,6 +2399,71 @@ function compactSuitableProductsForAnswer(products: Product[], visibleCardIds: S
       isCoreProduct: isCoreEquipment(product)
     };
   });
+}
+
+function compactRuntimeContractsForAnswer(input: {
+  requirementLedger: RequirementLedger;
+  executionContract: ExecutionContract;
+  cardManifest: CardManifest;
+  factClaimPlanner: FactClaimPlanner;
+  leadStateMachine: LeadStateMachine;
+}) {
+  return {
+    requirementLedger: {
+      activeRequirementIds: input.requirementLedger.activeRequirementIds.slice(0, 12),
+      primaryRequirementIds: input.requirementLedger.primaryRequirementIds.slice(0, 8),
+      hardConstraintKeys: input.requirementLedger.hardConstraintKeys.slice(0, 12),
+      alternativeMode: input.requirementLedger.alternativeMode,
+      warnings: input.requirementLedger.warnings.slice(0, 6)
+    },
+    executionContract: {
+      answerTask: input.executionContract.answerTask,
+      taskType: input.executionContract.taskType,
+      catalogPolicy: input.executionContract.catalogPolicy,
+      cardsPolicy: input.executionContract.cardsPolicy,
+      leadPolicy: input.executionContract.leadPolicy,
+      factPolicy: input.executionContract.factPolicy,
+      activeRequirementIds: input.executionContract.activeRequirementIds.slice(0, 12),
+      postconditions: input.executionContract.postconditions.slice(0, 8),
+      warnings: input.executionContract.warnings.slice(0, 6)
+    },
+    cardManifest: {
+      cardsPolicy: input.cardManifest.cardsPolicy,
+      visibleProductIds: input.cardManifest.visibleProductIds.slice(0, 12),
+      hiddenProductCount: input.cardManifest.hiddenProductIds.length,
+      hiddenProductIdsPreview: input.cardManifest.hiddenProductIds.slice(0, ANSWER_HIDDEN_CARD_PREVIEW_LIMIT),
+      items: input.cardManifest.items
+        .filter((item) => item.visible || item.constraintStatus === 'violates_hard_constraints')
+        .slice(0, 12)
+        .map((item) => ({
+          productId: item.productId,
+          rank: item.rank,
+          visible: item.visible,
+          role: item.role,
+          constraintStatus: item.constraintStatus,
+          violations: item.violations.slice(0, 4)
+        })),
+      warnings: input.cardManifest.warnings.slice(0, 6)
+    },
+    factClaimPlanner: {
+      factPolicy: input.factClaimPlanner.factPolicy,
+      allowedSources: input.factClaimPlanner.allowedSources,
+      requiredDisclaimers: input.factClaimPlanner.requiredDisclaimers.slice(0, 8),
+      forbiddenClaims: input.factClaimPlanner.forbiddenClaims.slice(0, 8),
+      risk: input.factClaimPlanner.risk,
+      warnings: input.factClaimPlanner.warnings.slice(0, 6)
+    },
+    leadStateMachine: {
+      state: input.leadStateMachine.state,
+      nextAction: input.leadStateMachine.nextAction,
+      leadPolicy: input.leadStateMachine.leadPolicy,
+      hasContactInTurn: input.leadStateMachine.hasContactInTurn,
+      leadRequested: input.leadStateMachine.leadRequested,
+      leadCreated: input.leadStateMachine.leadCreated,
+      missing: input.leadStateMachine.missing,
+      warnings: input.leadStateMachine.warnings.slice(0, 6)
+    }
+  };
 }
 
 
@@ -7932,6 +7999,7 @@ export class AssistantService {
               ].filter(Boolean).join(' ')
         };
 
+    const visibleCardsForAnswer = cards.slice(0, finalCards.initialVisibleCount);
     const cardIdsForAnswer = new Set(cards.map((card) => card.id));
     const answerNeedsFullCatalogContext = answerCurrentLineupStyle ||
       detailedFactStyle ||
@@ -7942,19 +8010,19 @@ export class AssistantService {
       answerNeedsFullCatalogContext,
       recommendationAnswer,
       blockEstimatedPumpCards,
-      cards,
+      cards: recommendationAnswer ? visibleCardsForAnswer : cards,
       candidates,
       cardSourceProducts: productsForCardSelection
     });
     const priceRangeForAnswer = productCardPriceRange(cards);
-    const visibleCardIdsForContext = new Set(cards.slice(0, finalCards.initialVisibleCount).map((card) => card.id));
+    const visibleCardIdsForContext = new Set(visibleCardsForAnswer.map((card) => card.id));
     const shownCardIdsForContext = new Set(cards.map((card) => card.id));
     const suitableProductsForContext = blockEstimatedPumpCards
       ? []
       : selectionResult.matchedProducts.length
       ? selectionResult.matchedProducts
       : productsForCardSelection.filter((product) => cardIdsForAnswer.has(product.id));
-    const generatorSizingPolicy = generatorSizingPolicyForAnswer(loadProfileForAnswer, cards);
+    const generatorSizingPolicy = generatorSizingPolicyForAnswer(loadProfileForAnswer, visibleCardsForAnswer);
     const compactCommercialHandoffAnswer = answerAgentTurnContract.answerTask === 'lead_handoff' &&
       answerAgentTurnContract.commercialAction === 'explain_manager_required' &&
       answerAgentTurnContract.catalogAction === 'none' &&
@@ -7962,6 +8030,13 @@ export class AssistantService {
       answerAgentTurnContract.productCardsPolicy === 'none' &&
       !answerAgentTurnContract.leadAllowed &&
       cards.length === 0;
+    const runtimeContractsForAnswer = compactRuntimeContractsForAnswer({
+      requirementLedger,
+      executionContract,
+      cardManifest,
+      factClaimPlanner,
+      leadStateMachine
+    });
 
     const context = {
       ...buildAssistantContext({
@@ -7975,7 +8050,7 @@ export class AssistantService {
       }, {
         mode: answerNeedsFullCatalogContext ? 'expanded' : 'compact'
       }),
-      productCardsShown: cards.map((card) => ({
+      productCardsShown: visibleCardsForAnswer.map((card) => ({
         id: card.id,
         name: card.name,
         category: card.category,
@@ -7986,14 +8061,14 @@ export class AssistantService {
         initialVisibleCount: finalCards.initialVisibleCount,
         hiddenCount: Math.max(0, cards.length - finalCards.initialVisibleCount)
       },
-      productCardsVisibleFirst: cards.slice(0, finalCards.initialVisibleCount).map((card) => ({
+      productCardsVisibleFirst: visibleCardsForAnswer.map((card) => ({
         id: card.id,
         name: card.name,
         category: card.category,
         price: card.price,
         reasons: card.reasons.slice(0, 2)
       })),
-      productCardsBehindShowMore: cards.slice(finalCards.initialVisibleCount).map((card) => ({
+      productCardsBehindShowMore: cards.slice(finalCards.initialVisibleCount, finalCards.initialVisibleCount + ANSWER_HIDDEN_CARD_PREVIEW_LIMIT).map((card) => ({
         id: card.id,
         category: card.category,
         price: card.price
@@ -8005,7 +8080,8 @@ export class AssistantService {
       allSuitableProducts: compactSuitableProductsForAnswer(
         suitableProductsForContext,
         visibleCardIdsForContext,
-        shownCardIdsForContext
+        shownCardIdsForContext,
+        ANSWER_SUITABLE_PRODUCT_CONTEXT_LIMIT
       ),
       productSelection: productSelectionForAnswer,
       comparisonProducts: selectionResult.comparisonProducts.slice(0, 12).map((product) => ({
@@ -8034,11 +8110,7 @@ export class AssistantService {
         : null,
       cardSelectionDiagnostics: cardSelection.diagnostics,
       agentTurnContract: answerAgentTurnContract,
-      requirementLedger,
-      executionContract,
-      cardManifest,
-      factClaimPlanner,
-      leadStateMachine,
+      runtimeContracts: runtimeContractsForAnswer,
       leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
       selectedBundleForLead: leadRequestedForAnswer
@@ -8070,11 +8142,6 @@ export class AssistantService {
     const answerInputPayload = {
       turnPlan: compactTurnPlanForAnswer(effectivePlan),
       agentTurnContract: answerAgentTurnContract,
-      requirementLedger,
-      executionContract,
-      cardManifest,
-      factClaimPlanner,
-      leadStateMachine,
       answerContext: compactCommercialHandoffAnswer
         ? {
             responseStyle,
@@ -8098,7 +8165,7 @@ export class AssistantService {
     const answerStyleInstructions = [
       baseAnswerStyleInstructions,
       'For gasoline-vs-diesel or generator reserve comparisons, answer by the buyer context and avoid exhaustive spare-parts tables unless the buyer explicitly asks for spare-part or consumable prices. Never list consumables irrelevant to the current product class; for portable generators do not include cutting discs, water nodes, or belts unless the concrete model actually uses them.',
-      'For product recommendation turns, productCardsShown is the complete card payload and productCardsVisibleFirst is what the buyer sees before Show more. Name only productCardsVisibleFirst as direct recommendations. Do not name catalogCandidates or allSuitableProducts items as found/recommended unless they are also in productCardsShown; refer to productCardsBehindShowMore only as additional suitable options under Show more. If productCardsShown is empty, do not name any concrete model.',
+      'For product recommendation turns, productCardsShown and productCardsVisibleFirst contain the buyer-visible cards before Show more. Name only productCardsVisibleFirst as direct recommendations. Do not name catalogCandidates, allSuitableProducts, or productCardsBehindShowMore items as found/recommended unless they are also in productCardsVisibleFirst; refer to hidden cards only as additional suitable options under Show more. If productCardsShown is empty, do not name any concrete model.',
       'When you say "selection" or "podborka", define the scope: "po tekushchim kriteriyam v kataloge". Do not mention allSuitableProductCount unless the buyer asks how many options there are or you must explain a broad catalog slice. If allSuitableProductCountIsCapped is true, never present the count as an exact total; say only that more options are available under Show more.',
       'Do not say an inverter generator is required while showing only conventional generator cards. If inverter is a hard requirement, conventional generators are not suitable; ask whether to broaden to conventional options. If inverter is only a preference, say explicitly that shown conventional cards are compromise options, not inverter models.',
       'Do not use the phrase "hidden options" or Russian equivalents like "скрытые варианты"; say "additional suitable options are under Show more" or "I can expand the catalog selection". If productCardPriceRange is present and several suitable cards are shown, mention the catalog price range for the requested product type and stated need. For ordinary product comparisons, prefer short bullets over markdown tables unless exact tabular data is necessary.',
@@ -9832,6 +9899,7 @@ export const assistantTestHooks = {
   exactAvailabilityInitialVisibleCount,
   answerContextProductsForCards,
   compactSuitableProductsForAnswer,
+  compactRuntimeContractsForAnswer,
   selectionResultCanDriveCards,
   shouldForceStructuredSelectionCards,
   isCatalogShortlistTurn,
