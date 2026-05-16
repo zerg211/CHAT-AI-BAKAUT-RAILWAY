@@ -992,7 +992,7 @@ describe('agentic #876 internal cycle', () => {
     });
     const contract: AgentTurnContract = {
       answerTask: 'product_selection',
-      taskType: 'pure_availability',
+      taskType: 'product_selection',
       catalogAction: 'find_matching_products',
       commercialAction: 'explain_manager_required',
       productCardsPolicy: 'show_matching_products',

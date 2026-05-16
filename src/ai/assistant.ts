@@ -4763,7 +4763,7 @@ function exactAvailabilityInitialVisibleCount(
   selectionResult: ProductSelectionResult,
   contract: AgentTurnContract
 ) {
-  if (contract.taskType !== 'pure_availability' || cards.length <= 3) return baseCount;
+  if (cards.length <= 3 || (contract.productCardsPolicy ?? 'none') === 'none') return baseCount;
   const hard = selectionResult.state.hardConstraints;
   const nominalMin = hard.nominalPowerKwMin;
   const nominalMax = hard.nominalPowerKwMax;
