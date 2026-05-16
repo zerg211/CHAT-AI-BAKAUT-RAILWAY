@@ -4898,6 +4898,11 @@ function isExplicitCommercialQuestion(message: string) {
   return /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0441\u0443\u043c\u043c|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|\u043e\u0444\u043e\u0440\u043c|\u0437\u0430\u043a\u0430\u0437|delivery|shipping|discount|price|cost|stock|order|terms)/iu.test(message);
 }
 
+function isContactRefusalTechnicalSummaryRequest(message: string) {
+  return /(?:\u0431\u0435\u0437\s+\u0437\u0432\u043e\u043d|\u043d\u0435\s+\u0437\u0432\u043e\u043d|\u043f\u043e\u043a\u0430\s+\u0431\u0435\u0437|\u043d\u0435\s+\u043e\u0441\u0442\u0430\u0432)/iu.test(message) &&
+    /(?:\u0442\u0435\u0445\u043d\u0438\u043a|\u0447\u0442\u043e\s+\u0441\u0435\u0439\u0447\u0430\u0441\s+\u0431\u0440\u0430\u0442|\u0433\u0435\u043d\u0435\u0440\u0430\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|\u0443\u0442\u043e\u0447\u043d)/iu.test(message);
+}
+
 function shouldUseCommercialDeterministicFallback(contract: AgentTurnContract | undefined, message: string) {
   if (contract?.commercialAction !== 'explain_manager_required') return false;
   if (contract.answerTask === 'lead_handoff') return true;
@@ -4950,7 +4955,7 @@ function deterministicCommercialHandoffFallback(input: {
   ];
 
   if (generator && plate && typeof generator.price === 'number' && typeof plate.price === 'number') {
-    lines.push(`По видимым карточкам нижний ориентир комплекта: ${generator.name} (${rubPrice(generator.price)}) плюс ${plate.name} (${rubPrice(plate.price)}), вместе примерно от ${rubPrice(generator.price + plate.price)} без учета доставки и возможных финальных условий.`);
+    lines.push(`По видимым карточкам нижний ориентир комплекта: ${generator.name} (${rubPrice(generator.price)}) плюс ${plate.name} (${rubPrice(plate.price)}), вместе примерно от ${rubPrice(generator.price + plate.price)} как предварительный ориентир по товарам.`);
   } else if (candidates.length) {
     const sorted = [...candidates].sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
     const min = sorted[0]?.price;
@@ -4969,6 +4974,33 @@ function deterministicCommercialHandoffFallback(input: {
   }
 
   return lines.join('\n\n');
+}
+
+function deterministicTechnicalSummaryRecovery(input: {
+  cards: ProductCard[];
+  state: ProductSelectionState;
+}) {
+  const products = input.cards.map(productFromCard);
+  const generator = products.find((product) => {
+    const flags = classifyProduct(product);
+    return flags.isGenerator || flags.isWeldingGenerator;
+  });
+  const plate = products.find((product) => classifyProduct(product).isPlate);
+  const load = input.state.loadProfile;
+  const nominal = formatKwValue(load?.requiredNominalKw);
+  const starting = formatKwValue(load?.requiredStartingKw);
+  const generatorLine = generator
+    ? `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. Из уже показанных вариантов можно смотреть ${generator.name}, но финально надо сверить мощность или модель скважинного насоса на шильдике.`
+    : `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. Финально надо сверить мощность или модель скважинного насоса на шильдике.`;
+  const plateLine = plate
+    ? `По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: ${plate.name} остается нормальной отправной точкой, потому что ее проще грузить и переносить одному.`
+    : 'По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: тяжелее брать стоит только если щебня будет больше и переноска уже не главный фактор.';
+  return [
+    'Без звонка, продолжаем по технике.',
+    generatorLine,
+    plateLine,
+    'Что еще уточнить для точного выбора: мощность/модель насоса, будет ли болгарка работать одновременно с насосом, и какой вес виброплиты вам комфортно грузить одному.'
+  ].join('\n\n');
 }
 
 function deterministicAnswerGenerationFallback(input: {
@@ -8692,6 +8724,35 @@ export class AssistantService {
         });
       }
     }
+    if (!storedContract && latestUser && isContactRefusalTechnicalSummaryRequest(latestUserText)) {
+      const summaryContract: AgentTurnContract = {
+        answerTask: 'technical_explanation',
+        taskType: 'contact_refusal_continue_selection',
+        catalogAction: 'none',
+        commercialAction: 'none',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['summarize current generator and plate technical choice without contact collection'],
+        activeNeeds: (session.needState.activeNeeds ?? []).map((need) => ({
+          id: need.id,
+          productClass: need.productClass,
+          summary: need.summary
+        })),
+        currentFocus: 'technical_summary',
+        cardsRole: 'none',
+        leadAllowed: false,
+        leadAllowedReason: 'buyer explicitly refused a call and asked to continue technical selection',
+        errorRecoveryPriority: 'Summarize current technical recommendation and missing inputs without asking for contact.',
+        validatorWarnings: ['contact_refusal_summary_recovery_contract']
+      };
+      const answer = deterministicTechnicalSummaryRecovery({
+        cards: allShownProductCards(history),
+        state: session.needState.selectionState
+      });
+      return completeRecoveredAnswer(answer, summaryContract, {
+        cards: [],
+        cardDisplay: undefined
+      });
+    }
     const recoveryBaseQuery = productSearchText(latestUserText, session.needState);
     const recoveryPlan = !storedContract && latestUserText
       ? await this.planAssistantTurn({
@@ -9728,6 +9789,7 @@ export const assistantTestHooks = {
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
   deterministicCommercialHandoffFallback,
+  deterministicTechnicalSummaryRecovery,
   deterministicAnswerGenerationFallback,
   reliableBundleTotal,
   isCatalogAvailabilityQuestion,

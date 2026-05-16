@@ -104,4 +104,43 @@ describe('commercial remediation fallback', () => {
     expect(audit.warnings).not.toContain('current_lineup_claim_without_web_policy');
     expect(audit.warnings).not.toContain('availability_claim_without_specialist_verification_wording');
   });
+
+  it('recovers a no-call technical summary without asking for contact', () => {
+    const answer = assistantTestHooks.deterministicTechnicalSummaryRecovery({
+      cards: [
+        {
+          id: 'gen-6',
+          name: 'Генератор бензиновый SUMEC SU8800 6 кВт',
+          category: 'Бензиновые генераторы',
+          price: 47990,
+          currency: 'RUB',
+          specs: {},
+          reasons: [],
+          caveats: []
+        },
+        {
+          id: 'plate-50',
+          name: 'Виброплита STEM Techno SPC 152E 50 кг',
+          category: 'Виброплиты',
+          price: 35500,
+          currency: 'RUB',
+          specs: {},
+          reasons: [],
+          caveats: []
+        }
+      ],
+      state: {
+        loadProfile: {
+          requiredNominalKw: 5.5,
+          requiredStartingKw: 4.3
+        }
+      }
+    } as any);
+
+    expect(answer).toContain('Без звонка');
+    expect(answer).toContain('генератор');
+    expect(answer).toContain('виброплите');
+    expect(answer).toContain('насоса');
+    expect(answer).not.toMatch(/телефон|номер|контакт|заявк/iu);
+  });
 });
