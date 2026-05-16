@@ -5302,11 +5302,14 @@ function hasExplicitSinglePhase220Constraint(state?: ProductSelectionState | nul
 
 function isExplicitPhaseReconfirmationSentence(sentence: string) {
   const normalized = sentence.toLowerCase();
-  if (!/(?:220\s*\/\s*380|220\s*-\s*380|380\s*в|\b380\b)/iu.test(normalized)) return false;
-  if (!/(?:220\s*в|230\s*в|\b220\b|\b230\b|однофаз)/iu.test(normalized)) return false;
   if (/(?:без|исключа|не\s+(?:беру|смотрю|рассматриваю|добавляю|включаю|предлагаю))/iu.test(normalized) && !normalized.includes('?')) {
     return false;
   }
+  if (/(?:тр[её]х\s*фаз|тр[её]хфаз|3\s*фаз|230\s*\/\s*400|220\s*\/\s*380|380\s*\/\s*220|380\s*в|400\s*в|\b380\b|\b400\b)/iu.test(normalized)) {
+    return true;
+  }
+  if (!/(?:220\s*\/\s*380|220\s*-\s*380|380\s*в|\b380\b)/iu.test(normalized)) return false;
+  if (!/(?:220\s*в|230\s*в|\b220\b|\b230\b|однофаз)/iu.test(normalized)) return false;
   return /[?]/u.test(sentence) ||
     /(?:уточн|подтверд|нужн|строго|подойд|допустим|или|можно|рассматрива)/iu.test(normalized);
 }
@@ -5323,7 +5326,7 @@ function repairExplicitPhaseReconfirmation(answer: string, state?: ProductSelect
   });
   if (!removed) return answer;
   const repaired = kept.join('').replace(/\n{3,}/gu, '\n\n').trim();
-  const phaseAnchor = 'Фазность уже зафиксировал: показываю однофазные 220 В, без универсальных 220/380.';
+  const phaseAnchor = 'Фазность уже зафиксировал: показываю однофазные 220 В.';
   return repaired ? `${phaseAnchor}\n\n${repaired}` : phaseAnchor;
 }
 

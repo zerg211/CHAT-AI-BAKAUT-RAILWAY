@@ -899,6 +899,32 @@ describe('agentic #876 internal cycle', () => {
     expect(repaired).not.toContain(ru('\u043f\u043e\u0434\u043e\u0439\u0434\u0435\u0442 \u0443\u043d\u0438\u0432\u0435\u0440\u0441\u0430\u043b\u044c\u043d\u044b\u0439 220/380'));
   });
 
+  it('removes three-phase explanatory detours after strict 220 V was explicit', () => {
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        singlePhase220: true,
+        provenance: {
+          singlePhase220: 'explicit_user'
+        }
+      }
+    });
+    const answer = [
+      ru('\u041f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u044e \u043e\u0434\u043d\u043e\u0444\u0430\u0437\u043d\u044b\u0435 \u0422\u0421\u0421 8-10 \u043a\u0412\u0442.'),
+      ru('\u0414\u043b\u044f \u0441\u0442\u0440\u043e\u0433\u043e 220 \u0412 \u043d\u0443\u0436\u0435\u043d \u0438\u043c\u0435\u043d\u043d\u043e \u043e\u0434\u043d\u043e\u0444\u0430\u0437\u043d\u044b\u0439 \u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440 - \u0442\u0440\u0435\u0445\u0444\u0430\u0437\u043d\u044b\u0439 \u0438\u043c\u0435\u0435\u0442 \u0441\u043c\u044b\u0441\u043b \u0442\u043e\u043b\u044c\u043a\u043e \u0435\u0441\u043b\u0438 \u0435\u0441\u0442\u044c 380 \u0412.'),
+      'TSS SGG 9000ELA, TSS SGG 10000EI, TSS SGG 10000EHA.'
+    ].join(' ');
+
+    const repaired = assistantTestHooks.repairExplicitPhaseReconfirmation(answer, selectionState);
+
+    expect(repaired).toContain('TSS SGG 10000EHA');
+    expect(repaired).not.toContain(ru('\u0442\u0440\u0435\u0445\u0444\u0430\u0437\u043d'));
+    expect(repaired).not.toContain('380');
+  });
+
   it('keeps phase clarification when 220 V was only inferred from load context', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',
