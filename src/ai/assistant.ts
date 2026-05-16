@@ -6781,7 +6781,7 @@ export class AssistantService {
     );
     selectionState = applyCurrentTurnGeneratorPhase(
       selectionState,
-      [userMessage, plan.catalogSearchQuery, plan.selectionState.mustHaveTraits.join(' ')].filter(Boolean).join(' '),
+      userMessage,
       plan.requiredProductTraits.singlePhase220
     );
     selectionState = clearStaleLoadSizingForExplicitCatalogPower(selectionState, userMessage, plan);

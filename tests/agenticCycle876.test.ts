@@ -764,6 +764,79 @@ describe('agentic #876 internal cycle', () => {
     expect(recovered.cards.map((card) => card.id)).not.toContain('tss-12');
   });
 
+  it('lets the latest user 220 V phrase override planner text that mentions 220/380 alternatives', async () => {
+    const products = [
+      product('tss-e3ui', 'TSS SGG 11000E3Ui gasoline generator 10.0 kW', { voltage: '220/380 V', nominalPower: '10.0 kW' }),
+      product('tss-eh3a', 'TSS SGG 10000EH3A gasoline generator 10.0 kW', { voltage: '220/380 V', nominalPower: '10.0 kW' }),
+      product('tss-eha', 'TSS SGG 10000EHA gasoline generator 10.0 kW 230 V single phase', { voltage: '230 V', nominalPower: '10.0 kW' })
+    ];
+    const previousSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        brandConstraint: 'TSS',
+        nominalPowerKwMin: 10,
+        provenance: {
+          fuel: 'planner',
+          brandConstraint: 'planner',
+          nominalPowerKwMin: 'planner'
+        }
+      }
+    });
+    const plan = rawPlan({
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      catalogSearchQuery: ru('\u0422\u0421\u0421 \u0431\u0435\u043d\u0437\u0438\u043d\u043e\u0432\u044b\u0439 \u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440 \u043e\u043a\u043e\u043b\u043e 10 \u043a\u0412\u0442, \u043e\u0434\u043d\u043e\u0444\u0430\u0437\u043d\u044b\u0439 220 \u0412; \u0435\u0441\u043b\u0438 \u0441\u0442\u0440\u043e\u0433\u043e\u0433\u043e \u043e\u0434\u043d\u043e\u0444\u0430\u0437\u043d\u043e\u0433\u043e \u043d\u0435\u0442 - \u0443\u043d\u0438\u0432\u0435\u0440\u0441\u0430\u043b\u044c\u043d\u044b\u0435 220/380 \u043c\u043e\u0434\u0435\u043b\u0438'),
+      requiredProductTraits: {
+        ...rawPlan({}).requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        singlePhase220: false,
+        nominalPowerKwMin: 10
+      },
+      selectionState: {
+        ...rawPlan({}).selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        brandConstraint: 'TSS',
+        mustHaveTraits: [ru('\u043e\u0434\u043d\u043e\u0444\u0430\u0437\u043d\u044b\u0439 220 \u0412')]
+      },
+      agentDecision: {
+        answerTask: 'product_selection',
+        taskType: 'product_selection',
+        catalogAction: 'find_matching_products',
+        productCardsPolicy: 'show_matching_products',
+        mustAnswerNow: [ru('\u0443\u0442\u043e\u0447\u043d\u0438\u0442\u044c, \u043f\u043e\u0434\u043e\u0439\u0434\u0443\u0442 \u043b\u0438 220/380 \u043c\u043e\u0434\u0435\u043b\u0438')],
+        currentFocus: 'generator',
+        cardsRole: 'supporting',
+        leadAllowed: false,
+        leadAllowedReason: 'selection turn',
+        errorRecoveryPriority: 'respect latest explicit user phase',
+        confidence: 0.6
+      }
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const result = await assistant.selectProductsForTurn(
+      ru('\u041d\u0443\u0436\u0435\u043d 220 \u0412, \u043e\u0434\u043d\u043e\u0444\u0430\u0437\u043d\u044b\u0439.'),
+      { ...emptyNeedState(), selectionState: previousSelection },
+      plan,
+      products,
+      assistantTestHooks.resolveTurnContractForPlan(plan)
+    );
+
+    expect(result.state.hardConstraints.singlePhase220).toBe(true);
+    expect(result.state.hardConstraints.provenance?.singlePhase220).toBe('explicit_user');
+    expect(result.visibleProducts.map((item) => item.id)).toContain('tss-eha');
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('tss-e3ui');
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('tss-eh3a');
+  });
+
   it('repairs phase reconfirmation when single-phase 220 V is already explicit', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',
