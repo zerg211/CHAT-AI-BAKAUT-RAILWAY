@@ -1207,8 +1207,16 @@ function applySemanticMemoryToSelectionState(
     }
     if (requirement.kind === 'powerKw') {
       if (!intentAcceptsRequirementKind(targetProductClass, requirement.kind)) continue;
-      const min = semanticNumber(value, 'min');
-      const max = semanticNumber(value, 'max') ?? semanticNumber(value, 'amount');
+      const amount = semanticNumber(value, 'amount');
+      let min = semanticNumber(value, 'min');
+      let max = semanticNumber(value, 'max') ?? amount;
+      const evidenceText = [
+        semanticText(value, 'text'),
+        requirement.evidence
+      ].filter(Boolean).join(' ');
+      if (!min && amount && max === amount && !textMarksPowerUpperBound(evidenceText) && !parseDesiredPowerRange(evidenceText)) {
+        min = amount;
+      }
       hardConstraints = {
         ...hardConstraints,
         nominalPowerKwMin: min,
@@ -1836,7 +1844,9 @@ function generatorPowerFromSelectionHardConstraints(hard: ProductSelectionCriter
   if (hard.nominalPowerKwMax) range.nominalMax = hard.nominalPowerKwMax;
   if (hard.maxPowerKwMin) range.maxMin = hard.maxPowerKwMin;
   if (hard.maxPowerKwMax) range.maxMax = hard.maxPowerKwMax;
-  return range.nominalMin || range.nominalMax || range.maxMin || range.maxMax ? range : undefined;
+  return range.nominalMin || range.nominalMax || range.maxMin || range.maxMax
+    ? completeSingleTargetNominalPower(range, hard)
+    : undefined;
 }
 
 function normalizePowerRange(range?: GeneratorPowerProfile) {
@@ -1849,6 +1859,31 @@ function normalizePowerRange(range?: GeneratorPowerProfile) {
     [normalized.maxMin, normalized.maxMax] = [normalized.maxMax, normalized.maxMin];
   }
   return normalized;
+}
+
+function textMarksPowerUpperBound(text: string) {
+  return /(?:\u0434\u043e\s+\d|\u043d\u0435\s+(?:\u0431\u043e\u043b\u044c\u0448\u0435|\u0432\u044b\u0448\u0435)\s+\d|\u043c\u0430\u043a\u0441(?:\u0438\u043c\u0443\u043c|\.)?\s*\d|max(?:imum)?\s*\d|up\s+to\s+\d|under\s+\d|below\s+\d|<=\s*\d)/iu.test(text);
+}
+
+function exactSinglePowerFromCriteriaText(criteria: ProductSelectionCriteria) {
+  const text = [
+    criteria.mustHaveTraits.join(' '),
+    criteria.exactModelConstraint,
+    criteria.exactModelTokens.join(' ')
+  ].filter(Boolean).join(' ');
+  if (!text || textMarksPowerUpperBound(text) || parseDesiredPowerRange(text)) return undefined;
+  return singlePowerKwFromText(text);
+}
+
+function completeSingleTargetNominalPower(range: GeneratorPowerProfile, criteria: ProductSelectionCriteria) {
+  if (range.nominalMin || !range.nominalMax) return range;
+  const exactPower = exactSinglePowerFromCriteriaText(criteria);
+  if (!exactPower || Math.abs(exactPower - range.nominalMax) > 0.25) return range;
+  return {
+    ...range,
+    nominalMin: exactPower,
+    nominalMax: exactPower
+  };
 }
 
 function hasExplicitGeneratorElectricStartNeed(text: string) {
@@ -4368,13 +4403,13 @@ function powerCriteriaFromSelection(criteria: ProductSelectionCriteria): Generat
     criteria.provenance?.maxPowerKwMin,
     criteria.provenance?.maxPowerKwMax
   ].some((item) => item === 'inferred_from_load') ? 'estimated_load' : 'explicit_text';
-  return normalizePowerRange({
+  return normalizePowerRange(completeSingleTargetNominalPower({
     nominalMin: criteria.nominalPowerKwMin,
     nominalMax: criteria.nominalPowerKwMax,
     maxMin: criteria.maxPowerKwMin,
     maxMax: criteria.maxPowerKwMax,
     source
-  });
+  }, criteria));
 }
 
 function productMeetsCalculatedLoad(product: Product, state: ProductSelectionState) {

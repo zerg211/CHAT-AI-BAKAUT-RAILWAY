@@ -6185,6 +6185,41 @@ describe('recommendation ranking', () => {
     expect(result.visibleProducts.map((item) => item.id)).toEqual(['tss-10']);
   });
 
+  it('does not treat a single requested generator power as a max-only range in recovered state', () => {
+    const message = ru('\\u0415\\u0441\\u0442\\u044c \\u0432 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0438 \\u0422\\u0421\\u0421 10 \\u043a\\u0412\\u0442 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d?');
+    const low2 = productWithSpecs('tss-2', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 \\u0422\\u0421\\u0421 SGG 2000N (2,0 \\u043a\\u0412\\u0442)'), 24_687, 'https://example.test/tss-2', {
+      [ru('\\u043f\\u0440\\u043e\\u0438\\u0437\\u0432\\u043e\\u0434\\u0438\\u0442\\u0435\\u043b\\u044c \\u043e\\u0431\\u043e\\u0440\\u0443\\u0434\\u043e\\u0432\\u0430\\u043d\\u0438\\u044f')]: ru('\\u0422\\u0421\\u0421'),
+      [ru('\\u0432\\u0438\\u0434 \\u0442\\u043e\\u043f\\u043b\\u0438\\u0432\\u0430')]: ru('\\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0435'),
+      [ru('\\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u043d\\u043e\\u043c\\u0438\\u043d\\u0430\\u043b\\u044c\\u043d\\u0430\\u044f \\u043f\\u0440\\u0438 220 \\u0432, \\u043a\\u0432\\u0442')]: '2'
+    });
+    const exact10 = productWithSpecs('tss-10', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 \\u0422\\u0421\\u0421 SGG 10000EHA (10,0 \\u043a\\u0412\\u0442)'), 213_941, 'https://example.test/tss-10', {
+      [ru('\\u043f\\u0440\\u043e\\u0438\\u0437\\u0432\\u043e\\u0434\\u0438\\u0442\\u0435\\u043b\\u044c \\u043e\\u0431\\u043e\\u0440\\u0443\\u0434\\u043e\\u0432\\u0430\\u043d\\u0438\\u044f')]: ru('\\u0422\\u0421\\u0421'),
+      [ru('\\u0432\\u0438\\u0434 \\u0442\\u043e\\u043f\\u043b\\u0438\\u0432\\u0430')]: ru('\\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0435'),
+      [ru('\\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u043d\\u043e\\u043c\\u0438\\u043d\\u0430\\u043b\\u044c\\u043d\\u0430\\u044f \\u043f\\u0440\\u0438 220 \\u0432, \\u043a\\u0432\\u0442')]: '10'
+    });
+    const selectionState = mergeProductSelectionState(emptyProductSelectionState(), {
+      semanticSource: 'llm_need_extraction',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyProductSelectionState().hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        brandConstraint: ru('\\u0422\\u0421\\u0421'),
+        nominalPowerKwMax: 10,
+        mustHaveTraits: [ru('\\u0422\\u0421\\u0421'), ru('\\u0431\\u0435\\u043d\\u0437\\u0438\\u043d'), ru('\\u043e\\u043a\\u043e\\u043b\\u043e 10 \\u043a\\u0412\\u0442')],
+        excludedClasses: [],
+        exactModelTokens: [],
+        provenance: { nominalPowerKwMax: 'planner' }
+      }
+    });
+    const profile = assistantTestHooks.buildProductFitProfile({ ...emptyNeedState(), selectionState }, message);
+
+    expect(assistantTestHooks.productFitPenalty(low2 as any, profile)).toBeLessThanOrEqual(-140);
+    expect(assistantTestHooks.productFitPenalty(exact10 as any, profile)).toBe(0);
+  });
+
   it('does not accept a planner conventional-generator hard constraint without evidence', () => {
     const message = 'Нет, просто покажите варианты';
     const plan = baseTurnPlan({
