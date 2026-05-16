@@ -1119,6 +1119,76 @@ describe('agentic #876 internal cycle', () => {
     }, userMessage)).toBe(true);
   });
 
+  it('keeps explicit single power from the current user turn as a hard constraint when planner omits it', () => {
+    const userMessage = ru('\u0415\u0441\u0442\u044c \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438 \u0422\u0421\u0421 10 \u043a\u0412\u0442 \u0431\u0435\u043d\u0437\u0438\u043d?');
+    const plan = rawPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      requiredProductTraits: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'unknown',
+        enclosure: 'unknown',
+        conventionalGenerator: null,
+        singlePhase220: null,
+        budgetMax: null,
+        weightKgMin: null,
+        weightKgMax: null,
+        diameterMmMin: null,
+        diameterMmMax: null,
+        nominalPowerKwMin: null,
+        nominalPowerKwMax: null,
+        maxPowerKwMin: null,
+        maxPowerKwMax: null,
+        powerReasoning: ''
+      },
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        compatibilityTargetProduct: '',
+        mustHaveTraits: [],
+        niceToHaveTraits: [],
+        excludedClasses: [],
+        brandConstraint: 'TSS',
+        exactModelConstraint: '',
+        isAccessoryFollowUp: false,
+        selectionConfidence: 0.72,
+        shouldShowCards: true,
+        cardDisplayMode: 'exact_matches'
+      },
+      agentDecision: {
+        answerTask: 'product_selection',
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'find_matching_products',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'show_matching_products',
+        mustAnswerNow: ['answer availability from catalog cards'],
+        currentFocus: 'TSS gasoline generator 10 kW',
+        cardsRole: 'primary',
+        leadAllowed: false,
+        leadAllowedReason: 'availability requires manager verification',
+        errorRecoveryPriority: 'show exact 10 kW cards',
+        confidence: 0.8
+      }
+    });
+    const state = emptyNeedState();
+    const profile = assistantTestHooks.buildProductFitProfile(state, userMessage, '', plan.requiredProductTraits);
+
+    const update = assistantTestHooks.explicitCriteriaFromTurn(
+      state.selectionState,
+      userMessage,
+      userMessage,
+      plan,
+      profile
+    );
+
+    expect(update.hardConstraints?.nominalPowerKwMin).toBe(10);
+    expect(update.hardConstraints?.nominalPowerKwMax).toBe(10);
+    expect(update.hardConstraints?.provenance?.nominalPowerKwMin).toBe('explicit_user');
+    expect(update.hardConstraints?.provenance?.nominalPowerKwMax).toBe('explicit_user');
+  });
+
   it('repairs phase reconfirmation when single-phase 220 V is already explicit', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',

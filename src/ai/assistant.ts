@@ -4075,12 +4075,28 @@ function explicitCriteriaFromTurn(
   const latestExplicitPowerRange = targetProductClass === 'generator'
     ? parseDesiredPowerRange(userMessage)
     : undefined;
+  const latestIsCatalogPowerLookup = isCatalogAvailabilityQuestion(userMessage) ||
+    /\u043d\u0430\u043b\u0438\u0447/iu.test(userMessage) ||
+    plan.agentDecision?.catalogAction === 'exact_model_lookup' ||
+    plan.agentDecision?.catalogAction === 'verify_catalog_absence';
+  const latestExplicitSinglePower = targetProductClass === 'generator' && !latestExplicitPowerRange
+    && !loadProfileCanSetPower
+    && !hasCompatibilityTargetContext(userMessage)
+    && latestIsCatalogPowerLookup
+    ? explicitSinglePowerKwConstraint(userMessage)
+    : undefined;
   const latestPowerRange = latestExplicitPowerRange
     ? {
         nominalMin: latestExplicitPowerRange.min,
         nominalMax: latestExplicitPowerRange.max,
         source: 'explicit_text' as const
       }
+    : latestExplicitSinglePower
+      ? {
+          nominalMin: latestExplicitSinglePower,
+          nominalMax: latestExplicitSinglePower,
+          source: 'explicit_text' as const
+        }
     : undefined;
   const plannerPower = targetProductClass === 'generator' && !loadProfileOverridesPlannerPower && (
     plannerTraits.nominalPowerKwMin ||
@@ -4120,13 +4136,14 @@ function explicitCriteriaFromTurn(
         : undefined
     ) : undefined;
   if (!rankingOnly && effectivePlannerPower) {
+    const powerSource = effectivePlannerPower.source === 'explicit_text' ? 'explicit_user' : 'planner';
     if (effectivePlannerPower.nominalMin) {
       hard.nominalPowerKwMin = effectivePlannerPower.nominalMin;
-      hard.provenance!.nominalPowerKwMin = exactPowerFromLatestUser ? 'explicit_user' : 'planner';
+      hard.provenance!.nominalPowerKwMin = powerSource;
     }
     if (effectivePlannerPower.nominalMax) {
       hard.nominalPowerKwMax = effectivePlannerPower.nominalMax;
-      hard.provenance!.nominalPowerKwMax = exactPowerFromLatestUser ? 'explicit_user' : 'planner';
+      hard.provenance!.nominalPowerKwMax = powerSource;
     }
     if (effectivePlannerPower.maxMin) {
       hard.maxPowerKwMin = effectivePlannerPower.maxMin;

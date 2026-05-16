@@ -337,9 +337,9 @@ async function main() {
       const cardCount = Math.max(0, totalCardCount - previousProductCardCount);
       previousProductCardCount = totalCardCount;
       const step = { ...turn, answer, pageText, productText, cardCount };
+      steps.push(step);
       if (!answer) throw new Error(`Empty assistant answer after ${turn.phase}`);
       assertPhase(step);
-      steps.push(step);
     }
 
     sessionId = await readWidgetSessionId(page);
