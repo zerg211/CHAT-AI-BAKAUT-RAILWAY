@@ -424,6 +424,15 @@ Operational conclusion:
   - turn error is `AI answer recovery failed: insufficient_quota`;
   - no assistant message was created.
 - This is external runtime configuration evidence, not proof of a remaining contract/card/ledger implementation defect. Completion remains unproven until quota is restored and postdeploy/live gates pass.
+- After correcting the completion-audit evidence model, the latest `npm run test:remediation:completion-audit` fails on only one required item: `postdeploy_live_gates_passed`.
+- Proven by current artifacts:
+  - backup and backup metadata exist;
+  - predeploy gate passes;
+  - Docker image proof passes with marker `2026-05-16-agent-contract-stack-v20`;
+  - external readiness passes;
+  - production marker/runtime artifacts are present.
+- Still not proven:
+  - successful real production widget conversation after the latest remediation stack, because the first live LLM turn fails with `insufficient_quota`.
 
 ## External architecture sources used
 

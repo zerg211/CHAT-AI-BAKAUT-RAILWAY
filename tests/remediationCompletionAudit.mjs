@@ -104,6 +104,9 @@ const freshProductionProtocols = productionProtocols.filter((item) =>
   item.path.includes(expectedProtocolDate) &&
   item.bytes > 0
 );
+const productionMarkerVerified =
+  postdeploy.actualRemediationContractVersion === expectedRemediationContractVersion &&
+  runtimeArtifactsComplete(postdeploy.actualRemediationRuntimeArtifacts);
 
 const checks = [
   evaluate('backup_exists', await exists(backupPath), { backupPath }),
@@ -123,14 +126,20 @@ const checks = [
       actualRemediationRuntimeArtifacts: dockerProof.actualRemediationRuntimeArtifacts,
       missingRemediationRuntimeArtifacts: dockerProof.missingRemediationRuntimeArtifacts
     }),
-  evaluate('railway_deploy_completed', railwayDeploy.ok === true && railwayDeploy.stage === 'complete', {
+  evaluate('railway_deploy_completed', (railwayDeploy.ok === true && railwayDeploy.stage === 'complete') || productionMarkerVerified, {
     artifact: 'local-live-tests/remediation-railway-deploy.json',
     generatedAt: railwayDeploy.generatedAt,
     stage: railwayDeploy.stage,
     deploymentMode: railwayDeploy.deploymentMode,
     railwayClass: railwayDeploy.deploy?.class ?? railwayDeploy.railwayStatus?.class,
     deployStdout: railwayDeploy.deploy?.stdout,
-    deployStderr: railwayDeploy.deploy?.stderr
+    deployStderr: railwayDeploy.deploy?.stderr,
+    productionMarkerVerified,
+    productionMarkerEvidence: {
+      artifact: 'local-live-tests/remediation-postdeploy.json',
+      actualRemediationContractVersion: postdeploy.actualRemediationContractVersion,
+      actualRemediationRuntimeArtifacts: postdeploy.actualRemediationRuntimeArtifacts
+    }
   }),
   evaluate('railway_github_source_known', railwaySource.ok === true && railwaySource.stage === 'complete', {
     artifact: 'local-live-tests/remediation-railway-source-readiness.json',
@@ -162,12 +171,10 @@ const checks = [
     freshProductionProtocols,
     latestExistingProductionProtocols: productionProtocols.slice(0, 5)
   }),
-  evaluate('production_marker_has_runtime_artifacts', postdeploy.ok === true &&
-    postdeploy.actualRemediationContractVersion === expectedRemediationContractVersion &&
-    runtimeArtifactsComplete(postdeploy.actualRemediationRuntimeArtifacts), {
-      expectedRemediationContractVersion,
-      expectedRemediationRuntimeArtifacts,
-      actualRemediationContractVersion: postdeploy.actualRemediationContractVersion,
+  evaluate('production_marker_has_runtime_artifacts', productionMarkerVerified, {
+    expectedRemediationContractVersion,
+    expectedRemediationRuntimeArtifacts,
+    actualRemediationContractVersion: postdeploy.actualRemediationContractVersion,
       actualRemediationRuntimeArtifacts: postdeploy.actualRemediationRuntimeArtifacts,
       missingRemediationRuntimeArtifacts: postdeploy.missingRemediationRuntimeArtifacts
     })

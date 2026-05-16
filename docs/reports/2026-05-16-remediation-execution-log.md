@@ -906,3 +906,12 @@ Not yet validated:
   - `npm run test:remediation:postdeploy`;
   - `npm run test:remediation:external-readiness`;
   - `npm run test:remediation:completion-audit`.
+- Follow-up gates after hardening the audit evidence:
+  - `npm run test:remediation:docker-image` - PASS with marker `2026-05-16-agent-contract-stack-v20` and all expected runtime artifacts;
+  - `npm run test:remediation:external-readiness` - PASS with no blockers;
+  - `npm run test:remediation:predeploy` - PASS after the completion-audit script correction;
+  - `npm run test:remediation:completion-audit` - FAIL by design on the single remaining required item: `postdeploy_live_gates_passed`.
+- `tests/remediationCompletionAudit.mjs` now evaluates deployment/marker evidence separately from live-dialog success:
+  - production marker/runtime artifacts are proven when `remediation-postdeploy.json` contains the expected marker and runtime artifacts, even if live gates fail later;
+  - GitHub/Railway deployment is accepted when the production marker proves the expected runtime is live;
+  - live behavior remains a separate hard requirement and is still blocked by production OpenAI quota.
