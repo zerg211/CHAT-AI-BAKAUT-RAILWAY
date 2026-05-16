@@ -42,7 +42,11 @@ function defaultCurrentFocus(state: CustomerNeedState) {
   return state.activeNeeds?.find((need) => need.status === 'open')?.id ?? 'latest_message';
 }
 
-function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState): AgentTurnContract | null {
+function contactRefusalText(value: string) {
+  return /(?:номер|телефон|контакт|звон|перезвон)[^.!?\n]{0,80}(?:не\s+(?:остав|даю|надо|нуж|хоч)|пока\s+не)|(?:не\s+(?:остав|даю|надо|нуж|хоч)[^.!?\n]{0,80}(?:номер|телефон|контакт|звон|перезвон))|(?:без|пока\s+без)\s+(?:звон|перезвон|контакт|телефон|номера)/iu.test(value);
+}
+
+function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState, userMessage: string): AgentTurnContract | null {
   const decision = plan.agentDecision;
   if (!decision) return null;
 
@@ -133,7 +137,13 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     : exactLookupHasSelectedCandidate && rawProductCardsPolicy === 'none'
       ? 'supporting_only'
       : rawProductCardsPolicy;
-  const answerTask = explicitAnswerTask
+  const exactAvailabilityNeedsContact = taskType === 'pure_availability' &&
+    rawProductCardsPolicy === 'show_exact_matches' &&
+    plan.selectedProductIds.length > 0 &&
+    commercialAction === 'explain_manager_required';
+  const contactRefused = contactRefusalText(`${userMessage}\n${String(decision.leadAllowedReason ?? '')}`);
+  const rawLeadAllowed = typeof decision.leadAllowed === 'boolean' ? decision.leadAllowed : true;
+  const preliminaryAnswerTask = explicitAnswerTask
     ?? (taskType === 'comparison'
       ? 'comparison'
       : taskType === 'technical_answer'
@@ -143,6 +153,15 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
           : taskType === 'product_selection'
             ? 'product_selection'
         : 'mixed');
+  const preliminarySelectionDeliveryStillSelecting = taskType === 'product_selection_with_delivery' && preliminaryAnswerTask !== 'lead_handoff';
+  const leadAllowed = preliminarySelectionDeliveryStillSelecting
+    ? false
+    : exactAvailabilityNeedsContact && !contactRefused
+      ? true
+      : rawLeadAllowed;
+  const answerTask = exactAvailabilityNeedsContact && leadAllowed
+    ? 'lead_handoff'
+    : preliminaryAnswerTask;
   const selectionDeliveryStillSelecting = taskType === 'product_selection_with_delivery' && answerTask !== 'lead_handoff';
   const effectiveCommercialAction = selectionDeliveryStillSelecting && commercialAction === 'offer_contact_after_answer'
     ? 'explain_manager_required'
@@ -165,8 +184,6 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   const mustAnswerNow = Array.isArray(decision.mustAnswerNow)
     ? decision.mustAnswerNow.map((item) => String(item).trim()).filter(Boolean).slice(0, 8)
     : [];
-  const rawLeadAllowed = typeof decision.leadAllowed === 'boolean' ? decision.leadAllowed : true;
-  const leadAllowed = selectionDeliveryStillSelecting ? false : rawLeadAllowed;
   const validatorWarnings: string[] = ['contract_source:llm_planner'];
 
   if ((answerTask === 'comparison' || answerTask === 'technical_explanation') && plan.action === 'recommend_products') {
@@ -194,7 +211,10 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     validatorWarnings.push('delivery_selection_commercial_action_repaired');
   }
   if (leadAllowed !== rawLeadAllowed) {
-    validatorWarnings.push('delivery_selection_lead_allowed_repaired');
+    validatorWarnings.push(exactAvailabilityNeedsContact ? 'availability_handoff_lead_allowed_repaired' : 'delivery_selection_lead_allowed_repaired');
+  }
+  if (answerTask !== explicitAnswerTask && exactAvailabilityNeedsContact && leadAllowed) {
+    validatorWarnings.push('availability_handoff_answer_task_repaired');
   }
 
   return {
@@ -220,7 +240,7 @@ export function deriveAgentTurnContract(input: {
   needState: CustomerNeedState;
 }): AgentTurnContract {
   const { plan, needState } = input;
-  const semanticContract = coerceSemanticAgentDecision(plan, needState);
+  const semanticContract = coerceSemanticAgentDecision(plan, needState, input.userMessage);
   if (semanticContract) return semanticContract;
 
   const validatorWarnings: string[] = ['contract_source:missing_llm_contract'];
@@ -255,20 +275,34 @@ export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, con
   const shouldShowCatalogCards = shouldRecommendFromCatalog ||
     contract.productCardsPolicy === 'show_exact_matches' ||
     contract.productCardsPolicy === 'supporting_only';
+  const exactAvailabilityHandoff = contract.leadAllowed &&
+    contract.answerTask === 'lead_handoff' &&
+    contract.taskType === 'pure_availability' &&
+    contract.commercialAction === 'explain_manager_required';
 
   if (contract.answerTask === 'lead_handoff') {
     return {
       ...plan,
-      action: shouldRecommendFromCatalog ? 'recommend_products' : shouldShowCatalogCards ? 'answer_question' : contract.leadAllowed ? plan.action : 'answer_question',
+      action: shouldRecommendFromCatalog
+        ? 'recommend_products'
+        : exactAvailabilityHandoff
+          ? 'handoff_specialist'
+          : shouldShowCatalogCards
+            ? 'answer_question'
+            : contract.leadAllowed ? plan.action : 'answer_question',
       answerMode: shouldRecommendFromCatalog
         ? 'productRecommendation'
-        : shouldShowCatalogCards
+        : exactAvailabilityHandoff
+          ? 'leadCollection'
+          : shouldShowCatalogCards
           ? 'short'
         : contract.leadAllowed
           ? plan.answerMode
           : plan.answerMode === 'leadCollection' ? 'short' : plan.answerMode,
       cardPolicy: shouldShowCatalogCards ? 'showProducts' : contract.cardsRole === 'none' ? 'textOnly' : plan.cardPolicy,
-      followUpPolicy: contract.leadAllowed ? plan.followUpPolicy : 'answerNowNoDeferredOffer',
+      followUpPolicy: exactAvailabilityHandoff
+        ? 'collectLead'
+        : contract.leadAllowed ? plan.followUpPolicy : 'answerNowNoDeferredOffer',
       selectionState: {
         ...plan.selectionState,
         shouldShowCards: shouldShowCatalogCards || contract.cardsRole === 'primary'
@@ -279,7 +313,9 @@ export function applyAgentTurnContractToPlan<T extends PlannerLike>(plan: T, con
           ? 'AgentTurnContract repaired a contradictory planner decision. Ignore any earlier guidance that says not to show cards, claims no exact matches without catalog evidence, or asks to broaden before using validated catalog matches.'
           : undefined,
         contract.leadAllowed
-          ? 'AgentTurnContract treats this as a commercial/specialist handoff. Answer the buyer question first, do not show catalog cards unless cardsRole is primary, then ask for contact only if the specialist is needed for final delivery/discount/availability terms.'
+          ? exactAvailabilityHandoff
+            ? 'AgentTurnContract treats exact availability as a stock-verification handoff. Say the catalog card is present, do not promise live stock, and ask for name and phone so the BAKAUT AI manager can check the warehouse and call back with the answer.'
+            : 'AgentTurnContract treats this as a commercial/specialist handoff. Answer the buyer question first, do not show catalog cards unless cardsRole is primary, then ask for contact only if the specialist is needed for final delivery/discount/availability terms.'
           : 'Buyer does not want a call/contact handoff now. Answer the useful summary and do not ask for a phone as the main answer.'
       ].filter(Boolean).join('\n')
     };

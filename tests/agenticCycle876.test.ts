@@ -104,6 +104,39 @@ function rawPlan(overrides: Record<string, unknown>) {
 }
 
 describe('agentic #876 internal cycle', () => {
+  it('does not suppress chat auto lead after an availability handoff when the buyer already provided contact', () => {
+    const plan = rawPlan({
+      action: 'collect_lead',
+      answerMode: 'leadCollection',
+      followUpPolicy: 'collectLead',
+      agentDecision: {
+        answerTask: 'lead_handoff',
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'none',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['accept city and contact for availability verification'],
+        currentFocus: 'Ammann plate availability and delivery timing',
+        cardsRole: 'none',
+        leadAllowed: true,
+        leadAllowedReason: 'buyer provided contact for stock and delivery timing verification',
+        errorRecoveryPriority: 'create the lead and confirm commercial verification',
+        confidence: 0.94
+      }
+    });
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Город Москва, Александр 89934460088',
+      plan,
+      needState: emptyNeedState()
+    });
+
+    expect(contract.answerTask).toBe('lead_handoff');
+    expect(contract.taskType).toBe('product_selection_with_availability');
+    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract)).toBe(true);
+    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract, 'Город Москва')).toBe(true);
+    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract, 'Город Москва, Александр 89934460088')).toBe(false);
+  });
+
   it('preserves the LLM semantic contract across comparison, availability, selection, delivery, and contact-refusal turns', async () => {
     const comparisonPlan = rawPlan({
       action: 'recommend_products',

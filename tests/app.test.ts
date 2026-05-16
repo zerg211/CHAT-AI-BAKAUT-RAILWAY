@@ -11,7 +11,19 @@ describe('app', () => {
     expect(response.json()).toMatchObject({
       ok: true,
       answerModel: expect.any(String),
-      plannerModel: expect.any(String)
+      plannerModel: expect.any(String),
+      remediation: {
+        contractVersion: '2026-05-16-agent-contract-stack-v1',
+        runtimeArtifacts: expect.arrayContaining([
+          'executionContract',
+          'requirementLedger',
+          'cardManifest',
+          'factClaimPlanner',
+          'factClaimAudit',
+          'leadStateMachine',
+          'postAnswerVerification'
+        ])
+      }
     });
   }, 15_000);
 

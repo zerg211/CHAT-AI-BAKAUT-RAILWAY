@@ -1,0 +1,155 @@
+import { describe, expect, it } from 'vitest';
+import type { CardManifest, ExecutionContract, RequirementLedger } from '../src/shared/types.js';
+import { auditAnswerFactClaims, buildFactClaimPlanner } from '../src/ai/factClaimPlanner.js';
+
+const executionContract: ExecutionContract = {
+  version: 1,
+  source: 'agent_turn_contract',
+  answerTask: 'product_selection',
+  taskType: 'product_selection',
+  catalogPolicy: 'find_matching_products',
+  cardsPolicy: 'primary',
+  leadPolicy: 'none',
+  factPolicy: 'catalog_only',
+  activeRequirementIds: ['req-generator'],
+  postconditions: [],
+  warnings: []
+};
+
+const requirementLedger: RequirementLedger = {
+  version: 1,
+  activeRequirementIds: ['req-generator'],
+  primaryRequirementIds: ['req-generator'],
+  alternativeMode: 'none',
+  items: [{
+    id: 'req-generator',
+    kind: 'productClass',
+    value: { productIntent: 'generator' },
+    status: 'active',
+    strictness: 'strictOnly',
+    source: 'explicit_user',
+    evidence: 'buyer asked for generator'
+  }],
+  hardConstraintKeys: ['productIntent'],
+  warnings: []
+};
+
+describe('fact claim planner', () => {
+  it('allows only catalog and visible-card facts for ordinary recommendation turns', () => {
+    const planner = buildFactClaimPlanner({ executionContract, requirementLedger });
+
+    expect(planner.allowedSources).toEqual(expect.arrayContaining(['conversation_memory', 'visible_cards', 'catalog']));
+    expect(planner.allowedSources).not.toContain('web');
+    expect(planner.risk).toBe('low');
+    expect(planner.forbiddenClaims).toContain('do_not_invent_product_names_prices_specs');
+  });
+
+  it('requires specialist disclaimers for availability, delivery, discounts, and exact terms', () => {
+    const planner = buildFactClaimPlanner({
+      executionContract: {
+        ...executionContract,
+        answerTask: 'lead_handoff',
+        taskType: 'pure_availability',
+        factPolicy: 'specialist_required',
+        leadPolicy: 'required_now'
+      },
+      requirementLedger
+    });
+
+    expect(planner.allowedSources).toContain('specialist');
+    expect(planner.requiredDisclaimers).toContain('live_stock_delivery_discount_terms_require_specialist_verification');
+    expect(planner.forbiddenClaims).toContain('do_not_promise_live_stock_delivery_discount_or_exact_terms');
+    expect(planner.risk).toBe('high');
+  });
+
+  it('propagates visible card constraint warnings into claim policy', () => {
+    const cardManifest: CardManifest = {
+      version: 1,
+      source: 'execution_contract',
+      cardsPolicy: 'primary',
+      visibleProductIds: ['bad-card'],
+      hiddenProductIds: [],
+      items: [],
+      warnings: ['visible_card_constraint_violation:bad-card']
+    };
+    const planner = buildFactClaimPlanner({ executionContract, requirementLedger, cardManifest });
+
+    expect(planner.warnings).toContain('visible_card_constraint_violation:bad-card');
+    expect(planner.forbiddenClaims).toContain('do_not_name_visible_cards_with_constraint_violations_as_recommendations');
+    expect(planner.risk).toBe('high');
+  });
+
+  it('extracts grounded product, price, and technical claims from a card-backed answer', () => {
+    const planner = buildFactClaimPlanner({ executionContract, requirementLedger });
+    const audit = auditAnswerFactClaims({
+      answer: 'TSS SGG 8000EH стоит 82 000 руб. Это генератор 220 В.',
+      factClaimPlanner: planner,
+      cardManifest: {
+        version: 1,
+        source: 'execution_contract',
+        cardsPolicy: 'primary',
+        visibleProductIds: ['tss-8'],
+        hiddenProductIds: [],
+        items: [{
+          productId: 'tss-8',
+          name: 'TSS SGG 8000EH',
+          rank: 1,
+          visible: true,
+          role: 'primary',
+          constraintStatus: 'satisfies_hard_constraints',
+          violations: []
+        }],
+        warnings: []
+      }
+    });
+
+    expect(audit.claims).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'product_reference', groundingStatus: 'grounded', matchedProductIds: ['tss-8'] }),
+      expect.objectContaining({ kind: 'price', groundingStatus: 'grounded' }),
+      expect.objectContaining({ kind: 'technical_spec', groundingStatus: 'grounded' })
+    ]));
+    expect(audit.warnings).toEqual([]);
+  });
+
+  it('marks availability and delivery claims that lack specialist verification wording', () => {
+    const planner = buildFactClaimPlanner({
+      executionContract: {
+        ...executionContract,
+        answerTask: 'lead_handoff',
+        taskType: 'pure_availability',
+        factPolicy: 'specialist_required',
+        leadPolicy: 'required_now'
+      },
+      requirementLedger
+    });
+    const audit = auditAnswerFactClaims({
+      answer: 'Товар есть в наличии. Доставка будет бесплатной.',
+      factClaimPlanner: planner
+    });
+
+    expect(audit.claims).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'availability', groundingStatus: 'ungrounded' }),
+      expect.objectContaining({ kind: 'delivery', groundingStatus: 'ungrounded' })
+    ]));
+    expect(audit.warnings).toEqual(expect.arrayContaining([
+      'availability_claim_without_specialist_verification_wording',
+      'delivery_claim_without_specialist_verification_wording'
+    ]));
+  });
+
+  it('marks current-lineup claims as web-required when web is not allowed by the policy', () => {
+    const audit = auditAnswerFactClaims({
+      answer: 'Эта модель актуальна в текущей линейке производителя.',
+      factClaimPlanner: buildFactClaimPlanner({ executionContract, requirementLedger })
+    });
+
+    expect(audit.claims).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'current_lineup',
+        requiredSource: 'web',
+        groundingStatus: 'ungrounded'
+      })
+    ]));
+    expect(audit.warnings).toContain('current_lineup_claim_without_web_policy');
+  });
+});

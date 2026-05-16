@@ -8,6 +8,17 @@ import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 
+export const REMEDIATION_CONTRACT_VERSION = '2026-05-16-agent-contract-stack-v1';
+export const REMEDIATION_RUNTIME_ARTIFACTS = [
+  'executionContract',
+  'requirementLedger',
+  'cardManifest',
+  'factClaimPlanner',
+  'factClaimAudit',
+  'leadStateMachine',
+  'postAnswerVerification'
+] as const;
+
 export async function buildApp() {
   const app = Fastify({
     logger: {
@@ -44,7 +55,11 @@ export async function buildApp() {
   app.get('/api/health', async () => ({
     ok: true,
     answerModel: config.OPENAI_ANSWER_MODEL,
-    plannerModel: config.OPENAI_PLANNER_MODEL
+    plannerModel: config.OPENAI_PLANNER_MODEL,
+    remediation: {
+      contractVersion: REMEDIATION_CONTRACT_VERSION,
+      runtimeArtifacts: REMEDIATION_RUNTIME_ARTIFACTS
+    }
   }));
 
   await registerChatRoutes(app);

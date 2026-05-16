@@ -262,6 +262,85 @@ describe('agent turn contract', () => {
     expect(plan.answerGuidance).toContain('close model');
   });
 
+  it('turns confirmed exact availability into a contact handoff for stock verification', () => {
+    const exactAvailabilityPlan = {
+      ...basePlan,
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      followUpPolicy: 'answerNowNoDeferredOffer',
+      selectedProductIds: ['bison-bs6250ie'],
+      agentDecision: {
+        answerTask: 'technical_explanation' as const,
+        taskType: 'pure_availability' as const,
+        catalogAction: 'exact_model_lookup' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'show_exact_matches' as const,
+        mustAnswerNow: ['answer whether BISON BS6250IE is in stock'],
+        currentFocus: 'BISON BS6250IE availability',
+        cardsRole: 'supporting' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer asks for exact availability, not a callback',
+        errorRecoveryPriority: 'separate catalog presence from live stock',
+        confidence: 0.94
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Да он, есть в наличии?',
+      plan: exactAvailabilityPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(exactAvailabilityPlan, contract);
+
+    expect(contract.answerTask).toBe('lead_handoff');
+    expect(contract.taskType).toBe('pure_availability');
+    expect(contract.leadAllowed).toBe(true);
+    expect(contract.validatorWarnings).toEqual(expect.arrayContaining([
+      'commercial_action_repaired_for_manager_verification',
+      'availability_handoff_lead_allowed_repaired',
+      'availability_handoff_answer_task_repaired'
+    ]));
+    expect(plan.action).toBe('handoff_specialist');
+    expect(plan.answerMode).toBe('leadCollection');
+    expect(plan.followUpPolicy).toBe('collectLead');
+    expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.answerGuidance).toContain('check the warehouse and call back');
+  });
+
+  it('does not ask for contact on exact availability after an explicit contact refusal', () => {
+    const exactAvailabilityPlan = {
+      ...basePlan,
+      action: 'recommend_products',
+      selectedProductIds: ['bison-bs6250ie'],
+      agentDecision: {
+        answerTask: 'technical_explanation' as const,
+        taskType: 'pure_availability' as const,
+        catalogAction: 'exact_model_lookup' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'show_exact_matches' as const,
+        mustAnswerNow: ['answer whether BISON BS6250IE is in stock without contact pressure'],
+        currentFocus: 'BISON BS6250IE availability',
+        cardsRole: 'supporting' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer explicitly refuses phone contact now',
+        errorRecoveryPriority: 'answer without asking for phone',
+        confidence: 0.94
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Номер не оставляю, просто скажите есть ли',
+      plan: exactAvailabilityPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(exactAvailabilityPlan, contract);
+
+    expect(contract.leadAllowed).toBe(false);
+    expect(contract.answerTask).toBe('technical_explanation');
+    expect(contract.validatorWarnings).not.toContain('availability_handoff_lead_allowed_repaired');
+    expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
+  });
+
   it('keeps product selection with delivery as catalog/card work even when contact handoff is refused', () => {
     const mixedPlan = {
       ...basePlan,

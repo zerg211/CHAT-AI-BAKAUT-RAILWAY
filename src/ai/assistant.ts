@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { ActiveCustomerNeed, AgentTurnContract, BotCommitment, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, MentionedProductMemory, Message, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
+import type { ActiveCustomerNeed, AgentTurnContract, BotCommitment, CardDisplayOptions, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, GeneratorPowerProfile, Lead, MentionedProductMemory, Message, PostAnswerVerificationRecovery, Product, ProductCard, ProductElectricalLoadItem, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
@@ -42,6 +42,12 @@ import { traceTimer, emitTrace } from './tracing.js';
 import { enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
 import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
 import { applyAgentTurnContractToPlan, deriveAgentTurnContract } from './agentTurnContract.js';
+import { buildCardManifest, enforceVisibleCardConstraints } from './cardManifest.js';
+import { buildExecutionContract } from './executionContract.js';
+import { auditAnswerFactClaims, buildFactClaimPlanner } from './factClaimPlanner.js';
+import { buildLeadStateMachine } from './leadStateMachine.js';
+import { classifyPostAnswerRecovery, repairAnswerForPostAnswerVerification, verifyPostAnswer } from './postAnswerVerifier.js';
+import { buildRequirementLedger } from './requirementLedger.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 import {
   buildTroubleshootingCaseDraft,
@@ -1004,11 +1010,11 @@ function applyPlannerSelectionContract(state: ProductSelectionState, plan: Assis
       provenance
     };
 
-    if (!plannerBrand) {
+    if (!plannerBrand && provenance.brandConstraint === 'planner') {
       next.brandConstraint = '';
       delete provenance.brandConstraint;
     }
-    if (!plannerExactModel) {
+    if (!plannerExactModel && provenance.exactModelConstraint === 'planner') {
       next.exactModelConstraint = '';
       next.exactModelTokens = [];
       next.exactModelTokenRoles = [];
@@ -1019,7 +1025,7 @@ function applyPlannerSelectionContract(state: ProductSelectionState, plan: Assis
       if (plannerTraits.fuel === 'gasoline' || plannerTraits.fuel === 'diesel') {
         next.fuel = plannerTraits.fuel;
         provenance.fuel = 'planner';
-      } else {
+      } else if (provenance.fuel === 'planner') {
         next.fuel = undefined;
         delete provenance.fuel;
       }
@@ -1028,7 +1034,7 @@ function applyPlannerSelectionContract(state: ProductSelectionState, plan: Assis
         const priorPhaseStillMatches = criteria.singlePhase220 === plannerTraits.singlePhase220;
         next.singlePhase220 = plannerTraits.singlePhase220;
         provenance.singlePhase220 = priorPhaseSource === 'explicit_user' && priorPhaseStillMatches ? 'explicit_user' : 'planner';
-      } else {
+      } else if (provenance.singlePhase220 === 'planner') {
         next.singlePhase220 = undefined;
         delete provenance.singlePhase220;
       }
@@ -5855,8 +5861,9 @@ function stripDeferredOfferTail(answer: string) {
     .replace(/(?:^|(?<=[.!?])\s+)Если\s+(?:хотите|хочешь),?\s+дальше\s+(?:лучше\s+)?(?:смотреть|подбирать|сравнивать|проверять|искать)[\s\S]{0,500}$/iu, '');
 }
 
-function shouldSuppressLeadRequestFromContract(contract: AgentTurnContract) {
+function shouldSuppressLeadRequestFromContract(contract: AgentTurnContract, userMessage = '') {
   if (!contract.leadAllowed) return true;
+  if (contract.answerTask === 'lead_handoff' && hasLikelyContactText(userMessage)) return false;
   const selectionWithCommercialCheck = contract.taskType === 'product_selection_with_delivery' ||
     contract.taskType === 'product_selection_with_availability' ||
     contract.taskType === 'contact_refusal_continue_selection';
@@ -7516,15 +7523,35 @@ export class AssistantService {
       respectRequestedCardLimit: false
     });
     const initialVisibleCount = initialVisibleCardCountForCards(cardSelection.cards, selectionResult, visibleCardLimit);
-    const finalCards = finalCardsDecisionFromCards(cardSelection.cards, selectionResult, effectivePlan, initialVisibleCount);
-    const cards: ProductCard[] = finalCards.cards;
-    const cardDisplay = cardDisplayOptions(finalCards.initialVisibleCount, cards);
-    const bundleTotalPrice = reliableBundleTotal(cards, input.userMessage, needState);
-    const suppressLeadRequestByContract = shouldSuppressLeadRequestFromContract(answerAgentTurnContract);
-    const leadRequestedForAnswer = purchasePlan.leadRequested && !suppressLeadRequestByContract;
-    const autoLeadResult = leadRequestedForAnswer
-      ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
-      : null;
+    let finalCards = finalCardsDecisionFromCards(cardSelection.cards, selectionResult, effectivePlan, initialVisibleCount);
+    let cards: ProductCard[] = finalCards.cards;
+    const requirementLedger = buildRequirementLedger({
+      needState,
+      selectionState: selectionResult.state
+    });
+    const preliminaryExecutionContract = buildExecutionContract({
+      agentContract: answerAgentTurnContract,
+      renderContract: turnContract,
+      selectionState: selectionResult.state,
+      webRequired: false,
+      activeRequirementIds: requirementLedger.activeRequirementIds
+    });
+    let cardManifest = buildCardManifest({
+      executionContract: preliminaryExecutionContract,
+      cards,
+      visibleProductIds: finalCards.visibleProductIds,
+      hiddenProductIds: finalCards.hiddenProductIds
+    });
+    const cardEnforcement = enforceVisibleCardConstraints({ manifest: cardManifest, cards });
+    if (cardEnforcement.enforced) {
+      finalCards = finalCardsDecisionFromCards(
+        cardEnforcement.cards,
+        selectionResult,
+        effectivePlan,
+        initialVisibleCardCountForCards(cardEnforcement.cards, selectionResult, visibleCardLimit)
+      );
+      cards = finalCards.cards;
+    }
     const productCardsAnswer = !isLeadPlan(effectivePlan) &&
       cards.length > 0 &&
       (answerAgentTurnContract.cardsRole !== 'none' ||
@@ -7541,6 +7568,43 @@ export class AssistantService {
     const mustUseWebSearch = productCardsAnswer || textOnlyTechnicalAnswer
       ? false
       : shouldUseWebSearch(input.userMessage, effectivePlan) && !troubleshootingMemoryCanAnswer;
+    const executionContract = buildExecutionContract({
+      agentContract: answerAgentTurnContract,
+      renderContract: turnContract,
+      selectionState: selectionResult.state,
+      webRequired: mustUseWebSearch,
+      activeRequirementIds: requirementLedger.activeRequirementIds
+    });
+    cardManifest = buildCardManifest({
+      executionContract,
+      cards,
+      visibleProductIds: finalCards.visibleProductIds,
+      hiddenProductIds: finalCards.hiddenProductIds
+    });
+    if (cardEnforcement.enforced) {
+      cardManifest.warnings.push(`visible_card_constraint_violations_suppressed:${cardEnforcement.suppressedProductIds.join(',')}`);
+    }
+    const cardDisplay = cardDisplayOptions(finalCards.initialVisibleCount, cards);
+    const bundleTotalPrice = reliableBundleTotal(cards, input.userMessage, needState);
+    const suppressLeadRequestByContract = shouldSuppressLeadRequestFromContract(answerAgentTurnContract, input.userMessage);
+    const leadRequestedForAnswer = (purchasePlan.leadRequested || isLeadPlan(effectivePlan)) && !suppressLeadRequestByContract;
+    const autoLeadResult = leadRequestedForAnswer
+      ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
+      : null;
+    const factClaimPlanner = buildFactClaimPlanner({
+      executionContract,
+      requirementLedger,
+      cardManifest,
+      usedWebSearch: mustUseWebSearch
+    });
+    const leadStateMachine = buildLeadStateMachine({
+      executionContract,
+      hasContactInTurn: hasLikelyContactText(input.userMessage),
+      leadRequested: leadRequestedForAnswer,
+      leadCreated: autoLeadResult?.created ?? false,
+      missing: autoLeadResult?.missing,
+      error: autoLeadResult?.error
+    });
     const deepAnswerReasoning = shouldUseDeepReasoningForAnswer(
       effectivePlan,
       answerCurrentLineupStyle,
@@ -7725,6 +7789,11 @@ export class AssistantService {
         : null,
       cardSelectionDiagnostics: cardSelection.diagnostics,
       agentTurnContract: answerAgentTurnContract,
+      requirementLedger,
+      executionContract,
+      cardManifest,
+      factClaimPlanner,
+      leadStateMachine,
       leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
       selectedBundleForLead: leadRequestedForAnswer
@@ -7756,6 +7825,11 @@ export class AssistantService {
     const answerInputPayload = {
       turnPlan: compactTurnPlanForAnswer(effectivePlan),
       agentTurnContract: answerAgentTurnContract,
+      requirementLedger,
+      executionContract,
+      cardManifest,
+      factClaimPlanner,
+      leadStateMachine,
       answerContext: compactCommercialHandoffAnswer
         ? {
             responseStyle,
@@ -7788,6 +7862,10 @@ export class AssistantService {
       'For household generator load calculations, use answerContext.generatorSizingPolicy as the authority: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visibleCardNominalKw/visibleCardMaxKw are the only higher powers grounded by shown cards. Do not introduce a higher power class unless it is supported by the policy.',
       'If calculated requiredNominalKw is 4 kW or lower, do not say 4 kW generators are "on the edge" or insufficient. Say 4 kW is the calculated minimum class; 5 kW is only additional comfort/reserve when the price and size are acceptable.',
       `AgentTurnContract: answerTask=${answerAgentTurnContract.answerTask}; cardsRole=${answerAgentTurnContract.cardsRole}; leadAllowed=${answerAgentTurnContract.leadAllowed}. Must answer now before any cards: ${answerAgentTurnContract.mustAnswerNow.join('; ') || answerAgentTurnContract.errorRecoveryPriority}.`,
+      `ExecutionContract: cardsPolicy=${executionContract.cardsPolicy}; leadPolicy=${executionContract.leadPolicy}; factPolicy=${executionContract.factPolicy}.`,
+      `RequirementLedger: active=${requirementLedger.activeRequirementIds.join(',') || 'none'}; hardConstraints=${requirementLedger.hardConstraintKeys.join(',') || 'none'}; alternativeMode=${requirementLedger.alternativeMode}.`,
+      `FactClaimPlanner: allowedSources=${factClaimPlanner.allowedSources.join(',')}; forbiddenClaims=${factClaimPlanner.forbiddenClaims.join(',')}; requiredDisclaimers=${factClaimPlanner.requiredDisclaimers.join(',') || 'none'}.`,
+      `LeadStateMachine: state=${leadStateMachine.state}; nextAction=${leadStateMachine.nextAction}; missing=${leadStateMachine.missing ?? 'none'}.`,
       technicalCurrentLevelAnswerGuidance(answerAgentTurnContract),
       commercialManagerVerificationGuidance(answerAgentTurnContract),
       suppressLeadRequestByContract
@@ -8014,6 +8092,63 @@ export class AssistantService {
       input.userMessage,
       effectivePlan
     );
+    let factClaimAudit = auditAnswerFactClaims({
+      answer,
+      factClaimPlanner,
+      cardManifest
+    });
+    let postAnswerVerification = verifyPostAnswer({
+      answer,
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest,
+      factClaimAudit
+    });
+    const postAnswerVerificationRecovery: PostAnswerVerificationRecovery = {
+      attempted: false,
+      recovered: false,
+      issuesBefore: postAnswerVerification.issues.map((issue) => issue.code),
+      issuesAfter: postAnswerVerification.issues.map((issue) => issue.code),
+      method: 'none',
+      repairableIssues: [] as string[],
+      unrecoverableIssues: [] as string[],
+      reason: undefined as string | undefined
+    };
+    if (postAnswerVerification.status === 'error') {
+      const recoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
+      postAnswerVerificationRecovery.repairableIssues = recoveryPolicy.repairableIssues;
+      postAnswerVerificationRecovery.unrecoverableIssues = recoveryPolicy.unrecoverableIssues;
+      postAnswerVerificationRecovery.reason = recoveryPolicy.requiresRegenerationOrTooling
+        ? 'unrecoverable_issues_require_regeneration_or_tooling'
+        : 'deterministic_text_repair_available';
+      const repairedAnswer = repairAnswerForPostAnswerVerification({ answer, verification: postAnswerVerification });
+      if (repairedAnswer !== answer) {
+        postAnswerVerificationRecovery.attempted = true;
+        postAnswerVerificationRecovery.method = 'deterministic_text_repair';
+        answer = repairedAnswer;
+        factClaimAudit = auditAnswerFactClaims({
+          answer,
+          factClaimPlanner,
+          cardManifest
+        });
+        postAnswerVerification = verifyPostAnswer({
+          answer,
+          factClaimPlanner,
+          leadStateMachine,
+          cardManifest,
+          factClaimAudit
+        });
+        postAnswerVerificationRecovery.recovered = postAnswerVerification.status !== 'error';
+        postAnswerVerificationRecovery.issuesAfter = postAnswerVerification.issues.map((issue) => issue.code);
+        if (!postAnswerVerificationRecovery.recovered) {
+          const afterRecoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
+          postAnswerVerificationRecovery.unrecoverableIssues = afterRecoveryPolicy.unrecoverableIssues;
+          postAnswerVerificationRecovery.reason = afterRecoveryPolicy.requiresRegenerationOrTooling
+            ? 'deterministic_text_repair_left_unrecoverable_issues'
+            : 'deterministic_text_repair_did_not_clear_errors';
+        }
+      }
+    }
     const finalSelectionMetadata: ProductSelectionMetadata = {
       ...baseSelectionMetadata,
       matchedProductIds: selectionResult.matchedProducts.length
@@ -8092,6 +8227,14 @@ export class AssistantService {
         turnPlan: effectivePlan,
         turnId: input.turnId,
         turnContract: answerAgentTurnContract,
+        requirementLedger,
+        executionContract,
+        cardManifest,
+        factClaimPlanner,
+        factClaimAudit,
+        leadStateMachine,
+        postAnswerVerification,
+        postAnswerVerificationRecovery,
         activeNeedsBefore,
         activeNeedsAfter: needState.activeNeeds ?? [],
         semanticMemoryBefore,
@@ -8100,6 +8243,15 @@ export class AssistantService {
         cardsRole: answerAgentTurnContract.cardsRole,
         leadAllowed: answerAgentTurnContract.leadAllowed,
         validatorWarnings: answerAgentTurnContract.validatorWarnings,
+        contractWarnings: [
+          ...requirementLedger.warnings,
+          ...executionContract.warnings,
+          ...cardManifest.warnings,
+          ...factClaimPlanner.warnings,
+          ...factClaimAudit.warnings,
+          ...leadStateMachine.warnings,
+          ...postAnswerVerification.issues.map((issue) => issue.code)
+        ],
         aiDiagnostics,
         answerGenerationFallback: answerFallbackMetadata,
         cardSelection: cardSelection.diagnostics,
@@ -8151,6 +8303,24 @@ export class AssistantService {
       cardCount: cards.length,
       candidateCount: allCandidates.length,
       consistencyWarnings: consistencyWarnings.length,
+      executionContract: {
+        cardsPolicy: executionContract.cardsPolicy,
+        leadPolicy: executionContract.leadPolicy,
+        factPolicy: executionContract.factPolicy
+      },
+      requirementCount: requirementLedger.items.length,
+      contractWarningCount: requirementLedger.warnings.length +
+        executionContract.warnings.length +
+        cardManifest.warnings.length +
+        factClaimPlanner.warnings.length +
+        factClaimAudit.warnings.length +
+        leadStateMachine.warnings.length +
+        postAnswerVerification.issues.length,
+      factClaimRisk: factClaimPlanner.risk,
+      factClaimCount: factClaimAudit.claims.length,
+      leadState: leadStateMachine.state,
+      postAnswerVerification: postAnswerVerification.status,
+      postAnswerVerificationRecovered: postAnswerVerificationRecovery.recovered,
       usedWebSearch,
       aiFallbackStages: Object.entries(aiDiagnostics)
         .filter(([, diagnostic]) => diagnostic.used)
@@ -8175,6 +8345,14 @@ export class AssistantService {
         finalCardsSource: finalCards.source,
         turnPlan: compactTurnPlanForAnswer(effectivePlan),
         turnContract: answerAgentTurnContract,
+        requirementLedger,
+        executionContract,
+        cardManifest,
+        factClaimPlanner,
+        factClaimAudit,
+        leadStateMachine,
+        postAnswerVerification,
+        postAnswerVerificationRecovery,
         activeNeedsBefore,
         activeNeedsAfter: needState.activeNeeds ?? [],
         semanticMemoryBefore,
@@ -8183,6 +8361,15 @@ export class AssistantService {
         cardsRole: answerAgentTurnContract.cardsRole,
         leadAllowed: answerAgentTurnContract.leadAllowed,
         validatorWarnings: answerAgentTurnContract.validatorWarnings,
+        contractWarnings: [
+          ...requirementLedger.warnings,
+          ...executionContract.warnings,
+          ...cardManifest.warnings,
+          ...factClaimPlanner.warnings,
+          ...factClaimAudit.warnings,
+          ...leadStateMachine.warnings,
+          ...postAnswerVerification.issues.map((issue) => issue.code)
+        ],
         cardSelection: cardSelection.diagnostics,
         cardContract: cardContract.diagnostics,
         aiDiagnostics,

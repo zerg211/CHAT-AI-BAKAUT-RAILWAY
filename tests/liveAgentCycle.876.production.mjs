@@ -2,12 +2,44 @@ import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
 
 dotenv.config();
 
 const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
-const protocolPath = path.join('local-live-tests', '2026-05-12-production-876-agentic-remediation.production.md');
+const started = new Date().toISOString();
+const safeStamp = started.replace(/[:.]/g, '-');
+const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-production-876-agentic-remediation-${safeStamp}.production.md`);
 const failurePath = path.join('local-live-tests', 'production-876-remediation-failure.json');
+const globalTimeoutMs = Number(process.env.LIVE_AGENT_GLOBAL_TIMEOUT_MS ?? 420_000);
+const runtimeState = { sessionId: null, steps: [] };
+let activeBrowser = null;
+
+async function failAndExitOnGlobalTimeout() {
+  const error = `Error: production #876 live agent cycle exceeded global timeout ${globalTimeoutMs}ms`;
+  try {
+    await fs.mkdir('local-live-tests', { recursive: true });
+    await fs.writeFile(
+      failurePath,
+      JSON.stringify({ error, sessionId: runtimeState.sessionId, steps: runtimeState.steps }, null, 2),
+      'utf8'
+    );
+  } catch (writeError) {
+    console.error(`Failed to write timeout artifact: ${writeError}`);
+  }
+  try {
+    await activeBrowser?.close();
+  } catch {
+    // process is exiting
+  }
+  console.error(error);
+  process.exit(1);
+}
+
+const globalWatchdog = setTimeout(() => {
+  void failAndExitOnGlobalTimeout();
+}, globalTimeoutMs);
+globalWatchdog.unref?.();
 
 const turns = [
   { phase: 'engine_comparison_no_random_cards', text: 'Сравните две модели двигатель бадуин и дусан', expect: 'noCards' },
@@ -20,6 +52,9 @@ const turns = [
 
 const criticalPatterns = [
   /network error/i,
+  /\u043d\u0435\s+\u0441\u043c\u043e\u0433.{0,80}\u0441\u0444\u043e\u0440\u043c\u0438\u0440\u043e\u0432\u0430\u0442\u044c\s+\u043e\u0442\u0432\u0435\u0442/iu,
+  /\u0432\u043e\u043f\u0440\u043e\u0441\s+\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d.{0,80}\u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435/iu,
+  /\u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435.{0,40}\u0447\u0435\u0440\u0435\u0437\s+\u043f\u0430\u0440\u0443\s+\u043c\u0438\u043d\u0443\u0442/iu,
   /не смог надежно завершить ответ/iu,
   /ответ не успел/iu,
   /server finished without a done payload/i,
@@ -205,10 +240,45 @@ function assertProductionMetadata(detail) {
     }
     const warnings = [
       ...(metadata.validatorWarnings ?? []),
-      ...(contract.validatorWarnings ?? [])
+      ...(contract.validatorWarnings ?? []),
+      ...(metadata.requirementLedger?.warnings ?? []),
+      ...(metadata.executionContract?.warnings ?? []),
+      ...(metadata.cardManifest?.warnings ?? []),
+      ...(metadata.factClaimPlanner?.warnings ?? []),
+      ...(metadata.factClaimAudit?.warnings ?? []),
+      ...(metadata.leadStateMachine?.warnings ?? []),
+      ...((metadata.postAnswerVerification?.issues ?? []).map((issue) => issue.code))
     ];
     if (warnings.includes('contract_source:legacy_text_fallback')) {
       throw new Error(`Legacy text contract fallback in production turn ${index + 1}`);
+    }
+    if (!metadata.executionContract) {
+      throw new Error(`Production metadata missing executionContract in turn ${index + 1}.`);
+    }
+    if (!metadata.requirementLedger) {
+      throw new Error(`Production metadata missing requirementLedger in turn ${index + 1}.`);
+    }
+    if (!metadata.factClaimPlanner) {
+      throw new Error(`Production metadata missing factClaimPlanner in turn ${index + 1}.`);
+    }
+    if (!metadata.factClaimAudit) {
+      throw new Error(`Production metadata missing factClaimAudit in turn ${index + 1}.`);
+    }
+    if (!metadata.leadStateMachine) {
+      throw new Error(`Production metadata missing leadStateMachine in turn ${index + 1}.`);
+    }
+    if (!metadata.postAnswerVerification) {
+      throw new Error(`Production metadata missing postAnswerVerification in turn ${index + 1}.`);
+    }
+    if (metadata.postAnswerVerification.status === 'error') {
+      throw new Error(`Post-answer verification failed in turn ${index + 1}: ${JSON.stringify(metadata.postAnswerVerification.issues)}`);
+    }
+    if ((metadata.productCards ?? []).length && !metadata.cardManifest) {
+      throw new Error(`Production metadata missing cardManifest for product-card turn ${index + 1}.`);
+    }
+    const visibleCardViolation = warnings.find((warning) => String(warning).startsWith('visible_card_constraint_violation:'));
+    if (visibleCardViolation) {
+      throw new Error(`Visible product card violates execution hard constraints in turn ${index + 1}: ${visibleCardViolation}`);
     }
   });
 }
@@ -234,9 +304,11 @@ async function resolveBrowserExecutable() {
 
 async function main() {
   await fs.mkdir('local-live-tests', { recursive: true });
+  await assertProductionRemediationMarker(productionApiBase);
   const browser = await chromium.launch({ headless: true, executablePath: await resolveBrowserExecutable() });
+  activeBrowser = browser;
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
-  const steps = [];
+  const steps = runtimeState.steps;
   let sessionId = null;
 
   try {
@@ -271,6 +343,7 @@ async function main() {
     }
 
     sessionId = await readWidgetSessionId(page);
+    runtimeState.sessionId = sessionId;
     if (!sessionId) throw new Error('Widget session id was not available for production metadata audit.');
     const detail = await fetchProductionConversation(sessionId);
     assertProductionMetadata(detail);
@@ -303,10 +376,13 @@ async function main() {
 
     console.log(`PASS production #876 live agent cycle. Protocol: ${protocolPath}`);
   } catch (error) {
+    runtimeState.sessionId = sessionId;
     await fs.writeFile(failurePath, JSON.stringify({ error: String(error), sessionId, steps }, null, 2), 'utf8');
     throw error;
   } finally {
+    clearTimeout(globalWatchdog);
     await browser.close();
+    activeBrowser = null;
   }
 }
 

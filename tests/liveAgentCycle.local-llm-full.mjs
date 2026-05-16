@@ -59,6 +59,9 @@ const criticalTextPatterns = [
   /network error/i,
   /AI FALLBACK/i,
   /Connection error/i,
+  /\u043d\u0435\s+\u0441\u043c\u043e\u0433.{0,80}\u0441\u0444\u043e\u0440\u043c\u0438\u0440\u043e\u0432\u0430\u0442\u044c\s+\u043e\u0442\u0432\u0435\u0442/iu,
+  /\u0432\u043e\u043f\u0440\u043e\u0441\s+\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d.{0,80}\u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435/iu,
+  /\u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435.{0,40}\u0447\u0435\u0440\u0435\u0437\s+\u043f\u0430\u0440\u0443\s+\u043c\u0438\u043d\u0443\u0442/iu,
   /Не смог надежно завершить ответ/iu,
   /ответ не успел|не успел сформироваться/i,
   /server finished without a done payload/i,
@@ -244,11 +247,69 @@ function assertDbDiagnostics(db, expectedAssistantTurns) {
     if (fallbackUsed(message.metadata)) {
       throw new Error(`AI fallback used in assistant message ${message.id}: ${JSON.stringify(message.metadata.aiDiagnostics ?? message.metadata.answerGenerationFallback)}`);
     }
+    if (!message.metadata?.requirementLedger) throw new Error(`Missing requirementLedger in assistant message ${message.id}.`);
+    if (!message.metadata?.executionContract) throw new Error(`Missing executionContract in assistant message ${message.id}.`);
+    if (!message.metadata?.factClaimPlanner) throw new Error(`Missing factClaimPlanner in assistant message ${message.id}.`);
+    if (!message.metadata?.factClaimAudit) throw new Error(`Missing factClaimAudit in assistant message ${message.id}.`);
+    if (!message.metadata?.leadStateMachine) throw new Error(`Missing leadStateMachine in assistant message ${message.id}.`);
+    if (!message.metadata?.postAnswerVerification) throw new Error(`Missing postAnswerVerification in assistant message ${message.id}.`);
+    if (message.metadata.postAnswerVerification.status === 'error') {
+      throw new Error(`Post-answer verification failed in assistant message ${message.id}: ${JSON.stringify(message.metadata.postAnswerVerification.issues)}`);
+    }
+    if ((message.metadata?.productCards ?? []).length && !message.metadata?.cardManifest) {
+      throw new Error(`Missing cardManifest for product-card assistant message ${message.id}.`);
+    }
+    const warnings = [
+      ...(message.metadata?.requirementLedger?.warnings ?? []),
+      ...(message.metadata?.executionContract?.warnings ?? []),
+      ...(message.metadata?.cardManifest?.warnings ?? []),
+      ...(message.metadata?.factClaimPlanner?.warnings ?? []),
+      ...(message.metadata?.factClaimAudit?.warnings ?? []),
+      ...(message.metadata?.leadStateMachine?.warnings ?? []),
+      ...((message.metadata?.postAnswerVerification?.issues ?? []).map((issue) => issue.code))
+    ];
+    const visibleCardViolation = warnings.find((warning) => String(warning).startsWith('visible_card_constraint_violation:'));
+    if (visibleCardViolation) {
+      throw new Error(`Visible product card violates execution hard constraints in assistant message ${message.id}: ${visibleCardViolation}`);
+    }
   }
   const badTurns = db.turns.filter((turn) => !['completed', 'recovered'].includes(turn.status));
   if (badTurns.length) {
     throw new Error(`Non-completed turns found: ${JSON.stringify(badTurns)}`);
   }
+}
+
+async function readSessionId(page) {
+  return page.evaluate(() => sessionStorage.getItem('bakaut_session_id')).catch(() => null);
+}
+
+function classifyInfrastructureBlocker(db) {
+  const turnMessages = (db?.turns ?? []).map((turn) => String(turn.error_message ?? turn.error_code ?? ''));
+  if (turnMessages.some((message) => /unsupported_country_region_territory/iu.test(message))) {
+    return {
+      provider: 'openai',
+      code: 'unsupported_country_region_territory',
+      class: 'provider_access',
+      message: 'OpenAI API request reached the provider but this country, region, or territory is not supported.'
+    };
+  }
+  if (turnMessages.some((message) => /invalid_api_key|401/iu.test(message))) {
+    return {
+      provider: 'openai',
+      code: 'invalid_api_key',
+      class: 'authentication',
+      message: 'OpenAI API key is missing, invalid, or not accepted.'
+    };
+  }
+  if (turnMessages.some((message) => /insufficient_quota|quota|billing|credits/iu.test(message))) {
+    return {
+      provider: 'openai',
+      code: 'insufficient_quota',
+      class: 'quota',
+      message: 'OpenAI API quota, billing, or credit limit blocked the live test.'
+    };
+  }
+  return null;
 }
 
 async function main() {
@@ -260,6 +321,7 @@ async function main() {
   const context = await browser.newContext({ viewport: { width: 1365, height: 900 } });
   const page = await context.newPage();
   const steps = [];
+  let sessionId = null;
 
   try {
     await page.goto(widgetUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -284,7 +346,7 @@ async function main() {
       console.log(`PASS turn ${steps.length}: ${turn.phase}`);
     }
 
-    const sessionId = await page.evaluate(() => sessionStorage.getItem('bakaut_session_id'));
+    sessionId = await readSessionId(page);
     if (!sessionId) throw new Error('Could not read bakaut_session_id from sessionStorage.');
     const db = await queryDb(sessionId);
     assertDbDiagnostics(db, phases.length);
@@ -318,7 +380,18 @@ async function main() {
 
     console.log(`PASS local full agent-cycle LLM live test. Protocol: ${protocolPath}`);
   } catch (error) {
-    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), steps }, null, 2), 'utf8');
+    sessionId = sessionId ?? await readSessionId(page);
+    let db = null;
+    let infrastructureBlocker = null;
+    if (sessionId) {
+      db = await queryDb(sessionId).catch((dbError) => ({ dbError: String(dbError), messages: [], turns: [] }));
+      infrastructureBlocker = classifyInfrastructureBlocker(db);
+    }
+    await fs.writeFile(
+      failurePath,
+      JSON.stringify({ error: String(error), sessionId, infrastructureBlocker, steps, db }, null, 2),
+      'utf8'
+    );
     throw error;
   } finally {
     await context.close().catch(() => undefined);

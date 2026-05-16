@@ -2,6 +2,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
 
 dotenv.config();
 
@@ -246,7 +247,14 @@ function codeAudit(step, assistantMessage) {
   const contract = metadata.turnContract ?? {};
   const warnings = [
     ...(metadata.validatorWarnings ?? []),
-    ...(contract.validatorWarnings ?? [])
+    ...(contract.validatorWarnings ?? []),
+    ...(metadata.requirementLedger?.warnings ?? []),
+    ...(metadata.executionContract?.warnings ?? []),
+    ...(metadata.cardManifest?.warnings ?? []),
+    ...(metadata.factClaimPlanner?.warnings ?? []),
+    ...(metadata.factClaimAudit?.warnings ?? []),
+    ...(metadata.leadStateMachine?.warnings ?? []),
+    ...((metadata.postAnswerVerification?.issues ?? []).map((issue) => issue.code))
   ];
   const productCards = metadata.productCards ?? [];
   const diagnostics = metadata.aiDiagnostics ?? {};
@@ -261,6 +269,18 @@ function codeAudit(step, assistantMessage) {
   if (warnings.includes('contract_source:legacy_text_fallback')) {
     issues.push('legacy_text_fallback contract');
   }
+  if (!metadata.requirementLedger) issues.push('нет requirementLedger');
+  if (!metadata.executionContract) issues.push('нет executionContract');
+  if (productCards.length && !metadata.cardManifest) issues.push('нет cardManifest для карточек');
+  if (!metadata.factClaimPlanner) issues.push('нет factClaimPlanner');
+  if (!metadata.leadStateMachine) issues.push('нет leadStateMachine');
+  if (!metadata.factClaimAudit) issues.push('missing factClaimAudit');
+  if (!metadata.postAnswerVerification) issues.push('missing postAnswerVerification');
+  if (metadata.postAnswerVerification?.status === 'error') {
+    issues.push(`post-answer verification failed: ${JSON.stringify(metadata.postAnswerVerification.issues)}`);
+  }
+  const visibleCardViolation = warnings.find((warning) => String(warning).startsWith('visible_card_constraint_violation:'));
+  if (visibleCardViolation) issues.push(`visible card hard-constraint violation: ${visibleCardViolation}`);
 
   if (step.phase === 'cheap_catalog_4_6kw_220' && contract.productCardsPolicy === 'none') {
     issues.push('productCardsPolicy=none на прямой каталоговый запрос генераторов');
@@ -319,6 +339,7 @@ function mdList(items, empty = '- нет') {
 
 async function main() {
   await fs.mkdir('local-live-tests', { recursive: true });
+  await assertProductionRemediationMarker(productionApiBase);
   const browser = await chromium.launch({ headless: true, executablePath: await resolveBrowserExecutable() });
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
   const steps = [];

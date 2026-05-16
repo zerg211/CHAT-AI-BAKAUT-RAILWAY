@@ -448,6 +448,172 @@ export interface AgentTurnContract {
   validatorWarnings: string[];
 }
 
+export type ExecutionCatalogPolicy = AgentCatalogAction;
+export type ExecutionCardsPolicy = 'none' | 'primary' | 'supporting' | 'selected_only';
+export type ExecutionLeadPolicy = 'none' | 'forbidden' | 'optional_after_answer' | 'required_now';
+export type ExecutionFactPolicy = 'catalog_only' | 'web_required' | 'specialist_required';
+
+export interface ExecutionContract {
+  version: 1;
+  source: 'agent_turn_contract';
+  answerTask: AgentAnswerTask;
+  taskType?: AgentTaskType;
+  catalogPolicy: ExecutionCatalogPolicy;
+  cardsPolicy: ExecutionCardsPolicy;
+  leadPolicy: ExecutionLeadPolicy;
+  factPolicy: ExecutionFactPolicy;
+  activeRequirementIds: string[];
+  activeConstraints?: ProductSelectionCriteria;
+  postconditions: string[];
+  warnings: string[];
+}
+
+export type RequirementLedgerItemSource = SemanticMemorySource | 'selection_state';
+export type RequirementLedgerItemStatus = SemanticRequirementStatus | 'derived';
+
+export interface RequirementLedgerItem {
+  id: string;
+  kind: SemanticRequirementKind | 'exactModel' | 'startType' | 'enclosure';
+  value: Record<string, unknown>;
+  status: RequirementLedgerItemStatus;
+  strictness: SemanticRequirementStrictness;
+  source: RequirementLedgerItemSource;
+  evidence: string;
+}
+
+export interface RequirementLedger {
+  version: 1;
+  activeRequirementIds: string[];
+  primaryRequirementIds: string[];
+  alternativeMode: SemanticAlternativeMode;
+  items: RequirementLedgerItem[];
+  hardConstraintKeys: string[];
+  warnings: string[];
+}
+
+export type CardManifestRole = 'primary' | 'supporting' | 'alternative' | 'hidden';
+export type CardConstraintStatus = 'satisfies_hard_constraints' | 'violates_hard_constraints' | 'unchecked';
+
+export interface CardManifestItem {
+  productId: string;
+  name: string;
+  rank: number;
+  visible: boolean;
+  role: CardManifestRole;
+  constraintStatus: CardConstraintStatus;
+  violations: string[];
+}
+
+export interface CardManifest {
+  version: 1;
+  source: 'execution_contract';
+  cardsPolicy: ExecutionCardsPolicy;
+  visibleProductIds: string[];
+  hiddenProductIds: string[];
+  items: CardManifestItem[];
+  warnings: string[];
+}
+
+export type FactClaimSourcePolicy = 'catalog' | 'visible_cards' | 'web' | 'specialist' | 'conversation_memory';
+export type FactClaimRisk = 'low' | 'medium' | 'high';
+
+export interface FactClaimPlanner {
+  version: 1;
+  factPolicy: ExecutionFactPolicy;
+  allowedSources: FactClaimSourcePolicy[];
+  requiredDisclaimers: string[];
+  forbiddenClaims: string[];
+  risk: FactClaimRisk;
+  warnings: string[];
+}
+
+export type FactClaimKind =
+  | 'product_reference'
+  | 'price'
+  | 'availability'
+  | 'delivery'
+  | 'discount_or_terms'
+  | 'technical_spec'
+  | 'current_lineup';
+export type FactClaimGroundingStatus =
+  | 'grounded'
+  | 'requires_specialist_verification'
+  | 'requires_web_verification'
+  | 'ungrounded'
+  | 'unchecked';
+
+export interface FactClaim {
+  kind: FactClaimKind;
+  text: string;
+  requiredSource: FactClaimSourcePolicy;
+  groundingStatus: FactClaimGroundingStatus;
+  matchedProductIds: string[];
+  warning?: string;
+}
+
+export interface FactClaimAudit {
+  version: 1;
+  claims: FactClaim[];
+  warnings: string[];
+}
+
+export type LeadMachineState =
+  | 'not_allowed'
+  | 'not_needed'
+  | 'optional_after_answer'
+  | 'required_contact_missing'
+  | 'ready_to_create'
+  | 'created'
+  | 'failed';
+
+export type LeadMachineNextAction =
+  | 'do_not_ask_contact'
+  | 'answer_without_lead'
+  | 'offer_contact_after_answer'
+  | 'ask_for_missing_contact'
+  | 'create_or_confirm_lead'
+  | 'confirm_created_lead'
+  | 'manual_follow_up_required';
+
+export interface LeadStateMachine {
+  version: 1;
+  state: LeadMachineState;
+  nextAction: LeadMachineNextAction;
+  leadPolicy: ExecutionLeadPolicy;
+  hasContactInTurn: boolean;
+  leadRequested: boolean;
+  leadCreated: boolean;
+  missing?: 'name' | 'contact';
+  warnings: string[];
+}
+
+export type PostAnswerVerificationStatus = 'pass' | 'warn' | 'error';
+export type PostAnswerVerificationSeverity = 'warning' | 'error';
+
+export interface PostAnswerVerificationIssue {
+  code: string;
+  severity: PostAnswerVerificationSeverity;
+  message: string;
+}
+
+export interface PostAnswerVerification {
+  version: 1;
+  status: PostAnswerVerificationStatus;
+  issues: PostAnswerVerificationIssue[];
+  checkedPolicies: string[];
+}
+
+export interface PostAnswerVerificationRecovery {
+  attempted: boolean;
+  recovered: boolean;
+  issuesBefore: string[];
+  issuesAfter: string[];
+  method?: 'none' | 'deterministic_text_repair';
+  repairableIssues?: string[];
+  unrecoverableIssues?: string[];
+  reason?: string;
+}
+
 export interface ConversationTurn {
   id: string;
   sessionId: string;
@@ -496,6 +662,14 @@ export interface ChatResponsePayload {
     aiDiagnostics?: AiGenerationDiagnostics;
     turnId?: string;
     turnContract?: AgentTurnContract;
+    requirementLedger?: RequirementLedger;
+    executionContract?: ExecutionContract;
+    cardManifest?: CardManifest;
+    factClaimPlanner?: FactClaimPlanner;
+    factClaimAudit?: FactClaimAudit;
+    leadStateMachine?: LeadStateMachine;
+    postAnswerVerification?: PostAnswerVerification;
+    postAnswerVerificationRecovery?: PostAnswerVerificationRecovery;
     activeNeedsBefore?: ActiveCustomerNeed[];
     activeNeedsAfter?: ActiveCustomerNeed[];
     cardsRole?: AgentCardsRole;

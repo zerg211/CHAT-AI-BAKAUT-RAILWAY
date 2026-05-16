@@ -81,6 +81,91 @@ function aiFallbackLabels(metadata?: ChatResponsePayload['metadata']) {
   return labels;
 }
 
+type AdminDiagnosticFlag = {
+  label: string;
+  warn?: boolean;
+};
+
+function arrayLength(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): AdminDiagnosticFlag[] {
+  if (!metadata) return [];
+  const flags: AdminDiagnosticFlag[] = [];
+  const execution = metadata.executionContract;
+  if (execution) {
+    flags.push({
+      label: `exec: cards ${execution.cardsPolicy}, fact ${execution.factPolicy}, lead ${execution.leadPolicy}`,
+      warn: execution.warnings.length > 0
+    });
+  }
+
+  const ledger = metadata.requirementLedger;
+  if (ledger) {
+    flags.push({
+      label: `req: ${ledger.items.length}, hard ${ledger.hardConstraintKeys.length}, alt ${ledger.alternativeMode}`,
+      warn: ledger.warnings.length > 0
+    });
+  }
+
+  const manifest = metadata.cardManifest;
+  if (manifest) {
+    const visibleViolations = manifest.items.filter(
+      (item) => item.visible && item.constraintStatus === 'violates_hard_constraints'
+    ).length;
+    flags.push({
+      label: `cards: ${manifest.visibleProductIds.length}/${manifest.items.length}, ${manifest.cardsPolicy}`,
+      warn: manifest.warnings.length > 0 || visibleViolations > 0
+    });
+  }
+
+  const factClaimAudit = metadata.factClaimAudit;
+  const factClaimPlanner = metadata.factClaimPlanner;
+  if (factClaimPlanner || factClaimAudit) {
+    flags.push({
+      label: `facts: ${factClaimPlanner?.risk ?? 'n/a'}, claims ${factClaimAudit?.claims.length ?? 0}`,
+      warn: Boolean(
+        factClaimPlanner?.risk === 'high' ||
+        factClaimPlanner?.warnings.length ||
+        factClaimAudit?.warnings.length
+      )
+    });
+  }
+
+  const leadState = metadata.leadStateMachine;
+  if (leadState) {
+    flags.push({
+      label: `lead: ${leadState.state}, ${leadState.nextAction}`,
+      warn: leadState.warnings.length > 0 || leadState.state === 'failed'
+    });
+  }
+
+  const verification = metadata.postAnswerVerification;
+  if (verification) {
+    const recovery = metadata.postAnswerVerificationRecovery;
+    const recoveryLabel = recovery?.attempted ? `, recovered ${recovery.recovered ? 'yes' : 'no'}` : '';
+    flags.push({
+      label: `verify: ${verification.status}, issues ${verification.issues.length}${recoveryLabel}`,
+      warn: verification.status !== 'pass' || Boolean(recovery?.attempted && !recovery.recovered)
+    });
+  }
+
+  const warningCount =
+    arrayLength(metadata.contractWarnings) +
+    arrayLength(metadata.validatorWarnings) +
+    (execution?.warnings.length ?? 0) +
+    (ledger?.warnings.length ?? 0) +
+    (manifest?.warnings.length ?? 0) +
+    (factClaimPlanner?.warnings.length ?? 0) +
+    (factClaimAudit?.warnings.length ?? 0) +
+    (leadState?.warnings.length ?? 0);
+  if (warningCount > 0) {
+    flags.push({ label: `warnings: ${warningCount}`, warn: true });
+  }
+  return flags;
+}
+
 function AiDiagnosticsBadge({ metadata }: { metadata?: ChatResponsePayload['metadata'] }) {
   const labels = aiFallbackLabels(metadata);
   if (!shouldShowAiDiagnostics() || !labels.length) return null;
@@ -146,6 +231,7 @@ async function adminResponseError(response: Response, fallback: string) {
 }
 
 const apiBase = '';
+const CHAT_TURN_TIMEOUT_MS = 180_000;
 
 function id() {
   return Math.random().toString(36).slice(2);
@@ -879,16 +965,15 @@ function AdminApp() {
 
               <div className="admin-messages">
                 {detail.messages.map((message) => {
-                  const metadata = message.metadata as {
+                  const metadata = message.metadata as NonNullable<ChatResponsePayload['metadata']> & {
                     productCards?: ProductCard[];
                     cardDisplay?: CardDisplayOptions;
                     usedWebSearch?: boolean;
                     feedback?: { rating?: FeedbackRating; createdAt?: string };
                     cardSelection?: { fallbackSuppressed?: boolean; fallbackReason?: string; rankedCount?: number; selectedRejectedCount?: number };
-                    aiDiagnostics?: NonNullable<ChatResponsePayload['metadata']>['aiDiagnostics'];
-                    answerGenerationFallback?: NonNullable<ChatResponsePayload['metadata']>['answerGenerationFallback'];
                   };
                   const answerFallback = metadata.aiDiagnostics?.answerGenerationFallback ?? metadata.answerGenerationFallback;
+                  const runtimeFlags = adminRuntimeFlags(metadata);
                   return (
                     <article className={`admin-message ${message.role}`} key={message.id}>
                       <div className="message-meta">
@@ -906,6 +991,11 @@ function AdminApp() {
                           {metadata.feedback?.rating ? <span>feedback: {metadata.feedback.rating}</span> : null}
                           {metadata.cardSelection?.fallbackReason ? <span>{metadata.cardSelection.fallbackReason}</span> : null}
                           {typeof metadata.cardSelection?.rankedCount === 'number' ? <span>ranked: {metadata.cardSelection.rankedCount}</span> : null}
+                          {runtimeFlags.map((flag) => (
+                            <span className={flag.warn ? 'warn' : undefined} key={flag.label}>
+                              {flag.label}
+                            </span>
+                          ))}
                         </div>
                       ) : null}
                       {metadata.productCards?.length ? <ProductCards cards={metadata.productCards} initialVisibleCount={metadata.cardDisplay?.initialVisibleCount} /> : null}
@@ -1033,6 +1123,9 @@ function App() {
     setBusy(true);
     const controller = new AbortController();
     abortRef.current = controller;
+    const turnTimeout = window.setTimeout(() => {
+      controller.abort();
+    }, CHAT_TURN_TIMEOUT_MS);
     const assistantId = id();
     setMessages((current) => [
       ...current,
@@ -1104,6 +1197,7 @@ function App() {
       setError(safeMessage);
       }
     } finally {
+      window.clearTimeout(turnTimeout);
       setBusy(false);
       if (abortRef.current === controller) abortRef.current = null;
     }

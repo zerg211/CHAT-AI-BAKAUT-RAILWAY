@@ -2,13 +2,43 @@ import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
 
 dotenv.config();
 
 const started = new Date().toISOString();
-const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-bakautprof-production-agent-cycle.local.md`);
+const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-bakautprof-production-agent-cycle.production.md`);
 const failurePath = path.join('local-live-tests', 'production-agent-cycle-failure.json');
 const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
+const globalTimeoutMs = Number(process.env.LIVE_AGENT_GLOBAL_TIMEOUT_MS ?? 540_000);
+const runtimeState = { sessionId: null, steps: [] };
+let activeBrowser = null;
+
+async function failAndExitOnGlobalTimeout() {
+  const error = `Error: production live agent cycle exceeded global timeout ${globalTimeoutMs}ms`;
+  try {
+    await fs.mkdir('local-live-tests', { recursive: true });
+    await fs.writeFile(
+      failurePath,
+      JSON.stringify({ error, sessionId: runtimeState.sessionId, steps: runtimeState.steps }, null, 2),
+      'utf8'
+    );
+  } catch (writeError) {
+    console.error(`Failed to write timeout artifact: ${writeError}`);
+  }
+  try {
+    await activeBrowser?.close();
+  } catch {
+    // process is exiting
+  }
+  console.error(error);
+  process.exit(1);
+}
+
+const globalWatchdog = setTimeout(() => {
+  void failAndExitOnGlobalTimeout();
+}, globalTimeoutMs);
+globalWatchdog.unref?.();
 
 const turns = [
   {
@@ -51,6 +81,9 @@ const turns = [
 
 const criticalPatterns = [
   /network error/i,
+  /\u043d\u0435\s+\u0441\u043c\u043e\u0433.{0,80}\u0441\u0444\u043e\u0440\u043c\u0438\u0440\u043e\u0432\u0430\u0442\u044c\s+\u043e\u0442\u0432\u0435\u0442/iu,
+  /\u0432\u043e\u043f\u0440\u043e\u0441\s+\u0441\u043e\u0445\u0440\u0430\u043d\u0435\u043d.{0,80}\u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435/iu,
+  /\u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435.{0,40}\u0447\u0435\u0440\u0435\u0437\s+\u043f\u0430\u0440\u0443\s+\u043c\u0438\u043d\u0443\u0442/iu,
   /Не смог надежно завершить ответ/iu,
   /ответ не успел/iu,
   /не успел сформироваться/iu,
@@ -190,10 +223,45 @@ function assertProductionMetadata(detail) {
     }
     const warnings = [
       ...(metadata.validatorWarnings ?? []),
-      ...(metadata.turnContract?.validatorWarnings ?? [])
+      ...(metadata.turnContract?.validatorWarnings ?? []),
+      ...(metadata.requirementLedger?.warnings ?? []),
+      ...(metadata.executionContract?.warnings ?? []),
+      ...(metadata.cardManifest?.warnings ?? []),
+      ...(metadata.factClaimPlanner?.warnings ?? []),
+      ...(metadata.factClaimAudit?.warnings ?? []),
+      ...(metadata.leadStateMachine?.warnings ?? []),
+      ...((metadata.postAnswerVerification?.issues ?? []).map((issue) => issue.code))
     ];
     if (warnings.includes('contract_source:legacy_text_fallback')) {
       throw new Error(`Legacy text contract fallback in production turn ${index + 1}`);
+    }
+    if (!metadata.executionContract) {
+      throw new Error(`Missing executionContract in production turn ${index + 1}`);
+    }
+    if (!metadata.requirementLedger) {
+      throw new Error(`Missing requirementLedger in production turn ${index + 1}`);
+    }
+    if (!metadata.factClaimPlanner) {
+      throw new Error(`Missing factClaimPlanner in production turn ${index + 1}`);
+    }
+    if (!metadata.factClaimAudit) {
+      throw new Error(`Missing factClaimAudit in production turn ${index + 1}`);
+    }
+    if (!metadata.leadStateMachine) {
+      throw new Error(`Missing leadStateMachine in production turn ${index + 1}`);
+    }
+    if (!metadata.postAnswerVerification) {
+      throw new Error(`Missing postAnswerVerification in production turn ${index + 1}`);
+    }
+    if (metadata.postAnswerVerification.status === 'error') {
+      throw new Error(`Post-answer verification failed in production turn ${index + 1}: ${JSON.stringify(metadata.postAnswerVerification.issues)}`);
+    }
+    if ((metadata.productCards ?? []).length && !metadata.cardManifest) {
+      throw new Error(`Missing cardManifest for product-card turn ${index + 1}`);
+    }
+    const visibleCardViolation = warnings.find((warning) => String(warning).startsWith('visible_card_constraint_violation:'));
+    if (visibleCardViolation) {
+      throw new Error(`Visible product card violates execution hard constraints in production turn ${index + 1}: ${visibleCardViolation}`);
     }
     const loadProfile = metadata.productSelection?.loadProfile;
     assertNoDuplicateLoadKinds(loadProfile, `turn ${index + 1}`);
@@ -206,6 +274,7 @@ function assertProductionMetadata(detail) {
   }
 
   notes.push('- PASS: production admin metadata has no AI fallback diagnostics or legacy text turn contracts.');
+  notes.push('- PASS: executionContract/cardManifest metadata exists and visible cards do not violate hard constraints.');
   notes.push('- PASS: structured generator load profile has no duplicate pump/light/tool refinements.');
   return notes;
 }
@@ -244,12 +313,14 @@ async function resolveBrowserExecutable() {
 
 async function main() {
   await fs.mkdir('local-live-tests', { recursive: true });
+  await assertProductionRemediationMarker(productionApiBase);
   const browser = await chromium.launch({
     headless: true,
     executablePath: await resolveBrowserExecutable()
   });
+  activeBrowser = browser;
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
-  const steps = [];
+  const steps = runtimeState.steps;
   let sessionId = null;
 
   try {
@@ -280,6 +351,7 @@ async function main() {
     }
 
     sessionId = await readWidgetSessionId(page);
+    runtimeState.sessionId = sessionId;
     const detail = sessionId ? await fetchProductionConversation(sessionId) : null;
     const metadataAuditNotes = assertProductionMetadata(detail);
 
@@ -312,10 +384,13 @@ async function main() {
 
     console.log(`PASS production live agent cycle. Protocol: ${protocolPath}`);
   } catch (error) {
+    runtimeState.sessionId = sessionId;
     await fs.writeFile(failurePath, JSON.stringify({ error: String(error), sessionId, steps }, null, 2), 'utf8');
     throw error;
   } finally {
+    clearTimeout(globalWatchdog);
     await browser.close();
+    activeBrowser = null;
   }
 }
 
