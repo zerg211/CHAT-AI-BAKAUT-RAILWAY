@@ -974,6 +974,95 @@ describe('agentic #876 internal cycle', () => {
     })).toBe(answer);
   });
 
+  it('keeps exact 10 kW availability visible slice compact', () => {
+    const cards = [
+      { id: 'e3ui', name: 'TSS SGG 11000E3Ui gasoline generator 10.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/e3ui' },
+      { id: 'eha', name: 'TSS SGG 10000EHA gasoline generator 10.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/eha' },
+      { id: 'eh3a', name: 'TSS SGG 10000EH3A gasoline generator 10.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/eh3a' },
+      { id: 'tss-12', name: 'TSS SGG 12000EHLA gasoline generator 12.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/tss-12' }
+    ];
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        nominalPowerKwMin: 10
+      }
+    });
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'pure_availability',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: [],
+      activeNeeds: [],
+      currentFocus: 'generator',
+      cardsRole: 'supporting',
+      leadAllowed: false,
+      leadAllowedReason: 'availability check',
+      errorRecoveryPriority: 'show exact power first',
+      validatorWarnings: []
+    };
+
+    expect(assistantTestHooks.exactAvailabilityInitialVisibleCount(7, cards, {
+      state: selectionState,
+      matchedProducts: cards.map((card) => ({ ...card, specs: {} })) as any,
+      visibleProducts: cards.map((card) => ({ ...card, specs: {} })) as any,
+      hiddenProducts: [],
+      comparisonProducts: [],
+      rejectedProducts: [],
+      missingQuestions: [],
+      confidence: 0.9,
+      trace: {}
+    }, contract)).toBe(3);
+  });
+
+  it('does not compact broad availability without an exact power prefix', () => {
+    const cards = [
+      { id: 'tss-8', name: 'TSS SGG 8000E gasoline generator 8.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/tss-8' },
+      { id: 'tss-10', name: 'TSS SGG 10000EHA gasoline generator 10.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/tss-10' },
+      { id: 'tss-12', name: 'TSS SGG 12000EHLA gasoline generator 12.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/tss-12' },
+      { id: 'tss-15', name: 'TSS SGG 15000EH3A gasoline generator 15.0 kW', category: 'Generators', specs: {}, reasons: [], caveats: [], sourceUrl: 'https://example.test/tss-15' }
+    ];
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator'
+      }
+    });
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'pure_availability',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: [],
+      activeNeeds: [],
+      currentFocus: 'generator',
+      cardsRole: 'supporting',
+      leadAllowed: false,
+      leadAllowedReason: 'availability check',
+      errorRecoveryPriority: 'show matching products',
+      validatorWarnings: []
+    };
+
+    expect(assistantTestHooks.exactAvailabilityInitialVisibleCount(4, cards, {
+      state: selectionState,
+      matchedProducts: cards.map((card) => ({ ...card, specs: {} })) as any,
+      visibleProducts: cards.map((card) => ({ ...card, specs: {} })) as any,
+      hiddenProducts: [],
+      comparisonProducts: [],
+      rejectedProducts: [],
+      missingQuestions: [],
+      confidence: 0.9,
+      trace: {}
+    }, contract)).toBe(4);
+  });
+
   it('repairs phase reconfirmation when single-phase 220 V is already explicit', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',

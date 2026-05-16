@@ -4757,6 +4757,26 @@ function finalCardsDecisionFromCards(cards: ProductCard[], selectionResult: Prod
   };
 }
 
+function exactAvailabilityInitialVisibleCount(
+  baseCount: number,
+  cards: ProductCard[],
+  selectionResult: ProductSelectionResult,
+  contract: AgentTurnContract
+) {
+  if (contract.taskType !== 'pure_availability' || cards.length <= 3) return baseCount;
+  const hard = selectionResult.state.hardConstraints;
+  const nominalMin = hard.nominalPowerKwMin;
+  const nominalMax = hard.nominalPowerKwMax;
+  if (!nominalMin || (nominalMax && Math.abs(nominalMax - nominalMin) > 0.2)) return baseCount;
+  const leadingExactCards = cards.findIndex((card) => {
+    const nominalKw = generatorPowerFromCard(card).nominalKw;
+    return nominalKw === undefined || Math.abs(nominalKw - nominalMin) > 0.2;
+  });
+  const exactPrefixCount = leadingExactCards === -1 ? cards.length : leadingExactCards;
+  if (exactPrefixCount <= 0 || exactPrefixCount >= cards.length) return baseCount;
+  return Math.max(1, Math.min(baseCount, exactPrefixCount, 3));
+}
+
 function emptyCardContractDiagnostics(): CardContractDiagnostics {
   return {
     mentionedProductIds: [],
@@ -7721,7 +7741,12 @@ export class AssistantService {
       cardLimit: cardPayloadLimit,
       respectRequestedCardLimit: false
     });
-    const initialVisibleCount = initialVisibleCardCountForCards(cardSelection.cards, selectionResult, visibleCardLimit);
+    const initialVisibleCount = exactAvailabilityInitialVisibleCount(
+      initialVisibleCardCountForCards(cardSelection.cards, selectionResult, visibleCardLimit),
+      cardSelection.cards,
+      selectionResult,
+      answerAgentTurnContract
+    );
     let finalCards = finalCardsDecisionFromCards(cardSelection.cards, selectionResult, effectivePlan, initialVisibleCount);
     let cards: ProductCard[] = finalCards.cards;
     const requirementLedger = buildRequirementLedger({
@@ -7747,7 +7772,12 @@ export class AssistantService {
         cardEnforcement.cards,
         selectionResult,
         effectivePlan,
-        initialVisibleCardCountForCards(cardEnforcement.cards, selectionResult, visibleCardLimit)
+        exactAvailabilityInitialVisibleCount(
+          initialVisibleCardCountForCards(cardEnforcement.cards, selectionResult, visibleCardLimit),
+          cardEnforcement.cards,
+          selectionResult,
+          answerAgentTurnContract
+        )
       );
       cards = finalCards.cards;
     }
@@ -9832,6 +9862,7 @@ export const assistantTestHooks = {
   selectCardsFromPlan,
   selectCardsFromTurnContract,
   initialVisibleCardCountForCards,
+  exactAvailabilityInitialVisibleCount,
   answerContextProductsForCards,
   compactSuitableProductsForAnswer,
   selectionResultCanDriveCards,
