@@ -2596,11 +2596,10 @@ function planContractRequestsProductCards(plan: AssistantTurnPlan) {
 
 function isCatalogShortlistTurn(userMessage: string, plan?: AssistantTurnPlan) {
   if (plan?.agentDecision?.catalogAction) {
-    return plan.agentDecision.catalogAction === 'find_matching_products' ||
+    if (plan.agentDecision.catalogAction === 'find_matching_products' ||
       plan.agentDecision.catalogAction === 'exact_model_lookup' ||
-      plan.agentDecision.catalogAction === 'verify_catalog_absence';
+      plan.agentDecision.catalogAction === 'verify_catalog_absence') return true;
   }
-  if (plan?.agentDecision) return false;
   const catalogText = [userMessage, plan?.catalogSearchQuery].filter(Boolean).join(' ');
   const catalogAvailability = isCatalogAvailabilityQuestion(catalogText) && !isManufacturingStatusQuestion(userMessage);
   if (!catalogAvailability) return false;
@@ -2738,7 +2737,7 @@ function shouldPromoteGeneratorSizingCardsForContract(
 function selectionResultCanDriveCards(plan: AssistantTurnPlan, result: ProductSelectionResult, userMessage: string) {
   const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
   const exactLookupAlternativeFound = result.trace?.exactLookupAlternative === true;
-  return planContractRequestsProductCards(plan) &&
+  return (planContractRequestsProductCards(plan) || catalogShortlistTurn) &&
     (plan.cardPolicy === 'showProducts' || plan.selectionState.shouldShowCards || catalogShortlistTurn) &&
     (result.trace?.canRecommendFromSelection === true || exactLookupAlternativeFound) &&
     result.visibleProducts.length > 0 &&

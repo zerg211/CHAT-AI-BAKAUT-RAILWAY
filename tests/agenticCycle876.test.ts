@@ -1063,6 +1063,62 @@ describe('agentic #876 internal cycle', () => {
     }, contract)).toBe(4);
   });
 
+  it('lets a strong range availability request recover cards even when planner cards are none', () => {
+    const userMessage = ru('\u0410 \u0447\u0442\u043e \u0435\u0441\u0442\u044c \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438 \u043e\u0442 8 \u0434\u043e 10 \u043a\u0412\u0442?');
+    const plan = rawPlan({
+      action: 'answer_question',
+      answerMode: 'directAnswer',
+      cardPolicy: 'textOnly',
+      agentDecision: {
+        answerTask: 'product_selection',
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'none',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['answer catalog availability'],
+        currentFocus: 'TSS generator range',
+        cardsRole: 'none',
+        leadAllowed: false,
+        leadAllowedReason: 'availability range can be answered from catalog cards',
+        errorRecoveryPriority: 'show matching catalog options for the range',
+        confidence: 0.78
+      }
+    });
+    const products = [
+      product('tss-8', 'TSS SGG 9000ELA gasoline generator 8.0 kW', { nominalPower: '8.0 kW' }),
+      product('tss-9', 'TSS SGG 10000EI gasoline generator 9.0 kW', { nominalPower: '9.0 kW' }),
+      product('tss-10', 'TSS SGG 10000EHA gasoline generator 10.0 kW', { nominalPower: '10.0 kW' })
+    ];
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        nominalPowerKwMin: 8,
+        nominalPowerKwMax: 10,
+        provenance: {
+          ...emptyNeedState().selectionState.hardConstraints.provenance,
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
+      }
+    });
+
+    expect(assistantTestHooks.isCatalogShortlistTurn(userMessage, plan)).toBe(true);
+    expect(assistantTestHooks.selectionResultCanDriveCards(plan, {
+      state: selectionState,
+      matchedProducts: products,
+      visibleProducts: products,
+      hiddenProducts: [],
+      comparisonProducts: [],
+      rejectedProducts: [],
+      missingQuestions: [],
+      confidence: 0.82,
+      trace: { canRecommendFromSelection: true }
+    }, userMessage)).toBe(true);
+  });
+
   it('repairs phase reconfirmation when single-phase 220 V is already explicit', () => {
     const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
       currentProductClass: 'generator',
