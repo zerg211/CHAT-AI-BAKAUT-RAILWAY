@@ -3289,14 +3289,15 @@ function lastShownProductCards(history: Message[]) {
 }
 
 function allShownProductCards(history: Message[]) {
-  const byId = new Map<string, Product>();
+  const byId = new Map<string, ProductCard>();
   for (const message of history) {
     if (message.role !== 'assistant') continue;
     const cards = (message.metadata as { productCards?: unknown })?.productCards;
     if (!Array.isArray(cards) || cards.length === 0) continue;
     for (const card of cards) {
-      if (!card || typeof card !== 'object' || typeof (card as ProductCard).id !== 'string' || typeof (card as ProductCard).name !== 'string') continue;
-      byId.set((card as ProductCard).id, productFromCard(card as ProductCard));
+      if (card && typeof card === 'object' && typeof (card as ProductCard).id === 'string' && typeof (card as ProductCard).name === 'string') {
+        byId.set((card as ProductCard).id, card as ProductCard);
+      }
     }
   }
   return [...byId.values()];
@@ -8497,6 +8498,200 @@ export class AssistantService {
     const latestUserText = latestUser?.content ?? '';
     const storedContract = (turn.plannerContract ?? null) as AgentTurnContract | null;
     const recoveryAiDiagnostics = emptyAiGenerationDiagnostics();
+    const buildRecoveryRenderContract = (contract: AgentTurnContract, cards: ProductCard[]): ResolvedTurnContract => ({
+      action: {
+        primary: contract.answerTask === 'lead_handoff' && contract.leadAllowed ? 'collect_lead' : 'answer_question',
+        answerMode: contract.answerTask === 'lead_handoff' && contract.leadAllowed ? 'leadCollection' : 'short',
+        followUpPolicy: contract.leadAllowed ? 'collectLead' : 'answerNowNoDeferredOffer'
+      },
+      scope: {
+        context: 'fullSession',
+        search: 'previousSelectionOnly',
+        catalogSearchQuery: ''
+      },
+      knowledge: {
+        webRequired: false,
+        missingInformation: []
+      },
+      selection: {
+        selectedProductIds: cards.map((card) => card.id),
+        requiredProductTraits: session.needState.selectionState.hardConstraints,
+        selectionState: session.needState.selectionState
+      },
+      render: {
+        cards: cards.length && contract.cardsRole !== 'none' ? 'showProducts' : 'none',
+        leadForm: false
+      },
+      guidance: 'Deterministic recovery render contract.',
+      diagnostics: {
+        sourcePlan: {
+          action: 'answer_question',
+          answerMode: 'short',
+          cardPolicy: cards.length ? 'showProducts' : 'textOnly',
+          followUpPolicy: 'answerNowNoDeferredOffer',
+          contextScope: 'fullSession',
+          searchScope: 'previousSelectionOnly',
+          catalogSearchQuery: '',
+          selectedProductIds: cards.map((card) => card.id),
+          needsWebSearch: false,
+          missingInformation: [],
+          answerGuidance: 'Deterministic recovery render contract.'
+        },
+        overrides: ['recovery_render_contract']
+      }
+    });
+    const completeRecoveredAnswer = async (inputAnswer: string, contract: AgentTurnContract, recoveredSelection: {
+      cards: ProductCard[];
+      cardDisplay?: CardDisplayOptions;
+    }, openAiError?: unknown): Promise<ChatResponsePayload> => {
+      const answer = inputAnswer.trim();
+      const renderContract = buildRecoveryRenderContract(contract, recoveredSelection.cards);
+      const requirementLedger = buildRequirementLedger({
+        needState: session.needState,
+        selectionState: session.needState.selectionState
+      });
+      const executionContract = buildExecutionContract({
+        agentContract: contract,
+        renderContract,
+        selectionState: session.needState.selectionState,
+        webRequired: false,
+        activeRequirementIds: requirementLedger.activeRequirementIds
+      });
+      const visibleCount = recoveredSelection.cardDisplay?.initialVisibleCount ?? Math.min(recoveredSelection.cards.length, LARGE_SLICE_VISIBLE_CARDS);
+      const visibleProductIds = recoveredSelection.cards.slice(0, visibleCount).map((card) => card.id);
+      const hiddenProductIds = recoveredSelection.cards.slice(visibleCount).map((card) => card.id);
+      const cardManifest = buildCardManifest({
+        executionContract,
+        cards: recoveredSelection.cards,
+        visibleProductIds,
+        hiddenProductIds
+      });
+      const factClaimPlanner = buildFactClaimPlanner({
+        executionContract,
+        requirementLedger,
+        cardManifest,
+        usedWebSearch: false
+      });
+      const factClaimAudit = auditAnswerFactClaims({
+        answer,
+        factClaimPlanner,
+        cardManifest
+      });
+      const leadStateMachine = buildLeadStateMachine({
+        executionContract,
+        hasContactInTurn: hasLikelyContactText(latestUserText),
+        leadRequested: false,
+        leadCreated: false
+      });
+      const postAnswerVerification = verifyPostAnswer({
+        answer,
+        factClaimPlanner,
+        leadStateMachine,
+        cardManifest,
+        factClaimAudit
+      });
+      const metadata = {
+        turnId: input.turnId,
+        recovered: true,
+        recoveryAttempts: 1,
+        turnContract: contract,
+        executionContract,
+        requirementLedger,
+        cardManifest,
+        factClaimPlanner,
+        factClaimAudit,
+        leadStateMachine,
+        postAnswerVerification,
+        aiDiagnostics: recoveryAiDiagnostics,
+        productCards: recoveredSelection.cards,
+        cardDisplay: recoveredSelection.cardDisplay,
+        activeNeedsAfter: session.needState.activeNeeds ?? [],
+        warnings: [
+          ...(contract.validatorWarnings ?? []),
+          ...requirementLedger.warnings,
+          ...executionContract.warnings,
+          ...cardManifest.warnings,
+          ...factClaimPlanner.warnings,
+          ...factClaimAudit.warnings,
+          ...leadStateMachine.warnings,
+          ...postAnswerVerification.issues.map((issue) => issue.code)
+        ],
+        openAiError
+      };
+      await input.onDelta?.(answer);
+      const assistantMessage = await this.conversations.addMessage({
+        sessionId: input.sessionId,
+        role: 'assistant',
+        content: answer,
+        metadata
+      });
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'recovered',
+        stage: 'recovered',
+        assistantMessageId: assistantMessage.id,
+        plannerContract: contract,
+        errorCode: openAiError ? 'recovery_openai_failed' : null,
+        errorMessage: openAiError ? JSON.stringify(openAiError).slice(0, 1000) : null,
+        activeNeedsAfter: session.needState.activeNeeds ?? []
+      }).catch((error) => console.warn('Conversation turn recovery update failed', safeError(error)));
+      return {
+        turnId: input.turnId,
+        answer,
+        needState: session.needState,
+        productCards: recoveredSelection.cards,
+        cardDisplay: recoveredSelection.cardDisplay,
+        usedWebSearch: false,
+        leadRequested: false,
+        assistantMessageId: assistantMessage.id,
+        metadata
+      };
+    };
+    if (!storedContract && latestUser && isExplicitCommercialQuestion(latestUserText)) {
+      const commercialCards = allShownProductCards(history);
+      const commercialContract: AgentTurnContract = {
+        answerTask: 'lead_handoff',
+        taskType: 'pure_delivery',
+        catalogAction: 'none',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['answer delivery, discount, and rough total safely from already shown cards'],
+        activeNeeds: (session.needState.activeNeeds ?? []).map((need) => ({
+          id: need.id,
+          productClass: need.productClass,
+          summary: need.summary
+        })),
+        currentFocus: 'commercial',
+        cardsRole: 'none',
+        leadAllowed: false,
+        leadAllowedReason: 'deterministic recovery for commercial terms without contact pressure',
+        errorRecoveryPriority: 'Give a safe commercial answer without promising final stock, delivery, discount, or exact terms.',
+        validatorWarnings: ['commercial_recovery_contract']
+      };
+      const answer = deterministicCommercialHandoffFallback({
+        cards: commercialCards,
+        selectionResult: {
+          state: session.needState.selectionState,
+          matchedProducts: commercialCards.map(productFromCard),
+          visibleProducts: commercialCards.map(productFromCard),
+          hiddenProducts: [],
+          comparisonProducts: [],
+          rejectedProducts: [],
+          missingQuestions: [],
+          confidence: 0.7,
+          trace: { source: 'recovery_historical_cards' }
+        } as ProductSelectionResult,
+        contract: commercialContract,
+        latestUserMessage: latestUserText
+      });
+      if (answer) {
+        return completeRecoveredAnswer(answer, commercialContract, {
+          cards: [],
+          cardDisplay: undefined
+        });
+      }
+    }
     const recoveryBaseQuery = productSearchText(latestUserText, session.needState);
     const recoveryPlan = !storedContract && latestUserText
       ? await this.planAssistantTurn({
