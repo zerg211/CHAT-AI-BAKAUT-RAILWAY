@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AssistantService, assistantTestHooks } from '../src/ai/assistant.js';
 import { deriveAgentTurnContract, applyAgentTurnContractToPlan } from '../src/ai/agentTurnContract.js';
 import { emptyNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
-import type { CustomerNeedState, Product } from '../src/shared/types.js';
+import type { AgentTurnContract, CustomerNeedState, Product } from '../src/shared/types.js';
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
 
@@ -835,6 +835,42 @@ describe('agentic #876 internal cycle', () => {
     expect(result.visibleProducts.map((item) => item.id)).toContain('tss-eha');
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('tss-e3ui');
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('tss-eh3a');
+  });
+
+  it('does not inherit a "two models" comparison as a later product card limit', () => {
+    expect(assistantTestHooks.requestedVisibleCardLimitFromText(
+      ru('\u0421\u0440\u0430\u0432\u043d\u0438\u0442\u0435 \u0434\u0432\u0435 \u043c\u043e\u0434\u0435\u043b\u0438 \u0434\u0432\u0438\u0433\u0430\u0442\u0435\u043b\u044c \u0431\u0430\u0434\u0443\u0438\u043d \u0438 \u0434\u0443\u0441\u0430\u043d')
+    )).toBeUndefined();
+    expect(assistantTestHooks.requestedVisibleCardLimitFromText(
+      ru('\u041f\u043e\u043a\u0430\u0436\u0438\u0442\u0435 2 \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u0430, \u0431\u0435\u0437 \u0434\u043b\u0438\u043d\u043d\u043e\u0433\u043e \u0441\u043f\u0438\u0441\u043a\u0430')
+    )).toBe(2);
+  });
+
+  it('does not use proactive commercial fallback for catalog availability selection', () => {
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'product_selection_with_availability',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: [],
+      activeNeeds: [],
+      currentFocus: 'generator',
+      cardsRole: 'supporting',
+      leadAllowed: false,
+      leadAllowedReason: 'selection first',
+      errorRecoveryPriority: 'answer catalog availability',
+      validatorWarnings: []
+    };
+
+    expect(assistantTestHooks.shouldUseProactiveCommercialDeterministicAnswer(
+      contract,
+      ru('\u0410 \u0447\u0442\u043e \u0435\u0441\u0442\u044c \u0432 \u043d\u0430\u043b\u0438\u0447\u0438\u0438 \u043e\u0442 8 \u0434\u043e 10 \u043a\u0412\u0442?')
+    )).toBe(false);
+    expect(assistantTestHooks.shouldUseProactiveCommercialDeterministicAnswer(
+      { ...contract, taskType: 'product_selection_with_delivery' },
+      ru('\u0410 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430 \u0438 \u0441\u043a\u0438\u0434\u043a\u0430 \u0435\u0441\u0442\u044c? \u0418 \u043f\u0440\u0438\u043c\u0435\u0440\u043d\u043e \u0441\u0443\u043c\u043c\u0430?')
+    )).toBe(true);
   });
 
   it('repairs phase reconfirmation when single-phase 220 V is already explicit', () => {

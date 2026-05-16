@@ -4898,6 +4898,10 @@ function isExplicitCommercialQuestion(message: string) {
   return /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0441\u0443\u043c\u043c|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|\u043e\u0444\u043e\u0440\u043c|\u0437\u0430\u043a\u0430\u0437|delivery|shipping|discount|price|cost|stock|order|terms)/iu.test(message);
 }
 
+function isDeliveryDiscountPriceQuestion(message: string) {
+  return /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0441\u0443\u043c\u043c|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|\u0443\u0441\u043b\u043e\u0432|\u043e\u0444\u043e\u0440\u043c|\u0437\u0430\u043a\u0430\u0437|delivery|shipping|discount|price|cost|order|terms)/iu.test(message);
+}
+
 function isContactRefusalTechnicalSummaryRequest(message: string) {
   return /(?:\u0431\u0435\u0437\s+\u0437\u0432\u043e\u043d|\u043d\u0435\s+\u0437\u0432\u043e\u043d|\u043f\u043e\u043a\u0430\s+\u0431\u0435\u0437|\u043d\u0435\s+\u043e\u0441\u0442\u0430\u0432)/iu.test(message) &&
     /(?:\u0442\u0435\u0445\u043d\u0438\u043a|\u0447\u0442\u043e\s+\u0441\u0435\u0439\u0447\u0430\u0441\s+\u0431\u0440\u0430\u0442|\u0433\u0435\u043d\u0435\u0440\u0430\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|\u0443\u0442\u043e\u0447\u043d)/iu.test(message);
@@ -4910,6 +4914,15 @@ function shouldUseCommercialDeterministicFallback(contract: AgentTurnContract | 
   if (contract.taskType === 'pure_delivery' || contract.taskType === 'pure_availability') return true;
   if (contract.taskType === 'product_selection_with_delivery' && isExplicitCommercialQuestion(message)) return true;
   return isExplicitCommercialQuestion(message);
+}
+
+function shouldUseProactiveCommercialDeterministicAnswer(contract: AgentTurnContract | undefined, message: string) {
+  if (contract?.commercialAction !== 'explain_manager_required') return false;
+  if (contract.answerTask === 'lead_handoff') return true;
+  if (contract.currentFocus === 'commercial') return true;
+  if (contract.taskType === 'pure_delivery') return true;
+  if (contract.taskType === 'product_selection_with_delivery' && isDeliveryDiscountPriceQuestion(message)) return true;
+  return contract.catalogAction === 'none' && isDeliveryDiscountPriceQuestion(message);
 }
 
 function commercialFallbackCandidates(input: {
@@ -5316,6 +5329,10 @@ function repairExplicitPhaseReconfirmation(answer: string, state?: ProductSelect
 
 function requestedVisibleCardLimitFromText(text: string): number | undefined {
   const normalized = text.toLowerCase().replace(/ё/g, 'е');
+  if (/(?:сравн|отлич)/iu.test(normalized) &&
+    !/(?:покажи|показать|дай|подбери|выбери|карточ|вариант|позиц)/iu.test(normalized)) {
+    return undefined;
+  }
   const explicitTwo = /(?:один|1)\s+(?:основн|главн|перв)[^.!?\n]{0,80}(?:и|\+|,)[^.!?\n]{0,80}(?:один|1)\s+(?:запасн|альтернатив)/iu.test(normalized) ||
     /(?:пару|два|две|2)\s+(?:вариант|модел|позици)/iu.test(normalized) ||
     /(?:вариант|модел|позици)[^.!?\n]{0,40}(?:пару|два|две|2)\b/iu.test(normalized) ||
@@ -8142,7 +8159,7 @@ export class AssistantService {
       latestUserMessage: input.userMessage
     }).trim();
 
-    if (proactiveCommercialAnswer) {
+    if (proactiveCommercialAnswer && shouldUseProactiveCommercialDeterministicAnswer(answerAgentTurnContract, input.userMessage)) {
       answer = proactiveCommercialAnswer;
       completedResponse = undefined;
     } else {
@@ -9837,6 +9854,7 @@ export const assistantTestHooks = {
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
   deterministicCommercialHandoffFallback,
+  shouldUseProactiveCommercialDeterministicAnswer,
   deterministicTechnicalSummaryRecovery,
   deterministicAnswerGenerationFallback,
   reliableBundleTotal,

@@ -8,7 +8,7 @@ import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 
-export const REMEDIATION_CONTRACT_VERSION = '2026-05-16-agent-contract-stack-v8';
+export const REMEDIATION_CONTRACT_VERSION = '2026-05-16-agent-contract-stack-v9';
 export const REMEDIATION_RUNTIME_ARTIFACTS = [
   'executionContract',
   'requirementLedger',
