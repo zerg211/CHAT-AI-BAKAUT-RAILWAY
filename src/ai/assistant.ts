@@ -8125,15 +8125,6 @@ export class AssistantService {
       throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
     };
 
-    const answerRequest: Record<string, unknown> = buildAnswerRequest(answerProfile.model, answerProfile.effort);
-    if (mustUseWebSearch) {
-      answerRequest.tools = [{
-        type: 'web_search_preview',
-        search_context_size: searchContextSize
-      }];
-      answerRequest.tool_choice = { type: 'web_search_preview' };
-    }
-
     if (input.turnId) {
       await this.conversations.updateTurn({
         sessionId: input.sessionId,
@@ -8144,30 +8135,51 @@ export class AssistantService {
       }).catch((error) => console.warn('Conversation turn answering update failed', safeError(error)));
     }
 
-    try {
-      const result = await executeAnswerRequest(answerRequest, 'answer');
-      answer = result.answer;
-      completedResponse = result.completedResponse;
-    } catch (error) {
-      if (answerProfile.model !== config.OPENAI_ANSWER_MODEL) {
-        try {
-          const fallbackAnswerRequest: Record<string, unknown> = buildAnswerRequest(config.OPENAI_ANSWER_MODEL, config.OPENAI_ANSWER_REASONING_EFFORT);
-          if (mustUseWebSearch) {
-            fallbackAnswerRequest.tools = [{
-              type: 'web_search_preview',
-              search_context_size: searchContextSize
-            }];
-            fallbackAnswerRequest.tool_choice = { type: 'web_search_preview' };
+    const proactiveCommercialAnswer = deterministicCommercialHandoffFallback({
+      cards,
+      selectionResult,
+      contract: answerAgentTurnContract,
+      latestUserMessage: input.userMessage
+    }).trim();
+
+    if (proactiveCommercialAnswer) {
+      answer = proactiveCommercialAnswer;
+      completedResponse = undefined;
+    } else {
+      const answerRequest: Record<string, unknown> = buildAnswerRequest(answerProfile.model, answerProfile.effort);
+      if (mustUseWebSearch) {
+        answerRequest.tools = [{
+          type: 'web_search_preview',
+          search_context_size: searchContextSize
+        }];
+        answerRequest.tool_choice = { type: 'web_search_preview' };
+      }
+
+      try {
+        const result = await executeAnswerRequest(answerRequest, 'answer');
+        answer = result.answer;
+        completedResponse = result.completedResponse;
+      } catch (error) {
+        if (answerProfile.model !== config.OPENAI_ANSWER_MODEL) {
+          try {
+            const fallbackAnswerRequest: Record<string, unknown> = buildAnswerRequest(config.OPENAI_ANSWER_MODEL, config.OPENAI_ANSWER_REASONING_EFFORT);
+            if (mustUseWebSearch) {
+              fallbackAnswerRequest.tools = [{
+                type: 'web_search_preview',
+                search_context_size: searchContextSize
+              }];
+              fallbackAnswerRequest.tool_choice = { type: 'web_search_preview' };
+            }
+            const result = await executeAnswerRequest(fallbackAnswerRequest, 'answer_fallback');
+            answer = result.answer;
+            completedResponse = result.completedResponse;
+          } catch (fallbackError) {
+            console.warn('Deep answer fallback failed', safeError(fallbackError));
+            failAnswerGeneration(fallbackError);
           }
-          const result = await executeAnswerRequest(fallbackAnswerRequest, 'answer_fallback');
-          answer = result.answer;
-          completedResponse = result.completedResponse;
-        } catch (fallbackError) {
-          console.warn('Deep answer fallback failed', safeError(fallbackError));
-          failAnswerGeneration(fallbackError);
+        } else {
+          failAnswerGeneration(error);
         }
-      } else {
-        failAnswerGeneration(error);
       }
     }
 
