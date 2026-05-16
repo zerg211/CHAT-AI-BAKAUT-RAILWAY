@@ -416,7 +416,14 @@ Latest external/deploy gates:
 Operational conclusion:
 
 - The local implementation remains deploy-ready.
-- Production cannot be considered remediated until Railway upload/network access is stable enough to complete deployment, `/api/health` exposes `remediation.contractVersion=2026-05-16-agent-contract-stack-v1` with all expected runtime artifacts, and the postdeploy/live widget checks pass.
+- Production cannot be considered fully remediated until the live widget checks pass on `https://bakautprof.ru/`.
+- As of the 2026-05-17 continuation, deployment to GitHub/Railway is no longer the active blocker for the latest code path: production `/api/health` exposes `remediation.contractVersion=2026-05-16-agent-contract-stack-v20` with the expected runtime artifact list.
+- The active blocker is OpenAI quota in the production Railway environment:
+  - `npm run test:live:production` fails on the first live widget turn;
+  - production admin detail for session `374a2f6d-48f4-4674-89d6-5ed6aad43784` shows turn stage `recovery_failed`;
+  - turn error is `AI answer recovery failed: insufficient_quota`;
+  - no assistant message was created.
+- This is external runtime configuration evidence, not proof of a remaining contract/card/ledger implementation defect. Completion remains unproven until quota is restored and postdeploy/live gates pass.
 
 ## External architecture sources used
 

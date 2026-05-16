@@ -210,6 +210,15 @@ async function fetchProductionConversation(sessionId) {
   return response.json();
 }
 
+async function safeFetchProductionConversation(sessionId) {
+  if (!sessionId) return null;
+  try {
+    return await fetchProductionConversation(sessionId);
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
 function metadataOf(message) {
   if (!message?.metadata) return {};
   if (typeof message.metadata === 'string') {
@@ -328,6 +337,8 @@ async function main() {
       await input.press('Enter');
       await waitInputEnabled(input);
       await page.waitForTimeout(1000);
+      sessionId = sessionId ?? await readWidgetSessionId(page);
+      runtimeState.sessionId = sessionId;
 
       const messages = await collectMessages(frame);
       const answer = latestAssistant(messages);
@@ -376,8 +387,10 @@ async function main() {
 
     console.log(`PASS production #876 live agent cycle. Protocol: ${protocolPath}`);
   } catch (error) {
+    sessionId = sessionId ?? await readWidgetSessionId(page).catch(() => null);
     runtimeState.sessionId = sessionId;
-    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), sessionId, steps }, null, 2), 'utf8');
+    const adminDetail = await safeFetchProductionConversation(sessionId);
+    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), sessionId, steps, adminDetail }, null, 2), 'utf8');
     throw error;
   } finally {
     clearTimeout(globalWatchdog);

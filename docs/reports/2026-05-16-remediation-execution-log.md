@@ -887,3 +887,22 @@ Not yet validated:
 2. Extend recovery beyond deterministic text repair into a single constrained LLM rewrite when deterministic repair cannot clear safe text-only verification errors.
 3. Expand `FactClaimAudit` from deterministic extraction into optional LLM claim review for ambiguous factual paragraphs.
 4. Split `src/ai/assistant.ts` monolith into orchestration modules only after the new contracts are stable in production traces.
+
+## 2026-05-17 continuation: production live blocker
+
+- Current GitHub/Railway production marker reached `2026-05-16-agent-contract-stack-v20` with all expected remediation runtime artifacts exposed by `/api/health`.
+- `npm run test:live:production` still fails on the first real widget turn through `https://bakautprof.ru/`.
+- The failure is now proven from production admin metadata, not inferred from the UI:
+  - failure artifact: `local-live-tests/production-agent-cycle-failure.json`;
+  - captured session: `374a2f6d-48f4-4674-89d6-5ed6aad43784`;
+  - captured turn: `19fbfb13-4735-4a89-bf5d-38bbc8f19a85`;
+  - turn stage: `recovery_failed`;
+  - turn error: `AI answer recovery failed: insufficient_quota`;
+  - `plannerContract`: `null`;
+  - assistant message: not created.
+- This means the current blocker is OpenAI quota/billing on the production Railway environment. It is not a catalog ranking, card manifest, lead-state, or ExecutionContract bug.
+- The live harness was hardened so future first-turn failures save `sessionId` and admin conversation detail immediately instead of producing `sessionId: null`.
+- Required next action outside code: restore OpenAI quota/credits or replace the Railway OpenAI credential with a project key that has quota. After that, rerun:
+  - `npm run test:remediation:postdeploy`;
+  - `npm run test:remediation:external-readiness`;
+  - `npm run test:remediation:completion-audit`.
