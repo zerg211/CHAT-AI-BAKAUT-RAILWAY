@@ -915,3 +915,9 @@ Not yet validated:
   - production marker/runtime artifacts are proven when `remediation-postdeploy.json` contains the expected marker and runtime artifacts, even if live gates fail later;
   - GitHub/Railway deployment is accepted when the production marker proves the expected runtime is live;
   - live behavior remains a separate hard requirement and is still blocked by production OpenAI quota.
+- 2026-05-17 follow-up:
+  - `npm run test:remediation:postdeploy` was rerun and still fails at the first production widget turn;
+  - latest failure session: `d1ef43f4-686f-4e01-a374-27af53834281`;
+  - latest failure turn: `b86ba719-c895-4f21-a9ca-fdc6c900dcb8`;
+  - latest turn stage/error: `recovery_failed` / `AI answer recovery failed: insufficient_quota`;
+  - `tests/remediationCompletionAudit.mjs` now embeds this live failure evidence directly under `postdeploy_live_gates_passed`.

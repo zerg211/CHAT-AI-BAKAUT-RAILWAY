@@ -97,6 +97,7 @@ const railwayDeploy = await readJson(path.join('local-live-tests', 'remediation-
 const railwaySource = await readJson(path.join('local-live-tests', 'remediation-railway-source-readiness.json'));
 const externalReadiness = await readJson(path.join('local-live-tests', 'remediation-external-readiness.json'));
 const postdeploy = await readJson(path.join('local-live-tests', 'remediation-postdeploy.json'));
+const productionLiveFailure = await readJson(path.join('local-live-tests', 'production-agent-cycle-failure.json'));
 const productionProtocols = await listProductionProtocols();
 const releaseBundles = await listReleaseBundles();
 const latestReleaseBundle = releaseBundles[0];
@@ -164,7 +165,21 @@ const checks = [
     generatedAt: postdeploy.generatedAt,
     stage: postdeploy.stage,
     actualRemediationContractVersion: postdeploy.actualRemediationContractVersion,
-    missingRemediationRuntimeArtifacts: postdeploy.missingRemediationRuntimeArtifacts
+    missingRemediationRuntimeArtifacts: postdeploy.missingRemediationRuntimeArtifacts,
+    liveFailureArtifact: 'local-live-tests/production-agent-cycle-failure.json',
+    liveFailureSessionId: productionLiveFailure.sessionId,
+    liveFailureError: productionLiveFailure.error,
+    liveFailureTurn: productionLiveFailure.adminDetail?.turns?.[0]
+      ? {
+          id: productionLiveFailure.adminDetail.turns[0].id,
+          status: productionLiveFailure.adminDetail.turns[0].status,
+          stage: productionLiveFailure.adminDetail.turns[0].stage,
+          errorCode: productionLiveFailure.adminDetail.turns[0].errorCode,
+          errorMessage: productionLiveFailure.adminDetail.turns[0].errorMessage,
+          plannerContractPresent: Boolean(productionLiveFailure.adminDetail.turns[0].plannerContract),
+          assistantMessageId: productionLiveFailure.adminDetail.turns[0].assistantMessageId
+        }
+      : null
   }),
   evaluate('fresh_production_live_protocol_exists', freshProductionProtocols.length > 0, {
     expectedDate: expectedProtocolDate,

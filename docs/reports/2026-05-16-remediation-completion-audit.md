@@ -433,6 +433,12 @@ Operational conclusion:
   - production marker/runtime artifacts are present.
 - Still not proven:
   - successful real production widget conversation after the latest remediation stack, because the first live LLM turn fails with `insufficient_quota`.
+- 2026-05-17 recheck confirms the blocker remains:
+  - latest failed session: `d1ef43f4-686f-4e01-a374-27af53834281`;
+  - latest failed turn: `b86ba719-c895-4f21-a9ca-fdc6c900dcb8`;
+  - turn stage: `recovery_failed`;
+  - turn error: `AI answer recovery failed: insufficient_quota`;
+  - completion audit now embeds the live failure turn evidence directly in the failed `postdeploy_live_gates_passed` check.
 
 ## External architecture sources used
 
