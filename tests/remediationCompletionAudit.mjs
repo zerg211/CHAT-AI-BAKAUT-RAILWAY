@@ -166,6 +166,29 @@ const productionOpenAiRuntime = externalReadiness?.checks?.productionOpenAiRunti
 const productionOpenAiQuotaBlocked = productionOpenAiRuntime.class === 'quota_or_billing' ||
   externalBlockers.some((blocker) => blocker.name === 'productionOpenAiRuntime' && blocker.class === 'quota_or_billing');
 const liveGatePassed = postdeploy.ok === true && postdeploy.stage === 'complete' && freshProductionProtocols.length > 0;
+const currentPostdeployLiveAttempted = ['live_gates_started', 'complete'].includes(postdeploy.stage);
+const postdeployLiveEvidence = currentPostdeployLiveAttempted
+  ? {
+      liveFailureArtifact: 'local-live-tests/production-agent-cycle-failure.json',
+      liveFailureSessionId: productionLiveFailure.sessionId,
+      liveFailureError: productionLiveFailure.error,
+      liveFailureTurn: productionLiveFailure.adminDetail?.turns?.[0]
+        ? {
+            id: productionLiveFailure.adminDetail.turns[0].id,
+            status: productionLiveFailure.adminDetail.turns[0].status,
+            stage: productionLiveFailure.adminDetail.turns[0].stage,
+            errorCode: productionLiveFailure.adminDetail.turns[0].errorCode,
+            errorMessage: productionLiveFailure.adminDetail.turns[0].errorMessage,
+            plannerContractPresent: Boolean(productionLiveFailure.adminDetail.turns[0].plannerContract),
+            assistantMessageId: productionLiveFailure.adminDetail.turns[0].assistantMessageId
+          }
+        : null
+    }
+  : {
+      liveGatePolicy: postdeploy.liveGatePolicy,
+      requiredEnvForLiveGates: postdeploy.requiredEnvForLiveGates,
+      optionalEnvForFixedReplays: postdeploy.optionalEnvForFixedReplays
+    };
 
 const checks = [
   evaluate('backup_exists', await exists(backupPath), { backupPath }),
@@ -226,20 +249,8 @@ const checks = [
     stage: postdeploy.stage,
     actualRemediationContractVersion: postdeploy.actualRemediationContractVersion,
     missingRemediationRuntimeArtifacts: postdeploy.missingRemediationRuntimeArtifacts,
-    liveFailureArtifact: 'local-live-tests/production-agent-cycle-failure.json',
-    liveFailureSessionId: productionLiveFailure.sessionId,
-    liveFailureError: productionLiveFailure.error,
-    liveFailureTurn: productionLiveFailure.adminDetail?.turns?.[0]
-      ? {
-          id: productionLiveFailure.adminDetail.turns[0].id,
-          status: productionLiveFailure.adminDetail.turns[0].status,
-          stage: productionLiveFailure.adminDetail.turns[0].stage,
-          errorCode: productionLiveFailure.adminDetail.turns[0].errorCode,
-          errorMessage: productionLiveFailure.adminDetail.turns[0].errorMessage,
-          plannerContractPresent: Boolean(productionLiveFailure.adminDetail.turns[0].plannerContract),
-          assistantMessageId: productionLiveFailure.adminDetail.turns[0].assistantMessageId
-        }
-      : null,
+    currentPostdeployLiveAttempted,
+    ...postdeployLiveEvidence,
     productionOpenAiQuotaBlocked
   }),
   evaluate('fresh_production_live_protocol_exists', freshProductionProtocols.length > 0, {
