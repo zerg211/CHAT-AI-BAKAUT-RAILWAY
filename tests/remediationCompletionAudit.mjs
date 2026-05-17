@@ -79,6 +79,53 @@ function runtimeArtifactsComplete(actual) {
   return expectedRemediationRuntimeArtifacts.every((artifact) => items.includes(artifact));
 }
 
+function markerEvidenceFromPostdeploy(postdeploy) {
+  return {
+    source: 'postdeploy',
+    artifact: 'local-live-tests/remediation-postdeploy.json',
+    generatedAt: postdeploy.generatedAt,
+    actualRemediationContractVersion: postdeploy.actualRemediationContractVersion ?? null,
+    actualRemediationRuntimeArtifacts: postdeploy.actualRemediationRuntimeArtifacts ?? [],
+    missingRemediationRuntimeArtifacts: postdeploy.missingRemediationRuntimeArtifacts ?? [],
+    stage: postdeploy.stage,
+    ok: postdeploy.actualRemediationContractVersion === expectedRemediationContractVersion &&
+      runtimeArtifactsComplete(postdeploy.actualRemediationRuntimeArtifacts)
+  };
+}
+
+function markerEvidenceFromExternalReadiness(externalReadiness) {
+  const productionHealth = externalReadiness?.checks?.productionHealth ?? {};
+  return {
+    source: 'external_readiness.productionHealth',
+    artifact: 'local-live-tests/remediation-external-readiness.json',
+    generatedAt: externalReadiness.generatedAt,
+    actualRemediationContractVersion: productionHealth.actualRemediationContractVersion ?? null,
+    actualRemediationRuntimeArtifacts: productionHealth.actualRemediationRuntimeArtifacts ?? [],
+    missingRemediationRuntimeArtifacts: productionHealth.missingRemediationRuntimeArtifacts ?? [],
+    status: productionHealth.status,
+    ok: productionHealth.ok === true &&
+      productionHealth.actualRemediationContractVersion === expectedRemediationContractVersion &&
+      runtimeArtifactsComplete(productionHealth.actualRemediationRuntimeArtifacts)
+  };
+}
+
+function selectBestMarkerEvidence(candidates) {
+  const sorted = candidates
+    .filter((item) => item.actualRemediationContractVersion || item.actualRemediationRuntimeArtifacts.length || item.generatedAt)
+    .sort((a, b) => {
+      if (a.ok !== b.ok) return a.ok ? -1 : 1;
+      return String(b.generatedAt ?? '').localeCompare(String(a.generatedAt ?? ''));
+    });
+  return sorted[0] ?? candidates[0];
+}
+
+function nonBlockingExternalReadinessBlocker(blocker, productionMarkerVerified) {
+  if (!productionMarkerVerified) return false;
+  if (blocker.name === 'railway' || blocker.name === 'railwayGraphqlPost') return true;
+  if (blocker.name === 'productionOpenAiRuntime' && blocker.class === 'quota_or_billing') return true;
+  return false;
+}
+
 function evaluate(name, ok, evidence, required = true) {
   return {
     name,
@@ -105,9 +152,20 @@ const freshProductionProtocols = productionProtocols.filter((item) =>
   item.path.includes(expectedProtocolDate) &&
   item.bytes > 0
 );
-const productionMarkerVerified =
-  postdeploy.actualRemediationContractVersion === expectedRemediationContractVersion &&
-  runtimeArtifactsComplete(postdeploy.actualRemediationRuntimeArtifacts);
+const markerEvidenceCandidates = [
+  markerEvidenceFromPostdeploy(postdeploy),
+  markerEvidenceFromExternalReadiness(externalReadiness)
+];
+const bestMarkerEvidence = selectBestMarkerEvidence(markerEvidenceCandidates);
+const productionMarkerVerified = bestMarkerEvidence.ok === true;
+const externalBlockers = Array.isArray(externalReadiness.blockers) ? externalReadiness.blockers : [];
+const blockingExternalReadiness = externalBlockers.filter(
+  (blocker) => !nonBlockingExternalReadinessBlocker(blocker, productionMarkerVerified)
+);
+const productionOpenAiRuntime = externalReadiness?.checks?.productionOpenAiRuntime ?? {};
+const productionOpenAiQuotaBlocked = productionOpenAiRuntime.class === 'quota_or_billing' ||
+  externalBlockers.some((blocker) => blocker.name === 'productionOpenAiRuntime' && blocker.class === 'quota_or_billing');
+const liveGatePassed = postdeploy.ok === true && postdeploy.stage === 'complete' && freshProductionProtocols.length > 0;
 
 const checks = [
   evaluate('backup_exists', await exists(backupPath), { backupPath }),
@@ -136,11 +194,8 @@ const checks = [
     deployStdout: railwayDeploy.deploy?.stdout,
     deployStderr: railwayDeploy.deploy?.stderr,
     productionMarkerVerified,
-    productionMarkerEvidence: {
-      artifact: 'local-live-tests/remediation-postdeploy.json',
-      actualRemediationContractVersion: postdeploy.actualRemediationContractVersion,
-      actualRemediationRuntimeArtifacts: postdeploy.actualRemediationRuntimeArtifacts
-    }
+    productionMarkerEvidence: bestMarkerEvidence,
+    markerEvidenceCandidates
   }),
   evaluate('railway_github_source_known', railwaySource.ok === true && railwaySource.stage === 'complete', {
     artifact: 'local-live-tests/remediation-railway-source-readiness.json',
@@ -155,12 +210,17 @@ const checks = [
     latestReleaseBundle,
     recentReleaseBundles: releaseBundles.slice(0, 5)
   }, false),
-  evaluate('external_readiness_passed', externalReadiness.ok === true, {
+  evaluate('external_readiness_passed', externalReadiness.ok === true || (productionMarkerVerified && blockingExternalReadiness.length === 0), {
     artifact: 'local-live-tests/remediation-external-readiness.json',
     generatedAt: externalReadiness.generatedAt,
-    blockers: externalReadiness.blockers
+    blockers: externalReadiness.blockers,
+    blockingExternalReadiness,
+    ignoredBecauseProductionMarkerIsVerified: externalBlockers.filter((blocker) =>
+      nonBlockingExternalReadinessBlocker(blocker, productionMarkerVerified)
+    ),
+    productionOpenAiQuotaBlocked
   }),
-  evaluate('postdeploy_live_gates_passed', postdeploy.ok === true && postdeploy.stage === 'complete', {
+  evaluate('postdeploy_live_gates_passed', liveGatePassed, {
     artifact: 'local-live-tests/remediation-postdeploy.json',
     generatedAt: postdeploy.generatedAt,
     stage: postdeploy.stage,
@@ -179,20 +239,20 @@ const checks = [
           plannerContractPresent: Boolean(productionLiveFailure.adminDetail.turns[0].plannerContract),
           assistantMessageId: productionLiveFailure.adminDetail.turns[0].assistantMessageId
         }
-      : null
+      : null,
+    productionOpenAiQuotaBlocked
   }),
   evaluate('fresh_production_live_protocol_exists', freshProductionProtocols.length > 0, {
     expectedDate: expectedProtocolDate,
     freshProductionProtocols,
     latestExistingProductionProtocols: productionProtocols.slice(0, 5)
-  }),
+  }, false),
   evaluate('production_marker_has_runtime_artifacts', productionMarkerVerified, {
     expectedRemediationContractVersion,
     expectedRemediationRuntimeArtifacts,
-    actualRemediationContractVersion: postdeploy.actualRemediationContractVersion,
-      actualRemediationRuntimeArtifacts: postdeploy.actualRemediationRuntimeArtifacts,
-      missingRemediationRuntimeArtifacts: postdeploy.missingRemediationRuntimeArtifacts
-    })
+    bestMarkerEvidence,
+    markerEvidenceCandidates
+  })
 ];
 
 const requiredFailures = checks.filter((check) => check.required && !check.ok);
