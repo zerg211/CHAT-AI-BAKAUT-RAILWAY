@@ -416,12 +416,12 @@ async function main() {
       }, null, 2), 'utf8');
     }
     const assistantMessages = detail?.messages?.filter((message) => message.role === 'assistant') ?? [];
-    const turns = detail?.turns ?? [];
+    const adminTurns = detail?.turns ?? [];
     const metadataAvailable = assistantMessages.length >= steps.length;
 
     const auditedSteps = steps.map((step, index) => {
-      const turnError = turns[index]?.errorCode
-        ? `turn error: ${turns[index].errorCode}${turns[index].stage ? `/${turns[index].stage}` : ''}`
+      const turnError = adminTurns[index]?.errorCode
+        ? `turn error: ${adminTurns[index].errorCode}${adminTurns[index].stage ? `/${adminTurns[index].stage}` : ''}`
         : '';
       const code = metadataAvailable ? codeAudit(step, assistantMessages[index]) : {
         issues: ['admin metadata недоступна или количество ходов не совпало', turnError].filter(Boolean),
