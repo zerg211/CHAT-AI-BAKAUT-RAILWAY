@@ -85,7 +85,14 @@ const dialoguePolicy = await assertNonRepeatingProductionDialogue({
   scenarioName: productionDialogue.scenarioName,
   turns,
   artifactDir: 'local-live-tests',
-  excludePaths: [protocolPath, detailPath, failurePath, productionDialogue.scenarioFile].filter(Boolean)
+  excludePaths: [
+    protocolPath,
+    detailPath,
+    failurePath,
+    productionDialogue.scenarioFile,
+    path.join('local-live-tests', 'remediation-completion-audit.json'),
+    path.join('local-live-tests', 'remediation-postdeploy.json')
+  ].filter(Boolean)
 });
 
 function cleanText(value) {
