@@ -22,6 +22,7 @@ const checks = [
   { command: nodeCommand, args: ['--check', 'tests/liveAgentCycle.production.mjs'], label: 'production live script syntax' },
   { command: nodeCommand, args: ['--check', 'tests/liveAgentCycle.876.production.mjs'], label: 'production #876 live script syntax' },
   { command: nodeCommand, args: ['--check', 'tests/liveAgentCycle.diverse.production.mjs'], label: 'diverse production live script syntax' },
+  { command: nodeCommand, args: ['--check', 'tests/liveAgentCycle.custom-loads.production.mjs'], label: 'custom loads production live script syntax' },
   { command: nodeCommand, args: ['--check', 'tests/liveAgentCycle.local-llm-full.mjs'], label: 'local LLM live script syntax' },
   { command: nodeCommand, args: ['--check', 'tests/prepareProductionLiveDialogueScenario.mjs'], label: 'production live scenario preparation syntax' },
   { command: nodeCommand, args: ['--check', 'tests/productionOpenAiRuntimePreflight.mjs'], label: 'production OpenAI runtime preflight syntax' },

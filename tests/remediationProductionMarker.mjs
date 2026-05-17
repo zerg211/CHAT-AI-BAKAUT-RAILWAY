@@ -1,5 +1,5 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-17-generator-load-adaptive-buyer-v1';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-17-live-budget-generator-load-v2';
 
 export const expectedRemediationRuntimeArtifacts = [
   'executionContract',

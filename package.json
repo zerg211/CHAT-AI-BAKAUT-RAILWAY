@@ -23,6 +23,7 @@
     "test:live:production": "node tests/liveAgentCycle.production.mjs",
     "prepare:live:production:scenario": "node tests/prepareProductionLiveDialogueScenario.mjs",
     "test:live:production:diverse": "node tests/liveAgentCycle.diverse.production.mjs",
+    "test:live:production:custom-loads": "node tests/liveAgentCycle.custom-loads.production.mjs",
     "test:live:production:876": "node tests/liveAgentCycle.876.production.mjs",
     "test:watch": "vitest",
     "migrate": "tsx src/db/migrate.ts",
