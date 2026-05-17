@@ -1,5 +1,5 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-heavy-plate-nearest-v6';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-heavy-plate-budget-v7';
 
 export const expectedRemediationRuntimeArtifacts = [
   'executionContract',

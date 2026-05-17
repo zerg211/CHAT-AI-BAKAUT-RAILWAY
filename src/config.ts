@@ -77,7 +77,7 @@ const schema = z.object({
   DEBUG_OPENAI_USAGE: booleanFlag(false),
   OPENAI_USAGE_GUARD_ENABLED: booleanFlag(true),
   OPENAI_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(0),
-  OPENAI_HEADLESS_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(1600000),
+  OPENAI_HEADLESS_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(3000000),
   OPENAI_BUDGET_GUARD_RESERVE_TOKENS: defaultNonNegativeInt(16000),
   OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(true),
   CATALOG_BASE_URL: z.string().url().default('https://bakautprof.ru'),

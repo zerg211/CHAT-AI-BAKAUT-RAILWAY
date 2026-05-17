@@ -8,7 +8,7 @@ import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 
-export const REMEDIATION_CONTRACT_VERSION = '2026-05-18-heavy-plate-nearest-v6';
+export const REMEDIATION_CONTRACT_VERSION = '2026-05-18-heavy-plate-budget-v7';
 export const REMEDIATION_RUNTIME_ARTIFACTS = [
   'executionContract',
   'requirementLedger',
