@@ -16,7 +16,8 @@ Before `tests/liveAgentCycle.diverse.production.mjs` launches Playwright, it now
 
 1. verifies the production remediation marker;
 2. calls `/api/admin/runtime/openai` with the admin token;
-3. blocks before browser launch if the runtime is not healthy.
+3. calls `/api/admin/openai-usage?hours=24&source=production_live_test`;
+4. blocks before browser launch if the runtime is not healthy or the live-test token budget has no room after reserve.
 
 Blocked classes include:
 
@@ -26,11 +27,12 @@ Blocked classes include:
 - `model_project_or_org_access`;
 - `rate_limit`;
 - `network_or_timeout`;
-- `network_or_runtime`.
+- `network_or_runtime`;
+- `budget_guard`.
 
 ## Result
 
-The final live gate will not spend browser/test time or start a buyer dialogue when the production OpenAI runtime is already known to be unable to answer. The failure artifact records the scenario, policy context, and preflight error details, but no widget conversation is attempted.
+The final live gate will not spend browser/test time or start a buyer dialogue when the production OpenAI runtime is already known to be unable to answer or the `production_live_test` daily token budget is exhausted. The failure artifact records the scenario, policy context, and preflight error details, but no widget conversation is attempted.
 
 ## Verification
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  checkProductionLiveTestBudget,
   checkProductionOpenAiRuntime,
   requireProductionOpenAiRuntimeReady
 } from './productionOpenAiRuntimePreflight.mjs';
@@ -65,5 +66,49 @@ describe('production OpenAI runtime preflight', () => {
         blocking: true
       }
     });
+  });
+
+  it('blocks exhausted production live test token budget before browser launch', async () => {
+    const result = await checkProductionLiveTestBudget({
+      token: 'admin',
+      fetchImpl: async () => response(200, {
+        budget: {
+          headlessDailyTokenBudget: 160000,
+          guardReserveTokens: 16000
+        },
+        rows: [
+          { totalTokens: 144321 }
+        ]
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      class: 'budget_guard',
+      code: 'production_live_test_budget_exhausted',
+      usedTokens: 144321,
+      budget: 160000,
+      reserveTokens: 16000
+    });
+  });
+
+  it('passes only when runtime and live-test budget are healthy', async () => {
+    let call = 0;
+    const result = await requireProductionOpenAiRuntimeReady({
+      token: 'admin',
+      fetchImpl: async () => {
+        call += 1;
+        if (call === 1) {
+          return response(200, { ok: true, class: 'ok', outputPresent: true });
+        }
+        return response(200, {
+          budget: { headlessDailyTokenBudget: 160000, guardReserveTokens: 16000 },
+          rows: [{ totalTokens: 25000 }]
+        });
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.budget.remainingAfterReserve).toBe(119000);
   });
 });

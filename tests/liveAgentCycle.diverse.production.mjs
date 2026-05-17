@@ -479,6 +479,17 @@ async function main() {
       ])
     ].join('\n'), 'utf8');
 
+    if (buyerIssueCount || codeIssueCount) {
+      const error = new Error('production_diverse_live_audit_failed');
+      error.details = {
+        buyerIssueCount,
+        codeIssueCount,
+        protocolPath,
+        sessionId
+      };
+      throw error;
+    }
+
     console.log(`DONE diverse production audit. Buyer issues=${buyerIssueCount}; code issues=${codeIssueCount}; protocol=${protocolPath}`);
   } catch (error) {
     await fs.writeFile(failurePath, JSON.stringify({

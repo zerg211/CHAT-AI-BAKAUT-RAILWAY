@@ -36,10 +36,16 @@ async function listProductionProtocols() {
       if (!entry.isFile() || !entry.name.endsWith('.production.md')) continue;
       const fullPath = path.join('local-live-tests', entry.name);
       const stat = await fs.stat(fullPath);
+      const content = await fs.readFile(fullPath, 'utf8').catch(() => '');
+      const buyerIssueCount = Number(content.match(/Buyer-view issues:\s*(\d+)/iu)?.[1] ?? NaN);
+      const codeIssueCount = Number(content.match(/Code\/metadata issues:\s*(\d+)/iu)?.[1] ?? NaN);
       protocols.push({
         path: fullPath,
         bytes: stat.size,
-        modifiedAt: stat.mtime.toISOString()
+        modifiedAt: stat.mtime.toISOString(),
+        buyerIssueCount: Number.isFinite(buyerIssueCount) ? buyerIssueCount : null,
+        codeIssueCount: Number.isFinite(codeIssueCount) ? codeIssueCount : null,
+        validLiveAudit: buyerIssueCount === 0 && codeIssueCount === 0
       });
     }
     return protocols.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
@@ -219,6 +225,8 @@ const freshProductionProtocols = productionProtocols.filter((item) =>
   item.path.includes(expectedProtocolDate) &&
   item.bytes > 0
 );
+const freshPassingProductionProtocols = freshProductionProtocols.filter((item) => item.validLiveAudit);
+const latestFreshProductionProtocol = freshProductionProtocols[0] ?? null;
 const markerEvidenceCandidates = [
   markerEvidenceFromPostdeploy(postdeploy),
   markerEvidenceFromExternalReadiness(externalReadiness)
@@ -232,24 +240,28 @@ const blockingExternalReadiness = externalBlockers.filter(
 const productionOpenAiRuntime = externalReadiness?.checks?.productionOpenAiRuntime ?? {};
 const productionOpenAiQuotaBlocked = productionOpenAiRuntime.class === 'quota_or_billing' ||
   externalBlockers.some((blocker) => blocker.name === 'productionOpenAiRuntime' && blocker.class === 'quota_or_billing');
-const liveGatePassed = postdeploy.ok === true && postdeploy.stage === 'complete' && freshProductionProtocols.length > 0;
+const liveGatePassed = postdeploy.ok === true && postdeploy.stage === 'complete' && freshPassingProductionProtocols.length > 0;
 const currentPostdeployLiveAttempted = ['live_gates_started', 'complete'].includes(postdeploy.stage);
 const postdeployLiveEvidence = currentPostdeployLiveAttempted
   ? {
-      liveFailureArtifact: 'local-live-tests/production-agent-cycle-failure.json',
-      liveFailureSessionId: productionLiveFailure.sessionId,
-      liveFailureError: productionLiveFailure.error,
-      liveFailureTurn: productionLiveFailure.adminDetail?.turns?.[0]
-        ? {
-            id: productionLiveFailure.adminDetail.turns[0].id,
-            status: productionLiveFailure.adminDetail.turns[0].status,
-            stage: productionLiveFailure.adminDetail.turns[0].stage,
-            errorCode: productionLiveFailure.adminDetail.turns[0].errorCode,
-            errorMessage: productionLiveFailure.adminDetail.turns[0].errorMessage,
-            plannerContractPresent: Boolean(productionLiveFailure.adminDetail.turns[0].plannerContract),
-            assistantMessageId: productionLiveFailure.adminDetail.turns[0].assistantMessageId
-          }
-        : null
+      latestFreshProductionProtocol,
+      freshPassingProductionProtocols,
+      legacyLiveFailureArtifact: latestFreshProductionProtocol ? undefined : {
+        path: 'local-live-tests/production-agent-cycle-failure.json',
+        sessionId: productionLiveFailure.sessionId,
+        error: productionLiveFailure.error,
+        turn: productionLiveFailure.adminDetail?.turns?.[0]
+          ? {
+              id: productionLiveFailure.adminDetail.turns[0].id,
+              status: productionLiveFailure.adminDetail.turns[0].status,
+              stage: productionLiveFailure.adminDetail.turns[0].stage,
+              errorCode: productionLiveFailure.adminDetail.turns[0].errorCode,
+              errorMessage: productionLiveFailure.adminDetail.turns[0].errorMessage,
+              plannerContractPresent: Boolean(productionLiveFailure.adminDetail.turns[0].plannerContract),
+              assistantMessageId: productionLiveFailure.adminDetail.turns[0].assistantMessageId
+            }
+          : null
+      }
     }
   : {
       liveGatePolicy: postdeploy.liveGatePolicy,
@@ -323,6 +335,7 @@ const checks = [
   evaluate('fresh_production_live_protocol_exists', freshProductionProtocols.length > 0, {
     expectedDate: expectedProtocolDate,
     freshProductionProtocols,
+    freshPassingProductionProtocols,
     latestExistingProductionProtocols: productionProtocols.slice(0, 5)
   }, false),
   evaluate('prepared_production_live_scenario_exists', latestPreparedProductionLiveScenario?.valid === true, {

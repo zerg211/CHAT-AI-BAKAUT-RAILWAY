@@ -70,16 +70,89 @@ export async function checkProductionOpenAiRuntime({
   }
 }
 
-export async function requireProductionOpenAiRuntimeReady(options = {}) {
-  const result = await checkProductionOpenAiRuntime(options);
-  if (result.ok) return result;
+export async function checkProductionLiveTestBudget({
+  productionApiBase = process.env.PRODUCTION_API_BASE || 'https://chat-ai-production-3057.up.railway.app',
+  token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY,
+  fetchImpl = fetch,
+  timeoutMs = 30_000
+} = {}) {
+  if (!token) {
+    return {
+      ok: false,
+      class: 'authentication',
+      code: 'missing_admin_token',
+      message: 'ADMIN_PASSWORD or ADMIN_API_KEY is required before production live budget preflight.'
+    };
+  }
 
-  const runtimeClass = result.class ?? 'unknown';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetchImpl(`${productionApiBase}/api/admin/openai-usage?hours=24&source=production_live_test`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: controller.signal
+    });
+    const body = await response.text();
+    let payload = null;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      // Keep raw text in result.
+    }
+    const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+    const usedTokens = rows.reduce((sum, row) => sum + Number(row.totalTokens ?? row.total_tokens ?? 0), 0);
+    const budget = Number(payload?.budget?.headlessDailyTokenBudget ?? 0);
+    const reserve = Number(payload?.budget?.guardReserveTokens ?? 0);
+    const budgetConfigured = Number.isFinite(budget) && budget > 0;
+    const remainingAfterReserve = budgetConfigured ? budget - usedTokens - reserve : null;
+    return {
+      ok: response.ok && (!budgetConfigured || remainingAfterReserve > 0),
+      status: response.status,
+      class: response.ok ? (budgetConfigured && remainingAfterReserve <= 0 ? 'budget_guard' : 'ok') : 'unknown',
+      code: budgetConfigured && remainingAfterReserve <= 0 ? 'production_live_test_budget_exhausted' : null,
+      usedTokens,
+      budget: budgetConfigured ? budget : null,
+      reserveTokens: Number.isFinite(reserve) ? reserve : 0,
+      remainingAfterReserve,
+      rows: rows.slice(0, 10),
+      body: response.ok ? undefined : body.slice(0, 1200)
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      class: 'network_or_runtime',
+      code: 'production_live_budget_preflight_failed',
+      message: error instanceof Error ? error.message : String(error)
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function requireProductionOpenAiRuntimeReady(options = {}) {
+  const runtime = await checkProductionOpenAiRuntime(options);
+  if (!runtime.ok) {
+    const runtimeClass = runtime.class ?? 'unknown';
+    const error = new Error('production_openai_runtime_preflight_blocked');
+    error.details = {
+      ...runtime,
+      stage: 'runtime_probe',
+      blocking: blockingRuntimeClasses.has(runtimeClass),
+      policy: 'Production live widget dialogs require a healthy Railway OpenAI runtime before browser launch.'
+    };
+    throw error;
+  }
+
+  const budget = await checkProductionLiveTestBudget(options);
+  if (budget.ok) return { ok: true, runtime, budget };
+
   const error = new Error('production_openai_runtime_preflight_blocked');
   error.details = {
-    ...result,
-    blocking: blockingRuntimeClasses.has(runtimeClass),
-    policy: 'Production live widget dialogs require a healthy Railway OpenAI runtime before browser launch.'
+    ...budget,
+    stage: 'production_live_test_budget',
+    blocking: true,
+    runtime,
+    policy: 'Production live widget dialogs require remaining production_live_test token budget before browser launch.'
   };
   throw error;
 }
