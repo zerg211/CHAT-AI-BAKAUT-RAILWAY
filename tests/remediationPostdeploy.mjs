@@ -165,7 +165,11 @@ if (!runProductionLiveGates) {
     requiredEnvForLiveGates: {
       RUN_REMEDIATION_POSTDEPLOY_LIVE: '1',
       ALLOW_PRODUCTION_LIVE_TESTS: '1',
-      FINAL_RELEASE_LIVE_GATE: '1'
+      FINAL_RELEASE_LIVE_GATE: '1',
+      PRODUCTION_LIVE_DIALOGUE_FILE: 'path to a fresh non-repeating JSON scenario'
+    },
+    fallbackEnvForBundledScenario: {
+      ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE: '1 only for an intentional bundled scenario run'
     },
     optionalEnvForFixedReplays: {
       RUN_FIXED_PRODUCTION_REPLAYS: '1',

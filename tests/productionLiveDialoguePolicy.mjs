@@ -88,6 +88,64 @@ export async function assertNonRepeatingProductionDialogue({
   return { ...metadata, repeatedDialogueOverride: false, priorMatches: [] };
 }
 
+function validateDialogueTurns(turns) {
+  if (!Array.isArray(turns) || turns.length === 0) {
+    throw new Error('production_live_dialogue_policy_requires_turns');
+  }
+  const invalidIndex = turns.findIndex((turn) =>
+    !turn ||
+    typeof turn !== 'object' ||
+    !String(turn.phase ?? '').trim() ||
+    !String(turn.user ?? '').trim()
+  );
+  if (invalidIndex >= 0) {
+    const error = new Error('production_live_dialogue_turn_invalid');
+    error.details = { invalidIndex };
+    throw error;
+  }
+}
+
+export async function loadProductionLiveDialogue({
+  defaultTurns,
+  defaultScenarioName = 'bundled-production-live-dialogue',
+  scenarioFile = process.env.PRODUCTION_LIVE_DIALOGUE_FILE,
+  env = process.env
+} = {}) {
+  if (scenarioFile) {
+    const raw = await fs.readFile(scenarioFile, 'utf8');
+    const parsed = JSON.parse(raw);
+    const turns = Array.isArray(parsed) ? parsed : parsed.turns;
+    validateDialogueTurns(turns);
+    return {
+      turns,
+      scenarioName: String(parsed.scenarioName || env.PRODUCTION_LIVE_SCENARIO_NAME || defaultScenarioName),
+      source: 'file',
+      scenarioFile
+    };
+  }
+
+  validateDialogueTurns(defaultTurns);
+
+  if (env.ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE !== '1') {
+    const error = new Error('bundled_production_live_dialogue_not_approved');
+    error.details = {
+      policy: 'Final production live dialogs must use a fresh PRODUCTION_LIVE_DIALOGUE_FILE unless the bundled scenario is explicitly approved.',
+      requiredEnv: {
+        PRODUCTION_LIVE_DIALOGUE_FILE: 'path to a fresh JSON scenario with { "scenarioName": "...", "turns": [{ "phase": "...", "user": "..." }] }',
+        ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE: '1 only for an intentional bundled scenario run'
+      }
+    };
+    throw error;
+  }
+
+  return {
+    turns: defaultTurns,
+    scenarioName: String(env.PRODUCTION_LIVE_SCENARIO_NAME || defaultScenarioName),
+    source: 'bundled',
+    scenarioFile: null
+  };
+}
+
 export function dialoguePolicyMarkdown(policy) {
   return [
     `Live dialogue policy: ${policy.policy}`,

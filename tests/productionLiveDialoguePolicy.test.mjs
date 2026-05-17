@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import {
   assertNonRepeatingProductionDialogue,
   dialoguePolicyMarkdown,
-  dialogueSignature
+  dialogueSignature,
+  loadProductionLiveDialogue
 } from './productionLiveDialoguePolicy.mjs';
 
 const sampleTurns = [
@@ -79,5 +80,53 @@ describe('production live dialogue policy', () => {
 
     expect(policy.repeatedDialogueOverride).toBe(true);
     expect(policy.dialogueSignature).toBe(signature);
+  });
+
+  it('requires an explicit external scenario or bundled override', async () => {
+    await expect(loadProductionLiveDialogue({
+      defaultTurns: sampleTurns,
+      defaultScenarioName: 'bundled-v1',
+      env: {}
+    })).rejects.toMatchObject({
+      message: 'bundled_production_live_dialogue_not_approved',
+      details: {
+        requiredEnv: expect.objectContaining({
+          PRODUCTION_LIVE_DIALOGUE_FILE: expect.any(String)
+        })
+      }
+    });
+  });
+
+  it('loads a fresh scenario file before production live execution', async () => {
+    const artifactDir = await tempArtifactDir();
+    const scenarioFile = path.join(artifactDir, 'fresh-scenario.json');
+    await fs.writeFile(scenarioFile, JSON.stringify({
+      scenarioName: 'fresh-final-live-v2',
+      turns: sampleTurns
+    }), 'utf8');
+
+    const dialogue = await loadProductionLiveDialogue({
+      defaultTurns: [{ phase: 'bundled', user: 'Bundled prompt.' }],
+      defaultScenarioName: 'bundled-v1',
+      scenarioFile,
+      env: {}
+    });
+
+    expect(dialogue.source).toBe('file');
+    expect(dialogue.scenarioName).toBe('fresh-final-live-v2');
+    expect(dialogue.turns).toEqual(sampleTurns);
+    expect(dialogue.scenarioFile).toBe(scenarioFile);
+  });
+
+  it('allows bundled scenario only with explicit override', async () => {
+    const dialogue = await loadProductionLiveDialogue({
+      defaultTurns: sampleTurns,
+      defaultScenarioName: 'bundled-v1',
+      env: { ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE: '1' }
+    });
+
+    expect(dialogue.source).toBe('bundled');
+    expect(dialogue.scenarioName).toBe('bundled-v1');
+    expect(dialogue.turns).toEqual(sampleTurns);
   });
 });

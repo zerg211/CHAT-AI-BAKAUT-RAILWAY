@@ -5,7 +5,8 @@ import dotenv from 'dotenv';
 import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
 import {
   assertNonRepeatingProductionDialogue,
-  dialoguePolicyMarkdown
+  dialoguePolicyMarkdown,
+  loadProductionLiveDialogue
 } from './productionLiveDialoguePolicy.mjs';
 import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 
@@ -22,7 +23,7 @@ const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-prod
 const detailPath = path.join('local-live-tests', `${started.slice(0, 10)}-production-diverse-buyer-audit-${safeStamp}.json`);
 const failurePath = path.join('local-live-tests', 'production-diverse-buyer-audit-failure.json');
 
-const turns = [
+const bundledTurns = [
   {
     phase: 'household_unclear_generator',
     user: 'Добрый день. Я первый раз выбираю генератор. На дачу надо: холодильник, насос, свет и иногда чайник. Какой мощности смотреть, чтобы не купить лишнее?'
@@ -73,9 +74,14 @@ const turns = [
   }
 ];
 
+const productionDialogue = await loadProductionLiveDialogue({
+  defaultTurns: bundledTurns,
+  defaultScenarioName: 'diverse-buyer-audit-generator-plate-v1'
+});
+const turns = productionDialogue.turns;
 const dialoguePolicy = await assertNonRepeatingProductionDialogue({
   scriptName: 'liveAgentCycle.diverse.production final buyer audit',
-  scenarioName: process.env.PRODUCTION_LIVE_SCENARIO_NAME || 'diverse-buyer-audit-generator-plate-v1',
+  scenarioName: productionDialogue.scenarioName,
   turns,
   artifactDir: 'local-live-tests',
   excludePaths: [protocolPath, detailPath, failurePath]
@@ -394,6 +400,7 @@ async function main() {
     const detail = sessionId ? await fetchProductionConversation(sessionId) : null;
     if (detail) {
       await fs.writeFile(detailPath, JSON.stringify({
+        productionLiveDialogue: productionDialogue,
         productionLiveDialoguePolicy: dialoguePolicy,
         productionConversation: detail
       }, null, 2), 'utf8');
@@ -425,6 +432,7 @@ async function main() {
       `Date: ${new Date().toISOString()}`,
       `Session: ${sessionId ?? 'unknown'}`,
       `Admin metadata: ${metadataAvailable ? detailPath : 'not available'}`,
+      `Scenario source: ${productionDialogue.source}${productionDialogue.scenarioFile ? ` (${productionDialogue.scenarioFile})` : ''}`,
       ...dialoguePolicyMarkdown(dialoguePolicy),
       '',
       '## Scenario',
@@ -463,7 +471,7 @@ async function main() {
 
     console.log(`DONE diverse production audit. Buyer issues=${buyerIssueCount}; code issues=${codeIssueCount}; protocol=${protocolPath}`);
   } catch (error) {
-    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), dialoguePolicy, sessionId, steps }, null, 2), 'utf8');
+    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), productionDialogue, dialoguePolicy, sessionId, steps }, null, 2), 'utf8');
     throw error;
   } finally {
     await browser.close();

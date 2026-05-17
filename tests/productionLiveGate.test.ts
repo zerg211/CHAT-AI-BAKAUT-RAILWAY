@@ -13,6 +13,14 @@ function runGate(env: Record<string, string | undefined> = {}, options = '') {
   });
 }
 
+function runDiverseProductionScript(env: Record<string, string | undefined> = {}) {
+  return spawnSync(process.execPath, ['tests/liveAgentCycle.diverse.production.mjs'], {
+    cwd: process.cwd(),
+    env: { ...process.env, ...env },
+    encoding: 'utf8'
+  });
+}
+
 describe('production live gate', () => {
   it('blocks production live scripts by default', () => {
     const result = runGate({
@@ -56,5 +64,17 @@ describe('production live gate', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('allowed');
+  });
+
+  it('requires a fresh diverse scenario file after live approval', () => {
+    const result = runDiverseProductionScript({
+      ALLOW_PRODUCTION_LIVE_TESTS: '1',
+      FINAL_RELEASE_LIVE_GATE: '1',
+      PRODUCTION_LIVE_DIALOGUE_FILE: undefined,
+      ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE: undefined
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('bundled_production_live_dialogue_not_approved');
   });
 });
