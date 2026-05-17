@@ -58,7 +58,9 @@ Do not repeat the used scenario. A new scenario was prepared:
 local-live-tests\generated-production-live-scenarios\final-live-farm_pump_generator_plate-2026-05-17T12-08-19-994Z.json
 ```
 
-Before running it, either wait until the 24-hour `production_live_test` usage window clears or raise Railway `OPENAI_HEADLESS_DAILY_TOKEN_BUDGET` enough for the final live scenario. Otherwise the new budget preflight will block before browser launch.
+Before running it, either wait until the 24-hour `production_live_test` usage window clears or raise Railway/code-default `OPENAI_HEADLESS_DAILY_TOKEN_BUDGET` enough for the final live scenario. Otherwise the new budget preflight will block before browser launch.
+
+Follow-up implemented: the code default for `OPENAI_HEADLESS_DAILY_TOKEN_BUDGET` was raised from `160000` to `600000`. This budget applies only to headless production live tests detected as `production_live_test`; real buyers on the production widget are governed by the separate `OPENAI_DAILY_TOKEN_BUDGET`.
 
 The preflight now estimates required remaining budget for the planned scenario:
 

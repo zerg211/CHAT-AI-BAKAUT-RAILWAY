@@ -48,7 +48,7 @@ ALLOW_FIXED_PRODUCTION_REPLAY=1
 
 Для HeadlessChrome-трафика на `bakautprof.ru` включен отдельный дневной лимит:
 
-- `OPENAI_HEADLESS_DAILY_TOKEN_BUDGET=160000` по умолчанию;
+- `OPENAI_HEADLESS_DAILY_TOKEN_BUDGET=600000` по умолчанию;
 - `OPENAI_BUDGET_GUARD_RESERVE_TOKENS=16000`;
 - общий buyer-budget выключен по умолчанию: `OPENAI_DAILY_TOKEN_BUDGET=0`, чтобы случайно не заблокировать реальных покупателей.
 
