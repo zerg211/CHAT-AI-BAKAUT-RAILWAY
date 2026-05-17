@@ -490,16 +490,34 @@ export function expandModelTokenAliases(tokens: string[]) {
 export function parseWeightNeedRangeKg(text: string) {
   const normalized = text.replace(/\s+/g, ' ');
   const range = normalized.match(/(\d{2,4})\s*(?:[-\u2010-\u2015]|\u0434\u043e)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu);
-  if (!range) return undefined;
-  const a = Number(range[1]);
-  const b = Number(range[2]);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined;
-  const toleranceMatch = normalized.match(/(?:±|\+\/-|\u043f\u043b\u044e\u0441\s*(?:-|\u2011|\u2012|\u2013|\u2014|\s)\s*\u043c\u0438\u043d\u0443\u0441)\s*(\d{1,3})\s*(?:\u043a\u0433|kg)?/iu);
-  const tolerance = toleranceMatch ? Number(toleranceMatch[1]) : 0;
-  return {
-    min: Math.max(0, Math.min(a, b) - (Number.isFinite(tolerance) ? tolerance : 0)),
-    max: Math.max(a, b) + (Number.isFinite(tolerance) ? tolerance : 0)
-  };
+  if (range) {
+    const a = Number(range[1]);
+    const b = Number(range[2]);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined;
+    const toleranceMatch = normalized.match(/(?:±|\+\/-|\u043f\u043b\u044e\u0441\s*(?:-|\u2011|\u2012|\u2013|\u2014|\s)\s*\u043c\u0438\u043d\u0443\u0441)\s*(\d{1,3})\s*(?:\u043a\u0433|kg)?/iu);
+    const tolerance = toleranceMatch ? Number(toleranceMatch[1]) : 0;
+    return {
+      min: Math.max(0, Math.min(a, b) - (Number.isFinite(tolerance) ? tolerance : 0)),
+      max: Math.max(a, b) + (Number.isFinite(tolerance) ? tolerance : 0)
+    };
+  }
+  const upperBound = normalized.match(/(?:\u0434\u043e|\u043d\u0435\s+\u0442\u044f\u0436\u0435\u043b\u0435\u0435|\u043c\u0430\u043a\u0441(?:\u0438\u043c\u0443\u043c)?|up\s+to|max(?:imum)?)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu);
+  if (upperBound) {
+    const max = Number(upperBound[1]);
+    return Number.isFinite(max) ? { min: 0, max } : undefined;
+  }
+  const lowerBound = normalized.match(/(?:\u043e\u0442|\u043d\u0435\s+\u043b\u0435\u0433\u0447\u0435|\u043c\u0438\u043d(?:\u0438\u043c\u0443\u043c)?|from|min(?:imum)?)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu);
+  if (lowerBound) {
+    const min = Number(lowerBound[1]);
+    if (!Number.isFinite(min)) return undefined;
+    return { min, max: Math.round(min * 1.25) };
+  }
+  const single = normalized.match(/(?:\u043e\u043a\u043e\u043b\u043e|\u043f\u0440\u0438\u043c\u0435\u0440\u043d\u043e|\u043f\u043e\u0440\u044f\u0434\u043a\u0430|~|around|about)?\s*(\d{2,4})\s*(?:\u043a\u0433|kg)(?![\p{L}\p{N}])/iu);
+  if (!single) return undefined;
+  const value = Number(single[1]);
+  if (!Number.isFinite(value)) return undefined;
+  const tolerance = value <= 120 ? 10 : value <= 250 ? 20 : value <= 500 ? 50 : Math.round(value * 0.1);
+  return { min: Math.max(0, value - tolerance), max: value + tolerance };
 }
 
 export function parseDimensionNeedRangeMm(text: string) {

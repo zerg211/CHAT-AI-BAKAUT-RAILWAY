@@ -2421,6 +2421,8 @@ describe('recommendation ranking', () => {
 
     expect(parsed).toEqual({ min: 90, max: 160 });
     expect(assistantTestHooks.parseWeightNeedRangeKg('А если взять 100-120 кг, сильно лучше будет?')).toEqual({ min: 100, max: 120 });
+    expect(assistantTestHooks.parseWeightNeedRangeKg('нужна виброплита примерно 1000 кг')).toEqual({ min: 900, max: 1100 });
+    expect(assistantTestHooks.parseWeightNeedRangeKg('не тяжелее 80 кг')).toEqual({ min: 0, max: 80 });
   });
 
   it('builds a full catalog slice for generator power constraints, not only plate weights', async () => {
@@ -6044,6 +6046,40 @@ describe('recommendation ranking', () => {
     expect(result.state.hardConstraints.weightKgMax).toBe(120);
     expect(result.matchedProducts.map((item) => item.id)).toEqual(['light', 'mid']);
     expect(result.matchedProducts.map((item) => item.id)).not.toContain('heavy');
+  });
+
+  it('does not treat light plate cards as matching a single explicit 1000 kg request', async () => {
+    const mid = product('mid', 'Виброплита прямоходная бензиновая 95 кг', 90_000, 'https://example.test/catalog/vibroplity/mid/');
+    const light = product('light', 'Виброплита прямоходная бензиновая 65 кг', 60_000, 'https://example.test/catalog/vibroplity/light/');
+    const assistant = new AssistantService(undefined as never, new FakeProducts([mid, light] as any) as never);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        shouldShowCards: true,
+        selectionConfidence: 0.8
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Нужна виброплита примерно 1000 кг. Есть такие или что вместо нее смотреть?',
+      emptyNeedState(),
+      plan,
+      [mid, light] as any
+    );
+
+    expect(result.state.hardConstraints.weightKgMin).toBe(900);
+    expect(result.state.hardConstraints.weightKgMax).toBe(1100);
+    expect(result.visibleProducts).toEqual([]);
+    expect(result.matchedProducts).toEqual([]);
   });
 
   it('resets stale generator load when the buyer switches to a vibroplate need', async () => {

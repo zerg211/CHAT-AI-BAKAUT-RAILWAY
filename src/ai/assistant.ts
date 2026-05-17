@@ -4786,8 +4786,16 @@ function catalogShortlistAlternativeScore(product: Product, state: ProductSelect
     if (weight === undefined) {
       score += 140;
     } else {
-      if (hard.weightKgMin && weight < hard.weightKgMin) score += (hard.weightKgMin - weight) * 18;
-      if (hard.weightKgMax && weight > hard.weightKgMax) score += (weight - hard.weightKgMax) * 10;
+      if (hard.weightKgMin && weight < hard.weightKgMin) {
+        const deficit = hard.weightKgMin - weight;
+        if (deficit > Math.max(40, hard.weightKgMin * 0.35)) return null;
+        score += deficit * 18;
+      }
+      if (hard.weightKgMax && weight > hard.weightKgMax) {
+        const excess = weight - hard.weightKgMax;
+        if (excess > Math.max(40, hard.weightKgMax * 0.6)) return null;
+        score += excess * 10;
+      }
     }
   }
   if (hard.diameterMmMin || hard.diameterMmMax) {
