@@ -60,8 +60,16 @@ local-live-tests\generated-production-live-scenarios\final-live-farm_pump_genera
 
 Before running it, either wait until the 24-hour `production_live_test` usage window clears or raise Railway `OPENAI_HEADLESS_DAILY_TOKEN_BUDGET` enough for the final live scenario. Otherwise the new budget preflight will block before browser launch.
 
+The preflight now estimates required remaining budget for the planned scenario:
+
+```text
+max(120000, turnCount * 50000)
+```
+
+For the prepared 8-turn scenario this means about `400000` tokens must remain after reserve. This is intentionally conservative because the failed run used about `144321` tokens in only the first three substantive turns.
+
 ## Verification
 
-- `npm.cmd test -- tests\productionOpenAiRuntimePreflight.test.mjs tests\productionLiveGate.test.ts tests\productionLiveDialoguePolicy.test.mjs` - passed, 20 tests
+- `npm.cmd test -- tests\productionOpenAiRuntimePreflight.test.mjs tests\productionLiveGate.test.ts tests\productionLiveDialoguePolicy.test.mjs` - passed, 21 tests
 - `npm.cmd run test:remediation:predeploy` - passed, 32 test files / 340 tests, agentic eval 216 tests, production build passed
 - `npm.cmd run test:remediation:completion-audit` - expected fail on `postdeploy_live_gates_passed`

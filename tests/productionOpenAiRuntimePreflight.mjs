@@ -73,6 +73,7 @@ export async function checkProductionOpenAiRuntime({
 export async function checkProductionLiveTestBudget({
   productionApiBase = process.env.PRODUCTION_API_BASE || 'https://chat-ai-production-3057.up.railway.app',
   token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY,
+  requiredRemainingTokens = Number(process.env.PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS ?? 0),
   fetchImpl = fetch,
   timeoutMs = 30_000
 } = {}) {
@@ -105,15 +106,18 @@ export async function checkProductionLiveTestBudget({
     const reserve = Number(payload?.budget?.guardReserveTokens ?? 0);
     const budgetConfigured = Number.isFinite(budget) && budget > 0;
     const remainingAfterReserve = budgetConfigured ? budget - usedTokens - reserve : null;
+    const requiredTokens = Math.max(0, Number(requiredRemainingTokens) || 0);
+    const enoughForScenario = !budgetConfigured || remainingAfterReserve >= requiredTokens;
     return {
-      ok: response.ok && (!budgetConfigured || remainingAfterReserve > 0),
+      ok: response.ok && enoughForScenario,
       status: response.status,
-      class: response.ok ? (budgetConfigured && remainingAfterReserve <= 0 ? 'budget_guard' : 'ok') : 'unknown',
-      code: budgetConfigured && remainingAfterReserve <= 0 ? 'production_live_test_budget_exhausted' : null,
+      class: response.ok ? (!enoughForScenario ? 'budget_guard' : 'ok') : 'unknown',
+      code: !enoughForScenario ? 'production_live_test_budget_insufficient_for_scenario' : null,
       usedTokens,
       budget: budgetConfigured ? budget : null,
       reserveTokens: Number.isFinite(reserve) ? reserve : 0,
       remainingAfterReserve,
+      requiredRemainingTokens: requiredTokens,
       rows: rows.slice(0, 10),
       body: response.ok ? undefined : body.slice(0, 1200)
     };

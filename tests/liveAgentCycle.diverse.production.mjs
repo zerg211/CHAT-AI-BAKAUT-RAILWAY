@@ -94,6 +94,10 @@ const dialoguePolicy = await assertNonRepeatingProductionDialogue({
     path.join('local-live-tests', 'remediation-postdeploy.json')
   ].filter(Boolean)
 });
+const liveRequiredRemainingTokens = Number(
+  process.env.PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS ??
+  Math.max(120_000, turns.length * 50_000)
+);
 
 function cleanText(value) {
   return String(value ?? '')
@@ -376,7 +380,10 @@ async function main() {
 
   try {
     await assertProductionRemediationMarker(productionApiBase);
-    await requireProductionOpenAiRuntimeReady({ productionApiBase });
+    await requireProductionOpenAiRuntimeReady({
+      productionApiBase,
+      requiredRemainingTokens: liveRequiredRemainingTokens
+    });
     browser = await chromium.launch({ headless: true, executablePath: await resolveBrowserExecutable() });
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
     await page.goto('https://bakautprof.ru/', { waitUntil: 'domcontentloaded', timeout: 90_000 });

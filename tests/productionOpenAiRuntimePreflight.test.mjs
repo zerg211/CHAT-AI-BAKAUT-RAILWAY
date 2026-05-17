@@ -85,10 +85,34 @@ describe('production OpenAI runtime preflight', () => {
     expect(result).toMatchObject({
       ok: false,
       class: 'budget_guard',
-      code: 'production_live_test_budget_exhausted',
+      code: 'production_live_test_budget_insufficient_for_scenario',
       usedTokens: 144321,
       budget: 160000,
       reserveTokens: 16000
+    });
+  });
+
+  it('blocks when remaining budget is positive but too small for the planned scenario', async () => {
+    const result = await checkProductionLiveTestBudget({
+      token: 'admin',
+      requiredRemainingTokens: 400000,
+      fetchImpl: async () => response(200, {
+        budget: {
+          headlessDailyTokenBudget: 600000,
+          guardReserveTokens: 16000
+        },
+        rows: [
+          { totalTokens: 250000 }
+        ]
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      class: 'budget_guard',
+      code: 'production_live_test_budget_insufficient_for_scenario',
+      remainingAfterReserve: 334000,
+      requiredRemainingTokens: 400000
     });
   });
 
@@ -109,6 +133,7 @@ describe('production OpenAI runtime preflight', () => {
     });
 
     expect(result.ok).toBe(true);
+    expect(result.budget.requiredRemainingTokens).toBe(0);
     expect(result.budget.remainingAfterReserve).toBe(119000);
   });
 });

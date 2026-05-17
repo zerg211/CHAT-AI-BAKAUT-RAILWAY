@@ -17,7 +17,8 @@ Before `tests/liveAgentCycle.diverse.production.mjs` launches Playwright, it now
 1. verifies the production remediation marker;
 2. calls `/api/admin/runtime/openai` with the admin token;
 3. calls `/api/admin/openai-usage?hours=24&source=production_live_test`;
-4. blocks before browser launch if the runtime is not healthy or the live-test token budget has no room after reserve.
+4. estimates the required remaining token budget for the planned scenario;
+5. blocks before browser launch if the runtime is not healthy or the live-test token budget does not have enough room after reserve.
 
 Blocked classes include:
 
@@ -34,9 +35,17 @@ Blocked classes include:
 
 The final live gate will not spend browser/test time or start a buyer dialogue when the production OpenAI runtime is already known to be unable to answer or the `production_live_test` daily token budget is exhausted. The failure artifact records the scenario, policy context, and preflight error details, but no widget conversation is attempted.
 
+Default required budget for a scenario is:
+
+```text
+max(120000, turnCount * 50000)
+```
+
+It can be overridden with `PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS`.
+
 ## Verification
 
-- `npm.cmd test -- tests\productionOpenAiRuntimePreflight.test.mjs tests\productionLiveGate.test.ts tests\productionLiveDialoguePolicy.test.mjs` - passed, 16 tests
+- `npm.cmd test -- tests\productionOpenAiRuntimePreflight.test.mjs tests\productionLiveGate.test.ts tests\productionLiveDialoguePolicy.test.mjs` - passed, 21 tests
 - `node --check tests\productionOpenAiRuntimePreflight.mjs`
 - `node --check tests\liveAgentCycle.diverse.production.mjs`
 - `npm.cmd run test:remediation:predeploy` - passed, 32 test files / 336 tests, agentic eval 216 tests, production build passed
