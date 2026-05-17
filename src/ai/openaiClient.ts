@@ -1,9 +1,16 @@
 import OpenAI from 'openai';
 import { config } from '../config.js';
+import { assertOpenAIUsageBudget, recordOpenAIUsageOnce } from './openaiUsageGuard.js';
 
 export function createOpenAIClient() {
   if (!config.OPENAI_API_KEY) return null;
-  return new OpenAI({ apiKey: config.OPENAI_API_KEY, maxRetries: 0 }) as any;
+  const client = new OpenAI({ apiKey: config.OPENAI_API_KEY, maxRetries: 0 }) as any;
+  const createResponse = client.responses.create.bind(client.responses);
+  client.responses.create = async (body: Record<string, unknown>, options?: unknown) => {
+    await assertOpenAIUsageBudget('openai_response', String(body?.model ?? config.OPENAI_MODEL));
+    return createResponse(body, options);
+  };
+  return client;
 }
 
 function isRetryableError(error: unknown): boolean {
@@ -54,10 +61,12 @@ export async function createEmbedding(text: string, signal?: AbortSignal) {
   const client = createOpenAIClient();
   if (!client) return null;
   return withRetry(async () => {
+    await assertOpenAIUsageBudget('embedding', config.OPENAI_EMBEDDING_MODEL);
     const response = await client.embeddings.create({
       model: config.OPENAI_EMBEDDING_MODEL,
       input: text.slice(0, 8000)
     }, signal ? { signal } : undefined);
+    await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
     return response.data?.[0]?.embedding as number[] | undefined;
   }, 2, signal);
 }

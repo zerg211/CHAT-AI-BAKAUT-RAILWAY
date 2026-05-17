@@ -17,6 +17,7 @@ describe('database schema migrations', () => {
 
     expect(queries).toContain('ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS history_summary TEXT');
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS troubleshooting_cases'))).toBe(true);
+    expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS openai_usage_events'))).toBe(true);
   });
 
   it('creates history_summary in the fresh database schema', async () => {
@@ -34,5 +35,14 @@ describe('database schema migrations', () => {
     expect(schema).toContain('embedding vector(1536)');
     expect(schema).toContain('UNIQUE(model_key, problem_key)');
     expect(schema).not.toContain('GENERATED ALWAYS');
+  });
+
+  it('creates the OpenAI usage ledger schema', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '007_openai_usage_events.sql'), 'utf8');
+
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS openai_usage_events');
+    expect(schema).toContain('request_source text NOT NULL');
+    expect(schema).toContain('total_tokens integer');
+    expect(schema).toContain('openai_usage_events_source_created_idx');
   });
 });

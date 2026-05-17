@@ -3,8 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
+import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 
 dotenv.config();
+requireProductionLiveApproval({ scriptName: 'liveAgentCycle.876.production fixed regression replay' });
 
 const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
 const started = new Date().toISOString();

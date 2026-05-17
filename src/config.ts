@@ -23,6 +23,11 @@ const optionalPositiveInt = z.preprocess(
   z.coerce.number().int().positive().optional()
 );
 
+const defaultNonNegativeInt = (defaultValue: number) => z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.coerce.number().int().nonnegative().default(defaultValue)
+);
+
 const defaultPositiveInt = (defaultValue: number) => z.preprocess(
   (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
   z.coerce.number().int().positive().default(defaultValue)
@@ -70,6 +75,10 @@ const schema = z.object({
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(3200),
   OPENAI_FACT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(700),
   DEBUG_OPENAI_USAGE: booleanFlag(false),
+  OPENAI_USAGE_GUARD_ENABLED: booleanFlag(true),
+  OPENAI_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(0),
+  OPENAI_HEADLESS_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(160000),
+  OPENAI_BUDGET_GUARD_RESERVE_TOKENS: defaultNonNegativeInt(16000),
   OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(true),
   CATALOG_BASE_URL: z.string().url().default('https://bakautprof.ru'),
   CATALOG_MAX_PAGES: z.coerce.number().int().positive().default(300),

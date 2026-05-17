@@ -5,7 +5,9 @@ import { importCatalogCsv } from '../catalog/csvImport.js';
 import { syncCatalogFromSite } from '../catalog/crawler.js';
 import { syncCatalogFromSitemap } from '../catalog/sitemapSync.js';
 import { createOpenAIClient } from '../ai/openaiClient.js';
+import { recordOpenAIUsageOnce } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
+import { pool } from '../db/pool.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 
 function adminSecret() {
@@ -175,6 +177,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         input: 'Reply with exactly: OK',
         max_output_tokens: 16
       }, { signal: controller.signal });
+      await recordOpenAIUsageOnce('admin_runtime_probe', config.OPENAI_PLANNER_MODEL, response);
       return {
         ok: true,
         provider: 'openai',
@@ -195,5 +198,55 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     } finally {
       clearTimeout(timeout);
     }
+  });
+
+  app.get('/api/admin/openai-usage', async (request) => {
+    const query = z.object({
+      hours: z.coerce.number().int().positive().max(168).default(24),
+      source: z.string().trim().min(1).max(80).optional()
+    }).parse(request.query);
+    const params: unknown[] = [query.hours];
+    const sourceClause = query.source ? 'AND request_source = $2' : '';
+    if (query.source) params.push(query.source);
+    const result = await pool.query(
+      `SELECT
+         request_source,
+         stage,
+         model,
+         count(*)::int AS call_count,
+         coalesce(sum(input_tokens), 0)::bigint AS input_tokens,
+         coalesce(sum(output_tokens), 0)::bigint AS output_tokens,
+         coalesce(sum(reasoning_tokens), 0)::bigint AS reasoning_tokens,
+         coalesce(sum(total_tokens), 0)::bigint AS total_tokens,
+         min(created_at) AS first_seen_at,
+         max(created_at) AS last_seen_at
+       FROM openai_usage_events
+       WHERE created_at >= now() - ($1 || ' hours')::interval
+         ${sourceClause}
+       GROUP BY request_source, stage, model
+       ORDER BY total_tokens DESC, call_count DESC`,
+      params
+    );
+    return {
+      hours: query.hours,
+      source: query.source ?? null,
+      budget: {
+        dailyTokenBudget: config.OPENAI_DAILY_TOKEN_BUDGET,
+        headlessDailyTokenBudget: config.OPENAI_HEADLESS_DAILY_TOKEN_BUDGET,
+        guardReserveTokens: config.OPENAI_BUDGET_GUARD_RESERVE_TOKENS
+      },
+      rows: result.rows.map((row) => ({
+        requestSource: row.request_source,
+        stage: row.stage,
+        model: row.model,
+        callCount: Number(row.call_count ?? 0),
+        inputTokens: Number(row.input_tokens ?? 0),
+        outputTokens: Number(row.output_tokens ?? 0),
+        reasoningTokens: Number(row.reasoning_tokens ?? 0),
+        totalTokens: Number(row.total_tokens ?? 0),
+        firstSeenAt: row.first_seen_at?.toISOString?.() ?? row.first_seen_at ?? null,
+        lastSeenAt: row.last_seen_at?.toISOString?.() ?? row.last_seen_at ?? null
+      }))
+    };
   });
 }

@@ -3,8 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
+import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 
 dotenv.config();
+requireProductionLiveApproval({ scriptName: 'liveAgentCycle.production fixed replay' });
 
 const started = new Date().toISOString();
 const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-bakautprof-production-agent-cycle.production.md`);

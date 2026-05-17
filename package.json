@@ -21,6 +21,7 @@
     "deploy:remediation:railway": "node tests/remediationRailwayDeploy.mjs",
     "test:live:local:llm": "node tests/liveAgentCycle.local-llm-full.mjs",
     "test:live:production": "node tests/liveAgentCycle.production.mjs",
+    "test:live:production:diverse": "node tests/liveAgentCycle.diverse.production.mjs",
     "test:live:production:876": "node tests/liveAgentCycle.876.production.mjs",
     "test:watch": "vitest",
     "migrate": "tsx src/db/migrate.ts",

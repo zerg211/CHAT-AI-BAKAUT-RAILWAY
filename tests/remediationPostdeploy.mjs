@@ -7,6 +7,7 @@ import {
   expectedRemediationContractVersion,
   expectedRemediationRuntimeArtifacts
 } from './remediationProductionMarker.mjs';
+import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 
 dotenv.config({ quiet: true });
 
@@ -16,6 +17,7 @@ const productionApiBase = process.env.PRODUCTION_API_BASE || 'https://chat-ai-pr
 const artifactPath = path.join('local-live-tests', 'remediation-postdeploy.json');
 const markerWaitMs = Number(process.env.REMEDIATION_MARKER_WAIT_MS ?? 600_000);
 const markerPollMs = Number(process.env.REMEDIATION_MARKER_POLL_MS ?? 15_000);
+const runProductionLiveGates = process.env.RUN_REMEDIATION_POSTDEPLOY_LIVE === '1';
 
 function npmCommand(args, label) {
   if (npmExecPath) return { command: nodeCommand, args: [npmExecPath, ...args], label };
@@ -151,6 +153,31 @@ if (!adminTokenAvailable) {
   }, null, 2));
   process.exit(1);
 }
+
+if (!runProductionLiveGates) {
+  await writeArtifact({
+    ok: true,
+    stage: 'production_marker_complete_live_skipped',
+    actualRemediationContractVersion: actualVersion,
+    actualRemediationRuntimeArtifacts: actualRuntimeArtifacts,
+    liveGatePolicy: 'Production live dialogs are skipped by default. Run them only once for the final pre-launch gate with varied non-repeating buyer wording and manual audit.',
+    requiredEnvForLiveGates: {
+      RUN_REMEDIATION_POSTDEPLOY_LIVE: '1',
+      ALLOW_PRODUCTION_LIVE_TESTS: '1',
+      FINAL_RELEASE_LIVE_GATE: '1',
+      ALLOW_FIXED_PRODUCTION_REPLAY: '1'
+    }
+  });
+  console.log(JSON.stringify({
+    ok: true,
+    artifactPath,
+    stage: 'production_marker_complete_live_skipped',
+    actualRemediationContractVersion: actualVersion
+  }, null, 2));
+  process.exit(0);
+}
+
+requireProductionLiveApproval({ scriptName: 'remediationPostdeploy fixed production live gates' });
 
 await writeArtifact({
   ok: false,

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
+import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { ConversationRepository } from '../db/repositories.js';
 
 const createSessionSchema = z.object({
@@ -122,13 +123,18 @@ export async function registerChatRoutes(app: FastifyInstance) {
         send('status', { status: generationStatusMessages[statusIndex] });
       }, 12_000);
       statusTimer.unref?.();
-      const payload = await assistant.generateAnswer({
+      const payload = await runWithOpenAIUsageContext({
+        sessionId: params.id,
+        turnId,
+        pageUrl: session.pageUrl,
+        userAgent: session.userAgent
+      }, () => assistant.generateAnswer({
         sessionId: params.id,
         userMessage: input.message,
         turnId,
         onDelta: (delta) => send('delta', { delta }),
         signal: controller.signal
-      });
+      }));
       if (statusTimer) clearInterval(statusTimer);
       statusTimer = null;
       send('done', payload);
@@ -185,12 +191,18 @@ export async function registerChatRoutes(app: FastifyInstance) {
     try {
       send('turn', { turnId: params.turnId, recovered: true });
       send('status', { status: 'Ответ оборвался, восстанавливаю...' });
-      const payload = await assistant.recoverTurn({
+      const session = await conversations.getSession(params.id);
+      const payload = await runWithOpenAIUsageContext({
+        sessionId: params.id,
+        turnId: params.turnId,
+        pageUrl: session?.pageUrl,
+        userAgent: session?.userAgent
+      }, () => assistant.recoverTurn({
         sessionId: params.id,
         turnId: params.turnId,
         onDelta: (delta) => send('delta', { delta }),
         signal: controller.signal
-      });
+      }));
       send('done', payload);
     } catch (error) {
       await conversations.updateTurn({

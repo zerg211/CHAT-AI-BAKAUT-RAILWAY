@@ -49,6 +49,7 @@ import { buildLeadStateMachine } from './leadStateMachine.js';
 import { classifyPostAnswerRecovery, repairAnswerForPostAnswerVerification, verifyPostAnswer } from './postAnswerVerifier.js';
 import { buildRequirementLedger } from './requirementLedger.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
+import { recordOpenAIUsageOnce } from './openaiUsageGuard.js';
 import {
   buildTroubleshootingCaseDraft,
   buildTroubleshootingSearchQuery
@@ -9873,7 +9874,9 @@ function safeError(error: unknown) {
 }
 
 function logOpenAIUsage(stage: string, model: string, response: unknown) {
-  if (!config.DEBUG_OPENAI_USAGE || !response || typeof response !== 'object') return;
+  if (!response || typeof response !== 'object') return;
+  void recordOpenAIUsageOnce(stage, model, response);
+  if (!config.DEBUG_OPENAI_USAGE) return;
   const usage = (response as { usage?: {
     input_tokens?: number;
     output_tokens?: number;
