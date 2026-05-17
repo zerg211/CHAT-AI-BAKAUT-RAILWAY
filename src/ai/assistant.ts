@@ -118,6 +118,80 @@ function aiStageFailure(stage: string, diagnostic?: AiFallbackDiagnostic): Error
   return new Error(`AI ${stage} failed: ${diagnostic?.reason ?? 'unknown_error'}`);
 }
 
+function applyPostAnswerVerificationPolicy(input: {
+  answer: string;
+  factClaimPlanner: FactClaimPlanner;
+  leadStateMachine: LeadStateMachine;
+  cardManifest: CardManifest;
+}) {
+  let answer = input.answer.trim();
+  let factClaimAudit = auditAnswerFactClaims({
+    answer,
+    factClaimPlanner: input.factClaimPlanner,
+    cardManifest: input.cardManifest
+  });
+  let postAnswerVerification = verifyPostAnswer({
+    answer,
+    factClaimPlanner: input.factClaimPlanner,
+    leadStateMachine: input.leadStateMachine,
+    cardManifest: input.cardManifest,
+    factClaimAudit
+  });
+  const postAnswerVerificationRecovery: PostAnswerVerificationRecovery = {
+    attempted: false,
+    recovered: false,
+    issuesBefore: postAnswerVerification.issues.map((issue) => issue.code),
+    issuesAfter: postAnswerVerification.issues.map((issue) => issue.code),
+    method: 'none',
+    repairableIssues: [],
+    unrecoverableIssues: [],
+    reason: undefined
+  };
+
+  if (postAnswerVerification.status === 'error') {
+    const recoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
+    postAnswerVerificationRecovery.repairableIssues = recoveryPolicy.repairableIssues;
+    postAnswerVerificationRecovery.unrecoverableIssues = recoveryPolicy.unrecoverableIssues;
+    postAnswerVerificationRecovery.reason = recoveryPolicy.requiresRegenerationOrTooling
+      ? 'unrecoverable_issues_require_regeneration_or_tooling'
+      : 'deterministic_text_repair_available';
+    const repairedAnswer = repairAnswerForPostAnswerVerification({ answer, verification: postAnswerVerification });
+    if (repairedAnswer !== answer) {
+      postAnswerVerificationRecovery.attempted = true;
+      postAnswerVerificationRecovery.method = 'deterministic_text_repair';
+      answer = repairedAnswer;
+      factClaimAudit = auditAnswerFactClaims({
+        answer,
+        factClaimPlanner: input.factClaimPlanner,
+        cardManifest: input.cardManifest
+      });
+      postAnswerVerification = verifyPostAnswer({
+        answer,
+        factClaimPlanner: input.factClaimPlanner,
+        leadStateMachine: input.leadStateMachine,
+        cardManifest: input.cardManifest,
+        factClaimAudit
+      });
+      postAnswerVerificationRecovery.recovered = postAnswerVerification.status !== 'error';
+      postAnswerVerificationRecovery.issuesAfter = postAnswerVerification.issues.map((issue) => issue.code);
+      if (!postAnswerVerificationRecovery.recovered) {
+        const afterRecoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
+        postAnswerVerificationRecovery.unrecoverableIssues = afterRecoveryPolicy.unrecoverableIssues;
+        postAnswerVerificationRecovery.reason = afterRecoveryPolicy.requiresRegenerationOrTooling
+          ? 'deterministic_text_repair_left_unrecoverable_issues'
+          : 'deterministic_text_repair_did_not_clear_errors';
+      }
+    }
+  }
+
+  return {
+    answer,
+    factClaimAudit,
+    postAnswerVerification,
+    postAnswerVerificationRecovery
+  };
+}
+
 type WebCitation = {
   url: string;
   title?: string;
@@ -8819,7 +8893,7 @@ export class AssistantService {
       cards: ProductCard[];
       cardDisplay?: CardDisplayOptions;
     }, openAiError?: unknown): Promise<ChatResponsePayload> => {
-      const answer = inputAnswer.trim();
+      let answer = inputAnswer.trim();
       const renderContract = buildRecoveryRenderContract(contract, recoveredSelection.cards);
       const requirementLedger = buildRequirementLedger({
         needState: session.needState,
@@ -8847,24 +8921,35 @@ export class AssistantService {
         cardManifest,
         usedWebSearch: false
       });
-      const factClaimAudit = auditAnswerFactClaims({
-        answer,
-        factClaimPlanner,
-        cardManifest
-      });
       const leadStateMachine = buildLeadStateMachine({
         executionContract,
         hasContactInTurn: hasLikelyContactText(latestUserText),
         leadRequested: false,
         leadCreated: false
       });
-      const postAnswerVerification = verifyPostAnswer({
+      const postAnswerCheck = applyPostAnswerVerificationPolicy({
         answer,
         factClaimPlanner,
         leadStateMachine,
-        cardManifest,
-        factClaimAudit
+        cardManifest
       });
+      answer = postAnswerCheck.answer;
+      const factClaimAudit = postAnswerCheck.factClaimAudit;
+      const postAnswerVerification = postAnswerCheck.postAnswerVerification;
+      const postAnswerVerificationRecovery = postAnswerCheck.postAnswerVerificationRecovery;
+      if (postAnswerVerification.status === 'error') {
+        throw new Error(`Recovered answer violates post-answer verification: ${postAnswerVerification.issues.map((issue) => issue.code).join(', ')}`);
+      }
+      const contractWarnings = [
+        ...(contract.validatorWarnings ?? []),
+        ...requirementLedger.warnings,
+        ...executionContract.warnings,
+        ...cardManifest.warnings,
+        ...factClaimPlanner.warnings,
+        ...factClaimAudit.warnings,
+        ...leadStateMachine.warnings,
+        ...postAnswerVerification.issues.map((issue) => issue.code)
+      ];
       const metadata = {
         turnId: input.turnId,
         recovered: true,
@@ -8877,20 +8962,13 @@ export class AssistantService {
         factClaimAudit,
         leadStateMachine,
         postAnswerVerification,
+        postAnswerVerificationRecovery,
         aiDiagnostics: recoveryAiDiagnostics,
         productCards: recoveredSelection.cards,
         cardDisplay: recoveredSelection.cardDisplay,
         activeNeedsAfter: session.needState.activeNeeds ?? [],
-        warnings: [
-          ...(contract.validatorWarnings ?? []),
-          ...requirementLedger.warnings,
-          ...executionContract.warnings,
-          ...cardManifest.warnings,
-          ...factClaimPlanner.warnings,
-          ...factClaimAudit.warnings,
-          ...leadStateMachine.warnings,
-          ...postAnswerVerification.issues.map((issue) => issue.code)
-        ],
+        warnings: contractWarnings,
+        contractWarnings,
         openAiError
       };
       await input.onDelta?.(answer);
@@ -9947,6 +10025,7 @@ export const assistantTestHooks = {
   repairAnswerForFinalCards,
   cardsFromPlan,
   sanitizeVisibleAnswer,
+  applyPostAnswerVerificationPolicy,
   ensureLargeSliceShowMoreNote,
   recommendationScore,
   supplementalCatalogQueries,

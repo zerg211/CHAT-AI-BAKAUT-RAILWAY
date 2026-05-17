@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState } from '../src/ai/needState.js';
-import type { ConversationSession, Message, MessageRole, Product } from '../src/shared/types.js';
+import type { AgentTurnContract, ConversationSession, ConversationTurn, Message, MessageRole, Product } from '../src/shared/types.js';
 
 const openAiCreate = vi.hoisted(() => vi.fn(async () => {
   throw new Error('unsupported_country_region_territory');
@@ -12,7 +12,7 @@ vi.mock('../src/ai/openaiClient.js', () => ({
   withRetry: async <T>(fn: () => Promise<T>) => fn()
 }));
 
-const { AssistantService } = await import('../src/ai/assistant.js');
+const { AssistantService, assistantTestHooks } = await import('../src/ai/assistant.js');
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
 
@@ -30,6 +30,7 @@ function testProduct(id: string, name: string, price: number, specs: Record<stri
 
 class FakeConversations {
   readonly messages: Message[] = [];
+  turn: ConversationTurn | null = null;
   session: ConversationSession = {
     id: '11111111-1111-4111-8111-111111111111',
     status: 'active',
@@ -61,6 +62,22 @@ class FakeConversations {
 
   async listMessages() {
     return this.messages;
+  }
+
+  async getTurn() {
+    return this.turn;
+  }
+
+  async updateTurn(input: Partial<ConversationTurn> & { turnId?: string }) {
+    if (!this.turn) return null;
+    this.turn = {
+      ...this.turn,
+      ...input,
+      id: this.turn.id,
+      sessionId: this.turn.sessionId,
+      updatedAt: new Date().toISOString()
+    } as ConversationTurn;
+    return this.turn;
   }
 
   async updateNeedState(_sessionId: string, needState: ConversationSession['needState']) {
@@ -102,6 +119,13 @@ class FakeProducts {
 }
 
 describe('assistant OpenAI failure fallback', () => {
+  beforeEach(() => {
+    openAiCreate.mockReset();
+    openAiCreate.mockImplementation(async () => {
+      throw new Error('unsupported_country_region_territory');
+    });
+  });
+
   it('does not bypass LLM planning for operational delivery and stock questions', async () => {
     openAiCreate.mockClear();
     const products = [
@@ -164,5 +188,125 @@ describe('assistant OpenAI failure fallback', () => {
     })).rejects.toThrow(/AI need extraction failed/);
 
     expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
+  });
+
+  it('repairs recovered answers before saving when they violate post-answer lead policy', async () => {
+    const conversations = new FakeConversations();
+    const userMessage: Message = {
+      id: 'user-1',
+      sessionId: conversations.session.id,
+      role: 'user',
+      content: ru('\\u041d\\u0435\\u0442, \\u0437\\u0432\\u043e\\u043d\\u0438\\u0442\\u044c \\u043d\\u0435 \\u043d\\u0430\\u0434\\u043e, \\u043f\\u0440\\u043e\\u0441\\u0442\\u043e \\u043f\\u043e\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435 \\u0432\\u0430\\u0440\\u0438\\u0430\\u043d\\u0442\\u044b.'),
+      metadata: {},
+      createdAt: new Date().toISOString()
+    };
+    conversations.messages.push(userMessage);
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'product_selection',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'none',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: ['continue product selection without contact collection'],
+      activeNeeds: [],
+      currentFocus: 'generator',
+      cardsRole: 'primary',
+      leadAllowed: false,
+      leadAllowedReason: 'buyer refused a call',
+      errorRecoveryPriority: 'Continue selection and do not ask for contact.',
+      validatorWarnings: []
+    };
+    conversations.turn = {
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: conversations.session.id,
+      userMessageId: userMessage.id,
+      assistantMessageId: null,
+      status: 'failed',
+      requestHash: 'hash',
+      stage: 'failed',
+      errorCode: 'answer_generation_failed',
+      errorMessage: 'empty answer',
+      plannerContract: contract,
+      activeNeedsBefore: null,
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    (openAiCreate as unknown as { mockResolvedValueOnce: (value: unknown) => void }).mockResolvedValueOnce({
+      output_text: [
+        ru('\\u041f\\u0440\\u043e\\u0434\\u043e\\u043b\\u0436\\u0443 \\u043f\\u043e\\u0434\\u0431\\u043e\\u0440 \\u043f\\u043e \\u043a\\u0430\\u0440\\u0442\\u043e\\u0447\\u043a\\u0430\\u043c.'),
+        ru('\\u041e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u0438 \\u0438\\u043c\\u044f, \\u044f \\u043f\\u0435\\u0440\\u0435\\u0434\\u0430\\u043c \\u0437\\u0430\\u044f\\u0432\\u043a\\u0443.')
+      ].join(' ')
+    });
+    const deltas: string[] = [];
+    const assistant = new AssistantService(conversations as never, new FakeProducts([]) as never);
+
+    const result = await assistant.recoverTurn({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id,
+      onDelta: (delta) => {
+        deltas.push(delta);
+      }
+    });
+
+    expect(result.answer).toContain(ru('\\u041f\\u0440\\u043e\\u0434\\u043e\\u043b\\u0436\\u0443 \\u043f\\u043e\\u0434\\u0431\\u043e\\u0440'));
+    expect(result.answer).not.toContain(ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d'));
+    expect(deltas).toEqual([result.answer]);
+    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
+    expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(result.metadata?.postAnswerVerification?.issues ?? []).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'lead_contact_ask_forbidden' })
+    ]));
+    expect(result.metadata?.postAnswerVerificationRecovery).toMatchObject({
+      attempted: false,
+      method: 'none'
+    });
+  });
+
+  it('uses the recovery post-answer policy to repair unsafe restored text before streaming', () => {
+    const checked = assistantTestHooks.applyPostAnswerVerificationPolicy({
+      answer: [
+        ru('\\u041f\\u0440\\u043e\\u0434\\u043e\\u043b\\u0436\\u0443 \\u043f\\u043e\\u0434\\u0431\\u043e\\u0440 \\u043f\\u043e \\u043a\\u0430\\u0440\\u0442\\u043e\\u0447\\u043a\\u0430\\u043c.'),
+        ru('\\u041e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u0438 \\u0438\\u043c\\u044f, \\u044f \\u043f\\u0435\\u0440\\u0435\\u0434\\u0430\\u043c \\u0437\\u0430\\u044f\\u0432\\u043a\\u0443.')
+      ].join(' '),
+      factClaimPlanner: {
+        version: 1,
+        factPolicy: 'catalog_only',
+        allowedSources: ['catalog', 'visible_cards', 'conversation_memory'],
+        requiredDisclaimers: [],
+        forbiddenClaims: ['do_not_invent_product_names_prices_specs'],
+        risk: 'low',
+        warnings: []
+      },
+      leadStateMachine: {
+        version: 1,
+        state: 'not_allowed',
+        nextAction: 'do_not_ask_contact',
+        leadPolicy: 'forbidden',
+        hasContactInTurn: false,
+        leadRequested: false,
+        leadCreated: false,
+        warnings: []
+      },
+      cardManifest: {
+        version: 1,
+        source: 'execution_contract',
+        cardsPolicy: 'none',
+        visibleProductIds: [],
+        hiddenProductIds: [],
+        items: [],
+        warnings: []
+      }
+    });
+
+    expect(checked.answer).toContain(ru('\\u041f\\u0440\\u043e\\u0434\\u043e\\u043b\\u0436\\u0443 \\u043f\\u043e\\u0434\\u0431\\u043e\\u0440'));
+    expect(checked.answer).not.toContain(ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d'));
+    expect(checked.postAnswerVerification.status).toBe('pass');
+    expect(checked.postAnswerVerificationRecovery).toMatchObject({
+      attempted: true,
+      recovered: true,
+      method: 'deterministic_text_repair',
+      repairableIssues: ['lead_contact_ask_forbidden']
+    });
   });
 });
