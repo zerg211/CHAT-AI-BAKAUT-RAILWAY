@@ -68,9 +68,7 @@ export async function assertNonRepeatingProductionDialogue({
   env = process.env,
   excludePaths = []
 } = {}) {
-  if (!Array.isArray(turns) || turns.length === 0) {
-    throw new Error('production_live_dialogue_policy_requires_turns');
-  }
+  validateProductionLiveDialogueTurns(turns);
 
   const signature = dialogueSignature(turns);
   const metadata = {
@@ -96,21 +94,52 @@ export async function assertNonRepeatingProductionDialogue({
   return { ...metadata, repeatedDialogueOverride: false, priorMatches: [] };
 }
 
-function validateDialogueTurns(turns) {
-  if (!Array.isArray(turns) || turns.length === 0) {
-    throw new Error('production_live_dialogue_policy_requires_turns');
+export function analyzeProductionLiveDialogueTurns(turns, { minTurns = 1, minUserLength = 12 } = {}) {
+  const issues = [];
+  if (!Array.isArray(turns) || turns.length < minTurns) {
+    issues.push({
+      code: 'not_enough_turns',
+      expectedMinTurns: minTurns,
+      actualTurns: Array.isArray(turns) ? turns.length : 0
+    });
+    return { ok: false, issues };
   }
-  const invalidIndex = turns.findIndex((turn) =>
-    !turn ||
-    typeof turn !== 'object' ||
-    !String(turn.phase ?? '').trim() ||
-    !String(turn.user ?? '').trim()
-  );
-  if (invalidIndex >= 0) {
-    const error = new Error('production_live_dialogue_turn_invalid');
-    error.details = { invalidIndex };
+
+  const seenUsers = new Set();
+  turns.forEach((turn, index) => {
+    const phase = String(turn?.phase ?? '').trim();
+    const user = String(turn?.user ?? '').trim();
+    if (!turn || typeof turn !== 'object' || !phase || !user) {
+      issues.push({ code: 'invalid_turn_shape', index });
+      return;
+    }
+    if (user.length < minUserLength) {
+      issues.push({ code: 'user_text_too_short', index, minUserLength, actualLength: user.length });
+    }
+    if (/undefined|null|\[object Object\]/iu.test(user)) {
+      issues.push({ code: 'technical_placeholder_in_user_text', index });
+    }
+    if (/[\u0400\u0402-\u040F\u0490-\u052F]/u.test(user) || /(?:Р[—–ґµ»«]|С[Ѓ‚ѓ„…†‡€‰‹ЊЋЏ])/u.test(user)) {
+      issues.push({ code: 'suspicious_cyrillic_encoding_artifacts', index });
+    }
+    const normalized = normalizeDialogueText(user);
+    if (seenUsers.has(normalized)) {
+      issues.push({ code: 'duplicate_user_text', index });
+    }
+    seenUsers.add(normalized);
+  });
+
+  return { ok: issues.length === 0, issues };
+}
+
+export function validateProductionLiveDialogueTurns(turns, options = {}) {
+  const quality = analyzeProductionLiveDialogueTurns(turns, options);
+  if (!quality.ok) {
+    const error = new Error('production_live_dialogue_turns_not_ready');
+    error.details = quality;
     throw error;
   }
+  return true;
 }
 
 export async function loadProductionLiveDialogue({
@@ -123,7 +152,7 @@ export async function loadProductionLiveDialogue({
     const raw = await fs.readFile(scenarioFile, 'utf8');
     const parsed = JSON.parse(raw);
     const turns = Array.isArray(parsed) ? parsed : parsed.turns;
-    validateDialogueTurns(turns);
+    validateProductionLiveDialogueTurns(turns, { minTurns: 6, minUserLength: 20 });
     return {
       turns,
       scenarioName: String(parsed.scenarioName || env.PRODUCTION_LIVE_SCENARIO_NAME || defaultScenarioName),
@@ -132,7 +161,7 @@ export async function loadProductionLiveDialogue({
     };
   }
 
-  validateDialogueTurns(defaultTurns);
+  validateProductionLiveDialogueTurns(defaultTurns);
 
   if (env.ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE !== '1') {
     const error = new Error('bundled_production_live_dialogue_not_approved');

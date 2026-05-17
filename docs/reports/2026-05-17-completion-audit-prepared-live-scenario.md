@@ -24,6 +24,7 @@ and validates the latest prepared JSON scenario:
 
 - has `scenarioName` and `variantName`;
 - has at least 6 buyer turns;
+- passes text-quality validation: no duplicated buyer turns, no technical placeholders, no obvious encoding artifacts;
 - has a 64-character dialogue signature;
 - has matching `productionLivePolicy.dialogueSignature`;
 - was not produced with a repeat override;
@@ -47,4 +48,5 @@ local-live-tests\generated-production-live-scenarios\final-live-workshop_welder_
 
 - `npm.cmd run test:remediation:completion-audit` - expected fail only on `postdeploy_live_gates_passed`
 - `node --check tests\remediationCompletionAudit.mjs`
-- `npm.cmd run test:remediation:predeploy` - passed, 31 test files / 331 tests, agentic eval 216 tests, production build passed
+- `npm.cmd test -- tests\productionLiveDialoguePolicy.test.mjs tests\prepareProductionLiveDialogueScenario.test.mjs tests\productionLiveGate.test.ts` - passed, 17 tests
+- `npm.cmd run test:remediation:predeploy` - passed, 31 test files / 333 tests, agentic eval 216 tests, production build passed

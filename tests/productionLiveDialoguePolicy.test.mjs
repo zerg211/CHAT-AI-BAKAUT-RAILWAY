@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  analyzeProductionLiveDialogueTurns,
   assertNonRepeatingProductionDialogue,
   dialoguePolicyMarkdown,
   dialogueSignature,
@@ -13,12 +14,40 @@ const sampleTurns = [
   { phase: 'first_need', user: 'Need a generator for a small house.' },
   { phase: 'catalog_request', user: 'Show 4-6 kW options, not the expensive ones.' }
 ];
+const productionReadyTurns = [
+  { phase: 'need', user: 'Здравствуйте. Нужен генератор для мастерской под компрессор, свет и ручной инструмент.' },
+  { phase: 'power', user: 'Не понимаю, хватит ли 7-8 кВт или лучше сразу смотреть запас около 10 кВт.' },
+  { phase: 'catalog', user: 'Покажите несколько бензиновых вариантов из каталога без самых дорогих моделей.' },
+  { phase: 'service', user: 'Что важно по шуму, обслуживанию и длительной работе несколько часов подряд?' },
+  { phase: 'switch', user: 'Еще нужна бетономешалка для небольших заливок во дворе, не игрушечная, но перевозимая.' },
+  { phase: 'summary', user: 'Суммируйте, что смотреть по генератору и бетономешалке без обещаний точной доставки.' }
+];
 
 async function tempArtifactDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), 'production-live-dialogue-policy-'));
 }
 
 describe('production live dialogue policy', () => {
+  it('rejects technically valid but unusable dialogue text', () => {
+    const quality = analyzeProductionLiveDialogueTurns([
+      { phase: 'bad_encoding', user: 'Р—РґСЂР°РІСЃС‚РІСѓР№С‚Рµ. РќСѓР¶РµРЅ РіРµРЅРµСЂР°С‚РѕСЂ.' },
+      { phase: 'duplicate', user: 'Р—РґСЂР°РІСЃС‚РІСѓР№С‚Рµ. РќСѓР¶РµРЅ РіРµРЅРµСЂР°С‚РѕСЂ.' }
+    ], { minTurns: 2, minUserLength: 20 });
+
+    expect(quality.ok).toBe(false);
+    expect(quality.issues.map((issue) => issue.code)).toContain('suspicious_cyrillic_encoding_artifacts');
+    expect(quality.issues.map((issue) => issue.code)).toContain('duplicate_user_text');
+  });
+
+  it('accepts readable buyer dialogue text', () => {
+    const quality = analyzeProductionLiveDialogueTurns([
+      { phase: 'generator_need', user: 'Здравствуйте. Нужен генератор для мастерской под компрессор и свет.' },
+      { phase: 'catalog_request', user: 'Покажите варианты около 8-10 кВт, но без самых дорогих моделей.' }
+    ], { minTurns: 2, minUserLength: 20 });
+
+    expect(quality).toEqual({ ok: true, issues: [] });
+  });
+
   it('allows a first unseen dialogue and returns auditable metadata', async () => {
     const artifactDir = await tempArtifactDir();
 
@@ -102,7 +131,7 @@ describe('production live dialogue policy', () => {
     const scenarioFile = path.join(artifactDir, 'fresh-scenario.json');
     await fs.writeFile(scenarioFile, JSON.stringify({
       scenarioName: 'fresh-final-live-v2',
-      turns: sampleTurns
+      turns: productionReadyTurns
     }), 'utf8');
 
     const dialogue = await loadProductionLiveDialogue({
@@ -114,7 +143,7 @@ describe('production live dialogue policy', () => {
 
     expect(dialogue.source).toBe('file');
     expect(dialogue.scenarioName).toBe('fresh-final-live-v2');
-    expect(dialogue.turns).toEqual(sampleTurns);
+    expect(dialogue.turns).toEqual(productionReadyTurns);
     expect(dialogue.scenarioFile).toBe(scenarioFile);
   });
 

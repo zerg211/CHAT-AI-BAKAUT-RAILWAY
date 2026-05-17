@@ -4,6 +4,7 @@ import {
   expectedRemediationContractVersion,
   expectedRemediationRuntimeArtifacts
 } from './remediationProductionMarker.mjs';
+import { analyzeProductionLiveDialogueTurns } from './productionLiveDialoguePolicy.mjs';
 
 const artifactPath = path.join('local-live-tests', 'remediation-completion-audit.json');
 const backupRoot = process.env.REMEDIATION_BACKUP_ROOT || 'C:\\Projects\\chatAI-backups';
@@ -102,12 +103,14 @@ async function listPreparedProductionLiveScenarios() {
     const stat = await fs.stat(filePath).catch(() => null);
     const data = await readJson(filePath);
     const turns = Array.isArray(data.turns) ? data.turns : [];
+    const turnQuality = analyzeProductionLiveDialogueTurns(turns, { minTurns: 6, minUserLength: 20 });
     const signature = String(data.dialogueSignature ?? '');
     const policy = data.productionLivePolicy ?? {};
     const valid = Boolean(
       data.scenarioName &&
       data.variantName &&
       turns.length >= 6 &&
+      turnQuality.ok &&
       /^[a-f0-9]{64}$/u.test(signature) &&
       policy.dialogueSignature === signature &&
       policy.repeatedDialogueOverride === false &&
@@ -125,6 +128,7 @@ async function listPreparedProductionLiveScenarios() {
       turnCount: turns.length,
       repeatedDialogueOverride: policy.repeatedDialogueOverride,
       priorMatches: policy.priorMatches,
+      turnQuality,
       valid,
       readError: data.__readError
     });
