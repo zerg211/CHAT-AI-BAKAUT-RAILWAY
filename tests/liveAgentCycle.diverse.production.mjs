@@ -3,6 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
+import {
+  assertNonRepeatingProductionDialogue,
+  dialoguePolicyMarkdown
+} from './productionLiveDialoguePolicy.mjs';
 import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 
 dotenv.config();
@@ -68,6 +72,14 @@ const turns = [
     user: 'Пока без звонка. Коротко подведите итог: что смотреть по генератору, что по виброплите и что мне надо уточнить перед точным выбором.'
   }
 ];
+
+const dialoguePolicy = await assertNonRepeatingProductionDialogue({
+  scriptName: 'liveAgentCycle.diverse.production final buyer audit',
+  scenarioName: process.env.PRODUCTION_LIVE_SCENARIO_NAME || 'diverse-buyer-audit-generator-plate-v1',
+  turns,
+  artifactDir: 'local-live-tests',
+  excludePaths: [protocolPath, detailPath, failurePath]
+});
 
 function cleanText(value) {
   return String(value ?? '')
@@ -380,7 +392,12 @@ async function main() {
 
     sessionId = await readWidgetSessionId(page);
     const detail = sessionId ? await fetchProductionConversation(sessionId) : null;
-    if (detail) await fs.writeFile(detailPath, JSON.stringify(detail, null, 2), 'utf8');
+    if (detail) {
+      await fs.writeFile(detailPath, JSON.stringify({
+        productionLiveDialoguePolicy: dialoguePolicy,
+        productionConversation: detail
+      }, null, 2), 'utf8');
+    }
     const assistantMessages = detail?.messages?.filter((message) => message.role === 'assistant') ?? [];
     const turns = detail?.turns ?? [];
     const metadataAvailable = assistantMessages.length >= steps.length;
@@ -408,6 +425,7 @@ async function main() {
       `Date: ${new Date().toISOString()}`,
       `Session: ${sessionId ?? 'unknown'}`,
       `Admin metadata: ${metadataAvailable ? detailPath : 'not available'}`,
+      ...dialoguePolicyMarkdown(dialoguePolicy),
       '',
       '## Scenario',
       '',
@@ -445,7 +463,7 @@ async function main() {
 
     console.log(`DONE diverse production audit. Buyer issues=${buyerIssueCount}; code issues=${codeIssueCount}; protocol=${protocolPath}`);
   } catch (error) {
-    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), sessionId, steps }, null, 2), 'utf8');
+    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), dialoguePolicy, sessionId, steps }, null, 2), 'utf8');
     throw error;
   } finally {
     await browser.close();
