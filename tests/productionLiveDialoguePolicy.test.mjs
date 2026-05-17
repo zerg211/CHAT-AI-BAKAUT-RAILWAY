@@ -90,6 +90,25 @@ describe('production live dialogue policy', () => {
     });
   });
 
+  it('ignores an explicitly excluded scenario file while checking repeats', async () => {
+    const artifactDir = await tempArtifactDir();
+    const scenarioFile = path.join(artifactDir, 'prepared-scenario.json');
+    const signature = dialogueSignature(sampleTurns);
+    await fs.writeFile(scenarioFile, JSON.stringify({ dialogueSignature: signature, turns: sampleTurns }), 'utf8');
+
+    const policy = await assertNonRepeatingProductionDialogue({
+      scriptName: 'test diverse production audit',
+      scenarioName: 'sample-v1',
+      turns: sampleTurns,
+      artifactDir,
+      env: {},
+      excludePaths: [scenarioFile]
+    });
+
+    expect(policy.dialogueSignature).toBe(signature);
+    expect(policy.priorMatches).toEqual([]);
+  });
+
   it('allows a repeated dialogue only with explicit override', async () => {
     const artifactDir = await tempArtifactDir();
     const signature = dialogueSignature(sampleTurns);

@@ -162,6 +162,7 @@ if (!runProductionLiveGates) {
     actualRemediationContractVersion: actualVersion,
     actualRemediationRuntimeArtifacts: actualRuntimeArtifacts,
     liveGatePolicy: 'Production live dialogs are skipped by default. Run them only once for the final pre-launch gate with varied non-repeating buyer wording and manual audit.',
+    openAiRuntimePreflight: 'The diverse production live script probes /api/admin/runtime/openai before launching the browser and blocks on quota, billing, auth, model access, rate-limit, or runtime/network failures.',
     requiredEnvForLiveGates: {
       RUN_REMEDIATION_POSTDEPLOY_LIVE: '1',
       ALLOW_PRODUCTION_LIVE_TESTS: '1',

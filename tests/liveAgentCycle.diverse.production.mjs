@@ -9,6 +9,7 @@ import {
   loadProductionLiveDialogue
 } from './productionLiveDialoguePolicy.mjs';
 import { requireProductionLiveApproval } from './productionLiveGate.mjs';
+import { requireProductionOpenAiRuntimeReady } from './productionOpenAiRuntimePreflight.mjs';
 
 dotenv.config();
 requireProductionLiveApproval({
@@ -84,7 +85,7 @@ const dialoguePolicy = await assertNonRepeatingProductionDialogue({
   scenarioName: productionDialogue.scenarioName,
   turns,
   artifactDir: 'local-live-tests',
-  excludePaths: [protocolPath, detailPath, failurePath]
+  excludePaths: [protocolPath, detailPath, failurePath, productionDialogue.scenarioFile].filter(Boolean)
 });
 
 function cleanText(value) {
@@ -362,13 +363,15 @@ function mdList(items, empty = '- нет') {
 
 async function main() {
   await fs.mkdir('local-live-tests', { recursive: true });
-  await assertProductionRemediationMarker(productionApiBase);
-  const browser = await chromium.launch({ headless: true, executablePath: await resolveBrowserExecutable() });
-  const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
   const steps = [];
   let sessionId = null;
+  let browser = null;
 
   try {
+    await assertProductionRemediationMarker(productionApiBase);
+    await requireProductionOpenAiRuntimeReady({ productionApiBase });
+    browser = await chromium.launch({ headless: true, executablePath: await resolveBrowserExecutable() });
+    const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
     await page.goto('https://bakautprof.ru/', { waitUntil: 'domcontentloaded', timeout: 90_000 });
     const iframeElement = page.locator('iframe[src*="chat-ai-production"], iframe[src*="railway"], iframe[src*="/widget"]').first();
     await iframeElement.waitFor({ state: 'attached', timeout: 60_000 });
@@ -471,10 +474,17 @@ async function main() {
 
     console.log(`DONE diverse production audit. Buyer issues=${buyerIssueCount}; code issues=${codeIssueCount}; protocol=${protocolPath}`);
   } catch (error) {
-    await fs.writeFile(failurePath, JSON.stringify({ error: String(error), productionDialogue, dialoguePolicy, sessionId, steps }, null, 2), 'utf8');
+    await fs.writeFile(failurePath, JSON.stringify({
+      error: String(error),
+      errorDetails: error?.details,
+      productionDialogue,
+      dialoguePolicy,
+      sessionId,
+      steps
+    }, null, 2), 'utf8');
     throw error;
   } finally {
-    await browser.close();
+    await browser?.close();
   }
 }
 
