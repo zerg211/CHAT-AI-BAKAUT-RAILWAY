@@ -18,6 +18,7 @@ const artifactPath = path.join('local-live-tests', 'remediation-postdeploy.json'
 const markerWaitMs = Number(process.env.REMEDIATION_MARKER_WAIT_MS ?? 600_000);
 const markerPollMs = Number(process.env.REMEDIATION_MARKER_POLL_MS ?? 15_000);
 const runProductionLiveGates = process.env.RUN_REMEDIATION_POSTDEPLOY_LIVE === '1';
+const runFixedProductionReplays = process.env.RUN_FIXED_PRODUCTION_REPLAYS === '1';
 
 function npmCommand(args, label) {
   if (npmExecPath) return { command: nodeCommand, args: [npmExecPath, ...args], label };
@@ -164,7 +165,10 @@ if (!runProductionLiveGates) {
     requiredEnvForLiveGates: {
       RUN_REMEDIATION_POSTDEPLOY_LIVE: '1',
       ALLOW_PRODUCTION_LIVE_TESTS: '1',
-      FINAL_RELEASE_LIVE_GATE: '1',
+      FINAL_RELEASE_LIVE_GATE: '1'
+    },
+    optionalEnvForFixedReplays: {
+      RUN_FIXED_PRODUCTION_REPLAYS: '1',
       ALLOW_FIXED_PRODUCTION_REPLAY: '1'
     }
   });
@@ -177,23 +181,39 @@ if (!runProductionLiveGates) {
   process.exit(0);
 }
 
-requireProductionLiveApproval({ scriptName: 'remediationPostdeploy fixed production live gates' });
+requireProductionLiveApproval({
+  scriptName: 'remediationPostdeploy diverse final production live gate',
+  allowFixedReplay: true
+});
 
 await writeArtifact({
   ok: false,
   stage: 'live_gates_started',
   actualRemediationContractVersion: actualVersion,
-  actualRemediationRuntimeArtifacts: actualRuntimeArtifacts
+  actualRemediationRuntimeArtifacts: actualRuntimeArtifacts,
+  liveGateMode: runFixedProductionReplays ? 'diverse_plus_fixed_replays' : 'diverse_final_audit',
+  productionLiveScripts: runFixedProductionReplays
+    ? ['test:live:production:diverse', 'test:live:production', 'test:live:production:876']
+    : ['test:live:production:diverse']
 });
 
-await runCommand(npmCommand(['run', 'test:live:production'], 'production live agent cycle'));
-await runCommand(npmCommand(['run', 'test:live:production:876'], 'production #876 live agent cycle'));
+await runCommand(npmCommand(['run', 'test:live:production:diverse'], 'diverse production live agent audit'));
+
+if (runFixedProductionReplays) {
+  requireProductionLiveApproval({ scriptName: 'remediationPostdeploy optional fixed production replay gates' });
+  await runCommand(npmCommand(['run', 'test:live:production'], 'optional fixed production live replay'));
+  await runCommand(npmCommand(['run', 'test:live:production:876'], 'optional fixed production #876 replay'));
+}
 
 await writeArtifact({
   ok: true,
   stage: 'complete',
   actualRemediationContractVersion: actualVersion,
-  actualRemediationRuntimeArtifacts: actualRuntimeArtifacts
+  actualRemediationRuntimeArtifacts: actualRuntimeArtifacts,
+  liveGateMode: runFixedProductionReplays ? 'diverse_plus_fixed_replays' : 'diverse_final_audit',
+  productionLiveScripts: runFixedProductionReplays
+    ? ['test:live:production:diverse', 'test:live:production', 'test:live:production:876']
+    : ['test:live:production:diverse']
 });
 
 console.log(JSON.stringify({

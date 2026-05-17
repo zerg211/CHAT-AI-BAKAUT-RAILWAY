@@ -6,7 +6,10 @@ import { assertProductionRemediationMarker } from './remediationProductionMarker
 import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 
 dotenv.config();
-requireProductionLiveApproval({ scriptName: 'liveAgentCycle.diverse.production final buyer audit' });
+requireProductionLiveApproval({
+  scriptName: 'liveAgentCycle.diverse.production final buyer audit',
+  allowFixedReplay: true
+});
 
 const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
 const started = new Date().toISOString();

@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
-function runGate(env: Record<string, string | undefined> = {}) {
+function runGate(env: Record<string, string | undefined> = {}, options = '') {
   return spawnSync(process.execPath, [
     '--input-type=module',
     '-e',
-    "import { requireProductionLiveApproval } from './tests/productionLiveGate.mjs'; requireProductionLiveApproval({ scriptName: 'test fixed replay' }); console.log('allowed');"
+    `import { requireProductionLiveApproval } from './tests/productionLiveGate.mjs'; requireProductionLiveApproval({ scriptName: 'test production live', ${options} }); console.log('allowed');`
   ], {
     cwd: process.cwd(),
     env: { ...process.env, ...env },
@@ -34,6 +34,17 @@ describe('production live gate', () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('fixed_replay_not_approved');
+  });
+
+  it('allows explicitly approved diverse final audit without fixed replay approval', () => {
+    const result = runGate({
+      ALLOW_PRODUCTION_LIVE_TESTS: '1',
+      FINAL_RELEASE_LIVE_GATE: '1',
+      ALLOW_FIXED_PRODUCTION_REPLAY: undefined
+    }, 'allowFixedReplay: true');
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('allowed');
   });
 
   it('allows explicitly approved final fixed replay scripts', () => {
