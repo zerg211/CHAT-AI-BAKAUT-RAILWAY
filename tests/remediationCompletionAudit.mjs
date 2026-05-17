@@ -74,6 +74,66 @@ async function listReleaseBundles() {
   }
 }
 
+async function listPreparedProductionLiveScenarios() {
+  const root = path.join('local-live-tests', 'generated-production-live-scenarios');
+
+  async function walk(dir) {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      const files = [];
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          files.push(...await walk(fullPath));
+          continue;
+        }
+        if (entry.isFile() && entry.name.endsWith('.json')) files.push(fullPath);
+      }
+      return files;
+    } catch (error) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  const files = await walk(root);
+  const scenarios = [];
+  for (const filePath of files) {
+    const stat = await fs.stat(filePath).catch(() => null);
+    const data = await readJson(filePath);
+    const turns = Array.isArray(data.turns) ? data.turns : [];
+    const signature = String(data.dialogueSignature ?? '');
+    const policy = data.productionLivePolicy ?? {};
+    const valid = Boolean(
+      data.scenarioName &&
+      data.variantName &&
+      turns.length >= 6 &&
+      /^[a-f0-9]{64}$/u.test(signature) &&
+      policy.dialogueSignature === signature &&
+      policy.repeatedDialogueOverride === false &&
+      Array.isArray(policy.priorMatches) &&
+      policy.priorMatches.length === 0
+    );
+    scenarios.push({
+      path: filePath,
+      bytes: stat?.size ?? 0,
+      modifiedAt: stat?.mtime?.toISOString() ?? null,
+      scenarioName: data.scenarioName,
+      variantName: data.variantName,
+      createdAt: data.createdAt,
+      dialogueSignature: signature || null,
+      turnCount: turns.length,
+      repeatedDialogueOverride: policy.repeatedDialogueOverride,
+      priorMatches: policy.priorMatches,
+      valid,
+      readError: data.__readError
+    });
+  }
+  return scenarios.sort((a, b) =>
+    String(b.createdAt ?? b.modifiedAt ?? '').localeCompare(String(a.createdAt ?? a.modifiedAt ?? ''))
+  );
+}
+
 function runtimeArtifactsComplete(actual) {
   const items = Array.isArray(actual) ? actual : [];
   return expectedRemediationRuntimeArtifacts.every((artifact) => items.includes(artifact));
@@ -147,7 +207,10 @@ const postdeploy = await readJson(path.join('local-live-tests', 'remediation-pos
 const productionLiveFailure = await readJson(path.join('local-live-tests', 'production-agent-cycle-failure.json'));
 const productionProtocols = await listProductionProtocols();
 const releaseBundles = await listReleaseBundles();
+const preparedProductionLiveScenarios = await listPreparedProductionLiveScenarios();
 const latestReleaseBundle = releaseBundles[0];
+const latestPreparedProductionLiveScenario = preparedProductionLiveScenarios.find((scenario) => scenario.valid) ??
+  preparedProductionLiveScenarios[0];
 const freshProductionProtocols = productionProtocols.filter((item) =>
   item.path.includes(expectedProtocolDate) &&
   item.bytes > 0
@@ -258,6 +321,12 @@ const checks = [
     freshProductionProtocols,
     latestExistingProductionProtocols: productionProtocols.slice(0, 5)
   }, false),
+  evaluate('prepared_production_live_scenario_exists', latestPreparedProductionLiveScenario?.valid === true, {
+    scenarioRoot: 'local-live-tests/generated-production-live-scenarios',
+    latestPreparedProductionLiveScenario,
+    recentPreparedProductionLiveScenarios: preparedProductionLiveScenarios.slice(0, 5),
+    command: 'npm run prepare:live:production:scenario'
+  }),
   evaluate('production_marker_has_runtime_artifacts', productionMarkerVerified, {
     expectedRemediationContractVersion,
     expectedRemediationRuntimeArtifacts,
