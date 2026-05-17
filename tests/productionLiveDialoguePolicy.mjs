@@ -23,10 +23,18 @@ export function dialogueSignature(turns) {
 async function readCandidateFiles(artifactDir) {
   try {
     const entries = await fs.readdir(artifactDir, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isFile())
-      .map((entry) => path.join(artifactDir, entry.name))
-      .filter((filePath) => /\.(production\.md|json)$/iu.test(filePath));
+    const files = [];
+    for (const entry of entries) {
+      const filePath = path.join(artifactDir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await readCandidateFiles(filePath));
+        continue;
+      }
+      if (entry.isFile() && /\.(production\.md|json)$/iu.test(filePath)) {
+        files.push(filePath);
+      }
+    }
+    return files;
   } catch (error) {
     if (error?.code === 'ENOENT') return [];
     throw error;

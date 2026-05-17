@@ -168,6 +168,7 @@ if (!runProductionLiveGates) {
       FINAL_RELEASE_LIVE_GATE: '1',
       PRODUCTION_LIVE_DIALOGUE_FILE: 'path to a fresh non-repeating JSON scenario'
     },
+    scenarioPreparationCommand: 'npm run prepare:live:production:scenario',
     fallbackEnvForBundledScenario: {
       ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE: '1 only for an intentional bundled scenario run'
     },
