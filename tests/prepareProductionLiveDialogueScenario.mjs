@@ -110,6 +110,35 @@ export const productionLiveScenarioVariants = {
       }
     ]
   },
+  short_pump_plate_order_boundary: {
+    description: 'Short final gate: buyer asks backup power for pump and fridge, switches to plate compactor, then asks safe delivery/order boundary without a phone call.',
+    turns: [
+      {
+        phase: 'backup_power_need_short',
+        user: 'Здравствуйте. Подбираю резервное питание для дома: насос в скважине, холодильник, свет и иногда небольшой инструмент. Хочу понять разумный запас, без покупки слишком мощного генератора.'
+      },
+      {
+        phase: 'backup_power_avr_short',
+        user: 'Насос может дернуть ток при старте. Правильно ли я понимаю, что важнее запас по пуску и AVR, а не просто самая большая цифра кВт на корпусе?'
+      },
+      {
+        phase: 'plate_driveway_need_short',
+        user: 'Параллельно выбираю виброплиту для въезда: основание щебень с песком, сверху будет плитка. Нужен не профессиональный монстр, а нормальный вариант для частного участка.'
+      },
+      {
+        phase: 'plate_weight_choice',
+        user: 'Если брать по весу, 80 кг еще нормально или для такого основания лучше около 100 кг? Перевозить планирую сам, поэтому 150 кг не хочу.'
+      },
+      {
+        phase: 'plate_catalog_90_120kg_cheap',
+        user: 'Дайте из каталога варианты виброплит примерно 90-120 кг, лучше в адекватном бюджете, и отдельно поясните про резиновый коврик для плитки.'
+      },
+      {
+        phase: 'delivery_discount_no_contact',
+        user: 'Финально без заявки и телефона: что по доставке, наличию и скидке можно сказать сейчас, а что вы будете сверять отдельно перед оформлением?'
+      }
+    ]
+  },
   rental_team_diesel_generator_trowel: {
     description: 'Rental team asks for diesel generator under tools, compares engines, then switches to finishing concrete equipment.',
     turns: [
