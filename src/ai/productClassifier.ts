@@ -487,6 +487,25 @@ export function expandModelTokenAliases(tokens: string[]) {
   return [...expanded];
 }
 
+export function parseSingleWeightTargetKg(text: string) {
+  const normalized = text.replace(/\s+/g, ' ');
+  if (/(\d{2,4})\s*(?:[-\u2010-\u2015]|\u0434\u043e)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu.test(normalized)) return undefined;
+  if (/(?:\u0434\u043e|\u043d\u0435\s+\u0442\u044f\u0436\u0435\u043b\u0435\u0435|\u043c\u0430\u043a\u0441(?:\u0438\u043c\u0443\u043c)?|up\s+to|max(?:imum)?)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu.test(normalized)) return undefined;
+  if (/(?:\u043e\u0442|\u043d\u0435\s+\u043b\u0435\u0433\u0447\u0435|\u043c\u0438\u043d(?:\u0438\u043c\u0443\u043c)?|from|min(?:imum)?)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu.test(normalized)) return undefined;
+  const single = normalized.match(/(?:\u043e\u043a\u043e\u043b\u043e|\u043f\u0440\u0438\u043c\u0435\u0440\u043d\u043e|\u043f\u043e\u0440\u044f\u0434\u043a\u0430|~|around|about)?\s*(\d{2,4})\s*(?:\u043a\u0433|kg)(?![\p{L}\p{N}])/iu);
+  if (!single) return undefined;
+  const value = Number(single[1]);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function practicalSingleWeightToleranceKg(value: number) {
+  if (value <= 120) return 10;
+  if (value <= 250) return 20;
+  if (value <= 500) return 50;
+  if (value <= 700) return Math.round(value * 0.15);
+  return Math.round(value * 0.2);
+}
+
 export function parseWeightNeedRangeKg(text: string) {
   const normalized = text.replace(/\s+/g, ' ');
   const range = normalized.match(/(\d{2,4})\s*(?:[-\u2010-\u2015]|\u0434\u043e)\s*(\d{2,4})\s*(?:\u043a\u0433|kg)/iu);
@@ -512,11 +531,10 @@ export function parseWeightNeedRangeKg(text: string) {
     if (!Number.isFinite(min)) return undefined;
     return { min, max: Math.round(min * 1.25) };
   }
-  const single = normalized.match(/(?:\u043e\u043a\u043e\u043b\u043e|\u043f\u0440\u0438\u043c\u0435\u0440\u043d\u043e|\u043f\u043e\u0440\u044f\u0434\u043a\u0430|~|around|about)?\s*(\d{2,4})\s*(?:\u043a\u0433|kg)(?![\p{L}\p{N}])/iu);
-  if (!single) return undefined;
-  const value = Number(single[1]);
+  const value = parseSingleWeightTargetKg(normalized);
+  if (value === undefined) return undefined;
   if (!Number.isFinite(value)) return undefined;
-  const tolerance = value <= 120 ? 10 : value <= 250 ? 20 : value <= 500 ? 50 : Math.round(value * 0.1);
+  const tolerance = practicalSingleWeightToleranceKg(value);
   return { min: Math.max(0, value - tolerance), max: value + tolerance };
 }
 

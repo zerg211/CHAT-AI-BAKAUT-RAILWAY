@@ -23,7 +23,7 @@ import {
   productMatchesRequestedBrand, productMatchesIntent,
   extractGeneratorPowerForHardSelection, isTechnicalSpecToken, isLikelyModelToken,
   extractModelTokens, expandModelTokenAliases,
-  parseWeightNeedRangeKg, parseDimensionNeedRangeMm,
+  parseWeightNeedRangeKg, parseSingleWeightTargetKg, parseDimensionNeedRangeMm,
   isCatalogAvailabilityQuestion, isManufacturingStatusQuestion,
   parseDesiredPowerRange, parseBudgetMax, hasBudgetSignal,
   hasExplicitGeneratorPowerRequest, inferProductIntent,
@@ -4886,6 +4886,49 @@ function nearestCatalogShortlistAlternatives(
     .map((item) => item.product);
 }
 
+function nearestHeavyPlateTargetProducts(
+  products: Product[],
+  matchedProducts: Product[],
+  state: ProductSelectionState,
+  profile: ProductFitProfile,
+  targetKg: number,
+  limit: number
+) {
+  const hard = state.hardConstraints;
+  if (limit <= 0 || hard.productIntent !== 'plate' || targetKg < 600) return [];
+  if (hard.exactModelConstraint || hard.exactModelTokens.length) return [];
+  const matchedIds = new Set(matchedProducts.map((product) => product.id));
+  const requestedBrand = new Set([normalizeBrandKey(hard.brandConstraint)].filter((item) => item.length >= 3));
+  const lower = Math.max(500, Math.floor(targetKg * 0.65));
+  const upper = Math.ceil(targetKg * 1.35);
+  const scored = products
+    .filter((product) => !matchedIds.has(product.id))
+    .filter((product) => productMatchesIntent(product, 'plate'))
+    .filter((product) => hard.productRole !== 'coreProduct' || isCoreEquipment(product))
+    .filter((product) => !effectiveExcludedClassesForState(state).some((intent) => productMatchesIntent(product, intent as ProductIntent)))
+    .filter((product) => requestedBrand.size === 0 || productMatchesRequestedBrand(product, requestedBrand))
+    .map((product) => {
+      const weight = extractWeightKg(product);
+      if (weight === undefined || weight < lower || weight > upper) return null;
+      const flags = classifyProduct(product);
+      if (hard.fuel === 'gasoline' && flags.isDiesel) return null;
+      if (hard.fuel === 'diesel' && flags.isGasoline) return null;
+      const penalty = productFitPenalty(product, profile);
+      if (penalty <= -260) return null;
+      return {
+        product,
+        score: Math.abs(weight - targetKg) + (weight < targetKg ? 20 : 0) + Math.max(0, -penalty) * 0.25
+      };
+    })
+    .filter((item): item is { product: Product; score: number } => Boolean(item))
+    .sort((a, b) => {
+      const score = a.score - b.score;
+      if (score !== 0) return score;
+      return Number(a.product.price ?? Number.MAX_SAFE_INTEGER) - Number(b.product.price ?? Number.MAX_SAFE_INTEGER);
+    });
+  return scored.slice(0, limit).map((item) => item.product);
+}
+
 function missingQuestionsForSelection(state: ProductSelectionState, totalMatched: number) {
   const hard = state.hardConstraints;
   const uncertainties = [...state.unknowns];
@@ -7287,6 +7330,23 @@ export class AssistantService {
     const exactLookupAlternative = !matchedProducts.length && closeExactLookupAlternatives.length > 0;
     if (exactLookupAlternative) {
       matchedProducts = closeExactLookupAlternatives;
+      canRecommendFromSelection = true;
+    }
+    const heavyPlateTargetKg = !matchedProducts.length
+      ? parseSingleWeightTargetKg([userMessage, plan.catalogSearchQuery].filter(Boolean).join(' '))
+      : undefined;
+    const heavyPlateTargetProducts = heavyPlateTargetKg !== undefined
+      ? nearestHeavyPlateTargetProducts(
+          sourceProducts,
+          matchedProducts,
+          effectiveSelectionState,
+          effectiveSelectionProfile,
+          heavyPlateTargetKg,
+          Math.max(50, FULL_SLICE_PRODUCT_CARDS)
+        )
+      : [];
+    if (heavyPlateTargetProducts.length) {
+      matchedProducts = heavyPlateTargetProducts;
       canRecommendFromSelection = true;
     }
     const requestedVisibleLimit = visibleLimitOverride ?? requestedVisibleCardLimitFromText(userMessage);
