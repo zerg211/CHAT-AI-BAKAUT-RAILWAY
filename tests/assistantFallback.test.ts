@@ -263,6 +263,85 @@ describe('assistant OpenAI failure fallback', () => {
     });
   });
 
+  it('uses deterministic commercial recovery even when a stored commercial contract exists', async () => {
+    const conversations = new FakeConversations();
+    const plate = testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 REDVERG RD-29155'), 54_000);
+    conversations.messages.push({
+      id: 'assistant-cards',
+      sessionId: conversations.session.id,
+      role: 'assistant',
+      content: ru('\\u041f\\u043e\\u043a\\u0430\\u0437\\u0430\\u043b \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b.'),
+      metadata: {
+        productCards: [{
+          id: plate.id,
+          name: plate.name,
+          category: plate.category,
+          price: plate.price,
+          currency: 'RUB',
+          sourceUrl: plate.sourceUrl,
+          specs: {},
+          reasons: [ru('\\u041f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 \\u043f\\u043e \\u0432\\u0435\\u0441\\u0443')],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    const userMessage: Message = {
+      id: 'user-commercial',
+      sessionId: conversations.session.id,
+      role: 'user',
+      content: ru('\\u041f\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0435 \\u0438 \\u0441\\u043a\\u0438\\u0434\\u043a\\u0435 \\u043f\\u043e\\u043a\\u0430 \\u0431\\u0435\\u0437 \\u0437\\u0432\\u043e\\u043d\\u043a\\u0430: \\u0447\\u0442\\u043e \\u043c\\u043e\\u0436\\u043d\\u043e \\u043f\\u043e\\u043d\\u044f\\u0442\\u044c \\u0441\\u0435\\u0439\\u0447\\u0430\\u0441?'),
+      metadata: {},
+      createdAt: new Date().toISOString()
+    };
+    conversations.messages.push(userMessage);
+    const contract: AgentTurnContract = {
+      answerTask: 'lead_handoff',
+      taskType: 'pure_delivery',
+      catalogAction: 'none',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'none',
+      mustAnswerNow: ['answer delivery and discount boundaries without contact pressure'],
+      activeNeeds: [],
+      currentFocus: 'commercial',
+      cardsRole: 'none',
+      leadAllowed: false,
+      leadAllowedReason: 'buyer asked without a call',
+      errorRecoveryPriority: 'Answer safely without exact delivery, discount, stock, or contact request.',
+      validatorWarnings: []
+    };
+    conversations.turn = {
+      id: '33333333-3333-4333-8333-333333333333',
+      sessionId: conversations.session.id,
+      userMessageId: userMessage.id,
+      assistantMessageId: null,
+      status: 'failed',
+      requestHash: 'hash',
+      stage: 'recovery_failed',
+      errorCode: 'recovery_failed',
+      errorMessage: 'delivery claim without verification',
+      plannerContract: contract,
+      activeNeedsBefore: null,
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    openAiCreate.mockClear();
+    const assistant = new AssistantService(conversations as never, new FakeProducts([plate]) as never);
+
+    const result = await assistant.recoverTurn({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
+    expect(result.answer).toMatch(new RegExp(`${ru('\\u0441\\u043a\\u0438\\u0434')}|${ru('\\u043a\\u043e\\u043c\\u043c\\u0435\\u0440\\u0447')}`, 'iu'));
+    expect(result.answer).not.toMatch(new RegExp(`${ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d')}|${ru('\\u043d\\u043e\\u043c\\u0435\\u0440')}`, 'iu'));
+    expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(conversations.turn?.status).toBe('recovered');
+  });
+
   it('uses the recovery post-answer policy to repair unsafe restored text before streaming', () => {
     const checked = assistantTestHooks.applyPostAnswerVerificationPolicy({
       answer: [

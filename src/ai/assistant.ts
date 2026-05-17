@@ -8963,7 +8963,13 @@ export class AssistantService {
         metadata
       };
     };
-    if (!storedContract && latestUser && isExplicitCommercialQuestion(latestUserText)) {
+    if (
+      latestUser &&
+      isExplicitCommercialQuestion(latestUserText) &&
+      (!storedContract ||
+        storedContract.commercialAction === 'explain_manager_required' ||
+        shouldUseProactiveCommercialDeterministicAnswer(storedContract, latestUserText))
+    ) {
       const commercialCards = allShownProductCards(history);
       const commercialContract: AgentTurnContract = {
         answerTask: 'lead_handoff',
@@ -8984,6 +8990,14 @@ export class AssistantService {
         errorRecoveryPriority: 'Give a safe commercial answer without promising final stock, delivery, discount, or exact terms.',
         validatorWarnings: ['commercial_recovery_contract']
       };
+      const effectiveCommercialContract = {
+        ...commercialContract,
+        activeNeeds: storedContract?.activeNeeds?.length ? storedContract.activeNeeds : commercialContract.activeNeeds,
+        leadAllowed: storedContract?.leadAllowed === true ? true : false,
+        leadAllowedReason: storedContract?.leadAllowed === true
+          ? storedContract.leadAllowedReason
+          : commercialContract.leadAllowedReason
+      };
       const answer = deterministicCommercialHandoffFallback({
         cards: commercialCards,
         selectionResult: {
@@ -8997,11 +9011,11 @@ export class AssistantService {
           confidence: 0.7,
           trace: { source: 'recovery_historical_cards' }
         } as ProductSelectionResult,
-        contract: commercialContract,
+        contract: effectiveCommercialContract,
         latestUserMessage: latestUserText
       });
       if (answer) {
-        return completeRecoveredAnswer(answer, commercialContract, {
+        return completeRecoveredAnswer(answer, effectiveCommercialContract, {
           cards: [],
           cardDisplay: undefined
         });
