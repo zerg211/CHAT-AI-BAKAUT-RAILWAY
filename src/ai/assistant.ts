@@ -8528,62 +8528,24 @@ export class AssistantService {
       input.userMessage,
       effectivePlan
     );
-    let factClaimAudit = auditAnswerFactClaims({
-      answer,
-      factClaimPlanner,
-      cardManifest
-    });
-    let postAnswerVerification = verifyPostAnswer({
+    const postAnswerCheck = applyPostAnswerVerificationPolicy({
       answer,
       factClaimPlanner,
       leadStateMachine,
-      cardManifest,
-      factClaimAudit
+      cardManifest
     });
-    const postAnswerVerificationRecovery: PostAnswerVerificationRecovery = {
-      attempted: false,
-      recovered: false,
-      issuesBefore: postAnswerVerification.issues.map((issue) => issue.code),
-      issuesAfter: postAnswerVerification.issues.map((issue) => issue.code),
-      method: 'none',
-      repairableIssues: [] as string[],
-      unrecoverableIssues: [] as string[],
-      reason: undefined as string | undefined
-    };
+    answer = postAnswerCheck.answer;
+    const factClaimAudit = postAnswerCheck.factClaimAudit;
+    const postAnswerVerification = postAnswerCheck.postAnswerVerification;
+    const postAnswerVerificationRecovery = postAnswerCheck.postAnswerVerificationRecovery;
     if (postAnswerVerification.status === 'error') {
-      const recoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
-      postAnswerVerificationRecovery.repairableIssues = recoveryPolicy.repairableIssues;
-      postAnswerVerificationRecovery.unrecoverableIssues = recoveryPolicy.unrecoverableIssues;
-      postAnswerVerificationRecovery.reason = recoveryPolicy.requiresRegenerationOrTooling
-        ? 'unrecoverable_issues_require_regeneration_or_tooling'
-        : 'deterministic_text_repair_available';
-      const repairedAnswer = repairAnswerForPostAnswerVerification({ answer, verification: postAnswerVerification });
-      if (repairedAnswer !== answer) {
-        postAnswerVerificationRecovery.attempted = true;
-        postAnswerVerificationRecovery.method = 'deterministic_text_repair';
-        answer = repairedAnswer;
-        factClaimAudit = auditAnswerFactClaims({
-          answer,
-          factClaimPlanner,
-          cardManifest
-        });
-        postAnswerVerification = verifyPostAnswer({
-          answer,
-          factClaimPlanner,
-          leadStateMachine,
-          cardManifest,
-          factClaimAudit
-        });
-        postAnswerVerificationRecovery.recovered = postAnswerVerification.status !== 'error';
-        postAnswerVerificationRecovery.issuesAfter = postAnswerVerification.issues.map((issue) => issue.code);
-        if (!postAnswerVerificationRecovery.recovered) {
-          const afterRecoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
-          postAnswerVerificationRecovery.unrecoverableIssues = afterRecoveryPolicy.unrecoverableIssues;
-          postAnswerVerificationRecovery.reason = afterRecoveryPolicy.requiresRegenerationOrTooling
-            ? 'deterministic_text_repair_left_unrecoverable_issues'
-            : 'deterministic_text_repair_did_not_clear_errors';
-        }
-      }
+      markAiFallback(
+        aiDiagnostics,
+        'answerGenerationFallback',
+        `post_answer_verification:${postAnswerVerification.issues.map((issue) => issue.code).join(',')}`,
+        'post_answer_verification_failed'
+      );
+      throw new Error(`Answer violates post-answer verification: ${postAnswerVerification.issues.map((issue) => issue.code).join(', ')}`);
     }
     const finalSelectionMetadata: ProductSelectionMetadata = {
       ...baseSelectionMetadata,

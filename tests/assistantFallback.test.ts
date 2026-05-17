@@ -309,4 +309,45 @@ describe('assistant OpenAI failure fallback', () => {
       repairableIssues: ['lead_contact_ask_forbidden']
     });
   });
+
+  it('uses the same post-answer policy to classify unrecoverable groundedness failures', () => {
+    const checked = assistantTestHooks.applyPostAnswerVerificationPolicy({
+      answer: ru('\\u042d\\u0442\\u0430 \\u043c\\u043e\\u0434\\u0435\\u043b\\u044c \\u0442\\u043e\\u0447\\u043d\\u043e \\u0430\\u043a\\u0442\\u0443\\u0430\\u043b\\u044c\\u043d\\u0430 \\u0432 \\u0442\\u0435\\u043a\\u0443\\u0449\\u0435\\u0439 \\u043b\\u0438\\u043d\\u0435\\u0439\\u043a\\u0435 \\u043f\\u0440\\u043e\\u0438\\u0437\\u0432\\u043e\\u0434\\u0438\\u0442\\u0435\\u043b\\u044f.'),
+      factClaimPlanner: {
+        version: 1,
+        factPolicy: 'web_required',
+        allowedSources: ['catalog', 'visible_cards', 'conversation_memory'],
+        requiredDisclaimers: [],
+        forbiddenClaims: ['do_not_claim_current_lineup_without_web'],
+        risk: 'high',
+        warnings: []
+      },
+      leadStateMachine: {
+        version: 1,
+        state: 'not_needed',
+        nextAction: 'answer_without_lead',
+        leadPolicy: 'none',
+        hasContactInTurn: false,
+        leadRequested: false,
+        leadCreated: false,
+        warnings: []
+      },
+      cardManifest: {
+        version: 1,
+        source: 'execution_contract',
+        cardsPolicy: 'none',
+        visibleProductIds: [],
+        hiddenProductIds: [],
+        items: [],
+        warnings: []
+      }
+    });
+
+    expect(checked.postAnswerVerification.status).toBe('error');
+    expect(checked.postAnswerVerificationRecovery).toMatchObject({
+      attempted: false,
+      recovered: false,
+      unrecoverableIssues: ['fact_claim_audit:current_lineup_claim_without_web_policy']
+    });
+  });
 });
