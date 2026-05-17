@@ -122,6 +122,9 @@ export function analyzeProductionLiveDialogueTurns(turns, { minTurns = 1, minUse
     if (/[\u0400\u0402-\u040F\u0490-\u052F]/u.test(user) || /(?:Р[—–ґµ»«]|С[Ѓ‚ѓ„…†‡€‰‹ЊЋЏ])/u.test(user)) {
       issues.push({ code: 'suspicious_cyrillic_encoding_artifacts', index });
     }
+    if (/(?:без\s+(?:заявк|телефон|номера|звонк|перезвон)|номер\s+пока\s+не\s+оставляю|пока\s+без\s+звонк|не\s+оставляю.{0,30}(?:номер|телефон)|точную\s+цену\s+сейчас\s+не\s+обещайте|без\s+обещаний\s+точн|что\s+вы\s+будете\s+сверять|что\s+надо\s+будет\s+отдельно\s+уточнять|финально\s+без|параллельно\s+(?:выбираю|подбираю|нужн))/iu.test(user)) {
+      issues.push({ code: 'scripted_operator_user_text', index });
+    }
     const normalized = normalizeDialogueText(user);
     if (seenUsers.has(normalized)) {
       issues.push({ code: 'duplicate_user_text', index });
@@ -130,6 +133,62 @@ export function analyzeProductionLiveDialogueTurns(turns, { minTurns = 1, minUse
   });
 
   return { ok: issues.length === 0, issues };
+}
+
+function inferScenarioLeadMode(variant) {
+  if (variant?.leadMode) return String(variant.leadMode);
+  const turns = Array.isArray(variant?.turns) ? variant.turns : [];
+  if (turns.some((turn) => turn?.leadForm)) return 'contact_form_submit';
+  const text = turns.map((turn) => String(turn?.user ?? '')).join('\n');
+  if (/(?:\+7|8\s?\(?\d{3}|телефон|номер|меня\s+зовут|заявк|оформ)/iu.test(text)) return 'contact_ready';
+  if (/(?:номер\s+пока\s+не\s+оставляю|пока\s+без\s+звонк|не\s+оставляю.{0,30}(?:номер|телефон)|без\s+(?:звонк|телефон|номера|заявк))/iu.test(text)) return 'contact_refusal';
+  return 'selection_only';
+}
+
+export function analyzeProductionLiveScenarioPortfolio(variants, {
+  minVariants = 4,
+  minPersonas = 4,
+  requireLeadPositive = true
+} = {}) {
+  const entries = Object.entries(variants ?? {});
+  const issues = [];
+  if (entries.length < minVariants) {
+    issues.push({ code: 'not_enough_scenario_variants', expectedMinVariants: minVariants, actualVariants: entries.length });
+  }
+
+  const personas = new Set();
+  const leadModes = new Set();
+  for (const [name, variant] of entries) {
+    const persona = String(variant?.persona ?? '').trim();
+    if (!persona) issues.push({ code: 'missing_scenario_persona', scenario: name });
+    else personas.add(normalizeDialogueText(persona));
+
+    const turnQuality = analyzeProductionLiveDialogueTurns(variant?.turns, { minTurns: 4, minUserLength: 20 });
+    for (const issue of turnQuality.issues) {
+      issues.push({ ...issue, scenario: name });
+    }
+    leadModes.add(inferScenarioLeadMode(variant));
+  }
+
+  if (personas.size < minPersonas) {
+    issues.push({ code: 'not_enough_distinct_personas', expectedMinPersonas: minPersonas, actualPersonas: personas.size });
+  }
+  if (requireLeadPositive && ![...leadModes].some((mode) => /contact|lead/iu.test(mode) && mode !== 'contact_refusal')) {
+    issues.push({ code: 'missing_lead_positive_scenario' });
+  }
+  if (leadModes.size < 2) {
+    issues.push({ code: 'not_enough_contact_behavior_variety', actualLeadModes: [...leadModes] });
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+    summary: {
+      scenarioCount: entries.length,
+      personaCount: personas.size,
+      leadModes: [...leadModes].sort()
+    }
+  };
 }
 
 export function validateProductionLiveDialogueTurns(turns, options = {}) {

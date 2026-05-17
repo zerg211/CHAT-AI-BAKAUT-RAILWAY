@@ -6,7 +6,7 @@ import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, bui
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
 import { emptyNeedState, emptyProductSelectionState, emptySemanticMemory, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
-import { calculateGeneratorLoadProfile as calculateStructuredGeneratorLoadProfile } from './loadProfile.js';
+import { calculateGeneratorLoadProfile as calculateStructuredGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
 import {
   fromEscaped, weightRegex, powerRegex, powerRangeRegex, budgetMaxRegex,
   plateTerms, generatorTerms, rammerTerms, cutterTerms, diamondBladeTerms,
@@ -39,7 +39,7 @@ import { getSessionGuard, cleanupSessionGuard } from './consistencyGuard.js';
 import { buildOfftopicGuard } from './offtopicPolicy.js';
 import { assessLeadTemperature, temperatureGuidance } from './leadTemperature.js';
 import { traceTimer, emitTrace } from './tracing.js';
-import { enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
+import { classifyGeneratorLoadText, enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
 import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
 import { applyAgentTurnContractToPlan, deriveAgentTurnContract } from './agentTurnContract.js';
 import { buildCardManifest, enforceVisibleCardConstraints } from './cardManifest.js';
@@ -3834,6 +3834,44 @@ function loadItemKey(item: ProductElectricalLoadItem) {
   return `${item.kind}:${item.name ?? ''}`;
 }
 
+function loadKindsForReferenceId(id: string, loadClass: string) {
+  if (loadClass === 'handheld_tool_load') return ['handheld_tool', 'tool'];
+  if (loadClass === 'heating_resistive_load') return ['heating_resistive'];
+  if (id === 'submersible_pump' || id === 'surface_pump') return ['pump'];
+  if (id === 'refrigerator') return ['refrigerator'];
+  if (id === 'freezer') return ['freezer'];
+  if (id === 'air_compressor') return ['compressor'];
+  if (id === 'pressure_washer') return ['pressure_washer'];
+  if (id === 'construction_vacuum') return ['vacuum'];
+  if (id === 'concrete_mixer') return ['concrete_mixer'];
+  return [];
+}
+
+function stagedLoadKindsFromText(text: string) {
+  const stagedKinds = new Set<string>();
+  for (const detection of classifyGeneratorLoadText(text)) {
+    if (detection.role !== 'staged') continue;
+    for (const kind of loadKindsForReferenceId(detection.reference.id, detection.reference.loadClass)) {
+      stagedKinds.add(canonicalElectricalLoadKind(kind));
+    }
+  }
+  if (hasOccasionalHandheldToolUse(text)) stagedKinds.add('handheld_tool');
+  return stagedKinds;
+}
+
+function hasGeneratorLoadReferenceSignal(text: string) {
+  return hasOccasionalHandheldToolUse(text) ||
+    classifyGeneratorLoadText(text).some((item) => item.role === 'active' || item.role === 'staged');
+}
+
+function hasOccasionalHandheldToolUse(text: string) {
+  return text.split(/[.!?;\n]+/).some((clause) =>
+    /(?:иногда|периодически|время\s+от\s+времени|по\s+необходимости|occasionally|sometimes|from\s+time\s+to\s+time|as\s+needed)/iu.test(clause) &&
+    /(?:инструмент|электроинструмент|болгарк|ушм|дрел|перфоратор|пил[ауые]?|tool|grinder|drill|saw)/iu.test(clause) &&
+    !/(?:одновременно|вместе|разом|сразу|simultaneously|together)/iu.test(clause)
+  );
+}
+
 function calculateGeneratorLoadProfile(
   items: ProductElectricalLoadItem[],
   simultaneousStarting = false,
@@ -3892,6 +3930,12 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
   for (const item of generatorReferenceLoadItemsFromText(text)) {
     const key = loadItemKey(item);
     if (!items.has(key)) items.set(key, item);
+  }
+  const stagedKinds = stagedLoadKindsFromText(text);
+  if (stagedKinds.size) {
+    for (const [key, item] of [...items.entries()]) {
+      if (stagedKinds.has(canonicalElectricalLoadKind(item.kind))) items.delete(key);
+    }
   }
 
   const detectedFridgeCount = applianceCount(lower, /холодильник|fridge/iu, /холодильник[а-я]*|fridges/iu);
@@ -4044,7 +4088,9 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
   }
 
   const profile = calculateGeneratorLoadProfile([...items.values()], simultaneousStarting || current?.simultaneousStarting === true);
-  if (profile && (removedKinds.length || replacedPumpLoad)) profile.removedKinds = [...new Set([...removedKinds, ...(replacedPumpLoad ? ['pump'] : [])])];
+  if (profile && (removedKinds.length || replacedPumpLoad || stagedKinds.size)) {
+    profile.removedKinds = [...new Set([...removedKinds, ...(replacedPumpLoad ? ['pump'] : []), ...stagedKinds])];
+  }
   return profile;
 }
 
@@ -4080,6 +4126,10 @@ function activePowerFromLoadText(text: string) {
     }
   }
   return undefined;
+}
+
+function isGroundedPowerConstraintSource(source: unknown) {
+  return source === 'explicit_user' || source === 'catalog_fact' || source === 'previous_selection';
 }
 
 function singlePowerKwFromText(text: string) {
@@ -4230,9 +4280,16 @@ function explicitCriteriaFromTurn(
   const compatibilityTarget = targetProductClass === 'generator'
     ? mergeCompatibilityTarget(current.compatibilityTargetProduct, compatibilityUpdate)
     : undefined;
+  const shouldReconcileLoadProfileFromText = targetProductClass === 'generator' && (
+    hasGeneratorLoadReferenceSignal(userMessage) ||
+    hasNegatedPumpLoad(userMessage) ||
+    Boolean(explicitAggregateLoadKwFromText(userMessage))
+  );
   const loadProfile = targetProductClass === 'generator'
     ? semanticSelectionReady
-      ? current.loadProfile
+      ? shouldReconcileLoadProfileFromText
+        ? generatorLoadProfileFromText(userMessage, current.loadProfile, compatibilityTarget)
+        : current.loadProfile
       : allowLegacyTextFallback
         ? generatorLoadProfileFromText(userMessage, current.loadProfile, compatibilityTarget)
         : current.loadProfile
@@ -4242,7 +4299,7 @@ function explicitCriteriaFromTurn(
     : undefined;
   const currentGroundedPowerMin = currentHard.productIntent === 'generator' &&
     currentHard.nominalPowerKwMin &&
-    currentHard.provenance?.nominalPowerKwMin !== 'inferred_from_load'
+    isGroundedPowerConstraintSource(currentHard.provenance?.nominalPowerKwMin)
     ? currentHard.nominalPowerKwMin
     : undefined;
   const groundedPowerMin = Math.max(currentGroundedPowerMin ?? 0, contextualGroundedPowerMin ?? 0) || undefined;

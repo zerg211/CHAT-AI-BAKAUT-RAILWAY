@@ -44,12 +44,12 @@ describe('production live gate', () => {
     expect(result.stderr).toContain('fixed_replay_not_approved');
   });
 
-  it('allows explicitly approved diverse final audit without fixed replay approval', () => {
+  it('allows explicitly approved adaptive buyer audit without fixed replay approval', () => {
     const result = runGate({
       ALLOW_PRODUCTION_LIVE_TESTS: '1',
       FINAL_RELEASE_LIVE_GATE: '1',
       ALLOW_FIXED_PRODUCTION_REPLAY: undefined
-    }, 'allowFixedReplay: true');
+    }, 'adaptiveBuyer: true');
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('allowed');
@@ -66,15 +66,15 @@ describe('production live gate', () => {
     expect(result.stdout).toContain('allowed');
   });
 
-  it('requires a fresh diverse scenario file after live approval', () => {
+  it('blocks the adaptive diverse script before live approval', () => {
     const result = runDiverseProductionScript({
-      ALLOW_PRODUCTION_LIVE_TESTS: '1',
-      FINAL_RELEASE_LIVE_GATE: '1',
+      ALLOW_PRODUCTION_LIVE_TESTS: undefined,
+      FINAL_RELEASE_LIVE_GATE: undefined,
       PRODUCTION_LIVE_DIALOGUE_FILE: undefined,
       ALLOW_BUNDLED_PRODUCTION_LIVE_DIALOGUE: undefined
     });
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('bundled_production_live_dialogue_not_approved');
+    expect(result.stderr).toContain('production_live_tests_not_explicitly_approved');
   });
 });

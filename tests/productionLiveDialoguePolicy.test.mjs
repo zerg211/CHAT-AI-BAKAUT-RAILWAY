@@ -3,12 +3,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  analyzeProductionLiveScenarioPortfolio,
   analyzeProductionLiveDialogueTurns,
   assertNonRepeatingProductionDialogue,
   dialoguePolicyMarkdown,
   dialogueSignature,
   loadProductionLiveDialogue
 } from './productionLiveDialoguePolicy.mjs';
+import { productionLiveScenarioVariants } from './prepareProductionLiveDialogueScenario.mjs';
 
 const sampleTurns = [
   { phase: 'first_need', user: 'Need a generator for a small house.' },
@@ -20,7 +22,7 @@ const productionReadyTurns = [
   { phase: 'catalog', user: 'Покажите несколько бензиновых вариантов из каталога без самых дорогих моделей.' },
   { phase: 'service', user: 'Что важно по шуму, обслуживанию и длительной работе несколько часов подряд?' },
   { phase: 'switch', user: 'Еще нужна бетономешалка для небольших заливок во дворе, не игрушечная, но перевозимая.' },
-  { phase: 'summary', user: 'Суммируйте, что смотреть по генератору и бетономешалке без обещаний точной доставки.' }
+  { phase: 'summary', user: 'Ну и что в итоге лучше смотреть по генератору и бетономешалке?' }
 ];
 
 async function tempArtifactDir() {
@@ -31,12 +33,12 @@ describe('production live dialogue policy', () => {
   it('rejects technically valid but unusable dialogue text', () => {
     const quality = analyzeProductionLiveDialogueTurns([
       { phase: 'bad_encoding', user: 'Р—РґСЂР°РІСЃС‚РІСѓР№С‚Рµ. РќСѓР¶РµРЅ РіРµРЅРµСЂР°С‚РѕСЂ.' },
-      { phase: 'duplicate', user: 'Р—РґСЂР°РІСЃС‚РІСѓР№С‚Рµ. РќСѓР¶РµРЅ РіРµРЅРµСЂР°С‚РѕСЂ.' }
+      { phase: 'scripted', user: 'Финально без заявки и телефона: что по доставке, наличию и скидке можно сказать сейчас?' }
     ], { minTurns: 2, minUserLength: 20 });
 
     expect(quality.ok).toBe(false);
     expect(quality.issues.map((issue) => issue.code)).toContain('suspicious_cyrillic_encoding_artifacts');
-    expect(quality.issues.map((issue) => issue.code)).toContain('duplicate_user_text');
+    expect(quality.issues.map((issue) => issue.code)).toContain('scripted_operator_user_text');
   });
 
   it('accepts readable buyer dialogue text', () => {
@@ -46,6 +48,27 @@ describe('production live dialogue policy', () => {
     ], { minTurns: 2, minUserLength: 20 });
 
     expect(quality).toEqual({ ok: true, issues: [] });
+  });
+
+  it('keeps the prepared production scenario portfolio diverse and lead-positive', () => {
+    const quality = analyzeProductionLiveScenarioPortfolio(productionLiveScenarioVariants);
+
+    expect(quality.ok).toBe(true);
+    expect(quality.summary.scenarioCount).toBeGreaterThanOrEqual(4);
+    expect(quality.summary.personaCount).toBeGreaterThanOrEqual(4);
+    expect(quality.summary.leadModes).toContain('contact_ready');
+  });
+
+  it('rejects a scenario portfolio with no buyer persona variety and no lead-positive path', () => {
+    const quality = analyzeProductionLiveScenarioPortfolio({
+      copy_1: { persona: 'Одинаковый клиент', leadMode: 'selection_only', turns: productionReadyTurns },
+      copy_2: { persona: 'Одинаковый клиент', leadMode: 'selection_only', turns: productionReadyTurns }
+    });
+
+    expect(quality.ok).toBe(false);
+    expect(quality.issues.map((issue) => issue.code)).toContain('not_enough_scenario_variants');
+    expect(quality.issues.map((issue) => issue.code)).toContain('not_enough_distinct_personas');
+    expect(quality.issues.map((issue) => issue.code)).toContain('missing_lead_positive_scenario');
   });
 
   it('allows a first unseen dialogue and returns auditable metadata', async () => {

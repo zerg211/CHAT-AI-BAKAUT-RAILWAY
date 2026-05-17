@@ -8,6 +8,8 @@ import {
 
 export const productionLiveScenarioVariants = {
   workshop_welder_compressor_bundle: {
+    persona: 'Практичный мастер гаражной мастерской: сравнивает запас мощности, задает вопросы по эксплуатации, заявку сразу не оставляет.',
+    leadMode: 'selection_only',
     description: 'Workshop buyer compares generator power for welder and compressor, then switches to concrete mixer and delivery terms.',
     turns: [
       {
@@ -36,15 +38,17 @@ export const productionLiveScenarioVariants = {
       },
       {
         phase: 'delivery_without_exact_promise',
-        user: 'Если брать генератор и бетономешалку вместе, доставка в Таганрог возможна? Точную цену сейчас не обещайте, хочу понять порядок действий.'
+        user: 'Если брать генератор и бетономешалку вместе, доставка в Таганрог у вас бывает? Как это обычно считают?'
       },
       {
-        phase: 'final_summary_no_contact',
-        user: 'Пока номер не оставляю. Суммируйте, что мне выбрать по генератору, что по бетономешалке и какие данные подготовить перед точным расчетом.'
+        phase: 'final_summary',
+        user: 'Ну и что бы вы сейчас взяли по генератору и бетономешалке? Что мне еще посмотреть дома перед заказом?'
       }
     ]
   },
   farm_pump_generator_plate: {
+    persona: 'Хозяин небольшого хозяйства: осторожно выбирает резервное питание для насоса и морозильника, затем подбирает виброплиту для подъезда.',
+    leadMode: 'selection_only',
     description: 'Farm buyer needs generator for pump and freezer, asks about inverter, then switches to plate compactor for gravel and pavers.',
     turns: [
       {
@@ -77,12 +81,14 @@ export const productionLiveScenarioVariants = {
       },
       {
         phase: 'summary_and_specialist_boundary',
-        user: 'Итогом напишите, какие модели смотреть и что по доставке/наличию надо будет уточнить у специалиста, без обещаний точной цены.'
+        user: 'Какие модели мне в итоге смотреть? И по доставке с наличием как обычно понятно становится?'
       }
     ]
   },
   short_generator_plate_delivery: {
-    description: 'Short final gate: buyer sizes a generator, asks inverter risk, switches to plate compactor, requests catalog plates, then asks delivery/discount boundary without contact.',
+    persona: 'Владелец участка с ограниченным бюджетом: быстро сужает выбор генератора и виброплиты, пока прикидывает доставку и скидку.',
+    leadMode: 'commercial_question',
+    description: 'Short final gate: buyer sizes a generator, asks inverter risk, switches to plate compactor, requests catalog plates, then asks delivery/discount boundary.',
     turns: [
       {
         phase: 'generator_sizing_short',
@@ -105,25 +111,31 @@ export const productionLiveScenarioVariants = {
         user: 'Покажите из каталога виброплиты 90-120 кг, желательно без самых дорогих моделей, и поясните, где нужен коврик под плитку.'
       },
       {
-        phase: 'delivery_discount_no_contact',
-        user: 'По доставке и скидке пока без звонка: просто скажите, что можно понять сейчас, а что надо будет отдельно уточнять перед заказом.'
+        phase: 'delivery_discount_question',
+        user: 'А доставка и скидка бывают? Мне пока просто понять, на что рассчитывать.'
       }
     ]
   },
   short_pump_plate_order_boundary: {
-    description: 'Short final gate: buyer asks backup power for pump and fridge, switches to plate compactor, then asks safe delivery/order boundary without a phone call.',
+    persona: 'Домовладелец без точных характеристик насоса: отвечает на уточнения, просит предварительный подбор, затем переключается на въезд.',
+    leadMode: 'commercial_question',
+    description: 'Short final gate: buyer asks backup power for pump and fridge, switches to plate compactor, then asks safe delivery/order boundary.',
     turns: [
       {
         phase: 'backup_power_need_short',
         user: 'Здравствуйте. Подбираю резервное питание для дома: насос в скважине, холодильник, свет и иногда небольшой инструмент. Хочу понять разумный запас, без покупки слишком мощного генератора.'
       },
       {
+        phase: 'pump_details_unknown_power_short',
+        user: 'Насос скважинный, обычный 220 В. Мощность точно не помню, шильдик сейчас не вижу, вроде около 1 кВт. На таких данных уже можно понять, какую мощность генератора смотреть?'
+      },
+      {
         phase: 'backup_power_avr_short',
-        user: 'Насос может дернуть ток при старте. Правильно ли я понимаю, что важнее запас по пуску и AVR, а не просто самая большая цифра кВт на корпусе?'
+        user: 'А обычный генератор с AVR для холодильника и насоса нормально подойдет или лучше обязательно инверторный?'
       },
       {
         phase: 'plate_driveway_need_short',
-        user: 'Параллельно выбираю виброплиту для въезда: основание щебень с песком, сверху будет плитка. Нужен не профессиональный монстр, а нормальный вариант для частного участка.'
+        user: 'Еще нужна виброплита для въезда: основание щебень с песком, сверху будет плитка. Нужен не профессиональный монстр, а нормальный вариант для частного участка.'
       },
       {
         phase: 'plate_weight_choice',
@@ -134,12 +146,14 @@ export const productionLiveScenarioVariants = {
         user: 'Дайте из каталога варианты виброплит примерно 90-120 кг, лучше в адекватном бюджете, и отдельно поясните про резиновый коврик для плитки.'
       },
       {
-        phase: 'delivery_discount_no_contact',
-        user: 'Финально без заявки и телефона: что по доставке, наличию и скидке можно сказать сейчас, а что вы будете сверять отдельно перед оформлением?'
+        phase: 'delivery_discount_question',
+        user: 'А по доставке, наличию и скидке что можете сказать? Или это уже перед покупкой уточняется?'
       }
     ]
   },
   rental_team_diesel_generator_trowel: {
+    persona: 'Ответственный за прокатную бригаду: выбирает технику под коммерческую нагрузку и больше ценит ресурс, сервис и поставку.',
+    leadMode: 'selection_only',
     description: 'Rental team asks for diesel generator under tools, compares engines, then switches to finishing concrete equipment.',
     turns: [
       {
@@ -172,11 +186,48 @@ export const productionLiveScenarioVariants = {
       },
       {
         phase: 'final_decision_summary',
-        user: 'Соберите краткий план выбора: генератор, оборудование для бетона, какие характеристики мне нужно уточнить перед заявкой.'
+        user: 'Коротко подскажите, на чем остановиться по генератору и по бетону? Что мне еще уточнить у ребят на объекте?'
+      }
+    ]
+  },
+  ready_owner_generator_plate_lead: {
+    persona: 'Готовый к покупке владелец дома: после подбора просит уточнить наличие и доставку, сам оставляет имя и телефон.',
+    leadMode: 'contact_ready',
+    description: 'Ready homeowner narrows generator and plate compactor choices, then leaves contact details for availability and delivery verification.',
+    turns: [
+      {
+        phase: 'home_backup_generator_need',
+        user: 'Здравствуйте. Нужен генератор для дома в Азове: скважинный насос, холодильник, котел и свет. Хочу нормальный запас, но без промышленного уровня.'
+      },
+      {
+        phase: 'known_pump_and_boiler_details',
+        user: 'Насос 220 В, примерно 750 Вт, котел газовый с электроникой, холодильник один. Инструмент с генератором включать не планирую.'
+      },
+      {
+        phase: 'catalog_generator_ready_choice',
+        user: 'Покажите пару нормальных вариантов генераторов из каталога, чтобы можно было выбрать сегодня.'
+      },
+      {
+        phase: 'driveway_plate_need',
+        user: 'Еще нужна виброплита для въезда под плитку. Основание песок и щебень, площадь небольшая, таскать буду сам.'
+      },
+      {
+        phase: 'plate_catalog_ready_choice',
+        user: 'Покажите виброплиты примерно 80-100 кг и скажите, нужен ли коврик под плитку.'
+      },
+      {
+        phase: 'lead_contact_for_order_check',
+        user: 'Понял. Тогда давайте заявку: меня зовут Алексей, телефон +7 900 000-00-11. Нужно уточнить наличие выбранного генератора, виброплиты и доставку до Азова.'
       }
     ]
   }
 };
+
+export function defaultProductionLiveScenarioVariant(now = new Date()) {
+  const names = Object.keys(productionLiveScenarioVariants);
+  const dayIndex = Math.floor(now.getTime() / 86_400_000);
+  return names[dayIndex % names.length];
+}
 
 export function getScenarioVariant(name) {
   const variant = productionLiveScenarioVariants[name];
@@ -192,15 +243,16 @@ export function getScenarioVariant(name) {
 }
 
 export async function prepareProductionLiveDialogueScenario({
-  variantName = process.env.PRODUCTION_LIVE_SCENARIO_VARIANT || 'workshop_welder_compressor_bundle',
+  variantName = process.env.PRODUCTION_LIVE_SCENARIO_VARIANT,
   outputDir = process.env.PRODUCTION_LIVE_SCENARIO_OUTPUT_DIR || path.join('local-live-tests', 'generated-production-live-scenarios'),
   artifactDir = 'local-live-tests',
   now = new Date(),
   env = process.env
 } = {}) {
-  const variant = getScenarioVariant(variantName);
+  const resolvedVariantName = variantName || defaultProductionLiveScenarioVariant(now);
+  const variant = getScenarioVariant(resolvedVariantName);
   const safeStamp = now.toISOString().replace(/[:.]/g, '-');
-  const scenarioName = `final-live-${variantName}-${safeStamp}`;
+  const scenarioName = `final-live-${resolvedVariantName}-${safeStamp}`;
   const turns = variant.turns;
   const policy = await assertNonRepeatingProductionDialogue({
     scriptName: 'prepareProductionLiveDialogueScenario',
@@ -211,7 +263,9 @@ export async function prepareProductionLiveDialogueScenario({
   });
   const scenario = {
     scenarioName,
-    variantName,
+    variantName: resolvedVariantName,
+    persona: variant.persona,
+    leadMode: variant.leadMode,
     description: variant.description,
     createdAt: now.toISOString(),
     dialogueSignature: dialogueSignature(turns),
@@ -236,7 +290,25 @@ export async function prepareProductionLiveDialogueScenario({
 }
 
 async function main() {
-  const result = await prepareProductionLiveDialogueScenario();
+  const args = process.argv.slice(2);
+  if (args.includes('--list')) {
+    console.log(JSON.stringify({
+      ok: true,
+      defaultVariant: defaultProductionLiveScenarioVariant(),
+      variants: Object.entries(productionLiveScenarioVariants).map(([name, variant]) => ({
+        name,
+        persona: variant.persona,
+        leadMode: variant.leadMode,
+        turnCount: variant.turns.length,
+        description: variant.description
+      }))
+    }, null, 2));
+    return;
+  }
+  const variantArg = args.find((arg) => arg.startsWith('--variant='));
+  const result = await prepareProductionLiveDialogueScenario({
+    variantName: variantArg ? variantArg.slice('--variant='.length) : undefined
+  });
   console.log(JSON.stringify({
     ok: true,
     outputPath: result.outputPath,

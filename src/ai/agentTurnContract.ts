@@ -1,4 +1,5 @@
 import type { AgentTurnContract, CustomerNeedState } from '../shared/types.js';
+import { inferProductIntent } from './productClassifier.js';
 
 type PlannerLike = {
   action: string;
@@ -54,19 +55,23 @@ function contactRefusalTechnicalSummaryText(value: string) {
   return !explicitlyAsksCards;
 }
 
-function isGeneratorCatalogOptionRequest(userMessage: string, state: CustomerNeedState) {
+function productCatalogOptionRequest(userMessage: string, state: CustomerNeedState) {
   const text = userMessage.toLocaleLowerCase('ru');
-  const generatorContext =
-    /(?:\u0433\u0435\u043d\u0435\u0440\u0430\u0442|\u044d\u043b\u0435\u043a\u0442\u0440\u043e\u0441\u0442\u0430\u043d\u0446|generator)/iu.test(text) ||
-    state.selectionState?.targetProductClass === 'generator' ||
-    state.selectionState?.currentProductClass === 'generator' ||
-    (state.activeNeeds ?? []).some((need) => need.status !== 'closed' && need.productClass === 'generator');
-  if (!generatorContext) return false;
-  const asksForCatalogOptions = /(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043a\u0430\u0440\u0442\u043e\u0447|\u043f\u043e\u0434\u0431\u0435\u0440|\u043f\u043e\u0441\u043c\u043e\u0442\u0440|\u0447\u0442\u043e\s+\u0432\u0437\u044f\u0442|\u043a\u0430\u043a\u043e\u0439\s+\u0432\u0437\u044f\u0442|\u043c\u043e\u0436\u043d\u043e\s+\u043f\u0440\u0438\u043a\u0438\u043d|\u0441\s+\u0437\u0430\u043f\u0430\u0441|\u043c\u0438\u043d\u0438\u043c\u0430\u043b)/iu.test(text);
-  if (!asksForCatalogOptions) return false;
+  const latestIntent = inferProductIntent(userMessage);
+  const contextIntent = latestIntent !== 'unknown'
+    ? latestIntent
+    : state.selectionState?.targetProductClass !== 'unknown'
+      ? state.selectionState?.targetProductClass
+      : state.selectionState?.currentProductClass !== 'unknown'
+        ? state.selectionState?.currentProductClass
+        : (state.activeNeeds ?? []).find((need) => need.status !== 'closed' && need.productClass !== 'commercial')?.productClass;
+  if (!contextIntent || contextIntent === 'unknown' || contextIntent === 'commercial') return null;
+  const asksForCatalogOptions = /(?:\u0432\u044b\u0431\u0438\u0440|\u0432\u044b\u0431\u0440\u0430\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043a\u0430\u0440\u0442\u043e\u0447|\u043f\u043e\u0434\u0431\u0435\u0440|\u043f\u043e\u0441\u043c\u043e\u0442\u0440|\u0447\u0442\u043e\s+\u0432\u0437\u044f\u0442|\u043a\u0430\u043a\u043e\u0439\s+\u0432\u0437\u044f\u0442|\u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\w*\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0436\u043d\u043e\s+\u043f\u0440\u0438\u043a\u0438\u043d|\u0441\s+\u0437\u0430\u043f\u0430\u0441|\u043c\u0438\u043d\u0438\u043c\u0430\u043b)/iu.test(text);
+  if (!asksForCatalogOptions) return null;
   const commercialOnly = /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u0441\u043a\u0438\u0434|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0443\u0441\u043b\u043e\u0432)/iu.test(text) &&
-    !/(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043f\u043e\u0434\u0431\u0435\u0440|\u0433\u0435\u043d\u0435\u0440\u0430\u0442)/iu.test(text);
-  return !commercialOnly;
+    !/(?:\u0432\u044b\u0431\u0438\u0440|\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043f\u043e\u0434\u0431\u0435\u0440|\u0433\u0435\u043d\u0435\u0440\u0430\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|\u043f\u043b\u0438\u0442)/iu.test(text);
+  if (commercialOnly) return null;
+  return { intent: contextIntent, latestIntent };
 }
 
 function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState, userMessage: string): AgentTurnContract | null {
@@ -119,8 +124,10 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     taskType = 'contact_refusal_continue_selection';
     explicitAnswerTask = 'technical_explanation';
   }
-  const generatorOptionSelectionRepair = !technicalSummaryNoCards &&
-    isGeneratorCatalogOptionRequest(userMessage, state) &&
+  const optionSelectionRequest = !technicalSummaryNoCards
+    ? productCatalogOptionRequest(userMessage, state)
+    : null;
+  const productOptionSelectionRepair = Boolean(optionSelectionRequest) &&
     (taskType === 'comparison' ||
       taskType === 'technical_answer' ||
       explicitAnswerTask === 'comparison' ||
@@ -128,7 +135,7 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
       decision.catalogAction === 'none' ||
       decision.productCardsPolicy === 'none' ||
       decision.cardsRole === 'none');
-  if (generatorOptionSelectionRepair) {
+  if (productOptionSelectionRepair) {
     taskType = 'product_selection';
     explicitAnswerTask = 'mixed';
   }
@@ -265,8 +272,10 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   if (answerTask !== explicitAnswerTask && exactAvailabilityNeedsContact && leadAllowed) {
     validatorWarnings.push('availability_handoff_answer_task_repaired');
   }
-  if (generatorOptionSelectionRepair) {
-    validatorWarnings.push('generator_option_selection_repaired');
+  if (productOptionSelectionRepair) {
+    validatorWarnings.push(optionSelectionRequest?.intent === 'generator'
+      ? 'generator_option_selection_repaired'
+      : 'product_option_selection_repaired');
   }
   if (technicalSummaryNoCards) {
     validatorWarnings.push('contact_refusal_summary_cards_suppressed');
@@ -280,7 +289,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     productCardsPolicy,
     mustAnswerNow,
     activeNeeds: compactActiveNeeds(state),
-    currentFocus: String(decision.currentFocus ?? '').trim() || defaultCurrentFocus(state),
+    currentFocus: productOptionSelectionRepair && optionSelectionRequest?.intent
+      ? String(optionSelectionRequest.intent)
+      : String(decision.currentFocus ?? '').trim() || defaultCurrentFocus(state),
     cardsRole,
     leadAllowed,
     leadAllowedReason: String(decision.leadAllowedReason ?? '').trim() || (leadAllowed ? 'llm_allows_contact_handoff' : 'llm_detected_no_contact_handoff_now'),

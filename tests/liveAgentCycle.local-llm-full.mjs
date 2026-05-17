@@ -47,11 +47,11 @@ const phases = [
   },
   {
     phase: 'commercial_without_exact_bundle_total',
-    makeText: () => 'Доставка есть? Скидки бывают? И можно понять порядок суммы, если генератор выбираем предварительно, а по виброплите есть несколько вариантов?'
+    makeText: () => 'Доставка есть? Скидки бывают, если брать генератор и виброплиту вместе?'
   },
   {
-    phase: 'contact_refusal_final_summary',
-    makeText: () => 'Пока без звонка. Скажите коротко, что сейчас разумно смотреть по генератору и виброплите, и какие данные еще надо уточнить перед точным выбором.'
+    phase: 'final_buyer_summary',
+    makeText: () => 'Скажите коротко, что сейчас разумно смотреть по генератору и виброплите? Что еще надо уточнить перед выбором?'
   }
 ];
 
@@ -191,10 +191,7 @@ function assertPhase(phase, answer, pageText) {
     }
   }
 
-  if (phase === 'contact_refusal_final_summary') {
-    if (/остав(ь|ьте).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер)/iu.test(answer)) {
-      throw new Error(`Lead pressure after contact refusal: ${answer}`);
-    }
+  if (phase === 'final_buyer_summary') {
     if (!/генератор/iu.test(answer) || !/виброплит/iu.test(answer)) {
       throw new Error(`Final answer lost generator or plate need: ${answer}`);
     }

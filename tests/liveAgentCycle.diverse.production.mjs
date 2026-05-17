@@ -5,16 +5,21 @@ import dotenv from 'dotenv';
 import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
 import {
   assertNonRepeatingProductionDialogue,
-  dialoguePolicyMarkdown,
-  loadProductionLiveDialogue
+  dialoguePolicyMarkdown
 } from './productionLiveDialoguePolicy.mjs';
 import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 import { requireProductionOpenAiRuntimeReady } from './productionOpenAiRuntimePreflight.mjs';
+import {
+  adaptiveBuyerPolicy,
+  defaultAdaptiveBuyerGoal,
+  evaluateAdaptiveGoalProgress,
+  nextAdaptiveBuyerTurn
+} from './adaptiveProductionBuyer.mjs';
 
 dotenv.config();
 requireProductionLiveApproval({
-  scriptName: 'liveAgentCycle.diverse.production final buyer audit',
-  allowFixedReplay: true
+  scriptName: 'liveAgentCycle.diverse.production adaptive buyer audit',
+  adaptiveBuyer: true
 });
 
 const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
@@ -24,79 +29,12 @@ const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-prod
 const detailPath = path.join('local-live-tests', `${started.slice(0, 10)}-production-diverse-buyer-audit-${safeStamp}.json`);
 const failurePath = path.join('local-live-tests', 'production-diverse-buyer-audit-failure.json');
 
-const bundledTurns = [
-  {
-    phase: 'household_unclear_generator',
-    user: 'Добрый день. Я первый раз выбираю генератор. На дачу надо: холодильник, насос, свет и иногда чайник. Какой мощности смотреть, чтобы не купить лишнее?'
-  },
-  {
-    phase: 'silly_fridge_inverter_question',
-    user: 'А холодильник от генератора не сгорит? Мне обязательно инверторный брать или обычный тоже нормальный?'
-  },
-  {
-    phase: 'cheap_catalog_4_6kw_220',
-    user: 'Покажите тогда что есть подешевле из генераторов 4-6 кВт на 220 В. Бренд не важен, главное без переплаты.'
-  },
-  {
-    phase: 'exact_model_typo_bison',
-    user: 'А Bison 3250 есть? Может я модель криво написал.'
-  },
-  {
-    phase: 'commercial_diesel_15_20kw_380',
-    user: 'Теперь другая задача: для бригады нужен дизельный генератор 15-20 кВт, 380 В, чтобы тянуть инструмент и бетономешалку. Что в каталоге есть?'
-  },
-  {
-    phase: 'engine_comparison_no_exact_models',
-    user: 'Если для такой ДГУ сравнить в целом Baudouin и Doosan, что надежнее? Конкретных моделей пока нет.'
-  },
-  {
-    phase: 'switch_to_plate_80_90kg_home',
-    user: 'Еще нужна виброплита для дорожек и площадки под машину. Я не профи, хочу не тяжелее примерно 80-90 кг, чтобы самому грузить. Что посоветуете?'
-  },
-  {
-    phase: 'plate_weight_100_120_question',
-    user: 'А если взять 100-120 кг, сильно лучше будет? У меня песок, немного щебня и сверху плитка.'
-  },
-  {
-    phase: 'plate_catalog_90_120kg_cheap',
-    user: 'Покажите из каталога виброплиты 90-120 кг, желательно не самые дорогие.'
-  },
-  {
-    phase: 'plate_mat_accessory_question',
-    user: 'Для плитки к такой плите нужен коврик или можно без него?'
-  },
-  {
-    phase: 'delivery_discount_no_contact',
-    user: 'Доставка до Ейска и скидка есть, если брать генератор и виброплиту? Номер пока не оставляю, просто хочу понять порядок.'
-  },
-  {
-    phase: 'final_no_call_summary',
-    user: 'Пока без звонка. Коротко подведите итог: что смотреть по генератору, что по виброплите и что мне надо уточнить перед точным выбором.'
-  }
-];
-
-const productionDialogue = await loadProductionLiveDialogue({
-  defaultTurns: bundledTurns,
-  defaultScenarioName: 'diverse-buyer-audit-generator-plate-v1'
-});
-const turns = productionDialogue.turns;
-const dialoguePolicy = await assertNonRepeatingProductionDialogue({
-  scriptName: 'liveAgentCycle.diverse.production final buyer audit',
-  scenarioName: productionDialogue.scenarioName,
-  turns,
-  artifactDir: 'local-live-tests',
-  excludePaths: [
-    protocolPath,
-    detailPath,
-    failurePath,
-    productionDialogue.scenarioFile,
-    path.join('local-live-tests', 'remediation-completion-audit.json'),
-    path.join('local-live-tests', 'remediation-postdeploy.json')
-  ].filter(Boolean)
-});
+const adaptiveBuyerGoal = defaultAdaptiveBuyerGoal;
+const goalPolicy = adaptiveBuyerPolicy(adaptiveBuyerGoal);
+let dialoguePolicy = null;
 const liveRequiredRemainingTokens = Number(
   process.env.PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS ??
-  Math.max(120_000, turns.length * 50_000)
+  Math.max(120_000, adaptiveBuyerGoal.maxTurns * 55_000)
 );
 
 function cleanText(value) {
@@ -148,6 +86,38 @@ async function fetchProductionConversation(sessionId) {
   });
   if (!response.ok) throw new Error(`Production admin detail failed: ${response.status}`);
   return response.json();
+}
+
+async function fetchProductionLeads(limit = 50) {
+  const token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY;
+  if (!token) return null;
+  const response = await fetch(`${productionApiBase}/api/admin/leads?limit=${limit}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) throw new Error(`Production admin leads failed: ${response.status}`);
+  return response.json();
+}
+
+async function submitLeadForm(frame, leadForm) {
+  const toggle = frame.getByRole('button', { name: /Оставить контакт/i }).first();
+  if (await toggle.isVisible().catch(() => false)) {
+    await toggle.evaluate((element) => element.click());
+  }
+  await frame.locator('.lead-panel.expanded input').first().waitFor({ state: 'visible', timeout: 10_000 });
+  await frame.getByLabel('Имя').fill(leadForm.name);
+  await frame.getByLabel('Телефон').fill(leadForm.phone);
+  if (leadForm.email) await frame.getByLabel('Email').fill(leadForm.email);
+  await frame.getByLabel('Вопрос').fill(leadForm.question);
+  await frame.getByRole('button', { name: /Отправить заявку/i }).click();
+  await Promise.race([
+    frame.locator('.form-note.ok').waitFor({ state: 'visible', timeout: 60_000 }),
+    frame.locator('.form-note.bad').waitFor({ state: 'visible', timeout: 60_000 })
+  ]);
+  const panelText = cleanText(await frame.locator('.lead-panel').innerText());
+  if (await frame.locator('.form-note.bad').isVisible().catch(() => false)) {
+    throw new Error(`Lead form submit failed in widget: ${panelText}`);
+  }
+  return panelText;
 }
 
 function metadataOf(message) {
@@ -261,16 +231,13 @@ function buyerAudit(step) {
 
   if (step.phase === 'delivery_discount_no_contact') {
     if (!/доставк|скидк|Ейск|услов|свер|уточн|посчита/iu.test(answer)) issues.push('не ответил по доставке/скидке');
-    if (/остав(ь|ьте|ить).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер)|как вас зовут/iu.test(answer)) {
-      issues.push('давит на контакт, хотя покупатель явно отказался оставлять номер');
-    }
   }
 
-  if (step.phase === 'final_no_call_summary') {
-    if (!/(генератор|ДГУ)/iu.test(answer) || !/виброплит/iu.test(answer)) issues.push('финальный итог потерял одну из двух потребностей');
-    if (/остав(ь|ьте|ить).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер)/iu.test(answer)) {
-      issues.push('в финальном no-call ответе снова просит контакт');
+  if (step.phase === 'ready_to_submit_lead' || step.leadForm) {
+    if (!/(заявк|контакт|телефон|свяж|уточн|налич|достав)/iu.test(answer)) {
+      issues.push('не обработал готовность покупателя оставить заявку и телефон');
     }
+    if (!step.leadSubmission?.submitted) issues.push('форма заявки не была отправлена в live-проверке');
   }
 
   return issues;
@@ -332,6 +299,11 @@ function codeAudit(step, assistantMessage) {
   }
   if (/generator|bison|diesel|kw/iu.test(step.phase) && productCards.some((card) => /виброплит/iu.test(card.name ?? ''))) {
     issues.push('metadata.productCards содержит виброплиту на генераторном ходе');
+  }
+  if (step.phase === 'ready_to_submit_lead' || step.leadForm) {
+    const leadState = metadata.leadStateMachine;
+    if (leadState?.hasContactInTurn !== true) issues.push('leadStateMachine не распознал телефон в реплике покупателя');
+    if (metadata.executionContract?.leadPolicy === 'forbidden') issues.push('executionContract запретил lead на ходе, где покупатель сам оставил телефон');
   }
 
   return {
@@ -397,7 +369,13 @@ async function main() {
     await input.waitFor({ state: 'visible', timeout: 60_000 });
 
     let previousProductCardCount = await frame.locator('.product-card').count().catch(() => 0);
-    for (const turn of turns) {
+    for (let turnIndex = 0; turnIndex < adaptiveBuyerGoal.maxTurns; turnIndex++) {
+      const turn = await nextAdaptiveBuyerTurn({
+        goal: adaptiveBuyerGoal,
+        steps,
+        turnIndex
+      });
+      if (turn.done) break;
       await waitInputEnabled(input);
       await input.fill(turn.user);
       await input.press('Enter');
@@ -408,18 +386,40 @@ async function main() {
       const assistant = cleanText(latestAssistant(messages));
       const newCards = await collectNewCards(frame, previousProductCardCount);
       previousProductCardCount = await frame.locator('.product-card').count().catch(() => previousProductCardCount);
-      const buyerIssues = buyerAudit({ ...turn, assistant, newCards });
-      steps.push({ ...turn, assistant, newCards: cardNames(newCards), buyerIssues });
-      console.log(`${turn.phase}: ${buyerIssues.length ? `BUYER_ISSUES ${buyerIssues.length}` : 'buyer ok'}; cards=${newCards.length}`);
+      const leadSubmission = turn.leadForm
+        ? { submitted: true, panelText: await submitLeadForm(frame, turn.leadForm) }
+        : null;
+      const buyerIssues = buyerAudit({ ...turn, assistant, newCards, leadSubmission });
+      steps.push({ ...turn, assistant, newCards: cardNames(newCards), buyerIssues, leadSubmission });
+      console.log(`${turn.phase}: ${buyerIssues.length ? `BUYER_ISSUES ${buyerIssues.length}` : 'buyer ok'}; cards=${newCards.length}; buyer=${turn.source}`);
+      if (leadSubmission?.submitted) break;
     }
 
     sessionId = await readWidgetSessionId(page);
+    const generatedTurns = steps.map((step) => ({ phase: step.phase, user: step.user }));
+    dialoguePolicy = await assertNonRepeatingProductionDialogue({
+      scriptName: 'liveAgentCycle.diverse.production adaptive buyer audit',
+      scenarioName: `${adaptiveBuyerGoal.scenarioName}-${safeStamp}`,
+      turns: generatedTurns,
+      artifactDir: 'local-live-tests',
+      excludePaths: [
+        protocolPath,
+        detailPath,
+        failurePath,
+        path.join('local-live-tests', 'remediation-completion-audit.json'),
+        path.join('local-live-tests', 'remediation-postdeploy.json')
+      ]
+    });
     const detail = sessionId ? await fetchProductionConversation(sessionId) : null;
+    const leadData = sessionId ? await fetchProductionLeads() : null;
+    const sessionLeads = leadData?.leads?.filter((lead) => lead.sessionId === sessionId) ?? [];
     if (detail) {
       await fs.writeFile(detailPath, JSON.stringify({
-        productionLiveDialogue: productionDialogue,
+        adaptiveBuyerGoal,
+        adaptiveBuyerGoalPolicy: goalPolicy,
         productionLiveDialoguePolicy: dialoguePolicy,
-        productionConversation: detail
+        productionConversation: detail,
+        productionLeads: sessionLeads
       }, null, 2), 'utf8');
     }
     const assistantMessages = detail?.messages?.filter((message) => message.role === 'assistant') ?? [];
@@ -441,28 +441,47 @@ async function main() {
 
     const buyerIssueCount = auditedSteps.reduce((sum, step) => sum + step.buyerIssues.length, 0);
     const codeIssueCount = auditedSteps.reduce((sum, step) => sum + step.code.issues.length, 0);
+    const expectedLeadNames = steps.map((step) => step.leadForm?.name).filter(Boolean);
+    const leadAuditIssues = expectedLeadNames.length && leadData
+      ? expectedLeadNames.filter((name) => !sessionLeads.some((lead) => lead.name === name)).map((name) => `заявка ${name} не найдена в admin leads по sessionId`)
+      : [];
+    const goalProgress = evaluateAdaptiveGoalProgress(auditedSteps, adaptiveBuyerGoal);
 
     await fs.writeFile(protocolPath, [
-      '# Production diverse buyer dialogue audit',
+      '# Production adaptive buyer dialogue audit',
       '',
       `URL: https://bakautprof.ru/`,
       `Date: ${new Date().toISOString()}`,
       `Session: ${sessionId ?? 'unknown'}`,
       `Admin metadata: ${metadataAvailable ? detailPath : 'not available'}`,
-      `Scenario source: ${productionDialogue.source}${productionDialogue.scenarioFile ? ` (${productionDialogue.scenarioFile})` : ''}`,
+      `Scenario source: adaptive buyer goal`,
+      `Buyer persona: ${adaptiveBuyerGoal.persona}`,
+      `Buyer objective: ${adaptiveBuyerGoal.objective}`,
+      `Buyer goal signature: ${goalPolicy.dialogueSignature}`,
       ...dialoguePolicyMarkdown(dialoguePolicy),
       '',
       '## Scenario',
       '',
-      'Новый живой диалог проведен через встроенный виджет на сайте bakautprof.ru. Реплики написаны как обычный покупатель, который впервые зашел на сайт: бытовой генератор, глупый техвопрос, дешевый каталоговый подбор, неточное название модели, коммерческий дизель, сравнение двигателей, виброплита по весу, аксессуар, доставка/скидка без контакта.',
+      'Новый живой диалог проведен через встроенный виджет на сайте bakautprof.ru. Покупателю задана цель, а каждая следующая реплика сгенерирована после фактического ответа ассистента и видимых карточек. Проверка не следует заранее заданному списку фраз.',
       '',
       '## Summary',
       '',
       `- Buyer-view issues: ${buyerIssueCount}`,
       `- Code/metadata issues: ${codeIssueCount}`,
+      `- Buyer-goal issues: ${goalProgress.issues.length}`,
+      `- Lead submissions: ${sessionLeads.length}${leadData ? '' : ' (admin leads unavailable)'}`,
+      `- Lead audit issues: ${leadAuditIssues.length}`,
+      '',
+      ...goalProgress.issues.map((issue) => `- ${issue}`),
+      goalProgress.issues.length ? '' : '- Buyer goal: OK',
+      '',
+      ...leadAuditIssues.map((issue) => `- ${issue}`),
+      leadAuditIssues.length ? '' : '- Lead audit: OK',
       '',
       ...auditedSteps.flatMap((step, index) => [
         `## Turn ${index + 1}: ${step.phase}`,
+        '',
+        `**Buyer decision:** ${step.rationale ?? 'n/a'} (${step.source ?? 'unknown'})`,
         '',
         `**User:** ${step.user}`,
         '',
@@ -482,15 +501,18 @@ async function main() {
         `- metadata cards: ${step.code.productCards.length}`,
         mdList(step.code.productCards.map((name) => `card: ${name}`), '- cards: none'),
         mdList(step.code.warnings.map((warning) => `warning: ${warning}`), '- warnings: none'),
-        mdList(step.code.issues, '- OK')
+        mdList(step.code.issues, '- OK'),
+        step.leadSubmission ? `- lead form: ${step.leadSubmission.panelText}` : '- lead form: none'
       ])
     ].join('\n'), 'utf8');
 
-    if (buyerIssueCount || codeIssueCount) {
+    if (buyerIssueCount || codeIssueCount || leadAuditIssues.length || goalProgress.issues.length) {
       const error = new Error('production_diverse_live_audit_failed');
       error.details = {
         buyerIssueCount,
         codeIssueCount,
+        leadAuditIssues,
+        buyerGoalIssues: goalProgress.issues,
         protocolPath,
         sessionId
       };
@@ -502,7 +524,8 @@ async function main() {
     await fs.writeFile(failurePath, JSON.stringify({
       error: String(error),
       errorDetails: error?.details,
-      productionDialogue,
+      adaptiveBuyerGoal,
+      adaptiveBuyerGoalPolicy: goalPolicy,
       dialoguePolicy,
       sessionId,
       steps

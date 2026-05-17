@@ -3701,7 +3701,7 @@ describe('recommendation ranking', () => {
 
   it('does not calculate a bundle total when generator and plate needs are active but cards cover only plates', () => {
     let state = mergeNeedState(emptyNeedState(), heuristicNeedUpdate('Нужен генератор для дачи'));
-    state = mergeNeedState(state, heuristicNeedUpdate('Параллельно нужна виброплита для дорожек'));
+    state = mergeNeedState(state, heuristicNeedUpdate('Еще нужна виброплита для дорожек'));
     const cards = [
       {
         id: 'plate-1',
@@ -5943,6 +5943,82 @@ describe('recommendation ranking', () => {
     expect(result.state.loadProfile?.items.some((item) => item.kind === 'handheld_tool')).toBe(false);
     expect(result.matchedProducts.map((item) => item.id)).toEqual(['four-kw', 'five-kw']);
     expect(result.matchedProducts.map((item) => item.id)).not.toContain('oversized');
+  });
+
+  it('reconciles an LLM load profile that counted occasional tool use as active', async () => {
+    const fourKw = productWithSpecs('four-kw', 'Генератор бензиновый 4.0 kW 220 V', 74_000, 'https://example.test/generators/four', {
+      'Номинальная мощность': '4.0 кВт',
+      'Максимальная мощность': '4.5 кВт'
+    });
+    const sixKw = productWithSpecs('six-kw', 'Генератор бензиновый 6.0 kW 220 V', 92_000, 'https://example.test/generators/six', {
+      'Номинальная мощность': '6.0 кВт',
+      'Максимальная мощность': '6.5 кВт'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([sixKw, fourKw] as any) as never);
+    const message = 'Здравствуйте. Подбираю резервное питание для дома: насос в скважине, холодильник, свет и иногда небольшой инструмент. Хочу понять разумный запас, без покупки слишком мощного генератора.';
+    const inflatedLlmSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      semanticSource: 'llm_need_extraction',
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        ...emptyNeedState().selectionState.hardConstraints,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 6,
+        nominalPowerKwMax: 7,
+        maxPowerKwMin: 6,
+        provenance: {
+          nominalPowerKwMin: 'planner',
+          nominalPowerKwMax: 'planner',
+          maxPowerKwMin: 'planner'
+        }
+      },
+      loadProfile: {
+        items: [
+          { kind: 'pump', name: 'скважинный насос', count: 1, runningKw: 1.1, startingKw: 4, source: 'estimated_average', evidence: message },
+          { kind: 'refrigerator', name: 'холодильник', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: message },
+          { kind: 'lighting', name: 'свет', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence: message },
+          { kind: 'handheld_tool', name: 'небольшой инструмент', count: 1, runningKw: 1.5, startingKw: 3, source: 'estimated_average', evidence: message }
+        ],
+        totalRunningKw: 3.05,
+        requiredStartingKw: 5.95,
+        requiredNominalKw: 6,
+        simultaneousStarting: false,
+        calculation: 'LLM counted occasional tool as active',
+        confidence: 0.68
+      } as any,
+      confidence: 0.72
+    });
+    const plan = baseTurnPlan({
+      catalogSearchQuery: message,
+      agentDecision: productSelectionAgentDecision(),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 6,
+        nominalPowerKwMax: 7,
+        maxPowerKwMin: 6
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      message,
+      { ...emptyNeedState(), selectionState: inflatedLlmSelection },
+      plan,
+      [sixKw, fourKw] as any
+    );
+
+    expect(result.state.loadProfile?.items.some((item) => ['handheld_tool', 'tool'].includes(item.kind))).toBe(false);
+    expect(result.state.loadProfile?.requiredNominalKw).toBe(3.5);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBe(3.5);
+    expect(result.state.hardConstraints.nominalPowerKwMax).toBe(4.5);
+    expect(result.visibleProducts[0]?.id).toBe('four-kw');
   });
 
   it('keeps household vibroplate selection in light affordable models when no weight or budget is given', async () => {

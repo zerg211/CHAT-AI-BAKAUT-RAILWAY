@@ -601,4 +601,71 @@ describe('agent turn contract', () => {
     expect(plan.action).toBe('recommend_products');
     expect(plan.cardPolicy).toBe('showProducts');
   });
+
+  it('switches from a stale generator clarification to a new plate selection turn', () => {
+    const generatorClarificationState = {
+      ...emptyNeedState(),
+      activeNeeds: [{
+        id: 'generator',
+        productClass: 'generator' as const,
+        summary: 'home backup generator; pump power still unknown',
+        constraints: [],
+        openQuestions: ['pump type and power'],
+        selectedProductIds: [],
+        status: 'open' as const,
+        updatedAt: '2026-05-17T00:00:00.000Z'
+      }],
+      selectionState: {
+        ...emptyNeedState().selectionState,
+        currentProductClass: 'generator' as const,
+        targetProductClass: 'generator' as const,
+        hardConstraints: {
+          ...emptyNeedState().selectionState.hardConstraints,
+          productIntent: 'generator' as const
+        }
+      }
+    };
+    const staleTextOnlyPlan = {
+      ...basePlan,
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      selectedProductIds: [],
+      selectionState: {
+        shouldShowCards: false
+      },
+      agentDecision: {
+        answerTask: 'technical_explanation' as const,
+        taskType: 'technical_answer' as const,
+        catalogAction: 'none' as const,
+        commercialAction: 'none' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['wait for pump details before generator selection'],
+        currentFocus: 'generator',
+        cardsRole: 'none' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'previous generator clarification is still open',
+        errorRecoveryPriority: 'ask pump question',
+        confidence: 0.88
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Еще нужна виброплита для въезда: основание щебень с песком, сверху будет плитка. Нужен не профессиональный монстр, а нормальный вариант для частного участка.',
+      plan: staleTextOnlyPlan,
+      needState: generatorClarificationState
+    });
+    const plan = applyAgentTurnContractToPlan(staleTextOnlyPlan, contract);
+
+    expect(contract.currentFocus).toBe('plate');
+    expect(contract.answerTask).toBe('mixed');
+    expect(contract.taskType).toBe('product_selection');
+    expect(contract.catalogAction).toBe('find_matching_products');
+    expect(contract.productCardsPolicy).toBe('show_matching_products');
+    expect(contract.cardsRole).toBe('primary');
+    expect(contract.validatorWarnings).toContain('product_option_selection_repaired');
+    expect(plan.action).toBe('recommend_products');
+    expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.selectionState.shouldShowCards).toBe(true);
+  });
 });

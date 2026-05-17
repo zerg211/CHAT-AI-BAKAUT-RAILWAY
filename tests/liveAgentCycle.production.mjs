@@ -61,7 +61,7 @@ const turns = [
   },
   {
     phase: 'second_need_plate',
-    text: 'Параллельно нужна виброплита для дорожек на участке. Будет плитка, песок, иногда немного щебня. Грузить и таскать чаще буду сам, поэтому слишком тяжелую не хочу.'
+    text: 'Еще нужна виброплита для дорожек на участке. Будет плитка, песок, иногда немного щебня. Грузить и таскать чаще буду сам, поэтому слишком тяжелую не хочу.'
   },
   {
     phase: 'plate_use_question',
@@ -73,11 +73,11 @@ const turns = [
   },
   {
     phase: 'commercial_question',
-    text: 'А доставка и скидка есть? И примерно можно понять порядок суммы за генератор плюс виброплиту, если точные модели еще выбираем?'
+    text: 'А доставка есть? И скидку какую-нибудь можно сделать, если брать генератор и виброплиту?'
   },
   {
-    phase: 'contact_refusal_summary',
-    text: 'Пока без звонка. Сначала хочу понять по технике: что сейчас брать по генератору, что по виброплите и какие данные еще надо уточнить.'
+    phase: 'final_selection_summary',
+    text: 'Если коротко, что мне сейчас смотреть по генератору и по виброплите? Что еще надо померить или уточнить дома?'
   }
 ];
 
@@ -150,12 +150,9 @@ function assertPhase(phase, answer, pageText) {
     }
   }
 
-  if (phase === 'contact_refusal_summary') {
+  if (phase === 'final_selection_summary') {
     if (/Подходящие варианты|Открыть карточку/iu.test(answer)) {
-      throw new Error(`Final no-contact summary produced product cards instead of a technical summary: ${answer}`);
-    }
-    if (/остав(ь|ьте).{0,80}(телефон|номер|контакт)|напишите.{0,80}(телефон|номер)/iu.test(answer)) {
-      throw new Error(`Lead pressure after contact refusal: ${answer}`);
+      throw new Error(`Final buyer summary produced product cards instead of a concise summary: ${answer}`);
     }
     if (!/генератор/iu.test(answer) || !/виброплит/iu.test(answer)) {
       throw new Error(`Final summary lost generator or plate need: ${answer}`);
