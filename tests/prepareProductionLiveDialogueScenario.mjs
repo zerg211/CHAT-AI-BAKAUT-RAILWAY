@@ -81,6 +81,35 @@ export const productionLiveScenarioVariants = {
       }
     ]
   },
+  short_generator_plate_delivery: {
+    description: 'Short final gate: buyer sizes a generator, asks inverter risk, switches to plate compactor, requests catalog plates, then asks delivery/discount boundary without contact.',
+    turns: [
+      {
+        phase: 'generator_sizing_short',
+        user: 'Добрый день. Для участка нужен генератор: скважинный насос примерно 1 кВт, холодильник, свет и иногда болгарка. Не хочу брать огромный с лишним запасом, какой диапазон мощности смотреть?'
+      },
+      {
+        phase: 'generator_inverter_risk_short',
+        user: 'Если насос стартует тяжело, обычный генератор с AVR нормально подойдет или для холодильника и насоса обязательно нужен инверторный?'
+      },
+      {
+        phase: 'plate_need_short',
+        user: 'Еще отдельная задача: надо уплотнить подъезд перед плиткой, там щебень и песок. Слишком тяжелую плиту не хочу, но легкую боюсь взять зря.'
+      },
+      {
+        phase: 'plate_weight_choice',
+        user: 'Для такого подъезда 70-80 кг хватит или лучше смотреть 90-110 кг? Грузить буду в прицеп, поэтому вес тоже важен.'
+      },
+      {
+        phase: 'plate_catalog_90_120kg_cheap',
+        user: 'Покажите из каталога виброплиты 90-120 кг, желательно без самых дорогих моделей, и поясните, где нужен коврик под плитку.'
+      },
+      {
+        phase: 'delivery_discount_no_contact',
+        user: 'По доставке и скидке пока без звонка: просто скажите, что можно понять сейчас, а что надо будет отдельно уточнять перед заказом.'
+      }
+    ]
+  },
   rental_team_diesel_generator_trowel: {
     description: 'Rental team asks for diesel generator under tools, compares engines, then switches to finishing concrete equipment.',
     turns: [

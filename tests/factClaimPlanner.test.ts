@@ -164,4 +164,16 @@ describe('fact claim planner', () => {
     ]));
     expect(audit.warnings).toContain('current_lineup_claim_without_web_policy');
   });
+
+  it('does not treat catalog card freshness wording as a manufacturer current-lineup claim', () => {
+    const audit = auditAnswerFactClaims({
+      answer: '\u0426\u0435\u043d\u0430 \u0432 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0435: 54 000 RUB, \u0430\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u043e\u0441\u0442\u044c \u043d\u0443\u0436\u043d\u043e \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043f\u0435\u0440\u0435\u0434 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435\u043c.',
+      factClaimPlanner: buildFactClaimPlanner({ executionContract, requirementLedger })
+    });
+
+    expect(audit.claims).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'current_lineup' })
+    ]));
+    expect(audit.warnings).not.toContain('current_lineup_claim_without_web_policy');
+  });
 });

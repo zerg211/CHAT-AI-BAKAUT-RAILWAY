@@ -209,7 +209,7 @@ export function auditAnswerFactClaims(input: {
     }
 
     if (
-      /(?:\u0432\u044b\u043f\u0443\u0441\u043a|\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434|\u043b\u0438\u043d\u0435\u0439\u043a|\u0430\u043a\u0442\u0443\u0430\u043b|current\s+(?:lineup|production)|discontinued)/iu.test(sentence) &&
+      /(?:\u0432\u044b\u043f\u0443\u0441\u043a|\u043f\u0440\u043e\u0438\u0437\u0432\u043e\u0434|\u043b\u0438\u043d\u0435\u0439\u043a|(?:\u043c\u043e\u0434\u0435\u043b\w{0,8}.{0,40}\u0430\u043a\u0442\u0443\u0430\u043b\w{0,8})|(?:\u0430\u043a\u0442\u0443\u0430\u043b\w{0,8}.{0,40}\u043c\u043e\u0434\u0435\u043b\w{0,8})|current\s+(?:lineup|production)|discontinued)/iu.test(sentence) &&
       !isCommercialVerificationSentence(sentence)
     ) {
       const grounded = allowed.has('web');
