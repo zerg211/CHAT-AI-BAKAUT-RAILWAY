@@ -1,5 +1,5 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-heavy-plate-budget-v7';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-selection-memory-reground-v8';
 
 export const expectedRemediationRuntimeArtifacts = [
   'executionContract',

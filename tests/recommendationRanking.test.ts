@@ -6172,6 +6172,152 @@ describe('recommendation ranking', () => {
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('light');
   });
 
+  it('lets the latest explicit heavy plate target override exact planner memory weight', async () => {
+    const dpu110 = productWithSpecs('dpu110', 'Vibroplita reversivnaya dizelnaya Wacker Neuson DPU 110 Lem 970 (830 kg)', 2_800_000, 'https://example.test/catalog/vibroplity/dpu-110/', {
+      'rabochaya massa, kg': '830'
+    });
+    const light = productWithSpecs('light', 'Vibroplita pryamokhodnaya 95 kg', 90_000, 'https://example.test/catalog/vibroplity/light/', {
+      'rabochaya massa, kg': '95'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([light, dpu110] as any) as never);
+    const state = withSemanticMemory(emptyNeedState(), {
+      activeRequirementIds: ['req_productclass_plate', 'req_weight_1000kg'],
+      requirements: [
+        semanticRequirement({
+          id: 'req_productclass_plate',
+          kind: 'productClass',
+          value: { text: 'vibroplita', productClass: 'plate' },
+          strictness: 'strictOnly'
+        }),
+        semanticRequirement({
+          id: 'req_weight_1000kg',
+          kind: 'weightKg',
+          value: { min: 1000, max: 1000, amount: 1000, unit: 'kg', text: 'about 1000 kg', productClass: 'plate' },
+          strictness: 'targetRange'
+        })
+      ],
+      mentionedProducts: [{
+        role: 'targetProduct',
+        token: 'vibroplita',
+        status: 'unresolved',
+        evidence: 'Need vibroplita about 1000 kg',
+        updatedAt: '2026-05-18T00:00:00.000Z',
+        productIds: [],
+        normalizedToken: 'plate'
+      }],
+      selectionPolicy: {
+        primaryRequirementIds: ['req_productclass_plate', 'req_weight_1000kg'],
+        alternativeMode: 'none',
+        explanationRequired: false
+      }
+    } as any);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 1000,
+        weightKgMax: 1000
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        shouldShowCards: true,
+        selectionConfidence: 0.8
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Need vibroplita about 1000 kg. Any close models?',
+      state,
+      plan,
+      [light, dpu110] as any
+    );
+
+    expect(result.state.hardConstraints.weightKgMin).toBe(800);
+    expect(result.state.hardConstraints.weightKgMax).toBe(1200);
+    expect(result.state.hardConstraints.provenance?.weightKgMin).toBe('explicit_user');
+    expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.visibleProducts.map((item) => item.id)).toContain('dpu110');
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('light');
+  });
+
+  it('does not turn a generic cutter target phrase into an exact model token', async () => {
+    const cutter = productWithSpecs('fs309', 'Gasoline cutter Husqvarna FS 309 max disc 350 mm', 250_000, 'https://example.test/catalog/rezchiki/fs-309/', {
+      'max disc, mm': '350'
+    });
+    const small = productWithSpecs('small', 'Gasoline cutter 300 mm', 150_000, 'https://example.test/catalog/rezchiki/small/', {
+      'max disc, mm': '300'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([small, cutter] as any) as never);
+    const state = withSemanticMemory(emptyNeedState(), {
+      activeRequirementIds: ['req_productclass_cutter', 'req_diameter_350mm'],
+      requirements: [
+        semanticRequirement({
+          id: 'req_productclass_cutter',
+          kind: 'productClass',
+          value: { text: 'gasoline cutter', productClass: 'cutter' },
+          strictness: 'strictOnly'
+        }),
+        semanticRequirement({
+          id: 'req_diameter_350mm',
+          kind: 'diameterMm',
+          value: { min: 350, max: 350, amount: 350, unit: 'mm', text: '350 mm', productClass: 'cutter' },
+          strictness: 'targetRange'
+        })
+      ],
+      mentionedProducts: [{
+        role: 'targetProduct',
+        token: 'gasoline cutter',
+        status: 'unresolved',
+        evidence: 'Need gasoline cutter 350 mm',
+        updatedAt: '2026-05-18T00:00:00.000Z',
+        productIds: [],
+        normalizedToken: 'cutter'
+      }],
+      selectionPolicy: {
+        primaryRequirementIds: ['req_productclass_cutter', 'req_diameter_350mm'],
+        alternativeMode: 'none',
+        explanationRequired: false
+      }
+    } as any);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'cutter',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        diameterMmMin: 350,
+        diameterMmMax: 350
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'cutter',
+        targetProductClass: 'cutter',
+        shouldShowCards: true,
+        selectionConfidence: 0.8
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Need gasoline cutter for 350 mm disc. Show what you have.',
+      state,
+      plan,
+      [small, cutter] as any
+    );
+
+    expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.state.hardConstraints.diameterMmMin).toBeLessThanOrEqual(350);
+    expect(result.state.hardConstraints.diameterMmMax).toBeGreaterThanOrEqual(350);
+    expect(result.visibleProducts.map((item) => item.id)).toContain('fs309');
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('small');
+  });
+
   it('resets stale generator load when the buyer switches to a vibroplate need', async () => {
     const plate = product('plate', 'Виброплита прямоходная бензиновая 80 кг', 75_000, 'https://example.test/catalog/vibroplity/plate/');
     const generator = productWithSpecs('generator', 'Generator gasoline electric start 3.0 kW', 54_000, 'https://example.test/catalog/generators/generator/', {});

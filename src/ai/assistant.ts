@@ -1128,6 +1128,48 @@ function applyPlannerSelectionContract(state: ProductSelectionState, plan: Assis
   };
 }
 
+function applyCurrentTurnExplicitNumericCriteria(state: ProductSelectionState, userMessage: string): ProductSelectionState {
+  const productIntent = state.targetProductClass !== 'unknown'
+    ? state.targetProductClass
+    : state.hardConstraints.productIntent;
+  const parsedWeightRange = intentAcceptsRequirementKind(productIntent as ProductIntent, 'weightKg')
+    ? parseWeightNeedRangeKg(userMessage)
+    : undefined;
+  const singleWeightTarget = parseSingleWeightTargetKg(userMessage);
+  const explicitWeightRangeOrBound = /(?:\d{2,4}\s*(?:[-\u2010-\u2015]|\u0434\u043e)\s*\d{2,4}\s*(?:\u043a\u0433|kg)|(?:\u0434\u043e|\u043d\u0435\s+\u0442\u044f\u0436\u0435\u043b\u0435\u0435|\u043e\u0442|\u043d\u0435\s+\u043b\u0435\u0433\u0447\u0435|\u043c\u0438\u043d(?:\u0438\u043c\u0443\u043c)?|\u043c\u0430\u043a\u0441(?:\u0438\u043c\u0443\u043c)?|from|up\s+to|min(?:imum)?|max(?:imum)?)\s*\d{2,4}\s*(?:\u043a\u0433|kg))/iu.test(userMessage);
+  const weightRange = parsedWeightRange && (explicitWeightRangeOrBound || (singleWeightTarget ?? 0) >= 600)
+    ? parsedWeightRange
+    : undefined;
+  const dimensionRange = intentAcceptsRequirementKind(productIntent as ProductIntent, 'diameterMm')
+    ? parseDimensionNeedRangeMm(userMessage)
+    : undefined;
+  if (!weightRange && !dimensionRange) return state;
+
+  const apply = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
+    const provenance = { ...(criteria.provenance ?? {}) };
+    const next: ProductSelectionCriteria = { ...criteria, provenance };
+    if (weightRange) {
+      next.weightKgMin = weightRange.min;
+      next.weightKgMax = weightRange.max;
+      provenance.weightKgMin = 'explicit_user';
+      provenance.weightKgMax = 'explicit_user';
+    }
+    if (dimensionRange) {
+      next.diameterMmMin = dimensionRange.min;
+      next.diameterMmMax = dimensionRange.max;
+      provenance.diameterMmMin = 'explicit_user';
+      provenance.diameterMmMax = 'explicit_user';
+    }
+    return next;
+  };
+
+  return {
+    ...state,
+    hardConstraints: apply(state.hardConstraints),
+    activeRequirement: state.activeRequirement ? apply(state.activeRequirement) : state.activeRequirement
+  };
+}
+
 function clearStaleLoadSizingForExplicitCatalogPower(state: ProductSelectionState, userMessage: string, plan: AssistantTurnPlan): ProductSelectionState {
   if (!generatorOnlyIntent(state.hardConstraints.productIntent as ProductIntent)) return state;
   if (plan.agentDecision?.catalogAction !== 'find_matching_products') return state;
@@ -1346,6 +1388,7 @@ function applySemanticMemoryToSelectionState(
     if (!product.token) continue;
     if (product.role === 'targetProduct') {
       if (!modelTokenGroundedInCurrentTurn(product.token, groundingText)) continue;
+      if (!isLikelyModelToken(product.token)) continue;
       hardConstraints.exactModelTokens = uniqueList([...hardConstraints.exactModelTokens, product.token], 16);
     } else if (product.role === 'availabilityCheck' || product.role === 'comparison') {
       hardConstraints.exactModelTokenRoles = [
@@ -7142,6 +7185,7 @@ export class AssistantService {
       [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
     );
     selectionState = applyPlannerSelectionContract(selectionState, plan);
+    selectionState = applyCurrentTurnExplicitNumericCriteria(selectionState, userMessage);
     selectionState = clearUngroundedExactModelSelectionState(
       selectionState,
       [userMessage, plan.selectionState.exactModelConstraint, plan.catalogSearchQuery].filter(Boolean).join(' ')
