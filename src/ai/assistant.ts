@@ -1132,6 +1132,9 @@ function applyCurrentTurnExplicitNumericCriteria(state: ProductSelectionState, u
   const productIntent = state.targetProductClass !== 'unknown'
     ? state.targetProductClass
     : state.hardConstraints.productIntent;
+  const explicitPowerRange = generatorOnlyIntent(productIntent as ProductIntent)
+    ? currentTurnExplicitGeneratorPowerRange(userMessage)
+    : undefined;
   const parsedWeightRange = intentAcceptsRequirementKind(productIntent as ProductIntent, 'weightKg')
     ? parseWeightNeedRangeKg(userMessage)
     : undefined;
@@ -1143,11 +1146,25 @@ function applyCurrentTurnExplicitNumericCriteria(state: ProductSelectionState, u
   const dimensionRange = intentAcceptsRequirementKind(productIntent as ProductIntent, 'diameterMm')
     ? parseDimensionNeedRangeMm(userMessage)
     : undefined;
-  if (!weightRange && !dimensionRange) return state;
+  if (!explicitPowerRange && !weightRange && !dimensionRange) return state;
 
   const apply = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
     const provenance = { ...(criteria.provenance ?? {}) };
     const next: ProductSelectionCriteria = { ...criteria, provenance };
+    if (explicitPowerRange) {
+      next.nominalPowerKwMin = explicitPowerRange.min;
+      next.nominalPowerKwMax = explicitPowerRange.max;
+      provenance.nominalPowerKwMin = 'explicit_user';
+      provenance.nominalPowerKwMax = 'explicit_user';
+      if (provenance.maxPowerKwMin !== 'explicit_user') {
+        next.maxPowerKwMin = undefined;
+        delete provenance.maxPowerKwMin;
+      }
+      if (provenance.maxPowerKwMax !== 'explicit_user') {
+        next.maxPowerKwMax = undefined;
+        delete provenance.maxPowerKwMax;
+      }
+    }
     if (weightRange) {
       next.weightKgMin = weightRange.min;
       next.weightKgMax = weightRange.max;
@@ -1168,6 +1185,33 @@ function applyCurrentTurnExplicitNumericCriteria(state: ProductSelectionState, u
     hardConstraints: apply(state.hardConstraints),
     activeRequirement: state.activeRequirement ? apply(state.activeRequirement) : state.activeRequirement
   };
+}
+
+function roundGeneratorTargetPower(value: number) {
+  return Math.round(value * 10) / 10;
+}
+
+function practicalSingleGeneratorPowerRangeKw(value: number) {
+  const tolerance = value <= 3
+    ? 0.5
+    : value <= 6
+      ? 0.8
+      : value <= 15
+        ? Math.max(1, value * 0.1)
+        : value * 0.12;
+  return {
+    min: Math.max(0.5, roundGeneratorTargetPower(value - tolerance)),
+    max: roundGeneratorTargetPower(value + tolerance)
+  };
+}
+
+function currentTurnExplicitGeneratorPowerRange(userMessage: string) {
+  const range = parseDesiredPowerRange(userMessage);
+  if (range) return range;
+  if (!hasExplicitGeneratorPowerRequest(userMessage)) return undefined;
+  const target = explicitGeneratorPowerRequestKw(userMessage);
+  if (!target || !Number.isFinite(target)) return undefined;
+  return practicalSingleGeneratorPowerRangeKw(target);
 }
 
 function clearStaleLoadSizingForExplicitCatalogPower(state: ProductSelectionState, userMessage: string, plan: AssistantTurnPlan): ProductSelectionState {
@@ -5262,6 +5306,17 @@ function isExplicitCommercialQuestion(message: string) {
   return /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0441\u0443\u043c\u043c|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|\u043e\u0444\u043e\u0440\u043c|\u0437\u0430\u043a\u0430\u0437|delivery|shipping|discount|price|cost|stock|order|terms)/iu.test(message);
 }
 
+function isMixedCatalogAndCommercialQuestion(message: string, contract?: AgentTurnContract | null) {
+  const asksCatalogSelection = contract?.catalogAction === 'find_matching_products' ||
+    contract?.cardsRole === 'primary' ||
+    contract?.productCardsPolicy === 'show_matching_products' ||
+    /(?:\u043f\u043e\u043a\u0430\u0436|\u043f\u043e\u0434\u0431\u0435\u0440|\u043a\u0430\u043a\u0438\u0435\s+[^.!?\n]{0,80}(?:\u0435\u0441\u0442\u044c|\u043c\u043e\u0434\u0435\u043b|\u0432\u0430\u0440\u0438\u0430\u043d\u0442)|\u0447\u0442\u043e\s+[^.!?\n]{0,80}\u0435\u0441\u0442\u044c|show|which\s+models|what\s+.*available)/iu.test(message);
+  if (!asksCatalogSelection) return false;
+  const hasProductNeed = inferProductIntent(message) !== 'unknown' ||
+    (contract?.activeNeeds ?? []).some((need) => coerceProductIntent(need.productClass) !== 'unknown');
+  return hasProductNeed && isExplicitCommercialQuestion(message);
+}
+
 function isDeliveryDiscountPriceQuestion(message: string) {
   return /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0441\u0443\u043c\u043c|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|\u0443\u0441\u043b\u043e\u0432|\u043e\u0444\u043e\u0440\u043c|\u0437\u0430\u043a\u0430\u0437|delivery|shipping|discount|price|cost|order|terms)/iu.test(message);
 }
@@ -9135,6 +9190,7 @@ export class AssistantService {
     if (
       latestUser &&
       isExplicitCommercialQuestion(latestUserText) &&
+      !isMixedCatalogAndCommercialQuestion(latestUserText, storedContract) &&
       (!storedContract ||
         storedContract.commercialAction === 'explain_manager_required' ||
         shouldUseProactiveCommercialDeterministicAnswer(storedContract, latestUserText))
@@ -10213,6 +10269,7 @@ export const assistantTestHooks = {
   generatorSizingPolicyForAnswer,
   deterministicLeadCollectionAnswer,
   deterministicCommercialHandoffFallback,
+  isMixedCatalogAndCommercialQuestion,
   shouldUseProactiveCommercialDeterministicAnswer,
   deterministicTechnicalSummaryRecovery,
   deterministicAnswerGenerationFallback,

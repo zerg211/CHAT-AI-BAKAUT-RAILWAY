@@ -4681,7 +4681,7 @@ describe('recommendation ranking', () => {
     }), []);
 
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('vibrator');
-    expect(result.missingQuestions.length).toBeGreaterThan(0);
+    expect(result.visibleProducts.map((item) => item.id)).toContain('generator');
   });
 
   it('does not create hard budget from an unknown answer', async () => {
@@ -6243,6 +6243,177 @@ describe('recommendation ranking', () => {
     expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
     expect(result.visibleProducts.map((item) => item.id)).toContain('dpu110');
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('light');
+  });
+
+  it('lets the latest explicit generator catalog power override stale load memory', async () => {
+    const tiny = productWithSpecs('tiny-light', 'Generator gasoline lighting load 0.2 kW', 12_000, 'https://example.test/catalog/generators/tiny/', {
+      nominalPower: '0.2 kW'
+    });
+    const four = productWithSpecs('four-kw', 'Generator gasoline 4.0 kW home backup', 75_000, 'https://example.test/catalog/generators/four/', {
+      nominalPower: '4.0 kW',
+      maxPower: '4.5 kW'
+    });
+    const six = productWithSpecs('six-kw', 'Generator gasoline 6.0 kW larger backup', 120_000, 'https://example.test/catalog/generators/six/', {
+      nominalPower: '6.0 kW',
+      maxPower: '6.5 kW'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([tiny, four, six] as any) as never);
+    const state = withSemanticMemory(emptyNeedState(), {
+      activeRequirementIds: ['req_product_generator', 'req_load_lighting'],
+      requirements: [
+        semanticRequirement({
+          id: 'req_product_generator',
+          kind: 'productClass',
+          value: { text: 'generator', productClass: 'generator' },
+          strictness: 'strictOnly'
+        }),
+        semanticRequirement({
+          id: 'req_load_lighting',
+          kind: 'powerKw',
+          value: { min: 0.1, max: 0.2, amount: 0.2, unit: 'kW', text: 'lighting estimated', productClass: 'generator' },
+          strictness: 'fallbackAllowed'
+        })
+      ],
+      selectionPolicy: {
+        primaryRequirementIds: ['req_product_generator', 'req_load_lighting'],
+        alternativeMode: 'none',
+        explanationRequired: false
+      }
+    } as any);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 0.1,
+        nominalPowerKwMax: 0.2
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        shouldShowCards: true,
+        selectionConfidence: 0.8
+      },
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_delivery',
+        commercialAction: 'explain_manager_required'
+      })
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Покажите, какие 4 кВт генераторы сейчас есть, потом доставку посчитаем.',
+      state,
+      plan,
+      [tiny, four, six] as any
+    );
+
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBeLessThanOrEqual(4);
+    expect(result.state.hardConstraints.nominalPowerKwMax).toBeGreaterThanOrEqual(4);
+    expect(result.state.hardConstraints.provenance?.nominalPowerKwMin).toBe('explicit_user');
+    expect(result.visibleProducts.map((item) => item.id)).toContain('four-kw');
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('tiny-light');
+  });
+
+  it('does not let generic generator target memory suppress 13 kW catalog alternatives', async () => {
+    const near12 = productWithSpecs('near-12', 'Generator diesel 12.0 kW 13.0 kW max', 210_000, 'https://example.test/catalog/generators/near-12/', {
+      nominalPower: '12.0 kW',
+      maxPower: '13.0 kW'
+    });
+    const near14 = productWithSpecs('near-14', 'Generator gasoline 13.8 kW backup', 260_000, 'https://example.test/catalog/generators/near-14/', {
+      nominalPower: '13.8 kW',
+      maxPower: '15.0 kW'
+    });
+    const small = productWithSpecs('small', 'Generator gasoline 4.0 kW', 75_000, 'https://example.test/catalog/generators/small/', {
+      nominalPower: '4.0 kW'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([small, near12, near14] as any) as never);
+    const state = withSemanticMemory(emptyNeedState(), {
+      activeRequirementIds: ['req_product_generator', 'req_power_13'],
+      requirements: [
+        semanticRequirement({
+          id: 'req_product_generator',
+          kind: 'productClass',
+          value: { text: 'generator', productClass: 'generator' },
+          strictness: 'strictOnly'
+        }),
+        semanticRequirement({
+          id: 'req_power_13',
+          kind: 'powerKw',
+          value: { min: 13, max: 13, amount: 13, unit: 'kW', text: 'about 13 kW', productClass: 'generator' },
+          strictness: 'targetRange'
+        })
+      ],
+      mentionedProducts: [{
+        role: 'targetProduct',
+        token: 'генератор',
+        status: 'unresolved',
+        evidence: 'нужен генератор примерно 13 кВт',
+        updatedAt: '2026-05-18T00:00:00.000Z',
+        productIds: [],
+        normalizedToken: 'generator'
+      }],
+      selectionPolicy: {
+        primaryRequirementIds: ['req_product_generator', 'req_power_13'],
+        alternativeMode: 'none',
+        explanationRequired: false
+      }
+    } as any);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 13,
+        nominalPowerKwMax: 13
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        shouldShowCards: true,
+        selectionConfidence: 0.8
+      },
+      agentDecision: productSelectionAgentDecision()
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Теперь отдельно нужен генератор примерно 13 кВт. Что есть в каталоге?',
+      state,
+      plan,
+      [small, near12, near14] as any
+    );
+
+    expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBeLessThan(13);
+    expect(result.state.hardConstraints.nominalPowerKwMax).toBeGreaterThan(13);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(expect.arrayContaining(['near-12', 'near-14']));
+    expect(result.visibleProducts.map((item) => item.id)).not.toContain('small');
+  });
+
+  it('detects mixed product catalog plus delivery questions so recovery cannot answer delivery only', () => {
+    expect(assistantTestHooks.isMixedCatalogAndCommercialQuestion(
+      'Покажите, какие 4 кВт генераторы есть в наличии и что нужно для расчета доставки.',
+      {
+        answerTask: 'mixed',
+        taskType: 'product_selection_with_delivery',
+        catalogAction: 'find_matching_products',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'show_matching_products',
+        mustAnswerNow: ['show generator cards', 'explain delivery verification'],
+        activeNeeds: [{ id: 'need_generator', productClass: 'generator', summary: '4 kW generator' }],
+        currentFocus: 'generator with delivery',
+        cardsRole: 'primary',
+        leadAllowed: false,
+        leadAllowedReason: 'buyer has not selected a model',
+        errorRecoveryPriority: 'show catalog products first',
+        validatorWarnings: []
+      } as any
+    )).toBe(true);
   });
 
   it('does not turn a generic cutter target phrase into an exact model token', async () => {
