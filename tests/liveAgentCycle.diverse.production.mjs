@@ -114,7 +114,13 @@ async function submitLeadForm(frame, leadForm) {
   await frame.getByLabel('Телефон').fill(leadForm.phone);
   if (leadForm.email) await frame.getByLabel('Email').fill(leadForm.email);
   await frame.getByLabel('Вопрос').fill(leadForm.question);
-  await frame.getByRole('button', { name: /Отправить заявку/i }).click();
+  const submit = frame.locator('.lead-panel.expanded button[type="submit"]').first();
+  await submit.waitFor({ state: 'visible', timeout: 10_000 });
+  await frame.waitForFunction(() => {
+    const button = document.querySelector('.lead-panel.expanded button[type="submit"]');
+    return button instanceof HTMLButtonElement && !button.disabled;
+  }, null, { timeout: 10_000 });
+  await submit.evaluate((element) => element.click());
   await Promise.race([
     frame.locator('.form-note.ok').waitFor({ state: 'visible', timeout: 60_000 }),
     frame.locator('.form-note.bad').waitFor({ state: 'visible', timeout: 60_000 })

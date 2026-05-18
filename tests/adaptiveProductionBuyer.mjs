@@ -40,6 +40,10 @@ function hasInlineLeadContact(value) {
   return digits.length >= 10 || /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu.test(text);
 }
 
+function commitsToLeadSubmission(value) {
+  return /(?:заявк|контакт|телефон|номер|перезвон|позвон|оставл|оставить|оставлю|форм[аеу]|оформ|давайте\s+(?:проверим|оформ|заявк))/iu.test(value);
+}
+
 export function adaptiveBuyerGoalSignature(goal = defaultAdaptiveBuyerGoal) {
   const stableGoal = {
     scenarioName: goal.scenarioName,
@@ -107,12 +111,13 @@ function validateDecision(decision, fallbackDecision) {
   if (leadForm && hasInlineLeadContact(user)) {
     return { ...fallbackDecision, leadForm: fallbackDecision.leadForm ?? leadForm };
   }
+  const acceptedLeadForm = leadForm && commitsToLeadSubmission(user) ? leadForm : null;
   return {
     phase,
     user,
     rationale: normalize(decision?.rationale || decision?.reason || fallbackDecision.rationale),
     done: false,
-    leadForm,
+    leadForm: acceptedLeadForm,
     source: decision?.source || 'llm'
   };
 }
