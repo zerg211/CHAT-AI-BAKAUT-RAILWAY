@@ -5609,7 +5609,7 @@ function isMixedCatalogAndCommercialQuestion(message: string, contract?: AgentTu
 
 function isCommercialQuestionAboutShownProducts(message: string) {
   return isExplicitCommercialQuestion(message) &&
-    /(?:из\s+этих|по\s+этим|этих\s+модел|эти\s+модел|этих\s+вариант|эти\s+вариант|показанн|выбранн|из\s+карточек|по\s+карточкам|по\s+ним|по\s+позициям)/iu.test(message);
+    /(?:из\s+этих|из\s+этого|по\s+этим|этих\s+модел|эти\s+модел|этих\s+вариант|эти\s+вариант|показанн|выбранн|из\s+карточек|по\s+карточкам|по\s+ним|по\s+позициям)/iu.test(message);
 }
 
 function isDeliveryDiscountPriceQuestion(message: string) {
