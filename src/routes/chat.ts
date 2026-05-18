@@ -188,9 +188,16 @@ export async function registerChatRoutes(app: FastifyInstance) {
       reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    let statusTimer: NodeJS.Timeout | null = null;
     try {
       send('turn', { turnId: params.turnId, recovered: true });
       send('status', { status: 'Ответ оборвался, восстанавливаю...' });
+      let statusIndex = 0;
+      statusTimer = setInterval(() => {
+        statusIndex = Math.min(statusIndex + 1, generationStatusMessages.length - 1);
+        send('status', { status: generationStatusMessages[statusIndex] });
+      }, 12_000);
+      statusTimer.unref?.();
       const session = await conversations.getSession(params.id);
       const payload = await runWithOpenAIUsageContext({
         sessionId: params.id,
@@ -220,6 +227,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         error: 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
       });
     } finally {
+      if (statusTimer) clearInterval(statusTimer);
       clearTimeout(timeout);
       reply.raw.off('close', abort);
       if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();

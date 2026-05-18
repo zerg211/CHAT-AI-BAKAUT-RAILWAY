@@ -231,7 +231,7 @@ async function adminResponseError(response: Response, fallback: string) {
 }
 
 const apiBase = '';
-const CHAT_TURN_TIMEOUT_MS = 180_000;
+const CHAT_TURN_TIMEOUT_MS = 300_000;
 
 function id() {
   return Math.random().toString(36).slice(2);
@@ -1164,7 +1164,9 @@ function App() {
         message.id === assistantId
           ? {
               ...message,
-              content: message.content || payload?.answer || 'Ответ сформирован, но текст не был передан. Повторите запрос.',
+              content: payload?.metadata?.recovered === true || !message.content
+                ? payload?.answer || message.content || 'Ответ сформирован, но текст не был передан. Повторите запрос.'
+                : message.content,
               serverId: payload?.assistantMessageId,
               cards: payload?.productCards?.length ? payload.productCards : message.cards,
               cardDisplay: payload?.cardDisplay ?? payload?.metadata?.cardDisplay ?? message.cardDisplay,

@@ -14,6 +14,7 @@ export type ChatStreamOptions = {
 };
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 45_000;
+const DEFAULT_RECOVERY_IDLE_TIMEOUT_MS = 135_000;
 const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя.';
 const RECOVERING_STATUS = 'Ответ оборвался, восстанавливаю...';
 const FRIENDLY_FINAL_ERROR = 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
@@ -106,7 +107,7 @@ async function recoverChatMessage(
     signal
   });
   if (!response.ok || !response.body) throw new Error(FRIENDLY_FINAL_ERROR);
-  return consumeSse(response, handlers, signal, idleTimeoutMs);
+  return consumeSse(response, handlers, signal, Math.max(idleTimeoutMs, DEFAULT_RECOVERY_IDLE_TIMEOUT_MS));
 }
 
 export async function streamChatMessage(

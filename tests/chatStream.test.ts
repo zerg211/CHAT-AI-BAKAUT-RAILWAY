@@ -56,6 +56,59 @@ describe('streamChatMessage watchdog and recovery', () => {
     }
   });
 
+  it('lets recovery outlive the primary stream idle watchdog', async () => {
+    vi.useFakeTimers();
+    try {
+      const firstStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(sseEvent('turn', { turnId: 'turn-long' })));
+        }
+      });
+      const recoveredPayload = {
+        turnId: 'turn-long',
+        answer: 'Recovered after a long repair',
+        assistantMessageId: 'msg-long',
+        productCards: [{ id: 'dpu-130', name: 'DPU 130', url: '/dpu-130' }],
+        usedWebSearch: false
+      };
+      const recoveredStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode(
+              sseEvent('delta', { delta: 'Recovered after a long repair' }) +
+              sseEvent('done', recoveredPayload)
+            ));
+            controller.close();
+          }, 70_000);
+        }
+      });
+      const fetcher = vi.fn(async (url: string | URL | Request) => (
+        String(url).includes('/recover')
+          ? new Response(recoveredStream, { status: 200 })
+          : new Response(firstStream, { status: 200 })
+      ));
+      const deltas: string[] = [];
+
+      const result = streamChatMessage(
+        'http://127.0.0.1:3010',
+        'session-1',
+        'need heavy plate',
+        { onDelta: (delta) => deltas.push(delta) },
+        undefined,
+        { fetcher, idleTimeoutMs: 1000 }
+      );
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(70_000);
+
+      await expect(result).resolves.toMatchObject(recoveredPayload);
+      expect(deltas.join('')).toBe('Recovered after a long repair');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns the done payload when SSE finishes normally before the watchdog fires', async () => {
     vi.useFakeTimers();
     try {
