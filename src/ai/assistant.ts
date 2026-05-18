@@ -5604,6 +5604,11 @@ function isMixedCatalogAndCommercialQuestion(message: string, contract?: AgentTu
   return hasProductNeed && isExplicitCommercialQuestion(message);
 }
 
+function isCommercialQuestionAboutShownProducts(message: string) {
+  return isExplicitCommercialQuestion(message) &&
+    /(?:из\s+этих|по\s+этим|этих\s+модел|эти\s+модел|этих\s+вариант|эти\s+вариант|показанн|выбранн|из\s+карточек|по\s+карточкам|по\s+ним|по\s+позициям)/iu.test(message);
+}
+
 function isDeliveryDiscountPriceQuestion(message: string) {
   return /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0441\u0443\u043c\u043c|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|\u0443\u0441\u043b\u043e\u0432|\u043e\u0444\u043e\u0440\u043c|\u0437\u0430\u043a\u0430\u0437|delivery|shipping|discount|price|cost|order|terms)/iu.test(message);
 }
@@ -7411,11 +7416,12 @@ export class AssistantService {
   private async tryFastCommercialHandoff(input: GenerateAnswerInput, session: ConversationSession, history: Message[], aiDiagnostics: AiGenerationDiagnostics): Promise<ChatResponsePayload | null> {
     const latestUserMessage = input.userMessage;
     if (!isExplicitCommercialQuestion(latestUserMessage)) return null;
-    if (isMixedCatalogAndCommercialQuestion(latestUserMessage)) return null;
 
     const contactRefusal = isContactRefusalTechnicalSummaryRequest(latestUserMessage);
     const commercialCards = allShownProductCards(history);
     const hasPriorProductContext = commercialCards.length > 0 || (session.needState.activeNeeds ?? []).length > 0;
+    const commercialQuestionAboutShownProducts = commercialCards.length > 0 && isCommercialQuestionAboutShownProducts(latestUserMessage);
+    if (isMixedCatalogAndCommercialQuestion(latestUserMessage) && !commercialQuestionAboutShownProducts) return null;
     const asksNewCatalogWork = /(?:покаж|подбер|выбер|вариант|модел|какие\s+[^.!?\n]{0,80}есть|show|select|recommend)/iu.test(latestUserMessage);
     const asksSpecificCatalogItem = inferProductIntent(latestUserMessage) !== 'unknown' ||
       extractModelTokens(latestUserMessage).length > 0;

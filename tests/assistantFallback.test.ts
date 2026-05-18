@@ -205,6 +205,48 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(2);
   });
 
+  it('uses fast commercial handoff for stock and delivery of already shown cards even with a future product mention', async () => {
+    openAiCreate.mockClear();
+    const products = [
+      testProduct('generator-1', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 42_490)
+    ];
+    const conversations = new FakeConversations();
+    conversations.messages.push({
+      id: 'previous-assistant-generator-cards',
+      sessionId: conversations.session.id,
+      role: 'assistant',
+      content: ru('\\u041f\\u043e\\u043a\\u0430\\u0437\\u0430\\u043b \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u044b \\u043d\\u0430 5 \\u043a\\u0412\\u0442.'),
+      metadata: {
+        productCards: [{
+          id: products[0].id,
+          name: products[0].name,
+          category: products[0].category,
+          price: products[0].price,
+          currency: 'RUB',
+          sourceUrl: products[0].sourceUrl,
+          specs: {},
+          reasons: [ru('\\u041f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 \\u043f\\u043e \\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u0438')],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    const assistant = new AssistantService(conversations as never, new FakeProducts(products) as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId: conversations.session.id,
+      userMessage: ru('\\u0421\\u043f\\u0430\\u0441\\u0438\\u0431\\u043e, \\u043f\\u043e \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0443 \\u0442\\u043e\\u0433\\u0434\\u0430 \\u0441\\u043c\\u043e\\u0442\\u0440\\u044e \\u043d\\u0430 5 \\u043a\\u0412\\u0442 \\u0441 \\u0437\\u0430\\u043f\\u0430\\u0441\\u043e\\u043c. \\u041f\\u043e\\u0434\\u0441\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435, \\u043f\\u043e\\u0436\\u0430\\u043b\\u0443\\u0439\\u0441\\u0442\\u0430, \\u0447\\u0442\\u043e \\u0438\\u0437 \\u044d\\u0442\\u0438\\u0445 \\u043c\\u043e\\u0434\\u0435\\u043b\\u0435\\u0439 \\u0435\\u0441\\u0442\\u044c \\u0432 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0438 \\u0438 \\u043a\\u0430\\u043a\\u0430\\u044f \\u0431\\u0443\\u0434\\u0435\\u0442 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430 \\u0434\\u043e \\u0434\\u043e\\u043c\\u0430, \\u0430 \\u043f\\u043e\\u0442\\u043e\\u043c \\u0443\\u0436\\u0435 \\u043f\\u043e\\u0434\\u0431\\u0435\\u0440\\u0435\\u043c \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0443 \\u0434\\u043b\\u044f \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430.'),
+      onDelta: vi.fn()
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
+    expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u043b\\u0438\\u0447'));
+    expect(result.metadata?.answerMode).toBe('fast_commercial_handoff');
+    expect(result.leadRequested).toBe(true);
+    expect(result.productCards).toHaveLength(0);
+  });
+
   it('does not ask for contact again when the fast commercial handoff already created a lead from chat text', async () => {
     openAiCreate.mockClear();
     const products = [
