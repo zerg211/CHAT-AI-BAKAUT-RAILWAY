@@ -44,6 +44,30 @@ function commitsToLeadSubmission(value) {
   return /(?:заявк|контакт|телефон|номер|перезвон|позвон|оставл|оставить|оставлю|форм[аеу]|оформ|давайте\s+(?:проверим|оформ|заявк))/iu.test(value);
 }
 
+function coversFallbackStep(decision, fallbackDecision) {
+  const user = lower(decision?.user);
+  if (!user) return false;
+  switch (fallbackDecision?.phase) {
+    case 'answer_pump_clarification':
+    case 'add_pump_details':
+      return /насос|750\s*вт|0[,.]?75\s*квт|шильдик|модель|220\s*в/iu.test(user);
+    case 'request_generator_catalog':
+      return /(?:генератор|инвертор|4\s*квт|5\s*квт)/iu.test(user) &&
+        /(?:покаж|вариант|модел|карточ|каталог|какие[^.!?\n]{0,80}есть|налич)/iu.test(user);
+    case 'switch_to_plate_need':
+      return /виброплит/iu.test(user);
+    case 'request_plate_catalog':
+      return /виброплит/iu.test(user) &&
+        /(?:покаж|вариант|модел|карточ|каталог|80|90|100|кг)/iu.test(user);
+    case 'ask_delivery_availability':
+      return /достав|налич|склад|заказ|оформ/iu.test(user);
+    case 'leave_contact_for_order_check':
+      return Boolean(decision?.leadForm) || hasInlineLeadContact(user);
+    default:
+      return true;
+  }
+}
+
 export function adaptiveBuyerGoalSignature(goal = defaultAdaptiveBuyerGoal) {
   const stableGoal = {
     scenarioName: goal.scenarioName,
@@ -303,7 +327,14 @@ export async function nextAdaptiveBuyerTurn({
   try {
     const decision = await llmDecision({ goal, steps, turnIndex, signal });
     if (!decision) return fallback;
-    return validateDecision(decision, fallback);
+    const validated = validateDecision(decision, fallback);
+    if (!coversFallbackStep(validated, fallback)) {
+      return {
+        ...fallback,
+        source: `fallback_guarded_${validated.source ?? 'llm'}`
+      };
+    }
+    return validated;
   } catch (error) {
     return {
       ...fallback,
