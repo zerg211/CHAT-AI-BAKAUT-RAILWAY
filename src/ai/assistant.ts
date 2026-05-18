@@ -5731,12 +5731,46 @@ function deterministicTechnicalSummaryRecovery(input: {
   ].join('\n\n');
 }
 
+function isPlateWeightTechnicalQuestion(text: string) {
+  const normalized = text.toLowerCase();
+  const asksCatalogOrCommercial = /(?:покаж|вариант|модел|карточ|каталог|налич|склад|достав|скид|заказ|оформ)/iu.test(normalized);
+  if (asksCatalogOrCommercial || isExplicitCommercialQuestion(text) || isMixedCatalogAndCommercialQuestion(text)) return false;
+  const hasPlate = /(?:вибро\s*плит|виброплит|plate\s*compactor)/iu.test(normalized);
+  const asksWeightOrUse =
+    /(?:вес|кг|килограмм|груз|перевоз|тащить|сам|одному|песок|щеб|основан|трамб|уплотн)/iu.test(normalized);
+  return hasPlate && asksWeightOrUse;
+}
+
+function deterministicPlateWeightOrientation(userMessage: string) {
+  if (!isPlateWeightTechnicalQuestion(userMessage)) return '';
+  const normalized = userMessage.toLowerCase();
+  const selfLoad = /(?:сам|одному|груз|перевоз|багаж|прицеп|тащить)/iu.test(normalized);
+  const smallPaving = isSmallSitePlateNeed(userMessage) || /(?:плитк|въезд|песок|щеб|двор|дорож)/iu.test(normalized);
+  const lines = [
+    smallPaving
+      ? 'Для небольшого въезда под плитку по песку и щебню я бы сначала смотрел прямоходную бензиновую виброплиту примерно 60-80 кг, а не самый тяжелый класс.'
+      : 'По виброплите сначала держал бы ориентир на прямоходный бензиновый класс примерно 60-80 кг, если это не дорожные работы и не большой слой щебня.'
+  ];
+
+  if (selfLoad) {
+    lines.push('Если грузить будете один, ближе к 60-70 кг будет заметно спокойнее по погрузке и переноске. 70-80 кг уже плотнее работает по основанию, но ее сложнее регулярно поднимать без помощника или нормальной рампы.');
+  } else {
+    lines.push('Если есть помощник, рампа или прицеп, можно смотреть ближе к 70-80 кг: по основанию запас лучше, но это все еще не чрезмерно тяжелый класс для частного участка.');
+  }
+
+  lines.push('90 кг и тяжелее имеет смысл брать только если уплотнение щебня важнее удобной погрузки, либо есть чем спокойно грузить и возить плиту.');
+  lines.push('Если будете проходить уже уложенную тротуарную плитку, нужна полиуретановая или резиновая накладка, иначе можно побить поверхность.');
+  lines.push('Следующим шагом логично смотреть в каталоге прямоходные бензиновые плиты примерно 60-80 кг; тяжелее я бы рассматривал только если готовы решать погрузку.');
+  return lines.join('\n\n');
+}
+
 function shouldUseFastTechnicalOrientation(input: {
   userMessage: string;
   needState: CustomerNeedState;
   history: Message[];
 }) {
-  if (allShownProductCards(input.history).length) return false;
+  const plateWeightQuestion = isPlateWeightTechnicalQuestion(input.userMessage);
+  if (allShownProductCards(input.history).length && !plateWeightQuestion) return false;
   if (isExplicitCommercialQuestion(input.userMessage) || isMixedCatalogAndCommercialQuestion(input.userMessage)) return false;
   if (/(?:покаж|вариант|модел|карточ|каталог|налич|склад|достав|скид|заказ|оформ)/iu.test(input.userMessage)) return false;
 
@@ -5747,16 +5781,20 @@ function shouldUseFastTechnicalOrientation(input: {
   );
   const hardIntent = input.needState.selectionState?.hardConstraints?.productIntent;
   const targetClass = input.needState.selectionState?.targetProductClass;
+  const messageIntent = inferProductIntent(input.userMessage);
   const hasTechnicalProductContext =
     activeClasses.has('generator') ||
     activeClasses.has('plate') ||
     hardIntent === 'generator' ||
     hardIntent === 'plate' ||
     targetClass === 'generator' ||
-    targetClass === 'plate';
+    targetClass === 'plate' ||
+    messageIntent === 'generator' ||
+    messageIntent === 'plate';
   if (!hasTechnicalProductContext) return false;
 
-  return /(?:подскаж|какой|какая|какую|лучше|подойдет|хватит|мощн|ориентир|подбор|взять|тянул|тянуть|для\s+дома)/iu.test(input.userMessage);
+  return plateWeightQuestion ||
+    /(?:подскаж|какой|какая|какую|лучше|подойдет|хватит|мощн|ориентир|подбор|взять|тянул|тянуть|для\s+дома)/iu.test(input.userMessage);
 }
 
 function deterministicAnswerGenerationFallback(input: {
@@ -7158,10 +7196,10 @@ export class AssistantService {
       errorRecoveryPriority: 'Answer the current technical level from extracted need state, do not invent catalog facts, and ask the next missing technical input.',
       validatorWarnings: ['fast_technical_orientation_contract']
     };
-    let answer = deterministicTechnicalSummaryRecovery({
+    let answer = (deterministicPlateWeightOrientation(input.userMessage) || deterministicTechnicalSummaryRecovery({
       cards: allShownProductCards(history),
       state: needState.selectionState
-    }).trim();
+    })).trim();
     if (!answer) return null;
 
     const renderContract = this.buildTechnicalFastRenderContract(contract, needState);

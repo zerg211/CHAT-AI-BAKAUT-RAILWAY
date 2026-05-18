@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  adaptiveBuyerReadyForLeadSubmission,
   defaultAdaptiveBuyerGoal,
   evaluateAdaptiveGoalProgress,
   nextAdaptiveBuyerTurn
@@ -122,5 +123,36 @@ describe('adaptive production buyer', () => {
     expect(turn.leadForm).toMatchObject(defaultAdaptiveBuyerGoal.leadForm);
     expect(turn.user).not.toContain(defaultAdaptiveBuyerGoal.leadForm.phone);
     expect(turn.user).not.toContain(defaultAdaptiveBuyerGoal.leadForm.name);
+  });
+
+  it('does not consider the buyer ready for a form before plate catalog coverage', () => {
+    const steps = [
+      {
+        phase: 'start_generator_need',
+        user: defaultAdaptiveBuyerGoal.startUser,
+        assistant: 'Уточните насос.',
+        newCards: []
+      },
+      {
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный 220 В, примерно 750 Вт.',
+        assistant: 'Показываю генераторы.',
+        newCards: ['Генератор бензиновый 5 кВт']
+      },
+      {
+        phase: 'ask_delivery_availability',
+        user: 'А наличие и доставка по генератору есть?',
+        assistant: 'Оставьте контакт, чтобы уточнить.',
+        newCards: []
+      },
+      {
+        phase: 'switch_to_plate_need',
+        user: 'Еще нужна виброплита для въезда под плитку. Какой вес смотреть?',
+        assistant: 'Смотрите 60-80 кг.',
+        newCards: []
+      }
+    ];
+
+    expect(adaptiveBuyerReadyForLeadSubmission(steps, defaultAdaptiveBuyerGoal, steps.length)).toBe(false);
   });
 });

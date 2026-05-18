@@ -174,6 +174,17 @@ function coverageFromSteps(steps) {
   };
 }
 
+export function adaptiveBuyerReadyForLeadSubmission(steps, goal = defaultAdaptiveBuyerGoal, turnIndex = steps.length) {
+  const coverage = coverageFromSteps(steps);
+  return (turnIndex + 1) >= (goal.minTurnsBeforeLead ?? 0) &&
+    coverage.askedGeneratorNeed &&
+    coverage.sawGeneratorCards &&
+    coverage.askedPlateNeed &&
+    coverage.askedPlateCatalog &&
+    coverage.sawPlateCards &&
+    coverage.askedDelivery;
+}
+
 function assistantAsksPumpClarification(answer) {
   return /насос/iu.test(answer) &&
     /(?:мощност|кВт|Вт|шильдик|модель|какой|тип|220|напряж)/iu.test(answer) &&
@@ -328,6 +339,12 @@ export async function nextAdaptiveBuyerTurn({
     const decision = await llmDecision({ goal, steps, turnIndex, signal });
     if (!decision) return fallback;
     const validated = validateDecision(decision, fallback);
+    if (validated.leadForm && !adaptiveBuyerReadyForLeadSubmission(steps, goal, turnIndex)) {
+      return {
+        ...fallback,
+        source: `fallback_guarded_premature_lead_${validated.source ?? 'llm'}`
+      };
+    }
     if (!coversFallbackStep(validated, fallback)) {
       return {
         ...fallback,

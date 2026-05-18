@@ -384,6 +384,111 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.turn?.status).toBe('completed');
   });
 
+  it('answers plate weight orientation through the fast path after generator cards were shown', async () => {
+    openAiCreate.mockClear();
+    const previousGenerator = testProduct('generator-previous', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 82_000);
+    const conversations = new FakeConversations();
+    conversations.messages.push({
+      id: 'previous-assistant-generator-cards',
+      sessionId: conversations.session.id,
+      role: 'assistant',
+      content: ru('\\u041f\\u043e\\u043a\\u0430\\u0437\\u0430\\u043b \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u044b \\u043f\\u043e\\u0434 \\u043d\\u0430\\u0441\\u043e\\u0441 \\u0438 \\u0434\\u043e\\u043c.'),
+      metadata: {
+        productCards: [{
+          id: previousGenerator.id,
+          name: previousGenerator.name,
+          category: previousGenerator.category,
+          price: previousGenerator.price,
+          currency: 'RUB',
+          sourceUrl: previousGenerator.sourceUrl,
+          specs: {},
+          reasons: [ru('\\u041f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 \\u043f\\u043e \\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u0438')],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    const baseNeedState = emptyNeedState();
+    conversations.session = {
+      ...conversations.session,
+      needState: {
+        ...baseNeedState,
+        activeNeeds: [
+          {
+            id: 'need-generator',
+            status: 'open',
+            productClass: 'generator',
+            summary: 'Generator for house backup was already discussed',
+            constraints: ['pump', 'boiler', 'fridge'],
+            openQuestions: [],
+            selectedProductIds: ['generator-previous'],
+            updatedAt: new Date().toISOString()
+          },
+          {
+            id: 'need-plate',
+            status: 'open',
+            productClass: 'plate',
+            summary: 'Small plate for driveway under paving slabs',
+            constraints: ['small driveway', 'sand', 'crushed stone', 'self loading'],
+            openQuestions: ['weight class'],
+            selectedProductIds: [],
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        selectionState: mergeProductSelectionState(baseNeedState.selectionState, {
+          currentProductClass: 'plate',
+          targetProductClass: 'plate',
+          hardConstraints: {
+            ...baseNeedState.selectionState.hardConstraints,
+            productIntent: 'plate',
+            productRole: 'coreProduct'
+          }
+        })
+      }
+    };
+    conversations.turn = {
+      id: '77777777-7777-4777-8777-777777777777',
+      sessionId: conversations.session.id,
+      userMessageId: null,
+      assistantMessageId: null,
+      status: 'received',
+      requestHash: 'hash',
+      stage: 'received',
+      errorCode: null,
+      errorMessage: null,
+      plannerContract: null,
+      activeNeedsBefore: [],
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    class FastPlateTechnicalAssistant extends AssistantService {
+      async updateNeedState() {
+        return conversations.session.needState;
+      }
+
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner should not run for plate weight orientation');
+      }
+    }
+    const assistant = new FastPlateTechnicalAssistant(conversations as never, new FakeProducts([]) as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id,
+      userMessage: ru('\\u0415\\u0449\\u0435 \\u043d\\u0443\\u0436\\u043d\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430 \\u043f\\u043e\\u0434 \\u043f\\u043b\\u0438\\u0442\\u043a\\u0443. \\u0422\\u0430\\u043c \\u043f\\u0435\\u0441\\u043e\\u043a \\u0438 \\u0449\\u0435\\u0431\\u0435\\u043d\\u044c, \\u043f\\u043b\\u043e\\u0449\\u0430\\u0434\\u044c \\u043d\\u0435\\u0431\\u043e\\u043b\\u044c\\u0448\\u0430\\u044f, \\u0433\\u0440\\u0443\\u0437\\u0438\\u0442\\u044c \\u0431\\u0443\\u0434\\u0443 \\u0441\\u0430\\u043c. \\u041a\\u0430\\u043a\\u043e\\u0439 \\u0432\\u0435\\u0441 \\u0441\\u043c\\u043e\\u0442\\u0440\\u0435\\u0442\\u044c?')
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.productCards).toHaveLength(0);
+    expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
+    expect(result.metadata?.recovered).toBeUndefined();
+    expect(result.answer.toLowerCase()).toContain(ru('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442'));
+    expect(result.answer).toMatch(/60|70|80/);
+    expect(result.answer).not.toContain(previousGenerator.name);
+    expect(conversations.turn?.status).toBe('completed');
+  });
+
   it('repairs recovered answers before saving when they violate post-answer lead policy', async () => {
     const conversations = new FakeConversations();
     const userMessage: Message = {
