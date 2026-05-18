@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
 import { requireProductionLiveApproval } from './productionLiveGate.mjs';
 import { requireProductionOpenAiRuntimeReady } from './productionOpenAiRuntimePreflight.mjs';
+import { dialogueContinuityIssues } from './liveDialogueContinuity.mjs';
 
 dotenv.config();
 requireProductionLiveApproval({
@@ -25,6 +26,11 @@ const turns = [
     phase: 'changed_loads_generator_calculation',
     user: 'Здравствуйте. Подбираю генератор не для дома, а для небольшого гаража-магазина при отключениях. Потребители такие: морозильный ларь около 500 Вт, циркуляционный насос отопления 100 Вт, автоматика ворот 600 Вт, камеры с роутером 80 Вт, касса с ноутбуком 200 Вт и светодиодный свет 250 Вт. Скважинного насоса и электроинструмента не будет. Какую мощность смотреть без лишнего запаса?',
     expected: 'Должен пересчитать по новому набору потребителей, не тащить старые 6-8 кВт и не смешивать со скважинным насосом.'
+  },
+  {
+    phase: 'answer_generator_clarification',
+    user: '380 В нет, все обычное 220 В. Ворота могут сработать, пока морозильник работает, но специально одновременно ничего не запускаю. При таких вводных какой класс генератора лучше смотреть?',
+    expected: 'Если ассистент уточнил напряжение или одновременный запуск, покупатель сначала отвечает на это уточнение; бот должен продолжить расчет, а не считать это новым несвязанным сценарием.'
   },
   {
     phase: 'explicit_generator_13kw',
@@ -291,6 +297,12 @@ async function main() {
       ...step,
       code: codeAudit(step, assistantMessages[index], adminTurns[index])
     }));
+    for (const issue of dialogueContinuityIssues(auditedSteps)) {
+      const target = auditedSteps[issue.nextStepIndex];
+      if (target) {
+        target.buyerIssues.push(`${issue.message}; assistant asked: ${issue.evidence}; next buyer: ${issue.nextUser}`);
+      }
+    }
     const buyerIssueCount = auditedSteps.reduce((sum, step) => sum + step.buyerIssues.length, 0);
     const codeIssueCount = auditedSteps.reduce((sum, step) => sum + step.code.issues.length, 0);
 
