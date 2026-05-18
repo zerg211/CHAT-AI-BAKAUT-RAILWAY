@@ -428,6 +428,70 @@ export type AgentCatalogAction = 'none' | 'exact_model_lookup' | 'find_matching_
 export type AgentCommercialAction = 'none' | 'explain_manager_required' | 'offer_contact_after_answer';
 export type AgentProductCardsPolicy = 'none' | 'show_exact_matches' | 'show_matching_products' | 'supporting_only';
 
+export type AgentSource = 'catalog' | 'visible_cards' | 'web' | 'specialist' | 'conversation_memory';
+export type AgentWebPurpose = 'technical_specs' | 'manual_or_service' | 'current_lineup' | 'none';
+export type AgentToolName =
+  | 'searchCatalog'
+  | 'getProductDetails'
+  | 'selectProducts'
+  | 'compareProducts'
+  | 'webFactSearch'
+  | 'createLeadDraft'
+  | 'createLead';
+
+export interface AgentSourcePolicyV2 {
+  allowed: AgentSource[];
+  required: AgentSource[];
+  forbidden: AgentSource[];
+  webPurpose?: AgentWebPurpose;
+}
+
+export interface AgentToolPlanStepV2 {
+  tool: AgentToolName;
+  reason: string;
+  required: boolean;
+  inputHint: Record<string, unknown>;
+}
+
+export type AgentIntentV2 =
+  | 'product_selection'
+  | 'technical_answer'
+  | 'comparison'
+  | 'exact_model_lookup'
+  | 'availability_check'
+  | 'delivery_or_discount'
+  | 'lead_handoff'
+  | 'offtopic';
+
+export interface AgentTurnContractV2 {
+  version: 2;
+  intent: AgentIntentV2;
+  answerTask: AgentAnswerTask;
+  taskType?: AgentTaskType;
+  catalogAction: AgentCatalogAction;
+  commercialAction: AgentCommercialAction;
+  productCardsPolicy: AgentProductCardsPolicy;
+  cardsRole: AgentCardsRole;
+  leadPolicy: ExecutionLeadPolicy;
+  sourcePolicy: AgentSourcePolicyV2;
+  needDelta: {
+    newRequirements: string[];
+    confirmedRequirements: string[];
+    changedRequirements: string[];
+    supersededRequirementIds: string[];
+    rejectedProductIds: string[];
+  };
+  missingFacts: string[];
+  toolPlan: AgentToolPlanStepV2[];
+  selectedProductIds: string[];
+  rejectedProductIds: string[];
+  mustAnswerNow: string[];
+  currentFocus: string;
+  errorRecoveryPriority: string;
+  confidence: number;
+  warnings: string[];
+}
+
 export interface AgentTurnContract {
   answerTask: AgentAnswerTask;
   taskType?: AgentTaskType;
@@ -587,6 +651,75 @@ export interface LeadStateMachine {
   warnings: string[];
 }
 
+export interface LeadDraft {
+  version: 1;
+  reason: 'availability' | 'delivery' | 'discount' | 'order' | 'specialist_consultation' | 'service_terms';
+  productIds: string[];
+  buyerQuestion: string;
+  missingFacts: string[];
+  contact?: {
+    name?: string;
+    phone?: string;
+    email?: string;
+  };
+}
+
+export interface AgentToolTraceItem {
+  tool: AgentToolName;
+  ok: boolean;
+  risk: 'safe' | 'sensitive';
+  reason: string;
+  required: boolean;
+  durationMs?: number;
+  summary?: string;
+  warnings: string[];
+  error?: string;
+}
+
+export interface ProductEvidenceItem {
+  productId: string;
+  name: string;
+  source: 'catalog' | 'visible_card' | 'web';
+  role: 'primary' | 'supporting' | 'alternative' | 'hidden' | 'rejected';
+  allowedInAnswerText: boolean;
+  allowedAsVisibleCard: boolean;
+  rejectionReason?: string;
+  constraintStatus: CardConstraintStatus;
+  evidence: string[];
+}
+
+export interface ProductEvidenceRegistry {
+  version: 1;
+  items: ProductEvidenceItem[];
+  visibleProductIds: string[];
+  hiddenProductIds: string[];
+  rejectedProductIds: string[];
+  allowedProductIdsForText: string[];
+  warnings: string[];
+}
+
+export interface PolicyGateResult {
+  version: 1;
+  ok: boolean;
+  blockedReasons: string[];
+  requiredActions: AgentToolName[];
+  answerConstraints: string[];
+  warnings: string[];
+}
+
+export type PolicyGateEnforcementMode = 'pass' | 'repair' | 'hard_block';
+
+export interface PolicyGateEnforcement {
+  version: 1;
+  mode: PolicyGateEnforcementMode;
+  hardBlockReasons: string[];
+  repairedReasons: string[];
+  requiredActions: AgentToolName[];
+  answerConstraints: string[];
+  failedRequiredTools: AgentToolName[];
+  warnings: string[];
+}
+
 export type PostAnswerVerificationStatus = 'pass' | 'warn' | 'error';
 export type PostAnswerVerificationSeverity = 'warning' | 'error';
 
@@ -662,6 +795,13 @@ export interface ChatResponsePayload {
     aiDiagnostics?: AiGenerationDiagnostics;
     turnId?: string;
     turnContract?: AgentTurnContract;
+    agentContractV2?: AgentTurnContractV2;
+    sourcePolicy?: AgentSourcePolicyV2;
+    toolTrace?: AgentToolTraceItem[];
+    productEvidenceRegistry?: ProductEvidenceRegistry;
+    policyGate?: PolicyGateResult;
+    policyGateEnforcement?: PolicyGateEnforcement;
+    leadDraft?: LeadDraft;
     requirementLedger?: RequirementLedger;
     executionContract?: ExecutionContract;
     cardManifest?: CardManifest;

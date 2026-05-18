@@ -4,8 +4,10 @@ import type {
   FactClaimPlanner,
   LeadStateMachine,
   PostAnswerVerification,
-  PostAnswerVerificationIssue
+  PostAnswerVerificationIssue,
+  ProductEvidenceRegistry
 } from '../shared/types.js';
+import { answerProductReferenceViolations } from './productEvidenceRegistry.js';
 
 function normalized(value: unknown) {
   return String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -100,6 +102,7 @@ export function verifyPostAnswer(input: {
   leadStateMachine: LeadStateMachine;
   cardManifest: CardManifest;
   factClaimAudit?: FactClaimAudit;
+  productEvidenceRegistry?: ProductEvidenceRegistry;
 }): PostAnswerVerification {
   const issues: PostAnswerVerificationIssue[] = [];
 
@@ -156,6 +159,16 @@ export function verifyPostAnswer(input: {
       message: `Fact claim audit warning: ${warning}`
     });
   }
+  for (const productId of input.productEvidenceRegistry ? answerProductReferenceViolations({
+    answer: input.answer,
+    registry: input.productEvidenceRegistry
+  }) : []) {
+    issues.push({
+      code: 'disallowed_product_named_in_answer',
+      severity: 'error',
+      message: `Answer names product ${productId} even though product evidence registry does not allow it in answer text.`
+    });
+  }
 
   return {
     version: 1,
@@ -166,7 +179,8 @@ export function verifyPostAnswer(input: {
       'specialist_fact_policy',
       'visible_card_constraint_policy',
       'fact_claim_planner_warnings',
-      'fact_claim_audit_warnings'
+      'fact_claim_audit_warnings',
+      'product_evidence_registry'
     ]
   };
 }

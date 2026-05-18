@@ -354,6 +354,39 @@ export function buildTurnPlannerPrompt() {
     "shouldShowCards": boolean,
     "cardDisplayMode": "exact_matches" | "compatible_accessories" | "alternatives" | "preliminary" | "none"
   },
+  "agentContractV2": {
+    "version": 2,
+    "intent": "product_selection" | "technical_answer" | "comparison" | "exact_model_lookup" | "availability_check" | "delivery_or_discount" | "lead_handoff" | "offtopic",
+    "answerTask": "technical_explanation" | "comparison" | "product_selection" | "mixed" | "lead_handoff",
+    "taskType": "pure_delivery" | "pure_availability" | "product_selection" | "product_selection_with_delivery" | "product_selection_with_availability" | "technical_answer" | "comparison" | "contact_refusal_continue_selection",
+    "catalogAction": "none" | "exact_model_lookup" | "find_matching_products" | "verify_catalog_absence",
+    "commercialAction": "none" | "explain_manager_required" | "offer_contact_after_answer",
+    "productCardsPolicy": "none" | "show_exact_matches" | "show_matching_products" | "supporting_only",
+    "cardsRole": "none" | "supporting" | "primary",
+    "leadPolicy": "none" | "forbidden" | "optional_after_answer" | "required_now",
+    "sourcePolicy": {
+      "allowed": ("catalog" | "visible_cards" | "web" | "specialist" | "conversation_memory")[],
+      "required": ("catalog" | "visible_cards" | "web" | "specialist" | "conversation_memory")[],
+      "forbidden": ("catalog" | "visible_cards" | "web" | "specialist" | "conversation_memory")[],
+      "webPurpose": "technical_specs" | "manual_or_service" | "current_lineup" | "none"
+    },
+    "needDelta": {
+      "newRequirements": string[],
+      "confirmedRequirements": string[],
+      "changedRequirements": string[],
+      "supersededRequirementIds": string[],
+      "rejectedProductIds": string[]
+    },
+    "missingFacts": string[],
+    "toolPlan": [{"tool": "searchCatalog" | "getProductDetails" | "selectProducts" | "compareProducts" | "webFactSearch" | "createLeadDraft" | "createLead", "reason": string, "required": boolean, "inputHint": {}}],
+    "selectedProductIds": string[],
+    "rejectedProductIds": string[],
+    "mustAnswerNow": string[],
+    "currentFocus": string,
+    "errorRecoveryPriority": string,
+    "confidence": number,
+    "warnings": string[]
+  },
   "agentDecision": {
     "answerTask": "technical_explanation" | "comparison" | "product_selection" | "mixed" | "lead_handoff",
     "taskType": "pure_delivery" | "pure_availability" | "product_selection" | "product_selection_with_delivery" | "product_selection_with_availability" | "technical_answer" | "comparison" | "contact_refusal_continue_selection",
@@ -372,6 +405,9 @@ export function buildTurnPlannerPrompt() {
   "missingInformation": string[],
   "answerGuidance": string
 }
+
+agentContractV2 is the canonical semantic contract for this turn. Fill it first. It decides intent, source policy, tool plan, lead policy, product-card policy, missing facts, and requirement changes. agentDecision is a legacy mirror of the same decision for old runtime branches; do not put different meaning into agentDecision.
+For sourcePolicy: use web only for technical/current-lineup/service facts that are missing from catalog context. Never use web as proof of BAKAUT live stock, delivery price, discounts, special terms, or deadlines; those require specialist and forbid web.
 
 selectionState заполняй как рабочее состояние подбора, а не как текст ответа. currentProductClass - что уже обсуждали; targetProductClass - что надо подобрать сейчас; compatibilityTargetProduct - модель, к которой подбирают расходник/аксессуар; mustHaveTraits - жесткие критерии; niceToHaveTraits - желательные признаки; brandConstraint/exactModelConstraint - только если покупатель сам ограничил бренд или модель; cardDisplayMode выбирает смысл карточек: exact_matches, compatible_accessories, alternatives, preliminary или none.
 agentDecision - главный смысловой контракт хода. Заполняй его по смыслу последней реплики в контексте, а не по фразам:

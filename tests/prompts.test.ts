@@ -29,6 +29,8 @@ describe('assistant prompt guardrails', () => {
     expect(prompt).toContain('практический сравнительный вывод');
     expect(prompt).toContain('не заменять цены расходников ценой самой техники');
     expect(prompt).toContain('dyadko.ru');
+    expect(prompt).toContain('agentContractV2 is the canonical semantic contract');
+    expect(prompt).toContain('Never use web as proof of BAKAUT live stock');
     expect(prompt).toContain('переводить зарубежные цены в рубли');
   });
 

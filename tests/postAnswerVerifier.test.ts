@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CardManifest, FactClaimPlanner, LeadStateMachine } from '../src/shared/types.js';
+import type { CardManifest, FactClaimPlanner, LeadStateMachine, ProductEvidenceRegistry } from '../src/shared/types.js';
 import {
   classifyPostAnswerRecovery,
   repairAnswerForPostAnswerVerification,
@@ -43,6 +43,38 @@ const cardManifest: CardManifest = {
     violations: []
   }],
   warnings: []
+};
+
+const productEvidenceRegistry: ProductEvidenceRegistry = {
+  version: 1,
+  visibleProductIds: ['tss-8'],
+  hiddenProductIds: [],
+  rejectedProductIds: ['bad'],
+  allowedProductIdsForText: ['tss-8'],
+  warnings: [],
+  items: [
+    {
+      productId: 'tss-8',
+      name: 'TSS SGG 8000EH gasoline generator 220 V',
+      source: 'visible_card',
+      role: 'primary',
+      allowedInAnswerText: true,
+      allowedAsVisibleCard: true,
+      constraintStatus: 'satisfies_hard_constraints',
+      evidence: []
+    },
+    {
+      productId: 'bad',
+      name: 'Other 2 kW generator',
+      source: 'catalog',
+      role: 'rejected',
+      allowedInAnswerText: false,
+      allowedAsVisibleCard: false,
+      rejectionReason: 'hard constraints',
+      constraintStatus: 'violates_hard_constraints',
+      evidence: []
+    }
+  ]
 };
 
 describe('post-answer verifier', () => {
@@ -264,5 +296,24 @@ describe('post-answer verifier', () => {
       'violating_card_named_as_recommendation',
       'visible_card_constraint_violation:other-8'
     ]));
+  });
+
+  it('flags product names denied by the product evidence registry', () => {
+    const result = verifyPostAnswer({
+      answer: 'The best option is Other 2 kW generator.',
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest,
+      productEvidenceRegistry
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'disallowed_product_named_in_answer',
+        severity: 'error'
+      })
+    ]));
+    expect(result.checkedPolicies).toContain('product_evidence_registry');
   });
 });
