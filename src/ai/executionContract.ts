@@ -23,6 +23,15 @@ function cardsPolicyFromContracts(
 function leadPolicyFromContract(agent: AgentTurnContract): ExecutionLeadPolicy {
   if (!agent.leadAllowed) return 'forbidden';
   if (agent.answerTask !== 'lead_handoff') {
+    if (
+      agent.commercialAction === 'explain_manager_required' &&
+      (
+        agent.taskType === 'product_selection_with_delivery' ||
+        agent.taskType === 'product_selection_with_availability'
+      )
+    ) {
+      return 'optional_after_answer';
+    }
     return agent.commercialAction === 'offer_contact_after_answer'
       ? 'optional_after_answer'
       : 'none';

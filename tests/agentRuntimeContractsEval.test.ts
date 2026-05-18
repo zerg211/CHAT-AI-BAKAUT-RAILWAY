@@ -445,4 +445,107 @@ describe('agent runtime contract eval suite', () => {
       contact: draft?.contact
     })).toBe(false);
   });
+
+  it('keeps mixed product selection commercial verification as optional form handoff', () => {
+    const needState = emptyNeedState();
+    const mixedCommercialContract: AgentTurnContract = {
+      ...baseAgentContract,
+      answerTask: 'product_selection',
+      taskType: 'product_selection_with_delivery',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      cardsRole: 'primary',
+      leadAllowed: true,
+      leadAllowedReason: 'LLM requests form for delivery verification after showing cards'
+    };
+    const executionContract = buildExecutionContract({
+      agentContract: mixedCommercialContract,
+      renderContract: resolveTurnContract({ plan: { ...basePlan, followUpPolicy: 'collectLead' } }),
+      selectionState: needState.selectionState,
+      webRequired: false
+    });
+    const contractV2 = deriveAgentTurnContractV2({
+      userMessage: 'Show 5 kW generators and check delivery to Krasnodar',
+      legacyContract: mixedCommercialContract,
+      plan: {
+        ...basePlan,
+        agentContractV2: {
+          version: 2,
+          intent: 'delivery_or_discount',
+          answerTask: 'product_selection',
+          taskType: 'product_selection_with_delivery',
+          catalogAction: 'find_matching_products',
+          commercialAction: 'explain_manager_required',
+          productCardsPolicy: 'show_matching_products',
+          cardsRole: 'primary',
+          leadPolicy: 'optional_after_answer',
+          sourcePolicy: {
+            allowed: ['catalog', 'specialist', 'conversation_memory'],
+            required: ['catalog', 'specialist'],
+            forbidden: ['web'],
+            webPurpose: 'none'
+          },
+          needDelta: {
+            newRequirements: [],
+            confirmedRequirements: [],
+            changedRequirements: [],
+            supersededRequirementIds: [],
+            rejectedProductIds: []
+          },
+          missingFacts: ['delivery address'],
+          toolPlan: [{ tool: 'createLeadDraft', reason: 'delivery requires logistics verification', required: true, inputHint: {} }],
+          selectedProductIds: ['tss-8'],
+          rejectedProductIds: [],
+          mustAnswerNow: ['show cards and explain delivery verification'],
+          currentFocus: 'generator_delivery',
+          errorRecoveryPriority: 'answer selection and open form for delivery verification',
+          confidence: 0.9,
+          warnings: []
+        }
+      },
+      needState,
+      selectedProductIds: ['tss-8']
+    });
+    const registry = buildProductEvidenceRegistry({
+      executionContract,
+      cardManifest: buildCardManifest({
+        executionContract,
+        cards: [{
+          id: 'tss-8',
+          name: 'TSS SGG 8000EH',
+          category: 'Generators',
+          specs: {},
+          reasons: [],
+          caveats: []
+        }],
+        visibleProductIds: ['tss-8'],
+        hiddenProductIds: []
+      }),
+      cards: [{
+        id: 'tss-8',
+        name: 'TSS SGG 8000EH',
+        category: 'Generators',
+        specs: {},
+        reasons: [],
+        caveats: []
+      }],
+      rejectedProducts: []
+    });
+    const draft = buildLeadDraft({
+      contract: contractV2,
+      registry,
+      buyerQuestion: 'Show 5 kW generators and check delivery to Krasnodar'
+    });
+
+    expect(executionContract.leadPolicy).toBe('optional_after_answer');
+    expect(contractV2.leadPolicy).toBe('optional_after_answer');
+    expect(contractV2.toolPlan.map((step) => step.tool)).toContain('createLeadDraft');
+    expect(draft?.reason).toBe('delivery');
+    expect(shouldCommitLeadFromDraft({
+      draft,
+      leadRequested: true,
+      executionLeadPolicy: executionContract.leadPolicy
+    })).toBe(false);
+  });
 });

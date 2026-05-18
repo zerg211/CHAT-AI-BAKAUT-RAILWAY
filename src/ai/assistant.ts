@@ -6864,10 +6864,24 @@ function stripDeferredOfferTail(answer: string) {
 function shouldSuppressLeadRequestFromContract(contract: AgentTurnContract, userMessage = '') {
   if (!contract.leadAllowed) return true;
   if (contract.answerTask === 'lead_handoff' && hasLikelyContactText(userMessage)) return false;
-  const selectionWithCommercialCheck = contract.taskType === 'product_selection_with_delivery' ||
-    contract.taskType === 'product_selection_with_availability' ||
-    contract.taskType === 'contact_refusal_continue_selection';
-  return selectionWithCommercialCheck && contract.commercialAction === 'explain_manager_required';
+  return contract.taskType === 'contact_refusal_continue_selection' &&
+    contract.commercialAction === 'explain_manager_required';
+}
+
+function shouldRequestLeadFormForAnswer(input: {
+  leadDraft: LeadDraft | null;
+  suppressLeadRequest: boolean;
+  purchaseLeadRequested: boolean;
+  leadPlan: boolean;
+  leadPolicy: AgentTurnContractV2['leadPolicy'];
+  commercialAction?: AgentTurnContractV2['commercialAction'];
+}) {
+  if (!input.leadDraft || input.suppressLeadRequest) return false;
+  return input.purchaseLeadRequested ||
+    input.leadPlan ||
+    input.leadPolicy === 'required_now' ||
+    input.leadPolicy === 'optional_after_answer' ||
+    input.commercialAction === 'offer_contact_after_answer';
 }
 
 function isCurrentLevelTechnicalTurn(contract: AgentTurnContract) {
@@ -8776,9 +8790,6 @@ export class AssistantService {
     const client = createOpenAIClient();
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
-    const fastCommercialHandoff = await this.tryFastCommercialHandoff(input, session, history, aiDiagnostics);
-    if (fastCommercialHandoff) return fastCommercialHandoff;
-
     const previousSelectionState = session.needState.selectionState;
     let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal, aiDiagnostics);
     if (aiDiagnostics.needExtractionFallback.used) {
@@ -9387,14 +9398,14 @@ export class AssistantService {
       buyerQuestion: input.userMessage,
       contact: extractedLeadContact
     });
-    const leadRequestedForAnswer = Boolean(leadDraft) &&
-      !suppressLeadRequestByContract &&
-      (
-        purchasePlan.leadRequested ||
-        isLeadPlan(effectivePlan) ||
-        agentContractV2.leadPolicy === 'required_now' ||
-        agentContractV2.commercialAction === 'offer_contact_after_answer'
-      );
+    const leadRequestedForAnswer = shouldRequestLeadFormForAnswer({
+      leadDraft,
+      suppressLeadRequest: suppressLeadRequestByContract,
+      purchaseLeadRequested: purchasePlan.leadRequested,
+      leadPlan: isLeadPlan(effectivePlan),
+      leadPolicy: agentContractV2.leadPolicy,
+      commercialAction: agentContractV2.commercialAction
+    });
     const shouldCreateLead = shouldCommitLeadFromDraft({
       draft: leadDraft,
       leadRequested: leadRequestedForAnswer,
@@ -9547,8 +9558,8 @@ export class AssistantService {
           maxBullets: 3,
           guidance: leadRequestedForAnswer
             ? answerAgentTurnContract.answerTask === 'lead_handoff'
-              ? 'The buyer is asking a commercial/specialist question, not necessarily buying now. First answer what is known: delivery/discount/availability/final terms require first-person stock/logistics verification by the BAKAUT AI manager. If leadAllowed=true, ask for contact only as the next step for that verification. Do not show or re-list product cards unless cardsRole is primary. Do not treat this as a finalized order.'
-              : 'The buyer is ready to proceed. Confirm the selected bundle shown in productCardsShown, mention item prices and the total from selectedBundleForLead when available, then ask them to leave name and phone in the opened form so you can verify availability/delivery and contact them. Do not say the order/lead is already created. Do not continue selecting alternatives.'
+              ? 'The buyer is asking a commercial/specialist question, not necessarily buying now. Answer in 1-2 short sentences: delivery/discount/availability/final terms require first-person verification by the BAKAUT AI manager. Say the form is open for name and phone so you can check it and return with the answer. Do not show or re-list product cards unless cardsRole is primary. Do not treat this as a finalized order.'
+              : 'Answer the product selection or technical part first. If the turn includes delivery, availability, discount, deadlines, order processing, or other individual terms, add one short sentence that the form is open for name and phone so you can verify those terms and return with the answer. Do not say the order/lead is already created. Do not continue selecting alternatives.'
             : [
                 'Answer like a human sales consultant. If productCardsShown is not empty, the text must be only a short conclusion: max 3-4 short sentences, max 2 model names, no full list of all cards. The main/best recommendation in text must be productCardsVisibleFirst[0]. Mention other visible cards only as alternatives. Do not call a lower card or hidden show-more card the best option. Do not end with a generic deferred offer like "if you want, I can continue"; give a finished recommendation for the current request.',
                 comparativeAnswerGuidance
@@ -11832,6 +11843,7 @@ export const assistantTestHooks = {
   repairExplicitPhaseReconfirmation,
   repairAvailabilityAnswerWithCatalogModels,
   shouldSuppressLeadRequestFromContract,
+  shouldRequestLeadFormForAnswer,
   technicalCurrentLevelAnswerGuidance,
   shouldFreezeSelectionContextForNonCatalogTurn,
   freezeSelectionContextForNonCatalogTurn,

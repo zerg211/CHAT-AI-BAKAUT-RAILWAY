@@ -207,12 +207,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
           : taskType === 'product_selection'
             ? 'product_selection'
         : 'mixed');
-  const preliminarySelectionDeliveryStillSelecting = taskType === 'product_selection_with_delivery' && preliminaryAnswerTask !== 'lead_handoff';
-  const leadAllowed = preliminarySelectionDeliveryStillSelecting
-    ? false
-    : exactAvailabilityNeedsContact && !contactRefused
-      ? true
-      : rawLeadAllowed;
+  const leadAllowed = exactAvailabilityNeedsContact && !contactRefused
+    ? true
+    : rawLeadAllowed;
   const answerTask = exactAvailabilityNeedsContact && leadAllowed
     ? 'lead_handoff'
     : preliminaryAnswerTask;

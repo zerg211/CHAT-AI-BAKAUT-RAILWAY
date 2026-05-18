@@ -105,6 +105,53 @@ describe('commercial remediation fallback', () => {
     expect(audit.warnings).not.toContain('availability_claim_without_specialist_verification_wording');
   });
 
+  it('does not suppress the form for mixed commercial selection when the LLM allows handoff', () => {
+    const suppress = assistantTestHooks.shouldSuppressLeadRequestFromContract({
+      answerTask: 'product_selection',
+      taskType: 'product_selection_with_delivery',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: [],
+      activeNeeds: [],
+      currentFocus: 'generator_delivery',
+      cardsRole: 'primary',
+      leadAllowed: true,
+      leadAllowedReason: 'LLM asks to open form for delivery verification',
+      errorRecoveryPriority: 'answer and open form',
+      validatorWarnings: []
+    } as any, 'Show generator cards and check delivery');
+
+    expect(suppress).toBe(false);
+  });
+
+  it('opens the form for optional commercial lead policy and respects suppression', () => {
+    const leadDraft = {
+      version: 1,
+      reason: 'delivery',
+      productIds: ['p1'],
+      buyerQuestion: 'check delivery',
+      missingFacts: ['delivery address']
+    } as any;
+
+    expect(assistantTestHooks.shouldRequestLeadFormForAnswer({
+      leadDraft,
+      suppressLeadRequest: false,
+      purchaseLeadRequested: false,
+      leadPlan: false,
+      leadPolicy: 'optional_after_answer',
+      commercialAction: 'explain_manager_required'
+    })).toBe(true);
+    expect(assistantTestHooks.shouldRequestLeadFormForAnswer({
+      leadDraft,
+      suppressLeadRequest: true,
+      purchaseLeadRequested: false,
+      leadPlan: false,
+      leadPolicy: 'optional_after_answer',
+      commercialAction: 'explain_manager_required'
+    })).toBe(false);
+  });
+
   it('recovers a no-call technical summary without asking for contact', () => {
     const answer = assistantTestHooks.deterministicTechnicalSummaryRecovery({
       cards: [

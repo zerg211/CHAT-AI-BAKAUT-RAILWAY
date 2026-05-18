@@ -171,6 +171,15 @@ export function coercePlannerAgentTurnContractV2(
 function leadPolicyFromLegacy(contract: AgentTurnContract): ExecutionLeadPolicy {
   if (!contract.leadAllowed) return 'forbidden';
   if (contract.answerTask !== 'lead_handoff') {
+    if (
+      contract.commercialAction === 'explain_manager_required' &&
+      (
+        contract.taskType === 'product_selection_with_delivery' ||
+        contract.taskType === 'product_selection_with_availability'
+      )
+    ) {
+      return 'optional_after_answer';
+    }
     return contract.commercialAction === 'offer_contact_after_answer' ? 'optional_after_answer' : 'none';
   }
   if (contract.commercialAction === 'offer_contact_after_answer') return 'optional_after_answer';

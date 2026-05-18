@@ -174,6 +174,82 @@ describe('agent turn contract', () => {
     expect(plan.followUpPolicy).toBe('collectLead');
   });
 
+  it('lets mixed product selection with delivery keep cards and request the form', () => {
+    const commercialSelectionPlan = {
+      ...basePlan,
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      followUpPolicy: 'collectLead',
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'product_selection_with_delivery' as const,
+        catalogAction: 'find_matching_products' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'show_matching_products' as const,
+        mustAnswerNow: ['show matching generator cards', 'explain that delivery terms require verification'],
+        currentFocus: 'generator_delivery',
+        cardsRole: 'primary' as const,
+        leadAllowed: true,
+        leadAllowedReason: 'buyer asks product selection plus delivery verification',
+        errorRecoveryPriority: 'show cards and open the form for delivery verification',
+        confidence: 0.9
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Show gasoline 5 kW generators and check delivery to Krasnodar',
+      plan: commercialSelectionPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(commercialSelectionPlan, contract);
+
+    expect(contract.taskType).toBe('product_selection_with_delivery');
+    expect(contract.answerTask).toBe('product_selection');
+    expect(contract.commercialAction).toBe('explain_manager_required');
+    expect(contract.leadAllowed).toBe(true);
+    expect(contract.cardsRole).toBe('primary');
+    expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.followUpPolicy).toBe('collectLead');
+    expect(plan.selectionState.shouldShowCards).toBe(true);
+    expect(contract.validatorWarnings).not.toContain('delivery_selection_lead_allowed_repaired');
+  });
+
+  it('keeps explicit contact refusal from opening the commercial form', () => {
+    const refusalPlan = {
+      ...basePlan,
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      followUpPolicy: 'collectLead',
+      agentDecision: {
+        answerTask: 'product_selection' as const,
+        taskType: 'product_selection_with_availability' as const,
+        catalogAction: 'find_matching_products' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'show_matching_products' as const,
+        mustAnswerNow: ['show matching catalog options', 'explain stock must be verified later'],
+        currentFocus: 'generator_availability',
+        cardsRole: 'primary' as const,
+        leadAllowed: false,
+        leadAllowedReason: 'buyer explicitly refuses contact or a call',
+        errorRecoveryPriority: 'show catalog options without opening the form',
+        confidence: 0.88
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: 'Show what is available, but no call and no form now',
+      plan: refusalPlan,
+      needState: emptyNeedState()
+    });
+    const plan = applyAgentTurnContractToPlan(refusalPlan, contract);
+
+    expect(contract.taskType).toBe('product_selection_with_availability');
+    expect(contract.leadAllowed).toBe(false);
+    expect(plan.cardPolicy).toBe('showProducts');
+    expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
+    expect(plan.selectionState.shouldShowCards).toBe(true);
+  });
+
   it('promotes product-selection turns to card-capable recommendation plans', () => {
     const textOnlyPlan = {
       ...basePlan,
@@ -466,7 +542,7 @@ describe('agent turn contract', () => {
     expect(plan.selectionState.shouldShowCards).toBe(false);
   });
 
-  it('repairs delivery selection away from contact handoff when buyer is still choosing products', () => {
+  it('keeps delivery selection card-capable while allowing commercial form handoff', () => {
     const mixedPlan = {
       ...basePlan,
       action: 'recommend_products',
@@ -487,8 +563,8 @@ describe('agent turn contract', () => {
         currentFocus: 'generator with delivery',
         cardsRole: 'primary' as const,
         leadAllowed: true,
-        leadAllowedReason: 'delivery requested, but buyer has not chosen a product or contact handoff',
-        errorRecoveryPriority: 'show cards without contact pressure',
+        leadAllowedReason: 'delivery requested and requires logistics verification after showing products',
+        errorRecoveryPriority: 'show cards and request the form for delivery verification',
         confidence: 0.92
       }
     };
@@ -501,12 +577,12 @@ describe('agent turn contract', () => {
     const plan = applyAgentTurnContractToPlan(mixedPlan, contract);
 
     expect(contract.commercialAction).toBe('explain_manager_required');
-    expect(contract.leadAllowed).toBe(false);
+    expect(contract.leadAllowed).toBe(true);
     expect(contract.validatorWarnings).toEqual(expect.arrayContaining([
-      'delivery_selection_commercial_action_repaired',
-      'delivery_selection_lead_allowed_repaired'
+      'delivery_selection_commercial_action_repaired'
     ]));
-    expect(plan.followUpPolicy).toBe('answerNowNoDeferredOffer');
+    expect(contract.validatorWarnings).not.toContain('delivery_selection_lead_allowed_repaired');
+    expect(plan.followUpPolicy).toBe('collectLead');
     expect(plan.cardPolicy).toBe('showProducts');
   });
 
