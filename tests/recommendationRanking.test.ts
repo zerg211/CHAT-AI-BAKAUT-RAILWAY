@@ -6470,6 +6470,7 @@ describe('recommendation ranking', () => {
         ...baseTurnPlan().selectionState,
         currentProductClass: 'cutter',
         targetProductClass: 'cutter',
+        excludedClasses: ['diamondBlade'],
         shouldShowCards: true,
         selectionConfidence: 0.8
       }
@@ -6487,6 +6488,73 @@ describe('recommendation ranking', () => {
     expect(result.state.hardConstraints.diameterMmMax).toBeGreaterThanOrEqual(350);
     expect(result.visibleProducts.map((item) => item.id)).toContain('fs309');
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('small');
+  });
+
+  it('does not turn a Russian generic cutter target with disc size into an exact model token', async () => {
+    const cutter = productWithSpecs('gt350', 'Gasoline cutter TSS GT-6508S max disc 350 mm', 250_000, 'https://example.test/catalog/rezchiki/gt-6508s/', {
+      'max disc, mm': '350'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([cutter] as any) as never);
+    const state = withSemanticMemory(emptyNeedState(), {
+      activeRequirementIds: ['req_productclass_cutter', 'req_diameter_350mm'],
+      requirements: [
+        semanticRequirement({
+          id: 'req_productclass_cutter',
+          kind: 'productClass',
+          value: { text: 'бензиновый резчик', productClass: 'cutter' },
+          strictness: 'strictOnly'
+        }),
+        semanticRequirement({
+          id: 'req_diameter_350mm',
+          kind: 'diameterMm',
+          value: { min: 350, max: 350, amount: 350, unit: 'mm', text: 'диск 350 мм', productClass: 'cutter' },
+          strictness: 'targetRange'
+        })
+      ],
+      mentionedProducts: [{
+        role: 'targetProduct',
+        token: 'бензиновый резчик под диск 350 мм',
+        status: 'unresolved',
+        evidence: 'Нужен бензиновый резчик под диск 350 мм',
+        updatedAt: '2026-05-18T00:00:00.000Z',
+        productIds: [],
+        normalizedToken: 'cutter'
+      }],
+      selectionPolicy: {
+        primaryRequirementIds: ['req_productclass_cutter', 'req_diameter_350mm'],
+        alternativeMode: 'none',
+        explanationRequired: false
+      }
+    } as any);
+    const plan = baseTurnPlan({
+      action: 'recommend_products',
+      cardPolicy: 'showProducts',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'cutter',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        diameterMmMin: 350,
+        diameterMmMax: 350
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'cutter',
+        targetProductClass: 'cutter',
+        shouldShowCards: true,
+        selectionConfidence: 0.8
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'И еще нужен бензиновый резчик под диск 350 мм. Покажите, что есть.',
+      state,
+      plan,
+      [cutter] as any
+    );
+
+    expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['gt350']);
   });
 
   it('resets stale generator load when the buyer switches to a vibroplate need', async () => {

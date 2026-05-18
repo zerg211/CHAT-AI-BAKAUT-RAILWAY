@@ -1013,6 +1013,40 @@ function generatorOnlyIntent(intent: ProductIntent) {
   return intent === 'generator' || intent === 'weldingGenerator';
 }
 
+function intentTermsForGenericTarget(intent: ProductIntent) {
+  if (intent === 'plate') return plateTerms;
+  if (intent === 'generator' || intent === 'weldingGenerator') return [...generatorTerms, ...weldingTerms];
+  if (intent === 'rammer') return rammerTerms;
+  if (intent === 'roller') return rollerTerms;
+  if (intent === 'cutter') return cutterTerms;
+  if (intent === 'diamondBlade') return diamondBladeTerms;
+  if (intent === 'diamondCore') return diamondCoreTerms;
+  if (intent === 'trowel') return trowelTerms;
+  return [];
+}
+
+function hasModelLikeNumberWithoutUnit(token: string) {
+  const normalized = token.toLowerCase();
+  const matches = [...normalized.matchAll(/\d{2,5}/gu)];
+  if (!matches.length) return false;
+  return matches.some((match) => {
+    const index = match.index ?? 0;
+    const after = normalized.slice(index + match[0].length, index + match[0].length + 12);
+    return !/^\s*(?:кг|kg|квт|kw|вт|w|мм|mm|в|v)(?:\s|$|[.,;:)\]-])/iu.test(after);
+  });
+}
+
+function isGenericProductTargetToken(token: string, intent: ProductIntent) {
+  const terms = intentTermsForGenericTarget(intent);
+  if (!terms.length || !containsAny(token, terms)) return false;
+  if (hasModelLikeNumberWithoutUnit(token)) return false;
+  return /(?:нуж|под|для|показ|есть|вариант|примерн|около|порядка|диск|need|show|for|about|around|disc|disk|option)/iu.test(token);
+}
+
+function isSemanticExactModelTargetToken(token: string, intent: ProductIntent) {
+  return isLikelyModelToken(token) && !isGenericProductTargetToken(token, intent);
+}
+
 function clearUngroundedExactModelCriteria(criteria: ProductSelectionCriteria, groundingText: string): ProductSelectionCriteria {
   const groundedTokens = (criteria.exactModelTokens ?? []).filter((token) => modelTokenGroundedInCurrentTurn(token, groundingText));
   const exactModelConstraint = criteria.exactModelConstraint && modelTokenGroundedInCurrentTurn(criteria.exactModelConstraint, groundingText)
@@ -1432,7 +1466,7 @@ function applySemanticMemoryToSelectionState(
     if (!product.token) continue;
     if (product.role === 'targetProduct') {
       if (!modelTokenGroundedInCurrentTurn(product.token, groundingText)) continue;
-      if (!isLikelyModelToken(product.token)) continue;
+      if (!isSemanticExactModelTargetToken(product.token, targetProductClass)) continue;
       hardConstraints.exactModelTokens = uniqueList([...hardConstraints.exactModelTokens, product.token], 16);
     } else if (product.role === 'availabilityCheck' || product.role === 'comparison') {
       hardConstraints.exactModelTokenRoles = [
@@ -8712,9 +8746,32 @@ export class AssistantService {
       contract: answerAgentTurnContract,
       latestUserMessage: input.userMessage
     }).trim();
+    const proactiveCatalogSelectionAnswer = deterministicRecoveredSelectionAnswer({
+      contract: answerAgentTurnContract,
+      cards,
+      state: needState,
+      latestUserMessage: input.userMessage
+    }).trim();
+    const shouldUseProactiveCatalogSelectionAnswer = Boolean(
+      proactiveCatalogSelectionAnswer &&
+      cards.length > 0 &&
+      !leadRequestedForAnswer &&
+      !mustUseWebSearch &&
+      !answerCurrentLineupStyle &&
+      !serviceCostStyle &&
+      !detailedFactStyle &&
+      recommendationAnswer &&
+      answerAgentTurnContract.catalogAction === 'find_matching_products' &&
+      answerAgentTurnContract.productCardsPolicy !== 'none' &&
+      answerAgentTurnContract.cardsRole !== 'none' &&
+      ['product_selection', 'mixed'].includes(answerAgentTurnContract.answerTask)
+    );
 
     if (proactiveCommercialAnswer && shouldUseProactiveCommercialDeterministicAnswer(answerAgentTurnContract, input.userMessage)) {
       answer = proactiveCommercialAnswer;
+      completedResponse = undefined;
+    } else if (shouldUseProactiveCatalogSelectionAnswer) {
+      answer = proactiveCatalogSelectionAnswer;
       completedResponse = undefined;
     } else {
       const answerRequest: Record<string, unknown> = buildAnswerRequest(answerProfile.model, answerProfile.effort);
