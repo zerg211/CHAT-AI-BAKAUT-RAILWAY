@@ -64,6 +64,25 @@ describe('execution contract', () => {
     expect(contract.postconditions).toContain('do_not_request_phone_or_contact_as_main_next_step');
   });
 
+  it('keeps agent-required catalog cards when the legacy render contract is text-only', () => {
+    const contract = buildExecutionContract({
+      agentContract: baseAgentContract,
+      renderContract: resolveTurnContract({
+        plan: {
+          ...basePlan,
+          action: 'answer_question',
+          answerMode: 'short',
+          cardPolicy: 'textOnly'
+        }
+      }),
+      selectionState: emptyNeedState().selectionState,
+      webRequired: false
+    });
+
+    expect(contract.cardsPolicy).toBe('primary');
+    expect(contract.warnings).not.toContain('execution_cards_suppressed_by_render_contract');
+  });
+
   it('marks availability handoff as specialist-required and requires the lead step', () => {
     const contract = buildExecutionContract({
       agentContract: {

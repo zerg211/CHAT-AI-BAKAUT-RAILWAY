@@ -1051,21 +1051,33 @@ function hasModelLikeNumberWithoutUnit(token: string) {
 function isGenericProductTargetToken(token: string, intent: ProductIntent) {
   const terms = intentTermsForGenericTarget(intent);
   if (!terms.length || !containsAny(token, terms)) return false;
+  if (/(?:\d+(?:[,.]\d+)?\s*(?:[-\u2010-\u2015]|\u0434\u043e|to)\s*\d+(?:[,.]\d+)?|\b\d+(?:[,.]\d+)?)\s*(?:\u043a\u0433|kg|\u043a\u0432\u0442|kw|\u0432\u0442|w|\u043c\u043c|mm|\u0432|v)(?:\s|$|[.,;:!?])/iu.test(token)) return true;
   if (hasModelLikeNumberWithoutUnit(token)) return false;
   return /(?:нуж|под|для|показ|есть|вариант|примерн|около|порядка|диск|need|show|for|about|around|disc|disk|option)/iu.test(token);
 }
 
 function isSemanticExactModelTargetToken(token: string, intent: ProductIntent) {
-  return isLikelyModelToken(token) && !isGenericProductTargetToken(token, intent);
+  const targetIntent = coerceProductIntent(intent);
+  return isLikelyModelToken(token) && !isGenericProductTargetToken(token, targetIntent);
 }
 
 function clearUngroundedExactModelCriteria(criteria: ProductSelectionCriteria, groundingText: string): ProductSelectionCriteria {
-  const groundedTokens = (criteria.exactModelTokens ?? []).filter((token) => modelTokenGroundedInCurrentTurn(token, groundingText));
-  const exactModelConstraint = criteria.exactModelConstraint && modelTokenGroundedInCurrentTurn(criteria.exactModelConstraint, groundingText)
+  const targetIntent = coerceProductIntent(criteria.productIntent);
+  const groundedTokens = (criteria.exactModelTokens ?? []).filter((token) =>
+    modelTokenGroundedInCurrentTurn(token, groundingText) &&
+    isSemanticExactModelTargetToken(token, targetIntent)
+  );
+  const exactModelConstraint = criteria.exactModelConstraint &&
+    modelTokenGroundedInCurrentTurn(criteria.exactModelConstraint, groundingText) &&
+    isSemanticExactModelTargetToken(criteria.exactModelConstraint, targetIntent)
     ? criteria.exactModelConstraint
     : '';
   const exactModelTokenRoles = (criteria.exactModelTokenRoles ?? []).filter((item) =>
-    item.role !== 'targetProduct' || modelTokenGroundedInCurrentTurn(item.value, groundingText)
+    item.role !== 'targetProduct' ||
+    (
+      modelTokenGroundedInCurrentTurn(item.value, groundingText) &&
+      isSemanticExactModelTargetToken(item.value, targetIntent)
+    )
   );
   if (
     exactModelConstraint === criteria.exactModelConstraint &&
@@ -1124,7 +1136,10 @@ function applyPlannerSelectionContract(state: ProductSelectionState, plan: Assis
     ...plan.selectionState.niceToHaveTraits
   ], 24);
   const plannerBrand = sanitizeBrandConstraintText(plan.selectionState.brandConstraint);
-  const plannerExactModel = shortText(plan.selectionState.exactModelConstraint, 160).trim();
+  const rawPlannerExactModel = shortText(plan.selectionState.exactModelConstraint, 160).trim();
+  const plannerExactModel = isSemanticExactModelTargetToken(rawPlannerExactModel, productIntent)
+    ? rawPlannerExactModel
+    : '';
   const syncCriteria = (criteria: ProductSelectionCriteria): ProductSelectionCriteria => {
     const provenance = { ...(criteria.provenance ?? {}) };
     const next: ProductSelectionCriteria = {
@@ -2990,7 +3005,10 @@ function shouldPromotePrimarySelectionCards(
     result.visibleProducts.length > 0 &&
     result.matchedProducts.length > 0 &&
     result.confidence >= 0.55 &&
-    hasReliableGeneratorSelectionBasis(result.state);
+    (
+      hasReliableGeneratorSelectionBasis(result.state) ||
+      shouldAllowPreliminaryCatalogCardsForEstimatedPump(contract, result)
+    );
 }
 
 function shouldPromoteCatalogFactCheckedCards(
@@ -4484,10 +4502,15 @@ function explicitCriteriaFromTurn(
     (targetProductClass !== 'unknown' && !plannerTraits.budgetMax ? 'cheapest' : undefined);
   const rankingOnly = allowLegacyTextFallback ? isRankingOnlyFollowUp(userMessage) : plan.searchScope === 'broadenAlternatives';
   const currentHard = current.activeRequirement ?? current.hardConstraints;
+  const plannerExactModelConstraint = shortText(plan.selectionState.exactModelConstraint, 160).trim();
+  const semanticExactModelConstraint = isSemanticExactModelTargetToken(plannerExactModelConstraint, targetProductClass)
+    ? plannerExactModelConstraint
+    : '';
   const exactTokenSource = allowLegacyTextFallback
     ? userMessage
-    : plan.selectionState.exactModelConstraint;
-  const exactTokensFromMessage = expandModelTokenAliases(extractModelTokens(exactTokenSource));
+    : semanticExactModelConstraint;
+  const exactTokensFromMessage = expandModelTokenAliases(extractModelTokens(exactTokenSource))
+    .filter((token) => isSemanticExactModelTargetToken(token, targetProductClass));
   const exactTokenRoles = allowLegacyTextFallback
     ? tokenRolesForTurn(exactTokensFromMessage, userMessage, targetProductClass)
     : exactTokensFromMessage.map((value) => ({
@@ -4776,8 +4799,8 @@ function explicitCriteriaFromTurn(
     hard.brandConstraint = plannerBrandConstraint;
     hard.provenance!.brandConstraint = 'planner';
   }
-  if (plan.selectionState.exactModelConstraint.trim()) {
-    hard.exactModelConstraint = plan.selectionState.exactModelConstraint.trim();
+  if (semanticExactModelConstraint) {
+    hard.exactModelConstraint = semanticExactModelConstraint;
     hard.provenance!.exactModelConstraint = allowLegacyTextFallback ? 'explicit_user' : 'planner';
   }
   const hasHardUpdate = Boolean(
@@ -4911,6 +4934,25 @@ function isReliableGeneratorLoadProfile(profile?: ProductGeneratorLoadProfile | 
 function hasEstimatedPumpLoad(state: ProductSelectionState) {
   return state.hardConstraints.productIntent === 'generator' &&
     hasEstimatedPumpLoadProfile(state.loadProfile);
+}
+
+function shouldAllowPreliminaryCatalogCardsForEstimatedPump(
+  contract: AgentTurnContract,
+  result: ProductSelectionResult
+) {
+  const hard = result.state.hardConstraints;
+  if (hard.productIntent !== 'generator') return false;
+  if (!hasEstimatedPumpLoad(result.state)) return false;
+  if (contract.catalogAction !== 'find_matching_products') return false;
+  if (contract.cardsRole !== 'primary' || (contract.productCardsPolicy ?? 'none') === 'none') return false;
+  if (!result.visibleProducts.length || !result.matchedProducts.length || result.confidence < 0.55) return false;
+  return Boolean(
+    hard.nominalPowerKwMin ||
+    hard.nominalPowerKwMax ||
+    hard.maxPowerKwMin ||
+    hard.maxPowerKwMax ||
+    result.state.loadProfile?.requiredNominalKw
+  );
 }
 
 function hasTypedEstimatedPumpLoad(state: ProductSelectionState) {
@@ -8613,7 +8655,12 @@ export class AssistantService {
     }
     const memoryDecisions = memoryDecisionSummary(semanticMemoryBefore, needState.semanticMemory);
     const selectionHard = selectionResult.state.hardConstraints;
-    const selectionCanRecommend = hasReliableGeneratorSelectionBasis(selectionResult.state);
+    const allowPreliminaryEstimatedPumpCatalogCards = shouldAllowPreliminaryCatalogCardsForEstimatedPump(
+      agentTurnContract,
+      selectionResult
+    );
+    const selectionCanRecommend = hasReliableGeneratorSelectionBasis(selectionResult.state) ||
+      allowPreliminaryEstimatedPumpCatalogCards;
     const selectionHasEstimatedPump = hasEstimatedPumpLoad(selectionResult.state);
     const currentTurnCanBlockForEstimatedPump = selectionHard.productIntent === 'generator' &&
       agentTurnContract.catalogAction !== 'exact_model_lookup' &&
@@ -8631,6 +8678,7 @@ export class AssistantService {
       agentTurnContract.productCardsPolicy !== 'none' &&
       Boolean(parseDesiredPowerRange(input.userMessage) || hasExplicitGeneratorPowerRequest(input.userMessage));
     const blockEstimatedPumpCards = currentTurnCanBlockForEstimatedPump &&
+      !allowPreliminaryEstimatedPumpCatalogCards &&
       !currentTurnExplicitCatalogPowerSelection &&
       (shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state) || latestTurnBlocksEstimatedPumpCards);
     const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
@@ -8669,12 +8717,14 @@ export class AssistantService {
       const generatorSizingRequestsCards = agentTurnContract.cardsRole !== 'none' &&
         shouldPromoteGeneratorSizingCardsForContract(agentTurnContract, selectionResult, blockEstimatedPumpCards);
       if ((agentTurnContract.cardsRole === 'primary' || (agentTurnContract.cardsRole === 'supporting' && (generatorSizingRequestsCards || supportingSelectionRequestsCards)) || catalogFactCheckRequestsCards) &&
-        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards || supportingSelectionRequestsCards || catalogFactCheckRequestsCards) &&
+        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || allowPreliminaryEstimatedPumpCatalogCards || generatorSizingRequestsCards || supportingSelectionRequestsCards || catalogFactCheckRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = promotePlanToSelectionCatalogCards(
           effectivePlan,
           selectionResult,
-          generatorSizingRequestsCards
+          allowPreliminaryEstimatedPumpCatalogCards
+            ? 'The buyer explicitly asked for catalog generator options and productSelection found visible matches from the current load estimate. Show those cards as preliminary options, state that pump model/power can still change the final recommendation, and ask for pump data after the cards instead of blocking the catalog request.'
+            : generatorSizingRequestsCards
             ? 'The buyer has supplied enough generator load context for a preliminary product selection. First answer the sizing calculation, then show visible generator cards as preliminary suitable options. Do not keep the turn text-only.'
             : supportingSelectionRequestsCards
               ? 'The buyer asked for catalog options or close alternatives and productSelection found reliable matching products. Show those products as supporting cards, explain the fit or compromise against the stated constraints, and do not answer as if the catalog has no usable options.'
@@ -8751,6 +8801,8 @@ export class AssistantService {
     turnContract = resolveTurnContractForPlan(effectivePlan);
     effectivePlan = applyResolvedTurnContractToPlan(effectivePlan, turnContract);
     effectivePlan = applyAgentTurnContractToPlan(effectivePlan, agentTurnContract);
+    turnContract = resolveTurnContractForPlan(effectivePlan);
+    effectivePlan = applyResolvedTurnContractToPlan(effectivePlan, turnContract);
     if (catalogFactCheckRequestsCards && effectivePlan.cardPolicy === 'textOnly') {
       effectivePlan = promotePlanToSelectionCatalogCards(
         effectivePlan,
@@ -11411,6 +11463,7 @@ export const assistantTestHooks = {
   shouldPromotePrimarySelectionCards,
   shouldPromoteCatalogFactCheckedCards,
   shouldPromoteSupportingSelectionCards,
+  shouldAllowPreliminaryCatalogCardsForEstimatedPump,
   promotePlanToSelectionCatalogCards,
   shouldPromoteGeneratorSizingCards,
   shouldPromoteGeneratorSizingCardsForContract,

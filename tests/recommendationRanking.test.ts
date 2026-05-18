@@ -1009,6 +1009,69 @@ describe('recommendation ranking', () => {
     )).toBe(false);
   });
 
+  it('allows preliminary generator cards for an explicit catalog request while pump power is still unknown', () => {
+    const fit = productWithSpecs('fit-5kw', 'Generator gasoline 5.5 kW 220 V', 64_000, 'https://example.test/generators/fit-5kw/', {
+      nominalPower: '5.5 kW',
+      maxPower: '6.0 kW'
+    });
+    const pumpState = mergeProductSelectionState(reliableGeneratorSelectionResult().state, {
+      hardConstraints: {
+        ...reliableGeneratorSelectionResult().state.hardConstraints,
+        nominalPowerKwMin: 5,
+        nominalPowerKwMax: 6.5,
+        maxPowerKwMin: 6
+      },
+      loadProfile: {
+        items: [
+          {
+            kind: 'pump',
+            name: 'pump',
+            count: 1,
+            runningKw: 0.8,
+            startingKw: 3.2,
+            source: 'estimated_average',
+            evidence: 'pump, type and power unknown'
+          },
+          {
+            kind: 'refrigerator',
+            name: 'refrigerator',
+            count: 1,
+            runningKw: 0.25,
+            startingKw: 0.9,
+            source: 'explicit_user',
+            evidence: 'one refrigerator'
+          }
+        ],
+        confidence: 0.68,
+        calculation: 'generic pump and refrigerator',
+        totalRunningKw: 1.05,
+        requiredNominalKw: 5,
+        requiredStartingKw: 6,
+        simultaneousStarting: false
+      } as any,
+      confidence: 0.72
+    });
+    const result = reliableGeneratorSelectionResult({
+      state: pumpState,
+      matchedProducts: [fit],
+      visibleProducts: [fit],
+      confidence: 0.72
+    });
+    const contract = {
+      ...productSelectionAgentDecision(),
+      activeNeeds: [],
+      validatorWarnings: []
+    } as any;
+
+    expect(assistantTestHooks.shouldAllowPreliminaryCatalogCardsForEstimatedPump(contract, result)).toBe(true);
+    expect(assistantTestHooks.shouldPromotePrimarySelectionCards(
+      contract,
+      baseTurnPlan({ action: 'answer_question', answerMode: 'short', cardPolicy: 'auto' }),
+      result,
+      false
+    )).toBe(true);
+  });
+
   it('allows preliminary generator cards when the pump type is known but exact power is missing', () => {
     const fit = productWithSpecs('fit-5kw', 'Generator gasoline 5.5 kW 220 V', 64_000, 'https://example.test/generators/fit-5kw/', {
       nominalPower: '5.5 kW',
@@ -4461,6 +4524,47 @@ describe('recommendation ranking', () => {
 
     expect(assistantTestHooks.parseWeightNeedRangeKg(message)).toEqual({ min: 90, max: 100 });
     expect(assistantTestHooks.extractModelTokens(message)).toEqual([]);
+  });
+
+  it('drops generic planner exact-model text when the buyer asks for plate cards by weight range', async () => {
+    const plate83 = productWithSpecs('plate-83', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Wacker Neuson MP15-CE 83 \\u043a\\u0433'), 154_000, 'https://example.test/plate-83', {
+      weight: '83 kg'
+    });
+    const plate100 = productWithSpecs('plate-100', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 TSS VP100 100 \\u043a\\u0433'), 52_000, 'https://example.test/plate-100', {
+      weight: '100 kg'
+    });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([plate83, plate100] as any) as never);
+    const message = ru('\\u041f\\u043e\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435 \\u0438\\u0437 \\u043a\\u0430\\u0442\\u0430\\u043b\\u043e\\u0433\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b \\u043f\\u0440\\u0438\\u043c\\u0435\\u0440\\u043d\\u043e 80-100 \\u043a\\u0433 \\u0438 \\u0441\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435, \\u043d\\u0443\\u0436\\u0435\\u043d \\u043b\\u0438 \\u043a\\u043e\\u0432\\u0440\\u0438\\u043a \\u043f\\u043e\\u0434 \\u043f\\u043b\\u0438\\u0442\\u043a\\u0443.');
+    const genericExactModelText = ru('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b \\u043f\\u0440\\u0438\\u043c\\u0435\\u0440\\u043d\\u043e 80-100 \\u043a\\u0433');
+    const plan = baseTurnPlan({
+      catalogSearchQuery: message,
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        catalogAction: 'find_matching_products',
+        productCardsPolicy: 'show_matching_products'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 80,
+        weightKgMax: 100
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate',
+        exactModelConstraint: genericExactModelText
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(message, emptyNeedState(), plan, [plate83, plate100] as any);
+
+    expect(result.state.hardConstraints.exactModelConstraint).toBe('');
+    expect(result.state.hardConstraints.exactModelTokens).toEqual([]);
+    expect(result.state.hardConstraints.weightKgMin).toBe(80);
+    expect(result.state.hardConstraints.weightKgMax).toBe(100);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(expect.arrayContaining(['plate-83', 'plate-100']));
   });
 
   it('supersedes replaced semantic requirements instead of keeping conflicting active ranges', () => {

@@ -12,9 +12,11 @@ function cardsPolicyFromContracts(
   agent: AgentTurnContract,
   render: ResolvedTurnContract
 ): ExecutionCardsPolicy {
-  if (render.render.cards === 'none' || agent.cardsRole === 'none') return 'none';
+  const agentRequiresCards = agent.cardsRole !== 'none' && (agent.productCardsPolicy ?? 'none') !== 'none';
+  if (!agentRequiresCards) return 'none';
   if (render.render.cards === 'selectedOnly') return 'selected_only';
   if (agent.cardsRole === 'primary') return 'primary';
+  if (agent.productCardsPolicy === 'show_exact_matches') return 'selected_only';
   return 'supporting';
 }
 
@@ -71,7 +73,11 @@ export function buildExecutionContract(input: {
   const factPolicy = factPolicyFromContract(input.agentContract, input.webRequired);
   const warnings = [...(input.agentContract.validatorWarnings ?? [])];
 
-  if (cardsPolicy === 'none' && input.agentContract.cardsRole !== 'none') {
+  if (
+    cardsPolicy === 'none' &&
+    input.agentContract.cardsRole !== 'none' &&
+    (input.agentContract.productCardsPolicy ?? 'none') !== 'none'
+  ) {
     warnings.push('execution_cards_suppressed_by_render_contract');
   }
   if (leadPolicy === 'forbidden' && input.renderContract.render.leadForm) {
