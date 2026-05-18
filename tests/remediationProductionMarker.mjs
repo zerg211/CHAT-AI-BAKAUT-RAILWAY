@@ -1,5 +1,5 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-generic-size-token-v9';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-live-budget-restored-v10';
 
 export const expectedRemediationRuntimeArtifacts = [
   'executionContract',
