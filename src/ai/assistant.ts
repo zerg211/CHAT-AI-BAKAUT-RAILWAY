@@ -3524,6 +3524,84 @@ function deterministicCatalogSliceAnswer(slice: StructuredCatalogSlice, cards: P
   return '';
 }
 
+function recoveredSelectionIntentLabel(intent: ProductSelectionClass | 'commercial' | undefined) {
+  if (intent === 'plate') return 'виброплите';
+  if (intent === 'generator') return 'генератору';
+  if (intent === 'cutter') return 'резчику';
+  if (intent === 'diamondBlade') return 'диску';
+  if (intent === 'rammer') return 'трамбовке';
+  if (intent === 'roller') return 'катку';
+  return 'товару';
+}
+
+function recoveredSelectionCardLine(card: ProductCard, intent: ProductSelectionClass | 'commercial' | undefined) {
+  const product = productFromCard(card);
+  const facts: string[] = [];
+  const weight = extractWeightKg(product);
+  const power = extractGeneratorPower(product);
+  const diameter = extractDimensionMm(product);
+  if (intent === 'plate' || intent === 'rammer' || intent === 'roller') {
+    if (weight) facts.push(`${roundNumber(weight, 0)} кг`);
+  } else if (intent === 'generator') {
+    if (power.nominalKw) facts.push(`${roundNumber(power.nominalKw, 1)} кВт ном.`);
+    if (power.maxKw) facts.push(`${roundNumber(power.maxKw, 1)} кВт макс.`);
+  } else if (intent === 'cutter' || intent === 'diamondBlade') {
+    if (diameter) facts.push(`${roundNumber(diameter, 0)} мм`);
+  }
+  return `${card.name}${facts.length ? ` (${facts.join(', ')})` : ''}${card.price ? ` - ${rubPrice(card.price)}` : ''}`;
+}
+
+function deterministicRecoveredSelectionAnswer(input: {
+  contract: AgentTurnContract;
+  cards: ProductCard[];
+  state: CustomerNeedState;
+  latestUserMessage: string;
+}) {
+  if (!input.cards.length || input.contract.cardsRole === 'none') return '';
+  const selectionState = input.state.selectionState ?? emptyProductSelectionState();
+  const intent = selectionState.targetProductClass !== 'unknown'
+    ? selectionState.targetProductClass
+    : input.contract.activeNeeds.find((need) => need.productClass !== 'commercial')?.productClass;
+  const hard = selectionState.hardConstraints ?? emptyProductSelectionState().hardConstraints;
+  const label = recoveredSelectionIntentLabel(intent);
+  const visible = input.cards.slice(0, Math.min(input.cards.length, LARGE_SLICE_VISIBLE_CARDS));
+  const named = visible.slice(0, 2).map((card) => recoveredSelectionCardLine(card, intent)).join('; ');
+  const lines: string[] = [];
+
+  if (intent === 'plate' && (hard.weightKgMin || hard.weightKgMax)) {
+    const midpoint = hard.weightKgMin && hard.weightKgMax
+      ? roundNumber((hard.weightKgMin + hard.weightKgMax) / 2, 0)
+      : hard.weightKgMin ?? hard.weightKgMax;
+    lines.push(midpoint
+      ? `По запросу около ${midpoint} кг показываю ближайшие тяжелые варианты из каталога. Для точного выбора нужно смотреть тип работ и основание: тяжелая реверсивная плита не всегда заменяет каток.`
+      : 'Показываю ближайшие тяжелые варианты из каталога. Для точного выбора нужно смотреть тип работ и основание: тяжелая реверсивная плита не всегда заменяет каток.');
+  } else if (intent === 'generator' && (hard.nominalPowerKwMin || hard.nominalPowerKwMax || hard.maxPowerKwMin || hard.maxPowerKwMax)) {
+    const nominalMin = hard.nominalPowerKwMin ?? hard.maxPowerKwMin;
+    const nominalMax = hard.nominalPowerKwMax ?? hard.maxPowerKwMax;
+    const powerRange = nominalMin && nominalMax
+      ? nominalMin === nominalMax ? `${roundNumber(nominalMin, 1)} кВт` : `${roundNumber(nominalMin, 1)}-${roundNumber(nominalMax, 1)} кВт`
+      : nominalMin ? `от ${roundNumber(nominalMin, 1)} кВт` : `до ${roundNumber(nominalMax, 1)} кВт`;
+    lines.push(`По запросу ${powerRange} показываю ближайшие варианты из каталога. Смотрите номинал, максимум, фазность и запас под пусковые нагрузки.`);
+  } else if ((intent === 'cutter' || intent === 'diamondBlade') && (hard.diameterMmMin || hard.diameterMmMax)) {
+    const diameterMin = hard.diameterMmMin ?? hard.diameterMmMax;
+    const diameterMax = hard.diameterMmMax ?? hard.diameterMmMin;
+    const diameterRange = diameterMin && diameterMax
+      ? diameterMin === diameterMax ? `${roundNumber(diameterMin, 0)} мм` : `${roundNumber(diameterMin, 0)}-${roundNumber(diameterMax, 0)} мм`
+      : `${roundNumber(diameterMin ?? diameterMax, 0)} мм`;
+    lines.push(`По диску ${diameterRange} показываю ближайшие варианты из каталога. Важно сверить посадку, глубину реза и тип материала.`);
+  } else {
+    lines.push(`Продолжаю подбор по ${label}: показываю ближайшие варианты из каталога.`);
+  }
+
+  if (named) {
+    lines.push(`В первых карточках: ${named}.`);
+  }
+  if (input.cards.length > visible.length) {
+    lines.push('Остальные подходящие позиции оставил за кнопкой "Показать еще".');
+  }
+  return lines.join('\n\n');
+}
+
 function productFromCard(card: ProductCard): Product {
   return {
     id: card.id,
@@ -9335,6 +9413,21 @@ export class AssistantService {
       session.needState.selectionState?.loadProfile,
       recoveredSelection.cards
     );
+    const deterministicRecoveryAnswer = deterministicRecoveredSelectionAnswer({
+      contract,
+      cards: recoveredSelection.cards,
+      state: session.needState,
+      latestUserMessage: latestUserText
+    });
+    if (deterministicRecoveryAnswer) {
+      const safeRecoveryAnswer = ensureCommercialManagerVerification(
+        shouldSuppressLeadRequestFromContract(contract)
+          ? stripLeadPressureTail(sanitizeVisibleAnswer(deterministicRecoveryAnswer))
+          : sanitizeVisibleAnswer(deterministicRecoveryAnswer),
+        contract
+      );
+      return completeRecoveredAnswer(safeRecoveryAnswer, contract, recoveredSelection);
+    }
     const client = createOpenAIClient();
     let answer = '';
     let openAiError: unknown;
@@ -10272,6 +10365,7 @@ export const assistantTestHooks = {
   isMixedCatalogAndCommercialQuestion,
   shouldUseProactiveCommercialDeterministicAnswer,
   deterministicTechnicalSummaryRecovery,
+  deterministicRecoveredSelectionAnswer,
   deterministicAnswerGenerationFallback,
   reliableBundleTotal,
   isCatalogAvailabilityQuestion,

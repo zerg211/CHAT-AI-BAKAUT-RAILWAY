@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyNeedState } from '../src/ai/needState.js';
+import { emptyNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
 import type { AgentTurnContract, ConversationSession, ConversationTurn, Message, MessageRole, Product } from '../src/shared/types.js';
 
 const openAiCreate = vi.hoisted(() => vi.fn(async () => {
@@ -338,6 +338,129 @@ describe('assistant OpenAI failure fallback', () => {
     expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
     expect(result.answer).toMatch(new RegExp(`${ru('\\u0441\\u043a\\u0438\\u0434')}|${ru('\\u043a\\u043e\\u043c\\u043c\\u0435\\u0440\\u0447')}`, 'iu'));
     expect(result.answer).not.toMatch(new RegExp(`${ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d')}|${ru('\\u043d\\u043e\\u043c\\u0435\\u0440')}`, 'iu'));
+    expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(conversations.turn?.status).toBe('recovered');
+  });
+
+  it('recovers product-selection turns with card-backed text instead of a second LLM answer', async () => {
+    const conversations = new FakeConversations();
+    const dpu130: Product = {
+      id: 'dpu130',
+      name: 'Vibroplita reversivnaya dizelnaya Wacker Neuson DPU 130 (1185 kg)',
+      category: ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'),
+      price: 3_500_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/catalog/vibroplity/dpu-130/',
+      specs: { 'rabochaya massa, kg': '1185' }
+    };
+    const dpu110: Product = {
+      id: 'dpu110',
+      name: 'Vibroplita reversivnaya dizelnaya Wacker Neuson DPU 110 Lem 970 (830 kg)',
+      category: ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'),
+      price: 2_800_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/catalog/vibroplity/dpu-110/',
+      specs: { 'rabochaya massa, kg': '830' }
+    };
+    const light: Product = {
+      id: 'light',
+      name: 'Vibroplita pryamokhodnaya benzinovaya 95 kg',
+      category: ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'),
+      price: 90_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/catalog/vibroplity/light/',
+      specs: { 'rabochaya massa, kg': '95' }
+    };
+    conversations.session = {
+      ...conversations.session,
+      needState: {
+        ...emptyNeedState(),
+        activeNeeds: [{
+          id: 'need_plate',
+          productClass: 'plate',
+          summary: 'Need vibroplate about 1000 kg',
+          constraints: ['about 1000 kg'],
+          openQuestions: [],
+          selectedProductIds: [],
+          status: 'open',
+          updatedAt: new Date().toISOString()
+        }],
+        selectionState: mergeProductSelectionState(emptyNeedState().selectionState, {
+          currentProductClass: 'plate',
+          targetProductClass: 'plate',
+          matchedProductIds: ['dpu130', 'dpu110'],
+          selectedProductIds: [],
+          confidence: 0.85,
+          hardConstraints: {
+            ...emptyNeedState().selectionState.hardConstraints,
+            productIntent: 'plate',
+            productRole: 'coreProduct',
+            weightKgMin: 800,
+            weightKgMax: 1200,
+            exactModelTokens: [],
+            excludedClasses: [],
+            provenance: {
+              weightKgMin: 'explicit_user',
+              weightKgMax: 'explicit_user'
+            }
+          }
+        })
+      }
+    };
+    const userMessage: Message = {
+      id: 'user-heavy-plate',
+      sessionId: conversations.session.id,
+      role: 'user',
+      content: 'Need vibroplita about 1000 kg. Any close models?',
+      metadata: {},
+      createdAt: new Date().toISOString()
+    };
+    conversations.messages.push(userMessage);
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'product_selection_with_availability',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: ['show nearest heavy vibroplate alternatives'],
+      activeNeeds: [{ id: 'need_plate', productClass: 'plate', summary: 'Need vibroplate about 1000 kg' }],
+      currentFocus: 'heavy vibroplate',
+      cardsRole: 'primary',
+      leadAllowed: false,
+      leadAllowedReason: 'buyer asked to see options first',
+      errorRecoveryPriority: 'Show nearest heavy vibroplate cards without unsupported current-lineup claims.',
+      validatorWarnings: []
+    };
+    conversations.turn = {
+      id: '44444444-4444-4444-8444-444444444444',
+      sessionId: conversations.session.id,
+      userMessageId: userMessage.id,
+      assistantMessageId: null,
+      status: 'failed',
+      requestHash: 'hash',
+      stage: 'recovery_failed',
+      errorCode: 'recovery_failed',
+      errorMessage: 'current_lineup_claim_without_web_policy',
+      plannerContract: contract,
+      activeNeedsBefore: null,
+      activeNeedsAfter: conversations.session.needState.activeNeeds,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    openAiCreate.mockClear();
+    const assistant = new AssistantService(conversations as never, new FakeProducts([light, dpu130, dpu110]) as never);
+
+    const result = await assistant.recoverTurn({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.answer).toContain('DPU 130');
+    expect(result.productCards.map((card) => card.id)).toEqual(expect.arrayContaining(['dpu130', 'dpu110']));
+    expect(result.productCards.map((card) => card.id)).not.toContain('light');
+    expect(result.answer).not.toContain(ru('\\u0421\\u0435\\u0439\\u0447\\u0430\\u0441 \\u043d\\u0435 \\u0441\\u043c\\u043e\\u0433'));
+    expect(result.answer).not.toMatch(new RegExp(`${ru('\\u043b\\u0438\\u043d\\u0435\\u0439\\u043a')}|${ru('\\u043f\\u0440\\u043e\\u0438\\u0437\\u0432\\u043e\\u0434')}`, 'iu'));
     expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
     expect(conversations.turn?.status).toBe('recovered');
   });
