@@ -6271,7 +6271,7 @@ describe('recommendation ranking', () => {
       ],
       mentionedProducts: [{
         role: 'targetProduct',
-        token: 'gasoline cutter',
+        token: 'gasoline cutter for 350 mm disc',
         status: 'unresolved',
         evidence: 'Need gasoline cutter 350 mm',
         updatedAt: '2026-05-18T00:00:00.000Z',

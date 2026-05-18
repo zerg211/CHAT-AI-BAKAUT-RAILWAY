@@ -446,6 +446,8 @@ export function isTechnicalSpecToken(token: string) {
   if (/^(?:under|over|upto|to|до|от|около|about|around|max|maximum|min|minimum)\d{1,7}$/iu.test(compact)) return true;
   if (/^(?:for|to|under|with|для|под|с)\s*\d{1,4}$/iu.test(token.trim())) return true;
   if (/^(?:plate|generator|cutter|core|blade|vibroplate|виброплит[аы]?|генератор|диск|коронка|резчик)\s*\d{1,4}$/iu.test(token.trim())) return true;
+  if (/(?:cutter|cut[-\s]?off|saw|disc|disk|резчик|бензорез|швонарез|диск).*?\d{2,4}\s*(?:mm|мм)\b/iu.test(token)) return true;
+  if (/(?:vibroplita|vibroplate|plate|виброплит).*?\d{2,4}\s*(?:kg|кг)\b/iu.test(token) && !/\b(?:DPU|BPU|WPU|DPS|LH|LF|MP|BPS|VP)\s*\d/iu.test(token)) return true;
   if (/\b(?:generator|генератор|электростанц)\b.*?\d{2,4}\s*[vв]\b/iu.test(token)) return true;
   if (/^(?:\d{2,4}[vв]|[vв]\d{2,4})(?:[-/](?:\d{2,4}[vв]|[vв]\d{2,4}))*$/iu.test(normalized)) return true;
   if (/^(?:[vв]?\d{2,4}[vв]?){1,2}$/iu.test(compact) && /[vв]/iu.test(compact)) return true;
