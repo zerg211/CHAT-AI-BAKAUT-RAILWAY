@@ -116,10 +116,14 @@ async function submitLeadForm(frame, leadForm) {
   await frame.getByLabel('Вопрос').fill(leadForm.question);
   const submit = frame.locator('.lead-panel.expanded button[type="submit"]').first();
   await submit.waitFor({ state: 'visible', timeout: 10_000 });
-  await frame.waitForFunction(() => {
-    const button = document.querySelector('.lead-panel.expanded button[type="submit"]');
-    return button instanceof HTMLButtonElement && !button.disabled;
-  }, null, { timeout: 10_000 });
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    if (await submit.evaluate((element) => element instanceof HTMLButtonElement && !element.disabled).catch(() => false)) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!await submit.evaluate((element) => element instanceof HTMLButtonElement && !element.disabled).catch(() => false)) {
+    throw new Error('Lead form submit button stayed disabled after filling required fields.');
+  }
   await submit.evaluate((element) => element.click());
   await Promise.race([
     frame.locator('.form-note.ok').waitFor({ state: 'visible', timeout: 60_000 }),
