@@ -40,6 +40,61 @@ describe('AgentTurnContractV2 adapter', () => {
     expect(contract.sourcePolicy.allowed).toContain('catalog');
   });
 
+  it('removes planner lead tools when canonical lead policy forbids a lead draft', () => {
+    const contract = deriveAgentTurnContractV2({
+      userMessage: 'Show plate options and tell me if delivery and stock are available.',
+      legacyContract: {
+        ...baseContract,
+        answerTask: 'mixed',
+        taskType: 'product_selection_with_availability',
+        commercialAction: 'explain_manager_required'
+      },
+      plan: {
+        selectedProductIds: ['plate-70'],
+        agentContractV2: {
+          version: 2,
+          intent: 'availability_check',
+          answerTask: 'mixed',
+          taskType: 'product_selection_with_availability',
+          catalogAction: 'find_matching_products',
+          commercialAction: 'explain_manager_required',
+          productCardsPolicy: 'show_matching_products',
+          cardsRole: 'primary',
+          leadPolicy: 'optional_after_answer',
+          sourcePolicy: {
+            allowed: ['catalog', 'visible_cards', 'specialist'],
+            required: ['specialist'],
+            forbidden: ['web'],
+            webPurpose: 'none'
+          },
+          needDelta: {
+            newRequirements: [],
+            confirmedRequirements: [],
+            changedRequirements: [],
+            supersededRequirementIds: [],
+            rejectedProductIds: []
+          },
+          missingFacts: ['live stock'],
+          toolPlan: [
+            { tool: 'selectProducts', reason: 'Select visible cards.', required: true, inputHint: {} },
+            { tool: 'createLeadDraft', reason: 'Prepare stock handoff.', required: true, inputHint: {} }
+          ],
+          selectedProductIds: ['plate-70'],
+          rejectedProductIds: [],
+          mustAnswerNow: ['Show cards and explain live stock verification.'],
+          currentFocus: 'plate',
+          errorRecoveryPriority: 'show cards first',
+          confidence: 0.9,
+          warnings: []
+        }
+      },
+      needState: emptyNeedState()
+    });
+
+    expect(contract.leadPolicy).toBe('none');
+    expect(contract.toolPlan.map((step) => step.tool)).toEqual(['selectProducts']);
+  });
+
   it('separates exact availability from live stock and requires specialist source', () => {
     const contract = deriveAgentTurnContractV2({
       userMessage: 'Is TSS 10 kW gasoline in stock?',

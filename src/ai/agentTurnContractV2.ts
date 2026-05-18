@@ -239,6 +239,16 @@ function toolPlanFromLegacy(input: {
   return steps;
 }
 
+function reconcileToolPlanWithLeadPolicy(
+  steps: AgentToolPlanStepV2[],
+  leadPolicy: ExecutionLeadPolicy
+) {
+  if (leadPolicy === 'none' || leadPolicy === 'forbidden') {
+    return steps.filter((step) => step.tool !== 'createLeadDraft' && step.tool !== 'createLead');
+  }
+  return steps;
+}
+
 export function deriveAgentTurnContractV2(input: {
   userMessage: string;
   legacyContract: AgentTurnContract;
@@ -308,6 +318,11 @@ export function deriveAgentTurnContractV2(input: {
   const safetySourcePolicy = sourcePolicy.required.includes('specialist') || sourcePolicy.forbidden.includes('web')
     ? sourcePolicy
     : directSourcePolicy;
+  const leadPolicy = leadPolicyFromLegacy(legacy);
+  const toolPlan = reconcileToolPlanWithLeadPolicy(
+    direct.toolPlan.length ? direct.toolPlan : fallback.toolPlan,
+    leadPolicy
+  );
 
   return {
     ...direct,
@@ -317,12 +332,12 @@ export function deriveAgentTurnContractV2(input: {
     commercialAction: legacy.commercialAction ?? 'none',
     productCardsPolicy: legacy.productCardsPolicy ?? 'none',
     cardsRole: legacy.cardsRole,
-    leadPolicy: leadPolicyFromLegacy(legacy),
+    leadPolicy,
     sourcePolicy: safetySourcePolicy,
     selectedProductIds: unique([...direct.selectedProductIds, ...selectedProductIds], 24),
     rejectedProductIds: unique([...direct.rejectedProductIds, ...rejectedProductIds], 24),
     missingFacts: unique([...direct.missingFacts, ...missingFacts], 12),
-    toolPlan: direct.toolPlan.length ? direct.toolPlan : fallback.toolPlan,
+    toolPlan,
     mustAnswerNow: legacy.mustAnswerNow.length ? [...legacy.mustAnswerNow] : direct.mustAnswerNow,
     currentFocus: legacy.currentFocus || direct.currentFocus,
     errorRecoveryPriority: legacy.errorRecoveryPriority || direct.errorRecoveryPriority,
