@@ -6127,6 +6127,79 @@ describe('recommendation ranking', () => {
     expect(result.visibleProducts.map((item) => item.id)).not.toContain('light');
   });
 
+  it('promotes supporting heavy plate alternatives to visible cards when exact 1000 kg target has matched products', () => {
+    const dpu130 = productWithSpecs('dpu130', 'Vibroplita reversivnaya dizelnaya Wacker Neuson DPU 130 (1185 kg)', 3_500_000, 'https://example.test/catalog/vibroplity/dpu-130/', {
+      'rabochaya massa, kg': '1185'
+    });
+    const dpu110 = productWithSpecs('dpu110', 'Vibroplita reversivnaya dizelnaya Wacker Neuson DPU 110 Lem 970 (830 kg)', 2_800_000, 'https://example.test/catalog/vibroplity/dpu-110/', {
+      'rabochaya massa, kg': '830'
+    });
+    const light = productWithSpecs('light', 'Vibroplita pryamokhodnaya benzinovaya 95 kg', 90_000, 'https://example.test/catalog/vibroplity/light/', {
+      'rabochaya massa, kg': '95'
+    });
+    const state = { ...emptyNeedState(), selectionState: mergeProductSelectionState(emptyProductSelectionState(), {
+      currentProductClass: 'plate',
+      targetProductClass: 'plate',
+      matchedProductIds: ['dpu130', 'dpu110'],
+      hardConstraints: {
+        ...emptyProductSelectionState().hardConstraints,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 800,
+        weightKgMax: 1200,
+        mustHaveTraits: ['heavy reversible plate'],
+        excludedClasses: [],
+        provenance: {
+          weightKgMin: 'explicit_user',
+          weightKgMax: 'explicit_user'
+        }
+      }
+    }) };
+    const plan = baseTurnPlan({
+      action: 'answer_question',
+      answerMode: 'short',
+      cardPolicy: 'textOnly',
+      agentDecision: productSelectionAgentDecision({
+        taskType: 'product_selection_with_availability',
+        answerTask: 'mixed',
+        catalogAction: 'find_matching_products',
+        productCardsPolicy: 'supporting_only',
+        cardsRole: 'supporting'
+      }),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct',
+        weightKgMin: 800,
+        weightKgMax: 1200
+      }
+    });
+    const result = {
+      state: state.selectionState,
+      matchedProducts: [dpu110, dpu130],
+      visibleProducts: [],
+      hiddenProducts: [],
+      comparisonProducts: [],
+      rejectedProducts: [],
+      missingQuestions: [],
+      confidence: 0.95,
+      trace: {
+        canRecommendFromSelection: true,
+        source: 'full_catalog_selection_engine'
+      }
+    } as any;
+
+    expect(assistantTestHooks.shouldPromoteSupportingSelectionCards(plan.agentDecision as any, plan, result, false)).toBe(true);
+
+    const promoted = assistantTestHooks.promotePlanToSelectionCatalogCards(plan, result, 'show supporting alternatives') as any;
+    expect(promoted.cardPolicy).toBe('showProducts');
+    expect(promoted.selectedProductIds).toEqual(['dpu110', 'dpu130']);
+
+    const cards = assistantTestHooks.cardsFromPlan([light, dpu110, dpu130] as any, state, 'Need vibroplita about 1000 kg. Any close models?', promoted);
+    expect(cards.map((card) => card.id)).toEqual(expect.arrayContaining(['dpu110', 'dpu130']));
+    expect(cards.map((card) => card.id)).not.toContain('light');
+  });
+
   it('selects nearest heavy plate targets when no card lands inside the practical target window', async () => {
     const nearLow = productWithSpecs('near-low', 'Vibroplita reversivnaya dizelnaya Wacker Neuson DPU 90 (770 kg)', 2_600_000, 'https://example.test/catalog/vibroplity/dpu-90/', {
       'rabochaya massa, kg': '770'

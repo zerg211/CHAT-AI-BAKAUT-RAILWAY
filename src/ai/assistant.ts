@@ -2958,6 +2958,47 @@ function shouldPromoteCatalogFactCheckedCards(
     hasReliableGeneratorSelectionBasis(result.state);
 }
 
+function shouldPromoteSupportingSelectionCards(
+  contract: AgentTurnContract,
+  plan: AssistantTurnPlan,
+  result: ProductSelectionResult,
+  blockEstimatedPumpCards: boolean
+) {
+  const taskNeedsCatalogSelection = contract.catalogAction === 'find_matching_products' &&
+    (contract.taskType === 'product_selection' ||
+      contract.taskType === 'product_selection_with_availability' ||
+      contract.taskType === 'product_selection_with_delivery' ||
+      contract.answerTask === 'product_selection' ||
+      contract.answerTask === 'mixed');
+  const hard = result.state.hardConstraints;
+  const hasMaterialSelectionConstraint = Boolean(
+    hard.exactModelTokens.length ||
+    hard.exactModelConstraint ||
+    hard.weightKgMin ||
+    hard.weightKgMax ||
+    hard.diameterMmMin ||
+    hard.diameterMmMax ||
+    hard.nominalPowerKwMin ||
+    hard.nominalPowerKwMax ||
+    hard.maxPowerKwMin ||
+    hard.maxPowerKwMax ||
+    hard.budgetMax ||
+    hard.brandConstraint ||
+    hard.mustHaveTraits.length
+  );
+  return taskNeedsCatalogSelection &&
+    contract.cardsRole === 'supporting' &&
+    (contract.productCardsPolicy ?? 'none') !== 'none' &&
+    !isLeadPlan(plan) &&
+    !blockEstimatedPumpCards &&
+    result.trace?.canRecommendFromSelection === true &&
+    result.matchedProducts.length > 0 &&
+    result.confidence >= 0.55 &&
+    hasReliableGeneratorSelectionBasis(result.state) &&
+    hard.productIntent !== 'unknown' &&
+    (hasMaterialSelectionConstraint || hasUserGroundedSelectionEvidence(result.state));
+}
+
 function promotePlanToSelectionCatalogCards(
   plan: AssistantTurnPlan,
   result: ProductSelectionResult,
@@ -2968,7 +3009,7 @@ function promotePlanToSelectionCatalogCards(
     ? result.visibleProducts
     : result.trace?.exactLookupAlternative === true
       ? result.matchedProducts
-      : [];
+      : result.matchedProducts;
   return {
     ...plan,
     action: 'recommend_products',
@@ -8118,16 +8159,19 @@ export class AssistantService {
       const selectionEngineRequestsCards = shouldForceStructuredSelectionCards(input.userMessage, effectivePlan, selectionResult);
       const primarySelectionRequestsCards = shouldPromotePrimarySelectionCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
       catalogFactCheckRequestsCards = shouldPromoteCatalogFactCheckedCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
+      const supportingSelectionRequestsCards = shouldPromoteSupportingSelectionCards(agentTurnContract, effectivePlan, selectionResult, blockEstimatedPumpCards);
       const generatorSizingRequestsCards = agentTurnContract.cardsRole !== 'none' &&
         shouldPromoteGeneratorSizingCardsForContract(agentTurnContract, selectionResult, blockEstimatedPumpCards);
-      if ((agentTurnContract.cardsRole === 'primary' || (agentTurnContract.cardsRole === 'supporting' && generatorSizingRequestsCards) || catalogFactCheckRequestsCards) &&
-        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards || catalogFactCheckRequestsCards) &&
+      if ((agentTurnContract.cardsRole === 'primary' || (agentTurnContract.cardsRole === 'supporting' && (generatorSizingRequestsCards || supportingSelectionRequestsCards)) || catalogFactCheckRequestsCards) &&
+        (planAllowsCatalogSelectionOverride(effectivePlan) || selectionEngineRequestsCards || primarySelectionRequestsCards || generatorSizingRequestsCards || supportingSelectionRequestsCards || catalogFactCheckRequestsCards) &&
         (structuredCatalogSlice.source === 'structured_constraints' || structuredCatalogSlice.source === 'full_catalog_slice')) {
         effectivePlan = promotePlanToSelectionCatalogCards(
           effectivePlan,
           selectionResult,
           generatorSizingRequestsCards
             ? 'The buyer has supplied enough generator load context for a preliminary product selection. First answer the sizing calculation, then show visible generator cards as preliminary suitable options. Do not keep the turn text-only.'
+            : supportingSelectionRequestsCards
+              ? 'The buyer asked for catalog options or close alternatives and productSelection found reliable matching products. Show those products as supporting cards, explain the fit or compromise against the stated constraints, and do not answer as if the catalog has no usable options.'
             : catalogFactCheckRequestsCards
               ? selectionResult.trace?.exactLookupAlternative === true
                 ? 'Catalog fact-check did not prove the exact spelling, but found close same-brand/model-token catalog alternatives. Show those cards as supporting alternatives, say the exact card is not visible, and ask whether the buyer meant the close model. Separate catalog presence from first-person stock verification.'
@@ -10431,6 +10475,7 @@ export const assistantTestHooks = {
   generatorLoadProfileFromText,
   shouldPromotePrimarySelectionCards,
   shouldPromoteCatalogFactCheckedCards,
+  shouldPromoteSupportingSelectionCards,
   promotePlanToSelectionCatalogCards,
   shouldPromoteGeneratorSizingCards,
   shouldPromoteGeneratorSizingCardsForContract,

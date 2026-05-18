@@ -13,7 +13,7 @@ describe('app', () => {
       answerModel: expect.any(String),
       plannerModel: expect.any(String),
       remediation: {
-        contractVersion: '2026-05-18-dialog-988-989-cutter-token-v14',
+        contractVersion: '2026-05-18-dialog-988-989-supporting-cards-v15',
         runtimeArtifacts: expect.arrayContaining([
           'executionContract',
           'requirementLedger',
