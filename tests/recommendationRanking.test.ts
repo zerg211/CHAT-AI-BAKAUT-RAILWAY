@@ -5132,6 +5132,100 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.shouldPromotePrimarySelectionCards(primarySelectionContract, plan, followUp, false)).toBe(true);
   });
 
+  it('keeps pump wattage memory out of generator power hard constraints', async () => {
+    const products = [
+      productWithSpecs('three', 'Generator gasoline HOME 3.2 kW 220 V', 38_900, 'https://example.test/catalog/generators/three', {
+        nominalPower: '3.2 kW',
+        maxPower: '3.8 kW'
+      }),
+      productWithSpecs('four', 'Generator gasoline HOME 3.8 kW 220 V', 44_900, 'https://example.test/catalog/generators/four', {
+        nominalPower: '3.8 kW',
+        maxPower: '4.5 kW'
+      })
+    ];
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const pumpLoadProfile = {
+      items: [
+        { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.15, startingKw: 0.6, source: 'estimated_average', evidence: 'fridge' },
+        { kind: 'boiler', name: 'boiler', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'estimated_average', evidence: 'boiler' },
+        { kind: 'lighting', name: 'lighting', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'estimated_average', evidence: 'lights' },
+        { kind: 'pump', name: 'borehole pump', count: 1, runningKw: 0.75, startingKw: 2, source: 'estimated_average', evidence: 'pump about 750 W' }
+      ],
+      confidence: 0.58,
+      calculation: 'fridge, boiler, lighting, borehole pump 750 W',
+      totalRunningKw: 1.1,
+      requiredNominalKw: 2.5,
+      requiredStartingKw: 2.4,
+      simultaneousStarting: false,
+      simultaneousStartingKinds: []
+    } as any;
+    const state = withSemanticMemory({
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyProductSelectionState(), {
+        semanticSource: 'llm_need_extraction',
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: []
+        },
+        loadProfile: pumpLoadProfile,
+        confidence: 0.72
+      })
+    }, {
+      activeRequirementIds: ['req_pump_power_750w'],
+      requirements: [
+        semanticRequirement({
+          id: 'req_pump_power_750w',
+          kind: 'powerKw',
+          value: { amount: 0.75, min: 0.75, max: 0.75, text: '750 W', unit: 'kW' },
+          evidence: 'pump about 750 W',
+          replacesRequirementIds: ['req_load_pump']
+        })
+      ]
+    });
+    const plan = baseTurnPlan({
+      agentDecision: productSelectionAgentDecision(),
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        nominalPowerKwMin: 3,
+        nominalPowerKwMax: 4,
+        maxPowerKwMin: 3.5,
+        maxPowerKwMax: 5,
+        powerReasoning: 'Use the pump load profile to choose a practical generator class, not a 0.75 kW generator.'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        selectionConfidence: 0.86,
+        shouldShowCards: true,
+        mustHaveTraits: ['home backup', 'pump 750 W']
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'The pump is a submersible well pump, about 750 W. Show generator options for the house.',
+      state,
+      plan,
+      products,
+      undefined,
+      2
+    );
+
+    expect(result.state.hardConstraints.nominalPowerKwMin).toBeGreaterThanOrEqual(3);
+    expect(result.state.hardConstraints.nominalPowerKwMax).toBeGreaterThanOrEqual(4);
+    expect(result.state.hardConstraints.nominalPowerKwMin).not.toBe(0.75);
+    expect(result.visibleProducts.length).toBeGreaterThan(0);
+    expect(result.visibleProducts.every((item) => item.id === 'three' || item.id === 'four')).toBe(true);
+    expect(assistantTestHooks.shouldBlockGeneratorCardsForEstimatedPump(result.state)).toBe(false);
+  });
+
   it('merges LLM load-state updates as appliance refinements instead of duplicate loads', () => {
     const initial = mergeProductSelectionState(emptyNeedState().selectionState, {
       semanticSource: 'llm_need_extraction',

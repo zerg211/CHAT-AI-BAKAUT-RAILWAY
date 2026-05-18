@@ -1429,6 +1429,7 @@ function applySemanticMemoryToSelectionState(
     }
     if (requirement.kind === 'powerKw') {
       if (!intentAcceptsRequirementKind(targetProductClass, requirement.kind)) continue;
+      if (!semanticRequirementAppliesToSelection(requirement, targetProductClass)) continue;
       const amount = semanticNumber(value, 'amount');
       let min = semanticNumber(value, 'min');
       let max = semanticNumber(value, 'max') ?? amount;
@@ -1521,9 +1522,10 @@ function applySemanticMemoryToSelectionState(
   };
 }
 
-function semanticAlternativeMode(memory: SemanticMemory | undefined) {
+function semanticAlternativeMode(memory: SemanticMemory | undefined, targetProductClass: ProductIntent = 'unknown') {
   const active = activeSemanticRequirements(memory).filter((item) =>
-    ['weightKg', 'budgetRub', 'powerKw', 'diameterMm'].includes(item.kind)
+    ['weightKg', 'budgetRub', 'powerKw', 'diameterMm'].includes(item.kind) &&
+    (targetProductClass === 'unknown' || semanticRequirementAppliesToSelection(item, targetProductClass))
   );
   if (!active.length) return { mode: memory?.selectionPolicy?.alternativeMode ?? 'none' as const, hasNumeric: false, strictOnly: false };
   if (memory?.selectionPolicy?.alternativeMode) {
@@ -4446,6 +4448,31 @@ function isGroundedPowerConstraintSource(source: unknown) {
   return source === 'explicit_user' || source === 'catalog_fact' || source === 'previous_selection';
 }
 
+function semanticPowerRequirementEvidence(requirement: SemanticRequirement) {
+  const value = requirement.value ?? {};
+  return [
+    requirement.id,
+    requirement.evidence,
+    semanticText(value, 'text'),
+    requirement.replacesRequirementIds?.join(' ')
+  ].filter(Boolean).join(' ');
+}
+
+function semanticPowerRequirementLooksLikeLoad(requirement: SemanticRequirement) {
+  if (requirement.kind !== 'powerKw') return false;
+  const evidenceText = semanticPowerRequirementEvidence(requirement);
+  if (!evidenceText.trim()) return false;
+  if (hasExplicitGeneratorPowerRequest(evidenceText)) return false;
+  return /(?:\u043d\u0430\u0441\u043e\u0441|pump|\u0445\u043e\u043b\u043e\u0434\u0438\u043b|fridge|refrigerator|\u043a\u043e\u0442[\u0435\u0451]\u043b|boiler|\u0441\u0432\u0435\u0442|\u043e\u0441\u0432\u0435\u0449|\u043b\u0430\u043c\u043f|\u0431\u043e\u043b\u0433\u0430\u0440\u043a|\u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442|tool|\u043a\u043e\u043c\u043f\u0440\u0435\u0441\u0441\u043e\u0440|compressor)/iu.test(evidenceText);
+}
+
+function semanticRequirementAppliesToSelection(requirement: SemanticRequirement, targetProductClass: ProductIntent) {
+  if (requirement.kind === 'powerKw' && generatorOnlyIntent(targetProductClass) && semanticPowerRequirementLooksLikeLoad(requirement)) {
+    return false;
+  }
+  return true;
+}
+
 function singlePowerKwFromText(text: string) {
   const match = text.match(powerRegex);
   if (!match) return undefined;
@@ -4887,6 +4914,15 @@ function hasTypedEstimatedPumpLoadProfile(profile?: ProductGeneratorLoadProfile 
   return pumpText.trim() ? pumpTypeFromText(pumpText) !== 'generic' : false;
 }
 
+function hasPumpPowerEvidenceProfile(profile?: ProductGeneratorLoadProfile | null) {
+  return (profile?.items ?? []).some((item) => {
+    if (item.kind !== 'pump') return false;
+    if (item.source === 'explicit_user') return true;
+    const text = [item.name, item.evidence].filter(Boolean).join(' ');
+    return /\d+(?:[,.]\d+)?\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430|\u0432\u0442|w)/iu.test(text);
+  });
+}
+
 function hasPreliminaryGeneratorSelectionBasisFromProfile(profile?: ProductGeneratorLoadProfile | null) {
   if (!profile?.requiredNominalKw || !hasEstimatedPumpLoadProfile(profile)) return false;
   if (!hasTypedEstimatedPumpLoadProfile(profile)) return false;
@@ -4895,7 +4931,7 @@ function hasPreliminaryGeneratorSelectionBasisFromProfile(profile?: ProductGener
     item.kind !== 'aggregate_load' &&
     (item.runningKw ?? 0) > 0
   );
-  return profile.requiredNominalKw >= 3.5 && hasOtherLoad;
+  return hasOtherLoad && (profile.requiredNominalKw >= 3.5 || hasPumpPowerEvidenceProfile(profile));
 }
 
 function hasPreliminaryGeneratorSelectionBasis(state: ProductSelectionState) {
@@ -8367,7 +8403,7 @@ export class AssistantService {
       effectiveSelectionState.hardConstraints.diameterMmMin ||
       effectiveSelectionState.hardConstraints.diameterMmMax
     );
-    const semanticAlternatives = semanticAlternativeMode(state.semanticMemory);
+    const semanticAlternatives = semanticAlternativeMode(state.semanticMemory, effectiveSelectionState.targetProductClass);
     const semanticShouldAddAlternatives = semanticAlternatives.mode === 'afterPrimary' ||
       (semanticAlternatives.mode === 'fallbackOnly' && !matchedProducts.length);
     const semanticBlocksAlternatives = semanticAlternatives.hasNumeric && semanticAlternatives.strictOnly;
