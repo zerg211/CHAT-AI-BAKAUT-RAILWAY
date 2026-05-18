@@ -3750,6 +3750,9 @@ function deterministicRecoveredSelectionAnswer(input: {
   if (input.cards.length > visible.length) {
     lines.push('Остальные подходящие позиции оставил за кнопкой "Показать еще".');
   }
+  if (input.contract.commercialAction === 'explain_manager_required' && isExplicitCommercialQuestion(input.latestUserMessage)) {
+    lines.push('По наличию и доставке точные условия нужно сверить отдельно: каталог показывает подходящие позиции, но не обещает live-остаток, стоимость доставки или сроки.');
+  }
   return lines.join('\n\n');
 }
 
@@ -9886,7 +9889,6 @@ export class AssistantService {
       !answerCurrentLineupStyle &&
       !serviceCostStyle &&
       !detailedFactStyle &&
-      recommendationAnswer &&
       answerAgentTurnContract.catalogAction === 'find_matching_products' &&
       answerAgentTurnContract.productCardsPolicy !== 'none' &&
       answerAgentTurnContract.cardsRole !== 'none' &&
