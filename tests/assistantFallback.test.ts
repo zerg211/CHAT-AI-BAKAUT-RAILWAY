@@ -279,6 +279,111 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
   });
 
+  it('answers broad technical orientation from extracted need state without planner recovery', async () => {
+    openAiCreate.mockClear();
+    const conversations = new FakeConversations();
+    const baseNeedState = emptyNeedState();
+    conversations.session = {
+      ...conversations.session,
+      needState: {
+        ...baseNeedState,
+        activeNeeds: [
+          {
+            id: 'need-generator',
+            status: 'open',
+            productClass: 'generator',
+            summary: 'Generator for home backup load',
+            constraints: ['pump', 'fridge', 'boiler', 'lights'],
+            openQuestions: ['pump power'],
+            selectedProductIds: [],
+            updatedAt: new Date().toISOString()
+          },
+          {
+            id: 'need-plate',
+            status: 'open',
+            productClass: 'plate',
+            summary: 'Small plate for driveway under paving slabs',
+            constraints: ['small driveway', 'paving slabs'],
+            openQuestions: ['comfortable weight'],
+            selectedProductIds: [],
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        selectionState: mergeProductSelectionState(baseNeedState.selectionState, {
+          currentProductClass: 'generator',
+          targetProductClass: 'generator',
+          loadProfile: {
+            items: [],
+            requiredNominalKw: 5.5,
+            requiredStartingKw: 4.3,
+            confidence: 0.62
+          },
+          hardConstraints: {
+            ...baseNeedState.selectionState.hardConstraints,
+            productIntent: 'generator',
+            productRole: 'coreProduct'
+          }
+        })
+      }
+    };
+    conversations.turn = {
+      id: '66666666-6666-4666-8666-666666666666',
+      sessionId: conversations.session.id,
+      userMessageId: null,
+      assistantMessageId: null,
+      status: 'received',
+      requestHash: 'hash',
+      stage: 'received',
+      errorCode: null,
+      errorMessage: null,
+      plannerContract: null,
+      activeNeedsBefore: [],
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    class FastTechnicalAssistant extends AssistantService {
+      async updateNeedState() {
+        return conversations.session.needState;
+      }
+
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner should not run for fast technical orientation');
+      }
+    }
+    const assistant = new FastTechnicalAssistant(conversations as never, new FakeProducts([]) as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id,
+      userMessage: 'Подскажите, какой генератор лучше взять для дома: насос, холодильник, котел и свет. И нужна небольшая виброплита для въезда.'
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u0441\\u043e\\u0441'));
+    expect(result.productCards).toHaveLength(0);
+    expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
+    expect(result.metadata?.turnContract).toMatchObject({
+      answerTask: 'technical_explanation',
+      taskType: 'technical_answer',
+      catalogAction: 'none',
+      productCardsPolicy: 'none',
+      cardsRole: 'none',
+      leadAllowed: false
+    });
+    expect(result.metadata?.executionContract).toBeDefined();
+    expect(result.metadata?.requirementLedger).toBeDefined();
+    expect(result.metadata?.factClaimPlanner).toBeDefined();
+    expect(result.metadata?.leadStateMachine).toMatchObject({
+      state: 'not_allowed',
+      nextAction: 'do_not_ask_contact'
+    });
+    expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(result.metadata?.recovered).toBeUndefined();
+    expect(result.metadata?.aiDiagnostics?.turnPlanningFallback?.used).toBe(false);
+    expect(conversations.turn?.status).toBe('completed');
+  });
+
   it('repairs recovered answers before saving when they violate post-answer lead policy', async () => {
     const conversations = new FakeConversations();
     const userMessage: Message = {

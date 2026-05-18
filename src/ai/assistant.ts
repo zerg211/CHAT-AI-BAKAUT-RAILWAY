@@ -5695,6 +5695,34 @@ function deterministicTechnicalSummaryRecovery(input: {
   ].join('\n\n');
 }
 
+function shouldUseFastTechnicalOrientation(input: {
+  userMessage: string;
+  needState: CustomerNeedState;
+  history: Message[];
+}) {
+  if (allShownProductCards(input.history).length) return false;
+  if (isExplicitCommercialQuestion(input.userMessage) || isMixedCatalogAndCommercialQuestion(input.userMessage)) return false;
+  if (/(?:покаж|вариант|модел|карточ|каталог|налич|склад|достав|скид|заказ|оформ)/iu.test(input.userMessage)) return false;
+
+  const activeClasses = new Set(
+    (input.needState.activeNeeds ?? [])
+      .map((need) => need.productClass)
+      .filter(Boolean)
+  );
+  const hardIntent = input.needState.selectionState?.hardConstraints?.productIntent;
+  const targetClass = input.needState.selectionState?.targetProductClass;
+  const hasTechnicalProductContext =
+    activeClasses.has('generator') ||
+    activeClasses.has('plate') ||
+    hardIntent === 'generator' ||
+    hardIntent === 'plate' ||
+    targetClass === 'generator' ||
+    targetClass === 'plate';
+  if (!hasTechnicalProductContext) return false;
+
+  return /(?:подскаж|какой|какая|какую|лучше|подойдет|хватит|мощн|ориентир|подбор|взять|тянул|тянуть|для\s+дома)/iu.test(input.userMessage);
+}
+
 function deterministicAnswerGenerationFallback(input: {
   cards: ProductCard[];
   selectionResult: ProductSelectionResult;
@@ -7015,6 +7043,276 @@ export class AssistantService {
         },
         overrides: ['fast_commercial_handoff']
       }
+    };
+  }
+
+  private buildTechnicalFastRenderContract(contract: AgentTurnContract, state: CustomerNeedState): ResolvedTurnContract {
+    return {
+      action: {
+        primary: 'answer_question',
+        answerMode: 'short',
+        followUpPolicy: 'askClarifyingQuestion'
+      },
+      scope: {
+        context: 'fullSession',
+        search: 'previousSelectionOnly',
+        catalogSearchQuery: ''
+      },
+      knowledge: {
+        webRequired: false,
+        missingInformation: state.selectionState.unknowns ?? []
+      },
+      selection: {
+        selectedProductIds: [],
+        requiredProductTraits: state.selectionState.hardConstraints,
+        selectionState: state.selectionState
+      },
+      render: {
+        cards: 'none',
+        leadForm: false
+      },
+      guidance: 'Fast technical orientation from extracted need state; no catalog cards or commercial promises.',
+      diagnostics: {
+        sourcePlan: {
+          action: 'answer_question',
+          answerMode: 'short',
+          cardPolicy: 'textOnly',
+          followUpPolicy: 'askClarifyingQuestion',
+          contextScope: 'fullSession',
+          searchScope: 'previousSelectionOnly',
+          catalogSearchQuery: '',
+          selectedProductIds: [],
+          needsWebSearch: false,
+          missingInformation: state.selectionState.unknowns ?? [],
+          answerGuidance: 'Answer the current technical level and ask for the missing pump/model/weight details before catalog selection.'
+        },
+        overrides: ['fast_technical_orientation']
+      }
+    };
+  }
+
+  private async tryFastTechnicalOrientation(
+    input: GenerateAnswerInput,
+    needState: CustomerNeedState,
+    history: Message[],
+    aiDiagnostics: AiGenerationDiagnostics
+  ): Promise<ChatResponsePayload | null> {
+    if (!shouldUseFastTechnicalOrientation({
+      userMessage: input.userMessage,
+      needState,
+      history
+    })) return null;
+
+    const contract: AgentTurnContract = {
+      answerTask: 'technical_explanation',
+      taskType: 'technical_answer',
+      catalogAction: 'none',
+      commercialAction: 'none',
+      productCardsPolicy: 'none',
+      mustAnswerNow: ['give a conservative technical orientation from extracted buyer needs before catalog selection'],
+      activeNeeds: (needState.activeNeeds ?? []).map((need) => ({
+        id: need.id,
+        productClass: need.productClass,
+        summary: need.summary
+      })),
+      currentFocus: 'technical_orientation',
+      cardsRole: 'none',
+      leadAllowed: false,
+      leadAllowedReason: 'technical orientation only; no commercial or specialist handoff requested',
+      errorRecoveryPriority: 'Answer the current technical level from extracted need state, do not invent catalog facts, and ask the next missing technical input.',
+      validatorWarnings: ['fast_technical_orientation_contract']
+    };
+    let answer = deterministicTechnicalSummaryRecovery({
+      cards: allShownProductCards(history),
+      state: needState.selectionState
+    }).trim();
+    if (!answer) return null;
+
+    const renderContract = this.buildTechnicalFastRenderContract(contract, needState);
+    const requirementLedger = buildRequirementLedger({
+      needState,
+      selectionState: needState.selectionState
+    });
+    const executionContract = buildExecutionContract({
+      agentContract: contract,
+      renderContract,
+      selectionState: needState.selectionState,
+      webRequired: false,
+      activeRequirementIds: requirementLedger.activeRequirementIds
+    });
+    const cardManifest = buildCardManifest({
+      executionContract,
+      cards: [],
+      visibleProductIds: [],
+      hiddenProductIds: []
+    });
+    const agentContractV2 = deriveAgentTurnContractV2({
+      userMessage: input.userMessage,
+      legacyContract: contract,
+      needState,
+      webRequired: false,
+      selectedProductIds: []
+    });
+    const productEvidenceRegistry = buildProductEvidenceRegistry({
+      executionContract,
+      cardManifest,
+      cards: [],
+      catalogProducts: []
+    });
+    const factClaimPlanner = buildFactClaimPlanner({
+      executionContract,
+      requirementLedger,
+      cardManifest,
+      usedWebSearch: false
+    });
+    const leadDraft = buildLeadDraft({
+      contract: agentContractV2,
+      registry: productEvidenceRegistry,
+      buyerQuestion: input.userMessage
+    });
+    const leadStateMachine = buildLeadStateMachine({
+      executionContract,
+      hasContactInTurn: false,
+      leadRequested: false,
+      leadCreated: false
+    });
+    const policyGate = runPolicyGate({
+      contract: agentContractV2,
+      requirementLedger,
+      productEvidenceRegistry,
+      executionContract,
+      factClaimPlanner,
+      leadStateMachine,
+      webSearchPlanned: false
+    });
+    const toolRegistry = new AgentToolRegistry(createRuntimeArtifactToolHandlers({
+      contract: agentContractV2,
+      selection: {
+        matchedProducts: [],
+        rejectedProducts: []
+      },
+      productEvidenceRegistry,
+      leadDraft,
+      autoLeadResult: null,
+      webSearchEnabled: false
+    }));
+    const toolResults = await toolRegistry.executePlan(agentContractV2.toolPlan, {
+      sessionId: input.sessionId,
+      userMessage: input.userMessage,
+      history,
+      needState,
+      signal: input.signal,
+      policy: {
+        leadAllowed: agentContractV2.leadPolicy !== 'forbidden',
+        webAllowed: !agentContractV2.sourcePolicy.forbidden.includes('web'),
+        webPurpose: agentContractV2.sourcePolicy.webPurpose
+      }
+    });
+    const toolTrace = toolResults.map((result, index) => toolResultToTrace(agentContractV2.toolPlan[index]!, result));
+    const policyGateEnforcement = enforcePolicyGateBeforeAnswer({
+      policyGate,
+      toolTrace
+    });
+    if (policyGateEnforcement.mode === 'hard_block') {
+      markAiFallback(
+        aiDiagnostics,
+        'answerGenerationFallback',
+        `fast_technical_policy_gate_blocked:${policyGateEnforcement.hardBlockReasons.join(',')}`,
+        'fast_technical_policy_gate_blocked'
+      );
+      throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
+    }
+
+    const postAnswerCheck = applyPostAnswerVerificationPolicy({
+      answer,
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest,
+      productEvidenceRegistry
+    });
+    answer = postAnswerCheck.answer;
+    const factClaimAudit = postAnswerCheck.factClaimAudit;
+    const postAnswerVerification = postAnswerCheck.postAnswerVerification;
+    const postAnswerVerificationRecovery = postAnswerCheck.postAnswerVerificationRecovery;
+    if (postAnswerVerification.status === 'error') {
+      throw new Error(`Fast technical answer violates post-answer verification: ${postAnswerVerification.issues.map((issue) => issue.code).join(', ')}`);
+    }
+
+    const contractWarnings = [
+      ...contract.validatorWarnings,
+      ...agentContractV2.warnings,
+      ...requirementLedger.warnings,
+      ...executionContract.warnings,
+      ...cardManifest.warnings,
+      ...productEvidenceRegistry.warnings,
+      ...policyGate.warnings,
+      ...policyGate.blockedReasons,
+      ...policyGateEnforcement.warnings,
+      ...policyGateEnforcement.hardBlockReasons,
+      ...policyGateEnforcement.repairedReasons,
+      ...factClaimPlanner.warnings,
+      ...factClaimAudit.warnings,
+      ...leadStateMachine.warnings,
+      ...postAnswerVerification.issues.map((issue) => issue.code)
+    ];
+    const metadata = {
+      turnId: input.turnId,
+      turnContract: contract,
+      agentContractV2,
+      sourcePolicy: agentContractV2.sourcePolicy,
+      toolTrace,
+      answerMode: 'fast_technical_orientation',
+      cardPolicy: 'textOnly',
+      cardsRole: contract.cardsRole,
+      leadAllowed: contract.leadAllowed,
+      leadDraft: leadDraft ?? undefined,
+      productEvidenceRegistry,
+      policyGate,
+      policyGateEnforcement,
+      executionContract,
+      requirementLedger,
+      cardManifest,
+      factClaimPlanner,
+      factClaimAudit,
+      leadStateMachine,
+      postAnswerVerification,
+      postAnswerVerificationRecovery,
+      aiDiagnostics,
+      productCards: [] as ProductCard[],
+      activeNeedsAfter: needState.activeNeeds ?? [],
+      warnings: contractWarnings,
+      contractWarnings
+    };
+
+    await input.onDelta?.(answer);
+    const assistantMessage = await this.conversations.addMessage({
+      sessionId: input.sessionId,
+      role: 'assistant',
+      content: answer,
+      metadata
+    });
+    if (input.turnId) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'completed',
+        stage: 'completed',
+        assistantMessageId: assistantMessage.id,
+        plannerContract: contract,
+        activeNeedsAfter: needState.activeNeeds ?? []
+      }).catch((error) => console.warn('Conversation turn fast technical update failed', safeError(error)));
+    }
+
+    return {
+      turnId: input.turnId,
+      answer,
+      needState,
+      productCards: [],
+      usedWebSearch: false,
+      leadRequested: false,
+      leadCreated: false,
+      assistantMessageId: assistantMessage.id,
+      metadata
     };
   }
 
@@ -8408,6 +8706,9 @@ export class AssistantService {
     }
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
+
+    const fastTechnicalOrientation = await this.tryFastTechnicalOrientation(input, needState, history, aiDiagnostics);
+    if (fastTechnicalOrientation) return fastTechnicalOrientation;
 
     const baseQuery = productSearchText(input.userMessage, needState);
     const preliminaryCandidates = await this.findPlannerContextProducts(input.userMessage, needState, baseQuery, input.signal);
