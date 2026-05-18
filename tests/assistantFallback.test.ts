@@ -384,6 +384,84 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.turn?.status).toBe('completed');
   });
 
+  it('does not introduce plate guidance into a generator-only technical orientation', async () => {
+    openAiCreate.mockClear();
+    const conversations = new FakeConversations();
+    const baseNeedState = emptyNeedState();
+    conversations.session = {
+      ...conversations.session,
+      needState: {
+        ...baseNeedState,
+        activeNeeds: [
+          {
+            id: 'need-generator',
+            status: 'open',
+            productClass: 'generator',
+            summary: 'Generator for home backup load',
+            constraints: ['pump', 'fridge', 'boiler', 'lights'],
+            openQuestions: ['pump power'],
+            selectedProductIds: [],
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        selectionState: mergeProductSelectionState(baseNeedState.selectionState, {
+          currentProductClass: 'generator',
+          targetProductClass: 'generator',
+          loadProfile: {
+            items: [],
+            requiredNominalKw: 5.5,
+            requiredStartingKw: 4.3,
+            confidence: 0.62
+          },
+          hardConstraints: {
+            ...baseNeedState.selectionState.hardConstraints,
+            productIntent: 'generator',
+            productRole: 'coreProduct'
+          }
+        })
+      }
+    };
+    conversations.turn = {
+      id: '67676767-6767-4767-8767-676767676767',
+      sessionId: conversations.session.id,
+      userMessageId: null,
+      assistantMessageId: null,
+      status: 'received',
+      requestHash: 'hash',
+      stage: 'received',
+      errorCode: null,
+      errorMessage: null,
+      plannerContract: null,
+      activeNeedsBefore: [],
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    class GeneratorOnlyTechnicalAssistant extends AssistantService {
+      async updateNeedState() {
+        return conversations.session.needState;
+      }
+
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner should not run for generator-only technical orientation');
+      }
+    }
+    const assistant = new GeneratorOnlyTechnicalAssistant(conversations as never, new FakeProducts([]) as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id,
+      userMessage: ru('\\u041f\\u043e\\u0434\\u0441\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435, \\u043a\\u0430\\u043a\\u043e\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u043b\\u0443\\u0447\\u0448\\u0435 \\u0432\\u0437\\u044f\\u0442\\u044c \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430: \\u043d\\u0430\\u0441\\u043e\\u0441, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a, \\u043a\\u043e\\u0442\\u0435\\u043b \\u0438 \\u0441\\u0432\\u0435\\u0442?')
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u0441\\u043e\\u0441'));
+    expect(result.answer.toLowerCase()).not.toContain(ru('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442'));
+    expect(result.productCards).toHaveLength(0);
+    expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
+    expect(result.metadata?.recovered).toBeUndefined();
+  });
+
   it('answers plate weight orientation through the fast path after generator cards were shown', async () => {
     openAiCreate.mockClear();
     const previousGenerator = testProduct('generator-previous', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 82_000);

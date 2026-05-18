@@ -1,5 +1,5 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-ai-manager-control-plane-v8';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-ai-manager-control-plane-v9';
 
 export const expectedRemediationRuntimeArtifacts = [
   'agentContractV2',

@@ -5723,12 +5723,30 @@ function deterministicTechnicalSummaryRecovery(input: {
   const plateLine = plate
     ? `По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: ${plate.name} остается нормальной отправной точкой, потому что ее проще грузить и переносить одному.`
     : 'По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: тяжелее брать стоит только если щебня будет больше и переноска уже не главный фактор.';
-  return [
-    'Без звонка, продолжаем по технике.',
-    generatorLine,
-    plateLine,
-    'Что еще уточнить для точного выбора: мощность/модель насоса, будет ли болгарка работать одновременно с насосом, и какой вес виброплиты вам комфортно грузить одному.'
-  ].join('\n\n');
+  const targetClass = input.state.targetProductClass;
+  const hardIntent = input.state.hardConstraints?.productIntent;
+  const hasGeneratorContext = Boolean(
+    generator ||
+    input.state.loadProfile ||
+    targetClass === 'generator' ||
+    hardIntent === 'generator'
+  );
+  const hasPlateContext = Boolean(
+    plate ||
+    targetClass === 'plate' ||
+    hardIntent === 'plate'
+  );
+  const lines = ['Без звонка, продолжаем по технике.'];
+  if (hasGeneratorContext || !hasPlateContext) lines.push(generatorLine);
+  if (hasPlateContext) lines.push(plateLine);
+  if (hasGeneratorContext && hasPlateContext) {
+    lines.push('Что еще уточнить для точного выбора: мощность/модель насоса, будет ли болгарка работать одновременно с насосом, и какой вес виброплиты вам комфортно грузить одному.');
+  } else if (hasGeneratorContext || !hasPlateContext) {
+    lines.push('Что еще уточнить для точного выбора генератора: мощность или модель насоса на шильдике и будут ли насос, холодильник и котел стартовать одновременно.');
+  } else {
+    lines.push('Что еще уточнить для точного выбора виброплиты: основание, толщину слоя щебня и какой вес вам реально удобно грузить одному.');
+  }
+  return lines.join('\n\n');
 }
 
 function isPlateWeightTechnicalQuestion(text: string) {

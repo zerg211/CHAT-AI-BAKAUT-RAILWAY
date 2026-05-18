@@ -155,4 +155,39 @@ describe('adaptive production buyer', () => {
 
     expect(adaptiveBuyerReadyForLeadSubmission(steps, defaultAdaptiveBuyerGoal, steps.length)).toBe(false);
   });
+
+  it('requests plate catalog again instead of leaving a lead when plate cards are missing', async () => {
+    const steps = [
+      {
+        phase: 'start_generator_need',
+        user: defaultAdaptiveBuyerGoal.startUser,
+        assistant: 'Уточните насос.',
+        newCards: []
+      },
+      {
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный 220 В, примерно 750 Вт.',
+        assistant: 'Вот генераторы.',
+        newCards: ['Генератор бензиновый 5 кВт']
+      },
+      {
+        phase: 'request_plate_catalog',
+        user: 'Покажите из каталога виброплиты примерно 80-100 кг.',
+        assistant: 'Пока показал только генераторы.',
+        newCards: []
+      },
+      {
+        phase: 'ask_delivery_availability',
+        user: 'Доставка и наличие по этим позициям как уточняется?',
+        assistant: 'Можно оставить контакт.',
+        newCards: []
+      }
+    ];
+
+    const turn = await nextAdaptiveBuyerTurn({ goal: defaultAdaptiveBuyerGoal, forceOffline: true, steps });
+
+    expect(turn.phase).toBe('request_plate_catalog');
+    expect(turn.leadForm).toBeUndefined();
+    expect(turn.user).toMatch(/виброплит/iu);
+  });
 });

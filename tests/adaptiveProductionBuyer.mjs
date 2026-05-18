@@ -222,7 +222,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
     };
   }
 
-  if (!coverage.askedGeneratorCatalog && !coverage.sawGeneratorCards) {
+  if (!coverage.sawGeneratorCards) {
     return {
       phase: 'request_generator_catalog',
       user: 'Покажите тогда пару нормальных генераторов из каталога, чтобы был запас под насос и котел, но без огромной переплаты.',
@@ -240,7 +240,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
     };
   }
 
-  if (!coverage.askedPlateCatalog) {
+  if (!coverage.askedPlateCatalog || !coverage.sawPlateCards) {
     return {
       phase: 'request_plate_catalog',
       user: 'Покажите из каталога виброплиты примерно 80-100 кг и скажите, нужен ли коврик под плитку.',
@@ -366,7 +366,7 @@ export function evaluateAdaptiveGoalProgress(steps, goal = defaultAdaptiveBuyerG
   const issues = [];
   if (!coverage.askedGeneratorNeed) issues.push('buyer_goal_missing_generator_need');
   if (!coverage.answeredPumpDetails) issues.push('buyer_goal_missing_pump_details');
-  if (!coverage.askedGeneratorCatalog) issues.push('buyer_goal_missing_generator_catalog_request');
+  if (!coverage.askedGeneratorCatalog && !coverage.sawGeneratorCards) issues.push('buyer_goal_missing_generator_catalog_request');
   if (!coverage.sawGeneratorCards) issues.push('assistant_missing_generator_cards_for_goal');
   if (!coverage.askedPlateNeed) issues.push('buyer_goal_missing_plate_need');
   if (!coverage.askedPlateCatalog) issues.push('buyer_goal_missing_plate_catalog_request');
