@@ -5610,7 +5610,9 @@ function deterministicCommercialHandoffFallback(input: {
     lines.push('Порядок суммы честно назову после фиксации двух карточек: генератора и виброплиты. Без цен из выбранных карточек не буду придумывать итоговую сумму.');
   }
 
-  if (!input.contract?.leadAllowed) {
+  if (input.contract?.leadAllowed) {
+    lines.push('Если хотите, оставьте имя и телефон: я передам выбранные позиции на проверку наличия, доставки и финальных условий, чтобы вернуться уже с точным ответом.');
+  } else {
     lines.push('Пока можно продолжать без звонка: сначала доведем подбор до конкретной пары моделей, затем уже сверю коммерческую часть.');
   }
 
@@ -6922,6 +6924,320 @@ export class AssistantService {
     }
   }
 
+  private buildCommercialFastRenderContract(contract: AgentTurnContract, state: CustomerNeedState, selectedProductIds: string[]): ResolvedTurnContract {
+    return {
+      action: {
+        primary: contract.leadAllowed ? 'collect_lead' : 'answer_question',
+        answerMode: contract.leadAllowed ? 'leadCollection' : 'short',
+        followUpPolicy: contract.leadAllowed ? 'collectLead' : 'answerNowNoDeferredOffer'
+      },
+      scope: {
+        context: 'fullSession',
+        search: 'previousSelectionOnly',
+        catalogSearchQuery: ''
+      },
+      knowledge: {
+        webRequired: false,
+        missingInformation: []
+      },
+      selection: {
+        selectedProductIds,
+        requiredProductTraits: state.selectionState.hardConstraints,
+        selectionState: state.selectionState
+      },
+      render: {
+        cards: 'none',
+        leadForm: false
+      },
+      guidance: 'Deterministic commercial handoff for delivery, stock, discount, and final terms.',
+      diagnostics: {
+        sourcePlan: {
+          action: contract.leadAllowed ? 'collect_lead' : 'answer_question',
+          answerMode: contract.leadAllowed ? 'leadCollection' : 'short',
+          cardPolicy: 'textOnly',
+          followUpPolicy: contract.leadAllowed ? 'collectLead' : 'answerNowNoDeferredOffer',
+          contextScope: 'fullSession',
+          searchScope: 'previousSelectionOnly',
+          catalogSearchQuery: '',
+          selectedProductIds,
+          needsWebSearch: false,
+          missingInformation: [],
+          answerGuidance: 'Answer commercial boundaries from policy and prior visible cards; do not promise live stock, delivery price, discounts, or exact terms.'
+        },
+        overrides: ['fast_commercial_handoff']
+      }
+    };
+  }
+
+  private async tryFastCommercialHandoff(input: GenerateAnswerInput, session: ConversationSession, history: Message[], aiDiagnostics: AiGenerationDiagnostics): Promise<ChatResponsePayload | null> {
+    const latestUserMessage = input.userMessage;
+    if (!isExplicitCommercialQuestion(latestUserMessage)) return null;
+    if (isMixedCatalogAndCommercialQuestion(latestUserMessage)) return null;
+
+    const contactRefusal = isContactRefusalTechnicalSummaryRequest(latestUserMessage);
+    const commercialCards = allShownProductCards(history);
+    const hasPriorProductContext = commercialCards.length > 0 || (session.needState.activeNeeds ?? []).length > 0;
+    const asksNewCatalogWork = /(?:покаж|подбер|выбер|вариант|модел|какие\s+[^.!?\n]{0,80}есть|show|select|recommend)/iu.test(latestUserMessage);
+    const asksSpecificCatalogItem = inferProductIntent(latestUserMessage) !== 'unknown' ||
+      extractModelTokens(latestUserMessage).length > 0;
+    if (!hasPriorProductContext && asksNewCatalogWork) return null;
+    if (!hasPriorProductContext && asksSpecificCatalogItem) return null;
+
+    const selectedProductIds = commercialCards.map((card) => card.id).slice(0, 24);
+    const contract: AgentTurnContract = {
+      answerTask: 'lead_handoff',
+      taskType: /(?:налич|склад|stock)/iu.test(latestUserMessage) && !/(?:достав|логист|delivery|shipping)/iu.test(latestUserMessage)
+        ? 'pure_availability'
+        : 'pure_delivery',
+      catalogAction: 'none',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'none',
+      mustAnswerNow: ['answer delivery, stock, discount, and final terms safely from business policy and prior shown cards'],
+      activeNeeds: (session.needState.activeNeeds ?? []).map((need) => ({
+        id: need.id,
+        productClass: need.productClass,
+        summary: need.summary
+      })),
+      currentFocus: 'commercial',
+      cardsRole: 'none',
+      leadAllowed: !contactRefusal,
+      leadAllowedReason: contactRefusal
+        ? 'buyer explicitly asked to continue without a call or contact pressure'
+        : 'delivery, stock, discount, and final commercial terms require specialist/logistics verification',
+      errorRecoveryPriority: 'Give a safe commercial answer without promising final stock, delivery, discount, or exact terms.',
+      validatorWarnings: ['fast_commercial_handoff_contract']
+    };
+
+    const selectionResult: ProductSelectionResult = {
+      state: session.needState.selectionState,
+      matchedProducts: commercialCards.map(productFromCard),
+      visibleProducts: commercialCards.map(productFromCard),
+      hiddenProducts: [],
+      comparisonProducts: [],
+      rejectedProducts: [],
+      missingQuestions: [],
+      confidence: commercialCards.length ? 0.72 : 0.55,
+      trace: { source: 'fast_commercial_handoff_prior_cards' }
+    };
+    let answer = deterministicCommercialHandoffFallback({
+      cards: commercialCards,
+      selectionResult,
+      contract,
+      latestUserMessage
+    }).trim();
+    if (!answer) return null;
+
+    const renderContract = this.buildCommercialFastRenderContract(contract, session.needState, selectedProductIds);
+    const requirementLedger = buildRequirementLedger({
+      needState: session.needState,
+      selectionState: session.needState.selectionState
+    });
+    const executionContract = buildExecutionContract({
+      agentContract: contract,
+      renderContract,
+      selectionState: session.needState.selectionState,
+      webRequired: false,
+      activeRequirementIds: requirementLedger.activeRequirementIds
+    });
+    const cardManifest = buildCardManifest({
+      executionContract,
+      cards: [],
+      visibleProductIds: [],
+      hiddenProductIds: []
+    });
+    const agentContractV2 = deriveAgentTurnContractV2({
+      userMessage: latestUserMessage,
+      legacyContract: contract,
+      needState: session.needState,
+      webRequired: false,
+      selectedProductIds
+    });
+    const productEvidenceRegistry = buildProductEvidenceRegistry({
+      executionContract,
+      cardManifest,
+      cards: [],
+      catalogProducts: commercialCards.map(productFromCard)
+    });
+    const factClaimPlanner = buildFactClaimPlanner({
+      executionContract,
+      requirementLedger,
+      cardManifest,
+      usedWebSearch: false
+    });
+    const extractedLeadContact = hasLikelyContactText(latestUserMessage)
+      ? extractLeadContactDetails(latestUserMessage)
+      : undefined;
+    const leadDraft = buildLeadDraft({
+      contract: agentContractV2,
+      registry: productEvidenceRegistry,
+      buyerQuestion: latestUserMessage,
+      contact: extractedLeadContact
+    });
+    const leadRequestedForAnswer = Boolean(leadDraft) && contract.leadAllowed && !shouldSuppressLeadRequestFromContract(contract, latestUserMessage);
+    const shouldCreateLead = shouldCommitLeadFromDraft({
+      draft: leadDraft,
+      leadRequested: leadRequestedForAnswer,
+      executionLeadPolicy: executionContract.leadPolicy,
+      contact: extractedLeadContact
+    });
+    const autoLeadResult = shouldCreateLead
+      ? await this.createLeadFromChatContact(session, history, commercialCards, latestUserMessage, session.needState)
+      : null;
+    const leadStateMachine = buildLeadStateMachine({
+      executionContract,
+      hasContactInTurn: Boolean(extractedLeadContact),
+      leadRequested: leadRequestedForAnswer,
+      leadCreated: autoLeadResult?.created ?? false,
+      missing: autoLeadResult?.missing,
+      error: autoLeadResult?.error
+    });
+    if (autoLeadResult?.created) {
+      answer = [
+        answer,
+        'Контакт принял. Наличие, доставку и финальные условия проверим по выбранным позициям и вернемся с точным ответом.'
+      ].join('\n\n');
+    }
+
+    const policyGate = runPolicyGate({
+      contract: agentContractV2,
+      requirementLedger,
+      productEvidenceRegistry,
+      executionContract,
+      factClaimPlanner,
+      leadStateMachine,
+      webSearchPlanned: false
+    });
+    const toolRegistry = new AgentToolRegistry(createRuntimeArtifactToolHandlers({
+      contract: agentContractV2,
+      selection: {
+        matchedProducts: commercialCards.map(productFromCard),
+        rejectedProducts: []
+      },
+      productEvidenceRegistry,
+      leadDraft,
+      autoLeadResult,
+      webSearchEnabled: false
+    }));
+    const toolResults = await toolRegistry.executePlan(agentContractV2.toolPlan, {
+      sessionId: input.sessionId,
+      userMessage: latestUserMessage,
+      history,
+      needState: session.needState,
+      signal: input.signal,
+      policy: {
+        leadAllowed: agentContractV2.leadPolicy !== 'forbidden',
+        webAllowed: !agentContractV2.sourcePolicy.forbidden.includes('web'),
+        webPurpose: agentContractV2.sourcePolicy.webPurpose
+      }
+    });
+    const toolTrace = toolResults.map((result, index) => toolResultToTrace(agentContractV2.toolPlan[index]!, result));
+    const policyGateEnforcement = enforcePolicyGateBeforeAnswer({
+      policyGate,
+      toolTrace
+    });
+    if (policyGateEnforcement.mode === 'hard_block') {
+      markAiFallback(
+        aiDiagnostics,
+        'answerGenerationFallback',
+        `fast_commercial_policy_gate_blocked:${policyGateEnforcement.hardBlockReasons.join(',')}`,
+        'fast_commercial_policy_gate_blocked'
+      );
+      throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
+    }
+
+    const postAnswerCheck = applyPostAnswerVerificationPolicy({
+      answer,
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest,
+      productEvidenceRegistry
+    });
+    answer = postAnswerCheck.answer;
+    const factClaimAudit = postAnswerCheck.factClaimAudit;
+    const postAnswerVerification = postAnswerCheck.postAnswerVerification;
+    const postAnswerVerificationRecovery = postAnswerCheck.postAnswerVerificationRecovery;
+    if (postAnswerVerification.status === 'error') {
+      throw new Error(`Fast commercial answer violates post-answer verification: ${postAnswerVerification.issues.map((issue) => issue.code).join(', ')}`);
+    }
+
+    const contractWarnings = [
+      ...contract.validatorWarnings,
+      ...agentContractV2.warnings,
+      ...requirementLedger.warnings,
+      ...executionContract.warnings,
+      ...cardManifest.warnings,
+      ...productEvidenceRegistry.warnings,
+      ...policyGate.warnings,
+      ...policyGate.blockedReasons,
+      ...policyGateEnforcement.warnings,
+      ...policyGateEnforcement.hardBlockReasons,
+      ...policyGateEnforcement.repairedReasons,
+      ...factClaimPlanner.warnings,
+      ...factClaimAudit.warnings,
+      ...leadStateMachine.warnings,
+      ...postAnswerVerification.issues.map((issue) => issue.code)
+    ];
+    const metadata = {
+      turnId: input.turnId,
+      turnContract: contract,
+      agentContractV2,
+      sourcePolicy: agentContractV2.sourcePolicy,
+      toolTrace,
+      answerMode: 'fast_commercial_handoff',
+      cardPolicy: 'textOnly',
+      cardsRole: contract.cardsRole,
+      leadAllowed: contract.leadAllowed,
+      leadDraft: leadDraft ?? undefined,
+      productEvidenceRegistry,
+      policyGate,
+      policyGateEnforcement,
+      executionContract,
+      requirementLedger,
+      cardManifest,
+      factClaimPlanner,
+      factClaimAudit,
+      leadStateMachine,
+      postAnswerVerification,
+      postAnswerVerificationRecovery,
+      aiDiagnostics,
+      productCards: [] as ProductCard[],
+      activeNeedsAfter: session.needState.activeNeeds ?? [],
+      warnings: contractWarnings,
+      contractWarnings
+    };
+
+    await input.onDelta?.(answer);
+    const assistantMessage = await this.conversations.addMessage({
+      sessionId: input.sessionId,
+      role: 'assistant',
+      content: answer,
+      metadata
+    });
+    if (input.turnId) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'completed',
+        stage: 'completed',
+        assistantMessageId: assistantMessage.id,
+        plannerContract: contract,
+        activeNeedsAfter: session.needState.activeNeeds ?? []
+      }).catch((error) => console.warn('Conversation turn fast commercial update failed', safeError(error)));
+    }
+
+    return {
+      turnId: input.turnId,
+      answer,
+      needState: session.needState,
+      productCards: [],
+      usedWebSearch: false,
+      leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
+      leadCreated: autoLeadResult?.created ?? false,
+      assistantMessageId: assistantMessage.id,
+      metadata
+    };
+  }
+
   private async productCardsFromRecoveredSelection(state: CustomerNeedState, userMessage: string) {
     if (state.selectionState?.targetProductClass === 'generator' && shouldBlockGeneratorCardsForEstimatedPump(state.selectionState)) {
       return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
@@ -8011,6 +8327,9 @@ export class AssistantService {
     const client = createOpenAIClient();
 
     const history = await this.conversations.listMessages(input.sessionId, 80);
+    const fastCommercialHandoff = await this.tryFastCommercialHandoff(input, session, history, aiDiagnostics);
+    if (fastCommercialHandoff) return fastCommercialHandoff;
+
     const previousSelectionState = session.needState.selectionState;
     let needState = await this.updateNeedState(session.needState, session.historySummary, input.userMessage, history, input.signal, aiDiagnostics);
     if (aiDiagnostics.needExtractionFallback.used) {
@@ -9655,12 +9974,32 @@ export class AssistantService {
         buyerQuestion: latestUserText,
         contact: recoveredContact
       });
+      const recoveredLeadRequested = Boolean(leadDraft) &&
+        contract.leadAllowed &&
+        !shouldSuppressLeadRequestFromContract(contract, latestUserText);
+      const recoveredShouldCreateLead = shouldCommitLeadFromDraft({
+        draft: leadDraft,
+        leadRequested: recoveredLeadRequested,
+        executionLeadPolicy: executionContract.leadPolicy,
+        contact: recoveredContact
+      });
+      const recoveredAutoLeadResult = recoveredShouldCreateLead
+        ? await this.createLeadFromChatContact(session, history, recoveredSelection.cards, latestUserText, session.needState)
+        : null;
       const leadStateMachine = buildLeadStateMachine({
         executionContract,
         hasContactInTurn: Boolean(recoveredContact),
-        leadRequested: false,
-        leadCreated: false
+        leadRequested: recoveredLeadRequested,
+        leadCreated: recoveredAutoLeadResult?.created ?? false,
+        missing: recoveredAutoLeadResult?.missing,
+        error: recoveredAutoLeadResult?.error
       });
+      if (recoveredAutoLeadResult?.created) {
+        answer = [
+          answer,
+          'Контакт принял. Наличие, доставку и финальные условия проверим по выбранным позициям и вернемся с точным ответом.'
+        ].join('\n\n');
+      }
       const policyGate = runPolicyGate({
         contract: agentContractV2,
         requirementLedger,
@@ -9678,7 +10017,7 @@ export class AssistantService {
         },
         productEvidenceRegistry,
         leadDraft,
-        autoLeadResult: null,
+        autoLeadResult: recoveredAutoLeadResult,
         webSearchEnabled: false
       }));
       const toolResults = await toolRegistry.executePlan(agentContractV2.toolPlan, {
@@ -9784,7 +10123,8 @@ export class AssistantService {
         productCards: recoveredSelection.cards,
         cardDisplay: recoveredSelection.cardDisplay,
         usedWebSearch: false,
-        leadRequested: false,
+        leadRequested: recoveredLeadRequested && !recoveredAutoLeadResult?.created,
+        leadCreated: recoveredAutoLeadResult?.created ?? false,
         assistantMessageId: assistantMessage.id,
         metadata
       };
@@ -9798,6 +10138,7 @@ export class AssistantService {
         shouldUseProactiveCommercialDeterministicAnswer(storedContract, latestUserText))
     ) {
       const commercialCards = allShownProductCards(history);
+      const commercialRecoveryAllowsLead = !isContactRefusalTechnicalSummaryRequest(latestUserText);
       const commercialContract: AgentTurnContract = {
         answerTask: 'lead_handoff',
         taskType: 'pure_delivery',
@@ -9812,16 +10153,18 @@ export class AssistantService {
         })),
         currentFocus: 'commercial',
         cardsRole: 'none',
-        leadAllowed: false,
-        leadAllowedReason: 'deterministic recovery for commercial terms without contact pressure',
+        leadAllowed: commercialRecoveryAllowsLead,
+        leadAllowedReason: commercialRecoveryAllowsLead
+          ? 'deterministic recovery for commercial terms with optional specialist/logistics handoff'
+          : 'deterministic recovery for commercial terms without contact pressure',
         errorRecoveryPriority: 'Give a safe commercial answer without promising final stock, delivery, discount, or exact terms.',
         validatorWarnings: ['commercial_recovery_contract']
       };
       const effectiveCommercialContract = {
         ...commercialContract,
         activeNeeds: storedContract?.activeNeeds?.length ? storedContract.activeNeeds : commercialContract.activeNeeds,
-        leadAllowed: storedContract?.leadAllowed === true ? true : false,
-        leadAllowedReason: storedContract?.leadAllowed === true
+        leadAllowed: storedContract?.leadAllowed === false ? false : commercialContract.leadAllowed,
+        leadAllowedReason: storedContract?.leadAllowed === false
           ? storedContract.leadAllowedReason
           : commercialContract.leadAllowedReason
       };

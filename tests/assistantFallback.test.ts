@@ -126,7 +126,7 @@ describe('assistant OpenAI failure fallback', () => {
     });
   });
 
-  it('does not bypass LLM planning for operational delivery and stock questions', async () => {
+  it('uses a fast policy handoff for operational delivery and stock questions', async () => {
     openAiCreate.mockClear();
     const products = [
       testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u043f\\u0440\\u044f\\u043c\\u043e\\u0445\\u043e\\u0434\\u043d\\u0430\\u044f 60 \\u043a\\u0433'), 72_000)
@@ -154,14 +154,25 @@ describe('assistant OpenAI failure fallback', () => {
     });
     const assistant = new AssistantService(conversations as never, new FakeProducts(products) as never);
 
-    await expect(assistant.generateAnswer({
+    const result = await assistant.generateAnswer({
       sessionId: conversations.session.id,
       userMessage: ru('\\u0410 \\u0441\\u043a\\u043e\\u043b\\u044c\\u043a\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430 \\u0438 \\u0435\\u0441\\u0442\\u044c \\u043b\\u0438 \\u0442\\u043e\\u0447\\u043d\\u043e \\u0432 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0438? \\u041c\\u043e\\u0433\\u0443 \\u043e\\u0441\\u0442\\u0430\\u0432\\u0438\\u0442\\u044c \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d.'),
       onDelta: vi.fn()
-    })).rejects.toThrow(/AI need extraction failed/i);
+    });
 
-    expect(openAiCreate).toHaveBeenCalled();
-    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
+    expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u043b\\u0438\\u0447'));
+    expect(result.leadRequested).toBe(true);
+    expect(result.metadata?.answerMode).toBe('fast_commercial_handoff');
+    expect(result.metadata?.leadStateMachine).toMatchObject({
+      state: 'required_contact_missing',
+      nextAction: 'ask_for_missing_contact'
+    });
+    expect(result.metadata?.policyGate?.answerConstraints).toEqual(expect.arrayContaining([
+      'do_not_promise_live_stock_delivery_discount_or_exact_terms'
+    ]));
+    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(2);
   });
 
   it('does not mask OpenAI failures as a normal catalog recommendation', async () => {
@@ -339,6 +350,88 @@ describe('assistant OpenAI failure fallback', () => {
     expect(result.answer).toMatch(new RegExp(`${ru('\\u0441\\u043a\\u0438\\u0434')}|${ru('\\u043a\\u043e\\u043c\\u043c\\u0435\\u0440\\u0447')}`, 'iu'));
     expect(result.answer).not.toMatch(new RegExp(`${ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d')}|${ru('\\u043d\\u043e\\u043c\\u0435\\u0440')}`, 'iu'));
     expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(conversations.turn?.status).toBe('recovered');
+  });
+
+  it('keeps commercial recovery lead-capable when the buyer asks for stock or delivery verification', async () => {
+    const conversations = new FakeConversations();
+    const plate = testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 REDVERG RD-29155'), 54_000);
+    conversations.messages.push({
+      id: 'assistant-cards',
+      sessionId: conversations.session.id,
+      role: 'assistant',
+      content: ru('\\u041f\\u043e\\u043a\\u0430\\u0437\\u0430\\u043b \\u043f\\u043e\\u0434\\u0445\\u043e\\u0434\\u044f\\u0449\\u0443\\u044e \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0443.'),
+      metadata: {
+        productCards: [{
+          id: plate.id,
+          name: plate.name,
+          category: plate.category,
+          price: plate.price,
+          currency: 'RUB',
+          sourceUrl: plate.sourceUrl,
+          specs: {},
+          reasons: [ru('\\u041f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 \\u043f\\u043e \\u0432\\u0435\\u0441\\u0443')],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    const userMessage: Message = {
+      id: 'user-commercial',
+      sessionId: conversations.session.id,
+      role: 'user',
+      content: ru('\\u0414\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443 \\u0434\\u043e \\u0410\\u0437\\u043e\\u0432\\u0430 \\u0438 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435 \\u043f\\u043e \\u044d\\u0442\\u043e\\u0439 \\u043f\\u043e\\u0437\\u0438\\u0446\\u0438\\u0438 \\u043c\\u043e\\u0436\\u043d\\u043e \\u0443\\u0442\\u043e\\u0447\\u043d\\u0438\\u0442\\u044c?'),
+      metadata: {},
+      createdAt: new Date().toISOString()
+    };
+    conversations.messages.push(userMessage);
+    const contract: AgentTurnContract = {
+      answerTask: 'lead_handoff',
+      taskType: 'pure_delivery',
+      catalogAction: 'none',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'none',
+      mustAnswerNow: ['answer stock and delivery verification boundaries'],
+      activeNeeds: [],
+      currentFocus: 'commercial',
+      cardsRole: 'none',
+      leadAllowed: true,
+      leadAllowedReason: 'buyer asks for stock and delivery verification',
+      errorRecoveryPriority: 'Answer safely and ask for contact if verification is needed.',
+      validatorWarnings: []
+    };
+    conversations.turn = {
+      id: '55555555-5555-4555-8555-555555555555',
+      sessionId: conversations.session.id,
+      userMessageId: userMessage.id,
+      assistantMessageId: null,
+      status: 'failed',
+      requestHash: 'hash',
+      stage: 'recovery_failed',
+      errorCode: 'recovery_failed',
+      errorMessage: 'interrupted commercial answer',
+      plannerContract: contract,
+      activeNeedsBefore: null,
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    openAiCreate.mockClear();
+    const assistant = new AssistantService(conversations as never, new FakeProducts([plate]) as never);
+
+    const result = await assistant.recoverTurn({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.leadRequested).toBe(true);
+    expect(result.metadata?.leadDraft).toMatchObject({ reason: 'delivery' });
+    expect(result.metadata?.leadStateMachine).toMatchObject({
+      state: 'required_contact_missing',
+      nextAction: 'ask_for_missing_contact'
+    });
+    expect(result.answer).toMatch(new RegExp(`${ru('\\u0438\\u043c\\u044f')}|${ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d')}`, 'iu'));
     expect(conversations.turn?.status).toBe('recovered');
   });
 
