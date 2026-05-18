@@ -8,7 +8,7 @@ import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 
-export const REMEDIATION_CONTRACT_VERSION = '2026-05-18-ai-manager-control-plane-v2';
+export const REMEDIATION_CONTRACT_VERSION = '2026-05-18-ai-manager-control-plane-v3';
 export const REMEDIATION_RUNTIME_ARTIFACTS = [
   'agentContractV2',
   'sourcePolicy',

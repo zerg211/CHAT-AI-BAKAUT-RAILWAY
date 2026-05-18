@@ -45,6 +45,12 @@ function cleanText(value) {
     .trim();
 }
 
+function hasInlineLeadContact(value) {
+  const text = String(value ?? '');
+  const digits = text.replace(/\D+/g, '');
+  return digits.length >= 10 || /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu.test(text);
+}
+
 function latestAssistant(messages) {
   return [...messages].reverse().find((message) => message.role === 'assistant')?.text ?? '';
 }
@@ -302,7 +308,10 @@ function codeAudit(step, assistantMessage) {
   }
   if (step.phase === 'ready_to_submit_lead' || step.leadForm) {
     const leadState = metadata.leadStateMachine;
-    if (leadState?.hasContactInTurn !== true) issues.push('leadStateMachine не распознал телефон в реплике покупателя');
+    const leadViaForm = step.leadSubmission?.method === 'form';
+    const leadViaChat = step.leadSubmission?.method === 'chat_contact' || hasInlineLeadContact(step.user);
+    if (leadViaChat && leadState?.hasContactInTurn !== true) issues.push('leadStateMachine не распознал телефон в реплике покупателя');
+    if (leadViaForm && leadState?.leadRequested !== true) issues.push('leadStateMachine не запросил контакт перед отправкой формы');
     if (metadata.executionContract?.leadPolicy === 'forbidden') issues.push('executionContract запретил lead на ходе, где покупатель сам оставил телефон');
   }
 
@@ -386,8 +395,15 @@ async function main() {
       const assistant = cleanText(latestAssistant(messages));
       const newCards = await collectNewCards(frame, previousProductCardCount);
       previousProductCardCount = await frame.locator('.product-card').count().catch(() => previousProductCardCount);
+      const inlineLeadContact = turn.leadForm && hasInlineLeadContact(turn.user);
       const leadSubmission = turn.leadForm
-        ? { submitted: true, panelText: await submitLeadForm(frame, turn.leadForm) }
+        ? inlineLeadContact
+          ? {
+              submitted: true,
+              method: 'chat_contact',
+              panelText: 'Контакт оставлен в реплике покупателя; лид проверяется через admin leads.'
+            }
+          : { submitted: true, method: 'form', panelText: await submitLeadForm(frame, turn.leadForm) }
         : null;
       const buyerIssues = buyerAudit({ ...turn, assistant, newCards, leadSubmission });
       steps.push({ ...turn, assistant, newCards: cardNames(newCards), buyerIssues, leadSubmission });
@@ -502,7 +518,7 @@ async function main() {
         mdList(step.code.productCards.map((name) => `card: ${name}`), '- cards: none'),
         mdList(step.code.warnings.map((warning) => `warning: ${warning}`), '- warnings: none'),
         mdList(step.code.issues, '- OK'),
-        step.leadSubmission ? `- lead form: ${step.leadSubmission.panelText}` : '- lead form: none'
+        step.leadSubmission ? `- lead submission (${step.leadSubmission.method ?? 'form'}): ${step.leadSubmission.panelText}` : '- lead submission: none'
       ])
     ].join('\n'), 'utf8');
 

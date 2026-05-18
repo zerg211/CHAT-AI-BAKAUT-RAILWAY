@@ -5578,6 +5578,7 @@ function deterministicCommercialHandoffFallback(input: {
   selectionResult: ProductSelectionResult;
   contract?: AgentTurnContract;
   latestUserMessage?: string;
+  leadContact?: ExtractedLeadContact;
 }) {
   const message = input.latestUserMessage ?? '';
   if (!shouldUseCommercialDeterministicFallback(input.contract, message)) return '';
@@ -5611,7 +5612,13 @@ function deterministicCommercialHandoffFallback(input: {
   }
 
   if (input.contract?.leadAllowed) {
-    lines.push('Если хотите, оставьте имя и телефон: я передам выбранные позиции на проверку наличия, доставки и финальных условий, чтобы вернуться уже с точным ответом.');
+    const hasLeadContact = Boolean(input.leadContact?.phone || input.leadContact?.email);
+    const hasLeadName = Boolean(input.leadContact?.name);
+    if (!hasLeadContact) {
+      lines.push('Если хотите, оставьте имя и телефон: я передам выбранные позиции на проверку наличия, доставки и финальных условий, чтобы вернуться уже с точным ответом.');
+    } else if (!hasLeadName) {
+      lines.push('Телефон вижу. Напишите, пожалуйста, имя: тогда передам выбранные позиции на проверку наличия, доставки и финальных условий.');
+    }
   } else {
     lines.push('Пока можно продолжать без звонка: сначала доведем подбор до конкретной пары моделей, затем уже сверю коммерческую часть.');
   }
@@ -6984,6 +6991,9 @@ export class AssistantService {
     if (!hasPriorProductContext && asksSpecificCatalogItem) return null;
 
     const selectedProductIds = commercialCards.map((card) => card.id).slice(0, 24);
+    const extractedLeadContact = hasLikelyContactText(latestUserMessage)
+      ? extractLeadContactDetails(latestUserMessage)
+      : undefined;
     const contract: AgentTurnContract = {
       answerTask: 'lead_handoff',
       taskType: /(?:налич|склад|stock)/iu.test(latestUserMessage) && !/(?:достав|логист|delivery|shipping)/iu.test(latestUserMessage)
@@ -7023,7 +7033,8 @@ export class AssistantService {
       cards: commercialCards,
       selectionResult,
       contract,
-      latestUserMessage
+      latestUserMessage,
+      leadContact: extractedLeadContact
     }).trim();
     if (!answer) return null;
 
@@ -7064,9 +7075,6 @@ export class AssistantService {
       cardManifest,
       usedWebSearch: false
     });
-    const extractedLeadContact = hasLikelyContactText(latestUserMessage)
-      ? extractLeadContactDetails(latestUserMessage)
-      : undefined;
     const leadDraft = buildLeadDraft({
       contract: agentContractV2,
       registry: productEvidenceRegistry,

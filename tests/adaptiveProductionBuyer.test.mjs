@@ -78,14 +78,49 @@ describe('adaptive production buyer', () => {
       },
       {
         phase: 'leave_contact_for_order_check',
-        user: 'Меня зовут Алексей, телефон +7 900 000-00-11.',
+        user: 'Хорошо, я оставлю контакт в форме.',
         assistant: 'Заявку принял.',
         newCards: [],
         leadForm: defaultAdaptiveBuyerGoal.leadForm,
-        leadSubmission: { submitted: true }
+        leadSubmission: { submitted: true, method: 'form' }
       }
     ];
 
     expect(evaluateAdaptiveGoalProgress(steps).ok).toBe(true);
+  });
+
+  it('keeps form contact details out of the buyer chat text', async () => {
+    const steps = [
+      {
+        phase: 'start_generator_need',
+        user: defaultAdaptiveBuyerGoal.startUser,
+        assistant: 'Уточните насос.',
+        newCards: []
+      },
+      {
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный 220 В, примерно 750 Вт.',
+        assistant: 'Подойдут генераторы около 3 кВт.',
+        newCards: ['Генератор бензиновый 3 кВт']
+      },
+      {
+        phase: 'request_plate_catalog',
+        user: 'Еще нужна виброплита для въезда, покажите варианты 70-90 кг.',
+        assistant: 'Оставьте контакт, и я передам выбранные позиции на проверку.',
+        newCards: ['Виброплита бензиновая 75 кг']
+      },
+      {
+        phase: 'ask_delivery_availability',
+        user: 'Доставка и наличие по этим позициям как уточняется?',
+        assistant: 'Оставьте контакт, и я передам выбранные позиции на проверку.',
+        newCards: []
+      }
+    ];
+
+    const turn = await nextAdaptiveBuyerTurn({ goal: defaultAdaptiveBuyerGoal, forceOffline: true, steps });
+
+    expect(turn.leadForm).toMatchObject(defaultAdaptiveBuyerGoal.leadForm);
+    expect(turn.user).not.toContain(defaultAdaptiveBuyerGoal.leadForm.phone);
+    expect(turn.user).not.toContain(defaultAdaptiveBuyerGoal.leadForm.name);
   });
 });

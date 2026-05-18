@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
-import type { AgentTurnContract, ConversationSession, ConversationTurn, Message, MessageRole, Product } from '../src/shared/types.js';
+import type { AgentTurnContract, ConversationSession, ConversationTurn, Lead, Message, MessageRole, Product } from '../src/shared/types.js';
 
 const openAiCreate = vi.hoisted(() => vi.fn(async () => {
   throw new Error('unsupported_country_region_territory');
@@ -10,6 +10,10 @@ vi.mock('../src/ai/openaiClient.js', () => ({
   createOpenAIClient: () => ({ responses: { create: openAiCreate } }),
   createEmbedding: async () => null,
   withRetry: async <T>(fn: () => Promise<T>) => fn()
+}));
+
+vi.mock('../src/email/httpEmail.js', () => ({
+  sendLeadEmail: vi.fn(async () => ({ ok: true }))
 }));
 
 const { AssistantService, assistantTestHooks } = await import('../src/ai/assistant.js');
@@ -118,6 +122,32 @@ class FakeProducts {
   }
 }
 
+class FakeLeads {
+  readonly leads: Lead[] = [];
+
+  async createLead(input: { sessionId?: string | null; name: string; phone?: string | null; email?: string | null; question?: string | null }) {
+    const lead: Lead = {
+      id: `lead-${this.leads.length + 1}`,
+      sessionId: input.sessionId,
+      name: input.name,
+      phone: input.phone ?? null,
+      email: input.email ?? null,
+      question: input.question ?? null,
+      status: 'pending_email',
+      createdAt: new Date().toISOString()
+    };
+    this.leads.push(lead);
+    return lead;
+  }
+
+  async markEmailResult(id: string, status: Lead['status']) {
+    const lead = this.leads.find((item) => item.id === id);
+    if (!lead) throw new Error('lead not found');
+    lead.status = status;
+    return lead;
+  }
+}
+
 describe('assistant OpenAI failure fallback', () => {
   beforeEach(() => {
     openAiCreate.mockReset();
@@ -173,6 +203,54 @@ describe('assistant OpenAI failure fallback', () => {
       'do_not_promise_live_stock_delivery_discount_or_exact_terms'
     ]));
     expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(2);
+  });
+
+  it('does not ask for contact again when the fast commercial handoff already created a lead from chat text', async () => {
+    openAiCreate.mockClear();
+    const products = [
+      testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u043f\\u0440\\u044f\\u043c\\u043e\\u0445\\u043e\\u0434\\u043d\\u0430\\u044f 70 \\u043a\\u0433'), 38_766)
+    ];
+    const conversations = new FakeConversations();
+    conversations.messages.push({
+      id: 'previous-assistant',
+      sessionId: conversations.session.id,
+      role: 'assistant',
+      content: ru('\\u041f\\u043e\\u043a\\u0430\\u0437\\u0430\\u043b \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0443 \\u043f\\u043e\\u0434 \\u0432\\u044a\\u0435\\u0437\\u0434.'),
+      metadata: {
+        productCards: [{
+          id: 'plate-1',
+          name: products[0].name,
+          category: products[0].category,
+          price: products[0].price,
+          currency: 'RUB',
+          sourceUrl: products[0].sourceUrl,
+          specs: {},
+          reasons: [ru('\\u041f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 \\u043f\\u043e \\u0442\\u0435\\u043a\\u0443\\u0449\\u0435\\u0439 \\u0437\\u0430\\u0434\\u0430\\u0447\\u0435')],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    const leads = new FakeLeads();
+    const assistant = new AssistantService(conversations as never, new FakeProducts(products) as never, leads as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId: conversations.session.id,
+      userMessage: ru('\\u0414\\u0430, \\u0434\\u0430\\u0432\\u0430\\u0439\\u0442\\u0435 \\u043f\\u0440\\u043e\\u0432\\u0435\\u0440\\u0438\\u043c \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435 \\u0438 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443. \\u041c\\u0435\\u043d\\u044f \\u0437\\u043e\\u0432\\u0443\\u0442 \\u0410\\u043b\\u0435\\u043a\\u0441\\u0435\\u0439, \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d +7 900 000-00-11.'),
+      onDelta: vi.fn()
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(leads.leads).toHaveLength(1);
+    expect(result.leadCreated).toBe(true);
+    expect(result.leadRequested).toBe(false);
+    expect(result.answer).toContain(ru('\\u041a\\u043e\\u043d\\u0442\\u0430\\u043a\\u0442 \\u043f\\u0440\\u0438\\u043d\\u044f\\u043b'));
+    expect(result.answer).not.toContain(ru('\\u043e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435 \\u0438\\u043c\\u044f \\u0438 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d'));
+    expect(result.metadata?.leadStateMachine).toMatchObject({
+      state: 'created',
+      nextAction: 'confirm_created_lead',
+      hasContactInTurn: true
+    });
   });
 
   it('does not mask OpenAI failures as a normal catalog recommendation', async () => {

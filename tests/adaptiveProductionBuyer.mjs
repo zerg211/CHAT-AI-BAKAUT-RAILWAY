@@ -34,6 +34,12 @@ function lower(value) {
   return normalize(value).toLocaleLowerCase('ru');
 }
 
+function hasInlineLeadContact(value) {
+  const text = String(value ?? '');
+  const digits = text.replace(/\D+/g, '');
+  return digits.length >= 10 || /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu.test(text);
+}
+
 export function adaptiveBuyerGoalSignature(goal = defaultAdaptiveBuyerGoal) {
   const stableGoal = {
     scenarioName: goal.scenarioName,
@@ -90,19 +96,23 @@ function validateDecision(decision, fallbackDecision) {
   const phase = normalize(decision?.phase) || fallbackDecision.phase;
   if (decision?.done === true) return { ...fallbackDecision, done: true, phase: 'done', user: '' };
   if (!user || user.length < 12 || scriptedOperatorTextPattern.test(user)) return fallbackDecision;
+  const leadForm = decision?.leadForm && typeof decision.leadForm === 'object'
+    ? {
+        name: normalize(decision.leadForm.name || fallbackDecision.leadForm?.name),
+        phone: normalize(decision.leadForm.phone || fallbackDecision.leadForm?.phone),
+        email: normalize(decision.leadForm.email || fallbackDecision.leadForm?.email),
+        question: normalize(decision.leadForm.question || fallbackDecision.leadForm?.question)
+      }
+    : fallbackDecision.leadForm ?? null;
+  if (leadForm && hasInlineLeadContact(user)) {
+    return { ...fallbackDecision, leadForm: fallbackDecision.leadForm ?? leadForm };
+  }
   return {
     phase,
     user,
     rationale: normalize(decision?.rationale || decision?.reason || fallbackDecision.rationale),
     done: false,
-    leadForm: decision?.leadForm && typeof decision.leadForm === 'object'
-      ? {
-          name: normalize(decision.leadForm.name || fallbackDecision.leadForm?.name),
-          phone: normalize(decision.leadForm.phone || fallbackDecision.leadForm?.phone),
-          email: normalize(decision.leadForm.email || fallbackDecision.leadForm?.email),
-          question: normalize(decision.leadForm.question || fallbackDecision.leadForm?.question)
-        }
-      : fallbackDecision.leadForm ?? null,
+    leadForm,
     source: decision?.source || 'llm'
   };
 }
@@ -211,7 +221,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
   const contact = goal.leadForm ?? defaultAdaptiveBuyerGoal.leadForm;
   return {
     phase: 'leave_contact_for_order_check',
-    user: `Хорошо, давайте заявку: меня зовут ${contact.name}, телефон ${contact.phone}. Нужно уточнить наличие выбранного генератора, виброплиты и доставку.`,
+    user: 'Хорошо, давайте заявку, я оставлю контакт в форме. Нужно уточнить наличие выбранного генератора, виброплиты и доставку.',
     rationale: 'Цель почти закрыта, покупатель готов оставить контакт для проверки наличия и доставки.',
     source: 'fallback',
     leadForm: contact
@@ -247,7 +257,7 @@ function buildBuyerPrompt({ goal, steps, turnIndex }) {
     'Формат JSON:',
     '{"phase":"short_snake_case","user":"реплика покупателя","rationale":"почему это следующий логичный ход","leadForm":null}',
     '',
-    `Если покупатель оставляет заявку, user должен включать имя и телефон: ${goal.leadForm?.name}, ${goal.leadForm?.phone}. Тогда leadForm заполни объектом с name, phone, question.`
+    `Если покупатель оставляет заявку через форму, user не должен включать имя и телефон; эти данные укажи только в leadForm: ${goal.leadForm?.name}, ${goal.leadForm?.phone}.`
   ].join('\n');
 }
 
