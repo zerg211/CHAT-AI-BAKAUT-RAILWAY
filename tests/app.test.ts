@@ -13,8 +13,15 @@ describe('app', () => {
       answerModel: expect.any(String),
       plannerModel: expect.any(String),
       remediation: {
-        contractVersion: '2026-05-18-recovery-stream-v16',
+        contractVersion: '2026-05-18-ai-manager-control-plane-v1',
         runtimeArtifacts: expect.arrayContaining([
+          'agentContractV2',
+          'sourcePolicy',
+          'toolTrace',
+          'productEvidenceRegistry',
+          'policyGate',
+          'policyGateEnforcement',
+          'leadDraft',
           'executionContract',
           'requirementLedger',
           'cardManifest',

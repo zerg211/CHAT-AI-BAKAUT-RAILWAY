@@ -1,7 +1,14 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-recovery-stream-v16';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-18-ai-manager-control-plane-v1';
 
 export const expectedRemediationRuntimeArtifacts = [
+  'agentContractV2',
+  'sourcePolicy',
+  'toolTrace',
+  'productEvidenceRegistry',
+  'policyGate',
+  'policyGateEnforcement',
+  'leadDraft',
   'executionContract',
   'requirementLedger',
   'cardManifest',
