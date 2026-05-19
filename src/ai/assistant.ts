@@ -3959,6 +3959,23 @@ function lastVisibleShownProductCards(history: Message[]) {
   return [];
 }
 
+function lastVisibleShownProductCardPayloads(history: Message[]) {
+  for (const message of [...history].reverse()) {
+    if (message.role !== 'assistant') continue;
+    const metadata = message.metadata as { productCards?: unknown; cardDisplay?: { initialVisibleCount?: unknown } } | undefined;
+    const cards = metadata?.productCards;
+    if (!Array.isArray(cards) || cards.length === 0) continue;
+    const initialVisibleCount = Number(metadata?.cardDisplay?.initialVisibleCount);
+    const visibleCount = Number.isFinite(initialVisibleCount) && initialVisibleCount > 0
+      ? Math.min(cards.length, Math.max(1, Math.floor(initialVisibleCount)))
+      : cards.length;
+    return cards
+      .slice(0, visibleCount)
+      .filter((card): card is ProductCard => Boolean(card && typeof card === 'object' && typeof (card as ProductCard).id === 'string' && typeof (card as ProductCard).name === 'string'));
+  }
+  return [];
+}
+
 function allShownProductCards(history: Message[]) {
   const byId = new Map<string, ProductCard>();
   for (const message of history) {
@@ -8178,7 +8195,8 @@ export class AssistantService {
     if (isShownProductChoiceOrComparisonQuestion(latestUserMessage)) return null;
 
     const contactRefusal = isContactRefusalTechnicalSummaryRequest(latestUserMessage);
-    const commercialCards = allShownProductCards(history);
+    const visibleCommercialCards = lastVisibleShownProductCardPayloads(history);
+    const commercialCards = visibleCommercialCards.length ? visibleCommercialCards : allShownProductCards(history);
     const hasPriorProductContext = commercialCards.length > 0 || (session.needState.activeNeeds ?? []).length > 0;
     const commercialQuestionAboutShownProducts = commercialCards.length > 0 && isCommercialQuestionAboutShownProducts(latestUserMessage);
     if (isMixedCatalogAndCommercialQuestion(latestUserMessage) && !commercialQuestionAboutShownProducts) return null;

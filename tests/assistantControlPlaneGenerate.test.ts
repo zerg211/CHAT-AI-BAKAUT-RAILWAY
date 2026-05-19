@@ -471,24 +471,44 @@ describe('assistant generateAnswer control-plane metadata', () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
     const product = generator();
+    const hiddenDiesel = {
+      ...rejectedGenerator(),
+      id: 'hidden-diesel',
+      name: 'Hidden diesel generator 12 kW'
+    };
     conversations.messages.push({
       id: 'previous-assistant-cards',
       sessionId,
       role: 'assistant',
       content: 'Показываю подходящие генераторы.',
       metadata: {
-        productCards: [{
-          id: product.id,
-          name: product.name,
-          brand: product.brand,
-          category: product.category,
-          price: product.price,
-          currency: product.currency,
-          sourceUrl: product.sourceUrl,
-          specs: product.specs,
-          reasons: ['Подходит по мощности'],
-          caveats: []
-        }]
+        cardDisplay: { initialVisibleCount: 1 },
+        productCards: [
+          {
+            id: product.id,
+            name: product.name,
+            brand: product.brand,
+            category: product.category,
+            price: product.price,
+            currency: product.currency,
+            sourceUrl: product.sourceUrl,
+            specs: product.specs,
+            reasons: ['Подходит по мощности'],
+            caveats: []
+          },
+          {
+            id: hiddenDiesel.id,
+            name: hiddenDiesel.name,
+            brand: hiddenDiesel.brand,
+            category: hiddenDiesel.category,
+            price: hiddenDiesel.price,
+            currency: hiddenDiesel.currency,
+            sourceUrl: hiddenDiesel.sourceUrl,
+            specs: { fuel: 'diesel', voltage: '380 V', nominalPower: '12 kW' },
+            reasons: ['Hidden by cardDisplay'],
+            caveats: []
+          }
+        ]
       },
       createdAt: new Date().toISOString()
     });
@@ -523,6 +543,7 @@ describe('assistant generateAnswer control-plane metadata', () => {
       reason: 'delivery',
       productIds: expect.arrayContaining(['tss-8'])
     });
+    expect(result.metadata?.leadDraft?.productIds).not.toContain('hidden-diesel');
     expect(result.answer).toMatch(/Алексей, контакт получил/iu);
     expect(result.answer).not.toMatch(/оставьте|напишите|телефон/iu);
   });
