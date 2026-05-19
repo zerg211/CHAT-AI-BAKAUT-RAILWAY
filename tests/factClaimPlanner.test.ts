@@ -111,6 +111,34 @@ describe('fact claim planner', () => {
     expect(audit.warnings).toEqual([]);
   });
 
+  it('grounds generator load calculation numbers in conversation memory without catalog cards', () => {
+    const planner = buildFactClaimPlanner({
+      executionContract: {
+        ...executionContract,
+        answerTask: 'technical_explanation',
+        taskType: 'technical_answer',
+        catalogPolicy: 'none',
+        cardsPolicy: 'none',
+        factPolicy: 'catalog_only'
+      },
+      requirementLedger
+    });
+    const audit = auditAnswerFactClaims({
+      answer: 'По генератору сейчас держал бы ориентир на класс 8 кВт по номиналу, пусковая нагрузка около 7,7 кВт. Учитываю так: компрессор 2,2 кВт лучше считать отдельным пусковым сценарием. Расчет веду по сценариям: самый тяжелый сценарий сейчас - компрессор вместе с базовой нагрузкой. Котел, холодильник, морозилка, связь и охрана должны работать постоянно.',
+      factClaimPlanner: planner
+    });
+
+    expect(audit.claims).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'technical_spec',
+        requiredSource: 'conversation_memory',
+        groundingStatus: 'grounded'
+      })
+    ]));
+    expect(audit.warnings).not.toContain('technical_claim_without_catalog_context');
+    expect(audit.warnings).not.toContain('availability_claim_without_specialist_verification_wording');
+  });
+
   it('marks availability and delivery claims that lack specialist verification wording', () => {
     const planner = buildFactClaimPlanner({
       executionContract: {
