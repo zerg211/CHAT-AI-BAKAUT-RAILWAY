@@ -15,6 +15,105 @@ const basePlan = {
 };
 
 describe('agent turn contract', () => {
+  it('repairs shown-card choice plus delivery so product reasoning stays before the form', () => {
+    const message = '\u0414\u043b\u044f \u043c\u043e\u0435\u0433\u043e \u0432\u044a\u0435\u0437\u0434\u0430, \u043d\u0430\u0432\u0435\u0440\u043d\u043e\u0435, \u043b\u0443\u0447\u0448\u0435 \u0447\u0442\u043e-\u0442\u043e \u0432 \u0440\u0430\u0439\u043e\u043d\u0435 70\u201380 \u043a\u0433, \u0447\u0442\u043e\u0431\u044b \u0438 \u043f\u0435\u0441\u043e\u043a, \u0438 \u0449\u0435\u0431\u0435\u043d\u044c \u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\u043e \u0442\u0440\u0430\u043c\u0431\u043e\u0432\u0430\u043b\u0430. \u041f\u043e\u0434\u0441\u043a\u0430\u0436\u0438\u0442\u0435, \u0438\u0437 \u044d\u0442\u0438\u0445 \u043a\u0430\u043a\u0430\u044f \u043f\u0440\u0430\u043a\u0442\u0438\u0447\u043d\u0435\u0435 \u0438 \u0435\u0441\u0442\u044c \u043b\u0438 \u043f\u043e \u043d\u0435\u0439 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430?';
+    const needState = {
+      ...emptyNeedState(),
+      selectionState: {
+        ...emptyNeedState().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate'
+      },
+      activeNeeds: [{
+        id: 'need_plate',
+        productClass: 'plate',
+        summary: 'vibroplate 70-80 kg for driveway',
+        constraints: ['70-80 kg', 'driveway', 'sand and gravel'],
+        openQuestions: [],
+        selectedProductIds: [],
+        status: 'open',
+        updatedAt: '2026-05-19T00:00:00.000Z'
+      }]
+    } as ReturnType<typeof emptyNeedState>;
+    const commercialPlan = {
+      ...basePlan,
+      action: 'collect_lead',
+      answerMode: 'leadCollection',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'collectLead',
+      agentDecision: {
+        answerTask: 'lead_handoff' as const,
+        taskType: 'pure_delivery' as const,
+        catalogAction: 'none' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['explain delivery verification'],
+        currentFocus: 'commercial',
+        cardsRole: 'none' as const,
+        leadAllowed: true,
+        leadAllowedReason: 'delivery requires logistics verification',
+        errorRecoveryPriority: 'answer delivery safely',
+        confidence: 0.83
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: message,
+      plan: commercialPlan,
+      needState
+    });
+    const applied = applyAgentTurnContractToPlan(commercialPlan, contract);
+
+    expect(contract.answerTask).toBe('mixed');
+    expect(contract.taskType).toBe('product_selection_with_delivery');
+    expect(contract.catalogAction).toBe('find_matching_products');
+    expect(contract.productCardsPolicy).toBe('show_matching_products');
+    expect(contract.cardsRole).toBe('primary');
+    expect(contract.commercialAction).toBe('explain_manager_required');
+    expect(contract.mustAnswerNow[0]).toMatch(/product choice/i);
+    expect(contract.validatorWarnings).toContain('shown_product_choice_commercial_repaired');
+    expect(applied.action).toBe('recommend_products');
+    expect(applied.cardPolicy).toBe('showProducts');
+    expect(applied.selectionState.shouldShowCards).toBe(true);
+  });
+
+  it('keeps pure commercial questions about shown positions as a handoff', () => {
+    const message = '\u041f\u043e \u044d\u0442\u0438\u043c \u043f\u043e\u0437\u0438\u0446\u0438\u044f\u043c \u0435\u0441\u0442\u044c \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0430 \u0438 \u0441\u043a\u0438\u0434\u043a\u0430?';
+    const commercialPlan = {
+      ...basePlan,
+      action: 'collect_lead',
+      answerMode: 'leadCollection',
+      cardPolicy: 'textOnly',
+      followUpPolicy: 'collectLead',
+      agentDecision: {
+        answerTask: 'lead_handoff' as const,
+        taskType: 'pure_delivery' as const,
+        catalogAction: 'none' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'none' as const,
+        mustAnswerNow: ['explain delivery and discount verification'],
+        currentFocus: 'commercial',
+        cardsRole: 'none' as const,
+        leadAllowed: true,
+        leadAllowedReason: 'commercial terms require verification',
+        errorRecoveryPriority: 'answer commercial terms safely',
+        confidence: 0.9
+      }
+    };
+
+    const contract = deriveAgentTurnContract({
+      userMessage: message,
+      plan: commercialPlan,
+      needState: emptyNeedState()
+    });
+
+    expect(contract.answerTask).toBe('lead_handoff');
+    expect(contract.taskType).toBe('pure_delivery');
+    expect(contract.catalogAction).toBe('none');
+    expect(contract.productCardsPolicy).toBe('none');
+    expect(contract.validatorWarnings).not.toContain('shown_product_choice_commercial_repaired');
+  });
+
   it('keeps gasoline/diesel reserve comparison as answer-first instead of catalog shortlist', () => {
     const contract = deriveAgentTurnContract({
       userMessage: 'Сравните бензиновый и дизельный генератор для редких отключений, и какой риск если взять без запаса?',

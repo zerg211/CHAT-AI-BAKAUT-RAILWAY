@@ -6775,6 +6775,28 @@ describe('recommendation ranking', () => {
     )).toBe(true);
   });
 
+  it('detects shown-card choice plus delivery as product reasoning, not commercial-only handoff', () => {
+    const message = ru('\\u0414\\u043b\\u044f \\u043c\\u043e\\u0435\\u0433\\u043e \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430, \\u043d\\u0430\\u0432\\u0435\\u0440\\u043d\\u043e\\u0435, \\u043b\\u0443\\u0447\\u0448\\u0435 \\u0447\\u0442\\u043e-\\u0442\\u043e \\u0432 \\u0440\\u0430\\u0439\\u043e\\u043d\\u0435 70\\u201380 \\u043a\\u0433, \\u0447\\u0442\\u043e\\u0431\\u044b \\u0438 \\u043f\\u0435\\u0441\\u043e\\u043a, \\u0438 \\u0449\\u0435\\u0431\\u0435\\u043d\\u044c \\u043d\\u043e\\u0440\\u043c\\u0430\\u043b\\u044c\\u043d\\u043e \\u0442\\u0440\\u0430\\u043c\\u0431\\u043e\\u0432\\u0430\\u043b\\u0430. \\u041f\\u043e\\u0434\\u0441\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435, \\u0438\\u0437 \\u044d\\u0442\\u0438\\u0445 \\u043a\\u0430\\u043a\\u0430\\u044f \\u043f\\u0440\\u0430\\u043a\\u0442\\u0438\\u0447\\u043d\\u0435\\u0435 \\u0438 \\u0435\\u0441\\u0442\\u044c \\u043b\\u0438 \\u043f\\u043e \\u043d\\u0435\\u0439 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430?');
+    const contract = {
+      answerTask: 'mixed',
+      taskType: 'product_selection_with_delivery',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: ['answer shown-card choice first', 'explain delivery verification'],
+      activeNeeds: [{ id: 'need_plate', productClass: 'plate', summary: 'plate 70-80 kg for driveway' }],
+      currentFocus: 'plate with delivery',
+      cardsRole: 'primary',
+      leadAllowed: true,
+      leadAllowedReason: 'delivery verification after recommendation',
+      errorRecoveryPriority: 'answer choice first',
+      validatorWarnings: []
+    } as any;
+
+    expect(assistantTestHooks.isShownProductChoiceOrComparisonQuestion(message)).toBe(true);
+    expect(assistantTestHooks.shouldUseProactiveCommercialDeterministicAnswer(contract, message)).toBe(false);
+  });
+
   it('does not turn a generic cutter target phrase into an exact model token', async () => {
     const cutter = productWithSpecs('fs309', 'Gasoline cutter Husqvarna FS 309 max disc 350 mm', 250_000, 'https://example.test/catalog/rezchiki/fs-309/', {
       'max disc, mm': '350'

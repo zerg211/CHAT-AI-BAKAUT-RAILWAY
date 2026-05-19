@@ -1,5 +1,6 @@
 import type { AgentTurnContract, CustomerNeedState } from '../shared/types.js';
 import { inferProductIntent } from './productClassifier.js';
+import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 
 type PlannerLike = {
   action: string;
@@ -66,12 +67,22 @@ function productCatalogOptionRequest(userMessage: string, state: CustomerNeedSta
         ? state.selectionState?.currentProductClass
         : (state.activeNeeds ?? []).find((need) => need.status !== 'closed' && need.productClass !== 'commercial')?.productClass;
   if (!contextIntent || contextIntent === 'unknown' || contextIntent === 'commercial') return null;
-  const asksForCatalogOptions = /(?:\u0432\u044b\u0431\u0438\u0440|\u0432\u044b\u0431\u0440\u0430\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043a\u0430\u0440\u0442\u043e\u0447|\u043f\u043e\u0434\u0431\u0435\u0440|\u043f\u043e\u0441\u043c\u043e\u0442\u0440|\u0447\u0442\u043e\s+\u0432\u0437\u044f\u0442|\u043a\u0430\u043a\u043e\u0439\s+\u0432\u0437\u044f\u0442|\u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\w*\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0436\u043d\u043e\s+\u043f\u0440\u0438\u043a\u0438\u043d|\u0441\s+\u0437\u0430\u043f\u0430\u0441|\u043c\u0438\u043d\u0438\u043c\u0430\u043b)/iu.test(text);
+  const shownChoiceRequest = isShownProductChoiceOrComparisonQuestion(userMessage);
+  const asksForCatalogOptions = shownChoiceRequest ||
+    /(?:\u0432\u044b\u0431\u0438\u0440|\u0432\u044b\u0431\u0440\u0430\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043a\u0430\u0440\u0442\u043e\u0447|\u043f\u043e\u0434\u0431\u0435\u0440|\u043f\u043e\u0441\u043c\u043e\u0442\u0440|\u0447\u0442\u043e\s+\u0432\u0437\u044f\u0442|\u043a\u0430\u043a\u043e\u0439\s+\u0432\u0437\u044f\u0442|\u043d\u043e\u0440\u043c\u0430\u043b\u044c\u043d\w*\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0436\u043d\u043e\s+\u043f\u0440\u0438\u043a\u0438\u043d|\u0441\s+\u0437\u0430\u043f\u0430\u0441|\u043c\u0438\u043d\u0438\u043c\u0430\u043b)/iu.test(text);
   if (!asksForCatalogOptions) return null;
-  const commercialOnly = /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u0441\u043a\u0438\u0434|\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0443\u0441\u043b\u043e\u0432)/iu.test(text) &&
+  const hasDeliveryLikeCommercialTerm = /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u0441\u0440\u043e\u043a|\u0441\u0442\u043e\u0438\u043c|\u0446\u0435\u043d|delivery|shipping|discount|price|cost|terms)/iu.test(text);
+  const hasAvailabilityTerm = /(?:\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|stock|warehouse)/iu.test(text);
+  const commercialOnly = !shownChoiceRequest &&
+    (hasDeliveryLikeCommercialTerm || hasAvailabilityTerm) &&
     !/(?:\u0432\u044b\u0431\u0438\u0440|\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043c\u043e\u0434\u0435\u043b|\u043f\u043e\u0434\u0431\u0435\u0440|\u0433\u0435\u043d\u0435\u0440\u0430\u0442|\u0432\u0438\u0431\u0440\u043e\u043f\u043b\u0438\u0442|\u043f\u043b\u0438\u0442)/iu.test(text);
   if (commercialOnly) return null;
-  return { intent: contextIntent, latestIntent };
+  const commercialTermKind = hasDeliveryLikeCommercialTerm
+    ? 'delivery'
+    : hasAvailabilityTerm
+      ? 'availability'
+      : 'none';
+  return { intent: contextIntent, latestIntent, shownChoiceRequest, commercialTermKind };
 }
 
 function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState, userMessage: string): AgentTurnContract | null {
@@ -136,7 +147,11 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
       decision.productCardsPolicy === 'none' ||
       decision.cardsRole === 'none');
   if (productOptionSelectionRepair) {
-    taskType = 'product_selection';
+    taskType = optionSelectionRequest?.commercialTermKind === 'availability'
+      ? 'product_selection_with_availability'
+      : optionSelectionRequest?.commercialTermKind === 'delivery'
+        ? 'product_selection_with_delivery'
+        : 'product_selection';
     explicitAnswerTask = 'mixed';
   }
   const deliverySelectionDefaultsToCatalog = explicitAnswerTask !== 'lead_handoff' && (
@@ -234,9 +249,18 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
   const cardsRole = rawCardsRole === 'none' && productCardsPolicy !== 'none'
     ? inferredCardsRole
     : rawCardsRole;
-  const mustAnswerNow = Array.isArray(decision.mustAnswerNow)
+  let mustAnswerNow = Array.isArray(decision.mustAnswerNow)
     ? decision.mustAnswerNow.map((item) => String(item).trim()).filter(Boolean).slice(0, 8)
     : [];
+  if (productOptionSelectionRepair) {
+    mustAnswerNow = [
+      'answer the buyer product choice or comparison first from shown/catalog product facts',
+      optionSelectionRequest?.commercialTermKind !== 'none'
+        ? 'then explain that delivery, stock, discount, or final terms need specialist verification and can use the form after the answer'
+        : '',
+      ...mustAnswerNow
+    ].filter(Boolean).slice(0, 8);
+  }
   const validatorWarnings: string[] = ['contract_source:llm_planner'];
 
   if ((answerTask === 'comparison' || answerTask === 'technical_explanation') && plan.action === 'recommend_products') {
@@ -273,6 +297,9 @@ function coerceSemanticAgentDecision(plan: PlannerLike, state: CustomerNeedState
     validatorWarnings.push(optionSelectionRequest?.intent === 'generator'
       ? 'generator_option_selection_repaired'
       : 'product_option_selection_repaired');
+    if (optionSelectionRequest?.shownChoiceRequest && optionSelectionRequest.commercialTermKind !== 'none') {
+      validatorWarnings.push('shown_product_choice_commercial_repaired');
+    }
   }
   if (technicalSummaryNoCards) {
     validatorWarnings.push('contact_refusal_summary_cards_suppressed');

@@ -58,6 +58,7 @@ import { enforcePolicyGateBeforeAnswer, runPolicyGate } from './policyGate.js';
 import { buildLeadDraft, shouldCommitLeadFromDraft } from './leadDraft.js';
 import { sourcePolicyRequiresWeb } from './sourcePolicy.js';
 import { applyContractNeedDelta } from './requirementDelta.js';
+import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 import {
   buildTroubleshootingCaseDraft,
   buildTroubleshootingSearchQuery
@@ -5777,6 +5778,7 @@ function isContactRefusalTechnicalSummaryRequest(message: string) {
 }
 
 function shouldUseCommercialDeterministicFallback(contract: AgentTurnContract | undefined, message: string) {
+  if (isShownProductChoiceOrComparisonQuestion(message)) return false;
   if (contract?.commercialAction !== 'explain_manager_required') return false;
   if (contract.answerTask === 'lead_handoff') return true;
   if (contract.currentFocus === 'commercial') return true;
@@ -5786,6 +5788,7 @@ function shouldUseCommercialDeterministicFallback(contract: AgentTurnContract | 
 }
 
 function shouldUseProactiveCommercialDeterministicAnswer(contract: AgentTurnContract | undefined, message: string) {
+  if (isShownProductChoiceOrComparisonQuestion(message)) return false;
   if (contract?.commercialAction !== 'explain_manager_required') return false;
   if (contract.answerTask === 'lead_handoff') return true;
   if (contract.currentFocus === 'commercial') return true;
@@ -7574,6 +7577,7 @@ export class AssistantService {
   private async tryFastCommercialHandoff(input: GenerateAnswerInput, session: ConversationSession, history: Message[], aiDiagnostics: AiGenerationDiagnostics): Promise<ChatResponsePayload | null> {
     const latestUserMessage = input.userMessage;
     if (!isExplicitCommercialQuestion(latestUserMessage)) return null;
+    if (isShownProductChoiceOrComparisonQuestion(latestUserMessage)) return null;
 
     const contactRefusal = isContactRefusalTechnicalSummaryRequest(latestUserMessage);
     const commercialCards = allShownProductCards(history);
@@ -9070,8 +9074,11 @@ export class AssistantService {
     const byId = new Map<string, Product>();
     for (const product of [...refinedCandidates, ...preliminaryCandidates]) byId.set(product.id, product);
     const leadRequestedBeforeCards = isLeadPlan(plan);
-    if (leadRequestedBeforeCards) {
+    const shownProductChoiceTurn = isShownProductChoiceOrComparisonQuestion(input.userMessage);
+    if (leadRequestedBeforeCards || shownProductChoiceTurn) {
       for (const product of lastShownProductCards(history)) byId.set(product.id, product);
+    }
+    if (leadRequestedBeforeCards) {
       const purchaseContextText = [
         input.userMessage,
         plan.catalogSearchQuery,
@@ -12077,6 +12084,7 @@ export const assistantTestHooks = {
   deterministicLeadCollectionAnswer,
   deterministicCommercialHandoffFallback,
   isMixedCatalogAndCommercialQuestion,
+  isShownProductChoiceOrComparisonQuestion,
   shouldUseProactiveCommercialDeterministicAnswer,
   deterministicTechnicalSummaryRecovery,
   deterministicRecoveredSelectionAnswer,
