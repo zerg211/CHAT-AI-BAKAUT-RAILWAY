@@ -3,6 +3,7 @@ import { fetch } from 'undici';
 import { config } from '../config.js';
 import { ProductRepository } from '../db/repositories.js';
 import { createEmbedding } from '../ai/openaiClient.js';
+import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
 import type { CatalogProductInput } from '../shared/types.js';
 import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
 
@@ -169,8 +170,9 @@ export async function syncCatalogFromSite(
 
         const product = extractProduct(html, url, baseUrl);
         if (product) {
-          const embedding = await createEmbedding(productToEmbeddingText(product)).catch(() => null);
-          await repository.upsertProduct(product, embedding ?? undefined);
+          const embeddingText = productToEmbeddingText(product);
+          const embedding = await createEmbedding(embeddingText).catch(() => null);
+          await repository.upsertProduct(product, embedding ?? undefined, embedding ? embeddingMetadataForText(embeddingText) : undefined);
           imported += 1;
         }
       } catch {
@@ -235,8 +237,9 @@ export async function inventoryCatalogFromSite(
 
   if (options.importMissing) {
     for (const product of missingProducts) {
-      const embedding = await createEmbedding(productToEmbeddingText(product)).catch(() => null);
-      await repository.upsertProduct(product, embedding ?? undefined);
+      const embeddingText = productToEmbeddingText(product);
+      const embedding = await createEmbedding(embeddingText).catch(() => null);
+      await repository.upsertProduct(product, embedding ?? undefined, embedding ? embeddingMetadataForText(embeddingText) : undefined);
     }
   }
 

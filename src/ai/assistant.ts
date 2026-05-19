@@ -1,9 +1,10 @@
 import { config } from '../config.js';
-import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
+import { ConversationRepository, LeadRepository, ProductRepository, type EmbeddingCoverageTarget } from '../db/repositories.js';
 import yaml from 'js-yaml';
 import type { ActiveCustomerNeed, AgentToolTraceItem, AgentTurnContract, AgentTurnContractV2, BotCommitment, CardDisplayOptions, CardManifest, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, ExecutionContract, FactClaimPlanner, GeneratorPowerProfile, Lead, LeadDraft, LeadStateMachine, MentionedProductMemory, Message, PolicyGateEnforcement, PolicyGateResult, PostAnswerVerificationRecovery, Product, ProductCard, ProductElectricalLoadItem, ProductEvidenceRegistry, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, RequirementLedger, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
+import { embeddingMetadataForText } from './embeddingUtils.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
 import { emptyNeedState, emptyProductSelectionState, emptySemanticMemory, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 import { calculateGeneratorLoadProfile as calculateStructuredGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
@@ -2671,6 +2672,12 @@ function plannerContextSupplementalQueries(query: string) {
   return uniqueList(result, 8);
 }
 
+function retrievalScoreBoost(product: Product) {
+  if (product.retrievalSource !== 'vector' || typeof product.retrievalScore !== 'number') return 0;
+  if (!Number.isFinite(product.retrievalScore) || product.retrievalScore < 0.65) return 0;
+  return Math.min(36, Math.max(0, (product.retrievalScore - 0.65) * 120));
+}
+
 function recommendationScore(product: Product, state: CustomerNeedState, userMessage: string, profile = buildProductFitProfile(state, userMessage)) {
   const needText = profile.activeNeedText || stateText(state, userMessage);
   const productText = [product.name, product.category, product.sourceUrl, product.description].join(' ').toLowerCase();
@@ -2698,6 +2705,7 @@ function recommendationScore(product: Product, state: CustomerNeedState, userMes
   const modelTokens = profile.exactModelTokens.length ? profile.exactModelTokens : extractModelTokens(needText);
   const flags = classifyProduct(product);
   let score = productFitPenalty(product, profile);
+  score += retrievalScoreBoost(product);
 
   if (wantsPlate && containsAny(productText, plateTerms)) score += 60;
   if (wantsGenerator && containsAny(productText, generatorTerms)) score += 60;
@@ -7456,11 +7464,54 @@ function leadQuestionSummary(userMessage: string, history: Message[], state: Cus
 }
 
 export class AssistantService {
+  private readonly embeddingCoverageCache = new Map<string, { usable: boolean; expiresAt: number }>();
+  private readonly queryEmbeddingCache = new Map<string, { value: number[]; expiresAt: number }>();
+
   constructor(
     private readonly conversations = new ConversationRepository(),
     private readonly products = new ProductRepository(),
     private readonly leads = new LeadRepository()
   ) {}
+
+  private async canUseEmbeddings(target: EmbeddingCoverageTarget) {
+    const coverageFn = (this.products as unknown as {
+      getEmbeddingCoverage?: ProductRepository['getEmbeddingCoverage'];
+    }).getEmbeddingCoverage;
+    if (!coverageFn) return true;
+
+    const key = `${target}:${config.OPENAI_EMBEDDING_MODEL}`;
+    const cached = this.embeddingCoverageCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.usable;
+
+    try {
+      const coverage = await coverageFn.call(this.products, target, config.OPENAI_EMBEDDING_MODEL);
+      const usable = coverage.total > 0 && coverage.coverage >= config.EMBEDDING_MIN_COVERAGE;
+      this.embeddingCoverageCache.set(key, { usable, expiresAt: now + 60_000 });
+      return usable;
+    } catch (error) {
+      console.warn('Embedding coverage check failed', { target, error: safeError(error).message });
+      this.embeddingCoverageCache.set(key, { usable: false, expiresAt: now + 15_000 });
+      return false;
+    }
+  }
+
+  private async createCachedQueryEmbedding(text: string, signal?: AbortSignal) {
+    const key = `${config.OPENAI_EMBEDDING_MODEL}:${text.slice(0, 8000)}`;
+    const cached = this.queryEmbeddingCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.value;
+
+    const embedding = await createEmbedding(text, signal).catch(() => null);
+    if (!embedding) return null;
+
+    if (this.queryEmbeddingCache.size >= 200) {
+      const oldest = this.queryEmbeddingCache.keys().next().value;
+      if (oldest) this.queryEmbeddingCache.delete(oldest);
+    }
+    this.queryEmbeddingCache.set(key, { value: embedding, expiresAt: now + 10 * 60_000 });
+    return embedding;
+  }
 
   private async createLeadFromChatContact(
     session: ConversationSession,
@@ -8866,7 +8917,9 @@ export class AssistantService {
     const text = [userMessage, retrievalQuery].filter(Boolean).join(' ');
     const query = buildTroubleshootingSearchQuery(text);
     if (!query.modelKeys.length) return { cases: [], guidance: '', confidence: 0 };
-    const embedding = await createEmbedding(text, signal).catch(() => null);
+    const embedding = await this.canUseEmbeddings('troubleshooting_cases')
+      ? await this.createCachedQueryEmbedding(text, signal)
+      : null;
     const matches = await this.products.searchTroubleshootingCases({
       query: text,
       modelKeys: query.modelKeys,
@@ -8973,7 +9026,9 @@ export class AssistantService {
     const supplementalResults = (await Promise.all(
       supplementalCatalogQueries(profile).map((item) => this.products.searchProducts(item, supplementalLimit).catch(() => []))
     )).flat();
-    const embedding = await createEmbedding(query, signal).catch(() => null);
+    const embedding = await this.canUseEmbeddings('products')
+      ? await this.createCachedQueryEmbedding(query, signal)
+      : null;
     const vectorResults = embedding ? await this.products.vectorSearch(embedding, 50).catch(() => []) : [];
     const byId = new Map<string, Product>();
     for (const product of [...exactResults, ...textResults, ...supplementalResults, ...vectorResults]) byId.set(product.id, product);
@@ -9000,7 +9055,9 @@ export class AssistantService {
     const supplementalResults = (await Promise.all(
       plannerContextSupplementalQueries(query).map((item) => this.products.searchProducts(item, 80).catch(() => []))
     )).flat();
-    const embedding = await createEmbedding(query, signal).catch(() => null);
+    const embedding = await this.canUseEmbeddings('products')
+      ? await this.createCachedQueryEmbedding(query, signal)
+      : null;
     const vectorResults = embedding ? await this.products.vectorSearch(embedding, 80).catch(() => []) : [];
     const byId = new Map<string, Product>();
     for (const product of [...exactResults, ...textResults, ...supplementalResults, ...vectorResults]) byId.set(product.id, product);
@@ -9011,6 +9068,7 @@ export class AssistantService {
         let score = modelTokens.some((token) => compactModelText(text).includes(compactModelText(token))) ? 180 : 0;
         for (const token of queryTokens) if (text.includes(token)) score += 8;
         if (isCoreEquipment(product)) score += 10;
+        score += retrievalScoreBoost(product);
         return { product, score };
       })
       .sort((a, b) => b.score - a.score);
@@ -9020,7 +9078,9 @@ export class AssistantService {
   async findKnowledgePages(userMessage: string, state: CustomerNeedState, retrievalQuery?: string, signal?: AbortSignal) {
     const query = retrievalQuery?.trim() || productSearchText(userMessage, state);
     const textResults = await this.products.searchCatalogPages(query, 6).catch(() => []);
-    const embedding = await createEmbedding(query, signal).catch(() => null);
+    const embedding = await this.canUseEmbeddings('catalog_pages')
+      ? await this.createCachedQueryEmbedding(query, signal)
+      : null;
     const vectorResults = embedding ? await this.products.vectorSearchCatalogPages(embedding, 4).catch(() => []) : [];
     const byUrl = new Map<string, (typeof textResults)[number]>();
     for (const page of [...textResults, ...vectorResults]) byUrl.set(page.sourceUrl, page);
@@ -11945,13 +12005,18 @@ export class AssistantService {
       sourceTitles: citations.map((citation) => citation.title ?? '').filter(Boolean)
     });
     if (troubleshootingCase) {
-      const embedding = await createEmbedding([
+      const embeddingText = [
         troubleshootingCase.model,
         (troubleshootingCase.faultCodes ?? []).join(' '),
         troubleshootingCase.problemSummary,
         troubleshootingCase.answer
-      ].filter(Boolean).join('\n'), input.signal).catch(() => null);
-      await this.products.upsertTroubleshootingCase(troubleshootingCase, embedding ?? undefined);
+      ].filter(Boolean).join('\n');
+      const embedding = await createEmbedding(embeddingText, input.signal).catch(() => null);
+      await this.products.upsertTroubleshootingCase(
+        troubleshootingCase,
+        embedding ?? undefined,
+        embedding ? embeddingMetadataForText(embeddingText) : undefined
+      );
     }
 
     const client = createOpenAIClient();

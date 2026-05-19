@@ -50,6 +50,15 @@ export interface Product {
   description?: string | null;
   specs: Record<string, unknown>;
   raw?: Record<string, unknown>;
+  retrievalScore?: number | null;
+  retrievalSource?: ProductRetrievalSource | null;
+}
+
+export type ProductRetrievalSource = 'text' | 'exact' | 'vector' | 'unknown';
+
+export interface EmbeddingMetadata {
+  model: string;
+  sourceHash: string;
 }
 
 export interface ProductCard {

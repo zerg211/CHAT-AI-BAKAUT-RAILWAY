@@ -1,5 +1,6 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { pool } from './pool.js';
+import { config } from '../config.js';
 import type {
   CatalogProductInput,
   CatalogPage,
@@ -9,10 +10,12 @@ import type {
   ConversationTurn,
   CustomerNeedState,
   DataConflict,
+  EmbeddingMetadata,
   Lead,
   Message,
   MessageRole,
   Product,
+  ProductRetrievalSource,
   ProductFact,
   TroubleshootingCase,
   TroubleshootingCaseInput
@@ -20,6 +23,31 @@ import type {
 import { emptyNeedState } from '../ai/needState.js';
 
 type Db = Pool | PoolClient;
+export type EmbeddingCoverageTarget = 'products' | 'catalog_pages' | 'troubleshooting_cases';
+
+export interface EmbeddingCoverage {
+  target: EmbeddingCoverageTarget;
+  total: number;
+  embedded: number;
+  usable: number;
+  coverage: number;
+}
+
+export interface EmbeddingBackfillProduct {
+  product: Product;
+  hasEmbedding: boolean;
+  embeddingModel?: string | null;
+  embeddingSourceHash?: string | null;
+  embeddingUpdatedAt?: string | null;
+}
+
+export interface EmbeddingBackfillCatalogPage {
+  page: CatalogPage;
+  hasEmbedding: boolean;
+  embeddingModel?: string | null;
+  embeddingSourceHash?: string | null;
+  embeddingUpdatedAt?: string | null;
+}
 
 function jsonbParam(value: unknown) {
   return value === undefined || value === null ? null : JSON.stringify(value);
@@ -97,6 +125,12 @@ function mapMessage(row: QueryResultRow): Message {
 }
 
 function mapProduct(row: QueryResultRow): Product {
+  const retrievalSource = typeof row.retrieval_source === 'string'
+    ? row.retrieval_source as ProductRetrievalSource
+    : undefined;
+  const retrievalScore = row.retrieval_score === null || row.retrieval_score === undefined
+    ? undefined
+    : Number(row.retrieval_score);
   return {
     id: row.id,
     externalId: row.external_id,
@@ -110,7 +144,9 @@ function mapProduct(row: QueryResultRow): Product {
     imageUrl: row.image_url,
     description: row.description,
     specs: row.specs ?? {},
-    raw: row.raw ?? {}
+    raw: row.raw ?? {},
+    retrievalScore,
+    retrievalSource
   };
 }
 
@@ -194,6 +230,26 @@ function mapCatalogPage(row: QueryResultRow): CatalogPage {
     raw: row.raw ?? {},
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
+  };
+}
+
+function mapBackfillProduct(row: QueryResultRow): EmbeddingBackfillProduct {
+  return {
+    product: mapProduct(row),
+    hasEmbedding: Boolean(row.has_embedding),
+    embeddingModel: row.embedding_model ?? null,
+    embeddingSourceHash: row.embedding_source_hash ?? null,
+    embeddingUpdatedAt: row.embedding_updated_at ? row.embedding_updated_at.toISOString() : null
+  };
+}
+
+function mapBackfillCatalogPage(row: QueryResultRow): EmbeddingBackfillCatalogPage {
+  return {
+    page: mapCatalogPage(row),
+    hasEmbedding: Boolean(row.has_embedding),
+    embeddingModel: row.embedding_model ?? null,
+    embeddingSourceHash: row.embedding_source_hash ?? null,
+    embeddingUpdatedAt: row.embedding_updated_at ? row.embedding_updated_at.toISOString() : null
   };
 }
 
@@ -624,14 +680,127 @@ export class ProductRepository {
     );
   }
 
-  async upsertProduct(input: CatalogProductInput, embedding?: number[]) {
+  async getEmbeddingCoverage(target: EmbeddingCoverageTarget, model = config.OPENAI_EMBEDDING_MODEL): Promise<EmbeddingCoverage> {
+    const targets: Record<EmbeddingCoverageTarget, { table: string; where: string }> = {
+      products: { table: 'products', where: PRODUCT_FILTER },
+      catalog_pages: { table: 'catalog_pages', where: 'true' },
+      troubleshooting_cases: { table: 'troubleshooting_cases', where: 'true' }
+    };
+    const item = targets[target];
+    const result = await this.db.query(
+      `SELECT
+         COUNT(*)::int AS total,
+         COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded,
+         COUNT(*) FILTER (WHERE embedding IS NOT NULL AND embedding_model = $1)::int AS usable
+       FROM ${item.table}
+       WHERE ${item.where}`,
+      [model]
+    );
+    const row = result.rows[0] ?? {};
+    const total = Number(row.total ?? 0);
+    const usable = Number(row.usable ?? 0);
+    return {
+      target,
+      total,
+      embedded: Number(row.embedded ?? 0),
+      usable,
+      coverage: total > 0 ? usable / total : 0
+    };
+  }
+
+  async listProductsNeedingEmbeddings(limit = 100, model = config.OPENAI_EMBEDDING_MODEL) {
+    const result = await this.db.query(
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, embedding IS NOT NULL AS has_embedding, embedding_model, embedding_source_hash, embedding_updated_at
+       FROM products
+       WHERE ${PRODUCT_FILTER}
+         AND (
+           embedding IS NULL
+           OR embedding_model IS DISTINCT FROM $1
+           OR embedding_source_hash IS NULL
+           OR embedding_updated_at IS NULL
+           OR updated_at > embedding_updated_at
+         )
+       ORDER BY updated_at DESC
+       LIMIT $2`,
+      [model, limit]
+    );
+    return result.rows.map(mapBackfillProduct);
+  }
+
+  async updateProductEmbedding(id: string, embedding: number[], metadata: EmbeddingMetadata) {
+    const vector = `[${embedding.join(',')}]`;
+    await this.db.query(
+      `UPDATE products
+       SET embedding = $2::vector,
+           embedding_model = $3,
+           embedding_source_hash = $4,
+           embedding_updated_at = now()
+       WHERE id = $1`,
+      [id, vector, metadata.model, metadata.sourceHash]
+    );
+  }
+
+  async touchProductEmbeddingMetadata(id: string, metadata: EmbeddingMetadata) {
+    await this.db.query(
+      `UPDATE products
+       SET embedding_model = $2,
+           embedding_source_hash = $3,
+           embedding_updated_at = now()
+       WHERE id = $1
+         AND embedding IS NOT NULL`,
+      [id, metadata.model, metadata.sourceHash]
+    );
+  }
+
+  async listCatalogPagesNeedingEmbeddings(limit = 100, model = config.OPENAI_EMBEDDING_MODEL) {
+    const result = await this.db.query(
+      `SELECT *, embedding IS NOT NULL AS has_embedding, embedding_model, embedding_source_hash, embedding_updated_at
+       FROM catalog_pages
+       WHERE embedding IS NULL
+          OR embedding_model IS DISTINCT FROM $1
+          OR embedding_source_hash IS NULL
+          OR embedding_updated_at IS NULL
+          OR updated_at > embedding_updated_at
+       ORDER BY updated_at DESC
+       LIMIT $2`,
+      [model, limit]
+    );
+    return result.rows.map(mapBackfillCatalogPage);
+  }
+
+  async updateCatalogPageEmbedding(id: string, embedding: number[], metadata: EmbeddingMetadata) {
+    const vector = `[${embedding.join(',')}]`;
+    await this.db.query(
+      `UPDATE catalog_pages
+       SET embedding = $2::vector,
+           embedding_model = $3,
+           embedding_source_hash = $4,
+           embedding_updated_at = now()
+       WHERE id = $1`,
+      [id, vector, metadata.model, metadata.sourceHash]
+    );
+  }
+
+  async touchCatalogPageEmbeddingMetadata(id: string, metadata: EmbeddingMetadata) {
+    await this.db.query(
+      `UPDATE catalog_pages
+       SET embedding_model = $2,
+           embedding_source_hash = $3,
+           embedding_updated_at = now()
+       WHERE id = $1
+         AND embedding IS NOT NULL`,
+      [id, metadata.model, metadata.sourceHash]
+    );
+  }
+
+  async upsertProduct(input: CatalogProductInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
     const vector = embedding ? `[${embedding.join(',')}]` : null;
     const result = await this.db.query(
       `INSERT INTO products(
          external_id, source_url, slug, name, brand, category, price, currency, image_url,
-         description, specs, raw, source_priority, embedding
+         description, specs, raw, source_priority, embedding, embedding_model, embedding_source_hash, embedding_updated_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector, $15, $16, CASE WHEN $14::vector IS NULL THEN NULL ELSE now() END)
        ON CONFLICT (source_url) DO UPDATE SET
          external_id = coalesce(EXCLUDED.external_id, products.external_id),
          slug = coalesce(EXCLUDED.slug, products.slug),
@@ -646,6 +815,9 @@ export class ProductRepository {
          raw = products.raw || EXCLUDED.raw,
          source_priority = LEAST(products.source_priority, EXCLUDED.source_priority),
          embedding = coalesce(EXCLUDED.embedding, products.embedding),
+         embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_model ELSE EXCLUDED.embedding_model END,
+         embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_source_hash ELSE EXCLUDED.embedding_source_hash END,
+         embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_updated_at ELSE EXCLUDED.embedding_updated_at END,
          updated_at = now()
        RETURNING *`,
       [
@@ -662,7 +834,9 @@ export class ProductRepository {
         input.specs ?? {},
         input.raw ?? {},
         input.sourcePriority ?? 50,
-        vector
+        vector,
+        embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
+        embedding ? embeddingMetadata?.sourceHash ?? null : null
       ]
     );
 
@@ -725,14 +899,14 @@ export class ProductRepository {
     await this.refreshConflicts(productId);
   }
 
-  async upsertTroubleshootingCase(input: TroubleshootingCaseInput, embedding?: number[]) {
+  async upsertTroubleshootingCase(input: TroubleshootingCaseInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
     const vector = embedding ? `[${embedding.join(',')}]` : null;
     const result = await this.db.query(
       `INSERT INTO troubleshooting_cases(
          model, model_key, fault_codes, problem_summary, problem_key, answer,
-         source_urls, source_titles, confidence, embedding, first_seen_message
+         source_urls, source_titles, confidence, embedding, embedding_model, embedding_source_hash, embedding_updated_at, first_seen_message
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::vector, $11, $12, CASE WHEN $10::vector IS NULL THEN NULL ELSE now() END, $13)
        ON CONFLICT (model_key, problem_key) DO UPDATE SET
          model = EXCLUDED.model,
          fault_codes = EXCLUDED.fault_codes,
@@ -742,6 +916,9 @@ export class ProductRepository {
          source_titles = EXCLUDED.source_titles,
          confidence = GREATEST(troubleshooting_cases.confidence, EXCLUDED.confidence),
          embedding = coalesce(EXCLUDED.embedding, troubleshooting_cases.embedding),
+         embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN troubleshooting_cases.embedding_model ELSE EXCLUDED.embedding_model END,
+         embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN troubleshooting_cases.embedding_source_hash ELSE EXCLUDED.embedding_source_hash END,
+         embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NULL THEN troubleshooting_cases.embedding_updated_at ELSE EXCLUDED.embedding_updated_at END,
          first_seen_message = coalesce(troubleshooting_cases.first_seen_message, EXCLUDED.first_seen_message),
          updated_at = now()
        RETURNING *`,
@@ -756,6 +933,8 @@ export class ProductRepository {
         input.sourceTitles ?? [],
         input.confidence ?? 0.75,
         vector,
+        embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
+        embedding ? embeddingMetadata?.sourceHash ?? null : null,
         input.firstSeenMessage ?? null
       ]
     );
@@ -777,7 +956,7 @@ export class ProductRepository {
       `WITH ranked AS (
          SELECT *,
            CASE
-             WHEN $4::vector IS NOT NULL AND embedding IS NOT NULL THEN 1 - (embedding <=> $4::vector)
+             WHEN $4::vector IS NOT NULL AND embedding IS NOT NULL AND embedding_model = $6 THEN 1 - (embedding <=> $4::vector)
              ELSE NULL
            END AS semantic_score,
            CASE
@@ -809,13 +988,13 @@ export class ProductRepository {
                coalesce(answer, '')
              ) @@ websearch_to_tsquery('russian', $1)
            )
-           OR ($4::vector IS NOT NULL AND embedding IS NOT NULL)
+           OR ($4::vector IS NOT NULL AND embedding IS NOT NULL AND embedding_model = $6)
        )
        SELECT *
        FROM ranked
        ORDER BY model_match DESC, fault_match DESC, semantic_score DESC NULLS LAST, text_rank DESC, updated_at DESC
        LIMIT $5`,
-      [normalized, modelKeys, faultCodes, vector, input.limit ?? 4]
+      [normalized, modelKeys, faultCodes, vector, input.limit ?? 4, config.OPENAI_EMBEDDING_MODEL]
     );
     return result.rows.map(mapTroubleshootingCase);
   }
@@ -833,11 +1012,11 @@ export class ProductRepository {
     return result.rowCount ?? 0;
   }
 
-  async upsertCatalogPage(input: CatalogPageInput, embedding?: number[]) {
+  async upsertCatalogPage(input: CatalogPageInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
     const vector = embedding ? `[${embedding.join(',')}]` : null;
     const result = await this.db.query(
-      `INSERT INTO catalog_pages(source_url, page_type, title, content, summary, raw, embedding)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::vector)
+      `INSERT INTO catalog_pages(source_url, page_type, title, content, summary, raw, embedding, embedding_model, embedding_source_hash, embedding_updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9, CASE WHEN $7::vector IS NULL THEN NULL ELSE now() END)
        ON CONFLICT (source_url) DO UPDATE SET
          page_type = EXCLUDED.page_type,
          title = EXCLUDED.title,
@@ -845,6 +1024,9 @@ export class ProductRepository {
          summary = EXCLUDED.summary,
          raw = catalog_pages.raw || EXCLUDED.raw,
          embedding = coalesce(EXCLUDED.embedding, catalog_pages.embedding),
+         embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_model ELSE EXCLUDED.embedding_model END,
+         embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_source_hash ELSE EXCLUDED.embedding_source_hash END,
+         embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_updated_at ELSE EXCLUDED.embedding_updated_at END,
          updated_at = now()
        RETURNING *`,
       [
@@ -854,7 +1036,9 @@ export class ProductRepository {
         input.content,
         input.summary ?? null,
         input.raw ?? {},
-        vector
+        vector,
+        embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
+        embedding ? embeddingMetadata?.sourceHash ?? null : null
       ]
     );
     return mapCatalogPage(result.rows[0]);
@@ -866,7 +1050,7 @@ export class ProductRepository {
       `SELECT *, ts_rank_cd(search_tsv, websearch_to_tsquery('russian', $1)) AS rank
        FROM catalog_pages
        WHERE $1 <> '' AND search_tsv @@ websearch_to_tsquery('russian', $1)
-       ORDER BY rank DESC NULLS LAST, updated_at DESC
+       ORDER BY retrieval_score DESC NULLS LAST, updated_at DESC
        LIMIT $2`,
       [normalized, limit]
     );
@@ -879,9 +1063,10 @@ export class ProductRepository {
       `SELECT *, 1 - (embedding <=> $1::vector) AS score
        FROM catalog_pages
        WHERE embedding IS NOT NULL
+         AND embedding_model = $3
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
-      [vector, limit]
+      [vector, limit, config.OPENAI_EMBEDDING_MODEL]
     );
     return result.rows.map(mapCatalogPage);
   }
@@ -938,7 +1123,7 @@ export class ProductRepository {
     const normalized = query.trim();
     const tokens = searchTokens(normalized);
     const result = await this.db.query(
-      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, ts_rank_cd(search_tsv, plainto_tsquery('russian', $1)) AS rank
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, ts_rank_cd(search_tsv, plainto_tsquery('russian', $1)) AS retrieval_score, 'text'::text AS retrieval_source
        FROM products
        WHERE ${PRODUCT_FILTER}
           AND (
@@ -962,7 +1147,7 @@ export class ProductRepository {
   async searchProductsByModelTokens(tokens: string[], limit = 20) {
     if (!tokens.length) return [];
     const result = await this.db.query(
-      `SELECT ${PRODUCT_RESPONSE_COLUMNS}
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
        FROM products
        WHERE ${PRODUCT_FILTER}
           AND EXISTS (
@@ -984,13 +1169,14 @@ export class ProductRepository {
   async vectorSearch(embedding: number[], limit = 8) {
     const vector = `[${embedding.join(',')}]`;
     const result = await this.db.query(
-      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1 - (embedding <=> $1::vector) AS score
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1 - (embedding <=> $1::vector) AS retrieval_score, 'vector'::text AS retrieval_source
        FROM products
        WHERE embedding IS NOT NULL
           AND ${PRODUCT_FILTER}
+          AND embedding_model = $3
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
-      [vector, limit]
+      [vector, limit, config.OPENAI_EMBEDDING_MODEL]
     );
     return result.rows.map(mapProduct);
   }

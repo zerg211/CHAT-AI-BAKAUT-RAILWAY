@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { parse } from 'csv-parse';
 import { ProductRepository } from '../db/repositories.js';
 import { createEmbedding } from '../ai/openaiClient.js';
+import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
 import type { CatalogProductInput } from '../shared/types.js';
 import { normalizeCsvHeader, parsePrice, productToEmbeddingText } from './normalize.js';
 
@@ -86,8 +87,9 @@ export async function importCatalogCsv(filePath: string, repository = new Produc
         skipped += 1;
         continue;
       }
-      const embedding = await createEmbedding(productToEmbeddingText(product)).catch(() => null);
-      await repository.upsertProduct(product, embedding ?? undefined);
+      const embeddingText = productToEmbeddingText(product);
+      const embedding = await createEmbedding(embeddingText).catch(() => null);
+      await repository.upsertProduct(product, embedding ?? undefined, embedding ? embeddingMetadataForText(embeddingText) : undefined);
       imported += 1;
     }
 

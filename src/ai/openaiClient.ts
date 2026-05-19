@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { config } from '../config.js';
 import { assertOpenAIUsageBudget, recordOpenAIUsageOnce } from './openaiUsageGuard.js';
+import { embeddingInputText } from './embeddingUtils.js';
 
 export function createOpenAIClient() {
   if (!config.OPENAI_API_KEY) return null;
@@ -64,7 +65,7 @@ export async function createEmbedding(text: string, signal?: AbortSignal) {
     await assertOpenAIUsageBudget('embedding', config.OPENAI_EMBEDDING_MODEL);
     const response = await client.embeddings.create({
       model: config.OPENAI_EMBEDDING_MODEL,
-      input: text.slice(0, 8000)
+      input: embeddingInputText(text)
     }, signal ? { signal } : undefined);
     await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
     return response.data?.[0]?.embedding as number[] | undefined;

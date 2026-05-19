@@ -16,6 +16,9 @@ describe('database schema migrations', () => {
     await repairRequiredSchema(client);
 
     expect(queries).toContain('ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS history_summary TEXT');
+    expect(queries).toContain('ALTER TABLE products ADD COLUMN IF NOT EXISTS embedding_model text');
+    expect(queries).toContain('ALTER TABLE catalog_pages ADD COLUMN IF NOT EXISTS embedding_source_hash text');
+    expect(queries).toContain('ALTER TABLE troubleshooting_cases ADD COLUMN IF NOT EXISTS embedding_updated_at timestamptz');
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS troubleshooting_cases'))).toBe(true);
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS openai_usage_events'))).toBe(true);
   });
@@ -33,8 +36,19 @@ describe('database schema migrations', () => {
     expect(schema).toContain('CREATE TABLE IF NOT EXISTS troubleshooting_cases');
     expect(schema).toContain('model_key text NOT NULL');
     expect(schema).toContain('embedding vector(1536)');
+    expect(schema).toContain('embedding_model text');
     expect(schema).toContain('UNIQUE(model_key, problem_key)');
     expect(schema).not.toContain('GENERATED ALWAYS');
+  });
+
+  it('adds embedding metadata to existing catalog tables', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '008_embedding_metadata.sql'), 'utf8');
+
+    expect(schema).toContain('ALTER TABLE products');
+    expect(schema).toContain('embedding_source_hash text');
+    expect(schema).toContain('products_embedding_metadata_idx');
+    expect(schema).toContain('catalog_pages_embedding_metadata_idx');
+    expect(schema).toContain('troubleshooting_cases_embedding_metadata_idx');
   });
 
   it('creates the OpenAI usage ledger schema', async () => {

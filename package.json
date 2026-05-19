@@ -30,7 +30,9 @@
     "catalog:sync": "tsx src/scripts/syncCatalog.ts",
     "catalog:sync:sitemap": "tsx src/scripts/syncCatalogSitemap.ts",
     "catalog:inventory": "tsx src/scripts/inventoryCatalog.ts",
-    "catalog:import": "tsx src/scripts/importCatalogCsv.ts"
+    "catalog:import": "tsx src/scripts/importCatalogCsv.ts",
+    "embeddings:backfill": "tsx src/scripts/backfillEmbeddings.ts",
+    "embeddings:coverage": "tsx src/scripts/embeddingCoverage.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

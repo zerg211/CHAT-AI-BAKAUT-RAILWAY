@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS catalog_pages (
   summary text,
   raw jsonb NOT NULL DEFAULT '{}'::jsonb,
   embedding vector(1536),
+  embedding_model text,
+  embedding_source_hash text,
+  embedding_updated_at timestamptz,
   search_tsv tsvector GENERATED ALWAYS AS (
     to_tsvector(
       'russian',
@@ -23,3 +26,4 @@ CREATE INDEX IF NOT EXISTS catalog_pages_search_tsv_idx ON catalog_pages USING g
 CREATE INDEX IF NOT EXISTS catalog_pages_page_type_idx ON catalog_pages(page_type);
 CREATE INDEX IF NOT EXISTS catalog_pages_updated_at_idx ON catalog_pages(updated_at DESC);
 CREATE INDEX IF NOT EXISTS catalog_pages_embedding_idx ON catalog_pages USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50);
+CREATE INDEX IF NOT EXISTS catalog_pages_embedding_metadata_idx ON catalog_pages(embedding_model, embedding_updated_at) WHERE embedding IS NOT NULL;

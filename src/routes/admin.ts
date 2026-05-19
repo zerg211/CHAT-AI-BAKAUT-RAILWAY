@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { importCatalogCsv } from '../catalog/csvImport.js';
 import { syncCatalogFromSite } from '../catalog/crawler.js';
 import { syncCatalogFromSitemap } from '../catalog/sitemapSync.js';
+import { buildEmbeddingCoverageReport } from '../ai/embeddingCoverage.js';
 import { createOpenAIClient } from '../ai/openaiClient.js';
 import { recordOpenAIUsageOnce } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
@@ -154,6 +155,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     const query = z.object({ limit: z.coerce.number().int().positive().max(500).default(100) }).parse(request.query);
     return { products: await products.listProducts(query.limit) };
   });
+
+  app.get('/api/admin/embedding-coverage', async () => buildEmbeddingCoverageReport(products));
 
   app.get('/api/admin/runtime/openai', async () => {
     const client = createOpenAIClient();

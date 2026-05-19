@@ -74,6 +74,7 @@ const schema = z.object({
   OPENAI_NEED_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(8000),
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(3200),
   OPENAI_FACT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(700),
+  EMBEDDING_MIN_COVERAGE: z.coerce.number().min(0).max(1).default(0.05),
   DEBUG_OPENAI_USAGE: booleanFlag(false),
   OPENAI_USAGE_GUARD_ENABLED: booleanFlag(true),
   OPENAI_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(0),

@@ -1,0 +1,60 @@
+{
+  "taskId": "embedding-retrieval-hardening",
+  "verdict": "PASS",
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS"
+  },
+  "commands": [
+    {
+      "command": "npm test -- tests/embeddingRetrieval.test.ts tests/conversationRepository.test.ts tests/migrate.test.ts",
+      "status": "PASS",
+      "summary": "3 files, 18 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS",
+      "summary": "tsc passed for frontend and server configs"
+    },
+    {
+      "command": "npm test -- tests/recommendationRanking.test.ts tests/agenticCycle876.test.ts tests/agentTurnContract.test.ts tests/agentRuntimeContractsEval.test.ts",
+      "status": "PASS",
+      "summary": "4 files, 249 tests passed"
+    },
+    {
+      "command": "npm run migrate",
+      "status": "PASS",
+      "summary": "local migration completed"
+    },
+    {
+      "command": "npm run embeddings:backfill -- --dry-run --limit=3",
+      "status": "PASS",
+      "summary": "dry-run planned 3 products and 3 catalog pages"
+    },
+    {
+      "command": "npm test -- tests/openaiClient.test.ts tests/openaiUsageGuard.test.ts",
+      "status": "PASS",
+      "summary": "2 files, 6 tests passed"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "45 files, 452 tests passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "no whitespace errors; line-ending warnings only"
+    }
+  ],
+  "localEmbeddingCoverage": {
+    "products": { "total": 3955, "embedded": 0, "usable": 0 },
+    "catalog_pages": { "total": 102, "embedded": 0, "usable": 0 },
+    "troubleshooting_cases": { "total": 1, "embedded": 0, "usable": 0 }
+  }
+}

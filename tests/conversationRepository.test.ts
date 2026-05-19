@@ -227,7 +227,8 @@ describe('ProductRepository troubleshooting memory', () => {
       ['ад30ст4001ркм1'],
       ['A25'],
       '[0.1,0.2]',
-      3
+      3,
+      'text-embedding-3-small'
     ]);
     expect(results[0]).toMatchObject({ modelKey: 'ад30ст4001ркм1' });
   });

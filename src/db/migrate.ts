@@ -61,6 +61,11 @@ export async function repairRequiredSchema(client: QueryableClient) {
   // Keep this tiny and idempotent: it protects local/dev databases where
   // schema_migrations can say that 004 ran while the physical column is absent.
   await client.query('ALTER TABLE conversation_sessions ADD COLUMN IF NOT EXISTS history_summary TEXT');
+  for (const table of ['products', 'catalog_pages', 'troubleshooting_cases']) {
+    await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_model text`);
+    await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_source_hash text`);
+    await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS embedding_updated_at timestamptz`);
+  }
   await client.query(`
     CREATE TABLE IF NOT EXISTS conversation_turns (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -147,6 +152,21 @@ export async function repairRequiredSchema(client: QueryableClient) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS openai_usage_events_session_created_idx
       ON openai_usage_events(session_id, created_at DESC)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS products_embedding_metadata_idx
+      ON products(embedding_model, embedding_updated_at)
+      WHERE embedding IS NOT NULL
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS catalog_pages_embedding_metadata_idx
+      ON catalog_pages(embedding_model, embedding_updated_at)
+      WHERE embedding IS NOT NULL
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS troubleshooting_cases_embedding_metadata_idx
+      ON troubleshooting_cases(embedding_model, embedding_updated_at)
+      WHERE embedding IS NOT NULL
   `);
 }
 

@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS troubleshooting_cases (
   source_titles text[] NOT NULL DEFAULT '{}'::text[],
   confidence numeric(3, 2) NOT NULL DEFAULT 0.75,
   embedding vector(1536),
+  embedding_model text,
+  embedding_source_hash text,
+  embedding_updated_at timestamptz,
   first_seen_message text,
   hit_count integer NOT NULL DEFAULT 0,
   last_used_at timestamptz,
@@ -21,3 +24,4 @@ CREATE TABLE IF NOT EXISTS troubleshooting_cases (
 CREATE INDEX IF NOT EXISTS troubleshooting_cases_model_key_idx ON troubleshooting_cases(model_key);
 CREATE INDEX IF NOT EXISTS troubleshooting_cases_fault_codes_idx ON troubleshooting_cases USING gin(fault_codes);
 CREATE INDEX IF NOT EXISTS troubleshooting_cases_embedding_idx ON troubleshooting_cases USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50);
+CREATE INDEX IF NOT EXISTS troubleshooting_cases_embedding_metadata_idx ON troubleshooting_cases(embedding_model, embedding_updated_at) WHERE embedding IS NOT NULL;

@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import { fetch } from 'undici';
 import { createEmbedding } from '../ai/openaiClient.js';
+import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
 import { config } from '../config.js';
 import { ProductRepository } from '../db/repositories.js';
 import type { CatalogPageInput, CatalogProductInput } from '../shared/types.js';
@@ -458,8 +459,9 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
             stats.skippedProducts += 1;
             return;
           }
-          const embedding = await maybeEmbedding(productToEmbeddingText(product), includeEmbeddings);
-          await repository.upsertProduct(product, embedding);
+          const embeddingText = productToEmbeddingText(product);
+          const embedding = await maybeEmbedding(embeddingText, includeEmbeddings);
+          await repository.upsertProduct(product, embedding, embedding ? embeddingMetadataForText(embeddingText) : undefined);
           stats.importedProducts += 1;
           if (!product.price) stats.productsWithoutPrice += 1;
           if (!Object.keys(product.specs ?? {}).length) stats.productsWithoutSpecs += 1;
@@ -484,8 +486,9 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
             stats.skippedContentPages += 1;
             return;
           }
-          const embedding = await maybeEmbedding([page.title, page.summary, page.content].filter(Boolean).join('\n').slice(0, 8000), includeEmbeddings);
-          await repository.upsertCatalogPage(page, embedding);
+          const embeddingText = [page.title, page.summary, page.content].filter(Boolean).join('\n').slice(0, 8000);
+          const embedding = await maybeEmbedding(embeddingText, includeEmbeddings);
+          await repository.upsertCatalogPage(page, embedding, embedding ? embeddingMetadataForText(embeddingText) : undefined);
           stats.importedContentPages += 1;
         } catch (error) {
           stats.failedContentPages += 1;

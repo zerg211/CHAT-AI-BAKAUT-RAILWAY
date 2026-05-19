@@ -1,0 +1,67 @@
+{
+  "taskId": "embedding-finalization-execution",
+  "verdict": "PARTIAL_PASS_NOT_FINAL",
+  "status": {
+    "code_ready": "PASS",
+    "production_backfill_ready": "PENDING",
+    "production_backfill_done": "PENDING",
+    "live_gate_done": "PENDING",
+    "final_ready": "FAIL"
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/adminEmbeddingCoverage.test.ts tests/embeddingCoverageReport.test.ts tests/embeddingRetrieval.test.ts tests/conversationRepository.test.ts tests/migrate.test.ts tests/app.test.ts",
+      "status": "PASS",
+      "summary": "6 files, 23 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "47 files, 455 tests passed"
+    },
+    {
+      "command": "npm run migrate",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run embeddings:coverage",
+      "status": "PASS",
+      "summary": "local finalReady=false"
+    },
+    {
+      "command": "npm run embeddings:backfill -- --dry-run --limit=50",
+      "status": "PASS",
+      "summary": "planned 50 products and 50 catalog pages"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "line-ending warnings only"
+    }
+  ],
+  "localCoverage": {
+    "model": "text-embedding-3-small",
+    "minCoverage": 0.05,
+    "finalCoverageTarget": 0.8,
+    "targets": {
+      "products": { "total": 3858, "embedded": 0, "usable": 0, "coverage": 0, "ready": false },
+      "catalog_pages": { "total": 102, "embedded": 0, "usable": 0, "coverage": 0, "ready": false },
+      "troubleshooting_cases": { "total": 1, "embedded": 0, "usable": 0, "coverage": 0, "ready": false }
+    },
+    "finalReady": false
+  },
+  "production": {
+    "coverageEndpoint": "PENDING",
+    "backfillDryRun": "PENDING",
+    "backfill": "PENDING",
+    "liveGate": "PENDING"
+  }
+}

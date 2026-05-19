@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS products (
   raw jsonb NOT NULL DEFAULT '{}'::jsonb,
   source_priority integer NOT NULL DEFAULT 50,
   embedding vector(1536),
+  embedding_model text,
+  embedding_source_hash text,
+  embedding_updated_at timestamptz,
   search_tsv tsvector GENERATED ALWAYS AS (
     to_tsvector(
       'russian',
@@ -74,6 +77,7 @@ CREATE INDEX IF NOT EXISTS products_search_tsv_idx ON products USING gin(search_
 CREATE INDEX IF NOT EXISTS products_category_idx ON products(category);
 CREATE INDEX IF NOT EXISTS products_updated_at_idx ON products(updated_at DESC);
 CREATE INDEX IF NOT EXISTS products_embedding_idx ON products USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+CREATE INDEX IF NOT EXISTS products_embedding_metadata_idx ON products(embedding_model, embedding_updated_at) WHERE embedding IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS product_facts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
