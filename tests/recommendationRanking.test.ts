@@ -1386,6 +1386,41 @@ describe('recommendation ranking', () => {
     expect(answer).toMatch(new RegExp(ru('\\u0441\\u0446\\u0435\\u043d\\u0430\\u0440'), 'iu'));
   });
 
+  it('keeps generator load refinements with "еще" out of current-lineup routing', () => {
+    const message = 'Насос скважинный примерно 1,1 кВт, модель не знаю. Еще в гараже бывает компрессор 2,2 кВт, его можно запускать отдельно, не вместе с чайником и плиткой. Котел, холодильник, морозилка, связь и охрана должны работать постоянно. Дизель не хочу, лучше бензиновый.';
+    const profile = assistantTestHooks.generatorLoadProfileFromText(message);
+    const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      hardConstraints: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        exactModelTokens: [],
+        mustHaveTraits: [],
+        excludedClasses: []
+      },
+      loadProfile: profile as any,
+      confidence: 0.82
+    });
+
+    expect(assistantTestHooks.shouldUseCurrentLineupStyle(message)).toBe(false);
+    expect(assistantTestHooks.shouldUseFastTechnicalOrientation({
+      userMessage: message,
+      needState: { ...emptyNeedState(), selectionState },
+      history: []
+    })).toBe(true);
+    expect(profile?.requiredNominalKw).toBeGreaterThanOrEqual(8);
+    expect(profile?.requiredNominalKw).toBeLessThan(12);
+
+    const answer = assistantTestHooks.deterministicTechnicalSummaryRecovery({
+      cards: [],
+      state: selectionState,
+      latestUserMessage: message
+    });
+    expect(answer).toContain('компрессор вместе с базовой нагрузкой');
+    expect(answer).not.toMatch(/compressor scenario|В каталоге вижу/iu);
+  });
+
   it('keeps deterministic fallback from showing generator catalog when pump is generic unknown', () => {
     const fit = productWithSpecs('fit-5kw', 'Generator gasoline 5.0 kW 220 V', 64_000, 'https://example.test/generators/fit-5kw/', {
       nominalPower: '5.0 kW',

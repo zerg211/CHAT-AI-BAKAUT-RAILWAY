@@ -3393,7 +3393,7 @@ function fallbackDetectTechnicalSpecVerificationQuestion(text: string) {
 
 function fallbackDetectCurrentLineupQuestion(text: string) {
   const normalized = text.toLowerCase();
-  return /(?:выпуска(?:ет|ется|ют|ютcя)?|производ(?:ит|ится|ят|ятcя)?|снят[аоы]?\s+с\s+производства|снима(?:ют|ется)\s+с\s+производства|актуальн(?:ая|ой|ую)?\s+линейк|текущ(?:ая|ей|ую)?\s+линейк|еще\s+в\s+линейк|ещ[её]\??|сейчас\s+(?:есть|выпуска|производ)|current\s+lineup|discontinued|still\s+made|still\s+produced)/iu.test(normalized);
+  return /(?:выпуска(?:ет|ется|ют|ютcя)?|производ(?:ит|ится|ят|ятcя)?|снят[аоы]?\s+с\s+производства|снима(?:ют|ется)\s+с\s+производства|актуальн(?:ая|ой|ую)?\s+линейк|текущ(?:ая|ей|ую)?\s+линейк|ещ[её]\s+(?:в\s+линейк|выпуска|производ|дела(?:ют|ется)|прода(?:ют|ется))|сейчас\s+(?:есть|выпуска|производ)|current\s+lineup|discontinued|still\s+made|still\s+produced)/iu.test(normalized);
 }
 
 function shouldUseCurrentLineupStyle(userMessage: string, plan?: AssistantTurnPlan) {
@@ -6016,6 +6016,19 @@ function deterministicTechnicalSummaryRecovery(input: {
   return lines.join('\n\n');
 }
 
+function generatorScenarioDisplayLabel(scenario: NonNullable<ProductGeneratorLoadProfile['scenarios']>[number]) {
+  const text = `${scenario.id} ${scenario.label}`.toLowerCase();
+  if (scenario.id === 'base') return 'базовая постоянная нагрузка';
+  if (/(?:compressor|компрессор)/iu.test(text)) return 'компрессор вместе с базовой нагрузкой';
+  if (/(?:pump|насос|скважин)/iu.test(text)) return 'насос вместе с базовой нагрузкой';
+  if (/(?:kettle|чайник)/iu.test(text)) return 'чайник вместе с базовой нагрузкой';
+  if (/(?:microwave|микроволн)/iu.test(text)) return 'микроволновка вместе с базовой нагрузкой';
+  if (/(?:induction|cooktop|hob|индукц|плитк)/iu.test(text)) return 'плитка вместе с базовой нагрузкой';
+  if (/(?:tool|grinder|drill|saw|инструмент|болгарк|дрел)/iu.test(text)) return 'ручной инструмент вместе с базовой нагрузкой';
+  const label = scenario.label.replace(/\s+scenario$/iu, '').trim();
+  return label ? `${label} вместе с базовой нагрузкой` : 'самый тяжелый отдельный потребитель';
+}
+
 function generatorLoadScenarioExplanation(load?: ProductGeneratorLoadProfile | null) {
   const scenarios = load?.scenarios?.filter((scenario) => scenario.requiredNominalKw > 0) ?? [];
   if (scenarios.length <= 1) return '';
@@ -6027,7 +6040,7 @@ function generatorLoadScenarioExplanation(load?: ProductGeneratorLoadProfile | n
   const optionalText = optionalCount > 0
     ? 'разовые потребители считаю отдельными сценариями, а не складываю все сразу'
     : 'проверяю самый тяжелый пусковой сценарий';
-  return `Расчет веду по сценариям: ${optionalText}. Самый тяжелый сценарий сейчас - ${primary.label}, примерно ${nominal} кВт по номиналу${starting ? ` и ${starting} кВт по пуску` : ''}. `;
+  return `Расчет веду по сценариям: ${optionalText}. Самый тяжелый сценарий сейчас - ${generatorScenarioDisplayLabel(primary)}, примерно ${nominal} кВт по номиналу${starting ? ` и ${starting} кВт по пуску` : ''}. `;
 }
 
 function generatorTechnicalLoadNotes(load?: ProductGeneratorLoadProfile | null, latestUserMessage = '') {
@@ -6037,7 +6050,9 @@ function generatorTechnicalLoadNotes(load?: ProductGeneratorLoadProfile | null, 
   ].join(' ').toLowerCase();
   const notes: string[] = [];
   if (/(?:компрессор|compressor)/iu.test(context)) {
-    notes.push('компрессор 2,2 кВт лучше считать отдельным пусковым сценарием, а не включать вместе с чайником');
+    const compressor = load?.items?.find((item) => /(?:компрессор|compressor)/iu.test(`${item.kind} ${item.name ?? ''}`));
+    const compressorKw = formatKwValue(compressor?.runningKw);
+    notes.push(`компрессор${compressorKw ? ` ${compressorKw} кВт` : ''} лучше считать отдельным пусковым сценарием, а не включать вместе с чайником`);
   }
   if (/(?:скважин|borehole|well pump)/iu.test(context)) {
     notes.push('скважинный насос остается главным пусковым риском');
@@ -11267,8 +11282,13 @@ export class AssistantService {
     const latestUserText = latestUser?.content ?? '';
     const storedContract = (recoveryTurn.plannerContract ?? null) as AgentTurnContract | null;
     const recoveryAiDiagnostics = emptyAiGenerationDiagnostics();
-    const recoveryCurrentLineupStyle = shouldUseCurrentLineupStyle(latestUserText);
     const recoveryNeedState = latestMessageScopedRecoveryNeedState(session.needState, latestUserText);
+    const recoveryTechnicalOrientation = latestUser ? shouldUseFastTechnicalOrientation({
+      userMessage: latestUserText,
+      needState: recoveryNeedState,
+      history
+    }) : false;
+    const recoveryCurrentLineupStyle = !recoveryTechnicalOrientation && shouldUseCurrentLineupStyle(latestUserText);
     let recoveryCatalogProducts: Product[] = [];
     const buildRecoveryRenderContract = (contract: AgentTurnContract, cards: ProductCard[]): ResolvedTurnContract => ({
       action: {
@@ -11618,11 +11638,7 @@ export class AssistantService {
         cardDisplay: undefined
       });
     }
-    if (latestUser && shouldUseFastTechnicalOrientation({
-      userMessage: latestUserText,
-      needState: recoveryNeedState,
-      history
-    })) {
+    if (latestUser && recoveryTechnicalOrientation) {
       const technicalContract: AgentTurnContract = {
         answerTask: 'technical_explanation',
         taskType: 'technical_answer',
