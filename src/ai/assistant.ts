@@ -4508,7 +4508,6 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
 
   const negatedPumpLoad = hasNegatedPumpLoad(text);
   const removedKinds = negatedPumpLoad ? ['pump'] : [];
-  let replacedPumpLoad = false;
   if (negatedPumpLoad) {
     for (const [key, existing] of [...items.entries()]) {
       if (existing.kind === 'pump') items.delete(key);
@@ -4559,13 +4558,12 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
     for (const [key, existing] of [...items.entries()]) {
       if (existing.kind === 'pump') items.delete(key);
     }
-    replacedPumpLoad = true;
     items.set(loadItemKey(item), item);
   }
 
   const profile = calculateGeneratorLoadProfile([...items.values()], simultaneousStarting || current?.simultaneousStarting === true);
-  if (profile && (removedKinds.length || replacedPumpLoad || stagedKinds.size)) {
-    profile.removedKinds = [...new Set([...removedKinds, ...(replacedPumpLoad ? ['pump'] : []), ...stagedKinds])];
+  if (profile && (removedKinds.length || stagedKinds.size)) {
+    profile.removedKinds = [...new Set([...removedKinds, ...stagedKinds])];
   }
   return profile;
 }
@@ -5980,6 +5978,10 @@ function shouldUseFastTechnicalOrientation(input: {
     /(?:подскаж|какой|какая|какую|лучше|подойдет|хватит|мощн|ориентир|подбор|взять|тянул|тянуть|для\s+дома)/iu.test(input.userMessage);
 }
 
+function deterministicEstimatedPumpClarificationQuestion(_missingQuestion?: string) {
+  return 'Уточните, пожалуйста: какой насос стоит и какая у него мощность или модель на шильдике?';
+}
+
 function deterministicAnswerGenerationFallback(input: {
   cards: ProductCard[];
   selectionResult: ProductSelectionResult;
@@ -5998,21 +6000,7 @@ function deterministicAnswerGenerationFallback(input: {
   }
 
   if (shouldBlockGeneratorCardsForEstimatedPump(input.selectionResult.state)) {
-    const load = input.selectionResult.state.loadProfile;
-    const nominal = formatKwValue(load?.requiredNominalKw);
-    const starting = formatKwValue(load?.requiredStartingKw);
-    const question = input.selectionResult.missingQuestions[0] ||
-      'какой насос: скважинный или поверхностный, и есть ли мощность/модель на шильдике';
-    const lines = [
-      nominal
-        ? starting
-          ? `По текущим данным можно дать только предварительный расчет: около ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт. Это еще не финальный подбор генератора.`
-          : `По текущим данным можно дать только предварительный расчет: около ${nominal} кВт по номиналу. Это еще не финальный подбор генератора.`
-        : '',
-      'Карточки генераторов пока не показываю: насос есть, но его тип/мощность неизвестны, а именно насос задает главный пусковой риск.',
-      `Уточните: ${question}`
-    ].filter(Boolean);
-    return lines.join('\n\n');
+    return deterministicEstimatedPumpClarificationQuestion(input.selectionResult.missingQuestions[0]);
   }
 
   const catalogAnswer = input.structuredCatalogSlice
@@ -6159,22 +6147,16 @@ function deterministicGeneratorSizingAnswer(
   cards: ProductCard[] = [],
   options: { blockEstimatedPumpCards?: boolean; missingQuestion?: string } = {}
 ) {
+  if (options.blockEstimatedPumpCards) {
+    return deterministicEstimatedPumpClarificationQuestion(options.missingQuestion);
+  }
   const nominal = formatKwValue(loadProfile.requiredNominalKw);
   const starting = formatKwValue(loadProfile.requiredStartingKw);
   const lines = [
-    options.blockEstimatedPumpCards
-      ? starting
-        ? `Пока это только предварительный расчет: около ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт.`
-        : `Пока это только предварительный расчет: около ${nominal} кВт по номиналу.`
-      : starting
-        ? `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт.`
-        : `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу.`
+    starting
+      ? `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт.`
+      : `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу.`
   ];
-  if (options.blockEstimatedPumpCards) {
-    lines.push('Карточки генераторов пока не показываю: насос есть, но его тип/мощность неизвестны, а именно насос задает главный пусковой риск.');
-    lines.push(`Уточните: ${options.missingQuestion || 'какой насос стоит и какая у него мощность или модель'}.`);
-    return lines.join('\n\n');
-  }
   const cardLines = cards
     .slice(0, 3)
     .map((card) => {
@@ -6297,11 +6279,13 @@ function repairExplicitPhaseReconfirmation(answer: string, state?: ProductSelect
 function repairAvailabilityAnswerWithCatalogModels(
   answer: string,
   contract: AgentTurnContract | undefined,
-  selectionResult: ProductSelectionResult
+  selectionResult: ProductSelectionResult,
+  options: { blockProductCards?: boolean } = {}
 ) {
   const availabilityTurn = contract?.taskType === 'pure_availability' ||
     contract?.taskType === 'product_selection_with_availability';
   if (!availabilityTurn) return answer;
+  if (options.blockProductCards) return answer;
   if (shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state)) return answer;
   const products = (selectionResult.visibleProducts.length
     ? selectionResult.visibleProducts
@@ -7867,6 +7851,7 @@ export class AssistantService {
     const catalog = await this.products.listProducts(5000).catch(() => []);
     const byId = new Map(catalog.filter((product) => idSet.has(product.id)).map((product) => [product.id, product]));
     let selectedProducts = ids.map((id) => byId.get(id)).filter((product): product is Product => Boolean(product));
+    let recoveredInitialVisibleCount: number | undefined;
     const profile = buildProductFitProfile(state, userMessage);
     const selectionState = state.selectionState ?? emptyProductSelectionState();
     selectedProducts = selectedProducts.filter((product) => productMatchesSelectionCriteria(product, selectionState, profile));
@@ -7928,13 +7913,18 @@ export class AssistantService {
         answerGuidance: 'Recovery catalog selection from validated structured need state.'
       };
       const selection = await this.selectProductsForTurn(userMessage, state, recoveryPlan, catalog, undefined, LARGE_SLICE_VISIBLE_CARDS);
-      selectedProducts = selection.visibleProducts.length
-        ? selection.visibleProducts
-        : selection.matchedProducts.slice(0, LARGE_SLICE_VISIBLE_CARDS);
+      selectedProducts = (selection.matchedProducts.length
+        ? selection.matchedProducts
+        : selection.visibleProducts
+      ).slice(0, FULL_SLICE_PRODUCT_CARDS);
+      recoveredInitialVisibleCount = Math.min(
+        selectedProducts.length,
+        selection.visibleProducts.length || LARGE_SLICE_VISIBLE_CARDS
+      );
     }
     if (!selectedProducts.length) return { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined };
     const cards = productCards(selectedProducts, state, userMessage, profile, FULL_SLICE_PRODUCT_CARDS);
-    const initialVisibleCount = Math.min(cards.length, LARGE_SLICE_VISIBLE_CARDS);
+    const initialVisibleCount = Math.min(cards.length, recoveredInitialVisibleCount ?? LARGE_SLICE_VISIBLE_CARDS);
     return {
       cards,
       cardDisplay: cardDisplayOptions(initialVisibleCount, cards)
@@ -9237,8 +9227,10 @@ export class AssistantService {
       agentTurnContract.catalogAction !== 'verify_catalog_absence' &&
       agentTurnContract.taskType !== 'comparison' &&
       agentTurnContract.taskType !== 'technical_answer';
+    const selectionBlocksEstimatedPumpCards = shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state);
     const latestLoadProfileForPumpBlock = selectionStateBeforeProductSelection.loadProfile ?? selectionResult.state.loadProfile;
     const latestTurnBlocksEstimatedPumpCards = currentTurnCanBlockForEstimatedPump && Boolean(
+      selectionBlocksEstimatedPumpCards &&
       latestLoadProfileForPumpBlock &&
       hasEstimatedPumpLoadProfile(latestLoadProfileForPumpBlock) &&
       !hasPreliminaryGeneratorSelectionBasisFromProfile(latestLoadProfileForPumpBlock)
@@ -9250,7 +9242,7 @@ export class AssistantService {
     const blockEstimatedPumpCards = currentTurnCanBlockForEstimatedPump &&
       !allowPreliminaryEstimatedPumpCatalogCards &&
       !currentTurnExplicitCatalogPowerSelection &&
-      (shouldBlockGeneratorCardsForEstimatedPump(selectionResult.state) || latestTurnBlocksEstimatedPumpCards);
+      (selectionBlocksEstimatedPumpCards || latestTurnBlocksEstimatedPumpCards);
     const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
       ? {
           source: selectionResult.trace.source === 'full_catalog_selection_engine' ? 'full_catalog_slice' : 'structured_constraints',
@@ -10169,7 +10161,9 @@ export class AssistantService {
         : selectionResult.missingQuestions[0]
     });
     answer = repairExplicitPhaseReconfirmation(answer, selectionResult.state);
-    answer = repairAvailabilityAnswerWithCatalogModels(answer, answerAgentTurnContract, selectionResult);
+    answer = repairAvailabilityAnswerWithCatalogModels(answer, answerAgentTurnContract, selectionResult, {
+      blockProductCards: blockEstimatedPumpCards
+    });
     if (suppressLeadRequestByContract) {
       answer = stripLeadPressureTail(answer);
     }

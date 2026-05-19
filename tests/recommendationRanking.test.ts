@@ -1415,11 +1415,24 @@ describe('recommendation ranking', () => {
       }
     } as any);
 
-    expect(answer).toContain(ru('\\u041a\\u0430\\u0440\\u0442\\u043e\\u0447\\u043a\\u0438 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u043e\\u0432 \\u043f\\u043e\\u043a\\u0430 \\u043d\\u0435 \\u043f\\u043e\\u043a\\u0430\\u0437\\u044b\\u0432\\u0430\\u044e'));
-    expect(answer).toContain(ru('\\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u0438\\u043b\\u0438 \\u0442\\u0438\\u043f \\u043d\\u0430\\u0441\\u043e\\u0441\\u0430'));
+    expect(answer).toContain(ru('\\u043a\\u0430\\u043a\\u043e\\u0439 \\u043d\\u0430\\u0441\\u043e\\u0441'));
+    expect(answer).not.toMatch(/кВт|номинал|пусковая|карточ/iu);
     expect(answer).not.toContain('50');
     expect(answer).not.toContain('fit-5kw');
     expect(answer).not.toContain(fit.name);
+
+    const availabilityRepaired = assistantTestHooks.repairAvailabilityAnswerWithCatalogModels(
+      answer,
+      {
+        taskType: 'product_selection_with_availability',
+        cardsRole: 'primary',
+        productCardsPolicy: 'show_matching_products',
+        catalogAction: 'find_matching_products'
+      } as any,
+      result,
+      { blockProductCards: true }
+    );
+    expect(availabilityRepaired).toBe(answer);
   });
 
   it('repairs inflated household generator recommendations back to the calculated minimum', () => {
@@ -3011,6 +3024,55 @@ describe('recommendation ranking', () => {
 
     expect(assistantTestHooks.initialVisibleCardCountForCards(cards as any, result)).toBe(7);
     expect(assistantTestHooks.initialVisibleCardCountForCards(cards as any, result, 2)).toBe(2);
+  });
+
+  it('rebuilds recovered catalog selections with hidden generator cards preserved', async () => {
+    const products = Array.from({ length: 12 }, (_, index) => productWithSpecs(
+      `g${index}`,
+      `Generator gasoline HOME ${3 + (index % 3) * 0.2} kW 220 V model ${index}`,
+      30_000 + index * 1000,
+      `https://example.test/generators/g${index}`,
+      {
+        nominalPower: `${3 + (index % 3) * 0.2} kW`,
+        maxPower: `${3.4 + (index % 3) * 0.2} kW`,
+        voltage: '230 V',
+        phase: 'single phase'
+      }
+    ));
+    const assistant = new AssistantService(undefined as never, new FakeProducts(products) as never);
+    const state = {
+      ...emptyNeedState(),
+      selectionState: mergeProductSelectionState(emptyProductSelectionState(), {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        hardConstraints: {
+          productIntent: 'generator',
+          productRole: 'coreProduct',
+          nominalPowerKwMin: 3,
+          nominalPowerKwMax: 4,
+          singlePhase220: true,
+          exactModelTokens: [],
+          mustHaveTraits: [],
+          excludedClasses: [],
+          provenance: {
+            nominalPowerKwMin: 'explicit_user',
+            nominalPowerKwMax: 'explicit_user',
+            singlePhase220: 'explicit_user'
+          }
+        },
+        selectedProductIds: products.slice(0, 7).map((item) => item.id),
+        matchedProductIds: products.map((item) => item.id),
+        confidence: 0.86
+      })
+    };
+
+    const recovered = await (assistant as any).productCardsFromRecoveredSelection(
+      state,
+      'Покажите генераторы около 3 кВт для дома 220 В'
+    );
+
+    expect(recovered.cards).toHaveLength(12);
+    expect(recovered.cardDisplay?.initialVisibleCount).toBe(7);
   });
 
   it('marks visible and show-more suitable products in answer context', () => {
@@ -5130,6 +5192,32 @@ describe('recommendation ranking', () => {
     } as never;
     expect(assistantTestHooks.shouldPromotePrimarySelectionCards(primarySelectionContract, plan, initial, true)).toBe(false);
     expect(assistantTestHooks.shouldPromotePrimarySelectionCards(primarySelectionContract, plan, followUp, false)).toBe(true);
+  });
+
+  it('does not mark a refined pump load as removed', () => {
+    const current = {
+      items: [
+        { kind: 'pump', name: 'pump', count: 1, runningKw: 0.75, startingKw: 2, source: 'estimated_average', evidence: 'generic pump' },
+        { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.15, startingKw: 1, source: 'estimated_average', evidence: 'fridge' }
+      ],
+      confidence: 0.6,
+      calculation: 'generic pump and fridge',
+      totalRunningKw: 0.9,
+      requiredStartingKw: 2.9,
+      requiredNominalKw: 3,
+      simultaneousStarting: false,
+      simultaneousStartingKinds: []
+    } as any;
+
+    const refined = assistantTestHooks.generatorLoadProfileFromText(
+      'Насос скважинный 220 В, примерно 750 Вт, модель сейчас не скажу.',
+      current
+    );
+
+    expect(refined?.items.find((item) => item.kind === 'pump')).toMatchObject({
+      name: 'borehole pump'
+    });
+    expect(refined?.removedKinds ?? []).not.toContain('pump');
   });
 
   it('keeps pump wattage memory out of generator power hard constraints', async () => {
