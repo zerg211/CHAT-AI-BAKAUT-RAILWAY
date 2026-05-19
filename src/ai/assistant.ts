@@ -6182,7 +6182,8 @@ function shouldUseFastCatalogSelection(input: {
   history: Message[];
 }) {
   if (!isCatalogSelectionRequestText(input.userMessage)) return false;
-  if (isExplicitCommercialQuestion(input.userMessage) || isMixedCatalogAndCommercialQuestion(input.userMessage)) return false;
+  const mixedCatalogCommercial = isMixedCatalogAndCommercialQuestion(input.userMessage);
+  if (isExplicitCommercialQuestion(input.userMessage) && !mixedCatalogCommercial) return false;
   if (isShownProductChoiceOrComparisonQuestion(input.userMessage) && allShownProductCards(input.history).length > 0) return false;
 
   const selection = input.needState.selectionState;
@@ -6198,6 +6199,21 @@ function shouldUseFastCatalogSelection(input: {
     Boolean(selection.loadProfile?.items?.length) ||
     Boolean(selection.activeRequirement);
   return hasSelectionBasis && (activeNeedMatches || selection.confidence >= 0.55);
+}
+
+function fastCatalogCommercialVerificationText(message: string) {
+  const asksAvailability = /(?:\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0441\u0442\u0430\u0442|\u043e\u0442\u0433\u0440\u0443\u0437|stock|available)/iu.test(message);
+  const asksDelivery = /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|shipping|delivery)/iu.test(message);
+  if (asksAvailability && asksDelivery) {
+    return '\u041d\u0430\u043b\u0438\u0447\u0438\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0445 \u043f\u043e\u0437\u0438\u0446\u0438\u0439 \u0441\u0432\u0435\u0440\u044e \u043f\u0435\u0440\u0435\u0434 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435\u043c, \u0430 \u0434\u043e\u0441\u0442\u0430\u0432\u043a\u0443 \u0438 \u0435\u0435 \u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442\u044c \u043f\u043e\u0441\u0447\u0438\u0442\u0430\u044e \u043f\u043e \u0430\u0434\u0440\u0435\u0441\u0443 \u0447\u0435\u0440\u0435\u0437 \u043b\u043e\u0433\u0438\u0441\u0442\u0438\u043a\u0443.';
+  }
+  if (asksAvailability) {
+    return '\u0410\u043a\u0442\u0443\u0430\u043b\u044c\u043d\u044b\u0439 \u0441\u043a\u043b\u0430\u0434 \u0438 \u0432\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\u044c \u043e\u0442\u0433\u0440\u0443\u0437\u043a\u0438 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0445 \u043f\u043e\u0437\u0438\u0446\u0438\u0439 \u0441\u0432\u0435\u0440\u044e \u043f\u0435\u0440\u0435\u0434 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435\u043c.';
+  }
+  if (asksDelivery) {
+    return '\u0414\u043e\u0441\u0442\u0430\u0432\u043a\u0443 \u0438 \u0435\u0435 \u0441\u0442\u043e\u0438\u043c\u043e\u0441\u0442\u044c \u043f\u043e\u0441\u0447\u0438\u0442\u0430\u044e \u043f\u043e \u0430\u0434\u0440\u0435\u0441\u0443 \u0447\u0435\u0440\u0435\u0437 \u043b\u043e\u0433\u0438\u0441\u0442\u0438\u043a\u0443 \u043f\u0435\u0440\u0435\u0434 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435\u043c.';
+  }
+  return '\u0424\u0438\u043d\u0430\u043b\u044c\u043d\u044b\u0435 \u043a\u043e\u043c\u043c\u0435\u0440\u0447\u0435\u0441\u043a\u0438\u0435 \u0443\u0441\u043b\u043e\u0432\u0438\u044f \u0441\u0432\u0435\u0440\u044e \u043f\u0435\u0440\u0435\u0434 \u043e\u0444\u043e\u0440\u043c\u043b\u0435\u043d\u0438\u0435\u043c.';
 }
 
 function deterministicEstimatedPumpClarificationQuestion(_missingQuestion?: string) {
@@ -7780,15 +7796,21 @@ export class AssistantService {
       history
     })) return null;
 
+    const mixedCatalogCommercial = isMixedCatalogAndCommercialQuestion(input.userMessage);
+    const mixedCommercialTaskType: AgentTurnContract['taskType'] = /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|shipping|delivery)/iu.test(input.userMessage)
+      ? 'product_selection_with_delivery'
+      : 'product_selection_with_availability';
     const catalogSearchQuery = productSearchText(input.userMessage, needState);
     const plan = this.fastCatalogSelectionPlan(input, needState, catalogSearchQuery);
     const contract: AgentTurnContract = {
       answerTask: 'product_selection',
-      taskType: 'product_selection',
+      taskType: mixedCatalogCommercial ? mixedCommercialTaskType : 'product_selection',
       catalogAction: 'find_matching_products',
-      commercialAction: 'none',
+      commercialAction: mixedCatalogCommercial ? 'explain_manager_required' : 'none',
       productCardsPolicy: 'show_matching_products',
-      mustAnswerNow: ['show grounded catalog options from current structured need state'],
+      mustAnswerNow: mixedCatalogCommercial
+        ? ['show grounded catalog options from current structured need state', 'explain that stock, delivery, and final commercial terms need verification']
+        : ['show grounded catalog options from current structured need state'],
       activeNeeds: (needState.activeNeeds ?? []).map((need) => ({
         id: need.id,
         productClass: need.productClass,
@@ -7797,9 +7819,13 @@ export class AssistantService {
       currentFocus: 'catalog_selection',
       cardsRole: 'primary',
       leadAllowed: false,
-      leadAllowedReason: 'catalog selection turn; buyer has not asked for delivery, stock, discount, or final commercial terms',
+      leadAllowedReason: mixedCatalogCommercial
+        ? 'mixed catalog and commercial turn; answer selection first and verify commercial facts before any final promise'
+        : 'catalog selection turn; buyer has not asked for delivery, stock, discount, or final commercial terms',
       errorRecoveryPriority: 'Select products from catalog and answer with visible cards without waiting for the heavyweight planner.',
-      validatorWarnings: ['fast_catalog_selection_contract']
+      validatorWarnings: mixedCatalogCommercial
+        ? ['fast_catalog_selection_contract', 'fast_catalog_mixed_commercial_contract']
+        : ['fast_catalog_selection_contract']
     };
 
     const provisionalRenderContract = this.buildCatalogFastRenderContract(contract, needState, [], catalogSearchQuery);
@@ -7905,6 +7931,9 @@ export class AssistantService {
       latestUserMessage: input.userMessage
     }).trim();
     if (!answer) return null;
+    if (mixedCatalogCommercial) {
+      answer = `${answer}\n\n${fastCatalogCommercialVerificationText(input.userMessage)}`;
+    }
 
     const renderContract = this.buildCatalogFastRenderContract(contract, updatedNeedState, selectedProductIds, catalogSearchQuery);
     const requirementLedger = buildRequirementLedger({

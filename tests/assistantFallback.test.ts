@@ -531,6 +531,102 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.turn?.status).toBe('completed');
   });
 
+  it('keeps mixed catalog and commercial selection on the fast catalog path', async () => {
+    openAiCreate.mockClear();
+    const conversations = new FakeConversations();
+    const baseNeedState = emptyNeedState();
+    conversations.session = {
+      ...conversations.session,
+      needState: {
+        ...baseNeedState,
+        activeNeeds: [
+          {
+            id: 'need-plate',
+            status: 'open',
+            productClass: 'plate',
+            summary: 'Plate for driveway 80-100 kg',
+            constraints: ['80-100 kg', 'stock and delivery check'],
+            openQuestions: [],
+            selectedProductIds: [],
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        selectionState: mergeProductSelectionState(baseNeedState.selectionState, {
+          currentProductClass: 'plate',
+          targetProductClass: 'plate',
+          confidence: 0.8,
+          hardConstraints: {
+            ...baseNeedState.selectionState.hardConstraints,
+            productIntent: 'plate',
+            productRole: 'coreProduct',
+            weightKgMin: 80,
+            weightKgMax: 100,
+            provenance: {
+              weightKgMin: 'explicit_user',
+              weightKgMax: 'explicit_user'
+            }
+          }
+        })
+      }
+    };
+    conversations.turn = {
+      id: '69696969-6969-4969-8969-696969696969',
+      sessionId: conversations.session.id,
+      userMessageId: null,
+      assistantMessageId: null,
+      status: 'received',
+      requestHash: 'hash',
+      stage: 'received',
+      errorCode: null,
+      errorMessage: null,
+      plannerContract: null,
+      activeNeedsBefore: [],
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const plate = {
+      ...testProduct('plate-90', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 REDVERG 91 \\u043a\\u0433'), 54_000, {
+        [ru('\\u0420\\u0430\\u0431\\u043e\\u0447\\u0430\\u044f \\u043c\\u0430\\u0441\\u0441\\u0430, \\u043a\\u0433')]: '91'
+      }),
+      category: ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b')
+    };
+    const generator = testProduct('generator-1', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 60_000);
+    class FastMixedCatalogAssistant extends AssistantService {
+      async updateNeedState() {
+        return conversations.session.needState;
+      }
+
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner should not run for mixed fast catalog selection');
+      }
+    }
+    const assistant = new FastMixedCatalogAssistant(conversations as never, new FakeProducts([plate, generator]) as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id,
+      userMessage: ru('\\u041f\\u043e\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435 \\u0438\\u0437 \\u043a\\u0430\\u0442\\u0430\\u043b\\u043e\\u0433\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b \\u043f\\u0440\\u0438\\u043c\\u0435\\u0440\\u043d\\u043e 80-100 \\u043a\\u0433 \\u0438 \\u0441\\u043e\\u0440\\u0438\\u0435\\u043d\\u0442\\u0438\\u0440\\u0443\\u0439\\u0442\\u0435, \\u0435\\u0441\\u0442\\u044c \\u043b\\u0438 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435 \\u0438 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430.')
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.metadata?.answerMode).toBe('fast_catalog_selection');
+    expect(result.productCards.map((card) => card.id)).toContain('plate-90');
+    expect(result.productCards.map((card) => card.id)).not.toContain('generator-1');
+    expect(result.answer).toMatch(new RegExp(`${ru('\\u041d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435')}.*${ru('\\u0441\\u0432\\u0435\\u0440\\u044e')}|${ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432')}.*${ru('\\u043b\\u043e\\u0433\\u0438\\u0441\\u0442')}`, 'iu'));
+    expect(result.metadata?.turnContract).toMatchObject({
+      answerTask: 'product_selection',
+      taskType: 'product_selection_with_delivery',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'explain_manager_required',
+      productCardsPolicy: 'show_matching_products',
+      cardsRole: 'primary',
+      leadAllowed: false
+    });
+    expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(conversations.turn?.status).toBe('completed');
+  });
+
   it('does not introduce plate guidance into a generator-only technical orientation', async () => {
     openAiCreate.mockClear();
     const conversations = new FakeConversations();
