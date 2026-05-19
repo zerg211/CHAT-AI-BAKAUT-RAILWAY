@@ -1,5 +1,5 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-19-mp15-current-lineup-recovery-v13';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-19-mp15-fallback-intent-filter-v14';
 
 export const expectedRemediationRuntimeArtifacts = [
   'agentContractV2',

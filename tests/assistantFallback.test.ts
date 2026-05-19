@@ -963,6 +963,15 @@ describe('assistant OpenAI failure fallback', () => {
       sourceUrl: 'https://example.test/mp15',
       specs: { weight: '83 kg' }
     };
+    const mpmcGenerator: Product = {
+      id: 'mpmc-mp15',
+      name: 'Generator diesel MPMC MP15-230Y 13.5 kW',
+      category: ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u044b'),
+      price: 799_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/mpmc-mp15',
+      specs: {}
+    };
     conversations.messages.push({
       id: 'assistant-dpu',
       sessionId: conversations.session.id,
@@ -1045,7 +1054,7 @@ describe('assistant OpenAI failure fallback', () => {
         throw new Error('planner timeout');
       }
     }
-    const assistant = new PlannerlessCurrentLineupRecoveryAssistant(conversations as never, new FakeProducts([dpu, mp15]) as never);
+    const assistant = new PlannerlessCurrentLineupRecoveryAssistant(conversations as never, new FakeProducts([mpmcGenerator, dpu, mp15]) as never);
 
     const result = await assistant.recoverTurn({
       sessionId: conversations.session.id,
@@ -1053,7 +1062,9 @@ describe('assistant OpenAI failure fallback', () => {
     });
 
     expect(result.answer).toContain('MP15');
+    expect(result.answer).toContain('MP15-CE');
     expect(result.answer).not.toContain('DPU 6555');
+    expect(result.answer).not.toContain('MPMC');
     expect(result.productCards).toEqual([]);
     expect(result.leadRequested).toBe(true);
     expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');

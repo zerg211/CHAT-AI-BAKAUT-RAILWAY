@@ -2117,10 +2117,14 @@ function deterministicCurrentLineupRecoveryFallback(input: {
 }) {
   const latestToken = extractModelTokens(input.latestUserMessage)[0]?.trim();
   const tokenCompact = latestToken ? compactModelText(latestToken) : '';
+  const latestIntent = inferProductIntent(input.latestUserMessage);
   const matchingCatalogProducts = tokenCompact
     ? input.catalogProducts.filter((product) => compactModelText(productFullText(product)).includes(tokenCompact))
     : input.catalogProducts;
-  const coreMatch = matchingCatalogProducts.find(isCoreEquipment);
+  const intentMatchedProducts = latestIntent === 'unknown'
+    ? matchingCatalogProducts
+    : matchingCatalogProducts.filter((product) => productMatchesIntent(product, latestIntent));
+  const coreMatch = intentMatchedProducts.find(isCoreEquipment);
   const modelText = latestToken ? `по ${latestToken}` : 'по этой модели';
   const catalogLine = coreMatch
     ? `В каталоге вижу ${coreMatch.name}.`
