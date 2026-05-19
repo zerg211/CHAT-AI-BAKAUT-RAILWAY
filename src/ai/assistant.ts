@@ -8384,7 +8384,7 @@ export class AssistantService {
     contract?: ResolvedTurnContract,
     visibleLimitOverride?: number,
     conversationUserText = '',
-    options: { forceCatalogVerification?: boolean } = {}
+    options: { forceCatalogVerification?: boolean; restrictToBaseCandidates?: boolean } = {}
   ): Promise<ProductSelectionResult> {
     const currentSelection = state.selectionState ?? emptyProductSelectionState();
     const activeText = [userMessage, plan.catalogSearchQuery, conversationUserText, stateText(state, '')].filter(Boolean).join(' ');
@@ -8446,6 +8446,7 @@ export class AssistantService {
     const canListProducts = typeof (this.products as { listProducts?: unknown }).listProducts === 'function';
     const catalogShortlistTurn = isCatalogShortlistTurn(userMessage, plan);
     const shouldUseCatalog = canListProducts &&
+      !options.restrictToBaseCandidates &&
       selectionState.targetProductClass !== 'unknown' &&
       (!isLeadPlan(plan) || options.forceCatalogVerification) &&
       !shouldUseCurrentLineupStyle(userMessage, plan) &&
@@ -9189,7 +9190,10 @@ export class AssistantService {
           turnContract,
           visibleCardLimit,
           recentUserConversationText(history),
-          { forceCatalogVerification: agentTurnContract.catalogAction !== undefined && agentTurnContract.catalogAction !== 'none' }
+          {
+            forceCatalogVerification: agentTurnContract.catalogAction !== undefined && agentTurnContract.catalogAction !== 'none',
+            restrictToBaseCandidates: shownProductChoiceTurn && visibleShownProductsForChoice.length > 0
+          }
         );
         selectionExecution.result = result;
         return {
