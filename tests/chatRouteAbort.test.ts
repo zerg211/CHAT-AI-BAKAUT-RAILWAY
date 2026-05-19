@@ -9,9 +9,6 @@ class FakeRequestRaw extends EventEmitter {
 function attach(raw: FakeRequestRaw, controller = new AbortController()) {
   const cleanup = attachRequestAbortHandler({
     raw: {
-      get aborted() {
-        return raw.aborted;
-      },
       once: raw.once.bind(raw),
       off: raw.off.bind(raw)
     }
@@ -40,14 +37,14 @@ describe('chat route request abort handling', () => {
     cleanup();
   });
 
-  it('aborts on close only when Node marks the request as aborted', () => {
+  it('does not treat close as an abort source even if a runtime marks the request aborted', () => {
     const raw = new FakeRequestRaw();
     const { controller, cleanup } = attach(raw);
 
     raw.aborted = true;
     raw.emit('close');
 
-    expect(controller.signal.aborted).toBe(true);
+    expect(controller.signal.aborted).toBe(false);
     cleanup();
   });
 

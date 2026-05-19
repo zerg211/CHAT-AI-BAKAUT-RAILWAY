@@ -7,9 +7,8 @@ import { ConversationRepository } from '../db/repositories.js';
 
 type RequestAbortSource = {
   raw: {
-    aborted: boolean;
-    once(event: 'aborted' | 'close', listener: () => void): unknown;
-    off(event: 'aborted' | 'close', listener: () => void): unknown;
+    once(event: 'aborted', listener: () => void): unknown;
+    off(event: 'aborted', listener: () => void): unknown;
   };
 };
 
@@ -46,14 +45,9 @@ export function attachRequestAbortHandler(request: RequestAbortSource, controlle
   const abort = () => {
     controller.abort();
   };
-  const abortIfRequestWasAborted = () => {
-    if (request.raw.aborted) controller.abort();
-  };
   request.raw.once('aborted', abort);
-  request.raw.once('close', abortIfRequestWasAborted);
   return () => {
     request.raw.off('aborted', abort);
-    request.raw.off('close', abortIfRequestWasAborted);
   };
 }
 
