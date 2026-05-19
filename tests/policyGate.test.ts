@@ -188,6 +188,98 @@ describe('policy gate', () => {
     expect(enforcement.requiredActions).toContain('webFactSearch');
   });
 
+  it('does not hard-block searchCatalog when runtime product selection already satisfied catalog retrieval', () => {
+    const result = runPolicyGate({
+      contract,
+      requirementLedger,
+      productEvidenceRegistry: registry,
+      executionContract,
+      factClaimPlanner,
+      leadStateMachine,
+      webSearchPlanned: false
+    });
+
+    const enforcement = enforcePolicyGateBeforeAnswer({
+      policyGate: result,
+      toolTrace: [
+        {
+          tool: 'searchCatalog',
+          ok: false,
+          risk: 'safe',
+          reason: 'planner requested catalog search',
+          required: true,
+          warnings: [],
+          error: 'catalog_search_not_executed'
+        },
+        {
+          tool: 'selectProducts',
+          ok: true,
+          risk: 'safe',
+          reason: 'runtime selected visible product cards',
+          required: true,
+          warnings: []
+        }
+      ]
+    });
+
+    expect(enforcement.mode).toBe('pass');
+    expect(enforcement.failedRequiredTools).toEqual([]);
+    expect(enforcement.hardBlockReasons).not.toContain('required_tool_failed:searchCatalog');
+  });
+
+  it('does not hard-block createLead when a lead draft is prepared for form capture', () => {
+    const result = runPolicyGate({
+      contract: {
+        ...contract,
+        leadPolicy: 'required_now',
+        commercialAction: 'offer_contact_after_answer'
+      },
+      requirementLedger,
+      productEvidenceRegistry: registry,
+      executionContract: {
+        ...executionContract,
+        leadPolicy: 'required_now',
+        factPolicy: 'specialist_required'
+      },
+      factClaimPlanner,
+      leadStateMachine: {
+        ...leadStateMachine,
+        state: 'required_contact_missing',
+        nextAction: 'ask_for_missing_contact',
+        leadPolicy: 'required_now',
+        leadRequested: true
+      },
+      webSearchPlanned: false
+    });
+
+    const enforcement = enforcePolicyGateBeforeAnswer({
+      policyGate: result,
+      toolTrace: [
+        {
+          tool: 'createLeadDraft',
+          ok: true,
+          risk: 'safe',
+          reason: 'prepare specialist handoff',
+          required: true,
+          warnings: []
+        },
+        {
+          tool: 'createLead',
+          ok: false,
+          risk: 'sensitive',
+          reason: 'commit lead if contact is already present',
+          required: true,
+          warnings: ['lead_create_not_committed'],
+          error: 'lead_not_created_by_current_turn'
+        }
+      ]
+    });
+
+    expect(enforcement.mode).toBe('pass');
+    expect(enforcement.failedRequiredTools).toEqual([]);
+    expect(enforcement.hardBlockReasons).not.toContain('required_tool_failed:createLead');
+  });
+
   it('adds commercial verification constraints for specialist policy', () => {
     const result = runPolicyGate({
       contract: {

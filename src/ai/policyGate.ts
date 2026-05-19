@@ -98,9 +98,19 @@ export function enforcePolicyGateBeforeAnswer(input: {
   policyGate: PolicyGateResult;
   toolTrace?: AgentToolTraceItem[];
 }): PolicyGateEnforcement {
+  const toolTrace = input.toolTrace ?? [];
+  const successfulTools = new Set(toolTrace
+    .filter((item) => item.ok)
+    .map((item) => item.tool));
+  const isRepresentedByEquivalentRuntimeTool = (tool: AgentToolName) => {
+    if (tool === 'searchCatalog') return successfulTools.has('selectProducts');
+    if (tool === 'createLead') return successfulTools.has('createLeadDraft');
+    return false;
+  };
   const failedRequiredTools = unique((input.toolTrace ?? [])
     .filter((item) => item.required && !item.ok)
-    .map((item) => item.tool));
+    .map((item) => item.tool))
+    .filter((tool) => !isRepresentedByEquivalentRuntimeTool(tool));
   const repairedReasons = failedRequiredTools.length
     ? []
     : input.policyGate.blockedReasons.filter((reason) => repairableBlockedReasons.has(reason));
