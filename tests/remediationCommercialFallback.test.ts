@@ -28,7 +28,7 @@ const requirementLedger: RequirementLedger = {
 };
 
 describe('commercial remediation fallback', () => {
-  it('answers delivery, discount, and rough bundle total without exposing a generic failure', () => {
+  it('answers delivery and discount without price claims when cards are not evidence for the turn', () => {
     const answer = assistantTestHooks.deterministicCommercialHandoffFallback({
       cards: [
         {
@@ -79,8 +79,107 @@ describe('commercial remediation fallback', () => {
     expect(answer).toContain('Доставка есть');
     expect(answer).toContain('логистику');
     expect(answer).toContain('Скидку');
-    expect(answer).toContain('примерно от');
+    expect(answer).toContain('Порядок суммы');
+    expect(answer).not.toMatch(/\d[\d\s]*(?:₽|руб|RUB)|примерно от/iu);
     expect(answer).not.toMatch(/не смог|повторите|телефон|номер/iu);
+  });
+
+  it('can include a rough bundle total when the turn explicitly allows card-backed product facts', () => {
+    const answer = assistantTestHooks.deterministicCommercialHandoffFallback({
+      cards: [
+        {
+          id: 'gen-5',
+          name: 'Генератор бензиновый SUMEC SU7700 5 кВт',
+          category: 'Бензиновые генераторы',
+          price: 42490,
+          currency: 'RUB',
+          specs: {},
+          reasons: [],
+          caveats: []
+        },
+        {
+          id: 'plate-50',
+          name: 'Виброплита STEM Techno SPC 152E 50 кг',
+          category: 'Виброплиты',
+          price: 35500,
+          currency: 'RUB',
+          specs: {},
+          reasons: [],
+          caveats: []
+        }
+      ],
+      selectionResult: {
+        visibleProducts: [],
+        matchedProducts: [],
+        missingQuestions: [],
+        confidence: 0.8
+      },
+      latestUserMessage: 'А доставка и скидка есть? И примерно можно понять порядок суммы?',
+      contract: {
+        answerTask: 'lead_handoff',
+        taskType: 'product_selection_with_delivery',
+        catalogAction: 'find_matching_products',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'supporting_only',
+        mustAnswerNow: [],
+        activeNeeds: [],
+        currentFocus: 'commercial',
+        cardsRole: 'supporting',
+        leadAllowed: false,
+        leadAllowedReason: 'buyer asked commercial terms but refused contact pressure',
+        errorRecoveryPriority: 'answer commercial terms safely',
+        validatorWarnings: []
+      }
+    } as any);
+
+    expect(answer).toContain('примерно от');
+    expect(answer).toMatch(/77\s?990|77 990/iu);
+  });
+
+  it('uses fast commercial handoff for commercial questions about already shown products', () => {
+    const history = [{
+      role: 'assistant',
+      metadata: {
+        productCards: [{
+          id: 'plate-90',
+          name: 'Виброплита REDVERG 91 кг',
+          category: 'Виброплиты',
+          price: 54000,
+          currency: 'RUB',
+          specs: {},
+          reasons: [],
+          caveats: []
+        }]
+      }
+    }];
+
+    expect(assistantTestHooks.shouldTryFastCommercialHandoff(
+      'По этим моделям есть наличие, доставка в Ейск и скидка?',
+      history as any
+    )).toBe(true);
+  });
+
+  it('does not use fast commercial handoff when the buyer asks to choose between shown cards', () => {
+    const history = [{
+      role: 'assistant',
+      metadata: {
+        productCards: [{
+          id: 'plate-90',
+          name: 'Виброплита REDVERG 91 кг',
+          category: 'Виброплиты',
+          price: 54000,
+          currency: 'RUB',
+          specs: {},
+          reasons: [],
+          caveats: []
+        }]
+      }
+    }];
+
+    expect(assistantTestHooks.shouldTryFastCommercialHandoff(
+      'Из этих какая практичнее для моего въезда и есть ли по ней доставка?',
+      history as any
+    )).toBe(false);
   });
 
   it('does not append stock verification to a non-commercial selection answer after planner overclassification', () => {

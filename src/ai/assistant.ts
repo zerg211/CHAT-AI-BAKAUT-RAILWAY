@@ -5898,6 +5898,14 @@ function shouldUseProactiveCommercialDeterministicAnswer(contract: AgentTurnCont
   return contract.catalogAction === 'none' && isDeliveryDiscountPriceQuestion(message);
 }
 
+function shouldTryFastCommercialHandoff(message: string, history: Message[]) {
+  if (!allShownProductCards(history).length) return false;
+  if (hasLikelyContactText(message) && fallbackDetectLeadHandoffIntent(message)) return true;
+  if (!isExplicitCommercialQuestion(message)) return false;
+  if (isShownProductChoiceOrComparisonQuestion(message)) return false;
+  return isDeliveryDiscountPriceQuestion(message) || isCommercialQuestionAboutShownProducts(message);
+}
+
 function commercialFallbackCandidates(input: {
   cards: ProductCard[];
   selectionResult: ProductSelectionResult;
@@ -5924,11 +5932,16 @@ function deterministicCommercialHandoffFallback(input: {
   contract?: AgentTurnContract;
   latestUserMessage?: string;
   leadContact?: ExtractedLeadContact;
+  allowPriceFromCards?: boolean;
 }) {
   const message = input.latestUserMessage ?? '';
   if (!shouldUseCommercialDeterministicFallback(input.contract, message)) return '';
 
-  const candidates = commercialFallbackCandidates(input);
+  const priceClaimsAllowed = input.allowPriceFromCards ?? (
+    input.contract?.cardsRole !== 'none' &&
+    input.contract?.productCardsPolicy !== 'none'
+  );
+  const candidates = priceClaimsAllowed ? commercialFallbackCandidates(input) : [];
   const generators = candidates.filter((product) => {
     const flags = classifyProduct(product);
     return flags.isGenerator || flags.isWeldingGenerator;
@@ -9726,8 +9739,7 @@ export class AssistantService {
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
 
-    const hasPriorShownCardsForFastLead = allShownProductCards(history).length > 0;
-    const fastCommercialContactConfirmation = hasPriorShownCardsForFastLead && hasLikelyContactText(input.userMessage) && fallbackDetectLeadHandoffIntent(input.userMessage)
+    const fastCommercialContactConfirmation = shouldTryFastCommercialHandoff(input.userMessage, history)
       ? await this.tryFastCommercialHandoff(input, { ...session, needState }, history, aiDiagnostics)
       : null;
     if (fastCommercialContactConfirmation) return fastCommercialContactConfirmation;
@@ -11660,7 +11672,8 @@ export class AssistantService {
           trace: { source: 'recovery_historical_cards' }
         } as ProductSelectionResult,
         contract: effectiveCommercialContract,
-        latestUserMessage: latestUserText
+        latestUserMessage: latestUserText,
+        allowPriceFromCards: false
       });
       if (answer) {
         return completeRecoveredAnswer(answer, effectiveCommercialContract, {
@@ -12971,6 +12984,7 @@ export const assistantTestHooks = {
   isMixedCatalogAndCommercialQuestion,
   isShownProductChoiceOrComparisonQuestion,
   shouldUseProactiveCommercialDeterministicAnswer,
+  shouldTryFastCommercialHandoff,
   deterministicTechnicalSummaryRecovery,
   deterministicRecoveredSelectionAnswer,
   deterministicAnswerGenerationFallback,
