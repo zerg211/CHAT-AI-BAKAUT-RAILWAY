@@ -738,6 +738,85 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.turn?.status).toBe('recovered');
   });
 
+  it('returns the original completed turn instead of creating duplicate recovery output', async () => {
+    vi.useFakeTimers();
+    try {
+      const conversations = new FakeConversations();
+      const userMessage: Message = {
+        id: 'user-generator-followup',
+        sessionId: conversations.session.id,
+        role: 'user',
+        content: 'Pump model is unknown, compressor can start separately.',
+        metadata: {},
+        createdAt: new Date().toISOString()
+      };
+      const completedAssistant: Message = {
+        id: 'assistant-original-completed',
+        sessionId: conversations.session.id,
+        role: 'assistant',
+        content: 'Original fast technical answer from the active turn.',
+        metadata: {
+          productCards: [],
+          answerMode: 'fast_technical_orientation'
+        },
+        createdAt: new Date().toISOString()
+      };
+      conversations.messages.push(userMessage, completedAssistant);
+      const activeTurn: ConversationTurn = {
+        id: '77777777-7777-4777-8777-777777777777',
+        sessionId: conversations.session.id,
+        userMessageId: userMessage.id,
+        assistantMessageId: null,
+        status: 'answering',
+        requestHash: 'hash',
+        stage: 'answering',
+        errorCode: null,
+        errorMessage: null,
+        plannerContract: null,
+        activeNeedsBefore: null,
+        activeNeedsAfter: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      conversations.turn = activeTurn;
+      let getTurnCalls = 0;
+      conversations.getTurn = async () => {
+        getTurnCalls += 1;
+        if (getTurnCalls >= 3) {
+          conversations.turn = {
+            ...activeTurn,
+            assistantMessageId: completedAssistant.id,
+            status: 'completed',
+            stage: 'completed'
+          };
+        }
+        return conversations.turn;
+      };
+      const deltas: string[] = [];
+      openAiCreate.mockClear();
+      const assistant = new AssistantService(conversations as never, new FakeProducts([]) as never);
+
+      const resultPromise = assistant.recoverTurn({
+        sessionId: conversations.session.id,
+        turnId: activeTurn.id,
+        onDelta: (delta) => {
+          deltas.push(delta);
+        }
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = await resultPromise;
+
+      expect(result.answer).toBe(completedAssistant.content);
+      expect(result.assistantMessageId).toBe(completedAssistant.id);
+      expect(deltas).toEqual([completedAssistant.content]);
+      expect(openAiCreate).not.toHaveBeenCalled();
+      expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
+      expect(conversations.turn?.status).toBe('completed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps commercial recovery lead-capable when the buyer asks for stock or delivery verification', async () => {
     const conversations = new FakeConversations();
     const plate = testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 REDVERG RD-29155'), 54_000);

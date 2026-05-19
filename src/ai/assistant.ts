@@ -10637,16 +10637,18 @@ export class AssistantService {
   async recoverTurn(input: { sessionId: string; turnId: string; onDelta?: (text: string) => void | Promise<void>; signal?: AbortSignal }): Promise<ChatResponsePayload> {
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
-    const turn = await this.conversations.getTurn(input.sessionId, input.turnId);
+    let turn = await this.conversations.getTurn(input.sessionId, input.turnId);
     if (!turn) throw new Error('Conversation turn not found');
-    const history = await this.conversations.listMessages(input.sessionId, 80);
-    const latestUser = turn.userMessageId
-      ? history.find((message) => message.id === turn.userMessageId)
-      : [...history].reverse().find((message) => message.role === 'user');
-    const existingAssistant = turn.assistantMessageId
-      ? history.find((message) => message.id === turn.assistantMessageId && message.role === 'assistant')
-      : null;
-    if (existingAssistant?.content?.trim() && (turn.status === 'completed' || turn.status === 'recovered')) {
+    const completedTurnPayload = async () => {
+      const currentTurn = await this.conversations.getTurn(input.sessionId, input.turnId);
+      if (!currentTurn || !['completed', 'recovered'].includes(currentTurn.status) || !currentTurn.assistantMessageId) return null;
+      const currentHistory = await this.conversations.listMessages(input.sessionId, 80);
+      const existingAssistant = currentHistory.find((message) =>
+        message.id === currentTurn.assistantMessageId &&
+        message.role === 'assistant' &&
+        message.content?.trim()
+      );
+      if (!existingAssistant) return null;
       await input.onDelta?.(existingAssistant.content);
       return {
         turnId: input.turnId,
@@ -10659,13 +10661,52 @@ export class AssistantService {
         metadata: {
           ...(existingAssistant.metadata ?? {}),
           turnId: input.turnId,
-          recoveryAttempts: turn.status === 'recovered' ? 1 : 0
+          recoveryAttempts: currentTurn.status === 'recovered' ? 1 : 0
         }
       };
+    };
+    const initialCompletedPayload = await completedTurnPayload();
+    if (initialCompletedPayload) return initialCompletedPayload;
+
+    const waitWhileOriginalTurnIsActive = async () => {
+      const activeStatuses = new Set(['received', 'need_extracted', 'planned', 'answering']);
+      const deadline = Date.now() + 35_000;
+      while (activeStatuses.has(turn!.status) && Date.now() < deadline) {
+        await new Promise<void>((resolve, reject) => {
+          const timeout = setTimeout(resolve, 750);
+          input.signal?.addEventListener('abort', () => {
+            clearTimeout(timeout);
+            reject(new Error('AI turn recovery aborted'));
+          }, { once: true });
+        });
+        const completedPayload = await completedTurnPayload();
+        if (completedPayload) return completedPayload;
+        const refreshed = await this.conversations.getTurn(input.sessionId, input.turnId);
+        if (!refreshed) return null;
+        turn = refreshed;
+        if (turn.status === 'failed') return null;
+      }
+      return null;
+    };
+    const originalTurnPayload = await waitWhileOriginalTurnIsActive();
+    if (originalTurnPayload) return originalTurnPayload;
+
+    if (!turn) throw new Error('Conversation turn not found');
+    const recoveryTurn = turn;
+    let history = await this.conversations.listMessages(input.sessionId, 80);
+    const latestUser = recoveryTurn.userMessageId
+      ? history.find((message) => message.id === recoveryTurn.userMessageId)
+      : [...history].reverse().find((message) => message.role === 'user');
+    const existingAssistant = recoveryTurn.assistantMessageId
+      ? history.find((message) => message.id === recoveryTurn.assistantMessageId && message.role === 'assistant')
+      : null;
+    if (existingAssistant?.content?.trim() && (recoveryTurn.status === 'completed' || recoveryTurn.status === 'recovered')) {
+      const completedPayload = await completedTurnPayload();
+      if (completedPayload) return completedPayload;
     }
 
     const latestUserText = latestUser?.content ?? '';
-    const storedContract = (turn.plannerContract ?? null) as AgentTurnContract | null;
+    const storedContract = (recoveryTurn.plannerContract ?? null) as AgentTurnContract | null;
     const recoveryAiDiagnostics = emptyAiGenerationDiagnostics();
     const recoveryCurrentLineupStyle = shouldUseCurrentLineupStyle(latestUserText);
     const recoveryNeedState = latestMessageScopedRecoveryNeedState(session.needState, latestUserText);
@@ -10716,6 +10757,8 @@ export class AssistantService {
       cards: ProductCard[];
       cardDisplay?: CardDisplayOptions;
     }, openAiError?: unknown): Promise<ChatResponsePayload> => {
+      const completedPayload = await completedTurnPayload();
+      if (completedPayload) return completedPayload;
       let answer = inputAnswer.trim();
       const renderContract = buildRecoveryRenderContract(contract, recoveredSelection.cards);
       const requirementLedger = buildRequirementLedger({
