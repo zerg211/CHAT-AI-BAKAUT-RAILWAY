@@ -8,7 +8,7 @@ import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 
-export const REMEDIATION_CONTRACT_VERSION = '2026-05-19-dialog-1002-browser-sse-v20';
+export const REMEDIATION_CONTRACT_VERSION = '2026-05-19-dialog-1002-browser-sse-v21';
 export const REMEDIATION_RUNTIME_ARTIFACTS = [
   'agentContractV2',
   'sourcePolicy',

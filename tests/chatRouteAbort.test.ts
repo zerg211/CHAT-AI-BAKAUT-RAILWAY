@@ -1,60 +1,13 @@
-import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { attachRequestAbortHandler } from '../src/routes/chat.js';
 
-class FakeRequestRaw extends EventEmitter {
-  aborted = false;
-}
+describe('chat route SSE abort policy', () => {
+  it('does not attach request/reply close abort handlers to streaming chat turns', () => {
+    const source = readFileSync('src/routes/chat.ts', 'utf8');
 
-function attach(raw: FakeRequestRaw, controller = new AbortController()) {
-  const cleanup = attachRequestAbortHandler({
-    raw: {
-      once: raw.once.bind(raw),
-      off: raw.off.bind(raw)
-    }
-  }, controller);
-  return { controller, cleanup };
-}
-
-describe('chat route request abort handling', () => {
-  it('does not abort generation on a normal request close event', () => {
-    const raw = new FakeRequestRaw();
-    const { controller, cleanup } = attach(raw);
-
-    raw.emit('close');
-
-    expect(controller.signal.aborted).toBe(false);
-    cleanup();
-  });
-
-  it('aborts generation when the request is explicitly aborted', () => {
-    const raw = new FakeRequestRaw();
-    const { controller, cleanup } = attach(raw);
-
-    raw.emit('aborted');
-
-    expect(controller.signal.aborted).toBe(true);
-    cleanup();
-  });
-
-  it('does not treat close as an abort source even if a runtime marks the request aborted', () => {
-    const raw = new FakeRequestRaw();
-    const { controller, cleanup } = attach(raw);
-
-    raw.aborted = true;
-    raw.emit('close');
-
-    expect(controller.signal.aborted).toBe(false);
-    cleanup();
-  });
-
-  it('removes abort listeners after cleanup', () => {
-    const raw = new FakeRequestRaw();
-    const { controller, cleanup } = attach(raw);
-
-    cleanup();
-    raw.emit('aborted');
-
-    expect(controller.signal.aborted).toBe(false);
+    expect(source).not.toMatch(/reply\.raw\.once\(['"]close['"]/);
+    expect(source).not.toMatch(/request\.raw\.once\(['"]close['"]/);
+    expect(source).not.toMatch(/request\.raw\.once\(['"]aborted['"]/);
+    expect(source).toContain('const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)');
   });
 });
