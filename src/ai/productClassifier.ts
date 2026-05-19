@@ -624,7 +624,8 @@ export function inferProductIntent(text: string): ProductIntent {
   if (!text.trim()) return 'unknown';
   const lower = text.toLowerCase();
   const hasGeneratorContext = containsAny(lower, generatorTerms);
-  const hasShortPlateModelContext = extractModelTokens(text).length > 0 && /\b\u043f\u043b\u0438\u0442(?:\u0430|\u044b|\u0443|\u0435|\u043e\u0439)?\b/iu.test(lower);
+  const hasShortPlateModelContext = extractModelTokens(text).length > 0 &&
+    /(?:^|[^\p{L}\p{N}_])\u043f\u043b\u0438\u0442(?:\u0430|\u044b|\u0443|\u0435|\u043e\u0439)?(?=$|[^\p{L}\p{N}_])/iu.test(lower);
   const hasPlateContext = containsAny(lower, plateTerms) || hasShortPlateModelContext;
   const hasEquipmentContext = hasGeneratorContext || hasPlateContext || containsAny(lower, rammerTerms) || containsAny(lower, cutterTerms);
   const generatorInEnclosureRequest = hasGeneratorContext && fallbackDetectGeneratorEnclosureSignal(lower);
@@ -641,7 +642,7 @@ export function inferProductIntent(text: string): ProductIntent {
   const hasTileContext = /(?:керамогранит|керамик|плиткорез|плитк|мокр(?:ая|ой|ую)|сух(?:ая|ой|ую)\s+резк)/i.test(lower);
   if (containsAny(lower, cutterTerms) && !/(?:алмаз|diamond|керамогранит|керамик|плиткорез|blade)/i.test(lower)) return 'cutter';
   if (hasDiamond && (hasBladeContext || hasTileContext)) return 'diamondBlade';
-  if (containsAny(lower, plateTerms)) return 'plate';
+  if (hasPlateContext) return 'plate';
   if (containsAny(lower, rammerTerms)) return 'rammer';
   if (containsAny(lower, cutterTerms)) return 'cutter';
   if (containsAny(lower, generatorTerms)) return 'generator';
