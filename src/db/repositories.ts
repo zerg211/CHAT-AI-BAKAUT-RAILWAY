@@ -233,6 +233,38 @@ function mapCatalogPage(row: QueryResultRow): CatalogPage {
   };
 }
 
+export interface LeadOutboxItem {
+  id: string;
+  leadId: string;
+  sessionId: string;
+  turnId: string;
+  destination: string;
+  payload: Record<string, unknown>;
+  status: string;
+  attemptCount: number;
+  nextAttemptAt?: string | null;
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function mapLeadOutboxItem(row: QueryResultRow): LeadOutboxItem {
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    destination: row.destination,
+    payload: row.payload ?? {},
+    status: row.status,
+    attemptCount: Number(row.attempt_count ?? 0),
+    nextAttemptAt: row.next_attempt_at ? row.next_attempt_at.toISOString() : null,
+    lastError: row.last_error ?? null,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  };
+}
+
 function mapBackfillProduct(row: QueryResultRow): EmbeddingBackfillProduct {
   return {
     product: mapProduct(row),
@@ -517,6 +549,293 @@ export class ConversationRepository {
       ]
     );
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
+  }
+
+  async upsertDialogueLedgerEvent(input: {
+    sessionId: string;
+    turnId: string;
+    eventId: string;
+    eventType: string;
+    scope: string;
+    payload: unknown;
+    evidence: string;
+    source: string;
+    status: string;
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO dialogue_ledger_events(session_id, turn_id, event_id, event_type, scope, payload, evidence, source, status)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
+       ON CONFLICT (session_id, event_id) DO UPDATE
+       SET event_id = dialogue_ledger_events.event_id
+       RETURNING *`,
+      [
+        input.sessionId,
+        input.turnId,
+        input.eventId,
+        input.eventType,
+        input.scope,
+        jsonbParam(input.payload),
+        input.evidence,
+        input.source,
+        input.status
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async listDialogueLedgerEvents(sessionId: string, limit = 500) {
+    const result = await this.db.query(
+      `SELECT *
+       FROM dialogue_ledger_events
+       WHERE session_id = $1
+       ORDER BY created_at ASC
+       LIMIT $2`,
+      [sessionId, limit]
+    );
+    return result.rows;
+  }
+
+  async upsertTurnCheckpoint(input: {
+    sessionId: string;
+    turnId: string;
+    checkpoint: string;
+    status: string;
+    artifactRef?: string | null;
+    payload?: unknown;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO turn_checkpoints(session_id, turn_id, checkpoint, status, artifact_ref, payload, error_code, error_message)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+       ON CONFLICT (session_id, turn_id, checkpoint) DO UPDATE
+       SET status = EXCLUDED.status,
+           artifact_ref = EXCLUDED.artifact_ref,
+           payload = EXCLUDED.payload,
+           error_code = EXCLUDED.error_code,
+           error_message = EXCLUDED.error_message,
+           updated_at = now()
+       RETURNING *`,
+      [
+        input.sessionId,
+        input.turnId,
+        input.checkpoint,
+        input.status,
+        input.artifactRef ?? null,
+        jsonbParam(input.payload ?? {}),
+        input.errorCode ?? null,
+        input.errorMessage ?? null
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async saveToolArtifact(input: {
+    sessionId: string;
+    turnId: string;
+    toolName: string;
+    toolRequestId: string;
+    status: string;
+    payload: unknown;
+    warnings?: unknown[];
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO tool_artifacts(session_id, turn_id, tool_name, tool_request_id, status, payload, warnings)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
+       ON CONFLICT (session_id, turn_id, tool_request_id) DO UPDATE
+       SET tool_name = EXCLUDED.tool_name,
+           status = EXCLUDED.status,
+           payload = EXCLUDED.payload,
+           warnings = EXCLUDED.warnings
+       RETURNING *`,
+      [
+        input.sessionId,
+        input.turnId,
+        input.toolName,
+        input.toolRequestId,
+        input.status,
+        jsonbParam(input.payload),
+        jsonbParam(input.warnings ?? [])
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async saveAnswerContract(input: {
+    sessionId: string;
+    turnId: string;
+    answerText: string;
+    contract: unknown;
+    review?: unknown;
+    status: string;
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO answer_contracts(session_id, turn_id, answer_text, contract, review, status)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+       ON CONFLICT (session_id, turn_id) WHERE status = 'final' DO UPDATE
+       SET answer_text = EXCLUDED.answer_text,
+           contract = EXCLUDED.contract,
+           review = EXCLUDED.review
+       RETURNING *`,
+      [
+        input.sessionId,
+        input.turnId,
+        input.answerText,
+        jsonbParam(input.contract),
+        jsonbParam(input.review ?? null),
+        input.status
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async getFinalAnswerContract(sessionId: string, turnId: string) {
+    const result = await this.db.query(
+      `SELECT *
+       FROM answer_contracts
+       WHERE session_id = $1
+         AND turn_id = $2
+         AND status = 'final'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [sessionId, turnId]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async addAssistantMessageForTurn(input: {
+    sessionId: string;
+    turnId: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    recovered?: boolean;
+  }) {
+    const result = await this.db.query(
+      `WITH locked_turn AS (
+         SELECT *
+         FROM conversation_turns
+         WHERE session_id = $1 AND id = $2
+         FOR UPDATE
+       ),
+       existing_message AS (
+         SELECT m.*
+         FROM messages m
+         JOIN locked_turn t ON t.assistant_message_id = m.id
+         WHERE m.role = 'assistant'
+       ),
+       inserted_message AS (
+         INSERT INTO messages(session_id, role, content, metadata)
+         SELECT $1, 'assistant', $3, $4::jsonb
+         WHERE NOT EXISTS (SELECT 1 FROM existing_message)
+         RETURNING *
+       ),
+       chosen_message AS (
+         SELECT * FROM existing_message
+         UNION ALL
+         SELECT * FROM inserted_message
+         LIMIT 1
+       ),
+       updated_turn AS (
+         UPDATE conversation_turns
+         SET assistant_message_id = (SELECT id FROM chosen_message),
+             status = CASE WHEN $5::boolean THEN 'recovered' ELSE 'completed' END,
+             stage = 'assistant_message_saved',
+             updated_at = now()
+         WHERE session_id = $1 AND id = $2
+         RETURNING *
+       )
+       SELECT *
+       FROM chosen_message`,
+      [
+        input.sessionId,
+        input.turnId,
+        input.content,
+        jsonbParam(input.metadata ?? {}),
+        input.recovered ?? false
+      ]
+    );
+    if (!result.rowCount) throw new Error('Unable to save assistant message for turn');
+    await this.db.query(
+      `UPDATE conversation_sessions
+       SET updated_at = now()
+       WHERE id = $1`,
+      [input.sessionId]
+    );
+    return mapMessage(result.rows[0]);
+  }
+
+  async enqueueLeadOutbox(input: {
+    leadId: string;
+    sessionId: string;
+    turnId: string;
+    destination: string;
+    payload: unknown;
+    status?: string;
+    nextAttemptAt?: string | null;
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO lead_outbox(lead_id, session_id, turn_id, destination, payload, status, next_attempt_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::timestamptz)
+       ON CONFLICT (lead_id, destination) DO UPDATE
+       SET payload = EXCLUDED.payload,
+           status = CASE
+             WHEN lead_outbox.status = 'sent' THEN lead_outbox.status
+             ELSE EXCLUDED.status
+           END,
+           next_attempt_at = EXCLUDED.next_attempt_at,
+           updated_at = now()
+       RETURNING *`,
+      [
+        input.leadId,
+        input.sessionId,
+        input.turnId,
+        input.destination,
+        jsonbParam(input.payload),
+        input.status ?? 'pending',
+        input.nextAttemptAt ?? null
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async addAgentTrace(input: {
+    sessionId?: string | null;
+    turnId?: string | null;
+    phase: string;
+    eventType: string;
+    payload?: unknown;
+    redacted?: boolean;
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO agent_traces(session_id, turn_id, phase, event_type, payload, redacted)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, $6)
+       RETURNING *`,
+      [
+        input.sessionId ?? null,
+        input.turnId ?? null,
+        input.phase,
+        input.eventType,
+        jsonbParam(input.payload ?? {}),
+        input.redacted ?? true
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async listAgentTraces(sessionId: string, turnId?: string, limit = 200) {
+    const params: unknown[] = [sessionId, limit];
+    const turnClause = turnId ? 'AND turn_id = $3' : '';
+    if (turnId) params.push(turnId);
+    const result = await this.db.query(
+      `SELECT *
+       FROM agent_traces
+       WHERE session_id = $1
+         ${turnClause}
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      params
+    );
+    return result.rows;
   }
 
   async updateAssistantFeedback(input: {
@@ -1119,6 +1438,28 @@ export class ProductRepository {
     );
   }
 
+  async recordDataQualityIssue(input: {
+    productId?: string | null;
+    issueType: string;
+    fieldName?: string | null;
+    conflictingValues?: unknown[];
+    evidence?: unknown[];
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO data_quality_issues(product_id, issue_type, field_name, conflicting_values, evidence)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+       RETURNING *`,
+      [
+        input.productId ?? null,
+        input.issueType,
+        input.fieldName ?? null,
+        jsonbParam(input.conflictingValues ?? []),
+        jsonbParam(input.evidence ?? [])
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
   async searchProducts(query: string, limit = 8) {
     const normalized = query.trim();
     const tokens = searchTokens(normalized);
@@ -1294,6 +1635,62 @@ export class LeadRepository {
       [id, status, providerResponse]
     );
     return mapLead(result.rows[0]);
+  }
+
+  async getLead(id: string) {
+    const result = await this.db.query('SELECT * FROM leads WHERE id = $1', [id]);
+    return result.rowCount ? mapLead(result.rows[0]) : null;
+  }
+
+  async claimDueLeadOutbox(limit = 10) {
+    const result = await this.db.query(
+      `WITH due AS (
+         SELECT id
+         FROM lead_outbox
+         WHERE status IN ('pending', 'failed')
+           AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+         ORDER BY created_at ASC
+         LIMIT $1
+         FOR UPDATE SKIP LOCKED
+       )
+       UPDATE lead_outbox o
+       SET status = 'sending',
+           attempt_count = o.attempt_count + 1,
+           updated_at = now()
+       FROM due
+       WHERE o.id = due.id
+       RETURNING o.*`,
+      [limit]
+    );
+    return result.rows.map(mapLeadOutboxItem);
+  }
+
+  async markLeadOutboxSent(id: string) {
+    const result = await this.db.query(
+      `UPDATE lead_outbox
+       SET status = 'sent',
+           last_error = NULL,
+           next_attempt_at = NULL,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+    return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
+  }
+
+  async markLeadOutboxFailed(input: { id: string; error: string; nextAttemptAt?: string | null; dead?: boolean }) {
+    const result = await this.db.query(
+      `UPDATE lead_outbox
+       SET status = $2,
+           last_error = $3,
+           next_attempt_at = $4::timestamptz,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [input.id, input.dead ? 'dead' : 'failed', input.error, input.nextAttemptAt ?? null]
+    );
+    return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
   }
 
   async listLeads(limit = 100) {

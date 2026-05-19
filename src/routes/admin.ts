@@ -126,7 +126,19 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return {
       session,
       messages: await conversations.listMessages(params.id, 200),
-      turns: await conversations.listTurns(params.id, 200)
+      turns: await conversations.listTurns(params.id, 200),
+      agentTraces: await conversations.listAgentTraces(params.id, undefined, 200)
+    };
+  });
+
+  app.get('/api/admin/conversations/:id/agent-traces', async (request) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const query = z.object({
+      turnId: z.string().uuid().optional(),
+      limit: z.coerce.number().int().positive().max(500).default(200)
+    }).parse(request.query);
+    return {
+      traces: await conversations.listAgentTraces(params.id, query.turnId, query.limit)
     };
   });
 

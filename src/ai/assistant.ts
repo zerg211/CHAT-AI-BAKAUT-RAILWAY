@@ -58,6 +58,8 @@ import { buildProductEvidenceRegistry, compactProductEvidenceRegistry } from './
 import { enforcePolicyGateBeforeAnswer, runPolicyGate } from './policyGate.js';
 import { buildLeadDraft, shouldCommitLeadFromDraft } from './leadDraft.js';
 import { sourcePolicyRequiresWeb } from './sourcePolicy.js';
+import { disabledLegacyWriterMetadata, legacyAnswerWriterAllowed } from './agentManagerConfig.js';
+import { AgentManagerOrchestrator } from './agentManagerOrchestrator.js';
 import { applyContractNeedDelta } from './requirementDelta.js';
 import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 import {
@@ -6751,7 +6753,7 @@ type ExtractedLeadContact = {
 type AutoLeadResult = {
   created: boolean;
   lead?: Lead;
-  emailStatus?: 'sent_email' | 'email_failed';
+  emailStatus?: 'sent_email' | 'email_failed' | 'pending_outbox';
   missing?: 'name' | 'contact';
   error?: string;
 };
@@ -7495,12 +7497,15 @@ function leadQuestionSummary(userMessage: string, history: Message[], state: Cus
 export class AssistantService {
   private readonly embeddingCoverageCache = new Map<string, { usable: boolean; expiresAt: number }>();
   private readonly queryEmbeddingCache = new Map<string, { value: number[]; expiresAt: number }>();
+  private readonly agentManager: AgentManagerOrchestrator;
 
   constructor(
     private readonly conversations = new ConversationRepository(),
     private readonly products = new ProductRepository(),
     private readonly leads = new LeadRepository()
-  ) {}
+  ) {
+    this.agentManager = new AgentManagerOrchestrator(this.conversations, this.products, this.leads);
+  }
 
   private async canUseEmbeddings(target: EmbeddingCoverageTarget) {
     const coverageFn = (this.products as unknown as {
@@ -7547,7 +7552,8 @@ export class AssistantService {
     history: Message[],
     cards: ProductCard[],
     userMessage: string,
-    state: CustomerNeedState
+    state: CustomerNeedState,
+    turnId?: string
   ): Promise<AutoLeadResult | null> {
     if (!hasLikelyContactText(userMessage)) return null;
     const contact = extractLeadContactDetails(userMessage);
@@ -7561,6 +7567,20 @@ export class AssistantService {
         email: contact.email,
         question: leadQuestionSummary(userMessage, history, state, cards)
       });
+      if (config.AGENT_MANAGER_LEAD_OUTBOX_ENABLED && turnId) {
+        await this.conversations.enqueueLeadOutbox({
+          leadId: lead.id,
+          sessionId: session.id,
+          turnId,
+          destination: 'lead_email',
+          payload: { lead, sessionId: session.id }
+        }).catch((error) => console.warn('Lead outbox enqueue failed', safeError(error)));
+        return {
+          created: true,
+          lead,
+          emailStatus: 'pending_outbox'
+        };
+      }
       const messages = await this.conversations.listMessages(session.id, 80).catch(() => history);
       const emailResult = await sendLeadEmail(lead, { session, messages });
       const updated = await this.leads.markEmailResult(
@@ -7790,6 +7810,7 @@ export class AssistantService {
     history: Message[],
     aiDiagnostics: AiGenerationDiagnostics
   ): Promise<ChatResponsePayload | null> {
+    if (!legacyAnswerWriterAllowed('fast_catalog_selection')) return null;
     if (!shouldUseFastCatalogSelection({
       userMessage: input.userMessage,
       needState,
@@ -8133,6 +8154,7 @@ export class AssistantService {
     history: Message[],
     aiDiagnostics: AiGenerationDiagnostics
   ): Promise<ChatResponsePayload | null> {
+    if (!legacyAnswerWriterAllowed('fast_technical_orientation')) return null;
     if (!shouldUseFastTechnicalOrientation({
       userMessage: input.userMessage,
       needState,
@@ -8354,6 +8376,7 @@ export class AssistantService {
   }
 
   private async tryFastCommercialHandoff(input: GenerateAnswerInput, session: ConversationSession, history: Message[], aiDiagnostics: AiGenerationDiagnostics): Promise<ChatResponsePayload | null> {
+    if (!legacyAnswerWriterAllowed('fast_commercial_contact_confirmation')) return null;
     const latestUserMessage = input.userMessage;
     if (!isExplicitCommercialQuestion(latestUserMessage)) return null;
     if (isShownProductChoiceOrComparisonQuestion(latestUserMessage)) return null;
@@ -8469,7 +8492,7 @@ export class AssistantService {
       contact: extractedLeadContact
     });
     const autoLeadResult = shouldCreateLead
-      ? await this.createLeadFromChatContact(session, history, commercialCards, latestUserMessage, session.needState)
+      ? await this.createLeadFromChatContact(session, history, commercialCards, latestUserMessage, session.needState, input.turnId)
       : null;
     const leadStateMachine = buildLeadStateMachine({
       executionContract,
@@ -9714,6 +9737,9 @@ export class AssistantService {
   }
 
   async generateAnswer(input: GenerateAnswerInput): Promise<ChatResponsePayload> {
+    if (config.AGENT_MANAGER_HARNESS_ENABLED) {
+      return this.agentManager.generateAnswer(input);
+    }
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
     const consistencyGuard = getSessionGuard(input.sessionId);
@@ -9768,15 +9794,20 @@ export class AssistantService {
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
 
-    const fastCommercialContactConfirmation = shouldTryFastCommercialHandoff(input.userMessage, history)
+    const fastCommercialContactConfirmation = legacyAnswerWriterAllowed('fast_commercial_contact_confirmation') &&
+      shouldTryFastCommercialHandoff(input.userMessage, history)
       ? await this.tryFastCommercialHandoff(input, { ...session, needState }, history, aiDiagnostics)
       : null;
     if (fastCommercialContactConfirmation) return fastCommercialContactConfirmation;
 
-    const fastCatalogSelection = await this.tryFastCatalogSelection(input, needState, history, aiDiagnostics);
+    const fastCatalogSelection = legacyAnswerWriterAllowed('fast_catalog_selection')
+      ? await this.tryFastCatalogSelection(input, needState, history, aiDiagnostics)
+      : null;
     if (fastCatalogSelection) return fastCatalogSelection;
 
-    const fastTechnicalOrientation = await this.tryFastTechnicalOrientation(input, needState, history, aiDiagnostics);
+    const fastTechnicalOrientation = legacyAnswerWriterAllowed('fast_technical_orientation')
+      ? await this.tryFastTechnicalOrientation(input, needState, history, aiDiagnostics)
+      : null;
     if (fastTechnicalOrientation) return fastTechnicalOrientation;
 
     const baseQuery = productSearchText(input.userMessage, needState);
@@ -10383,7 +10414,7 @@ export class AssistantService {
       contact: extractedLeadContact
     });
     const autoLeadResult = shouldCreateLead
-      ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState)
+      ? await this.createLeadFromChatContact(session, history, cards, input.userMessage, needState, input.turnId)
       : null;
     const leadStateMachine = buildLeadStateMachine({
       executionContract,
@@ -10822,6 +10853,13 @@ export class AssistantService {
       if (input.signal?.aborted) throw new Error('AI answer generation aborted');
       const details = safeError(error);
       markAiFallback(aiDiagnostics, 'answerGenerationFallback', error, 'answer_generation_failed');
+      if (!legacyAnswerWriterAllowed('deterministic_answer_generation_fallback')) {
+        console.warn('OpenAI answer generation failed; deterministic fallback disabled by agent manager harness', {
+          ...details,
+          legacyWriter: disabledLegacyWriterMetadata('deterministic_answer_generation_fallback')
+        });
+        throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
+      }
       const deterministicFallback = deterministicAnswerGenerationFallback({
         cards,
         selectionResult,
@@ -10850,25 +10888,29 @@ export class AssistantService {
       }).catch((error) => console.warn('Conversation turn answering update failed', safeError(error)));
     }
 
-    const proactiveCommercialAnswer = deterministicCommercialHandoffFallback({
-      cards,
-      selectionResult,
-      contract: answerAgentTurnContract,
-      latestUserMessage: input.userMessage
-    }).trim();
-    const createdLeadConfirmationAnswer = autoLeadResult?.created
+    const proactiveCommercialAnswer = legacyAnswerWriterAllowed('proactive_commercial_answer')
+      ? deterministicCommercialHandoffFallback({
+          cards,
+          selectionResult,
+          contract: answerAgentTurnContract,
+          latestUserMessage: input.userMessage
+        }).trim()
+      : '';
+    const createdLeadConfirmationAnswer = autoLeadResult?.created && legacyAnswerWriterAllowed('lead_confirmation_answer')
       ? leadCreatedConfirmationAnswer({
           cards,
           userMessage: input.userMessage,
           autoLead: autoLeadResult
         }).trim()
       : '';
-    const proactiveCatalogSelectionAnswer = deterministicRecoveredSelectionAnswer({
-      contract: answerAgentTurnContract,
-      cards,
-      state: needState,
-      latestUserMessage: input.userMessage
-    }).trim();
+    const proactiveCatalogSelectionAnswer = legacyAnswerWriterAllowed('proactive_catalog_selection_answer')
+      ? deterministicRecoveredSelectionAnswer({
+          contract: answerAgentTurnContract,
+          cards,
+          state: needState,
+          latestUserMessage: input.userMessage
+        }).trim()
+      : '';
     const shouldUseProactiveCatalogSelectionAnswer = Boolean(
       proactiveCatalogSelectionAnswer &&
       cards.length > 0 &&
@@ -11310,6 +11352,9 @@ export class AssistantService {
   }
 
   async recoverTurn(input: { sessionId: string; turnId: string; onDelta?: (text: string) => void | Promise<void>; signal?: AbortSignal }): Promise<ChatResponsePayload> {
+    if (config.AGENT_MANAGER_HARNESS_ENABLED) {
+      return this.agentManager.recoverTurn(input);
+    }
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
     let turn = await this.conversations.getTurn(input.sessionId, input.turnId);
@@ -11384,6 +11429,7 @@ export class AssistantService {
     const storedContract = (recoveryTurn.plannerContract ?? null) as AgentTurnContract | null;
     const recoveryAiDiagnostics = emptyAiGenerationDiagnostics();
     const recoveryNeedState = latestMessageScopedRecoveryNeedState(session.needState, latestUserText);
+    const deterministicRecoveryAllowed = legacyAnswerWriterAllowed('deterministic_turn_recovery');
     const recoveryTechnicalOrientation = latestUser ? shouldUseFastTechnicalOrientation({
       userMessage: latestUserText,
       needState: recoveryNeedState,
@@ -11502,7 +11548,7 @@ export class AssistantService {
         contact: recoveredContact
       });
       const recoveredAutoLeadResult = recoveredShouldCreateLead
-        ? await this.createLeadFromChatContact(session, history, recoveredSelection.cards, latestUserText, recoveryNeedState)
+        ? await this.createLeadFromChatContact(session, history, recoveredSelection.cards, latestUserText, recoveryNeedState, input.turnId)
         : null;
       const leadStateMachine = buildLeadStateMachine({
         executionContract,
@@ -11649,6 +11695,7 @@ export class AssistantService {
       };
     };
     if (
+      deterministicRecoveryAllowed &&
       latestUser &&
       isExplicitCommercialQuestion(latestUserText) &&
       !isMixedCatalogAndCommercialQuestion(latestUserText, storedContract) &&
@@ -11711,7 +11758,7 @@ export class AssistantService {
         });
       }
     }
-    if (!storedContract && latestUser && isContactRefusalTechnicalSummaryRequest(latestUserText)) {
+    if (deterministicRecoveryAllowed && !storedContract && latestUser && isContactRefusalTechnicalSummaryRequest(latestUserText)) {
       const summaryContract: AgentTurnContract = {
         answerTask: 'technical_explanation',
         taskType: 'contact_refusal_continue_selection',
@@ -11740,7 +11787,7 @@ export class AssistantService {
         cardDisplay: undefined
       });
     }
-    if (latestUser && recoveryTechnicalOrientation) {
+    if (deterministicRecoveryAllowed && latestUser && recoveryTechnicalOrientation) {
       const technicalContract: AgentTurnContract = {
         answerTask: 'technical_explanation',
         taskType: 'technical_answer',
@@ -11797,7 +11844,7 @@ export class AssistantService {
           needState: recoveryNeedState
         })
       : null;
-    const fallbackCurrentLineupContract: AgentTurnContract | null = recoveryCurrentLineupStyle
+    const fallbackCurrentLineupContract: AgentTurnContract | null = deterministicRecoveryAllowed && recoveryCurrentLineupStyle
       ? currentLineupRecoveryContract({
           answerTask: 'technical_explanation',
           taskType: 'technical_answer',

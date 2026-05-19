@@ -1,0 +1,46 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+describe('agent manager integration source guards', () => {
+  it('routes generate and recover through AgentManagerOrchestrator behind the harness flag', () => {
+    const assistant = readFileSync('src/ai/assistant.ts', 'utf8');
+
+    expect(assistant).toContain('new AgentManagerOrchestrator(this.conversations, this.products, this.leads)');
+    expect(assistant).toContain('if (config.AGENT_MANAGER_HARNESS_ENABLED) {\n      return this.agentManager.generateAnswer(input);');
+    expect(assistant).toContain('if (config.AGENT_MANAGER_HARNESS_ENABLED) {\n      return this.agentManager.recoverTurn(input);');
+  });
+
+  it('uses web search inside the comparison research module', () => {
+    const research = readFileSync('src/ai/productComparisonResearch.ts', 'utf8');
+
+    expect(research).toContain("type: 'web_search_preview'");
+    expect(research).toContain('conflicts');
+    expect(research).toContain('summaryForAnswer');
+  });
+
+  it('starts the lead outbox worker through the feature flag controlled worker', () => {
+    const app = readFileSync('src/app.ts', 'utf8');
+    const worker = readFileSync('src/ai/leadOutbox.ts', 'utf8');
+
+    expect(app).toContain('startLeadOutboxWorker({ log: app.log })');
+    expect(worker).toContain('if (!config.AGENT_MANAGER_HARNESS_ENABLED && !config.AGENT_MANAGER_LEAD_OUTBOX_ENABLED) return undefined;');
+  });
+
+  it('tries same-turn recovery before returning a saved-turn error in the harness path', () => {
+    const route = readFileSync('src/routes/chat.ts', 'utf8');
+
+    expect(route).toContain('if (!controller.signal.aborted && config.AGENT_MANAGER_HARNESS_ENABLED)');
+    expect(route).toContain('assistant.recoverTurn({');
+    expect(route).toContain('recoverable: config.AGENT_MANAGER_HARNESS_ENABLED');
+  });
+
+  it('renders agent manager traces in the admin conversation detail UI', () => {
+    const client = readFileSync('src/client/main.tsx', 'utf8');
+    const styles = readFileSync('src/client/styles.css', 'utf8');
+
+    expect(client).toContain('agentTraces?: AdminAgentTrace[]');
+    expect(client).toContain('function AgentTracePanel');
+    expect(client).toContain('detail.agentTraces?.length ? <AgentTracePanel traces={detail.agentTraces} /> : null');
+    expect(styles).toContain('.admin-trace-panel');
+  });
+});

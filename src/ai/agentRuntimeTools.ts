@@ -10,7 +10,7 @@ import type { AgentToolHandler } from './agentTools.js';
 type RuntimeAutoLeadResult = {
   created: boolean;
   lead?: { id: string };
-  emailStatus?: 'sent_email' | 'email_failed';
+  emailStatus?: 'sent_email' | 'email_failed' | 'pending_outbox';
   missing?: 'name' | 'contact';
   error?: string;
 };

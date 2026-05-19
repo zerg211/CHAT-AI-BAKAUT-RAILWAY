@@ -32,6 +32,22 @@ type LeadForm = {
 type AdminConversationDetail = {
   session: ConversationSession;
   messages: Message[];
+  agentTraces?: AdminAgentTrace[];
+};
+
+type AdminAgentTrace = {
+  id?: string;
+  session_id?: string | null;
+  sessionId?: string | null;
+  turn_id?: string | null;
+  turnId?: string | null;
+  phase?: string;
+  event_type?: string;
+  eventType?: string;
+  payload?: unknown;
+  redacted?: boolean;
+  created_at?: string;
+  createdAt?: string;
 };
 
 type AdminConversationStats = {
@@ -63,6 +79,69 @@ function shortDiagnosticReason(reason: unknown) {
   const value = String(reason ?? '').trim();
   if (!value) return 'unknown';
   return value.length > 140 ? `${value.slice(0, 137)}...` : value;
+}
+
+function jsonPreview(value: unknown, maxLength = 260) {
+  if (value === null || value === undefined) return '';
+  try {
+    const text = JSON.stringify(value);
+    return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+  } catch {
+    const text = String(value);
+    return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+  }
+}
+
+function traceCreatedAt(trace: AdminAgentTrace) {
+  return trace.createdAt ?? trace.created_at ?? '';
+}
+
+function traceTurnId(trace: AdminAgentTrace) {
+  return trace.turnId ?? trace.turn_id ?? '';
+}
+
+function traceEventType(trace: AdminAgentTrace) {
+  return trace.eventType ?? trace.event_type ?? '';
+}
+
+function AgentTracePanel({ traces }: { traces: AdminAgentTrace[] }) {
+  const phaseCounts = traces.reduce<Record<string, number>>((acc, trace) => {
+    const phase = trace.phase || 'unknown';
+    acc[phase] = (acc[phase] ?? 0) + 1;
+    return acc;
+  }, {});
+  const recent = traces.slice(0, 12);
+  return (
+    <section className="admin-trace-panel" aria-label="Agent manager trace">
+      <div className="admin-trace-head">
+        <div>
+          <strong>Agent trace</strong>
+          <span>{traces.length} events</span>
+        </div>
+        <div className="admin-trace-phases">
+          {Object.entries(phaseCounts).map(([phase, count]) => (
+            <span key={phase}>{phase}: {count}</span>
+          ))}
+        </div>
+      </div>
+      <div className="admin-trace-list">
+        {recent.map((trace, index) => (
+          <div className="admin-trace-row" key={trace.id ?? `${traceCreatedAt(trace)}-${index}`}>
+            <div className="admin-trace-row-main">
+              <span>{trace.phase || 'unknown'}</span>
+              <strong>{traceEventType(trace) || 'event'}</strong>
+              <time>{formatDateTime(traceCreatedAt(trace))}</time>
+            </div>
+            <div className="admin-trace-row-meta">
+              {traceTurnId(trace) ? <span>turn {shortText(traceTurnId(trace), 8)}</span> : null}
+              {trace.redacted !== false ? <span>redacted</span> : <span className="warn">raw</span>}
+            </div>
+            {trace.payload ? <code>{jsonPreview(trace.payload)}</code> : null}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function aiFallbackLabels(metadata?: ChatResponsePayload['metadata']) {
@@ -962,6 +1041,8 @@ function AdminApp() {
                   </button>
                 </div>
               </div>
+
+              {detail.agentTraces?.length ? <AgentTracePanel traces={detail.agentTraces} /> : null}
 
               <div className="admin-messages">
                 {detail.messages.map((message) => {

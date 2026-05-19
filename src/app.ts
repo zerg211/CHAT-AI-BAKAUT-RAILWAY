@@ -3,6 +3,7 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 import { config } from './config.js';
 import { ConversationRepository } from './db/repositories.js';
+import { startLeadOutboxWorker } from './ai/leadOutbox.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
@@ -84,6 +85,8 @@ export async function buildApp() {
       app.log.warn({ error: error instanceof Error ? error.message : String(error) }, 'failed to maintain sessions');
     });
   }, 60_000).unref();
+
+  startLeadOutboxWorker({ log: app.log });
 
   return app;
 }

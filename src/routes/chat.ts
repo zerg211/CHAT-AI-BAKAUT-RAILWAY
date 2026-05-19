@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
+import { config } from '../config.js';
 import { ConversationRepository } from '../db/repositories.js';
 
 const createSessionSchema = z.object({
@@ -135,6 +136,27 @@ export async function registerChatRoutes(app: FastifyInstance) {
       statusTimer = null;
       send('done', payload);
     } catch (error) {
+      if (!controller.signal.aborted && config.AGENT_MANAGER_HARNESS_ENABLED) {
+        try {
+          const recoveredPayload = await runWithOpenAIUsageContext({
+            sessionId: params.id,
+            turnId,
+            pageUrl: session.pageUrl,
+            userAgent: session.userAgent
+          }, () => assistant.recoverTurn({
+            sessionId: params.id,
+            turnId,
+            onDelta: (delta) => send('delta', { delta }),
+            signal: controller.signal
+          }));
+          if (statusTimer) clearInterval(statusTimer);
+          statusTimer = null;
+          send('done', recoveredPayload);
+          return;
+        } catch (recoveryError) {
+          app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(recoveryError) }, 'agent manager same-turn recovery failed');
+        }
+      }
       await conversations.updateTurn({
         sessionId: params.id,
         turnId,
@@ -143,9 +165,11 @@ export async function registerChatRoutes(app: FastifyInstance) {
         errorCode: controller.signal.aborted ? 'generation_aborted_or_timeout' : 'generation_failed',
         errorMessage: safeErrorMessage(error)
       }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
-      const message = controller.signal.aborted
-        ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
-        : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
+      const message = config.AGENT_MANAGER_HARNESS_ENABLED
+        ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
+        : controller.signal.aborted
+          ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
+          : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
       if (!controller.signal.aborted) {
         app.log.warn({ sessionId: params.id, error: error instanceof Error ? error.message : String(error) }, 'chat generation failed');
       }
@@ -214,8 +238,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
       app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(error) }, 'chat recovery failed');
       send('error', {
         turnId: params.turnId,
-        recoverable: false,
-        error: 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
+        recoverable: config.AGENT_MANAGER_HARNESS_ENABLED,
+        error: config.AGENT_MANAGER_HARNESS_ENABLED
+          ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
+          : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
       });
     } finally {
       if (statusTimer) clearInterval(statusTimer);
