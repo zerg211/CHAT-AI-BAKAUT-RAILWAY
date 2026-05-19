@@ -11618,6 +11618,40 @@ export class AssistantService {
         cardDisplay: undefined
       });
     }
+    if (latestUser && shouldUseFastTechnicalOrientation({
+      userMessage: latestUserText,
+      needState: recoveryNeedState,
+      history
+    })) {
+      const technicalContract: AgentTurnContract = {
+        answerTask: 'technical_explanation',
+        taskType: 'technical_answer',
+        catalogAction: 'none',
+        commercialAction: 'none',
+        productCardsPolicy: 'none',
+        mustAnswerNow: ['recover the generator or plate technical answer from current need state without catalog lookup'],
+        activeNeeds: (recoveryNeedState.activeNeeds ?? []).map((need) => ({
+          id: need.id,
+          productClass: need.productClass,
+          summary: need.summary
+        })),
+        currentFocus: 'technical_recovery',
+        cardsRole: 'none',
+        leadAllowed: false,
+        leadAllowedReason: 'recovery for technical orientation; no commercial handoff requested',
+        errorRecoveryPriority: 'Recover the technical calculation or orientation directly from need state.',
+        validatorWarnings: ['technical_orientation_recovery_contract']
+      };
+      const answer = deterministicTechnicalSummaryRecovery({
+        cards: allShownProductCards(history),
+        state: recoveryNeedState.selectionState,
+        latestUserMessage: latestUserText
+      });
+      return completeRecoveredAnswer(answer, technicalContract, {
+        cards: [],
+        cardDisplay: undefined
+      });
+    }
     const recoveryBaseQuery = productSearchText(latestUserText, recoveryNeedState);
     const recoveryPlan = !storedContract && latestUserText
       ? await this.planAssistantTurn({
