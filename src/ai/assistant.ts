@@ -4062,13 +4062,37 @@ function rankingPreferenceFromText(text: string): ProductRankingPreference | und
 function isSmallSitePlateNeed(text: string) {
   const normalized = text.toLowerCase();
   const smallSite = /(?:участк|участок|дач|сад|дорож|тротуар|плитк|пешеход|частн|двор|гараж|path|garden|yard|sidewalk)/iu.test(normalized);
-  const heavyDuty = /(?:асфальт|дорожн|магистра|промышлен|бригада|ежеднев|проф|больш[а-я]+\s+объем|котлован|транше|reversible|heavy|industrial|road\s+work)/iu.test(normalized);
-  return smallSite && !heavyDuty;
+  return smallSite && !isHeavyDutyPlateNeed(text);
+}
+
+function isHeavyDutyPlateNeed(text: string) {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ');
+  const professionalActor = /(?:бригад|бизнес|коммерческ|проф(?:ессиональн)?|под\s+ключ|объект|ежеднев|аренд|industrial|professional|crew)/iu.test(normalized);
+  const heavySurface = /(?:парковк|стоянк|заезд|дорог|проезд|щеб[её]н|щебень\s*20\s*[-–—]?\s*40|пгс|грави|основан|road\s*base|parking|driveway)/iu.test(normalized);
+  const thickLayer = /(?:слой|слоя|толщин)[^.!?\n]{0,40}(?:1[5-9]|2[0-9]|3[0-9])\s*(?:см|cm)|(?:1[5-9]|2[0-9]|3[0-9])\s*(?:см|cm)[^.!?\n]{0,40}(?:слой|щеб|основан)/iu.test(normalized);
+  const largeArea = /(?:\d{3,4}\s*(?:[-–—]\s*)?\d{0,4}\s*(?:м2|м²|квадрат|кв\.?\s*м)|площад[ьи]\s+[^.!?\n]{0,50}\d{3,4})/iu.test(normalized);
+  const rollerContext = /(?:каток|без\s+катка|каток\s+не\s+всегда|roller)/iu.test(normalized);
+  const heavyClassWords = /(?:реверсив|тяж[её]л|центробеж|кн\b|кН\b|уплотн[а-яё]*\s+щеб|больш[а-яё]+\s+объем|котлован|транше|reversible|heavy\s*duty)/iu.test(normalized);
+  const transportAllowsHeavy = /(?:газел|аппарел|рамп|погрузчик|минипогруз|до\s*(?:2[0-9]{2}|3[0-9]{2})\s*кг)/iu.test(normalized);
+
+  const score = [
+    professionalActor,
+    heavySurface,
+    thickLayer,
+    largeArea,
+    rollerContext,
+    heavyClassWords,
+    transportAllowsHeavy
+  ].filter(Boolean).length;
+
+  return score >= 2 || (professionalActor && heavySurface) || (thickLayer && heavySurface) || (largeArea && heavySurface);
 }
 
 function implicitPlateWeightRangeFromNeed(text: string, intent: ProductIntent) {
-  if (intent !== 'plate' || !isSmallSitePlateNeed(text)) return undefined;
-  return { min: 0, max: 120 };
+  if (intent !== 'plate') return undefined;
+  if (isHeavyDutyPlateNeed(text)) return { min: 120, max: 350 };
+  if (isSmallSitePlateNeed(text)) return { min: 0, max: 120 };
+  return undefined;
 }
 
 function isRankingOnlyFollowUp(text: string) {
@@ -5947,6 +5971,16 @@ function deterministicPlateWeightOrientation(userMessage: string) {
   if (!isPlateWeightTechnicalQuestion(userMessage)) return '';
   const normalized = userMessage.toLowerCase();
   const selfLoad = /(?:сам|одному|груз|перевоз|багаж|прицеп|тащить)/iu.test(normalized);
+  const heavyDuty = isHeavyDutyPlateNeed(userMessage);
+  if (heavyDuty) {
+    const lines = [
+      'Для такой бизнес-задачи легкий класс 60-80 кг я бы не ставил основным: щебень 20-40, слой 15-20 см и площади 200-400 м2 требуют уже профессионального уплотнения.',
+      'Практичный ориентир - реверсивная виброплита примерно 150-300 кг: ближе к 150-200 кг, если важна мобильность бригады, и ближе к 250-300 кг, если катка часто нет и нужно увереннее работать по щебеночному основанию.',
+      'Смотреть нужно не только вес, но и центробежную силу, размер подошвы, реверс, ресурс двигателя и насколько реально грузить машину в вашу Газель/на аппарели.',
+      'Если основание ответственное или слой идет за один проход, каток все равно лучше планировать как основной инструмент, а виброплиту использовать для зон, куда каток не проходит.'
+    ];
+    return lines.join('\n\n');
+  }
   const smallPaving = isSmallSitePlateNeed(userMessage) || /(?:плитк|въезд|песок|щеб|двор|дорож)/iu.test(normalized);
   const lines = [
     smallPaving
@@ -12151,6 +12185,10 @@ export const assistantTestHooks = {
   parseWeightNeedRangeKg,
   parseDimensionNeedRangeMm,
   extractModelTokens,
+  isHeavyDutyPlateNeed,
+  isSmallSitePlateNeed,
+  implicitPlateWeightRangeFromNeed,
+  deterministicPlateWeightOrientation,
   coerceTurnPlan,
   fallbackTurnPlan,
   lastVisibleShownProductCards,

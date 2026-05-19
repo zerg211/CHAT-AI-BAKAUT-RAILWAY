@@ -6334,6 +6334,53 @@ describe('recommendation ranking', () => {
     expect(result.matchedProducts.map((item) => item.id)).not.toContain('heavy');
   });
 
+  it('orients business crushed-stone plate work to professional reversible class instead of light household plates', () => {
+    const message = 'Нужна виброплита для бригады, не для дорожек и песка. Делаем заезды и небольшие парковки под ключ: щебень 20-40, слой обычно 15-20 см, площади 200-400 м2. Каток не всегда есть, нужно тяжелее и практичнее для бизнеса. Что смотреть?';
+
+    expect(assistantTestHooks.isHeavyDutyPlateNeed(message)).toBe(true);
+    expect(assistantTestHooks.isSmallSitePlateNeed(message)).toBe(false);
+    expect(assistantTestHooks.implicitPlateWeightRangeFromNeed(message, 'plate' as never)).toEqual({ min: 120, max: 350 });
+
+    const answer = assistantTestHooks.deterministicPlateWeightOrientation(message);
+    expect(answer).toMatch(/150-300 кг|реверсивная виброплита/iu);
+    expect(answer).toMatch(/60-80 кг я бы не ставил основным/iu);
+    expect(answer).not.toMatch(/для небольшого въезда под плитку/iu);
+  });
+
+  it('uses a professional weight window for business plate catalog selection without explicit kg', async () => {
+    const light = productWithSpecs('light65', 'Виброплита прямоходная бензиновая 65 кг', 50_000, 'https://example.test/catalog/vibroplity/light65/', { 'рабочая масса, кг': '65' });
+    const mid = productWithSpecs('mid160', 'Виброплита реверсивная бензиновая 160 кг', 180_000, 'https://example.test/catalog/vibroplity/mid160/', { 'рабочая масса, кг': '160' });
+    const heavy = productWithSpecs('heavy260', 'Виброплита реверсивная дизельная 260 кг', 320_000, 'https://example.test/catalog/vibroplity/heavy260/', { 'рабочая масса, кг': '260' });
+    const huge = productWithSpecs('huge900', 'Виброплита реверсивная дизельная 900 кг', 2_600_000, 'https://example.test/catalog/vibroplity/huge900/', { 'рабочая масса, кг': '900' });
+    const assistant = new AssistantService(undefined as never, new FakeProducts([light, mid, heavy, huge] as any) as never);
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'виброплита для бригады парковки щебень 20-40 слой 15-20 см',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'plate',
+        productRole: 'coreProduct'
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'plate',
+        targetProductClass: 'plate'
+      }
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Нужна виброплита для бригады: заезды и парковки, щебень 20-40, слой 15-20 см, площади 200-400 м2. Что есть в каталоге?',
+      emptyNeedState(),
+      plan,
+      [light, mid, heavy, huge] as any
+    );
+
+    expect(result.state.hardConstraints.weightKgMin).toBe(120);
+    expect(result.state.hardConstraints.weightKgMax).toBe(350);
+    expect(result.matchedProducts.map((item) => item.id)).toEqual(['mid160', 'heavy260']);
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('light65');
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('huge900');
+  });
+
   it('does not treat light plate cards as matching a single explicit 1000 kg request', async () => {
     const mid = product('mid', 'Виброплита прямоходная бензиновая 95 кг', 90_000, 'https://example.test/catalog/vibroplity/mid/');
     const light = product('light', 'Виброплита прямоходная бензиновая 65 кг', 60_000, 'https://example.test/catalog/vibroplity/light/');
