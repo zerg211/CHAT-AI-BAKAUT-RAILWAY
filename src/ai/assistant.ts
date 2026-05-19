@@ -1996,6 +1996,145 @@ function productSearchText(message: string, state: CustomerNeedState) {
   return parts.filter(Boolean).join(' ').slice(0, 1200);
 }
 
+function latestMessageScopedRecoveryNeedState(state: CustomerNeedState, latestUserMessage: string): CustomerNeedState {
+  const latestTokens = expandModelTokenAliases(extractModelTokens(latestUserMessage));
+  if (latestTokens.length !== 1 || !state.selectionState) return state;
+  const latestToken = latestTokens[0]!;
+  const latestCompact = compactModelText(latestToken);
+  if (!latestCompact) return state;
+
+  const selectionState = state.selectionState;
+  const hard = selectionState.hardConstraints;
+  const currentTokenCompacts = new Set((hard.exactModelTokens ?? []).map((token) => compactModelText(token)).filter(Boolean));
+  const currentConstraintCompact = hard.exactModelConstraint ? compactModelText(hard.exactModelConstraint) : '';
+  const hasStaleExactToken = [...currentTokenCompacts].some((token) => token !== latestCompact);
+  const hasStaleExactConstraint = Boolean(currentConstraintCompact && currentConstraintCompact !== latestCompact);
+  if (!hasStaleExactToken && !hasStaleExactConstraint) return state;
+
+  const oldExactCompacts = new Set([
+    ...currentTokenCompacts,
+    currentConstraintCompact
+  ].filter(Boolean));
+  const keepTrait = (trait: string) => {
+    const compactTrait = compactModelText(trait);
+    if (/^exactmodel/i.test(compactTrait)) return false;
+    return ![...oldExactCompacts].some((token) => token && compactTrait.includes(token));
+  };
+  const exactModelTokenRoles: ProductSelectionToken[] = [{
+    value: latestToken,
+    role: 'targetProduct',
+    evidence: latestUserMessage
+  }];
+  const nextHard: ProductSelectionCriteria = {
+    ...hard,
+    exactModelConstraint: latestToken,
+    exactModelTokens: [latestToken],
+    exactModelTokenRoles,
+    mustHaveTraits: uniqueList([
+      ...(hard.mustHaveTraits ?? []).filter(keepTrait),
+      `exact model ${latestToken}`
+    ], 24),
+    provenance: {
+      ...(hard.provenance ?? {}),
+      exactModelConstraint: 'explicit_user'
+    }
+  };
+  const nextSoft: ProductSelectionCriteria = {
+    ...selectionState.softPreferences,
+    exactModelConstraint: latestToken,
+    exactModelTokens: [],
+    exactModelTokenRoles: [],
+    mustHaveTraits: uniqueList([
+      ...(selectionState.softPreferences?.mustHaveTraits ?? []).filter(keepTrait),
+      `exact model ${latestToken}`
+    ], 24),
+    provenance: {
+      ...(selectionState.softPreferences?.provenance ?? {}),
+      exactModelConstraint: 'explicit_user'
+    }
+  };
+  return {
+    ...state,
+    selectionState: {
+      ...selectionState,
+      hardConstraints: nextHard,
+      softPreferences: nextSoft,
+      activeRequirement: selectionState.activeRequirement
+        ? {
+            ...selectionState.activeRequirement,
+            exactModelConstraint: latestToken,
+            exactModelTokens: [latestToken],
+            exactModelTokenRoles,
+            mustHaveTraits: uniqueList([
+              ...(selectionState.activeRequirement.mustHaveTraits ?? []).filter(keepTrait),
+              `exact model ${latestToken}`
+            ], 24),
+            provenance: {
+              ...(selectionState.activeRequirement.provenance ?? {}),
+              exactModelConstraint: 'explicit_user'
+            }
+          }
+        : selectionState.activeRequirement,
+      selectedProductIds: [],
+      matchedProductIds: [],
+      previousCandidateProductIds: [],
+      updatedAt: new Date().toISOString()
+    }
+  };
+}
+
+function currentLineupRecoveryContract(contract: AgentTurnContract, latestUserMessage: string): AgentTurnContract {
+  if (!shouldUseCurrentLineupStyle(latestUserMessage)) return contract;
+  const allowLeadAfterAnswer = isCatalogAvailabilityQuestion(latestUserMessage);
+  return {
+    ...contract,
+    answerTask: 'technical_explanation',
+    taskType: 'technical_answer',
+    catalogAction: 'exact_model_lookup',
+    commercialAction: allowLeadAfterAnswer ? 'offer_contact_after_answer' : 'none',
+    productCardsPolicy: 'none',
+    cardsRole: 'none',
+    leadAllowed: allowLeadAfterAnswer,
+    leadAllowedReason: allowLeadAfterAnswer
+      ? 'current-lineup recovery can answer factually first and offer specialist stock verification after the answer'
+      : 'current-lineup recovery is a factual text answer',
+    mustAnswerNow: uniqueList([
+      ...contract.mustAnswerNow,
+      'separate BAKAUT catalog presence, live stock, and current manufacturer status'
+    ], 8),
+    errorRecoveryPriority: 'Recover the current-lineup/current-production question with a concise factual answer. Use web verification for manufacturer status; do not show product cards.',
+    validatorWarnings: uniqueList([
+      ...(contract.validatorWarnings ?? []),
+      'current_lineup_recovery_forced_text_only_web_policy'
+    ], 40)
+  };
+}
+
+function deterministicCurrentLineupRecoveryFallback(input: {
+  latestUserMessage: string;
+  catalogProducts: Product[];
+  leadAllowed: boolean;
+}) {
+  const latestToken = extractModelTokens(input.latestUserMessage)[0]?.trim();
+  const tokenCompact = latestToken ? compactModelText(latestToken) : '';
+  const matchingCatalogProducts = tokenCompact
+    ? input.catalogProducts.filter((product) => compactModelText(productFullText(product)).includes(tokenCompact))
+    : input.catalogProducts;
+  const coreMatch = matchingCatalogProducts.find(isCoreEquipment);
+  const modelText = latestToken ? `по ${latestToken}` : 'по этой модели';
+  const catalogLine = coreMatch
+    ? `В каталоге вижу ${coreMatch.name}.`
+    : `По каталогу ${modelText} нужно сверить точную карточку, чтобы не подставить товар из предыдущего выбора.`;
+  const lines = [
+    catalogLine,
+    'Заводской статус без внешней проверки не буду утверждать как факт.'
+  ];
+  if (input.leadAllowed) {
+    lines.push('Живой склад и возможность заказа проверяет специалист: можно оставить имя и телефон в форме, и мы вернемся с точным ответом.');
+  }
+  return lines.join('\n\n');
+}
+
 function deriveConversationTopic(userMessage: string, state: CustomerNeedState) {
   const values = [
     state.explicitNeeds.find((item) => item.confidence >= 0.45)?.value,
@@ -10350,6 +10489,9 @@ export class AssistantService {
     const latestUserText = latestUser?.content ?? '';
     const storedContract = (turn.plannerContract ?? null) as AgentTurnContract | null;
     const recoveryAiDiagnostics = emptyAiGenerationDiagnostics();
+    const recoveryCurrentLineupStyle = shouldUseCurrentLineupStyle(latestUserText);
+    const recoveryNeedState = latestMessageScopedRecoveryNeedState(session.needState, latestUserText);
+    let recoveryCatalogProducts: Product[] = [];
     const buildRecoveryRenderContract = (contract: AgentTurnContract, cards: ProductCard[]): ResolvedTurnContract => ({
       action: {
         primary: contract.answerTask === 'lead_handoff' && contract.leadAllowed ? 'collect_lead' : 'answer_question',
@@ -10362,13 +10504,13 @@ export class AssistantService {
         catalogSearchQuery: ''
       },
       knowledge: {
-        webRequired: false,
-        missingInformation: []
+        webRequired: recoveryCurrentLineupStyle,
+        missingInformation: recoveryCurrentLineupStyle ? ['current manufacturer status'] : []
       },
       selection: {
         selectedProductIds: cards.map((card) => card.id),
-        requiredProductTraits: session.needState.selectionState.hardConstraints,
-        selectionState: session.needState.selectionState
+        requiredProductTraits: recoveryNeedState.selectionState.hardConstraints,
+        selectionState: recoveryNeedState.selectionState
       },
       render: {
         cards: cards.length && contract.cardsRole !== 'none' ? 'showProducts' : 'none',
@@ -10385,8 +10527,8 @@ export class AssistantService {
           searchScope: 'previousSelectionOnly',
           catalogSearchQuery: '',
           selectedProductIds: cards.map((card) => card.id),
-          needsWebSearch: false,
-          missingInformation: [],
+          needsWebSearch: recoveryCurrentLineupStyle,
+          missingInformation: recoveryCurrentLineupStyle ? ['current manufacturer status'] : [],
           answerGuidance: 'Deterministic recovery render contract.'
         },
         overrides: ['recovery_render_contract']
@@ -10399,14 +10541,14 @@ export class AssistantService {
       let answer = inputAnswer.trim();
       const renderContract = buildRecoveryRenderContract(contract, recoveredSelection.cards);
       const requirementLedger = buildRequirementLedger({
-        needState: session.needState,
-        selectionState: session.needState.selectionState
+        needState: recoveryNeedState,
+        selectionState: recoveryNeedState.selectionState
       });
       const executionContract = buildExecutionContract({
         agentContract: contract,
         renderContract,
-        selectionState: session.needState.selectionState,
-        webRequired: false,
+        selectionState: recoveryNeedState.selectionState,
+        webRequired: recoveryCurrentLineupStyle,
         activeRequirementIds: requirementLedger.activeRequirementIds
       });
       const visibleCount = recoveredSelection.cardDisplay?.initialVisibleCount ?? Math.min(recoveredSelection.cards.length, LARGE_SLICE_VISIBLE_CARDS);
@@ -10421,21 +10563,24 @@ export class AssistantService {
       const agentContractV2 = deriveAgentTurnContractV2({
         userMessage: latestUserText,
         legacyContract: contract,
-        needState: session.needState,
-        webRequired: false,
+        needState: recoveryNeedState,
+        webRequired: recoveryCurrentLineupStyle,
         selectedProductIds: visibleProductIds
       });
       const productEvidenceRegistry = buildProductEvidenceRegistry({
         executionContract,
         cardManifest,
         cards: recoveredSelection.cards,
-        catalogProducts: recoveredSelection.cards.map(productFromCard)
+        catalogProducts: [
+          ...recoveredSelection.cards.map(productFromCard),
+          ...recoveryCatalogProducts
+        ]
       });
       const factClaimPlanner = buildFactClaimPlanner({
         executionContract,
         requirementLedger,
         cardManifest,
-        usedWebSearch: false
+        usedWebSearch: recoveryCurrentLineupStyle
       });
       const recoveredContact = hasLikelyContactText(latestUserText)
         ? extractLeadContactDetails(latestUserText)
@@ -10456,7 +10601,7 @@ export class AssistantService {
         contact: recoveredContact
       });
       const recoveredAutoLeadResult = recoveredShouldCreateLead
-        ? await this.createLeadFromChatContact(session, history, recoveredSelection.cards, latestUserText, session.needState)
+        ? await this.createLeadFromChatContact(session, history, recoveredSelection.cards, latestUserText, recoveryNeedState)
         : null;
       const leadStateMachine = buildLeadStateMachine({
         executionContract,
@@ -10479,7 +10624,7 @@ export class AssistantService {
         executionContract,
         factClaimPlanner,
         leadStateMachine,
-        webSearchPlanned: false
+        webSearchPlanned: recoveryCurrentLineupStyle
       });
       const toolRegistry = new AgentToolRegistry(createRuntimeArtifactToolHandlers({
         contract: agentContractV2,
@@ -10490,13 +10635,13 @@ export class AssistantService {
         productEvidenceRegistry,
         leadDraft,
         autoLeadResult: recoveredAutoLeadResult,
-        webSearchEnabled: false
+        webSearchEnabled: recoveryCurrentLineupStyle
       }));
       const toolResults = await toolRegistry.executePlan(agentContractV2.toolPlan, {
         sessionId: input.sessionId,
         userMessage: latestUserText,
         history,
-        needState: session.needState,
+        needState: recoveryNeedState,
         signal: input.signal,
         policy: {
           leadAllowed: agentContractV2.leadPolicy !== 'forbidden',
@@ -10594,7 +10739,7 @@ export class AssistantService {
         needState: session.needState,
         productCards: recoveredSelection.cards,
         cardDisplay: recoveredSelection.cardDisplay,
-        usedWebSearch: false,
+        usedWebSearch: recoveryCurrentLineupStyle,
         leadRequested: recoveredLeadRequested && !recoveredAutoLeadResult?.created,
         leadCreated: recoveredAutoLeadResult?.created ?? false,
         assistantMessageId: assistantMessage.id,
@@ -10692,11 +10837,11 @@ export class AssistantService {
         cardDisplay: undefined
       });
     }
-    const recoveryBaseQuery = productSearchText(latestUserText, session.needState);
+    const recoveryBaseQuery = productSearchText(latestUserText, recoveryNeedState);
     const recoveryPlan = !storedContract && latestUserText
       ? await this.planAssistantTurn({
           userMessage: latestUserText,
-          needState: session.needState,
+          needState: recoveryNeedState,
           products: [],
           knowledgePages: [],
           troubleshootingCases: [],
@@ -10716,10 +10861,32 @@ export class AssistantService {
       ? deriveAgentTurnContract({
           userMessage: latestUserText,
           plan: recoveryPlan,
-          needState: session.needState
+          needState: recoveryNeedState
         })
       : null;
-    const contract = storedContract ?? derivedRecoveryContract;
+    const fallbackCurrentLineupContract: AgentTurnContract | null = recoveryCurrentLineupStyle
+      ? currentLineupRecoveryContract({
+          answerTask: 'technical_explanation',
+          taskType: 'technical_answer',
+          catalogAction: 'exact_model_lookup',
+          commercialAction: isCatalogAvailabilityQuestion(latestUserText) ? 'offer_contact_after_answer' : 'none',
+          productCardsPolicy: 'none',
+          mustAnswerNow: ['answer latest current-lineup and catalog-presence question without stale product cards'],
+          activeNeeds: (recoveryNeedState.activeNeeds ?? []).map((need) => ({
+            id: need.id,
+            productClass: need.productClass,
+            summary: need.summary
+          })),
+          currentFocus: latestUserText.slice(0, 120) || 'current-lineup recovery',
+          cardsRole: 'none',
+          leadAllowed: isCatalogAvailabilityQuestion(latestUserText),
+          leadAllowedReason: 'fallback current-lineup recovery contract',
+          errorRecoveryPriority: 'Answer the current model-status question safely.',
+          validatorWarnings: ['current_lineup_recovery_fallback_contract']
+        }, latestUserText)
+      : null;
+    const rawContract = storedContract ?? derivedRecoveryContract ?? fallbackCurrentLineupContract;
+    const contract = rawContract ? currentLineupRecoveryContract(rawContract, latestUserText) : null;
     if (!contract) {
       const diagnostic = recoveryAiDiagnostics.turnPlanningFallback.used
         ? recoveryAiDiagnostics.turnPlanningFallback
@@ -10731,16 +10898,29 @@ export class AssistantService {
           );
       throw aiStageFailure('turn recovery planning', diagnostic);
     }
+    if (recoveryCurrentLineupStyle) {
+      recoveryCatalogProducts = await this.findProducts(
+        latestUserText,
+        recoveryNeedState,
+        recoveryBaseQuery,
+        undefined,
+        input.signal
+      ).catch((error) => {
+        console.warn('Recovery current-lineup catalog lookup failed', safeError(error));
+        return [];
+      });
+    }
     const contractDisallowsRecoveryCards =
+      recoveryCurrentLineupStyle ||
       contract.cardsRole === 'none' ||
       contract.catalogAction === 'none' ||
       contract.productCardsPolicy === 'none';
     const recoveredSelection = contractDisallowsRecoveryCards
       ? { cards: [] as ProductCard[], cardDisplay: undefined as CardDisplayOptions | undefined }
-      : await this.productCardsFromRecoveredSelection(session.needState, latestUserText);
+      : await this.productCardsFromRecoveredSelection(recoveryNeedState, latestUserText);
     const recoveryBlocksEstimatedPumpCards = Boolean(
-      session.needState.selectionState?.targetProductClass === 'generator' &&
-      shouldBlockGeneratorCardsForEstimatedPump(session.needState.selectionState)
+      recoveryNeedState.selectionState?.targetProductClass === 'generator' &&
+      shouldBlockGeneratorCardsForEstimatedPump(recoveryNeedState.selectionState)
     );
     const recoveredCardSummary = recoveredSelection.cards.slice(0, LARGE_SLICE_VISIBLE_CARDS).map((card) => ({
       id: card.id,
@@ -10749,13 +10929,13 @@ export class AssistantService {
       category: card.category
     }));
     const recoveryGeneratorSizingPolicy = generatorSizingPolicyForAnswer(
-      session.needState.selectionState?.loadProfile,
+      recoveryNeedState.selectionState?.loadProfile,
       recoveredSelection.cards
     );
     const deterministicRecoveryAnswer = deterministicRecoveredSelectionAnswer({
       contract,
       cards: recoveredSelection.cards,
-      state: session.needState,
+      state: recoveryNeedState,
       latestUserMessage: latestUserText
     });
     if (deterministicRecoveryAnswer) {
@@ -10772,7 +10952,7 @@ export class AssistantService {
     let openAiError: unknown;
     if (client && latestUser) {
       try {
-        const response: any = await client.responses.create({
+        const recoveryAnswerRequest: Record<string, unknown> = {
           model: config.OPENAI_ANSWER_MODEL,
           reasoning: { effort: config.OPENAI_ANSWER_REASONING_EFFORT },
           instructions: [
@@ -10787,6 +10967,9 @@ export class AssistantService {
             recoveryGeneratorSizingPolicy
               ? 'For generator sizing recovery, answerContext.generatorSizingPolicy is authoritative: calculatedMinimumNominalKw is the load result, minimallySufficientNominalRangeKw is the selection window, and visible card powers are catalog options. Do not introduce a higher generator class unless it is supported by this policy.'
               : '',
+            recoveryCurrentLineupStyle
+              ? 'For current manufacturer-status/current-lineup recovery, use web search internally when available. Separate three things: BAKAUT catalog presence, live stock/order availability that requires specialist verification, and manufacturer current status. Do not show product cards. Do not reuse models from the previous topic unless the latest user message names them.'
+              : '',
             contract
               ? `TurnContract: answerTask=${contract.answerTask}; cardsRole=${contract.cardsRole}; leadAllowed=${contract.leadAllowed}; mustAnswerNow=${contract.mustAnswerNow.join('; ') || contract.errorRecoveryPriority}.`
               : '',
@@ -10798,22 +10981,29 @@ export class AssistantService {
             content: yaml.dump(cleanEmpty({
               latestUserMessage: latestUserText,
               conversationSummary: session.historySummary,
-              activeNeeds: session.needState.activeNeeds,
+              activeNeeds: recoveryNeedState.activeNeeds,
               turnContract: contract,
+              catalogMatches: recoveryCatalogProducts.slice(0, 8).map((product) => ({
+                id: product.id,
+                name: product.name,
+                category: product.category,
+                price: product.price,
+                sourceUrl: product.sourceUrl
+              })),
               productCardsShown: recoveredCardSummary,
               productCardDisplay: recoveredSelection.cardDisplay,
               generatorCardBlockReason: recoveryBlocksEstimatedPumpCards
                 ? 'pump_present_but_type_model_power_unknown'
                 : undefined,
               productSelection: selectionMetadata({
-                state: session.needState.selectionState,
+                state: recoveryNeedState.selectionState,
                 matchedProducts: [],
                 visibleProducts: [],
                 hiddenProducts: [],
                 comparisonProducts: [],
                 rejectedProducts: [],
-                confidence: session.needState.selectionState?.confidence ?? 0,
-                missingQuestions: session.needState.selectionState?.unknowns ?? [],
+                confidence: recoveryNeedState.selectionState?.confidence ?? 0,
+                missingQuestions: recoveryNeedState.selectionState?.unknowns ?? [],
                 trace: { source: 'recovery_selection_state' }
               }),
               generatorSizingPolicy: recoveryGeneratorSizingPolicy,
@@ -10821,12 +11011,29 @@ export class AssistantService {
             }))
           }],
           max_output_tokens: 1200
-        }, input.signal ? { signal: input.signal } : undefined);
+        };
+        if (recoveryCurrentLineupStyle) {
+          recoveryAnswerRequest.tools = [{
+            type: 'web_search_preview',
+            search_context_size: 'high'
+          }];
+          recoveryAnswerRequest.tool_choice = { type: 'web_search_preview' };
+        }
+        const response: any = await client.responses.create(recoveryAnswerRequest, input.signal ? { signal: input.signal } : undefined);
         logOpenAIUsage('answer_recovery', config.OPENAI_ANSWER_MODEL, response);
         answer = extractResponseText(response).trim();
       } catch (error) {
         openAiError = safeError(error);
         console.warn('Turn recovery failed', openAiError);
+      }
+    }
+    if (!answer) {
+      if (recoveryCurrentLineupStyle) {
+        answer = deterministicCurrentLineupRecoveryFallback({
+          latestUserMessage: latestUserText,
+          catalogProducts: recoveryCatalogProducts,
+          leadAllowed: contract.leadAllowed
+        });
       }
     }
     if (!answer) {

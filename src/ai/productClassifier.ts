@@ -558,7 +558,8 @@ export function parseDimensionNeedRangeMm(text: string) {
 }
 
 export function isCatalogAvailabilityQuestion(text: string) {
-  return /(?:\u0440\u0430\u0437\u0432\u0435|\u0435\u0441\u0442\u044c\s+\u043b\u0438|\u0435\u0441\u0442\u044c\s+[^?!.]{0,40}\s+\u0432\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433|\u0435\u0441\u0442\u044c\s+[^?!.]{0,50}\s+(?:\u0434\u043e|\u0437\u0430)\s*\d|\u043d\u0435\u0442\u0443\s+(?:\u043b\u0438\s+)?|\u043d\u0435\u0442\s+(?:\u043b\u0438\s+)?|\u0443\s+\u0432\u0430\u0441|\u0432\s+\u043d\u0430\u0448\u0435\u043c\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435)/iu.test(text);
+  if (/(?:\u0440\u0430\u0437\u0432\u0435|\u0435\u0441\u0442\u044c\s+\u043b\u0438|\u0435\u0441\u0442\u044c\s+[^?!.]{0,40}\s+\u0432\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433|\u0435\u0441\u0442\u044c\s+[^?!.]{0,50}\s+(?:\u0434\u043e|\u0437\u0430)\s*\d|\u043d\u0435\u0442\u0443\s+(?:\u043b\u0438\s+)?|\u043d\u0435\u0442\s+(?:\u043b\u0438\s+)?|\u0443\s+\u0432\u0430\u0441|\u0432\s+\u043d\u0430\u0448\u0435\u043c\s+\u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435)/iu.test(text)) return true;
+  return extractModelTokens(text).length > 0 && /(?:\u0435\u0441\u0442\u044c|available|stock)\s*\?/iu.test(text);
 }
 
 export function isManufacturingStatusQuestion(text: string) {

@@ -156,7 +156,7 @@ describe('assistant OpenAI failure fallback', () => {
     });
   });
 
-  it('uses a fast policy handoff for operational delivery and stock questions', async () => {
+  it('does not bypass the LLM with a fast policy handoff for delivery and stock questions', async () => {
     openAiCreate.mockClear();
     const products = [
       testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u043f\\u0440\\u044f\\u043c\\u043e\\u0445\\u043e\\u0434\\u043d\\u0430\\u044f 60 \\u043a\\u0433'), 72_000)
@@ -184,28 +184,17 @@ describe('assistant OpenAI failure fallback', () => {
     });
     const assistant = new AssistantService(conversations as never, new FakeProducts(products) as never);
 
-    const result = await assistant.generateAnswer({
+    await expect(assistant.generateAnswer({
       sessionId: conversations.session.id,
       userMessage: ru('\\u0410 \\u0441\\u043a\\u043e\\u043b\\u044c\\u043a\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430 \\u0438 \\u0435\\u0441\\u0442\\u044c \\u043b\\u0438 \\u0442\\u043e\\u0447\\u043d\\u043e \\u0432 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0438? \\u041c\\u043e\\u0433\\u0443 \\u043e\\u0441\\u0442\\u0430\\u0432\\u0438\\u0442\\u044c \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d.'),
       onDelta: vi.fn()
-    });
+    })).rejects.toThrow(/AI need extraction failed/);
 
-    expect(openAiCreate).not.toHaveBeenCalled();
-    expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
-    expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u043b\\u0438\\u0447'));
-    expect(result.leadRequested).toBe(true);
-    expect(result.metadata?.answerMode).toBe('fast_commercial_handoff');
-    expect(result.metadata?.leadStateMachine).toMatchObject({
-      state: 'required_contact_missing',
-      nextAction: 'ask_for_missing_contact'
-    });
-    expect(result.metadata?.policyGate?.answerConstraints).toEqual(expect.arrayContaining([
-      'do_not_promise_live_stock_delivery_discount_or_exact_terms'
-    ]));
-    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(2);
+    expect(openAiCreate).toHaveBeenCalled();
+    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
   });
 
-  it('uses fast commercial handoff for stock and delivery of already shown cards even with a future product mention', async () => {
+  it('does not use a fast commercial handoff for stock and delivery of already shown cards', async () => {
     openAiCreate.mockClear();
     const products = [
       testProduct('generator-1', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 42_490)
@@ -233,21 +222,17 @@ describe('assistant OpenAI failure fallback', () => {
     });
     const assistant = new AssistantService(conversations as never, new FakeProducts(products) as never);
 
-    const result = await assistant.generateAnswer({
+    await expect(assistant.generateAnswer({
       sessionId: conversations.session.id,
       userMessage: ru('\\u0421\\u043f\\u0430\\u0441\\u0438\\u0431\\u043e, \\u043f\\u043e \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0443 \\u0442\\u043e\\u0433\\u0434\\u0430 \\u0441\\u043c\\u043e\\u0442\\u0440\\u044e \\u043d\\u0430 5 \\u043a\\u0412\\u0442 \\u0441 \\u0437\\u0430\\u043f\\u0430\\u0441\\u043e\\u043c. \\u041f\\u043e\\u0434\\u0441\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435, \\u043f\\u043e\\u0436\\u0430\\u043b\\u0443\\u0439\\u0441\\u0442\\u0430, \\u0447\\u0442\\u043e \\u0438\\u0437 \\u044d\\u0442\\u043e\\u0433\\u043e \\u0435\\u0441\\u0442\\u044c \\u0432 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0438 \\u0438 \\u043a\\u0430\\u043a\\u0430\\u044f \\u0431\\u0443\\u0434\\u0435\\u0442 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430 \\u0434\\u043e \\u0434\\u043e\\u043c\\u0430, \\u0430 \\u043f\\u043e\\u0442\\u043e\\u043c \\u0443\\u0436\\u0435 \\u043f\\u043e\\u0434\\u0431\\u0435\\u0440\\u0435\\u043c \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0443 \\u0434\\u043b\\u044f \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430.'),
       onDelta: vi.fn()
-    });
+    })).rejects.toThrow(/AI need extraction failed/);
 
-    expect(openAiCreate).not.toHaveBeenCalled();
-    expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
-    expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u043b\\u0438\\u0447'));
-    expect(result.metadata?.answerMode).toBe('fast_commercial_handoff');
-    expect(result.leadRequested).toBe(true);
-    expect(result.productCards).toHaveLength(0);
+    expect(openAiCreate).toHaveBeenCalled();
+    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
   });
 
-  it('does not ask for contact again when the fast commercial handoff already created a lead from chat text', async () => {
+  it('does not create a lead from a deterministic fast handoff when LLM need extraction fails', async () => {
     openAiCreate.mockClear();
     const products = [
       testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u043f\\u0440\\u044f\\u043c\\u043e\\u0445\\u043e\\u0434\\u043d\\u0430\\u044f 70 \\u043a\\u0433'), 38_766)
@@ -276,23 +261,15 @@ describe('assistant OpenAI failure fallback', () => {
     const leads = new FakeLeads();
     const assistant = new AssistantService(conversations as never, new FakeProducts(products) as never, leads as never);
 
-    const result = await assistant.generateAnswer({
+    await expect(assistant.generateAnswer({
       sessionId: conversations.session.id,
       userMessage: ru('\\u0414\\u0430, \\u0434\\u0430\\u0432\\u0430\\u0439\\u0442\\u0435 \\u043f\\u0440\\u043e\\u0432\\u0435\\u0440\\u0438\\u043c \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435 \\u0438 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443. \\u041c\\u0435\\u043d\\u044f \\u0437\\u043e\\u0432\\u0443\\u0442 \\u0410\\u043b\\u0435\\u043a\\u0441\\u0435\\u0439, \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d +7 900 000-00-11.'),
       onDelta: vi.fn()
-    });
+    })).rejects.toThrow(/AI need extraction failed/);
 
-    expect(openAiCreate).not.toHaveBeenCalled();
-    expect(leads.leads).toHaveLength(1);
-    expect(result.leadCreated).toBe(true);
-    expect(result.leadRequested).toBe(false);
-    expect(result.answer).toContain(ru('\\u041a\\u043e\\u043d\\u0442\\u0430\\u043a\\u0442 \\u043f\\u0440\\u0438\\u043d\\u044f\\u043b'));
-    expect(result.answer).not.toContain(ru('\\u043e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435 \\u0438\\u043c\\u044f \\u0438 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d'));
-    expect(result.metadata?.leadStateMachine).toMatchObject({
-      state: 'created',
-      nextAction: 'confirm_created_lead',
-      hasContactInTurn: true
-    });
+    expect(openAiCreate).toHaveBeenCalled();
+    expect(leads.leads).toHaveLength(0);
+    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(1);
   });
 
   it('does not mask OpenAI failures as a normal catalog recommendation', async () => {
@@ -964,6 +941,130 @@ describe('assistant OpenAI failure fallback', () => {
     expect(result.answer).not.toMatch(new RegExp(`${ru('\\u043b\\u0438\\u043d\\u0435\\u0439\\u043a')}|${ru('\\u043f\\u0440\\u043e\\u0438\\u0437\\u0432\\u043e\\u0434')}`, 'iu'));
     expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
     expect(conversations.turn?.status).toBe('recovered');
+  });
+
+  it('recovers a current-lineup exact model switch without stale prior cards or a missing answer', async () => {
+    const conversations = new FakeConversations();
+    const dpu: Product = {
+      id: 'dpu-old',
+      name: 'Vibroplita Wacker Neuson DPU 6555 Hehap',
+      category: ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'),
+      price: 1_499_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/dpu-6555',
+      specs: {}
+    };
+    const mp15: Product = {
+      id: 'mp15',
+      name: 'Vibroplita Wacker Neuson MP15-CE 83 kg',
+      category: ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b'),
+      price: 154_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/mp15',
+      specs: { weight: '83 kg' }
+    };
+    conversations.messages.push({
+      id: 'assistant-dpu',
+      sessionId: conversations.session.id,
+      role: 'assistant',
+      content: 'DPU 6555 engine answer',
+      metadata: {
+        productCards: [{
+          id: dpu.id,
+          name: dpu.name,
+          category: dpu.category,
+          price: dpu.price,
+          currency: 'RUB',
+          sourceUrl: dpu.sourceUrl,
+          specs: {},
+          reasons: ['previous DPU card'],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    const userMessage: Message = {
+      id: 'user-mp15',
+      sessionId: conversations.session.id,
+      role: 'user',
+      content: ru('\\u043f\\u043e\\u043d\\u044f\\u043b, \\u0430 MP15 \\u043f\\u043b\\u0438\\u0442\\u0430 \\u0435\\u0441\\u0442\\u044c? \\u043e\\u043d\\u0430 \\u0432\\u043e\\u043e\\u0431\\u0449\\u0435 \\u0432\\u044b\\u043f\\u0443\\u0441\\u043a\\u0430\\u0435\\u0442\\u0441\\u044f \\u0435\\u0449\\u0435 ?'),
+      metadata: {},
+      createdAt: new Date().toISOString()
+    };
+    conversations.messages.push(userMessage);
+    const baseNeedState = emptyNeedState();
+    conversations.session = {
+      ...conversations.session,
+      needState: {
+        ...baseNeedState,
+        activeNeeds: [{
+          id: 'need-mp15',
+          status: 'open',
+          productClass: 'plate',
+          summary: 'Buyer switched from DPU 6555 to MP15 catalog/current-lineup check',
+          constraints: ['MP15 plate', 'current manufacturer status'],
+          openQuestions: [],
+          selectedProductIds: [],
+          updatedAt: new Date().toISOString()
+        }],
+        selectionState: mergeProductSelectionState(baseNeedState.selectionState, {
+          currentProductClass: 'plate',
+          targetProductClass: 'plate',
+          selectedProductIds: ['dpu-old'],
+          matchedProductIds: ['dpu-old'],
+          hardConstraints: {
+            ...baseNeedState.selectionState.hardConstraints,
+            productIntent: 'plate',
+            productRole: 'coreProduct',
+            brandConstraint: 'Wacker Neuson',
+            exactModelConstraint: 'MP15',
+            exactModelTokens: ['DPU 6555'],
+            mustHaveTraits: ['exact model DPU 6555', 'exact model MP15']
+          }
+        })
+      }
+    };
+    conversations.turn = {
+      id: '88888888-8888-4888-8888-888888888888',
+      sessionId: conversations.session.id,
+      userMessageId: userMessage.id,
+      assistantMessageId: null,
+      status: 'failed',
+      requestHash: 'hash',
+      stage: 'recovery_failed',
+      errorCode: 'recovery_failed',
+      errorMessage: 'Recovered answer violates post-answer verification',
+      plannerContract: null,
+      activeNeedsBefore: null,
+      activeNeedsAfter: conversations.session.needState.activeNeeds,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    class PlannerlessCurrentLineupRecoveryAssistant extends AssistantService {
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner timeout');
+      }
+    }
+    const assistant = new PlannerlessCurrentLineupRecoveryAssistant(conversations as never, new FakeProducts([dpu, mp15]) as never);
+
+    const result = await assistant.recoverTurn({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id
+    });
+
+    expect(result.answer).toContain('MP15');
+    expect(result.answer).not.toContain('DPU 6555');
+    expect(result.productCards).toEqual([]);
+    expect(result.leadRequested).toBe(true);
+    expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    const issueCodes = (result.metadata?.postAnswerVerification?.issues ?? []).map((issue: { code: string }) => issue.code);
+    expect(issueCodes).not.toEqual(expect.arrayContaining([
+      'disallowed_product_named_in_answer',
+      'violating_card_named_as_recommendation',
+      'fact_claim_audit:current_lineup_claim_without_web_policy'
+    ]));
+    expect(conversations.turn?.status).toBe('recovered');
+    expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(2);
   });
 
   it('uses the recovery post-answer policy to repair unsafe restored text before streaming', () => {
