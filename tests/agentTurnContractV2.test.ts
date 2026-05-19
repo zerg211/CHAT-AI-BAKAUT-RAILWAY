@@ -40,7 +40,7 @@ describe('AgentTurnContractV2 adapter', () => {
     expect(contract.sourcePolicy.allowed).toContain('catalog');
   });
 
-  it('removes planner lead tools when canonical lead policy forbids a lead draft', () => {
+  it('keeps optional lead tools for mixed selection with commercial verification', () => {
     const contract = deriveAgentTurnContractV2({
       userMessage: 'Show plate options and tell me if delivery and stock are available.',
       legacyContract: {
@@ -91,8 +91,8 @@ describe('AgentTurnContractV2 adapter', () => {
       needState: emptyNeedState()
     });
 
-    expect(contract.leadPolicy).toBe('none');
-    expect(contract.toolPlan.map((step) => step.tool)).toEqual(['selectProducts']);
+    expect(contract.leadPolicy).toBe('optional_after_answer');
+    expect(contract.toolPlan.map((step) => step.tool)).toEqual(['selectProducts', 'createLeadDraft']);
   });
 
   it('separates exact availability from live stock and requires specialist source', () => {

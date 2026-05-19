@@ -39,7 +39,7 @@ import { getSessionGuard, cleanupSessionGuard } from './consistencyGuard.js';
 import { buildOfftopicGuard } from './offtopicPolicy.js';
 import { assessLeadTemperature, temperatureGuidance } from './leadTemperature.js';
 import { traceTimer, emitTrace } from './tracing.js';
-import { classifyGeneratorLoadText, enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
+import { classifyGeneratorLoadText, enrichGeneratorLoadReferenceFromWeb, generatorReferenceLoadItemsFromText, generatorReferenceStagedLoadItemsFromText, shouldEnrichGeneratorLoadReference } from './generatorLoadReference.js';
 import { resolveTurnContract, type ResolvedTurnContract } from './turnContract.js';
 import { applyAgentTurnContractToPlan, deriveAgentTurnContract } from './agentTurnContract.js';
 import { buildCardManifest, enforceVisibleCardConstraints } from './cardManifest.js';
@@ -4473,6 +4473,9 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
       if (stagedKinds.has(canonicalElectricalLoadKind(item.kind))) items.delete(key);
     }
   }
+  for (const item of generatorReferenceStagedLoadItemsFromText(text)) {
+    items.set(loadItemKey(item), item);
+  }
 
   const detectedFridgeCount = applianceCount(lower, /холодильник|fridge/iu, /холодильник[а-я]*|fridges/iu);
   const previousFridge = items.get('refrigerator:холодильник') ?? [...items.values()].find((item) => item.kind === 'refrigerator');
@@ -4563,6 +4566,37 @@ function generatorLoadProfileFromText(text: string, current?: ProductGeneratorLo
         evidence: text
       };
       items.set(loadItemKey(existingHandheldTool), item);
+    }
+  }
+
+  const existingCompressor = [...items.values()].find((item) => canonicalElectricalLoadKind(item.kind) === 'compressor');
+  if (existingCompressor) {
+    const compressorTerms = /(?:\u043a\u043e\u043c\u043f\u0440\u0435\u0441\u0441\u043e\u0440|compressor)/iu;
+    const compressorCompetingLoadRe = new RegExp(`(?:${[
+      ruChars(1085, 1072, 1089, 1086, 1089),
+      ruChars(1093, 1086, 1083, 1086, 1076, 1080, 1083),
+      ruChars(1089, 1074, 1077, 1090),
+      ruChars(1083, 1072, 1084, 1087),
+      ruChars(1095, 1072, 1081, 1085, 1080, 1082),
+      ruChars(1084, 1080, 1082, 1088, 1086, 1074, 1086, 1083, 1085),
+      'pump',
+      'fridge',
+      'refrigerator',
+      'light',
+      'kettle',
+      'microwave'
+    ].join('|')})`, 'iu');
+    const explicit = explicitLoadKwNearOwnMention(text, compressorTerms, compressorCompetingLoadRe);
+    if (explicit) {
+      const item: ProductElectricalLoadItem = {
+        ...existingCompressor,
+        runningKw: explicit,
+        startingKw: Math.max(roundPowerKw(explicit * 3), roundPowerKw(explicit + 2)),
+        source: 'explicit_user',
+        evidence: text
+      };
+      items.delete(loadItemKey(existingCompressor));
+      items.set(loadItemKey(item), item);
     }
   }
 
@@ -5944,9 +5978,15 @@ function deterministicTechnicalSummaryRecovery(input: {
   const nominal = formatKwValue(load?.requiredNominalKw);
   const starting = formatKwValue(load?.requiredStartingKw);
   const generatorLoadNotes = generatorTechnicalLoadNotes(load, input.latestUserMessage);
+  const scenarioExplanation = generatorLoadScenarioExplanation(load);
   const generatorLine = generator
     ? `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. ${generatorLoadNotes}Из уже показанных вариантов можно смотреть ${generator.name}, но финально надо сверить мощность или модель скважинного насоса на шильдике.`
     : `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. ${generatorLoadNotes}Финально надо сверить мощность или модель скважинного насоса на шильдике.`;
+  const generatorLineWithScenarios = scenarioExplanation
+    ? generatorLoadNotes
+      ? generatorLine.replace(generatorLoadNotes, `${generatorLoadNotes}${scenarioExplanation}`)
+      : generatorLine.replace('. ', `. ${scenarioExplanation}`)
+    : generatorLine;
   const plateLine = plate
     ? `По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: ${plate.name} остается нормальной отправной точкой, потому что ее проще грузить и переносить одному.`
     : 'По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: тяжелее брать стоит только если щебня будет больше и переноска уже не главный фактор.';
@@ -5964,7 +6004,7 @@ function deterministicTechnicalSummaryRecovery(input: {
     hardIntent === 'plate'
   );
   const lines = ['Без звонка, продолжаем по технике.'];
-  if (hasGeneratorContext || !hasPlateContext) lines.push(generatorLine);
+  if (hasGeneratorContext || !hasPlateContext) lines.push(generatorLineWithScenarios);
   if (hasPlateContext) lines.push(plateLine);
   if (hasGeneratorContext && hasPlateContext) {
     lines.push('Что еще уточнить для точного выбора: мощность/модель насоса, будет ли болгарка работать одновременно с насосом, и какой вес виброплиты вам комфортно грузить одному.');
@@ -5974,6 +6014,20 @@ function deterministicTechnicalSummaryRecovery(input: {
     lines.push('Что еще уточнить для точного выбора виброплиты: основание, толщину слоя щебня и какой вес вам реально удобно грузить одному.');
   }
   return lines.join('\n\n');
+}
+
+function generatorLoadScenarioExplanation(load?: ProductGeneratorLoadProfile | null) {
+  const scenarios = load?.scenarios?.filter((scenario) => scenario.requiredNominalKw > 0) ?? [];
+  if (scenarios.length <= 1) return '';
+  const primary = scenarios.find((scenario) => scenario.id === load?.primaryScenarioId) ??
+    scenarios.reduce((best, current) => current.requiredNominalKw > best.requiredNominalKw ? current : best, scenarios[0]);
+  const nominal = formatKwValue(primary.requiredNominalKw);
+  const starting = formatKwValue(primary.requiredStartingKw);
+  const optionalCount = scenarios.filter((scenario) => scenario.id !== 'base').length;
+  const optionalText = optionalCount > 0
+    ? 'разовые потребители считаю отдельными сценариями, а не складываю все сразу'
+    : 'проверяю самый тяжелый пусковой сценарий';
+  return `Расчет веду по сценариям: ${optionalText}. Самый тяжелый сценарий сейчас - ${primary.label}, примерно ${nominal} кВт по номиналу${starting ? ` и ${starting} кВт по пуску` : ''}. `;
 }
 
 function generatorTechnicalLoadNotes(load?: ProductGeneratorLoadProfile | null, latestUserMessage = '') {
@@ -6289,6 +6343,8 @@ function deterministicGeneratorSizingAnswer(
       ? `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу, пусковая нагрузка около ${starting} кВт.`
       : `Расчетный минимум по указанной нагрузке: ${nominal} кВт по номиналу.`
   ];
+  const scenarioExplanation = generatorLoadScenarioExplanation(loadProfile);
+  if (scenarioExplanation) lines.push(scenarioExplanation.trim());
   const cardLines = cards
     .slice(0, 3)
     .map((card) => {

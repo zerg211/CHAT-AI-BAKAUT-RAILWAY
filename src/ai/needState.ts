@@ -387,7 +387,7 @@ function mergeLoadProfile(
     ...(!reset ? current ?? {} : {}),
     ...update,
     ...(recalculated ?? {}),
-    items,
+    items: recalculated?.items ?? items,
     simultaneousStarting,
     simultaneousStartingKinds,
     removedKinds: update.removedKinds

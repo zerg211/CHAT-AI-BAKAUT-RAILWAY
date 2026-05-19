@@ -268,6 +268,16 @@ export interface ProductElectricalLoadItem {
   evidence?: string;
 }
 
+export interface ProductGeneratorLoadScenario {
+  id: string;
+  label: string;
+  itemKinds: string[];
+  totalRunningKw: number;
+  requiredStartingKw: number;
+  requiredNominalKw: number;
+  calculation?: string;
+}
+
 export interface ProductGeneratorLoadProfile {
   items: ProductElectricalLoadItem[];
   totalRunningKw?: number;
@@ -275,6 +285,8 @@ export interface ProductGeneratorLoadProfile {
   requiredNominalKw?: number;
   simultaneousStarting?: boolean;
   simultaneousStartingKinds?: string[];
+  scenarios?: ProductGeneratorLoadScenario[];
+  primaryScenarioId?: string;
   calculation?: string;
   confidence?: number;
   removedKinds?: string[];

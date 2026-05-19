@@ -132,8 +132,8 @@ describe('agentic #876 internal cycle', () => {
 
     expect(contract.answerTask).toBe('lead_handoff');
     expect(contract.taskType).toBe('product_selection_with_availability');
-    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract)).toBe(true);
-    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract, 'Город Москва')).toBe(true);
+    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract)).toBe(false);
+    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract, 'Город Москва')).toBe(false);
     expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(contract, 'Город Москва, Александр 89934460088')).toBe(false);
   });
 
@@ -314,7 +314,7 @@ describe('agentic #876 internal cycle', () => {
     };
     expect(selectionTrace.hardConstraints.excludedClasses ?? []).not.toContain('generator');
     expect(selectionTrace.diagnosticRejectedProducts.find((item) => item.productId === 'single-220')?.reason ?? '').not.toMatch(/excluded class generator/i);
-    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(selectionContract)).toBe(true);
+    expect(assistantTestHooks.shouldSuppressLeadRequestFromContract(selectionContract)).toBe(false);
     expect(assistantTestHooks.commercialManagerVerificationGuidance(selectionContract)).toContain('first person');
 
     const leadPressure = ru('\\u041f\\u043e\\u0434 \\u0432\\u0430\\u0448 \\u0437\\u0430\\u043f\\u0440\\u043e\\u0441 \\u043f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 TSS SGG 10000EHA. \\u0414\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443 \\u0434\\u043e \\u0415\\u0439\\u0441\\u043a\\u0430 \\u043d\\u0443\\u0436\\u043d\\u043e \\u0443\\u0442\\u043e\\u0447\\u043d\\u044f\\u0442\\u044c \\u0443 \\u043b\\u043e\\u0433\\u0438\\u0441\\u0442\\u0438\\u043a\\u0438. \\u041d\\u0430\\u043f\\u0438\\u0448\\u0438\\u0442\\u0435 \\u0438\\u043c\\u044f \\u0438 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d, \\u043c\\u0435\\u043d\\u0435\\u0434\\u0436\\u0435\\u0440 \\u0443\\u0442\\u043e\\u0447\\u043d\\u0438\\u0442 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435 \\u0438 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443.');

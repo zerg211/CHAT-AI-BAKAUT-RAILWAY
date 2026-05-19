@@ -1225,8 +1225,8 @@ describe('recommendation ranking', () => {
   it('sizes household generator loads as minimally sufficient before reserve', () => {
     const profile = assistantTestHooks.generatorLoadProfileFromText(ru('\\u0414\\u043e\\u043c 220 \\u0412. \\u0425\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a \\u043e\\u0434\\u0438\\u043d, LED \\u0441\\u0432\\u0435\\u0442, \\u0438\\u043d\\u043e\\u0433\\u0434\\u0430 \\u0431\\u043e\\u043b\\u0433\\u0430\\u0440\\u043a\\u0430 1,2 \\u043a\\u0412\\u0442. \\u041d\\u0430\\u0441\\u043e\\u0441 \\u0441\\u043a\\u0432\\u0430\\u0436\\u0438\\u043d\\u043d\\u044b\\u0439, 220 \\u0412, \\u043d\\u0430\\u0441\\u043e\\u0441 \\u0441 \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a\\u043e\\u043c \\u043c\\u043e\\u0433\\u0443\\u0442 \\u0432\\u043a\\u043b\\u044e\\u0447\\u0438\\u0442\\u044c\\u0441\\u044f \\u0432\\u043c\\u0435\\u0441\\u0442\\u0435.'));
 
-    expect(profile?.totalRunningKw).toBe(1.5);
-    expect(profile?.requiredStartingKw).toBeCloseTo(4.1, 5);
+    expect(profile?.totalRunningKw).toBeCloseTo(2.7, 5);
+    expect(profile?.requiredStartingKw).toBeCloseTo(4.5, 5);
     expect(profile?.requiredNominalKw).toBe(4.5);
     expect(profile?.simultaneousStarting).toBe(true);
     const pump = profile?.items.find((item) => item.kind === 'pump');
@@ -1236,7 +1236,11 @@ describe('recommendation ranking', () => {
     expect(pump?.startingKw).toBeCloseTo(2.9, 5);
     expect(refrigerator).toEqual(expect.objectContaining({ runningKw: 0.15, startingKw: 1 }));
     expect(lighting).toEqual(expect.objectContaining({ runningKw: 0.2, startingKw: 0.2 }));
-    expect(profile?.items.some((item) => item.kind === 'handheld_tool')).toBe(false);
+    const baseScenario = profile?.scenarios?.find((scenario) => scenario.id === 'base');
+    expect(baseScenario?.totalRunningKw).toBe(1.5);
+    expect(baseScenario?.requiredStartingKw).toBeCloseTo(4.1, 5);
+    expect(profile?.items.some((item) => item.kind === 'handheld_tool')).toBe(true);
+    expect(profile?.scenarios?.some((scenario) => scenario.id.includes('handheld_tool'))).toBe(true);
   });
 
   it('does not treat missing exact numbers as an absent pump', () => {
@@ -1336,6 +1340,50 @@ describe('recommendation ranking', () => {
       expect.objectContaining({ kind: 'pump', name: 'pump', source: 'estimated_average' })
     ]));
     expect(update.selectionState?.unknowns).toContain('тип или мощность насоса');
+  });
+
+  it('stabilizes optional household generator loads from LLM extraction into scenarios', () => {
+    const update = assistantTestHooks.coerceNeedUpdate({
+      selectionState: {
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        loadProfile: {
+          items: [
+            { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'base household load' },
+            { kind: 'freezer', name: 'freezer', count: 1, runningKw: 0.35, startingKw: 1.2, source: 'estimated_average', evidence: 'base household load' },
+            { kind: 'boiler', name: 'gas boiler controls', count: 1, runningKw: 0.12, startingKw: 0.12, source: 'estimated_average', evidence: 'constant base load' },
+            { kind: 'pump', name: 'borehole pump', count: 1, runningKw: 1.1, startingKw: 1.1, source: 'explicit_user', evidence: 'borehole pump 1.1 kW, exact model unknown' },
+            { kind: 'water_treatment', name: 'water treatment', count: 1, runningKw: 0.25, startingKw: 0.5, source: 'estimated_average', evidence: 'base household load' },
+            { kind: 'gate_motor', name: 'gate motor', count: 1, runningKw: 0.5, startingKw: 1.2, source: 'estimated_average', evidence: 'base household load' },
+            { kind: 'router', name: 'router', count: 1, runningKw: 0.05, startingKw: 0.05, source: 'estimated_average', evidence: 'constant base load' },
+            { kind: 'camera', name: 'cameras', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'estimated_average', evidence: 'constant base load' },
+            { kind: 'microwave', name: 'microwave', count: 1, runningKw: 1.2, startingKw: 1.2, source: 'estimated_average', evidence: 'sometimes as needed' },
+            { kind: 'induction', name: 'single induction hob', count: 1, runningKw: 1.8, startingKw: 1.8, source: 'estimated_average', evidence: 'optional cooking load' },
+            { kind: 'kettle', name: 'kettle', count: 1, runningKw: 2, startingKw: 2, source: 'estimated_average', evidence: 'sometimes, not together with compressor' },
+            { kind: 'compressor', name: 'garage compressor', count: 1, runningKw: 2.2, startingKw: 4.5, source: 'explicit_user', evidence: 'garage compressor 2.2 kW can be started separately, not together with kettle' }
+          ],
+          simultaneousStarting: false,
+          confidence: 0.86,
+          removedKinds: []
+        },
+        confidence: 0.86
+      }
+    });
+
+    const profile = update.selectionState?.loadProfile;
+    expect(profile?.requiredNominalKw).toBeGreaterThanOrEqual(9);
+    expect(profile?.requiredNominalKw).toBeLessThanOrEqual(10);
+    expect(profile?.requiredNominalKw).toBeLessThan(12);
+    expect(profile?.items.find((item) => item.kind === 'pump')?.startingKw).toBeCloseTo(2.9, 5);
+    expect(profile?.items.find((item) => item.kind === 'compressor')?.startingKw).toBeCloseTo(6.6, 5);
+    expect(profile?.scenarios?.some((scenario) => scenario.id.includes('compressor'))).toBe(true);
+    expect(profile?.calculation).toMatch(/scenarios/);
+    const answer = assistantTestHooks.deterministicTechnicalSummaryRecovery({
+      cards: [],
+      state: update.selectionState!,
+      latestUserMessage: 'generator with optional household loads'
+    });
+    expect(answer).toMatch(new RegExp(ru('\\u0441\\u0446\\u0435\\u043d\\u0430\\u0440'), 'iu'));
   });
 
   it('keeps deterministic fallback from showing generator catalog when pump is generic unknown', () => {
@@ -5089,7 +5137,8 @@ describe('recommendation ranking', () => {
       2
     );
 
-    expect(followUp.state.loadProfile?.items.map((item) => item.name)).not.toContain('электрочайник');
+    expect(followUp.state.loadProfile?.items.map((item) => item.name)).toContain('электрочайник');
+    expect(followUp.state.loadProfile?.scenarios?.some((scenario) => scenario.id !== 'base' && scenario.id.includes('heating_resistive'))).toBe(true);
     expect(followUp.state.loadProfile?.requiredNominalKw).toBeLessThanOrEqual(5);
     expect(followUp.state.loadProfile?.simultaneousStarting).toBe(false);
     expect(followUp.state.hardConstraints.nominalPowerKwMin).toBeLessThanOrEqual(5);
@@ -5398,8 +5447,9 @@ describe('recommendation ranking', () => {
     expect(updated.loadProfile?.items.filter((item) => ['tool', 'handheld_tool'].includes(item.kind))).toHaveLength(1);
     expect(updated.loadProfile?.items.find((item) => item.kind === 'pump')?.name).toBe('borehole pump');
     expect(updated.loadProfile?.simultaneousStartingKinds).toEqual(['pump', 'refrigerator']);
-    expect(updated.loadProfile?.requiredStartingKw).toBeCloseTo(5, 5);
-    expect(updated.loadProfile?.requiredNominalKw).toBe(5);
+    expect(updated.loadProfile?.requiredStartingKw).toBeCloseTo(4.4, 5);
+    expect(updated.loadProfile?.requiredNominalKw).toBe(4.5);
+    expect(updated.loadProfile?.scenarios?.some((scenario) => scenario.id.includes('handheld_tool'))).toBe(true);
   });
 
   it('does not treat a question about switching to 7-8 kW as a desired generator range', async () => {

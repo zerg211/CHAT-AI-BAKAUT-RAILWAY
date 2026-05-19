@@ -656,10 +656,13 @@ function pushUniqueLoad(items: ProductElectricalLoadItem[], item: ProductElectri
   items.push(item);
 }
 
-export function generatorReferenceLoadItemsFromText(text: string): ProductElectricalLoadItem[] {
-  const detections = classifyGeneratorLoadText(text).filter((item) => item.role === 'active');
+function generatorReferenceLoadItemsFromDetections(
+  text: string,
+  detections: GeneratorLoadDetection[],
+  evidenceSuffix = ''
+): ProductElectricalLoadItem[] {
   const items: ProductElectricalLoadItem[] = [];
-  const evidence = text;
+  const evidence = evidenceSuffix ? `${text} | ${evidenceSuffix}` : text;
   if (detections.some((item) => item.reference.loadClass === 'resistive_light_load')) {
     pushUniqueLoad(items, { kind: 'lighting', name: 'свет', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence });
   }
@@ -714,6 +717,21 @@ export function generatorReferenceLoadItemsFromText(text: string): ProductElectr
     });
   }
   return items;
+}
+
+export function generatorReferenceLoadItemsFromText(text: string): ProductElectricalLoadItem[] {
+  return generatorReferenceLoadItemsFromDetections(
+    text,
+    classifyGeneratorLoadText(text).filter((item) => item.role === 'active')
+  );
+}
+
+export function generatorReferenceStagedLoadItemsFromText(text: string): ProductElectricalLoadItem[] {
+  return generatorReferenceLoadItemsFromDetections(
+    text,
+    classifyGeneratorLoadText(text).filter((item) => item.role === 'staged'),
+    'staged optional/separate scenario'
+  );
 }
 
 export function generatorReferenceSummaryForPrompt(text: string) {
