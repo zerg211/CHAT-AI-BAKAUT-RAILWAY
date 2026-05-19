@@ -403,6 +403,134 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.turn?.status).toBe('completed');
   });
 
+  it('shows catalog cards through fast catalog selection after LLM extracted the need state', async () => {
+    openAiCreate.mockClear();
+    const conversations = new FakeConversations();
+    const baseNeedState = emptyNeedState();
+    conversations.session = {
+      ...conversations.session,
+      needState: {
+        ...baseNeedState,
+        activeNeeds: [{
+          id: 'need-heavy-home-generator',
+          status: 'open',
+          productClass: 'generator',
+          summary: 'Gasoline 220 V home backup generator with pump and compressor starting loads',
+          constraints: ['gasoline', '220 V', 'pump 1.1 kW', 'compressor 2.2 kW'],
+          openQuestions: ['pump model can refine final sizing'],
+          selectedProductIds: [],
+          updatedAt: new Date().toISOString()
+        }],
+        selectionState: mergeProductSelectionState(baseNeedState.selectionState, {
+          currentProductClass: 'generator',
+          targetProductClass: 'generator',
+          loadProfile: {
+            items: [
+              {
+                kind: 'pump',
+                name: 'borehole pump',
+                count: 1,
+                runningKw: 1.1,
+                startingKw: 2.5,
+                source: 'explicit_user',
+                evidence: 'pump 1.1 kW'
+              },
+              {
+                kind: 'compressor',
+                name: 'garage compressor',
+                count: 1,
+                runningKw: 2.2,
+                startingKw: 4.5,
+                source: 'explicit_user',
+                evidence: 'compressor 2.2 kW'
+              }
+            ],
+            requiredNominalKw: 12,
+            requiredStartingKw: 11.6,
+            totalRunningKw: 9.3,
+            confidence: 0.88,
+            calculation: 'pump and compressor starting loads'
+          },
+          hardConstraints: {
+            ...baseNeedState.selectionState.hardConstraints,
+            productIntent: 'generator',
+            productRole: 'coreProduct',
+            fuel: 'gasoline',
+            singlePhase220: true
+          },
+          confidence: 0.9
+        })
+      }
+    };
+    conversations.turn = {
+      id: '68686868-6868-4868-8868-686868686868',
+      sessionId: conversations.session.id,
+      userMessageId: null,
+      assistantMessageId: null,
+      status: 'received',
+      requestHash: 'hash',
+      stage: 'received',
+      errorCode: null,
+      errorMessage: null,
+      plannerContract: null,
+      activeNeedsBefore: [],
+      activeNeedsAfter: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const products = [
+      testProduct('weak-diesel', 'Generator diesel 12 kW 380 V', 210_000, {
+        fuel: 'diesel',
+        voltage: '380 V',
+        nominalPower: '12 kW'
+      }),
+      testProduct('fit-main', 'Generator gasoline TSS 12000 12 kW 220 V', 240_000, {
+        fuel: 'gasoline',
+        voltage: '220 V',
+        nominalPower: '12 kW'
+      }),
+      testProduct('fit-reserve', 'Generator gasoline TSS 14000 13.8 kW 220 V', 270_000, {
+        fuel: 'gasoline',
+        voltage: '220 V',
+        nominalPower: '13.8 kW'
+      })
+    ];
+    class FastCatalogAssistant extends AssistantService {
+      async updateNeedState() {
+        return conversations.session.needState;
+      }
+
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner should not run for fast catalog selection');
+      }
+    }
+    const assistant = new FastCatalogAssistant(conversations as never, new FakeProducts(products) as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId: conversations.session.id,
+      turnId: conversations.turn.id,
+      userMessage: 'Покажите несколько бензиновых вариантов 220 В из каталога и объясните, какой практичнее как основной, а какой с запасом.'
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(result.metadata?.answerMode).toBe('fast_catalog_selection');
+    expect(result.productCards.map((card) => card.id)).toEqual(expect.arrayContaining(['fit-main', 'fit-reserve']));
+    expect(result.productCards.map((card) => card.id)).not.toContain('weak-diesel');
+    expect(result.answer).toMatch(/Основной|Запас/iu);
+    expect(result.metadata?.turnContract).toMatchObject({
+      answerTask: 'product_selection',
+      taskType: 'product_selection',
+      catalogAction: 'find_matching_products',
+      productCardsPolicy: 'show_matching_products',
+      cardsRole: 'primary',
+      leadAllowed: false
+    });
+    expect(result.metadata?.cardManifest?.visibleProductIds).toEqual(expect.arrayContaining(['fit-main', 'fit-reserve']));
+    expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(result.metadata?.aiDiagnostics?.turnPlanningFallback?.used).toBe(false);
+    expect(conversations.turn?.status).toBe('completed');
+  });
+
   it('does not introduce plate guidance into a generator-only technical orientation', async () => {
     openAiCreate.mockClear();
     const conversations = new FakeConversations();

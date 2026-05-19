@@ -6069,6 +6069,30 @@ function shouldUseFastTechnicalOrientation(input: {
     /(?:подскаж|какой|какая|какую|лучше|подойдет|хватит|мощн|ориентир|подбор|взять|тянул|тянуть|для\s+дома)/iu.test(input.userMessage);
 }
 
+function shouldUseFastCatalogSelection(input: {
+  userMessage: string;
+  needState: CustomerNeedState;
+  history: Message[];
+}) {
+  if (!isCatalogSelectionRequestText(input.userMessage)) return false;
+  if (isExplicitCommercialQuestion(input.userMessage) || isMixedCatalogAndCommercialQuestion(input.userMessage)) return false;
+  if (isShownProductChoiceOrComparisonQuestion(input.userMessage) && allShownProductCards(input.history).length > 0) return false;
+
+  const selection = input.needState.selectionState;
+  if (!selection) return false;
+  const targetProductClass = selection.targetProductClass !== 'unknown'
+    ? selection.targetProductClass
+    : selection.hardConstraints.productIntent;
+  if (targetProductClass === 'unknown') return false;
+
+  const activeNeedMatches = (input.needState.activeNeeds ?? []).some((need) => need.productClass === targetProductClass);
+  const hasSelectionBasis = hasMaterialHardConstraints(selection) ||
+    Boolean(selection.loadProfile?.requiredNominalKw) ||
+    Boolean(selection.loadProfile?.items?.length) ||
+    Boolean(selection.activeRequirement);
+  return hasSelectionBasis && (activeNeedMatches || selection.confidence >= 0.55);
+}
+
 function deterministicEstimatedPumpClarificationQuestion(_missingQuestion?: string) {
   return 'Уточните, пожалуйста: какой насос стоит и какая у него мощность или модель на шильдике?';
 }
@@ -7474,6 +7498,451 @@ export class AssistantService {
         },
         overrides: ['fast_technical_orientation']
       }
+    };
+  }
+
+  private buildCatalogFastRenderContract(contract: AgentTurnContract, state: CustomerNeedState, selectedProductIds: string[], catalogSearchQuery: string): ResolvedTurnContract {
+    return {
+      action: {
+        primary: 'recommend_products',
+        answerMode: 'productRecommendation',
+        followUpPolicy: 'askClarifyingQuestion'
+      },
+      scope: {
+        context: 'activeNeed',
+        search: 'focusedNeed',
+        catalogSearchQuery
+      },
+      knowledge: {
+        webRequired: false,
+        missingInformation: state.selectionState.unknowns ?? []
+      },
+      selection: {
+        selectedProductIds,
+        requiredProductTraits: state.selectionState.hardConstraints,
+        selectionState: state.selectionState
+      },
+      render: {
+        cards: 'showProducts',
+        leadForm: false
+      },
+      guidance: 'Fast catalog selection from LLM-extracted need state; show grounded catalog cards and keep uncertainty separate from product facts.',
+      diagnostics: {
+        sourcePlan: {
+          action: 'recommend_products',
+          answerMode: 'productRecommendation',
+          cardPolicy: 'showProducts',
+          followUpPolicy: 'askClarifyingQuestion',
+          contextScope: 'activeNeed',
+          searchScope: 'focusedNeed',
+          catalogSearchQuery,
+          selectedProductIds,
+          needsWebSearch: false,
+          missingInformation: state.selectionState.unknowns ?? [],
+          answerGuidance: 'Select products from the structured need state and answer with visible catalog cards; do not wait for the heavyweight planner when the buyer explicitly asks to show catalog options.'
+        },
+        overrides: ['fast_catalog_selection']
+      }
+    };
+  }
+
+  private fastCatalogSelectionPlan(input: GenerateAnswerInput, needState: CustomerNeedState, catalogSearchQuery: string): AssistantTurnPlan {
+    const selection = needState.selectionState ?? emptyProductSelectionState();
+    const hard = selection.hardConstraints;
+    const intent = selection.targetProductClass !== 'unknown'
+      ? selection.targetProductClass
+      : hard.productIntent;
+    return {
+      action: 'recommend_products',
+      answerMode: 'productRecommendation',
+      cardPolicy: 'showProducts',
+      followUpPolicy: 'askClarifyingQuestion',
+      contextScope: 'activeNeed',
+      searchScope: 'focusedNeed',
+      catalogSearchQuery,
+      selectedProductIds: [],
+      requiredProductTraits: {
+        ...emptyRequiredProductTraits(),
+        productIntent: intent,
+        productRole: hard.productRole !== 'unknown' ? hard.productRole : 'coreProduct',
+        fuel: hard.fuel ?? 'unknown',
+        startType: hard.startType ?? 'unknown',
+        enclosure: hard.enclosure ?? 'unknown',
+        conventionalGenerator: hard.conventionalGenerator ?? null,
+        singlePhase220: hard.singlePhase220 ?? null,
+        budgetMax: hard.budgetMax ?? null,
+        weightKgMin: hard.weightKgMin ?? null,
+        weightKgMax: hard.weightKgMax ?? null,
+        diameterMmMin: hard.diameterMmMin ?? null,
+        diameterMmMax: hard.diameterMmMax ?? null,
+        nominalPowerKwMin: hard.nominalPowerKwMin ?? null,
+        nominalPowerKwMax: hard.nominalPowerKwMax ?? null,
+        maxPowerKwMin: hard.maxPowerKwMin ?? null,
+        maxPowerKwMax: hard.maxPowerKwMax ?? null,
+        powerReasoning: selection.loadProfile?.calculation ?? '',
+        provenance: hard.provenance
+      },
+      selectionState: {
+        currentProductClass: intent,
+        targetProductClass: intent,
+        compatibilityTargetProduct: selection.compatibilityTargetProduct?.name ?? '',
+        mustHaveTraits: hard.mustHaveTraits ?? [],
+        niceToHaveTraits: selection.softPreferences?.mustHaveTraits ?? [],
+        excludedClasses: hard.excludedClasses as ProductIntent[],
+        brandConstraint: hard.brandConstraint ?? '',
+        exactModelConstraint: hard.exactModelConstraint ?? '',
+        isAccessoryFollowUp: false,
+        selectionConfidence: selection.confidence,
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      },
+      agentDecision: {
+        answerTask: 'product_selection',
+        taskType: 'product_selection',
+        catalogAction: 'find_matching_products',
+        commercialAction: 'none',
+        productCardsPolicy: 'show_matching_products',
+        cardsRole: 'primary',
+        leadAllowed: false,
+        leadAllowedReason: 'catalog selection turn; buyer has not asked for delivery, stock, discount, or final commercial terms',
+        currentFocus: 'catalog_selection',
+        mustAnswerNow: ['show grounded catalog options from current structured need state'],
+        errorRecoveryPriority: 'If product cards can be selected from catalog, answer with the cards instead of timing out in planning.',
+        confidence: Math.max(0.65, selection.confidence)
+      },
+      needsWebSearch: false,
+      missingInformation: selection.unknowns ?? [],
+      answerGuidance: 'Fast catalog selection from validated structured need state.'
+    };
+  }
+
+  private async tryFastCatalogSelection(
+    input: GenerateAnswerInput,
+    needState: CustomerNeedState,
+    history: Message[],
+    aiDiagnostics: AiGenerationDiagnostics
+  ): Promise<ChatResponsePayload | null> {
+    if (!shouldUseFastCatalogSelection({
+      userMessage: input.userMessage,
+      needState,
+      history
+    })) return null;
+
+    const catalogSearchQuery = productSearchText(input.userMessage, needState);
+    const plan = this.fastCatalogSelectionPlan(input, needState, catalogSearchQuery);
+    const contract: AgentTurnContract = {
+      answerTask: 'product_selection',
+      taskType: 'product_selection',
+      catalogAction: 'find_matching_products',
+      commercialAction: 'none',
+      productCardsPolicy: 'show_matching_products',
+      mustAnswerNow: ['show grounded catalog options from current structured need state'],
+      activeNeeds: (needState.activeNeeds ?? []).map((need) => ({
+        id: need.id,
+        productClass: need.productClass,
+        summary: need.summary
+      })),
+      currentFocus: 'catalog_selection',
+      cardsRole: 'primary',
+      leadAllowed: false,
+      leadAllowedReason: 'catalog selection turn; buyer has not asked for delivery, stock, discount, or final commercial terms',
+      errorRecoveryPriority: 'Select products from catalog and answer with visible cards without waiting for the heavyweight planner.',
+      validatorWarnings: ['fast_catalog_selection_contract']
+    };
+
+    const provisionalRenderContract = this.buildCatalogFastRenderContract(contract, needState, [], catalogSearchQuery);
+    let selectionResult = await this.selectProductsForTurn(
+      input.userMessage,
+      needState,
+      plan,
+      [],
+      provisionalRenderContract,
+      LARGE_SLICE_VISIBLE_CARDS,
+      recentUserConversationText(history),
+      { forceCatalogVerification: true }
+    );
+    const requiredGeneratorNominalKw = needState.selectionState?.hardConstraints.productIntent === 'generator'
+      ? needState.selectionState.loadProfile?.requiredNominalKw
+      : undefined;
+    if (!selectionResult.matchedProducts.length && requiredGeneratorNominalKw) {
+      const loadAnchoredHard = {
+        ...selectionResult.state.hardConstraints,
+        productIntent: 'generator' as const,
+        productRole: selectionResult.state.hardConstraints.productRole !== 'unknown'
+          ? selectionResult.state.hardConstraints.productRole
+          : 'coreProduct' as const,
+        nominalPowerKwMin: requiredGeneratorNominalKw,
+        nominalPowerKwMax: undefined,
+        maxPowerKwMin: undefined,
+        maxPowerKwMax: undefined,
+        provenance: {
+          ...(selectionResult.state.hardConstraints.provenance ?? {}),
+          nominalPowerKwMin: 'inferred_from_load' as const
+        }
+      };
+      const loadAnchoredState: ProductSelectionState = {
+        ...selectionResult.state,
+        hardConstraints: loadAnchoredHard,
+        activeRequirement: loadAnchoredHard,
+        loadProfile: needState.selectionState.loadProfile,
+        confidence: Math.max(selectionResult.state.confidence, needState.selectionState.confidence, 0.72)
+      };
+      const loadAnchoredNeedState = { ...needState, selectionState: loadAnchoredState };
+      const loadAnchoredProfile = buildProductFitProfile(loadAnchoredNeedState, input.userMessage, plan.catalogSearchQuery, plan.requiredProductTraits);
+      const catalog = await this.products.listProducts(5000).catch(() => []);
+      const ranked = sortSelectionProducts(catalog
+        .filter((product) => productMatchesSelectionCriteria(product, loadAnchoredState, loadAnchoredProfile))
+        .map((product) => ({
+          product,
+          score: recommendationScore(product, loadAnchoredNeedState, input.userMessage, loadAnchoredProfile)
+        })), loadAnchoredState.rankingPreference, loadAnchoredState.hardConstraints.budgetMax)
+        .slice(0, FULL_SLICE_PRODUCT_CARDS)
+        .map((item) => item.product);
+      if (ranked.length) {
+        const visibleProducts = ranked.slice(0, LARGE_SLICE_VISIBLE_CARDS);
+        const hiddenProducts = ranked.slice(LARGE_SLICE_VISIBLE_CARDS);
+        const missingQuestions = missingQuestionsForSelection(loadAnchoredState, ranked.length);
+        selectionResult = {
+          ...selectionResult,
+          state: {
+            ...loadAnchoredState,
+            selectedProductIds: visibleProducts.map((product) => product.id),
+            matchedProductIds: ranked.map((product) => product.id),
+            previousCandidateProductIds: ranked.map((product) => product.id),
+            unknowns: missingQuestions,
+            updatedAt: new Date().toISOString()
+          },
+          matchedProducts: ranked,
+          visibleProducts,
+          hiddenProducts,
+          missingQuestions,
+          confidence: Math.max(selectionResult.confidence, 0.72),
+          trace: {
+            ...selectionResult.trace,
+            source: 'fast_catalog_load_anchored_catalog_filter',
+            anchoredRequiredNominalKw: requiredGeneratorNominalKw
+          }
+        };
+      }
+    }
+    const selectedProducts = (selectionResult.matchedProducts.length
+      ? selectionResult.matchedProducts
+      : selectionResult.visibleProducts
+    ).slice(0, FULL_SLICE_PRODUCT_CARDS);
+    if (!selectedProducts.length) return null;
+
+    const semanticMemoryAfterSelection = reconcileSemanticMemoryWithSelection(needState.semanticMemory, selectionResult);
+    const updatedNeedState = {
+      ...needState,
+      selectionState: selectionResult.state,
+      semanticMemory: semanticMemoryAfterSelection
+    };
+    await this.conversations.updateNeedState(input.sessionId, updatedNeedState);
+
+    const cards = productCards(selectedProducts, updatedNeedState, input.userMessage, buildProductFitProfile(updatedNeedState, input.userMessage, plan.catalogSearchQuery, plan.requiredProductTraits), FULL_SLICE_PRODUCT_CARDS);
+    const initialVisibleCount = initialVisibleCardCountForCards(cards, selectionResult, LARGE_SLICE_VISIBLE_CARDS);
+    const finalCards = finalCardsDecisionFromCards(cards, selectionResult, plan, initialVisibleCount);
+    const cardDisplay = cardDisplayOptions(finalCards.initialVisibleCount, finalCards.cards);
+    const selectedProductIds = finalCards.visibleProductIds;
+    let answer = deterministicAnswerGenerationFallback({
+      cards: finalCards.cards,
+      selectionResult,
+      structuredCatalogSlice: null,
+      finalCards,
+      contract,
+      latestUserMessage: input.userMessage
+    }).trim();
+    if (!answer) return null;
+
+    const renderContract = this.buildCatalogFastRenderContract(contract, updatedNeedState, selectedProductIds, catalogSearchQuery);
+    const requirementLedger = buildRequirementLedger({
+      needState: updatedNeedState,
+      selectionState: selectionResult.state
+    });
+    const executionContract = buildExecutionContract({
+      agentContract: contract,
+      renderContract,
+      selectionState: selectionResult.state,
+      webRequired: false,
+      activeRequirementIds: requirementLedger.activeRequirementIds
+    });
+    const cardManifest = buildCardManifest({
+      executionContract,
+      cards: finalCards.cards,
+      visibleProductIds: finalCards.visibleProductIds,
+      hiddenProductIds: finalCards.hiddenProductIds
+    });
+    const agentContractV2 = deriveAgentTurnContractV2({
+      userMessage: input.userMessage,
+      legacyContract: contract,
+      needState: updatedNeedState,
+      webRequired: false,
+      selectedProductIds
+    });
+    const productEvidenceRegistry = buildProductEvidenceRegistry({
+      executionContract,
+      cardManifest,
+      cards: finalCards.cards,
+      catalogProducts: selectedProducts
+    });
+    const factClaimPlanner = buildFactClaimPlanner({
+      executionContract,
+      requirementLedger,
+      cardManifest,
+      usedWebSearch: false
+    });
+    const leadDraft = buildLeadDraft({
+      contract: agentContractV2,
+      registry: productEvidenceRegistry,
+      buyerQuestion: input.userMessage
+    });
+    const leadStateMachine = buildLeadStateMachine({
+      executionContract,
+      hasContactInTurn: false,
+      leadRequested: false,
+      leadCreated: false
+    });
+    const policyGate = runPolicyGate({
+      contract: agentContractV2,
+      requirementLedger,
+      productEvidenceRegistry,
+      executionContract,
+      factClaimPlanner,
+      leadStateMachine,
+      webSearchPlanned: false
+    });
+    const toolRegistry = new AgentToolRegistry(createRuntimeArtifactToolHandlers({
+      contract: agentContractV2,
+      selection: {
+        matchedProducts: selectionResult.matchedProducts,
+        rejectedProducts: selectionResult.rejectedProducts
+      },
+      productEvidenceRegistry,
+      leadDraft,
+      autoLeadResult: null,
+      webSearchEnabled: false
+    }));
+    const toolResults = await toolRegistry.executePlan(agentContractV2.toolPlan, {
+      sessionId: input.sessionId,
+      userMessage: input.userMessage,
+      history,
+      needState: updatedNeedState,
+      signal: input.signal,
+      policy: {
+        leadAllowed: false,
+        webAllowed: !agentContractV2.sourcePolicy.forbidden.includes('web'),
+        webPurpose: agentContractV2.sourcePolicy.webPurpose
+      }
+    });
+    const toolTrace = toolResults.map((result, index) => toolResultToTrace(agentContractV2.toolPlan[index]!, result));
+    const policyGateEnforcement = enforcePolicyGateBeforeAnswer({
+      policyGate,
+      toolTrace
+    });
+    if (policyGateEnforcement.mode === 'hard_block') {
+      markAiFallback(
+        aiDiagnostics,
+        'answerGenerationFallback',
+        `fast_catalog_policy_gate_blocked:${policyGateEnforcement.hardBlockReasons.join(',')}`,
+        'fast_catalog_policy_gate_blocked'
+      );
+      throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
+    }
+
+    const postAnswerCheck = applyPostAnswerVerificationPolicy({
+      answer,
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest,
+      productEvidenceRegistry
+    });
+    answer = postAnswerCheck.answer;
+    const factClaimAudit = postAnswerCheck.factClaimAudit;
+    const postAnswerVerification = postAnswerCheck.postAnswerVerification;
+    const postAnswerVerificationRecovery = postAnswerCheck.postAnswerVerificationRecovery;
+    if (postAnswerVerification.status === 'error') {
+      throw new Error(`Fast catalog answer violates post-answer verification: ${postAnswerVerification.issues.map((issue) => issue.code).join(', ')}`);
+    }
+
+    const contractWarnings = [
+      ...contract.validatorWarnings,
+      ...agentContractV2.warnings,
+      ...requirementLedger.warnings,
+      ...executionContract.warnings,
+      ...cardManifest.warnings,
+      ...productEvidenceRegistry.warnings,
+      ...policyGate.warnings,
+      ...policyGate.blockedReasons,
+      ...policyGateEnforcement.warnings,
+      ...policyGateEnforcement.hardBlockReasons,
+      ...policyGateEnforcement.repairedReasons,
+      ...factClaimPlanner.warnings,
+      ...factClaimAudit.warnings,
+      ...leadStateMachine.warnings,
+      ...postAnswerVerification.issues.map((issue) => issue.code)
+    ];
+    const selection = selectionMetadata(selectionResult);
+    const metadata = {
+      turnId: input.turnId,
+      turnContract: contract,
+      agentContractV2,
+      sourcePolicy: agentContractV2.sourcePolicy,
+      toolTrace,
+      answerMode: 'fast_catalog_selection',
+      cardPolicy: 'showProducts',
+      cardsRole: contract.cardsRole,
+      leadAllowed: contract.leadAllowed,
+      leadDraft: leadDraft ?? undefined,
+      selection,
+      cardDisplay,
+      productEvidenceRegistry,
+      policyGate,
+      policyGateEnforcement,
+      executionContract,
+      requirementLedger,
+      cardManifest,
+      factClaimPlanner,
+      factClaimAudit,
+      leadStateMachine,
+      postAnswerVerification,
+      postAnswerVerificationRecovery,
+      aiDiagnostics,
+      productCards: finalCards.cards,
+      activeNeedsAfter: updatedNeedState.activeNeeds ?? [],
+      warnings: contractWarnings,
+      contractWarnings
+    };
+
+    await input.onDelta?.(answer);
+    const assistantMessage = await this.conversations.addMessage({
+      sessionId: input.sessionId,
+      role: 'assistant',
+      content: answer,
+      metadata
+    });
+    if (input.turnId) {
+      await this.conversations.updateTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        status: 'completed',
+        stage: 'completed',
+        assistantMessageId: assistantMessage.id,
+        plannerContract: contract,
+        activeNeedsAfter: updatedNeedState.activeNeeds ?? []
+      }).catch((error) => console.warn('Conversation turn fast catalog update failed', safeError(error)));
+    }
+
+    return {
+      turnId: input.turnId,
+      answer,
+      needState: updatedNeedState,
+      productCards: finalCards.cards,
+      cardDisplay,
+      usedWebSearch: false,
+      leadRequested: false,
+      leadCreated: false,
+      assistantMessageId: assistantMessage.id,
+      metadata
     };
   }
 
@@ -9106,6 +9575,9 @@ export class AssistantService {
       ? await this.tryFastCommercialHandoff(input, { ...session, needState }, history, aiDiagnostics)
       : null;
     if (fastCommercialContactConfirmation) return fastCommercialContactConfirmation;
+
+    const fastCatalogSelection = await this.tryFastCatalogSelection(input, needState, history, aiDiagnostics);
+    if (fastCatalogSelection) return fastCatalogSelection;
 
     const fastTechnicalOrientation = await this.tryFastTechnicalOrientation(input, needState, history, aiDiagnostics);
     if (fastTechnicalOrientation) return fastTechnicalOrientation;
