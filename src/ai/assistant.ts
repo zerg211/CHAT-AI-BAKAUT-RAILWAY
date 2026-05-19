@@ -8408,6 +8408,13 @@ export class AssistantService {
       postAnswerVerificationRecovery,
       aiDiagnostics,
       productCards: [] as ProductCard[],
+      autoLead: autoLeadResult ? {
+        created: autoLeadResult.created,
+        leadId: autoLeadResult.lead?.id,
+        emailStatus: autoLeadResult.emailStatus,
+        missing: autoLeadResult.missing,
+        error: autoLeadResult.error
+      } : undefined,
       activeNeedsAfter: session.needState.activeNeeds ?? [],
       warnings: contractWarnings,
       contractWarnings

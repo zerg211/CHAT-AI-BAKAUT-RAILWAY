@@ -466,6 +466,67 @@ describe('assistant generateAnswer control-plane metadata', () => {
     expect(result.metadata?.toolTrace?.find((item) => item.tool === 'createLead')).toMatchObject({ ok: true, risk: 'sensitive' });
   });
 
+  it('fast-confirms contact from prior cards and records autoLead metadata', async () => {
+    openAiCreate.mockClear();
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const product = generator();
+    conversations.messages.push({
+      id: 'previous-assistant-cards',
+      sessionId,
+      role: 'assistant',
+      content: 'Показываю подходящие генераторы.',
+      metadata: {
+        productCards: [{
+          id: product.id,
+          name: product.name,
+          brand: product.brand,
+          category: product.category,
+          price: product.price,
+          currency: product.currency,
+          sourceUrl: product.sourceUrl,
+          specs: product.specs,
+          reasons: ['Подходит по мощности'],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    class FastLeadAssistant extends AssistantService {
+      async updateNeedState(current: ConversationSession['needState']) {
+        return current;
+      }
+
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner should not run for fast commercial contact confirmation');
+      }
+    }
+    const assistant = new FastLeadAssistant(conversations as never, new FakeProducts([product]) as never, leads as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId,
+      userMessage: 'Давайте проверим наличие и доставку по этим позициям. Меня зовут Алексей, телефон +7 900 000-00-11.'
+    });
+
+    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(leads.leads).toHaveLength(1);
+    expect(result.metadata?.answerMode).toBe('fast_commercial_handoff');
+    expect(result.metadata?.autoLead).toMatchObject({
+      created: true,
+      emailStatus: 'sent_email'
+    });
+    expect(result.metadata?.leadStateMachine).toMatchObject({
+      state: 'created',
+      nextAction: 'confirm_created_lead'
+    });
+    expect(result.metadata?.leadDraft).toMatchObject({
+      reason: 'delivery',
+      productIds: expect.arrayContaining(['tss-8'])
+    });
+    expect(result.answer).toMatch(/Алексей, контакт получил/iu);
+    expect(result.answer).not.toMatch(/оставьте|напишите|телефон/iu);
+  });
+
   it('preserves no-contact policy through generateAnswer metadata and verifier', async () => {
     openAiCreate.mockResolvedValue({ output_text: 'Отвечу без звонка: сначала уточним задачу и ограничения, затем можно продолжить подбор по каталогу.' });
     const conversations = new FakeConversations();
