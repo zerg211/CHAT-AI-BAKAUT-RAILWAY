@@ -8,7 +8,7 @@ import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 
-export const REMEDIATION_CONTRACT_VERSION = '2026-05-19-mp15-fallback-intent-filter-v14';
+export const REMEDIATION_CONTRACT_VERSION = '2026-05-19-short-plate-model-intent-v15';
 export const REMEDIATION_RUNTIME_ARTIFACTS = [
   'agentContractV2',
   'sourcePolicy',

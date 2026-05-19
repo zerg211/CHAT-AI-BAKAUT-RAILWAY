@@ -624,7 +624,8 @@ export function inferProductIntent(text: string): ProductIntent {
   if (!text.trim()) return 'unknown';
   const lower = text.toLowerCase();
   const hasGeneratorContext = containsAny(lower, generatorTerms);
-  const hasPlateContext = containsAny(lower, plateTerms);
+  const hasShortPlateModelContext = extractModelTokens(text).length > 0 && /\b\u043f\u043b\u0438\u0442(?:\u0430|\u044b|\u0443|\u0435|\u043e\u0439)?\b/iu.test(lower);
+  const hasPlateContext = containsAny(lower, plateTerms) || hasShortPlateModelContext;
   const hasEquipmentContext = hasGeneratorContext || hasPlateContext || containsAny(lower, rammerTerms) || containsAny(lower, cutterTerms);
   const generatorInEnclosureRequest = hasGeneratorContext && fallbackDetectGeneratorEnclosureSignal(lower);
   if (containsAny(lower, oilTerms) && hasEquipmentContext) return hasGeneratorContext && !hasPlateContext ? 'generatorOil' : 'engineOil';
