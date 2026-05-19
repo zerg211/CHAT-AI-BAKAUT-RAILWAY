@@ -5,6 +5,14 @@ import { AssistantService } from '../ai/assistant.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { ConversationRepository } from '../db/repositories.js';
 
+type RequestAbortSource = {
+  raw: {
+    aborted: boolean;
+    once(event: 'aborted' | 'close', listener: () => void): unknown;
+    off(event: 'aborted' | 'close', listener: () => void): unknown;
+  };
+};
+
 const createSessionSchema = z.object({
   visitorId: z.string().optional(),
   pageUrl: z.string().optional()
@@ -32,6 +40,21 @@ function requestHash(sessionId: string, message: string) {
 
 function safeErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function attachRequestAbortHandler(request: RequestAbortSource, controller: AbortController) {
+  const abort = () => {
+    controller.abort();
+  };
+  const abortIfRequestWasAborted = () => {
+    if (request.raw.aborted) controller.abort();
+  };
+  request.raw.once('aborted', abort);
+  request.raw.once('close', abortIfRequestWasAborted);
+  return () => {
+    request.raw.off('aborted', abort);
+    request.raw.off('close', abortIfRequestWasAborted);
+  };
 }
 
 export async function registerChatRoutes(app: FastifyInstance) {
@@ -94,10 +117,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
     timeout.unref?.();
-    const abort = () => {
-      if (!reply.raw.writableEnded) controller.abort();
-    };
-    reply.raw.once('close', abort);
+    const cleanupRequestAbort = attachRequestAbortHandler(request, controller);
 
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -157,7 +177,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     } finally {
       if (statusTimer) clearInterval(statusTimer);
       clearTimeout(timeout);
-      reply.raw.off('close', abort);
+      cleanupRequestAbort();
       if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
     }
   });
@@ -170,10 +190,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
     timeout.unref?.();
-    const abort = () => {
-      if (!reply.raw.writableEnded) controller.abort();
-    };
-    reply.raw.once('close', abort);
+    const cleanupRequestAbort = attachRequestAbortHandler(request, controller);
 
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -229,7 +246,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     } finally {
       if (statusTimer) clearInterval(statusTimer);
       clearTimeout(timeout);
-      reply.raw.off('close', abort);
+      cleanupRequestAbort();
       if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
     }
   });
