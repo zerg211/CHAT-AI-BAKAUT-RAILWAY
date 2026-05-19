@@ -5915,6 +5915,7 @@ function deterministicCommercialHandoffFallback(input: {
 function deterministicTechnicalSummaryRecovery(input: {
   cards: ProductCard[];
   state: ProductSelectionState;
+  latestUserMessage?: string;
 }) {
   const products = input.cards.map(productFromCard);
   const generator = products.find((product) => {
@@ -5925,9 +5926,10 @@ function deterministicTechnicalSummaryRecovery(input: {
   const load = input.state.loadProfile;
   const nominal = formatKwValue(load?.requiredNominalKw);
   const starting = formatKwValue(load?.requiredStartingKw);
+  const generatorLoadNotes = generatorTechnicalLoadNotes(load, input.latestUserMessage);
   const generatorLine = generator
-    ? `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. Из уже показанных вариантов можно смотреть ${generator.name}, но финально надо сверить мощность или модель скважинного насоса на шильдике.`
-    : `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. Финально надо сверить мощность или модель скважинного насоса на шильдике.`;
+    ? `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. ${generatorLoadNotes}Из уже показанных вариантов можно смотреть ${generator.name}, но финально надо сверить мощность или модель скважинного насоса на шильдике.`
+    : `По генератору сейчас держал бы ориентир на класс ${nominal || '5-6'} кВт по номиналу${starting ? `, пусковая нагрузка около ${starting} кВт` : ''}. ${generatorLoadNotes}Финально надо сверить мощность или модель скважинного насоса на шильдике.`;
   const plateLine = plate
     ? `По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: ${plate.name} остается нормальной отправной точкой, потому что ее проще грузить и переносить одному.`
     : 'По виброплите под дорожки, песок и плитку логичен легкий класс около 50-60 кг: тяжелее брать стоит только если щебня будет больше и переноска уже не главный фактор.';
@@ -5955,6 +5957,27 @@ function deterministicTechnicalSummaryRecovery(input: {
     lines.push('Что еще уточнить для точного выбора виброплиты: основание, толщину слоя щебня и какой вес вам реально удобно грузить одному.');
   }
   return lines.join('\n\n');
+}
+
+function generatorTechnicalLoadNotes(load?: ProductGeneratorLoadProfile | null, latestUserMessage = '') {
+  const context = [
+    latestUserMessage,
+    ...(load?.items ?? []).map((item) => `${item.kind} ${item.name ?? ''} ${item.evidence ?? ''}`)
+  ].join(' ').toLowerCase();
+  const notes: string[] = [];
+  if (/(?:компрессор|compressor)/iu.test(context)) {
+    notes.push('компрессор 2,2 кВт лучше считать отдельным пусковым сценарием, а не включать вместе с чайником');
+  }
+  if (/(?:скважин|borehole|well pump)/iu.test(context)) {
+    notes.push('скважинный насос остается главным пусковым риском');
+  }
+  if (/(?:кот[её]л|boiler|холодильник|морозил|fridge|freezer|роутер|камер|router|camera)/iu.test(context)) {
+    notes.push('котел, холодильник/морозилка и связь идут как постоянная базовая нагрузка');
+  }
+  if (/(?:дизель\s+не|не\s+хочу\s+дизел|лучше\s+бензин|gasoline|бензинов)/iu.test(context)) {
+    notes.push('смотрел бы бензиновый 220 В, без дизеля');
+  }
+  return notes.length ? `Учитываю так: ${notes.slice(0, 4).join('; ')}. ` : '';
 }
 
 function isPlateWeightTechnicalQuestion(text: string) {
@@ -6000,6 +6023,19 @@ function deterministicPlateWeightOrientation(userMessage: string) {
   return lines.join('\n\n');
 }
 
+function isTechnicalUnknownModelStatement(text: string) {
+  const normalized = text.toLowerCase();
+  return /(?:модел[ьи]|марку|артикул)[^.!?\n]{0,40}(?:не\s+(?:знаю|помню|скажу|известн)|неизвестн|нет)|(?:не\s+(?:знаю|помню|скажу)[^.!?\n]{0,40}(?:модел[ьи]|марку|артикул))/iu.test(normalized);
+}
+
+function isCatalogSelectionRequestText(text: string) {
+  const normalized = text.toLowerCase();
+  const explicitCatalogAction = /(?:покаж|подбер[иите]|подбор|вариант|карточ|каталог|что\s+есть|какие\s+есть|из\s+каталог|в\s+каталог|налич|склад|достав|скид|заказ|оформ)/iu.test(normalized);
+  const modelSelectionAction = /(?:какие\s+модел|модел[ьи][^.!?\n]{0,50}(?:есть|покаж|подход|вариант|из\s+каталог|в\s+каталог|посовет|предлож)|модель[^.!?\n]{0,50}(?:подойдет|выбрать|посовет|предлож))/iu.test(normalized);
+  const unknownModelOnly = isTechnicalUnknownModelStatement(normalized) && !explicitCatalogAction && !modelSelectionAction;
+  return !unknownModelOnly && (explicitCatalogAction || modelSelectionAction);
+}
+
 function shouldUseFastTechnicalOrientation(input: {
   userMessage: string;
   needState: CustomerNeedState;
@@ -6008,7 +6044,7 @@ function shouldUseFastTechnicalOrientation(input: {
   const plateWeightQuestion = isPlateWeightTechnicalQuestion(input.userMessage);
   if (allShownProductCards(input.history).length && !plateWeightQuestion) return false;
   if (isExplicitCommercialQuestion(input.userMessage) || isMixedCatalogAndCommercialQuestion(input.userMessage)) return false;
-  if (/(?:покаж|вариант|модел|карточ|каталог|налич|склад|достав|скид|заказ|оформ)/iu.test(input.userMessage)) return false;
+  if (isCatalogSelectionRequestText(input.userMessage)) return false;
 
   const activeClasses = new Set(
     (input.needState.activeNeeds ?? [])
@@ -7474,7 +7510,8 @@ export class AssistantService {
     };
     let answer = (deterministicPlateWeightOrientation(input.userMessage) || deterministicTechnicalSummaryRecovery({
       cards: allShownProductCards(history),
-      state: needState.selectionState
+      state: needState.selectionState,
+      latestUserMessage: input.userMessage
     })).trim();
     if (!answer) return null;
 
@@ -12188,6 +12225,8 @@ export const assistantTestHooks = {
   isHeavyDutyPlateNeed,
   isSmallSitePlateNeed,
   implicitPlateWeightRangeFromNeed,
+  isCatalogSelectionRequestText,
+  shouldUseFastTechnicalOrientation,
   deterministicPlateWeightOrientation,
   coerceTurnPlan,
   fallbackTurnPlan,
