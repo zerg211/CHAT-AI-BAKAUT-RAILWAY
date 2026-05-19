@@ -7781,8 +7781,8 @@ export class AssistantService {
     });
     const cardManifest = buildCardManifest({
       executionContract,
-      cards: [],
-      visibleProductIds: [],
+      cards: commercialCards,
+      visibleProductIds: selectedProductIds,
       hiddenProductIds: []
     });
     const agentContractV2 = deriveAgentTurnContractV2({
@@ -7795,7 +7795,7 @@ export class AssistantService {
     const productEvidenceRegistry = buildProductEvidenceRegistry({
       executionContract,
       cardManifest,
-      cards: [],
+      cards: commercialCards,
       catalogProducts: commercialCards.map(productFromCard)
     });
     const factClaimPlanner = buildFactClaimPlanner({
@@ -9100,6 +9100,12 @@ export class AssistantService {
     }
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
+
+    const hasPriorShownCardsForFastLead = allShownProductCards(history).length > 0;
+    const fastCommercialContactConfirmation = hasPriorShownCardsForFastLead && hasLikelyContactText(input.userMessage) && fallbackDetectLeadHandoffIntent(input.userMessage)
+      ? await this.tryFastCommercialHandoff(input, { ...session, needState }, history, aiDiagnostics)
+      : null;
+    if (fastCommercialContactConfirmation) return fastCommercialContactConfirmation;
 
     const fastTechnicalOrientation = await this.tryFastTechnicalOrientation(input, needState, history, aiDiagnostics);
     if (fastTechnicalOrientation) return fastTechnicalOrientation;

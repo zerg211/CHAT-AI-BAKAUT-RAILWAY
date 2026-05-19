@@ -13,7 +13,7 @@ describe('app', () => {
       answerModel: expect.any(String),
       plannerModel: expect.any(String),
       remediation: {
-        contractVersion: '2026-05-19-recovery-race-guard-v29',
+        contractVersion: '2026-05-19-fast-contact-lead-v30',
         runtimeArtifacts: expect.arrayContaining([
           'agentContractV2',
           'sourcePolicy',
