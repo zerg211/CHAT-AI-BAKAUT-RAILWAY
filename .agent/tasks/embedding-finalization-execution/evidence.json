@@ -1,12 +1,12 @@
 {
   "taskId": "embedding-finalization-execution",
-  "verdict": "PARTIAL_PASS_NOT_FINAL",
+  "verdict": "FINAL_PASS",
   "status": {
     "code_ready": "PASS",
-    "production_backfill_ready": "FAIL",
-    "production_backfill_done": "BLOCKED",
-    "live_gate_done": "BLOCKED",
-    "final_ready": "FAIL"
+    "production_backfill_ready": "PASS",
+    "production_backfill_done": "PASS",
+    "live_gate_done": "PASS",
+    "final_ready": "PASS"
   },
   "localChecks": [
     {
@@ -30,7 +30,7 @@
     {
       "command": "npm run embeddings:coverage",
       "status": "PASS",
-      "summary": "local finalReady=false"
+      "summary": "local finalReady=false before production backfill"
     },
     {
       "command": "npm run embeddings:backfill -- --dry-run --limit=50",
@@ -38,41 +38,90 @@
       "summary": "planned 50 products and 50 catalog pages"
     },
     {
+      "command": "npm test -- tests/assistantFallback.test.ts tests/remediationCommercialFallback.test.ts tests/assistantControlPlaneGenerate.test.ts tests/policyGate.test.ts",
+      "status": "PASS",
+      "summary": "4 files, 43 tests passed"
+    },
+    {
       "command": "npm run build",
       "status": "PASS"
     },
     {
-      "command": "git diff --check",
-      "status": "PASS",
-      "summary": "line-ending warnings only"
+      "command": "git diff --cached --check",
+      "status": "PASS"
     }
   ],
-  "localCoverage": {
+  "productionCoverage": {
     "model": "text-embedding-3-small",
     "minCoverage": 0.05,
     "finalCoverageTarget": 0.8,
     "targets": {
-      "products": { "total": 3858, "embedded": 0, "usable": 0, "coverage": 0, "ready": false },
-      "catalog_pages": { "total": 102, "embedded": 0, "usable": 0, "coverage": 0, "ready": false },
-      "troubleshooting_cases": { "total": 1, "embedded": 0, "usable": 0, "coverage": 0, "ready": false }
+      "products": {
+        "total": 4325,
+        "embedded": 4325,
+        "usable": 3999,
+        "coverage": 0.9246242774566474,
+        "ready": true
+      },
+      "catalog_pages": {
+        "total": 102,
+        "embedded": 102,
+        "usable": 102,
+        "coverage": 1,
+        "ready": true
+      },
+      "troubleshooting_cases": {
+        "total": 0,
+        "embedded": 0,
+        "usable": 0,
+        "coverage": 0,
+        "ready": false
+      }
     },
-    "finalReady": false
+    "finalReady": true
   },
   "production": {
-    "commit": "eae0157",
-    "push": "PASS",
-    "coverageEndpoint": "AUTH_BLOCKED_401",
-    "coverageEndpointSummary": "After push, GET /api/admin/embedding-coverage changed from 404 to 401 Unauthorized. The route is present, but the local ADMIN_PASSWORD/ADMIN_API_KEY does not authenticate against production.",
-    "databaseUrl": "MISSING_IN_LOCAL_ENV",
-    "backfillDryRun": "BLOCKED",
-    "backfill": "BLOCKED",
-    "liveGate": "BLOCKED",
+    "commits": [
+      "eae0157",
+      "2a5a88a",
+      "a3ac796",
+      "df7fa7d",
+      "e7ec987"
+    ],
+    "pushBranch": "PASS",
+    "pushMain": "PASS",
+    "deployment": {
+      "id": "f4de5131-9f06-4b90-b6a6-649524868673",
+      "commit": "e7ec987f5664b9dfbcfcb5f3a808d3cdb677b58d",
+      "status": "SUCCESS"
+    },
+    "coverageEndpoint": "PASS",
+    "backfill": "PASS",
+    "liveGate": "PASS",
     "manualRailwayDeploy": "NOT_ATTEMPTED_FORBIDDEN_BY_PROJECT_RULE"
   },
-  "blockers": [
-    "Need production-matching ADMIN_PASSWORD or ADMIN_API_KEY for admin endpoint checks and metadata audit.",
-    "Need explicit production DATABASE_URL or an approved production execution path before running real embeddings backfill.",
-    "Need production coverage target met before live widget gate can be considered final.",
-    "Need live protocol saved under local-live-tests/*.production.md after a real bakautprof.ru widget dialogue."
-  ]
+  "liveGate": {
+    "url": "https://bakautprof.ru/",
+    "protocol": "local-live-tests/2026-05-19-production-diverse-buyer-audit-2026-05-19T21-09-08-673Z.production.md",
+    "metadata": "local-live-tests/2026-05-19-production-diverse-buyer-audit-2026-05-19T21-09-08-673Z.json",
+    "sessionId": "c1cfef19-c1a7-4969-9b8e-62996dffcb45",
+    "buyerIssues": 0,
+    "codeIssues": 0,
+    "buyerGoalIssues": 0,
+    "leadAuditIssues": 0,
+    "leadSubmissions": 1
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS",
+    "AC8": "PASS",
+    "AC9": "PASS",
+    "AC10": "PASS"
+  },
+  "blockers": []
 }
