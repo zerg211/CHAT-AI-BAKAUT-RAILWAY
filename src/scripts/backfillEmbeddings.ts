@@ -1,10 +1,10 @@
-import { createEmbedding } from '../ai/openaiClient.js';
+import { createEmbeddings } from '../ai/openaiClient.js';
 import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
 import { productToEmbeddingText } from '../catalog/normalize.js';
 import { config } from '../config.js';
 import { pool } from '../db/pool.js';
 import { ProductRepository } from '../db/repositories.js';
-import type { CatalogPage } from '../shared/types.js';
+import type { CatalogPage, EmbeddingMetadata } from '../shared/types.js';
 
 function numberArg(name: string, fallback: number) {
   const arg = process.argv.find((value) => value.startsWith(`${name}=`));
@@ -17,16 +17,67 @@ function pageToEmbeddingText(page: CatalogPage) {
   return [page.title, page.summary, page.content].filter(Boolean).join('\n').slice(0, 8000);
 }
 
+type PlannedEmbedding<T> = {
+  item: T;
+  text: string;
+  metadata: EmbeddingMetadata;
+};
+
+async function createEmbeddingsWithFallback(texts: string[]) {
+  try {
+    return await createEmbeddings(texts);
+  } catch {
+    const embeddings: (number[] | null)[] = [];
+    for (const text of texts) {
+      try {
+        const [embedding] = await createEmbeddings([text]);
+        embeddings.push(embedding ?? null);
+      } catch {
+        embeddings.push(null);
+      }
+    }
+    return embeddings;
+  }
+}
+
+async function updatePlannedEmbeddings<T>(
+  planned: PlannedEmbedding<T>[],
+  batchSize: number,
+  update: (item: T, embedding: number[], metadata: EmbeddingMetadata) => Promise<void>
+) {
+  const stats = { updated: 0, failed: 0 };
+  for (let index = 0; index < planned.length; index += batchSize) {
+    const chunk = planned.slice(index, index + batchSize);
+    const embeddings = await createEmbeddingsWithFallback(chunk.map((item) => item.text));
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      const embedding = embeddings[offset];
+      if (!embedding) {
+        stats.failed += 1;
+        continue;
+      }
+      try {
+        await update(chunk[offset].item, embedding, chunk[offset].metadata);
+        stats.updated += 1;
+      } catch {
+        stats.failed += 1;
+      }
+    }
+  }
+  return stats;
+}
+
 async function backfill() {
   const repository = new ProductRepository();
   const dryRun = process.argv.includes('--dry-run');
   const productsOnly = process.argv.includes('--products-only');
   const contentOnly = process.argv.includes('--content-only');
   const limit = numberArg('--limit', 100);
+  const batchSize = Math.max(1, Math.min(numberArg('--batch-size', 32), 100));
   const stats = {
     model: config.OPENAI_EMBEDDING_MODEL,
     dryRun,
     limit,
+    batchSize,
     products: { scanned: 0, planned: 0, updated: 0, skippedFresh: 0, failed: 0 },
     catalogPages: { scanned: 0, planned: 0, updated: 0, skippedFresh: 0, failed: 0 }
   };
@@ -34,6 +85,7 @@ async function backfill() {
   if (!contentOnly && limit > 0) {
     const candidates = await repository.listProductsNeedingEmbeddings(limit, config.OPENAI_EMBEDDING_MODEL);
     stats.products.scanned = candidates.length;
+    const planned: PlannedEmbedding<(typeof candidates)[number]>[] = [];
     for (const item of candidates) {
       const text = productToEmbeddingText(item.product);
       const metadata = embeddingMetadataForText(text);
@@ -43,24 +95,20 @@ async function backfill() {
         continue;
       }
       stats.products.planned += 1;
-      if (dryRun) continue;
-      try {
-        const embedding = await createEmbedding(text);
-        if (!embedding) {
-          stats.products.failed += 1;
-          continue;
-        }
-        await repository.updateProductEmbedding(item.product.id, embedding, metadata);
-        stats.products.updated += 1;
-      } catch {
-        stats.products.failed += 1;
-      }
+      if (!dryRun) planned.push({ item, text, metadata });
+    }
+    if (!dryRun) {
+      const result = await updatePlannedEmbeddings(planned, batchSize, (item, embedding, metadata) =>
+        repository.updateProductEmbedding(item.product.id, embedding, metadata));
+      stats.products.updated += result.updated;
+      stats.products.failed += result.failed;
     }
   }
 
   if (!productsOnly && limit > 0) {
     const candidates = await repository.listCatalogPagesNeedingEmbeddings(limit, config.OPENAI_EMBEDDING_MODEL);
     stats.catalogPages.scanned = candidates.length;
+    const planned: PlannedEmbedding<(typeof candidates)[number]>[] = [];
     for (const item of candidates) {
       const text = pageToEmbeddingText(item.page);
       const metadata = embeddingMetadataForText(text);
@@ -70,18 +118,13 @@ async function backfill() {
         continue;
       }
       stats.catalogPages.planned += 1;
-      if (dryRun) continue;
-      try {
-        const embedding = await createEmbedding(text);
-        if (!embedding) {
-          stats.catalogPages.failed += 1;
-          continue;
-        }
-        await repository.updateCatalogPageEmbedding(item.page.id, embedding, metadata);
-        stats.catalogPages.updated += 1;
-      } catch {
-        stats.catalogPages.failed += 1;
-      }
+      if (!dryRun) planned.push({ item, text, metadata });
+    }
+    if (!dryRun) {
+      const result = await updatePlannedEmbeddings(planned, batchSize, (item, embedding, metadata) =>
+        repository.updateCatalogPageEmbedding(item.page.id, embedding, metadata));
+      stats.catalogPages.updated += result.updated;
+      stats.catalogPages.failed += result.failed;
     }
   }
 

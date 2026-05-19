@@ -71,3 +71,25 @@ export async function createEmbedding(text: string, signal?: AbortSignal) {
     return response.data?.[0]?.embedding as number[] | undefined;
   }, 2, signal);
 }
+
+export async function createEmbeddings(texts: string[], signal?: AbortSignal) {
+  if (texts.length === 0) return [];
+  if (config.NODE_ENV === 'test') return texts.map(() => null);
+  const client = createOpenAIClient();
+  if (!client) return texts.map(() => null);
+  return withRetry(async () => {
+    await assertOpenAIUsageBudget('embedding', config.OPENAI_EMBEDDING_MODEL);
+    const response = await client.embeddings.create({
+      model: config.OPENAI_EMBEDDING_MODEL,
+      input: texts.map((text) => embeddingInputText(text))
+    }, signal ? { signal } : undefined);
+    await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
+    const byIndex = new Map<number, number[]>();
+    for (const item of response.data ?? []) {
+      if (typeof item.index === 'number' && Array.isArray(item.embedding)) {
+        byIndex.set(item.index, item.embedding as number[]);
+      }
+    }
+    return texts.map((_, index) => byIndex.get(index) ?? null);
+  }, 2, signal);
+}
