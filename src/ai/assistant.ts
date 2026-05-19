@@ -3941,6 +3941,24 @@ function lastShownProductCards(history: Message[]) {
   return [];
 }
 
+function lastVisibleShownProductCards(history: Message[]) {
+  for (const message of [...history].reverse()) {
+    if (message.role !== 'assistant') continue;
+    const metadata = message.metadata as { productCards?: unknown; cardDisplay?: { initialVisibleCount?: unknown } } | undefined;
+    const cards = metadata?.productCards;
+    if (!Array.isArray(cards) || cards.length === 0) continue;
+    const initialVisibleCount = Number(metadata?.cardDisplay?.initialVisibleCount);
+    const visibleCount = Number.isFinite(initialVisibleCount) && initialVisibleCount > 0
+      ? Math.min(cards.length, Math.max(1, Math.floor(initialVisibleCount)))
+      : cards.length;
+    return cards
+      .slice(0, visibleCount)
+      .filter((card): card is ProductCard => Boolean(card && typeof card === 'object' && typeof (card as ProductCard).id === 'string' && typeof (card as ProductCard).name === 'string'))
+      .map((card) => productFromCard(card));
+  }
+  return [];
+}
+
 function allShownProductCards(history: Message[]) {
   const byId = new Map<string, ProductCard>();
   for (const message of history) {
@@ -9075,8 +9093,13 @@ export class AssistantService {
     for (const product of [...refinedCandidates, ...preliminaryCandidates]) byId.set(product.id, product);
     const leadRequestedBeforeCards = isLeadPlan(plan);
     const shownProductChoiceTurn = isShownProductChoiceOrComparisonQuestion(input.userMessage);
-    if (leadRequestedBeforeCards || shownProductChoiceTurn) {
+    const visibleShownProductsForChoice = shownProductChoiceTurn ? lastVisibleShownProductCards(history) : [];
+    if (leadRequestedBeforeCards) {
       for (const product of lastShownProductCards(history)) byId.set(product.id, product);
+    }
+    if (visibleShownProductsForChoice.length) {
+      byId.clear();
+      for (const product of visibleShownProductsForChoice) byId.set(product.id, product);
     }
     if (leadRequestedBeforeCards) {
       const purchaseContextText = [
@@ -12064,6 +12087,7 @@ export const assistantTestHooks = {
   extractModelTokens,
   coerceTurnPlan,
   fallbackTurnPlan,
+  lastVisibleShownProductCards,
   repairAnswerCardText,
   repairCardPhaseFactContradictions,
   repairGeneratorLoadMinimumText,

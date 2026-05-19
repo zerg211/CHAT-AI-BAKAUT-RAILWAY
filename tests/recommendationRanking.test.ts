@@ -6797,6 +6797,22 @@ describe('recommendation ranking', () => {
     expect(assistantTestHooks.shouldUseProactiveCommercialDeterministicAnswer(contract, message)).toBe(false);
   });
 
+  it('limits shown-card choice follow-ups to cards that were actually visible before Show more', () => {
+    const visible = product('visible-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0422\\u0421\\u0421 72 \\u043a\\u0433'), 38_000, 'https://example.test/visible-1');
+    const secondVisible = product('visible-2', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 STEM 78 \\u043a\\u0433'), 45_000, 'https://example.test/visible-2');
+    const hidden = product('hidden-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 Husqvarna 70 \\u043a\\u0433'), 288_000, 'https://example.test/hidden-1');
+    const history = [{
+      role: 'assistant',
+      metadata: {
+        productCards: [visible, secondVisible, hidden],
+        cardDisplay: { initialVisibleCount: 2 }
+      }
+    }] as any;
+
+    expect(assistantTestHooks.lastVisibleShownProductCards(history).map((item: { id: string }) => item.id))
+      .toEqual(['visible-1', 'visible-2']);
+  });
+
   it('does not turn a generic cutter target phrase into an exact model token', async () => {
     const cutter = productWithSpecs('fs309', 'Gasoline cutter Husqvarna FS 309 max disc 350 mm', 250_000, 'https://example.test/catalog/rezchiki/fs-309/', {
       'max disc, mm': '350'
