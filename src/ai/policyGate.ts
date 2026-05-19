@@ -47,6 +47,11 @@ export function runPolicyGate(input: {
   if (input.leadStateMachine.nextAction === 'do_not_ask_contact') {
     answerConstraints.push('do_not_ask_for_name_phone_contact_or_callback');
   }
+  if (input.leadStateMachine.nextAction === 'confirm_created_lead') {
+    answerConstraints.push('confirm_contact_received_only');
+    answerConstraints.push('do_not_repeat_product_selection_or_commercial_handoff');
+    answerConstraints.push('do_not_ask_for_name_phone_contact_or_form_again');
+  }
 
   if (
     input.executionContract.cardsPolicy === 'primary' &&

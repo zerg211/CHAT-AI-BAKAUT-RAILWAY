@@ -6628,6 +6628,46 @@ function deterministicLeadCollectionAnswer(
   ].filter(Boolean).join(' ');
 }
 
+function leadCreatedConfirmationAnswer(input: {
+  cards: ProductCard[];
+  userMessage: string;
+  autoLead?: AutoLeadResult | null;
+}) {
+  const normalized = input.userMessage.replace(/\s+/g, ' ').trim();
+  const lower = normalized.toLowerCase();
+  const topics = [
+    /доставк|логист/iu.test(lower) ? 'доставку' : '',
+    /налич|склад/iu.test(lower) ? 'наличие' : '',
+    /скидк|спецуслов|услови/iu.test(lower) ? 'финальные условия' : '',
+    /цен|стоимост/iu.test(lower) ? 'актуальную цену' : '',
+    /срок/iu.test(lower) ? 'сроки' : ''
+  ].filter(Boolean);
+  const uniqueTopics = [...new Set(topics)];
+  const topicText = uniqueTopics.length ? uniqueTopics.join(', ') : 'детали по запросу';
+  const selectedNames = input.cards
+    .slice(0, 2)
+    .map((card) => card.name.trim())
+    .filter(Boolean);
+  const itemText = selectedNames.length
+    ? 'по выбранным позициям'
+    : /(?:этим|выбран|позици|модел)/iu.test(lower)
+      ? 'по выбранным позициям'
+      : 'по вашему запросу';
+  const specialistPath = /доставк|логист/iu.test(lower)
+    ? /налич|склад/iu.test(lower)
+      ? 'через логистику и склад'
+      : 'через логистику'
+    : /налич|склад/iu.test(lower)
+      ? 'по складу'
+      : 'у профильного специалиста';
+  const leadName = input.autoLead?.lead?.name?.trim();
+  const hasPhone = Boolean(input.autoLead?.lead?.phone);
+  const greeting = leadName ? `${leadName}, контакт получил.` : 'Контакт получил.';
+  const returnText = hasPhone ? 'перезвоню с точным ответом' : 'вернусь с точным ответом';
+
+  return `${greeting} Проверю ${topicText} ${itemText} ${specialistPath} и ${returnText}.`;
+}
+
 function operationalHandoffContext(userMessage: string, fallbackItemsText: string) {
   const normalized = userMessage.replace(/\s+/g, ' ').trim();
   const lower = normalized.toLowerCase();
@@ -7718,10 +7758,11 @@ export class AssistantService {
       error: autoLeadResult?.error
     });
     if (autoLeadResult?.created) {
-      answer = [
-        answer,
-        'Контакт принял. Наличие, доставку и финальные условия проверим по выбранным позициям и вернемся с точным ответом.'
-      ].join('\n\n');
+      answer = leadCreatedConfirmationAnswer({
+        cards: commercialCards,
+        userMessage: latestUserMessage,
+        autoLead: autoLeadResult
+      });
     }
 
     const policyGate = runPolicyGate({
@@ -10069,6 +10110,13 @@ export class AssistantService {
       contract: answerAgentTurnContract,
       latestUserMessage: input.userMessage
     }).trim();
+    const createdLeadConfirmationAnswer = autoLeadResult?.created
+      ? leadCreatedConfirmationAnswer({
+          cards,
+          userMessage: input.userMessage,
+          autoLead: autoLeadResult
+        }).trim()
+      : '';
     const proactiveCatalogSelectionAnswer = deterministicRecoveredSelectionAnswer({
       contract: answerAgentTurnContract,
       cards,
@@ -10089,7 +10137,10 @@ export class AssistantService {
       ['product_selection', 'mixed'].includes(answerAgentTurnContract.answerTask)
     );
 
-    if (proactiveCommercialAnswer && shouldUseProactiveCommercialDeterministicAnswer(answerAgentTurnContract, input.userMessage)) {
+    if (createdLeadConfirmationAnswer) {
+      answer = createdLeadConfirmationAnswer;
+      completedResponse = undefined;
+    } else if (proactiveCommercialAnswer && shouldUseProactiveCommercialDeterministicAnswer(answerAgentTurnContract, input.userMessage)) {
       answer = proactiveCommercialAnswer;
       completedResponse = undefined;
     } else if (shouldUseProactiveCatalogSelectionAnswer) {
@@ -10184,25 +10235,33 @@ export class AssistantService {
 
     const usedWebSearch = responseUsedWebSearch(completedResponse);
     const rawAnswer = answer;
-    answer = sanitizeVisibleAnswer(answer, effectivePlan);
-    answer = repairAnswerForFinalCards(answer, cards, productsForCardSelection, needState, input.userMessage, effectivePlan);
-    answer = repairGeneratorLoadMinimumText(answer, loadProfileForAnswer, {
-      cards,
-      strictMinimumStatement: recommendationAnswer || cards.length > 0,
-      blockEstimatedPumpCards,
-      missingQuestion: blockEstimatedPumpCards
-        ? 'какой насос стоит: скважинный, поверхностный, дренажный или насосная станция, и какая у него мощность/модель'
-        : selectionResult.missingQuestions[0]
-    });
-    answer = repairExplicitPhaseReconfirmation(answer, selectionResult.state);
-    answer = repairAvailabilityAnswerWithCatalogModels(answer, answerAgentTurnContract, selectionResult, {
-      blockProductCards: blockEstimatedPumpCards
-    });
-    if (suppressLeadRequestByContract) {
-      answer = stripLeadPressureTail(answer);
+    if (autoLeadResult?.created) {
+      answer = createdLeadConfirmationAnswer || leadCreatedConfirmationAnswer({
+        cards,
+        userMessage: input.userMessage,
+        autoLead: autoLeadResult
+      });
+    } else {
+      answer = sanitizeVisibleAnswer(answer, effectivePlan);
+      answer = repairAnswerForFinalCards(answer, cards, productsForCardSelection, needState, input.userMessage, effectivePlan);
+      answer = repairGeneratorLoadMinimumText(answer, loadProfileForAnswer, {
+        cards,
+        strictMinimumStatement: recommendationAnswer || cards.length > 0,
+        blockEstimatedPumpCards,
+        missingQuestion: blockEstimatedPumpCards
+          ? 'какой насос стоит: скважинный, поверхностный, дренажный или насосная станция, и какая у него мощность/модель'
+          : selectionResult.missingQuestions[0]
+      });
+      answer = repairExplicitPhaseReconfirmation(answer, selectionResult.state);
+      answer = repairAvailabilityAnswerWithCatalogModels(answer, answerAgentTurnContract, selectionResult, {
+        blockProductCards: blockEstimatedPumpCards
+      });
+      if (suppressLeadRequestByContract) {
+        answer = stripLeadPressureTail(answer);
+      }
+      answer = ensureCommercialManagerVerification(answer, answerAgentTurnContract);
+      answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards, finalCards.initialVisibleCount);
     }
-    answer = ensureCommercialManagerVerification(answer, answerAgentTurnContract);
-    answer = ensureLargeSliceShowMoreNote(answer, structuredCatalogSlice, cards, finalCards.initialVisibleCount);
     const cardContract = enforceAnswerCardContract(
       answer,
       cards,
@@ -10658,10 +10717,11 @@ export class AssistantService {
         error: recoveredAutoLeadResult?.error
       });
       if (recoveredAutoLeadResult?.created) {
-        answer = [
-          answer,
-          'Контакт принял. Наличие, доставку и финальные условия проверим по выбранным позициям и вернемся с точным ответом.'
-        ].join('\n\n');
+        answer = leadCreatedConfirmationAnswer({
+          cards: recoveredSelection.cards,
+          userMessage: latestUserText,
+          autoLead: recoveredAutoLeadResult
+        });
       }
       const policyGate = runPolicyGate({
         contract: agentContractV2,
@@ -12109,6 +12169,7 @@ export const assistantTestHooks = {
   sanitizeSelfExcludingSelectionState,
   explicitCriteriaFromTurn,
   generatorSizingPolicyForAnswer,
+  leadCreatedConfirmationAnswer,
   deterministicLeadCollectionAnswer,
   deterministicCommercialHandoffFallback,
   isMixedCatalogAndCommercialQuestion,

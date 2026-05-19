@@ -427,20 +427,26 @@ describe('assistant generateAnswer control-plane metadata', () => {
     expect(answerRequest?.tool_choice).toEqual({ type: 'web_search_preview' });
   });
 
-  it('commits a lead only after a LeadDraft exists and contact policy allows it', async () => {
-    openAiCreate.mockResolvedValue({ output_text: 'Заявку передал: логистика уточнит условия доставки и вернется с ответом.' });
+  it('commits a lead and replaces the current turn with a short contact confirmation', async () => {
+    openAiCreate.mockResolvedValue({
+      output_text: 'Доставка есть, но точную стоимость и условия посчитаю через логистику. По видимым карточкам нижний ориентир комплекта: TSS SGG 8000EH. Оставьте имя и телефон.'
+    });
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
     const assistant = new ControlPlaneAssistant(conversations as never, new FakeProducts([generator()]) as never, false, 'lead', leads as never);
 
     const result = await assistant.generateAnswer({
       sessionId,
-      userMessage: 'Подберите TSS 8 кВт и уточните доставку. Alex +79990000000'
+      userMessage: 'Да, давайте проверим наличие и доставку по этим двум позициям. Меня зовут Алексей, телефон +7 900 000-00-11.'
     });
 
     expect(leads.leads).toHaveLength(1);
     expect(result.leadCreated).toBe(true);
     expect(result.leadRequested).toBe(false);
+    expect(result.answer).toMatch(/Алексей, контакт получил\./iu);
+    expect(result.answer).toMatch(/Проверю.*доставку.*наличие.*по выбранным позициям/iu);
+    expect(result.answer).toMatch(/перезвоню с точным ответом/iu);
+    expect(result.answer).not.toMatch(/нижний ориентир|TSS SGG 8000EH|оставьте|форма|телефон/iu);
     expect(result.metadata?.leadDraft).toMatchObject({
       reason: 'delivery',
       productIds: expect.arrayContaining(['tss-8'])
@@ -449,6 +455,11 @@ describe('assistant generateAnswer control-plane metadata', () => {
       state: 'created',
       nextAction: 'confirm_created_lead'
     });
+    expect(result.metadata?.policyGate?.answerConstraints).toEqual(expect.arrayContaining([
+      'confirm_contact_received_only',
+      'do_not_repeat_product_selection_or_commercial_handoff',
+      'do_not_ask_for_name_phone_contact_or_form_again'
+    ]));
     expect(result.metadata?.toolTrace?.find((item) => item.tool === 'createLeadDraft')).toMatchObject({ ok: true, risk: 'safe' });
     expect(result.metadata?.toolTrace?.find((item) => item.tool === 'createLead')).toMatchObject({ ok: true, risk: 'sensitive' });
   });
