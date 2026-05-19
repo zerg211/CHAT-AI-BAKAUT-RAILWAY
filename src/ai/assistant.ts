@@ -2139,6 +2139,20 @@ function deterministicCurrentLineupRecoveryFallback(input: {
   return lines.join('\n\n');
 }
 
+function currentLineupRecoveryCatalogProducts(latestUserMessage: string, products: Product[]) {
+  const latestTokens = expandModelTokenAliases(extractModelTokens(latestUserMessage));
+  const tokenCompacts = latestTokens.map((token) => compactModelText(token)).filter(Boolean);
+  const latestIntent = inferProductIntent(latestUserMessage);
+  const tokenMatched = tokenCompacts.length
+    ? products.filter((product) => {
+        const compact = compactModelText(productFullText(product));
+        return tokenCompacts.some((token) => compact.includes(token));
+      })
+    : products;
+  if (latestIntent === 'unknown') return tokenMatched;
+  return tokenMatched.filter((product) => productMatchesIntent(product, latestIntent));
+}
+
 function deriveConversationTopic(userMessage: string, state: CustomerNeedState) {
   const values = [
     state.explicitNeeds.find((item) => item.confidence >= 0.45)?.value,
@@ -10903,7 +10917,7 @@ export class AssistantService {
       throw aiStageFailure('turn recovery planning', diagnostic);
     }
     if (recoveryCurrentLineupStyle) {
-      recoveryCatalogProducts = await this.findProducts(
+      const rawRecoveryCatalogProducts = await this.findProducts(
         latestUserText,
         recoveryNeedState,
         recoveryBaseQuery,
@@ -10913,6 +10927,7 @@ export class AssistantService {
         console.warn('Recovery current-lineup catalog lookup failed', safeError(error));
         return [];
       });
+      recoveryCatalogProducts = currentLineupRecoveryCatalogProducts(latestUserText, rawRecoveryCatalogProducts);
     }
     const contractDisallowsRecoveryCards =
       recoveryCurrentLineupStyle ||
