@@ -3,9 +3,9 @@
   "verdict": "PARTIAL_PASS_NOT_FINAL",
   "status": {
     "code_ready": "PASS",
-    "production_backfill_ready": "PENDING",
-    "production_backfill_done": "PENDING",
-    "live_gate_done": "PENDING",
+    "production_backfill_ready": "FAIL",
+    "production_backfill_done": "BLOCKED",
+    "live_gate_done": "BLOCKED",
     "final_ready": "FAIL"
   },
   "localChecks": [
@@ -59,9 +59,20 @@
     "finalReady": false
   },
   "production": {
-    "coverageEndpoint": "PENDING",
-    "backfillDryRun": "PENDING",
-    "backfill": "PENDING",
-    "liveGate": "PENDING"
-  }
+    "commit": "eae0157",
+    "push": "PASS",
+    "coverageEndpoint": "AUTH_BLOCKED_401",
+    "coverageEndpointSummary": "After push, GET /api/admin/embedding-coverage changed from 404 to 401 Unauthorized. The route is present, but the local ADMIN_PASSWORD/ADMIN_API_KEY does not authenticate against production.",
+    "databaseUrl": "MISSING_IN_LOCAL_ENV",
+    "backfillDryRun": "BLOCKED",
+    "backfill": "BLOCKED",
+    "liveGate": "BLOCKED",
+    "manualRailwayDeploy": "NOT_ATTEMPTED_FORBIDDEN_BY_PROJECT_RULE"
+  },
+  "blockers": [
+    "Need production-matching ADMIN_PASSWORD or ADMIN_API_KEY for admin endpoint checks and metadata audit.",
+    "Need explicit production DATABASE_URL or an approved production execution path before running real embeddings backfill.",
+    "Need production coverage target met before live widget gate can be considered final.",
+    "Need live protocol saved under local-live-tests/*.production.md after a real bakautprof.ru widget dialogue."
+  ]
 }

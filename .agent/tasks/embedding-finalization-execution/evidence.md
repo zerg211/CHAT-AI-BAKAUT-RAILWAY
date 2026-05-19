@@ -2,14 +2,14 @@
 
 ## Current Verdict
 
-PARTIAL PASS. Code-level implementation and local verification passed. The overall result is not final until production deploy, production backfill, and production live gate pass.
+PARTIAL PASS. Code-level implementation, local verification, commit, and push passed. The overall result is not final because production coverage/backfill/live gates are blocked by unavailable production credentials.
 
 ## Status Flags
 
 - `code_ready`: PASS
-- `production_backfill_ready`: PENDING
-- `production_backfill_done`: PENDING
-- `live_gate_done`: PENDING
+- `production_backfill_ready`: FAIL
+- `production_backfill_done`: BLOCKED
+- `live_gate_done`: BLOCKED
 - `final_ready`: FAIL
 
 ## Local Verification
@@ -39,10 +39,22 @@ PARTIAL PASS. Code-level implementation and local verification passed. The overa
 }
 ```
 
-## Pending Production Gates
+## Git Result
 
-1. Commit and push to `origin codex/llm-commercial-lead-form`.
-2. Wait for Railway GitHub auto-deploy and migration.
-3. Check production `/api/admin/embedding-coverage`.
-4. Run production backfill if production `DATABASE_URL` and OpenAI budget are available.
-5. Run production live widget gate and save protocol.
+- Commit `eae0157` created with message `Finalize embedding retrieval monitoring`.
+- Push to `origin codex/llm-commercial-lead-form` completed.
+
+## Production Gate Status
+
+- Production `/api/admin/embedding-coverage` no longer returns 404 after push; it now returns `401 Unauthorized`, so the route exists but the local `ADMIN_PASSWORD`/`ADMIN_API_KEY` available to this shell does not match production.
+- Safe environment probe confirms no explicit `DATABASE_URL` is available locally. Running real backfill from this shell would target the default/local database, not confirmed production.
+- Manual Railway deploy is forbidden by project rules and was not attempted.
+- Production backfill was not run.
+- Production live widget gate was not run because target production coverage is not confirmed and metadata audit requires valid admin auth.
+
+## Remaining Blockers
+
+1. Provide or load the production-matching admin secret so `/api/admin/embedding-coverage`, `/api/admin/runtime/openai`, and `/api/admin/openai-usage` can be checked.
+2. Provide an explicit production `DATABASE_URL` or an approved one-off production execution path for `npm run embeddings:backfill`; do not rely on the local default DB.
+3. Run production backfill until `products >= 80%` and `catalog_pages >= 80%`, preferably `90%+`.
+4. Run the production widget live gate through `https://bakautprof.ru/` and save a `.production.md` protocol.

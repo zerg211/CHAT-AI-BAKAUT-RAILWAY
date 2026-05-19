@@ -45,3 +45,20 @@ PASS
 git diff --check
 PASS with Git line-ending warnings only.
 ```
+
+```text
+git commit -m "Finalize embedding retrieval monitoring"
+commit eae0157
+```
+
+```text
+git push origin codex/llm-commercial-lead-form
+PASS
+```
+
+```text
+GET https://chat-ai-production-3057.up.railway.app/api/admin/embedding-coverage
+Initial post-push polling: 404 Route not found.
+Later recheck: 401 Unauthorized with available local ADMIN_PASSWORD/ADMIN_API_KEY.
+Conclusion: route is deployed/reachable, but current local admin secret does not match production.
+```
