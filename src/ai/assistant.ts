@@ -10345,14 +10345,16 @@ export class AssistantService {
         .catch((error) => console.warn('Troubleshooting memory usage update failed', safeError(error)));
     }
     const answerFallbackMetadata = aiDiagnostics.answerGenerationFallback;
+    const answerProductCards = autoLeadResult?.created ? [] : cards;
+    const answerCardDisplay = autoLeadResult?.created ? undefined : cardDisplay;
 
     const assistantMessage = await this.conversations.addMessage({
       sessionId: input.sessionId,
       role: 'assistant',
       content: answer,
       metadata: {
-        productCards: cards,
-        cardDisplay,
+        productCards: answerProductCards,
+        cardDisplay: answerCardDisplay,
         usedWebSearch,
         webSearchRequired: mustUseWebSearch,
         troubleshootingMemoryUsed: troubleshootingMemoryCanAnswer,
@@ -10502,8 +10504,8 @@ export class AssistantService {
       turnId: input.turnId,
       answer,
       needState,
-      productCards: cards,
-      cardDisplay,
+      productCards: answerProductCards,
+      cardDisplay: answerCardDisplay,
       usedWebSearch,
       leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,

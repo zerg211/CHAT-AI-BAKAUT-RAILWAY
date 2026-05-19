@@ -443,6 +443,8 @@ describe('assistant generateAnswer control-plane metadata', () => {
     expect(leads.leads).toHaveLength(1);
     expect(result.leadCreated).toBe(true);
     expect(result.leadRequested).toBe(false);
+    expect(result.productCards).toHaveLength(0);
+    expect(conversations.messages.at(-1)?.metadata?.productCards).toEqual([]);
     expect(result.answer).toMatch(/Алексей, контакт получил\./iu);
     expect(result.answer).toMatch(/Проверю.*доставку.*наличие.*по выбранным позициям/iu);
     expect(result.answer).toMatch(/перезвоню с точным ответом/iu);
