@@ -75,7 +75,7 @@ export const ToolResultSchema = z.object({
 }).strict();
 
 export const AgentIntentContractSchema = z.object({
-  turnId: z.string().uuid().nullable().optional(),
+  turnId: z.string().nullable().optional(),
   userMessageSummary: nonEmptyString,
   dialogueUnderstanding: nonEmptyString,
   nextStepRationale: nonEmptyString,

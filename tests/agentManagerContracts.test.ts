@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AgentIntentContractSchema,
   DialogueLedgerEventSchema,
   createStableLedgerEventId,
   normalizeLedgerStateDeltaEvents,
@@ -60,6 +61,21 @@ describe('agent manager contracts', () => {
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it('does not require planner-provided turnId to be a trusted UUID', () => {
+    const result = AgentIntentContractSchema.safeParse({
+      turnId: 'planner-local-turn-id',
+      userMessageSummary: 'buyer asks about generator sizing',
+      dialogueUnderstanding: 'the real turn id is owned by server code, not by the LLM',
+      nextStepRationale: 'answer with calculation',
+      requiresTools: false,
+      toolRequests: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    });
+
+    expect(result.success).toBe(true);
   });
 
   it('creates stable event ids from sorted semantic content', () => {
