@@ -6241,7 +6241,7 @@ function deterministicTechnicalSummaryRecovery(input: {
     targetClass === 'plate' ||
     hardIntent === 'plate'
   );
-  const lines = ['Без звонка, продолжаем по технике.'];
+  const lines: string[] = [];
   if (hasGeneratorContext || !hasPlateContext) lines.push(generatorLineWithScenarios);
   if (hasPlateContext) lines.push(plateLine);
   if (hasGeneratorContext && hasPlateContext) {
@@ -6595,6 +6595,30 @@ function extractKwMentions(text: string) {
 
 function containsCalculatedMinimumMention(mentions: { min: number; max: number }[], required: number) {
   return mentions.some((mention) => required >= mention.min - 0.25 && required <= mention.max + 0.25);
+}
+
+function shouldExposeGeneratorLoadProfileToAnswer(input: {
+  contract: AgentTurnContract;
+  hardConstraints: ProductSelectionCriteria;
+  loadProfile?: ProductGeneratorLoadProfile | null;
+  loadProfileSupportsCurrentPower: boolean;
+  blockEstimatedPumpCards: boolean;
+  currentTurnCanBlockForEstimatedPump: boolean;
+  currentTurnExplicitCatalogPowerSelection: boolean;
+}) {
+  const required = input.loadProfile?.requiredNominalKw;
+  if (!required || !Number.isFinite(required)) return false;
+  if (input.blockEstimatedPumpCards) return true;
+  if (input.hardConstraints.productIntent !== 'generator') return false;
+  if (!input.loadProfileSupportsCurrentPower) return false;
+  if (input.currentTurnCanBlockForEstimatedPump && !input.currentTurnExplicitCatalogPowerSelection) return true;
+
+  const contract = input.contract;
+  return contract.taskType === 'technical_answer' &&
+    contract.catalogAction === 'none' &&
+    contract.cardsRole === 'none' &&
+    contract.productCardsPolicy === 'none' &&
+    (contract.answerTask === 'technical_explanation' || contract.answerTask === 'mixed');
 }
 
 function deterministicGeneratorSizingAnswer(
@@ -10682,6 +10706,19 @@ export class AssistantService {
       !allowPreliminaryEstimatedPumpCatalogCards &&
       !currentTurnExplicitCatalogPowerSelection &&
       (selectionBlocksEstimatedPumpCards || latestTurnBlocksEstimatedPumpCards);
+    const loadProfileSupportsCurrentPower = selectionHard.provenance?.nominalPowerKwMin === 'inferred_from_load' ||
+      selectionHard.provenance?.nominalPowerKwMax === 'inferred_from_load' ||
+      selectionHard.provenance?.maxPowerKwMin === 'inferred_from_load' ||
+      selectionHard.provenance?.maxPowerKwMax === 'inferred_from_load';
+    const exposeLoadProfileToAnswer = shouldExposeGeneratorLoadProfileToAnswer({
+      contract: agentTurnContract,
+      hardConstraints: selectionHard,
+      loadProfile: selectionResult.state.loadProfile,
+      loadProfileSupportsCurrentPower,
+      blockEstimatedPumpCards,
+      currentTurnCanBlockForEstimatedPump,
+      currentTurnExplicitCatalogPowerSelection
+    });
     const structuredCatalogSlice: StructuredCatalogSlice | null = selectionResult.matchedProducts.length
       ? {
           source: selectionResult.trace.source === 'full_catalog_selection_engine' ? 'full_catalog_slice' : 'structured_constraints',
@@ -10790,12 +10827,12 @@ export class AssistantService {
         ].filter(Boolean).join('\n')
       };
     }
-    if (!blockEstimatedPumpCards && currentTurnCanBlockForEstimatedPump && selectionHard.productIntent === 'generator' && selectionResult.state.loadProfile?.requiredNominalKw) {
+    if (exposeLoadProfileToAnswer && !blockEstimatedPumpCards && selectionHard.productIntent === 'generator' && selectionResult.state.loadProfile?.requiredNominalKw) {
       effectivePlan = {
         ...effectivePlan,
         answerGuidance: [
           effectivePlan.answerGuidance,
-          `Calculated generator load from current dialogue: minimum nominal power ${selectionResult.state.loadProfile.requiredNominalKw} kW, starting demand ${selectionResult.state.loadProfile.requiredStartingKw} kW. Use the calculated load as the minimum and treat catalog powers above it only as options when they are present in the selected cards or inside the structured sizing policy.`
+          `Calculated generator load from current dialogue: minimum nominal power ${selectionResult.state.loadProfile.requiredNominalKw} kW, starting demand ${selectionResult.state.loadProfile.requiredStartingKw} kW. Treat this calculation as an authoritative tool result for the answer. State the calculated minimum separately from any reserve/comfort class, and do not replace it with a broader class unless the structured sizing policy or visible cards support that class.`
         ].filter(Boolean).join('\n')
       };
     }
@@ -10825,12 +10862,6 @@ export class AssistantService {
         }
       : agentTurnContract;
     const baseSelectionMetadata = selectionMetadata(selectionResult);
-    const loadProfileSupportsCurrentPower = selectionHard.provenance?.nominalPowerKwMin === 'inferred_from_load' ||
-      selectionHard.provenance?.nominalPowerKwMax === 'inferred_from_load' ||
-      selectionHard.provenance?.maxPowerKwMin === 'inferred_from_load' ||
-      selectionHard.provenance?.maxPowerKwMax === 'inferred_from_load';
-    const exposeLoadProfileToAnswer = blockEstimatedPumpCards ||
-      (currentTurnCanBlockForEstimatedPump && !currentTurnExplicitCatalogPowerSelection && loadProfileSupportsCurrentPower);
     const loadProfileForAnswer = exposeLoadProfileToAnswer ? selectionResult.state.loadProfile : undefined;
     const productSelectionForAnswer: ProductSelectionMetadata = !exposeLoadProfileToAnswer && baseSelectionMetadata.loadProfile
       ? {
@@ -11583,7 +11614,7 @@ export class AssistantService {
       answer = repairAnswerForFinalCards(answer, cards, productsForCardSelection, needState, input.userMessage, effectivePlan);
       answer = repairGeneratorLoadMinimumText(answer, loadProfileForAnswer, {
         cards,
-        strictMinimumStatement: recommendationAnswer || cards.length > 0,
+        strictMinimumStatement: recommendationAnswer || cards.length > 0 || Boolean(generatorSizingPolicy),
         blockEstimatedPumpCards,
         missingQuestion: blockEstimatedPumpCards
           ? 'какой насос стоит: скважинный, поверхностный, дренажный или насосная станция, и какая у него мощность/модель'
@@ -13605,6 +13636,7 @@ export const assistantTestHooks = {
   sanitizeSelfExcludingSelectionState,
   explicitCriteriaFromTurn,
   generatorSizingPolicyForAnswer,
+  shouldExposeGeneratorLoadProfileToAnswer,
   deterministicLeadCollectionAnswer,
   deterministicCommercialHandoffFallback,
   isMixedCatalogAndCommercialQuestion,

@@ -28,6 +28,13 @@ describe('agent manager feature flags', () => {
     expect(legacyAnswerWriterAllowed('fast_technical_orientation', flags())).toBe(false);
   });
 
+  it('keeps the canned fast technical writer disabled even under emergency legacy override', () => {
+    expect(legacyAnswerWriterAllowed('fast_technical_orientation', flags({
+      harnessEnabled: true,
+      disableLegacyAnswerWriters: false
+    }))).toBe(false);
+  });
+
   it('blocks all legacy answer writers when the harness owns user-visible answers', () => {
     expect(legacyAnswerWriterAllowed('fast_catalog_selection', flags({ harnessEnabled: true }))).toBe(false);
     expect(legacyAnswerWriterAllowed('deterministic_turn_recovery', flags({ harnessEnabled: true }))).toBe(false);

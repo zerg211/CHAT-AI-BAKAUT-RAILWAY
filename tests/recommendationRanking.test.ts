@@ -5836,6 +5836,80 @@ describe('recommendation ranking', () => {
     });
     expect(repairedClass).toContain('4 кВт');
     expect(repairedClass).not.toContain('5 кВт номинал / 6+');
+
+    const repairedTechnicalText = assistantTestHooks.repairGeneratorLoadMinimumText(
+      'Тогда я бы смотрел генератор 5–6 кВт по номиналу: насос 1,1 кВт дает пусковую нагрузку.',
+      {
+        items: [],
+        totalRunningKw: 1.5,
+        requiredStartingKw: 4.1,
+        requiredNominalKw: 4.5,
+        simultaneousStarting: true,
+        calculation: '',
+        confidence: 0.82
+      },
+      { strictMinimumStatement: true }
+    );
+    expect(repairedTechnicalText).toContain('4,5 кВт');
+    expect(repairedTechnicalText).not.toContain('5–6 кВт по номиналу');
+  });
+
+  it('exposes calculated generator load profile to LLM text-only technical answers', () => {
+    const loadProfile = {
+      items: [],
+      totalRunningKw: 1.5,
+      requiredStartingKw: 4.1,
+      requiredNominalKw: 4.5,
+      simultaneousStarting: true,
+      calculation: '',
+      confidence: 0.82
+    };
+    const contract = {
+      answerTask: 'technical_explanation',
+      taskType: 'technical_answer',
+      catalogAction: 'none',
+      commercialAction: 'none',
+      productCardsPolicy: 'none',
+      mustAnswerNow: ['answer the generator sizing calculation from the current load'],
+      activeNeeds: [],
+      currentFocus: 'generator sizing',
+      cardsRole: 'none',
+      leadAllowed: false,
+      leadAllowedReason: 'technical answer',
+      errorRecoveryPriority: 'answer the generator load calculation',
+      validatorWarnings: []
+    };
+    const hardConstraints = {
+      productIntent: 'generator',
+      productRole: 'coreProduct',
+      nominalPowerKwMin: 4.5,
+      nominalPowerKwMax: 5.3,
+      maxPowerKwMin: 4.1,
+      exactModelTokens: [],
+      mustHaveTraits: [],
+      excludedClasses: [],
+      provenance: {
+        nominalPowerKwMin: 'inferred_from_load',
+        nominalPowerKwMax: 'inferred_from_load',
+        maxPowerKwMin: 'inferred_from_load'
+      }
+    };
+
+    expect(assistantTestHooks.shouldExposeGeneratorLoadProfileToAnswer({
+      contract: contract as any,
+      hardConstraints: hardConstraints as any,
+      loadProfile,
+      loadProfileSupportsCurrentPower: true,
+      blockEstimatedPumpCards: false,
+      currentTurnCanBlockForEstimatedPump: false,
+      currentTurnExplicitCatalogPowerSelection: false
+    })).toBe(true);
+
+    expect(assistantTestHooks.generatorSizingPolicyForAnswer(loadProfile as any, [])).toMatchObject({
+      calculatedMinimumNominalKw: 4.5,
+      calculatedStartingKw: 4.1,
+      minimallySufficientNominalRangeKw: { min: 4.5, max: 5.3 }
+    });
   });
 
   it('does not reintroduce reversed power ranges after generator load repair', () => {

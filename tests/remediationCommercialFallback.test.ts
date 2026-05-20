@@ -283,7 +283,7 @@ describe('commercial remediation fallback', () => {
       }
     } as any);
 
-    expect(answer).toContain('Без звонка');
+    expect(answer).not.toContain('Без звонка');
     expect(answer).toContain('генератор');
     expect(answer).toContain('виброплите');
     expect(answer).toContain('насоса');
