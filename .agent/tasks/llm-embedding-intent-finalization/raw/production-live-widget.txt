@@ -1,15 +1,15 @@
 Production live widget gate: PASS
 
 Command:
-ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 EXPECTED_PRODUCTION_COMMIT_SHA=57be092419150c02dc5936afa99be6c38ad64955 node local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs
+ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 EXPECTED_PRODUCTION_COMMIT_SHA=4bf48dc27348b5ea3d15f1e85b741d356b811aea node local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs
 
 Output:
 {
   "ok": true,
-  "protocolPath": "local-live-tests\\2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.production.md",
-  "detailPath": "local-live-tests\\2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.json",
-  "sessionId": "47e9a621-005f-4716-ade1-0938ae702329",
-  "commit": "57be092419150c02dc5936afa99be6c38ad64955"
+  "protocolPath": "local-live-tests\\2026-05-20-llm-embedding-intent-2026-05-20T12-55-43-718Z.production.md",
+  "detailPath": "local-live-tests\\2026-05-20-llm-embedding-intent-2026-05-20T12-55-43-718Z.json",
+  "sessionId": "7dcd6c20-e88b-4328-9185-300c6dd8b7da",
+  "commit": "4bf48dc27348b5ea3d15f1e85b741d356b811aea"
 }
 
 Manual audit summary:
@@ -19,5 +19,6 @@ Manual audit summary:
 - No fast_technical_orientation.
 - Generator calculator profile used on generator turns.
 - Pump update calculated requiredNominalKw=4.5 and requiredStartingKw=4.5.
-- Plate catalog request used embeddings with productIntent=plate.
-- Visible plate cards were 60-72 kg and plate-only.
+- Plate orientation switched away from generator context.
+- Plate catalog request used embeddings with retrieval.intent=plate.
+- Visible plate cards were 50-68 kg and plate-only.

@@ -1,8 +1,8 @@
 {
   "taskId": "llm-embedding-intent-finalization",
-  "checkedAt": "2026-05-20T12:56:30.000Z",
+  "checkedAt": "2026-05-20T13:03:41.2003425Z",
   "status": "final",
-  "runtimeCodeCommit": "57e1a8d42f211119cbeb85678d0c27973a73ff38",
+  "runtimeCodeCommit": "4bf48dc27348b5ea3d15f1e85b741d356b811aea",
   "productionCommitAtCheck": "4bf48dc27348b5ea3d15f1e85b741d356b811aea",
   "implementation": {
     "status": "PASS",
@@ -56,7 +56,10 @@
     },
     "productionLiveHeadlessBudget": {
       "status": "PASS",
-      "budget": 6000000
+      "usedTokens": 4030350,
+      "budget": 6000000,
+      "reserveTokens": 16000,
+      "remainingAfterReserve": 1953650
     }
   },
   "production": {

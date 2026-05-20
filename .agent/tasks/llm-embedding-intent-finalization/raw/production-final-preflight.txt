@@ -1,18 +1,23 @@
-Production current preflight: PASS
+Production final preflight: PASS
 
 /api/health:
-commitSha=8f48e6e9909cf89bda4576cb3dbb73e755244d4e
+commitSha=4bf48dc27348b5ea3d15f1e85b741d356b811aea
 branch=main
 agentManagerHarnessEnabled=true
 answerModel=gpt-5.4-mini
 plannerModel=gpt-5.4-mini
+
+/api/admin/openai-usage?hours=24&source=production_live_test:
+usedTokens=4030350
+headlessDailyTokenBudget=6000000
+reserveTokens=16000
+remainingAfterReserve=1953650
 
 /api/admin/embedding-coverage:
 model=text-embedding-3-small
 finalReady=true
 products total=4325 embedded=4325 usable=3999 coverage=0.9246242774566474 ready=true
 catalog_pages total=102 embedded=102 usable=102 coverage=1 ready=true
-troubleshooting_cases total=0 embedded=0 usable=0 coverage=0 ready=false
 
 /api/admin/runtime/openai:
 ok=true
