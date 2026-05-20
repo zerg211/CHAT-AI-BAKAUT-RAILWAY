@@ -222,7 +222,9 @@ function productBrandMentionedInText(product: Product, text: string) {
   const compactText = compactModelText(text);
   const brand = displayProductBrand(product) || product.brand;
   const compactBrand = compactModelText(brand ?? '');
-  return compactBrand.length >= 3 && compactText.includes(compactBrand);
+  const aliases = new Set([compactBrand]);
+  if (compactBrand === compactModelText('ТСС')) aliases.add('tss');
+  return [...aliases].some((alias) => alias.length >= 3 && compactText.includes(alias));
 }
 
 function answerMentionedProducts(products: Product[], answerText: string) {

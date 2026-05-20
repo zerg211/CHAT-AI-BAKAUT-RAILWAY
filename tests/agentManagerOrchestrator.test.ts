@@ -425,6 +425,70 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).toEqual(['evo-6200']);
   });
 
+  it('matches TSS answer mentions to catalog cards whose brand is stored as Cyrillic TCC', async () => {
+    class TssProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          { ...product('tss-7000', 'Generator TSS SGG 7000EA 7 kW', 'Generators'), brand: 'ТСС' },
+          { ...product('energo-7000', 'Generator Energo EB7.0/230-R 7 kW', 'Generators'), brand: 'Energo' }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const catalogModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for 7 kW generator options',
+          dialogueUnderstanding: 'the answer names an exact TSS model',
+          nextStepRationale: 'show the exact mentioned card',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'генератор 7 кВт TSS SGG 7000EA',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: null,
+              notes: null
+            },
+            rationale: 'buyer asked for TSS generator',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'As a reserve option, TSS SGG 7000EA is suitable.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new TssProducts() as never, new FakeLeads() as never, catalogModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show 7 kW generator option.'
+    });
+
+    expect(payload.productCards.map((card) => card.id)).toEqual(['tss-7000']);
+  });
+
   it('ranks generator catalog matches by requested kW range before oversized same-class results', async () => {
     class PowerRangeProducts extends FakeProducts {
       async searchProducts() {
