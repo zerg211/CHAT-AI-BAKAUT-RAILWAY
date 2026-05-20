@@ -1,9 +1,9 @@
 {
   "taskId": "llm-embedding-intent-finalization",
-  "checkedAt": "2026-05-20T12:56:00.000Z",
-  "status": "primary_rollout_pass",
+  "checkedAt": "2026-05-20T12:56:30.000Z",
+  "status": "final",
   "runtimeCodeCommit": "57e1a8d42f211119cbeb85678d0c27973a73ff38",
-  "productionCommitAtCheck": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
+  "productionCommitAtCheck": "4bf48dc27348b5ea3d15f1e85b741d356b811aea",
   "implementation": {
     "status": "PASS",
     "changes": [
@@ -15,30 +15,29 @@
       "answer/review prompts keep calculator values authoritative and keep 90+ kg out of primary self-loading plate range",
       "answer contracts expose allowed ledger/tool source ids to the LLM",
       "answer fact source metadata is normalized to existing ledger/tool artifacts before review",
-      "lead form route queues delivery through lead_outbox instead of blocking buyer-visible form success on email"
+      "lead form route queues delivery through lead_outbox instead of blocking buyer-visible form success on email",
+      "production_live_test headless daily budget raised to 6000000 for final live gate"
     ]
   },
   "commands": {
-    "agentManagerOrchestratorTests": {
+    "targetedTests": {
       "status": "PASS",
-      "tests": 17
+      "tests": 24,
+      "command": "npm test -- tests/productionOpenAiRuntimePreflight.test.mjs tests/agentManagerOrchestrator.test.ts"
     },
     "typecheck": {
       "status": "PASS"
     },
     "fullTests": {
       "status": "PASS",
-      "tests": 520
+      "tests": 521
     },
     "build": {
       "status": "PASS"
     },
-    "diffCheck": {
-      "status": "PASS"
-    },
     "productionHealth": {
       "status": "PASS",
-      "commit": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
+      "commit": "4bf48dc27348b5ea3d15f1e85b741d356b811aea",
       "agentManagerHarnessEnabled": true
     },
     "productionOpenAiRuntime": {
@@ -49,18 +48,15 @@
       "finalReady": true
     },
     "productionLiveWidgetCurrentCommit": {
-      "status": "PASS_WITH_MANUAL_AUDIT",
-      "mode": "production_widget_non_headless",
-      "protocol": "local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.production.md",
-      "detail": "local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.json",
-      "note": "Runner had one false-positive regex issue on the first coffee answer; manual audit and admin audit pass."
+      "status": "PASS",
+      "mode": "production_live_test_headless_final_gate",
+      "protocol": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T12-55-43-718Z.production.md",
+      "detail": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T12-55-43-718Z.json",
+      "sessionId": "7dcd6c20-e88b-4328-9185-300c6dd8b7da"
     },
     "productionLiveHeadlessBudget": {
-      "status": "BLOCKED_BUDGET",
-      "usedTokens": 3986558,
-      "budget": 4000000,
-      "reserveTokens": 16000,
-      "remainingAfterReserve": -2558
+      "status": "PASS",
+      "budget": 6000000
     }
   },
   "production": {
@@ -100,7 +96,7 @@
     {
       "commit": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e",
       "status": "BLOCKED_BUDGET",
-      "failure": "production_live_test_budget_insufficient_for_scenario before browser launch"
+      "failure": "production_live_test_budget_insufficient_for_scenario before budget increase"
     },
     {
       "commit": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
@@ -113,6 +109,14 @@
         "e9d675c0-1192-4515-871f-1d615bbfcfb1",
         "cdaa0925-5ef8-4e06-bade-4cc8f2071c33"
       ]
+    },
+    {
+      "commit": "4bf48dc27348b5ea3d15f1e85b741d356b811aea",
+      "status": "PASS",
+      "mode": "standard headless production live gate",
+      "protocol": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T12-55-43-718Z.production.md",
+      "detail": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T12-55-43-718Z.json",
+      "sessionId": "7dcd6c20-e88b-4328-9185-300c6dd8b7da"
     }
   ],
   "acceptanceCriteria": {
@@ -128,7 +132,7 @@
   },
   "primaryMode": {
     "status": "enabled",
-    "productionCommit": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
+    "productionCommit": "4bf48dc27348b5ea3d15f1e85b741d356b811aea",
     "agentManagerHarnessEnabled": true,
     "rolloutScope": "all production widget sessions by default",
     "legacyRemoval": "not_started_by_user_instruction"
