@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { streamChatMessage } from '../src/client/chatStream.js';
 
 function sseEvent(event: string, data: unknown) {
@@ -6,6 +7,14 @@ function sseEvent(event: string, data: unknown) {
 }
 
 describe('streamChatMessage watchdog and recovery', () => {
+  it('keeps the browser idle watchdog longer than the server generation timeout', () => {
+    const source = readFileSync('src/client/chatStream.ts', 'utf8');
+    const match = source.match(/const DEFAULT_STREAM_IDLE_TIMEOUT_MS = ([\d_]+);/);
+
+    expect(match).not.toBeNull();
+    expect(Number(match![1]!.replace(/_/g, ''))).toBeGreaterThan(120_000);
+  });
+
   it('recovers a stalled SSE stream when the server already emitted turnId', async () => {
     vi.useFakeTimers();
     try {
