@@ -553,7 +553,7 @@ describe('AgentManagerOrchestrator', () => {
               productNames: [],
               comparisonAttributes: [],
               loads: [
-                { kind: 'pump', name: 'pump', count: 1, runningKw: 1.1, startingKw: null, source: 'explicit_user', evidence: 'pump nameplate 1.1 kW' },
+                { kind: 'unknown', name: '\u043d\u0430\u0441\u043e\u0441', count: 1, runningKw: 1.1, startingKw: null, source: 'explicit_user', evidence: 'pump nameplate 1.1 kW' },
                 { kind: 'refrigerator', name: 'household refrigerator', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'ordinary household refrigerator' },
                 { kind: 'gas_boiler', name: 'gas boiler', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'small gas boiler controls' },
                 { kind: 'lighting', name: 'small light', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'small lighting' }

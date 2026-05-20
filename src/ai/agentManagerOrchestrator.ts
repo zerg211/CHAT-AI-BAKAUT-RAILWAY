@@ -526,7 +526,9 @@ function countFromToolArg(value: unknown) {
 function canonicalToolLoadKind(kind: unknown, name: unknown) {
   const raw = `${String(kind ?? '')} ${String(name ?? '')}`.toLowerCase().replace(/[\s-]+/g, '_');
   if (/gas_?boiler|baxi|\u0433\u0430\u0437\w*_\u043a\u043e\u0442|\u043a\u043e\u0442[\u0435\u0451]\u043b/u.test(raw)) return 'boiler';
-  return canonicalElectricalLoadKind(typeof kind === 'string' ? kind : typeof name === 'string' ? name : undefined);
+  const canonicalKind = canonicalElectricalLoadKind(typeof kind === 'string' ? kind : undefined);
+  if (!['unknown', 'unknown_load', 'load', 'consumer'].includes(canonicalKind)) return canonicalKind;
+  return canonicalElectricalLoadKind(typeof name === 'string' ? name : undefined);
 }
 
 function fallbackLoadForKind(kind: string, evidence: string): ProductElectricalLoadItem | undefined {
@@ -967,6 +969,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'If toolResults contains calculator.generatorLoad with status ok, treat payload.profile.requiredNominalKw and requiredStartingKw as the authoritative calculated minimum. Do not replace that number with a broader or higher default class. A higher class may be described only as comfort/reserve, not as the calculated minimum.',
             'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
+            'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
             'Верни только JSON AnswerContract.'
           ].join('\n')
         },
@@ -1010,6 +1013,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Блокируй или требуй rewrite, если ответ спрашивает уже известное, обещает непроверенное наличие/доставку/скидку/срок, противоречит текущему диалогу или просит повторить контакт, который уже есть.',
             'For calculator.generatorLoad, block or rewrite any answer that states a calculated minimum inconsistent with payload.profile.requiredNominalKw/requiredStartingKw.',
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
+            'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')
         },
