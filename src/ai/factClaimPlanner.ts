@@ -41,7 +41,7 @@ function hasCommercialTermsClaim(text: string) {
 }
 
 function hasAvailabilityClaim(text: string) {
-  return /(?:\u043d\u0430\u043b\u0438\u0447|\u043e\u0442\u0433\u0440\u0443\u0437|in\s+stock|available|(?:^|[^\p{L}])\u0441\u043a\u043b\u0430\u0434(?:\u0435|\u0430|\u0443|\u043e\u043c|\u044b|\u0430\u0445)?(?:$|[^\p{L}]))/iu.test(text);
+  return /(?:\u043d\u0430\u043b\u0438\u0447|\u043e\u0442\u0433\u0440\u0443\u0437|in\s+stock|available\s+(?:now|today|for\s+(?:pickup|shipping|order)|in\s+stock)|stock\s+availability|(?:^|[^\p{L}])\u0441\u043a\u043b\u0430\u0434(?:\u0435|\u0430|\u0443|\u043e\u043c|\u044b|\u0430\u0445)?(?:$|[^\p{L}]))/iu.test(text);
 }
 
 function isLoadCalculationSentence(text: string) {

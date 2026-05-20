@@ -7925,6 +7925,7 @@ export class AssistantService {
             'Use only the provided catalog cards, dialogue memory, lead state, and safety contracts.',
             'If product cards are shown, the first visible card is the primary recommendation. Do not recommend hidden cards as visible cards.',
             'Do not name product IDs or SKUs unless they are buyer-facing model names from productCardsShown.',
+            'When describing a product selection, use "подходящие модели/карточки/варианты" instead of "available options"; reserve availability wording only for live stock/warehouse verification.',
             'Do not invent stock, delivery price, discount, delivery time, or final terms. Say in first person that you will verify them through stock, logistics, or a responsible specialist when needed.',
             'Never write that a third-person manager will confirm/check/call. You are the AI manager in this chat; write "я сверю", "я посчитаю", or "я передам запрос".',
             'If leadStateMachine.state is created, confirm the contact was received and do not ask for it again.',
