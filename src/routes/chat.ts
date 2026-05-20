@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
-import { isAgentManagerHarnessEnabledForSession } from '../ai/agentManagerRuntime.js';
+import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
 import { ConversationRepository } from '../db/repositories.js';
@@ -84,6 +84,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const input = messageSchema.parse(request.body ?? {});
     const session = await conversations.getSession(params.id);
     if (!session || session.status !== 'active') return reply.code(404).send({ error: 'Session not found or inactive' });
+    const runtimeDecision = getAgentManagerRuntimeDecision(session);
     const requestedTurnId = randomUUID();
     const turn = await conversations.createTurn({
       id: requestedTurnId,
@@ -113,7 +114,12 @@ export async function registerChatRoutes(app: FastifyInstance) {
     let statusTimer: NodeJS.Timeout | null = null;
     try {
       send('start', { ok: true });
-      send('turn', { turnId });
+      send('turn', {
+        turnId,
+        runtimeMode: runtimeDecision.runtimeMode,
+        runtimeModeReason: runtimeDecision.reason,
+        agentManagerRuntime: runtimeDecision
+      });
       let statusIndex = 0;
       send('status', { status: generationStatusMessages[statusIndex] });
       statusTimer = setInterval(() => {
@@ -137,7 +143,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       statusTimer = null;
       send('done', payload);
     } catch (error) {
-      const agentManagerHarnessEnabled = isAgentManagerHarnessEnabledForSession(session);
+      const agentManagerHarnessEnabled = runtimeDecision.agentManagerHarnessEnabled;
       if (!controller.signal.aborted && agentManagerHarnessEnabled) {
         try {
           const recoveredPayload = await runWithOpenAIUsageContext({
@@ -164,7 +170,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
         turnId,
         status: 'failed',
         stage: controller.signal.aborted ? 'timeout_or_aborted' : 'failed',
-        errorCode: controller.signal.aborted ? 'generation_aborted_or_timeout' : 'generation_failed',
+        errorCode: controller.signal.aborted
+          ? `${runtimeDecision.runtimeMode}_generation_aborted_or_timeout`
+          : `${runtimeDecision.runtimeMode}_generation_failed`,
         errorMessage: safeErrorMessage(error)
       }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
       const message = agentManagerHarnessEnabled
@@ -173,9 +181,21 @@ export async function registerChatRoutes(app: FastifyInstance) {
           ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
           : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
       if (!controller.signal.aborted) {
-        app.log.warn({ sessionId: params.id, error: error instanceof Error ? error.message : String(error) }, 'chat generation failed');
+        app.log.warn({
+          sessionId: params.id,
+          runtimeMode: runtimeDecision.runtimeMode,
+          runtimeModeReason: runtimeDecision.reason,
+          error: error instanceof Error ? error.message : String(error)
+        }, 'chat generation failed');
       }
-      send('error', { error: message, turnId, recoverable: true });
+      send('error', {
+        error: message,
+        turnId,
+        recoverable: true,
+        runtimeMode: runtimeDecision.runtimeMode,
+        runtimeModeReason: runtimeDecision.reason,
+        agentManagerRuntime: runtimeDecision
+      });
     } finally {
       if (statusTimer) clearInterval(statusTimer);
       clearTimeout(timeout);
@@ -207,8 +227,17 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
     let statusTimer: NodeJS.Timeout | null = null;
     let sessionForRecovery: Awaited<ReturnType<ConversationRepository['getSession']>> | null = null;
+    let runtimeDecision = getAgentManagerRuntimeDecision(null);
     try {
-      send('turn', { turnId: params.turnId, recovered: true });
+      sessionForRecovery = await conversations.getSession(params.id);
+      runtimeDecision = getAgentManagerRuntimeDecision(sessionForRecovery);
+      send('turn', {
+        turnId: params.turnId,
+        recovered: true,
+        runtimeMode: runtimeDecision.runtimeMode,
+        runtimeModeReason: runtimeDecision.reason,
+        agentManagerRuntime: runtimeDecision
+      });
       send('status', { status: 'Ответ оборвался, восстанавливаю...' });
       let statusIndex = 0;
       statusTimer = setInterval(() => {
@@ -216,7 +245,6 @@ export async function registerChatRoutes(app: FastifyInstance) {
         send('status', { status: generationStatusMessages[statusIndex] });
       }, 12_000);
       statusTimer.unref?.();
-      sessionForRecovery = await conversations.getSession(params.id);
       const payload = await runWithOpenAIUsageContext({
         sessionId: params.id,
         turnId: params.turnId,
@@ -235,14 +263,26 @@ export async function registerChatRoutes(app: FastifyInstance) {
         turnId: params.turnId,
         status: 'failed',
         stage: 'recovery_failed',
-        errorCode: controller.signal.aborted ? 'recovery_aborted_or_timeout' : 'recovery_failed',
+        errorCode: controller.signal.aborted
+          ? `${runtimeDecision.runtimeMode}_recovery_aborted_or_timeout`
+          : `${runtimeDecision.runtimeMode}_recovery_failed`,
         errorMessage: safeErrorMessage(error)
       }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(updateError) }, 'turn recovery failure update failed'));
-      app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(error) }, 'chat recovery failed');
+      app.log.warn({
+        sessionId: params.id,
+        turnId: params.turnId,
+        runtimeMode: runtimeDecision.runtimeMode,
+        runtimeModeReason: runtimeDecision.reason,
+        error: safeErrorMessage(error)
+      }, 'chat recovery failed');
+      const agentManagerHarnessEnabled = runtimeDecision.agentManagerHarnessEnabled;
       send('error', {
         turnId: params.turnId,
-        recoverable: isAgentManagerHarnessEnabledForSession(sessionForRecovery),
-        error: isAgentManagerHarnessEnabledForSession(sessionForRecovery)
+        recoverable: agentManagerHarnessEnabled,
+        runtimeMode: runtimeDecision.runtimeMode,
+        runtimeModeReason: runtimeDecision.reason,
+        agentManagerRuntime: runtimeDecision,
+        error: agentManagerHarnessEnabled
           ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
           : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
       });

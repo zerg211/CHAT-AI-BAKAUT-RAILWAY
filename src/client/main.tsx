@@ -172,6 +172,20 @@ function arrayLength(value: unknown) {
 function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): AdminDiagnosticFlag[] {
   if (!metadata) return [];
   const flags: AdminDiagnosticFlag[] = [];
+  const runtimeMode = metadata.runtimeMode ?? (metadata.agentManager ? 'agent_manager' : undefined);
+  if (runtimeMode === 'agent_manager' || runtimeMode === 'legacy') {
+    const runtimeReason = metadata.runtimeModeReason ?? metadata.agentManagerRuntime?.reason ?? metadata.legacyRuntime?.reason ?? 'unknown';
+    flags.push({
+      label: `mode: ${runtimeMode} (${shortDiagnosticReason(runtimeReason)})`,
+      warn: runtimeMode === 'legacy'
+    });
+  }
+  if (metadata.legacyRuntime) {
+    flags.push({
+      label: `legacy path: ${shortDiagnosticReason(metadata.legacyRuntime.path ?? 'unknown')}`,
+      warn: true
+    });
+  }
   const execution = metadata.executionContract;
   if (execution) {
     flags.push({

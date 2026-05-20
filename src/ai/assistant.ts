@@ -60,7 +60,7 @@ import { buildLeadDraft, shouldCommitLeadFromDraft } from './leadDraft.js';
 import { sourcePolicyRequiresWeb } from './sourcePolicy.js';
 import { disabledLegacyWriterMetadata, legacyAnswerWriterAllowed } from './agentManagerConfig.js';
 import { AgentManagerOrchestrator } from './agentManagerOrchestrator.js';
-import { isAgentManagerHarnessEnabledForSession } from './agentManagerRuntime.js';
+import { getAgentManagerRuntimeDecision, type AgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import { applyContractNeedDelta } from './requirementDelta.js';
 import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 import {
@@ -129,6 +129,24 @@ function markAiFallback(diagnostics: AiGenerationDiagnostics | undefined, stage:
 
 function aiStageFailure(stage: string, diagnostic?: AiFallbackDiagnostic): Error {
   return new Error(`AI ${stage} failed: ${diagnostic?.reason ?? 'unknown_error'}`);
+}
+
+function runtimeResponseMetadata(runtimeDecision: AgentManagerRuntimeDecision, legacyPath?: string) {
+  const metadata = {
+    runtimeMode: runtimeDecision.runtimeMode,
+    runtimeModeReason: runtimeDecision.reason,
+    agentManagerRuntime: runtimeDecision
+  };
+  if (runtimeDecision.runtimeMode !== 'legacy') return metadata;
+  return {
+    ...metadata,
+    legacyRuntime: {
+      active: true,
+      path: legacyPath ?? 'legacy_unknown',
+      reason: runtimeDecision.reason,
+      legacyAnswerWritersDisabled: runtimeDecision.legacyAnswerWritersDisabled
+    }
+  };
 }
 
 function applyPostAnswerVerificationPolicy(input: {
@@ -8678,6 +8696,7 @@ export class AssistantService {
     const selection = selectionMetadata(selectionResult);
     const metadata = {
       turnId: input.turnId,
+      ...runtimeResponseMetadata(getAgentManagerRuntimeDecision(session), 'llm_fast_catalog_selection'),
       turnContract: contract,
       agentContractV2,
       sourcePolicy: agentContractV2.sourcePolicy,
@@ -8751,6 +8770,7 @@ export class AssistantService {
 
   private async tryFastTechnicalOrientation(
     input: GenerateAnswerInput,
+    session: ConversationSession,
     needState: CustomerNeedState,
     history: Message[],
     aiDiagnostics: AiGenerationDiagnostics
@@ -8921,6 +8941,7 @@ export class AssistantService {
     ];
     const metadata = {
       turnId: input.turnId,
+      ...runtimeResponseMetadata(getAgentManagerRuntimeDecision(session), 'fast_technical_orientation'),
       turnContract: contract,
       agentContractV2,
       sourcePolicy: agentContractV2.sourcePolicy,
@@ -9192,6 +9213,7 @@ export class AssistantService {
     ];
     const metadata = {
       turnId: input.turnId,
+      ...runtimeResponseMetadata(getAgentManagerRuntimeDecision(session), 'llm_fast_commercial_handoff'),
       turnContract: contract,
       agentContractV2,
       sourcePolicy: agentContractV2.sourcePolicy,
@@ -10342,7 +10364,8 @@ export class AssistantService {
   async generateAnswer(input: GenerateAnswerInput): Promise<ChatResponsePayload> {
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
-    if (isAgentManagerHarnessEnabledForSession(session)) {
+    const runtimeDecision = getAgentManagerRuntimeDecision(session);
+    if (runtimeDecision.agentManagerHarnessEnabled) {
       return this.agentManager.generateAnswer(input);
     }
     const consistencyGuard = getSessionGuard(input.sessionId);
@@ -10418,7 +10441,7 @@ export class AssistantService {
     if (llmFastCatalogSelection) return llmFastCatalogSelection;
 
     const fastTechnicalOrientation = legacyAnswerWriterAllowed('fast_technical_orientation')
-      ? await this.tryFastTechnicalOrientation(input, needState, history, aiDiagnostics)
+      ? await this.tryFastTechnicalOrientation(input, { ...session, needState }, needState, history, aiDiagnostics)
       : null;
     if (fastTechnicalOrientation) return fastTechnicalOrientation;
 
@@ -11696,6 +11719,7 @@ export class AssistantService {
             assistantMessageId: existingAssistant.id,
             metadata: {
               ...(existingAssistant.metadata ?? {}),
+              ...runtimeResponseMetadata(runtimeDecision, 'legacy_completed_turn_payload'),
               turnId: input.turnId,
               supersededMainAnswer: true
             }
@@ -11727,6 +11751,7 @@ export class AssistantService {
       content: answer,
       metadata: {
         productCards: answerProductCards,
+        ...runtimeResponseMetadata(runtimeDecision, 'legacy_full_pipeline'),
         cardDisplay: answerCardDisplay,
         usedWebSearch,
         webSearchRequired: mustUseWebSearch,
@@ -11885,6 +11910,7 @@ export class AssistantService {
       assistantMessageId: assistantMessage.id,
       metadata: {
         turnId: input.turnId,
+        ...runtimeResponseMetadata(runtimeDecision, 'legacy_full_pipeline'),
         selection: finalSelectionMetadata,
         cardDisplay,
         finalCardsSource: finalCards.source,
@@ -11939,7 +11965,8 @@ export class AssistantService {
   async recoverTurn(input: { sessionId: string; turnId: string; onDelta?: (text: string) => void | Promise<void>; signal?: AbortSignal }): Promise<ChatResponsePayload> {
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
-    if (isAgentManagerHarnessEnabledForSession(session)) {
+    const runtimeDecision = getAgentManagerRuntimeDecision(session);
+    if (runtimeDecision.agentManagerHarnessEnabled) {
       return this.agentManager.recoverTurn(input);
     }
     let turn = await this.conversations.getTurn(input.sessionId, input.turnId);
@@ -11965,6 +11992,7 @@ export class AssistantService {
         assistantMessageId: existingAssistant.id,
         metadata: {
           ...(existingAssistant.metadata ?? {}),
+          ...runtimeResponseMetadata(runtimeDecision, 'legacy_completed_turn_payload'),
           turnId: input.turnId,
           recoveryAttempts: currentTurn.status === 'recovered' ? 1 : 0
         }
@@ -12219,6 +12247,7 @@ export class AssistantService {
       ];
       const metadata = {
         turnId: input.turnId,
+        ...runtimeResponseMetadata(runtimeDecision, 'deterministic_turn_recovery'),
         recovered: true,
         recoveryAttempts: 1,
         turnContract: contract,

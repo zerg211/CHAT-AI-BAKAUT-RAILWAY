@@ -6,8 +6,9 @@ describe('agent manager integration source guards', () => {
     const assistant = readFileSync('src/ai/assistant.ts', 'utf8').replace(/\r\n/g, '\n');
 
     expect(assistant).toContain('new AgentManagerOrchestrator(this.conversations, this.products, this.leads)');
-    expect(assistant).toContain('if (isAgentManagerHarnessEnabledForSession(session)) {\n      return this.agentManager.generateAnswer(input);');
-    expect(assistant).toContain('if (isAgentManagerHarnessEnabledForSession(session)) {\n      return this.agentManager.recoverTurn(input);');
+    expect(assistant).toContain('const runtimeDecision = getAgentManagerRuntimeDecision(session);');
+    expect(assistant).toContain('if (runtimeDecision.agentManagerHarnessEnabled) {\n      return this.agentManager.generateAnswer(input);');
+    expect(assistant).toContain('if (runtimeDecision.agentManagerHarnessEnabled) {\n      return this.agentManager.recoverTurn(input);');
   });
 
   it('uses web search inside the comparison research module', () => {
@@ -48,7 +49,24 @@ describe('agent manager integration source guards', () => {
 
     expect(route).toContain('if (!controller.signal.aborted && agentManagerHarnessEnabled)');
     expect(route).toContain('assistant.recoverTurn({');
-    expect(route).toContain('recoverable: isAgentManagerHarnessEnabledForSession(sessionForRecovery)');
+    expect(route).toContain('recoverable: agentManagerHarnessEnabled');
+  });
+
+  it('marks runtime mode and legacy paths in stream payloads, saved metadata, and admin UI', () => {
+    const route = readFileSync('src/routes/chat.ts', 'utf8');
+    const assistant = readFileSync('src/ai/assistant.ts', 'utf8');
+    const orchestrator = readFileSync('src/ai/agentManagerOrchestrator.ts', 'utf8');
+    const client = readFileSync('src/client/main.tsx', 'utf8');
+
+    expect(route).toContain('runtimeModeReason: runtimeDecision.reason');
+    expect(route).toContain('agentManagerRuntime: runtimeDecision');
+    expect(assistant).toContain("legacyRuntime: {");
+    expect(assistant).toContain("path: legacyPath ?? 'legacy_unknown'");
+    expect(assistant).toContain("runtimeResponseMetadata(runtimeDecision, 'legacy_full_pipeline')");
+    expect(assistant).toContain("runtimeResponseMetadata(getAgentManagerRuntimeDecision(session), 'llm_fast_commercial_handoff')");
+    expect(orchestrator).toContain('runtimeModeReason: runtimeDecision.reason');
+    expect(client).toContain("label: `mode: ${runtimeMode} (${shortDiagnosticReason(runtimeReason)})`");
+    expect(client).toContain("label: `legacy path: ${shortDiagnosticReason(metadata.legacyRuntime.path ?? 'unknown')}`");
   });
 
   it('renders agent manager traces in the admin conversation detail UI', () => {

@@ -25,6 +25,7 @@ import { researchProductComparisonFacts } from './productComparisonResearch.js';
 import { compactModelText, displayProductBrand, extractGeneratorPowerForHardSelection, extractModelTokens, extractWeightKg, inferProductIntent, isCoreEquipment, parseWeightNeedRangeKg, productMatchesIntent, productMentionedInText } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
+import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -1366,8 +1367,12 @@ export class AgentManagerOrchestrator {
       needState: needStateSnapshot
     });
     const cards = productCards(cardSelection.products, ['Найдено в каталоге под текущий запрос.']);
+    const runtimeDecision = getAgentManagerRuntimeDecision(input.session);
     const metadata = {
       agentManager: true,
+      runtimeMode: runtimeDecision.runtimeMode,
+      runtimeModeReason: runtimeDecision.reason,
+      agentManagerRuntime: runtimeDecision,
       recovered: input.recovered,
       turnId: input.turnId,
       ledgerState,
@@ -1878,6 +1883,7 @@ export class AgentManagerOrchestrator {
     if (!message?.content?.trim()) return null;
     await onDelta?.(message.content);
     const needState = (message.metadata?.needStateSnapshot as CustomerNeedState | undefined) ?? session.needState ?? emptyNeedState();
+    const runtimeDecision = getAgentManagerRuntimeDecision(session);
     return {
       turnId,
       answer: message.content,
@@ -1888,6 +1894,9 @@ export class AgentManagerOrchestrator {
       metadata: {
         ...(message.metadata ?? {}),
         agentManager: true,
+        runtimeMode: runtimeDecision.runtimeMode,
+        runtimeModeReason: runtimeDecision.reason,
+        agentManagerRuntime: runtimeDecision,
         recoveredFromExistingTurn: true
       }
     };
@@ -1905,8 +1914,12 @@ export class AgentManagerOrchestrator {
     const rawLedgerRows = await this.conversations.listDialogueLedgerEvents(session.id, 500);
     const ledgerState = reduceDialogueLedger(mapLedgerRows(rawLedgerRows as DialogueLedgerRow[]));
     const needStateSnapshot = deriveNeedStateSnapshotFromLedger(ledgerState, session.needState ?? emptyNeedState());
+    const runtimeDecision = getAgentManagerRuntimeDecision(session);
     const metadata = {
       agentManager: true,
+      runtimeMode: runtimeDecision.runtimeMode,
+      runtimeModeReason: runtimeDecision.reason,
+      agentManagerRuntime: runtimeDecision,
       recovered,
       recoveredFromAnswerContract: true,
       turnId,

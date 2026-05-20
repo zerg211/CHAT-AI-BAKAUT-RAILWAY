@@ -811,6 +811,23 @@ export interface ChatResponsePayload {
   leadCreated?: boolean;
   assistantMessageId?: string;
   metadata?: {
+    runtimeMode?: 'agent_manager' | 'legacy';
+    runtimeModeReason?: string;
+    agentManagerRuntime?: {
+      runtimeMode?: 'agent_manager' | 'legacy';
+      reason?: string;
+      agentManagerHarnessEnabled?: boolean;
+      globalHarnessEnabled?: boolean;
+      urlOptIn?: boolean;
+      urlOptInParam?: string;
+      legacyAnswerWritersDisabled?: boolean;
+    };
+    legacyRuntime?: {
+      active?: boolean;
+      path?: string;
+      reason?: string;
+      legacyAnswerWritersDisabled?: boolean;
+    };
     selection?: ProductSelectionMetadata;
     cardDisplay?: CardDisplayOptions;
     aiDiagnostics?: AiGenerationDiagnostics;
