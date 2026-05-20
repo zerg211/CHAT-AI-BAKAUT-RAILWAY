@@ -1,7 +1,7 @@
-Production final preflight: PASS
+Production current preflight: PASS
 
 /api/health:
-commitSha=57be092419150c02dc5936afa99be6c38ad64955
+commitSha=8f48e6e9909cf89bda4576cb3dbb73e755244d4e
 branch=main
 agentManagerHarnessEnabled=true
 answerModel=gpt-5.4-mini

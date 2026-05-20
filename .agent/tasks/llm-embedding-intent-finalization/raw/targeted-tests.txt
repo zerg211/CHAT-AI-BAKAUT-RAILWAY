@@ -1,8 +1,8 @@
 ﻿> bakaut-ai-sales-assistant@0.1.0 test
-> vitest run tests/agentManagerOrchestrator.test.ts tests/recommendationRanking.test.ts tests/assistantFallback.test.ts tests/factClaimPlanner.test.ts tests/chatStream.test.ts
+> vitest run tests/agentManagerOrchestrator.test.ts
 
 RUN v4.1.5 C:/Projects/chatAI
 
-Test Files 5 passed (5)
-Tests 251 passed (251)
-Duration 3.73s
+Test Files 1 passed (1)
+Tests 16 passed (16)
+Duration 1.45s

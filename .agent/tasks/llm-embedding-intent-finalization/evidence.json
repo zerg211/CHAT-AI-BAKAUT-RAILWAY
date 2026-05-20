@@ -1,111 +1,54 @@
 {
   "taskId": "llm-embedding-intent-finalization",
-  "checkedAt": "2026-05-20T11:45:00.000Z",
-  "status": "final",
-  "localCommit": "57be092419150c02dc5936afa99be6c38ad64955",
-  "remoteMainCommit": "57be092419150c02dc5936afa99be6c38ad64955",
-  "productionCommit": "57be092419150c02dc5936afa99be6c38ad64955",
-  "acceptanceCriteria": {
-    "AC1_LLM_owns_retrieval_intent": {
-      "status": "PASS",
-      "evidence": [
-        "catalog.search tool requests carry LLM productIntent and semanticQuery",
-        "live plate request metadata shows intent=plate after prior generator context"
-      ]
-    },
-    "AC2_embeddings_are_intent_scoped": {
-      "status": "PASS",
-      "evidence": [
-        "catalog.search passes embeddingQuery from LLM semanticQuery",
-        "live metadata shows usedEmbeddings=true for plate catalog request",
-        "merged candidates are filtered by productIntent before visible cards"
-      ]
-    },
-    "AC3_stale_constraints_cleared_on_focus_switch": {
-      "status": "PASS",
-      "evidence": [
-        "live dialogue switched from generator to plate compactor",
-        "plate turns showed no generator cards"
-      ]
-    },
-    "AC4_card_class_guard": {
-      "status": "PASS",
-      "evidence": [
-        "catalog_products_filtered_by_intent warnings appear when wrong-class candidates are removed",
-        "plate metadata product cards contain only plate compactors"
-      ]
-    },
-    "AC5_no_deterministic_technical_writer_for_normal_LLM_path": {
-      "status": "PASS",
-      "evidence": [
-        "no fast_technical_orientation answerMode in production metadata",
-        "canned fast technical phrase absent from widget transcript"
-      ]
-    },
-    "AC6_calculations_are_tools_not_final_writers": {
-      "status": "PASS",
-      "evidence": [
-        "generator calculator tool profile present on both generator turns",
-        "pump update profile requiredNominalKw=4.5 and requiredStartingKw=4.5",
-        "LLM answer used 4.5 kW calculated minimum and 5 kW practical class"
-      ]
-    },
-    "AC7_dialog_1064_failure_pattern_covered": {
-      "status": "PASS",
-      "evidence": [
-        "regression tests cover generator-history followed by plate-compactor LLM tool request",
-        "production live gate covers the same focus switch and card consistency"
-      ]
-    },
-    "AC8_embedding_infrastructure_green": {
-      "status": "PASS",
-      "evidence": [
-        "npm run embeddings:coverage command succeeds locally",
-        "production embedding coverage finalReady=true"
-      ]
-    },
-    "AC9_evidence_and_finality": {
-      "status": "PASS",
-      "evidence": [
-        "code pushed to origin/main",
-        "Railway production marker is 57be092419150c02dc5936afa99be6c38ad64955",
-        "production coverage targets met",
-        "live widget protocol saved",
-        "manual + metadata audit PASS"
-      ]
-    }
+  "checkedAt": "2026-05-20T12:34:00.000Z",
+  "status": "not_final",
+  "reason": "current production live widget gate is blocked by production_live_test budget",
+  "runtimeCodeCommit": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e",
+  "productionCommitAtCheck": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e",
+  "implementation": {
+    "status": "PASS",
+    "changes": [
+      "LLM productIntent and semanticQuery scope catalog search and embeddings",
+      "catalog results are filtered by LLM productIntent before visible cards",
+      "plate self-loading constraints influence catalog ranking",
+      "generator calculator enriches missing household loads",
+      "generator calculator canonicalizes unknown load names by name, including насос -> pump",
+      "answer/review prompts keep calculator values authoritative and keep 90+ kg out of primary self-loading plate range"
+    ]
   },
   "commands": {
     "typecheck": {
       "status": "PASS"
     },
-    "targetedTests": {
+    "agentManagerOrchestratorTests": {
       "status": "PASS",
-      "tests": 251
+      "tests": 16
     },
     "fullTests": {
       "status": "PASS",
-      "tests": 517
+      "tests": 519
     },
     "build": {
       "status": "PASS"
     },
-    "localEmbeddingCoverage": {
-      "status": "PASS_COMMAND",
-      "finalReady": false,
-      "note": "local DB coverage is not the production finality gate"
-    },
-    "productionPreflight": {
+    "productionHealth": {
       "status": "PASS",
-      "healthCommit": "57be092419150c02dc5936afa99be6c38ad64955",
-      "runtime": "PASS",
-      "coverage": "PASS"
+      "commit": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e"
     },
-    "productionLiveWidget": {
+    "productionEmbeddingCoverage": {
       "status": "PASS",
-      "protocol": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.production.md",
-      "detail": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.json",
-      "sessionId": "47e9a621-005f-4716-ade1-0938ae702329"
+      "finalReady": true
+    },
+    "productionOpenAiRuntime": {
+      "status": "PASS"
+    },
+    "productionLiveWidgetCurrentCommit": {
+      "status": "BLOCKED_BUDGET",
+      "error": "production_live_test_budget_insufficient_for_scenario",
+      "usedTokens": 3986558,
+      "budget": 4000000,
+      "reserveTokens": 16000,
+      "remainingAfterReserve": -2558
     }
   },
   "production": {
@@ -126,14 +69,38 @@
       "catalogPagesTotal": 102,
       "catalogPagesUsable": 102,
       "catalogPagesCoverage": 1
-    },
-    "liveWidget": {
-      "status": "PASS",
-      "buyerIssues": [],
-      "metadataIssues": [],
-      "noFallbackOrRecovery": true,
-      "plateCardsOnly": true,
-      "selfLoadingPlateWeightsVisible": true
     }
-  }
+  },
+  "liveHistory": [
+    {
+      "commit": "57be092419150c02dc5936afa99be6c38ad64955",
+      "status": "PASS",
+      "protocol": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.production.md",
+      "detail": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.json",
+      "sessionId": "47e9a621-005f-4716-ade1-0938ae702329"
+    },
+    {
+      "commit": "af853642ad4289ad33dd623c2aa27eec12d17430",
+      "status": "FAIL_FIXED",
+      "failure": "turn2_understated_calculated_generator_minimum",
+      "fixCommit": "db5ea209ad6381e471f604a28d5cabe7fb505ef2"
+    },
+    {
+      "commit": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e",
+      "status": "BLOCKED_BUDGET",
+      "failure": "production_live_test_budget_insufficient_for_scenario before browser launch"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1_LLM_owns_retrieval_intent": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC2_embeddings_are_intent_scoped": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC3_stale_constraints_cleared_on_focus_switch": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC4_card_class_guard": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC5_no_deterministic_technical_writer_for_normal_LLM_path": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC6_calculations_are_tools_not_final_writers": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC7_dialog_1064_failure_pattern_covered": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC8_embedding_infrastructure_green": "PASS",
+    "AC9_evidence_and_finality": "BLOCKED_BUDGET"
+  },
+  "requiredNextStep": "Rerun local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs against commit 8f48e6e9909cf89bda4576cb3dbb73e755244d4e when production_live_test budget is available."
 }

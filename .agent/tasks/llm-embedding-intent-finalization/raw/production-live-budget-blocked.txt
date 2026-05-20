@@ -1,0 +1,19 @@
+Production live widget gate on current commit: BLOCKED
+
+Command:
+ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 EXPECTED_PRODUCTION_COMMIT_SHA=8f48e6e9909cf89bda4576cb3dbb73e755244d4e node local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs
+
+Result:
+production_openai_runtime_preflight_blocked
+
+Budget guard:
+code=production_live_test_budget_insufficient_for_scenario
+usedTokens=3986558
+budget=4000000
+reserveTokens=16000
+remainingAfterReserve=-2558
+
+Runtime itself:
+ok=true
+answerModel=gpt-5.4-mini
+plannerModel=gpt-5.4-mini
