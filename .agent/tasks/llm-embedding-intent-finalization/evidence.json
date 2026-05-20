@@ -102,5 +102,5 @@
     "AC8_embedding_infrastructure_green": "PASS",
     "AC9_evidence_and_finality": "BLOCKED_BUDGET"
   },
-  "requiredNextStep": "Rerun local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs against commit 8f48e6e9909cf89bda4576cb3dbb73e755244d4e when production_live_test budget is available."
+  "requiredNextStep": "When production_live_test budget is available, read /api/health.runtime.commitSha and rerun local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs with EXPECTED_PRODUCTION_COMMIT_SHA set to that exact current production commit."
 }

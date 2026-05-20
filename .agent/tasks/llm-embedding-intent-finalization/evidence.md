@@ -84,12 +84,12 @@ Status: BLOCKED, not run.
 
 ## Required To Finish
 
-When production live-test budget is available again, run:
+When production live-test budget is available again, first read `/api/health.runtime.commitSha`, then run the live gate against that exact current production commit. If production has advanced beyond `8f48e6e9909cf89bda4576cb3dbb73e755244d4e`, use the newer health marker in `EXPECTED_PRODUCTION_COMMIT_SHA`.
 
 ```powershell
 $env:ALLOW_PRODUCTION_LIVE_TESTS='1'
 $env:FINAL_RELEASE_LIVE_GATE='1'
-$env:EXPECTED_PRODUCTION_COMMIT_SHA='8f48e6e9909cf89bda4576cb3dbb73e755244d4e'
+$env:EXPECTED_PRODUCTION_COMMIT_SHA='<current /api/health.runtime.commitSha>'
 node local-live-tests\2026-05-20-llm-embedding-intent-live-runner.mjs
 ```
 
