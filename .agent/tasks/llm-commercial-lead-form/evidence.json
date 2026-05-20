@@ -1,6 +1,6 @@
 {
   "taskId": "llm-commercial-lead-form",
-  "status": "PASS_LOCAL_NOT_FINAL",
+  "status": "PASS_FINAL",
   "acceptance": {
     "AC1": "PASS",
     "AC2": "PASS",
@@ -73,12 +73,26 @@
     "date": "2026-05-20",
     "summary": "Third-person manager commercial wording is now a post-answer verification error and is rewritten by LLM before final response; deterministic repair remains fallback only.",
     "newIssueCode": "third_person_manager_role_handoff",
-    "finalReady": false
+    "finalReady": true
   },
   "liveProductionWidget": {
-    "run": false,
+    "run": true,
     "requiredBeforeProductionReady": true,
-    "reason": "New code still needs commit, Railway deploy marker, and fresh non-repeating real iframe validation on bakautprof.ru.",
+    "status": "PASS",
+    "productionCommit": "b89509245cc3c63006f770d4224179ba8fbbfe8a",
+    "implementationCommit": "ef68b6435ecaade530122d43b458f33b1f19e394",
+    "implementationCommitIsAncestorOfProduction": true,
+    "protocolPath": "local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.production.md",
+    "detailPath": "local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.json",
+    "summary": {
+      "buyerIssues": 0,
+      "codeMetadataIssues": 0,
+      "leadSubmissionsForSession": 1,
+      "leadAuditIssues": 0,
+      "fallbackOrRecoveryTurns": 0,
+      "postAnswerVerificationErrors": 0,
+      "thirdPersonManagerRoleIssues": 0
+    },
     "previousFailures": [
       {
         "path": "local-live-tests/2026-05-20-production-diverse-buyer-audit-2026-05-20T07-34-41-926Z.production.md",

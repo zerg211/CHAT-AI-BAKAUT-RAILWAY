@@ -96,11 +96,28 @@ Result: PASS.
 
 ## Live Verification
 
-Production widget validation is still required before final.
-
 Observed before this fix:
 
 - `2026-05-20-production-diverse-buyer-audit-2026-05-20T07-34-41-926Z.production.md`: failed because production recovery answer did not pass post-answer verification for commercial wording.
 - `local-live-tests/production-diverse-buyer-audit-failure.json`: after commit `0f87ade`, the local adaptive buyer could not call OpenAI (`403 Country, region, or territory not supported`) and repeated an old fallback dialogue; the live answer also exposed the remaining "manager/logistics as third person" tone on commercial turns.
 
-Current status: code-ready locally, not final until the new commit is pushed, Railway deploy marker matches it, and a fresh non-repeating live widget protocol on `https://bakautprof.ru/` passes buyer and metadata audit.
+Fresh production live gate after the LLM rewrite fix:
+
+```bash
+ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 EXPECTED_REMEDIATION_CONTRACT_VERSION=2026-05-19-generator-load-scenarios-recovery-v38 PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS=0 EXPECTED_PRODUCTION_COMMIT_SHA=b89509245cc3c63006f770d4224179ba8fbbfe8a node local-live-tests/2026-05-20-ai-manager-voice-live-runner.mjs
+```
+
+Result: PASS.
+
+- Protocol: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.production.md`
+- Admin detail: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.json`
+- Production commit tested: `b89509245cc3c63006f770d4224179ba8fbbfe8a` (`ef68b64` is an ancestor and contains the LLM rewrite fix)
+- Buyer issues: 0
+- Code/metadata issues: 0
+- Lead submissions for session: 1
+- Lead audit issues: 0
+- All turns completed without fallback/recovery.
+- `postAnswerVerification.status=pass` on every assistant turn.
+- Commercial handoff turn used `answerMode=llm_fast_commercial_handoff`, `commercialAction=explain_manager_required`, `leadRequested=true`, and no `third_person_manager_role_handoff`.
+
+Current status: final for the LLM commercial handoff voice/remediation scope.
