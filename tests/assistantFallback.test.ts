@@ -103,6 +103,78 @@ function llmFastAnswerResponse(answer: string, overrides: Record<string, unknown
   };
 }
 
+function requiredTraits(productIntent = 'unknown') {
+  return {
+    productIntent,
+    productRole: productIntent === 'unknown' ? 'unknown' : 'coreProduct',
+    fuel: 'unknown',
+    startType: 'unknown',
+    enclosure: 'unknown',
+    conventionalGenerator: null,
+    singlePhase220: null,
+    budgetMax: null,
+    weightKgMin: null,
+    weightKgMax: null,
+    diameterMmMin: null,
+    diameterMmMax: null,
+    nominalPowerKwMin: null,
+    nominalPowerKwMax: null,
+    maxPowerKwMin: null,
+    maxPowerKwMax: null,
+    powerReasoning: ''
+  };
+}
+
+function selectionState(productIntent = 'unknown') {
+  return {
+    currentProductClass: productIntent,
+    targetProductClass: productIntent,
+    compatibilityTargetProduct: '',
+    mustHaveTraits: [],
+    niceToHaveTraits: [],
+    excludedClasses: [],
+    brandConstraint: '',
+    exactModelConstraint: '',
+    isAccessoryFollowUp: false,
+    selectionConfidence: productIntent === 'unknown' ? 0 : 0.8,
+    shouldShowCards: false,
+    cardDisplayMode: 'none'
+  };
+}
+
+function technicalLlmPlan(productIntent = 'unknown', catalogSearchQuery = '') {
+  return {
+    action: 'answer_question',
+    answerMode: 'short',
+    cardPolicy: 'textOnly',
+    followUpPolicy: 'askClarifyingQuestion',
+    contextScope: 'activeNeed',
+    searchScope: 'focusedNeed',
+    catalogSearchQuery,
+    selectedProductIds: [],
+    requiredProductTraits: requiredTraits(productIntent),
+    selectionState: selectionState(productIntent),
+    agentDecision: {
+      answerTask: 'technical_explanation',
+      taskType: 'technical_answer',
+      catalogAction: 'none',
+      commercialAction: 'none',
+      productCardsPolicy: 'none',
+      mustAnswerNow: ['answer the current technical question from dialogue context'],
+      currentFocus: productIntent === 'plate' ? 'plate technical orientation' : 'generator technical orientation',
+      cardsRole: 'none',
+      leadAllowed: false,
+      leadAllowedReason: 'technical answer only',
+      errorRecoveryPriority: 'Use LLM technical reasoning and ask only necessary next input.',
+      confidence: 0.9
+    },
+    agentContractV2: null,
+    needsWebSearch: false,
+    missingInformation: [],
+    answerGuidance: 'LLM-authored technical answer. No deterministic fast writer.'
+  } as any;
+}
+
 function testProduct(id: string, name: string, price: number, specs: Record<string, unknown> = {}): Product {
   return {
     id,
@@ -381,9 +453,13 @@ describe('assistant OpenAI failure fallback', () => {
     expect(conversations.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
   });
 
-  it('answers broad technical orientation from extracted need state without planner recovery', async () => {
+  it('routes broad technical orientation through the LLM planner instead of the fast technical writer', async () => {
     openAiCreate.mockClear();
-    openAiCreate.mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }));
+    openAiCreate
+      .mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }))
+      .mockResolvedValueOnce({
+        output_text: ru('\\u041f\\u043e \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0443 \\u043f\\u043e\\u043a\\u0430 \\u043d\\u0443\\u0436\\u043d\\u043e \\u0441\\u0432\\u0435\\u0441\\u0442\\u0438 \\u043f\\u0443\\u0441\\u043a \\u043d\\u0430\\u0441\\u043e\\u0441\\u0430 \\u0438 \\u0431\\u0430\\u0437\\u043e\\u0432\\u0443\\u044e \\u043d\\u0430\\u0433\\u0440\\u0443\\u0437\\u043a\\u0443. \\u041f\\u043e \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0435 \\u0434\\u043b\\u044f \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430 \\u0441\\u043c\\u043e\\u0442\\u0440\\u0438\\u0442\\u0435 \\u043b\\u0435\\u0433\\u043a\\u0438\\u0439 \\u043a\\u043b\\u0430\\u0441\\u0441, \\u0430 \\u043a\\u0430\\u0440\\u0442\\u043e\\u0447\\u043a\\u0438 \\u043f\\u043e\\u043a\\u0430 \\u043d\\u0435 \\u043f\\u043e\\u043a\\u0430\\u0437\\u044b\\u0432\\u0430\\u044e.')
+      });
     const conversations = new FakeConversations();
     const baseNeedState = emptyNeedState();
     conversations.session = {
@@ -445,16 +521,16 @@ describe('assistant OpenAI failure fallback', () => {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
-    class FastTechnicalAssistant extends AssistantService {
+    class LlmTechnicalAssistant extends AssistantService {
       async updateNeedState() {
         return conversations.session.needState;
       }
 
-      async planAssistantTurn(): Promise<never> {
-        throw new Error('planner should not run for fast technical orientation');
+      async planAssistantTurn() {
+        return technicalLlmPlan('generator', 'home backup generator and small plate compactor');
       }
     }
-    const assistant = new FastTechnicalAssistant(conversations as never, new FakeProducts([]) as never);
+    const assistant = new LlmTechnicalAssistant(conversations as never, new FakeProducts([]) as never);
 
     const result = await assistant.generateAnswer({
       sessionId: conversations.session.id,
@@ -462,10 +538,10 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: 'Подскажите, какой генератор лучше взять для дома: насос, холодильник, котел и свет. И нужна небольшая виброплита для въезда.'
     });
 
-    expect(openAiCreate).toHaveBeenCalledTimes(1);
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
     expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u0441\\u043e\\u0441'));
     expect(result.productCards).toHaveLength(0);
-    expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
+    expect(result.metadata?.answerMode).not.toBe('fast_technical_orientation');
     expect(result.metadata?.turnContract).toMatchObject({
       answerTask: 'technical_explanation',
       taskType: 'technical_answer',
@@ -484,6 +560,7 @@ describe('assistant OpenAI failure fallback', () => {
     expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
     expect(result.metadata?.recovered).toBeUndefined();
     expect(result.metadata?.aiDiagnostics?.turnPlanningFallback?.used).toBe(false);
+    expect(result.answer).not.toContain('Без звонка');
     expect(conversations.turn?.status).toBe('completed');
   });
 
@@ -731,7 +808,11 @@ describe('assistant OpenAI failure fallback', () => {
 
   it('does not introduce plate guidance into a generator-only technical orientation', async () => {
     openAiCreate.mockClear();
-    openAiCreate.mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }));
+    openAiCreate
+      .mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }))
+      .mockResolvedValueOnce({
+        output_text: ru('\\u041f\\u043e \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440\\u0443 \\u0441\\u0435\\u0439\\u0447\\u0430\\u0441 \\u0433\\u043b\\u0430\\u0432\\u043d\\u044b\\u0439 \\u0440\\u0438\\u0441\\u043a - \\u043f\\u0443\\u0441\\u043a \\u043d\\u0430\\u0441\\u043e\\u0441\\u0430. \\u041d\\u0443\\u0436\\u043d\\u0430 \\u0435\\u0433\\u043e \\u043c\\u043e\\u0449\\u043d\\u043e\\u0441\\u0442\\u044c \\u0438\\u043b\\u0438 \\u043c\\u043e\\u0434\\u0435\\u043b\\u044c, \\u0442\\u043e\\u0433\\u0434\\u0430 \\u0441\\u0447\\u0438\\u0442\\u0430\\u044e \\u043a\\u043b\\u0430\\u0441\\u0441 \\u0431\\u0435\\u0437 \\u043b\\u0438\\u0448\\u043d\\u0435\\u0433\\u043e \\u0437\\u0430\\u043f\\u0430\\u0441\\u0430.')
+      });
     const conversations = new FakeConversations();
     const baseNeedState = emptyNeedState();
     conversations.session = {
@@ -788,8 +869,8 @@ describe('assistant OpenAI failure fallback', () => {
         return conversations.session.needState;
       }
 
-      async planAssistantTurn(): Promise<never> {
-        throw new Error('planner should not run for generator-only technical orientation');
+      async planAssistantTurn() {
+        return technicalLlmPlan('generator', 'home backup generator pump fridge boiler lights');
       }
     }
     const assistant = new GeneratorOnlyTechnicalAssistant(conversations as never, new FakeProducts([]) as never);
@@ -800,17 +881,21 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: ru('\\u041f\\u043e\\u0434\\u0441\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435, \\u043a\\u0430\\u043a\\u043e\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u043b\\u0443\\u0447\\u0448\\u0435 \\u0432\\u0437\\u044f\\u0442\\u044c \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430: \\u043d\\u0430\\u0441\\u043e\\u0441, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a, \\u043a\\u043e\\u0442\\u0435\\u043b \\u0438 \\u0441\\u0432\\u0435\\u0442?')
     });
 
-    expect(openAiCreate).toHaveBeenCalledTimes(1);
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
     expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u0441\\u043e\\u0441'));
     expect(result.answer.toLowerCase()).not.toContain(ru('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442'));
     expect(result.productCards).toHaveLength(0);
-    expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
+    expect(result.metadata?.answerMode).not.toBe('fast_technical_orientation');
     expect(result.metadata?.recovered).toBeUndefined();
   });
 
-  it('answers plate weight orientation through the fast path after generator cards were shown', async () => {
+  it('answers plate weight orientation through the LLM planner after generator cards were shown', async () => {
     openAiCreate.mockClear();
-    openAiCreate.mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }));
+    openAiCreate
+      .mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }))
+      .mockResolvedValueOnce({
+        output_text: ru('\\u0414\\u043b\\u044f \\u043d\\u0435\\u0431\\u043e\\u043b\\u044c\\u0448\\u043e\\u0433\\u043e \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430 \\u043f\\u043e\\u0434 \\u043f\\u043b\\u0438\\u0442\\u043a\\u0443 \\u043f\\u043e \\u043f\\u0435\\u0441\\u043a\\u0443 \\u0438 \\u0449\\u0435\\u0431\\u043d\\u044e \\u044f \\u0431\\u044b \\u0441\\u043c\\u043e\\u0442\\u0440\\u0435\\u043b \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0443 60-80 \\u043a\\u0433. \\u0415\\u0441\\u043b\\u0438 \\u0433\\u0440\\u0443\\u0437\\u0438\\u0442\\u044c \\u043e\\u0434\\u043d\\u043e\\u043c\\u0443, \\u0431\\u043b\\u0438\\u0436\\u0435 \\u043a 60-70 \\u043a\\u0433 \\u0431\\u0443\\u0434\\u0435\\u0442 \\u0441\\u043f\\u043e\\u043a\\u043e\\u0439\\u043d\\u0435\\u0435.')
+      });
     const previousGenerator = testProduct('generator-previous', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 82_000);
     const conversations = new FakeConversations();
     conversations.messages.push({
@@ -892,8 +977,8 @@ describe('assistant OpenAI failure fallback', () => {
         return conversations.session.needState;
       }
 
-      async planAssistantTurn(): Promise<never> {
-        throw new Error('planner should not run for plate weight orientation');
+      async planAssistantTurn() {
+        return technicalLlmPlan('plate', 'plate compactor small driveway paving slabs sand crushed stone self loading');
       }
     }
     const assistant = new FastPlateTechnicalAssistant(conversations as never, new FakeProducts([]) as never);
@@ -904,9 +989,9 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: ru('\\u0415\\u0449\\u0435 \\u043d\\u0443\\u0436\\u043d\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430 \\u043f\\u043e\\u0434 \\u043f\\u043b\\u0438\\u0442\\u043a\\u0443. \\u0422\\u0430\\u043c \\u043f\\u0435\\u0441\\u043e\\u043a \\u0438 \\u0449\\u0435\\u0431\\u0435\\u043d\\u044c, \\u043f\\u043b\\u043e\\u0449\\u0430\\u0434\\u044c \\u043d\\u0435\\u0431\\u043e\\u043b\\u044c\\u0448\\u0430\\u044f, \\u0433\\u0440\\u0443\\u0437\\u0438\\u0442\\u044c \\u0431\\u0443\\u0434\\u0443 \\u0441\\u0430\\u043c. \\u041a\\u0430\\u043a\\u043e\\u0439 \\u0432\\u0435\\u0441 \\u0441\\u043c\\u043e\\u0442\\u0440\\u0435\\u0442\\u044c?')
     });
 
-    expect(openAiCreate).toHaveBeenCalledTimes(1);
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
     expect(result.productCards).toHaveLength(0);
-    expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
+    expect(result.metadata?.answerMode).not.toBe('fast_technical_orientation');
     expect(result.metadata?.recovered).toBeUndefined();
     expect(result.answer.toLowerCase()).toContain(ru('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442'));
     expect(result.answer).toMatch(/60|70|80/);

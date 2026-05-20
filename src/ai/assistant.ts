@@ -4285,8 +4285,9 @@ function effectiveExcludedClassesForState(state: ProductSelectionState) {
 
 function productIntentFromSelection(state: ProductSelectionState, plan: AssistantTurnPlan, profile: ProductFitProfile): ProductIntent {
   if (plan.requiredProductTraits.productIntent !== 'unknown') return plan.requiredProductTraits.productIntent;
-  if (profile.intent !== 'unknown') return profile.intent;
   if (plan.selectionState.targetProductClass !== 'unknown') return plan.selectionState.targetProductClass;
+  if (plan.selectionState.currentProductClass !== 'unknown') return plan.selectionState.currentProductClass;
+  if (profile.intent !== 'unknown') return profile.intent;
   if (state.targetProductClass !== 'unknown') return state.targetProductClass as ProductIntent;
   if (state.hardConstraints.productIntent !== 'unknown') return state.hardConstraints.productIntent as ProductIntent;
   if (plannerHasSemanticSelection(plan)) return 'unknown';

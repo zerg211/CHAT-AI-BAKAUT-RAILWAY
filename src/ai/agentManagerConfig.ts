@@ -47,9 +47,10 @@ export function readAgentManagerFeatureFlags(source: ConfigLike = config): Agent
 }
 
 export function legacyAnswerWriterAllowed(
-  _kind: LegacyAnswerWriterKind,
+  kind: LegacyAnswerWriterKind,
   flags: AgentManagerFeatureFlags = readAgentManagerFeatureFlags()
 ) {
+  if (kind === 'fast_technical_orientation' && flags.disableLegacyAnswerWriters) return false;
   if (!flags.harnessEnabled) return true;
   return !flags.disableLegacyAnswerWriters;
 }

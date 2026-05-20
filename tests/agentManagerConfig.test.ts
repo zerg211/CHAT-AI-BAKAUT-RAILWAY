@@ -20,8 +20,12 @@ function flags(overrides: Partial<AgentManagerFeatureFlags> = {}): AgentManagerF
 }
 
 describe('agent manager feature flags', () => {
-  it('keeps legacy answer writers available while the new harness is off', () => {
-    expect(legacyAnswerWriterAllowed('fast_technical_orientation', flags())).toBe(true);
+  it('keeps deterministic emergency fallback available while the new harness is off', () => {
+    expect(legacyAnswerWriterAllowed('deterministic_answer_generation_fallback', flags())).toBe(true);
+  });
+
+  it('blocks the canned fast technical writer by default even before full harness rollout', () => {
+    expect(legacyAnswerWriterAllowed('fast_technical_orientation', flags())).toBe(false);
   });
 
   it('blocks all legacy answer writers when the harness owns user-visible answers', () => {

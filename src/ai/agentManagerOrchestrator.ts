@@ -185,6 +185,68 @@ function toolRequestSemanticText(intent: AgentIntentContract) {
   }).join('\n');
 }
 
+const productSelectionClasses: ProductSelectionClass[] = [
+  'generator',
+  'weldingGenerator',
+  'generatorOil',
+  'engineOil',
+  'generatorAccessory',
+  'plateAccessory',
+  'plate',
+  'rammer',
+  'roller',
+  'cutter',
+  'diamondBlade',
+  'diamondCore',
+  'trowel',
+  'unknown'
+];
+
+function coerceProductSelectionClass(value: unknown): ProductSelectionClass {
+  return productSelectionClasses.includes(value as ProductSelectionClass)
+    ? value as ProductSelectionClass
+    : 'unknown';
+}
+
+function toolRequestProductIntent(request: ToolRequest, fallbackText = ''): ProductSelectionClass {
+  const args = request.args as Record<string, unknown>;
+  const explicit = coerceProductSelectionClass(args.productIntent);
+  if (explicit !== 'unknown') return explicit;
+  const semanticText = [
+    typeof args.semanticQuery === 'string' ? args.semanticQuery : '',
+    typeof args.query === 'string' ? args.query : '',
+    typeof args.reason === 'string' ? args.reason : '',
+    typeof args.notes === 'string' ? args.notes : '',
+    request.rationale,
+    fallbackText
+  ].filter(Boolean).join('\n');
+  return inferProductIntent(semanticText);
+}
+
+function toolRequestScopedQuery(request: ToolRequest, fallbackQuery: string) {
+  const args = request.args as Record<string, unknown>;
+  const query = typeof args.query === 'string' && args.query.trim()
+    ? args.query.trim()
+    : fallbackQuery;
+  const semanticQuery = typeof args.semanticQuery === 'string' && args.semanticQuery.trim()
+    ? args.semanticQuery.trim()
+    : [
+        query,
+        typeof args.reason === 'string' ? args.reason : '',
+        typeof args.notes === 'string' ? args.notes : '',
+        request.rationale
+      ].filter(Boolean).join('\n');
+  return { query, semanticQuery };
+}
+
+function intentFromContractToolRequests(intent: AgentIntentContract): ProductSelectionClass {
+  for (const request of intent.toolRequests) {
+    const productIntent = toolRequestProductIntent(request);
+    if (productIntent !== 'unknown') return productIntent;
+  }
+  return 'unknown';
+}
+
 function inferVisibleCardIntent(input: {
   userMessage: string;
   history: Message[];
@@ -192,12 +254,9 @@ function inferVisibleCardIntent(input: {
   answerText: string;
   needState: CustomerNeedState;
 }): ProductSelectionClass {
-  const recentHistory = input.history
-    .slice(-6)
-    .map((message) => message.content)
-    .join('\n');
+  const toolIntent = intentFromContractToolRequests(input.intent);
+  if (toolIntent !== 'unknown') return toolIntent;
   const semanticText = [
-    recentHistory,
     input.userMessage,
     input.intent.userMessageSummary,
     input.intent.dialogueUnderstanding,
@@ -466,6 +525,8 @@ const toolArgsJsonSchema = {
   additionalProperties: false,
   properties: {
     query: nullableStringJsonSchema,
+    semanticQuery: nullableStringJsonSchema,
+    productIntent: { type: ['string', 'null'], enum: [...productSelectionClasses, null] },
     limit: nullableNumberJsonSchema,
     productIds: stringArrayJsonSchema,
     productNames: stringArrayJsonSchema,
@@ -479,6 +540,8 @@ const toolArgsJsonSchema = {
   },
   required: [
     'query',
+    'semanticQuery',
+    'productIntent',
     'limit',
     'productIds',
     'productNames',
@@ -1096,16 +1159,17 @@ export class AgentManagerOrchestrator {
       let result: ToolResult;
       try {
         if (request.tool === 'catalog.search') {
-          const query = typeof request.args.query === 'string' && request.args.query.trim()
-            ? request.args.query
-            : input.userMessage;
+          const { query, semanticQuery } = toolRequestScopedQuery(request, input.userMessage);
           const limit = Math.max(1, Math.min(12, Number(request.args.limit ?? 8)));
-          const search = await this.searchCatalogProducts(
+          const productIntent = toolRequestProductIntent(request, [input.userMessage, semanticQuery, request.rationale].join('\n'));
+          const search = await this.searchCatalogProducts({
             query,
             limit,
-            input.signal,
-            [input.userMessage, query, request.rationale].join('\n')
-          );
+            signal: input.signal,
+            semanticContext: [semanticQuery, input.userMessage, request.rationale].join('\n'),
+            productIntent,
+            embeddingQuery: semanticQuery
+          });
           const products = search.products;
           products.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
@@ -1117,6 +1181,9 @@ export class AgentManagerOrchestrator {
               productIds: products.map((product) => product.id),
               products,
               retrieval: {
+                intent: search.productIntent,
+                query: search.query,
+                embeddingQuery: search.embeddingQuery,
                 textCount: search.textCount,
                 vectorCount: search.vectorCount,
                 usedEmbeddings: search.vectorCount > 0
@@ -1131,13 +1198,17 @@ export class AgentManagerOrchestrator {
           const queries = names.length
             ? names
             : [typeof request.args.query === 'string' && request.args.query.trim() ? request.args.query : input.userMessage];
+          const productIntent = toolRequestProductIntent(request, input.userMessage);
+          const semanticQuery = toolRequestScopedQuery(request, input.userMessage).semanticQuery;
           for (const query of queries.slice(0, 4)) {
-            const found = await this.searchCatalogProducts(
+            const found = await this.searchCatalogProducts({
               query,
-              4,
-              input.signal,
-              [input.userMessage, query, request.rationale].join('\n')
-            );
+              limit: 4,
+              signal: input.signal,
+              semanticContext: [semanticQuery, query, input.userMessage, request.rationale].join('\n'),
+              productIntent,
+              embeddingQuery: semanticQuery
+            });
             found.products.forEach((product) => productsById.set(product.id, product));
           }
           result = ToolResultSchema.parse({
@@ -1164,7 +1235,14 @@ export class AgentManagerOrchestrator {
           });
         } else if (request.tool === 'web.researchProductFacts') {
           if (productsById.size < 2) {
-            const found = await this.searchCatalogProducts(input.userMessage, 4, input.signal, input.userMessage);
+            const found = await this.searchCatalogProducts({
+              query: input.userMessage,
+              limit: 4,
+              signal: input.signal,
+              semanticContext: input.userMessage,
+              productIntent: toolRequestProductIntent(request, input.userMessage),
+              embeddingQuery: toolRequestScopedQuery(request, input.userMessage).semanticQuery
+            });
             found.products.forEach((product) => productsById.set(product.id, product));
           }
           const selectedProducts = [...productsById.values()].slice(0, 4);
@@ -1308,7 +1386,21 @@ export class AgentManagerOrchestrator {
     return embedding;
   }
 
-  private async searchCatalogProducts(query: string, limit: number, signal?: AbortSignal, semanticContext = query) {
+  private async searchCatalogProducts(input: {
+    query: string;
+    limit: number;
+    signal?: AbortSignal;
+    semanticContext?: string;
+    productIntent?: ProductSelectionClass;
+    embeddingQuery?: string;
+  }) {
+    const query = input.query;
+    const limit = input.limit;
+    const semanticContext = input.semanticContext ?? query;
+    const productIntent = input.productIntent && input.productIntent !== 'unknown'
+      ? input.productIntent
+      : inferProductIntent(semanticContext);
+    const embeddingQuery = input.embeddingQuery?.trim() || query;
     const warnings: string[] = [];
     let firstError: unknown = null;
     let textProducts: Product[] = [];
@@ -1325,7 +1417,7 @@ export class AgentManagerOrchestrator {
       vectorSearch?: ProductRepository['vectorSearch'];
     }).vectorSearch;
     if (vectorSearchFn && await this.canUseProductEmbeddings()) {
-      const embedding = await this.createCachedQueryEmbedding(query, signal);
+      const embedding = await this.createCachedQueryEmbedding(embeddingQuery, input.signal);
       if (embedding) {
         try {
           vectorProducts = await vectorSearchFn.call(this.products, embedding, Math.max(limit, limit * 3));
@@ -1339,7 +1431,6 @@ export class AgentManagerOrchestrator {
     const byId = new Map<string, Product>();
     for (const product of [...textProducts, ...vectorProducts]) byId.set(product.id, product);
     const mergedProducts = [...byId.values()];
-    const productIntent = inferProductIntent(semanticContext);
     const matchingProducts = productIntent === 'unknown'
       ? mergedProducts
       : mergedProducts.filter((product) => productMatchesIntent(product, productIntent));
@@ -1355,6 +1446,9 @@ export class AgentManagerOrchestrator {
     const products = rankedProducts.slice(0, limit);
     if (!products.length && firstError) throw firstError;
     return {
+      query,
+      embeddingQuery,
+      productIntent,
       products,
       textCount: textProducts.length,
       vectorCount: vectorProducts.length,

@@ -360,6 +360,108 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.cardSelection?.droppedProductIds).toEqual([]);
   });
 
+  it('scopes embedding retrieval and visible cards to the LLM product intent when the dialogue switches product class', async () => {
+    const plate = product('plate-90', 'Vibroplita TSS VP90 90 kg', 'Vibroplita');
+    const generator = product('generator-stale', 'Generator previous match 5 kW', 'Generators');
+    const embeddingQueries: string[] = [];
+    class IntentScopedProducts extends FakeProducts {
+      vectorCalls = 0;
+
+      async searchProducts() {
+        return [plate];
+      }
+
+      async getEmbeddingCoverage() {
+        return { target: 'products', total: 10, embedded: 10, usable: 10, coverage: 1 };
+      }
+
+      async vectorSearch() {
+        this.vectorCalls += 1;
+        return [generator];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    conversations.messages.push(message('Earlier we discussed generator cards.', 'assistant'));
+    const products = new IntentScopedProducts();
+    const catalogModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer switches from generator to plate compactor weight/catalog need',
+          dialogueUnderstanding: 'current focus is a plate compactor for a small driveway, not the prior generator',
+          nextStepRationale: 'search catalog only for plate compactors',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'vibroplita 80-100 kg for paving slabs',
+              semanticQuery: 'plate compactor small driveway paving slabs sand crushed stone self loading 80-100 kg',
+              productIntent: 'plate',
+              limit: 8,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'current buyer focus switched to plate compactor',
+              notes: 'do not reuse generator constraints'
+            },
+            rationale: 'buyer asked about plate compactor after prior generator discussion',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'For the small driveway, Vibroplita TSS VP90 90 kg is the matching catalog direction.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      catalogModel,
+      async (text) => {
+        embeddingQueries.push(text);
+        return [0.1, 0.2, 0.3];
+      }
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Еще нужна виброплита для въезда под плитку. Какой вес смотреть?'
+    });
+
+    expect(products.vectorCalls).toBe(1);
+    expect(embeddingQueries).toEqual(['plate compactor small driveway paving slabs sand crushed stone self loading 80-100 kg']);
+    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-90']);
+    expect(payload.productCards.map((card) => card.id)).not.toContain('generator-stale');
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ payload?: { productIds?: string[]; retrieval?: { intent?: string; embeddingQuery?: string } }; warnings?: string[] }>;
+      cardSelection?: { intent?: string };
+    };
+    expect(metadata.toolResults?.[0]?.payload?.productIds).toEqual(['plate-90']);
+    expect(metadata.toolResults?.[0]?.payload?.retrieval).toMatchObject({
+      intent: 'plate',
+      embeddingQuery: 'plate compactor small driveway paving slabs sand crushed stone self loading 80-100 kg'
+    });
+    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('catalog_products_filtered_by_intent:plate:1');
+    expect(metadata.cardSelection?.intent).toBe('plate');
+  });
+
   it('prefers exact answer-mentioned product models over broad same-brand card expansion', async () => {
     class SameBrandProducts extends FakeProducts {
       async searchProducts() {
