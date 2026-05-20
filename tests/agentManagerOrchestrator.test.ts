@@ -906,6 +906,73 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(0);
   });
 
+  it('normalizes answer fact source aliases to the single executed tool result id', async () => {
+    const conversations = new FakeConversations();
+    const sourceAliasModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks for catalog options',
+          dialogueUnderstanding: 'catalog search is needed before answering',
+          nextStepRationale: 'search catalog and answer from returned products',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator 5 kW',
+              semanticQuery: 'generator 5 kW',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: null,
+              notes: null
+            },
+            rationale: 'find matching products',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'I found Generator 5 kW and Generator 6 kW in the catalog.',
+          factsUsed: [{
+            factKey: 'catalog_found_generators',
+            sourceEventIds: ['catalog_found_generators'],
+            value: true
+          }],
+          questionsAsked: [],
+          toolResultIds: [],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, sourceAliasModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show me catalog generators around 5 kW.'
+    });
+
+    expect(payload.metadata?.answerContract).toMatchObject({
+      factsUsed: [{
+        factKey: 'catalog_found_generators',
+        sourceEventIds: ['catalog-search'],
+        value: true
+      }]
+    });
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+
   it('blocks contact confirmation when local lead and outbox capture did not succeed', async () => {
     const conversations = new FakeConversations();
     const unsafeModel = model({

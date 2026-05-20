@@ -510,6 +510,76 @@ function leadCaptureRepairText(input: {
   return 'Наличие, доставку, сроки и индивидуальные условия нужно проверить по складу и логистике. Оставьте имя и телефон в форме, и я передам выбранные позиции на проверку; после проверки с вами свяжутся с точным ответом.';
 }
 
+function answerEvidenceSourceHints(input: {
+  ledgerState: ReducedDialogueLedgerState;
+  toolResults: ToolResult[];
+}) {
+  const ledgerFacts = Object.values(input.ledgerState.factsByKey).map((fact) => ({
+    id: fact.eventId,
+    factKey: fact.factKey,
+    value: fact.value,
+    evidence: fact.evidence,
+    status: fact.status
+  }));
+  const toolResults = input.toolResults.map((result) => ({
+    id: result.requestId,
+    tool: result.tool,
+    status: result.status,
+    warnings: result.warnings
+  }));
+  return {
+    allowedSourceIds: [
+      ...ledgerFacts.map((fact) => fact.id),
+      ...toolResults.map((result) => result.id)
+    ],
+    ledgerFacts,
+    toolResults
+  };
+}
+
+function normalizeAnswerEvidenceSources(input: {
+  answer: AnswerContract;
+  ledgerState: ReducedDialogueLedgerState;
+  toolResults: ToolResult[];
+}): AnswerContract {
+  const trustedSourceIds = new Set<string>([
+    ...input.ledgerState.eventIds,
+    ...input.toolResults.map((result) => result.requestId)
+  ]);
+  const toolResultIds = new Set(input.toolResults.map((result) => result.requestId));
+  const validAnswerToolResultIds = input.answer.toolResultIds.filter((toolResultId) => toolResultIds.has(toolResultId));
+  const okToolResultIds = input.toolResults
+    .filter((result) => result.status === 'ok')
+    .map((result) => result.requestId);
+  const fallbackOkToolResultIds = validAnswerToolResultIds.length || okToolResultIds.length !== 1
+    ? []
+    : okToolResultIds;
+
+  const factsUsed = input.answer.factsUsed.map((fact) => {
+    const exactSourceIds = fact.sourceEventIds.filter((sourceId) => trustedSourceIds.has(sourceId));
+    if (exactSourceIds.length) {
+      return { ...fact, sourceEventIds: [...new Set(exactSourceIds)] };
+    }
+
+      const ledgerFact = input.ledgerState.factsByKey[fact.factKey];
+      const repairedSourceIds = [
+        ledgerFact?.eventId,
+        ...validAnswerToolResultIds,
+      ...fallbackOkToolResultIds
+      ].filter((sourceId): sourceId is string => Boolean(sourceId && trustedSourceIds.has(sourceId)));
+
+    return repairedSourceIds.length
+      ? { ...fact, sourceEventIds: [...new Set(repairedSourceIds)] }
+      : fact;
+  });
+
+  return {
+    ...input.answer,
+    toolResultIds: validAnswerToolResultIds,
+    factsUsed
+  };
+}
+
 function positiveNumberFromToolArg(value: unknown) {
   if (value === null || value === undefined || value === '') return undefined;
   const parsed = Number(value);
@@ -970,6 +1040,9 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
+            'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
+            'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
+            'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
             'Верни только JSON AnswerContract.'
           ].join('\n')
         },
@@ -981,6 +1054,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             ledger: compactLedger(input.ledgerState),
             intent: input.intent,
             toolResults: input.toolResults,
+            availableEvidenceSources: answerEvidenceSourceHints(input),
             products: input.products.map((product) => ({
               id: product.id,
               name: product.name,
@@ -1199,7 +1273,7 @@ export class AgentManagerOrchestrator {
       statuses: toolResults.map((result) => ({ requestId: result.requestId, tool: result.tool, status: result.status }))
     });
 
-    const answer = await this.model.composeAnswer({
+    const rawAnswer = await this.model.composeAnswer({
       session: input.session,
       history,
       userMessage,
@@ -1209,6 +1283,11 @@ export class AgentManagerOrchestrator {
       toolResults,
       products,
       signal: input.signal
+    });
+    const answer = normalizeAnswerEvidenceSources({
+      answer: rawAnswer,
+      ledgerState,
+      toolResults
     });
     await this.conversations.saveAnswerContract({
       sessionId: input.sessionId,
