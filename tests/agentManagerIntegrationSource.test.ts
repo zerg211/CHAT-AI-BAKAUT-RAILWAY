@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 describe('agent manager integration source guards', () => {
   it('routes generate and recover through AgentManagerOrchestrator behind the harness flag', () => {
-    const assistant = readFileSync('src/ai/assistant.ts', 'utf8');
+    const assistant = readFileSync('src/ai/assistant.ts', 'utf8').replace(/\r\n/g, '\n');
 
     expect(assistant).toContain('new AgentManagerOrchestrator(this.conversations, this.products, this.leads)');
     expect(assistant).toContain('if (isAgentManagerHarnessEnabledForSession(session)) {\n      return this.agentManager.generateAnswer(input);');

@@ -7425,15 +7425,15 @@ describe('recommendation ranking', () => {
     expect(hard.provenance?.conventionalGenerator).toBeUndefined();
   });
 
-  it('does not append duplicate manager/logistics verification text', () => {
+  it('leaves third-person manager wording visible for the post-answer LLM verifier', () => {
     const answer = 'Доставку до Ейска можно посчитать, но итог по доставке и срокам проверит менеджер/логистика.';
     const result = assistantTestHooks.ensureCommercialManagerVerification(answer, {
       taskType: 'product_selection_with_delivery',
       commercialAction: 'explain_manager_required'
     } as any);
 
-    expect(result).toContain('Доставку и условия посчитаю по адресу через логистику.');
-    expect(result).not.toMatch(/менеджер/iu);
+    expect(result).toBe(answer);
+    expect(result).toMatch(/менеджер\/логистика/iu);
   });
 
   it('appends commercial verification in first person, not as a third-person manager', () => {
@@ -7446,22 +7446,21 @@ describe('recommendation ranking', () => {
     expect(result).not.toMatch(/должен подтвердить менеджер|проверяет менеджер/iu);
   });
 
-  it('cleans stale third-person manager verification from visible answers', () => {
+  it('does not hide stale third-person manager verification before LLM rewrite', () => {
     const cleaned = assistantTestHooks.sanitizeVisibleAnswer(
       'Живое складское наличие и условия проверяет менеджер. Точное наличие и возможность отгрузки должен подтвердить менеджер по актуальному складу.'
     );
 
-    expect(cleaned).toBe('Актуальный склад и возможность отгрузки сверю перед оформлением.');
-    expect(cleaned).not.toMatch(/менеджер/iu);
+    expect(cleaned).toContain('проверяет менеджер');
+    expect(cleaned).toContain('подтвердить менеджер');
   });
 
-  it('cleans third-person manager role from order process wording', () => {
+  it('does not hide third-person manager order wording before LLM rewrite', () => {
     const cleaned = assistantTestHooks.sanitizeVisibleAnswer(
       'Если всё устраивает — дальше уже оформляем через менеджера.'
     );
 
-    expect(cleaned).toBe('Если всё устраивает — дальше оформляем заказ.');
-    expect(cleaned).not.toMatch(/через\s+менеджер/iu);
+    expect(cleaned).toBe('Если всё устраивает — дальше уже оформляем через менеджера.');
   });
 
   it('does not treat a non-restrictive brand note as a hard brand', async () => {

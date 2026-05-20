@@ -651,6 +651,70 @@ describe('assistant generateAnswer control-plane metadata', () => {
     expect(result.answer).not.toMatch(/оставьте|напишите|телефон/iu);
   });
 
+  it('rewrites fast commercial handoff when LLM phrases the AI manager as a third-person manager', async () => {
+    openAiCreate.mockReset();
+    openAiCreate
+      .mockResolvedValueOnce(llmFastRouteResponse({ route: 'commercial_handoff' }))
+      .mockResolvedValueOnce(llmFastAnswerResponse(
+        'Алексей, контакт получил. Наличие и доставку по выбранным позициям уточнит менеджер/логистика после заявки.',
+        { namedProductIds: ['tss-8'], factsUsed: ['visible catalog card'], leadRequested: false }
+      ))
+      .mockResolvedValueOnce({
+        output_text: 'Алексей, контакт получил. По выбранным позициям я сверю актуальный склад и посчитаю доставку через логистику, затем вернусь с точным ответом.'
+      });
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const product = generator();
+    conversations.messages.push({
+      id: 'previous-assistant-cards',
+      sessionId,
+      role: 'assistant',
+      content: 'Показываю подходящие генераторы.',
+      metadata: {
+        cardDisplay: { initialVisibleCount: 1 },
+        productCards: [{
+          id: product.id,
+          name: product.name,
+          brand: product.brand,
+          category: product.category,
+          price: product.price,
+          currency: product.currency,
+          sourceUrl: product.sourceUrl,
+          specs: product.specs,
+          reasons: ['Подходит по мощности'],
+          caveats: []
+        }]
+      },
+      createdAt: new Date().toISOString()
+    });
+    class FastLeadAssistant extends AssistantService {
+      async updateNeedState(current: ConversationSession['needState']) {
+        return current;
+      }
+
+      async planAssistantTurn(): Promise<never> {
+        throw new Error('planner should not run for fast commercial contact confirmation');
+      }
+    }
+    const assistant = new FastLeadAssistant(conversations as never, new FakeProducts([product]) as never, leads as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId,
+      userMessage: 'Давайте проверим наличие и доставку по этим позициям. Меня зовут Алексей, телефон +7 900 000-00-11.'
+    });
+
+    expect(openAiCreate).toHaveBeenCalledTimes(3);
+    expect(result.metadata?.answerMode).toBe('llm_fast_commercial_handoff');
+    expect(result.metadata?.postAnswerVerificationRecovery).toMatchObject({
+      method: 'llm_rewrite',
+      recovered: true,
+      issuesBefore: expect.arrayContaining(['third_person_manager_role_handoff'])
+    });
+    expect(result.answer).toMatch(/я сверю|посчитаю доставку/iu);
+    expect(result.answer).not.toMatch(/менеджер/iu);
+    expect(result.answer).not.toMatch(/оставьте|напишите|телефон/iu);
+  });
+
   it('preserves no-contact policy through generateAnswer metadata and verifier', async () => {
     openAiCreate.mockResolvedValue({ output_text: 'Отвечу без звонка: сначала уточним задачу и ограничения, затем можно продолжить подбор по каталогу.' });
     const conversations = new FakeConversations();

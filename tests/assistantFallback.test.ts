@@ -1051,9 +1051,13 @@ describe('assistant OpenAI failure fallback', () => {
       updatedAt: new Date().toISOString()
     };
     openAiCreate.mockClear();
-    openAiCreate.mockResolvedValueOnce({
-      output_text: `${ru('\\u041f\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0435')} точную стоимость и условия нужно сверить через логистику. По скидке и коммерческим условиям тоже не обещаю заранее: это проверит менеджер по выбранному комплекту.`
-    });
+    openAiCreate
+      .mockResolvedValueOnce({
+        output_text: `${ru('\\u041f\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0435')} точную стоимость и условия нужно сверить через логистику. По скидке и коммерческим условиям тоже не обещаю заранее: это проверит менеджер по выбранному комплекту.`
+      })
+      .mockResolvedValueOnce({
+        output_text: `${ru('\\u041f\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0435')} точную стоимость и условия посчитаю через логистику. По скидке и коммерческим условиям заранее не обещаю: сверю их по выбранному комплекту перед оформлением.`
+      });
     const assistant = new AssistantService(conversations as never, new FakeProducts([plate]) as never);
 
     const result = await assistant.recoverTurn({
@@ -1061,11 +1065,17 @@ describe('assistant OpenAI failure fallback', () => {
       turnId: conversations.turn.id
     });
 
-    expect(openAiCreate).toHaveBeenCalledTimes(1);
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
     expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
     expect(result.answer).toMatch(new RegExp(`${ru('\\u0441\\u043a\\u0438\\u0434')}|${ru('\\u043a\\u043e\\u043c\\u043c\\u0435\\u0440\\u0447')}`, 'iu'));
     expect(result.answer).not.toMatch(new RegExp(`${ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d')}|${ru('\\u043d\\u043e\\u043c\\u0435\\u0440')}`, 'iu'));
+    expect(result.answer).not.toMatch(new RegExp(ru('\\u043c\\u0435\\u043d\\u0435\\u0434\\u0436\\u0435\\u0440'), 'iu'));
     expect(result.metadata?.postAnswerVerification?.status).not.toBe('error');
+    expect(result.metadata?.postAnswerVerificationRecovery).toMatchObject({
+      method: 'llm_rewrite',
+      recovered: true,
+      issuesBefore: expect.arrayContaining(['third_person_manager_role_handoff'])
+    });
     expect(conversations.turn?.status).toBe('recovered');
   });
 

@@ -1,0 +1,93 @@
+{
+  "taskId": "llm-commercial-lead-form",
+  "status": "PASS_LOCAL_NOT_FINAL",
+  "acceptance": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS"
+  },
+  "commands": [
+    {
+      "command": "npm test -- --run tests/agentTurnContract.test.ts tests/agentRuntimeContractsEval.test.ts tests/remediationCommercialFallback.test.ts",
+      "status": "PASS",
+      "summary": "3 files, 31 tests"
+    },
+    {
+      "command": "npm test -- --run tests/agentTurnContract.test.ts tests/agentRuntimeContractsEval.test.ts tests/remediationCommercialFallback.test.ts",
+      "status": "PASS",
+      "summary": "fresh rerun after evidence artifacts; 3 files, 31 tests"
+    },
+    {
+      "command": "npm test -- --run tests/agentTurnContract.test.ts tests/agentRuntimeContractsEval.test.ts tests/recommendationRanking.test.ts tests/assistantControlPlaneGenerate.test.ts tests/prompts.test.ts tests/remediationCommercialFallback.test.ts",
+      "status": "PASS",
+      "summary": "6 files, 238 tests"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test -- tests/postAnswerVerifier.test.ts",
+      "status": "PASS",
+      "summary": "1 file, 13 tests"
+    },
+    {
+      "command": "npm test -- tests/assistantControlPlaneGenerate.test.ts",
+      "status": "PASS",
+      "summary": "1 file, 11 tests"
+    },
+    {
+      "command": "npm test -- tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts tests/remediationCommercialFallback.test.ts tests/assistantLegacyWriterGuard.test.ts tests/postAnswerVerifier.test.ts",
+      "status": "PASS",
+      "summary": "5 files, 51 tests"
+    },
+    {
+      "command": "npm test -- tests/recommendationRanking.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "status": "PASS",
+      "summary": "2 files, 209 tests"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS",
+      "summary": "fresh rerun after AI-manager voice changes"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "58 files, 502 tests"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS",
+      "summary": "fresh rerun after AI-manager voice changes"
+    }
+  ],
+  "latestImplementation": {
+    "date": "2026-05-20",
+    "summary": "Third-person manager commercial wording is now a post-answer verification error and is rewritten by LLM before final response; deterministic repair remains fallback only.",
+    "newIssueCode": "third_person_manager_role_handoff",
+    "finalReady": false
+  },
+  "liveProductionWidget": {
+    "run": false,
+    "requiredBeforeProductionReady": true,
+    "reason": "New code still needs commit, Railway deploy marker, and fresh non-repeating real iframe validation on bakautprof.ru.",
+    "previousFailures": [
+      {
+        "path": "local-live-tests/2026-05-20-production-diverse-buyer-audit-2026-05-20T07-34-41-926Z.production.md",
+        "summary": "Recovery answer failed post-answer verification for commercial wording."
+      },
+      {
+        "path": "local-live-tests/production-diverse-buyer-audit-failure.json",
+        "summary": "Adaptive buyer fell back because local OpenAI call returned 403; live answers exposed remaining third-person manager/logistics wording."
+      }
+    ]
+  }
+}

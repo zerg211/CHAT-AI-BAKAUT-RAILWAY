@@ -239,6 +239,42 @@ describe('post-answer verifier', () => {
     expect(after.status).toBe('pass');
   });
 
+  it('flags third-person manager wording so LLM can rewrite it in first person', () => {
+    const result = verifyPostAnswer({
+      answer: 'Точное наличие и доставку по Азову подтвердит менеджер или логистика после заявки.',
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.issues.map((issue) => issue.code)).toContain('third_person_manager_role_handoff');
+    expect(result.checkedPolicies).toContain('ai_manager_voice_policy');
+  });
+
+  it('keeps a deterministic safety repair for third-person manager wording only as fallback', () => {
+    const verification = verifyPostAnswer({
+      answer: 'Наличие и доставку уточнит менеджер/логистика.',
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest
+    });
+    const repaired = repairAnswerForPostAnswerVerification({
+      answer: 'Наличие и доставку уточнит менеджер/логистика.',
+      verification
+    });
+    const after = verifyPostAnswer({
+      answer: repaired,
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest
+    });
+
+    expect(repaired).toMatch(/посчитаю|сверю/iu);
+    expect(repaired).not.toMatch(/менеджер/iu);
+    expect(after.status).toBe('pass');
+  });
+
   it('elevates ungrounded fact claim audit warnings into verification errors', () => {
     const result = verifyPostAnswer({
       answer: 'Эта модель актуальна в текущей линейке производителя.',

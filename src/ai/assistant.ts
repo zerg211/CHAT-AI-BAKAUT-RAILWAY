@@ -7521,6 +7521,7 @@ function buildCompactAnswerSystemPrompt() {
     'Use only the provided answerContext for concrete product names, prices, specs, and catalog facts. If productCardsShown is present, those cards are the authoritative visible recommendations.',
     'For product-card turns, keep the text short: a practical conclusion, one main model if needed, and one brief tradeoff. Let the cards carry the full catalog list.',
     'Do not claim live warehouse availability, delivery cost, discounts, special terms, or deadlines as final. Speak as the BAKAUT AI manager: separate catalog presence from your own stock/logistics verification wording, not from a third-person manager.',
+    'Never write that "a manager will confirm/check/call" or "through a manager". You are the AI manager in this chat; for stock/logistics facts write in first person: "я сверю по складу", "я посчитаю доставку через логистику", or "я передам запрос профильному специалисту".',
     'Do not ask for name, phone, callback, or a form unless agentTurnContract.leadAllowed is true and the current task actually requires specialist follow-up.',
     'For technical or comparison turns, answer the buyer question first at the truthful general level, then mention what depends on exact model or conditions.',
     'If catalog matches are shown, do not say there are no matching products. If no trustworthy catalog product is provided, do not invent model names.'
@@ -7529,7 +7530,7 @@ function buildCompactAnswerSystemPrompt() {
 
 function commercialManagerVerificationGuidance(contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return '';
-  return 'This turn includes a commercial fact that cannot be promised as final from catalog data alone. If the answer mentions live stock, warehouse availability, delivery price, delivery terms, discounts, order timing, or special conditions, explicitly say it in first person as the BAKAUT AI manager: "актуальный склад сверю перед оформлением" or "доставку посчитаю по адресу через логистику". Do not write that a third-person manager must confirm it. Do not replace the useful answer with a vague refusal; keep the product/technical answer moving, and only ask for contact when the semantic contract allows it.';
+  return 'This turn includes a commercial fact that cannot be promised as final from catalog data alone. If the answer mentions live stock, warehouse availability, delivery price, delivery terms, discounts, order timing, or special conditions, explicitly say it in first person as the BAKAUT AI manager: "актуальный склад сверю перед оформлением" or "доставку посчитаю по адресу через логистику". Never write that a third-person manager will confirm/check/call; if another team is needed, say "я передам запрос на склад/в логистику/профильному специалисту". Do not replace the useful answer with a vague refusal; keep the product/technical answer moving, and only ask for contact when the semantic contract allows it.';
 }
 
 function stripLeadPressureTail(answer: string) {
@@ -7547,7 +7548,6 @@ function stripLeadPressureTail(answer: string) {
 
 function ensureCommercialManagerVerification(answer: string, contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return answer;
-  answer = sanitizeThirdPersonManagerRole(answer);
   const commercialTextPresent = /(?:\u043d\u0430\u043b\u0438\u0447|\u0441\u043a\u043b\u0430\u0434|\u043e\u0442\u0433\u0440\u0443\u0437|\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|\u0441\u043a\u0438\u0434|\u0443\u0441\u043b\u043e\u0432|\u043a\u043e\u043c\u043c\u0435\u0440\u0447|in\s+stock|delivery|shipping|discount|terms)/iu.test(answer);
   const pureCommercialTask = contract.taskType === 'pure_delivery' ||
     contract.taskType === 'pure_availability' ||
@@ -7607,11 +7607,6 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, (_match, label: string) => visibleLinkLabel(label))
     .replace(/https?:\/\/\S+/gi, '')
     .replace(/\b(?:[\w-]+\.)+(?:ru|com|net|org|рф|su|io|dev|shop|site)\b(?:\/\S*)?/gi, '')
-    .replace(/Живое\s+складское\s+наличие\s+и\s+условия\s+проверяет\s+менеджер\.?/giu, 'Актуальный склад и условия отгрузки сверю перед оформлением.')
-    .replace(/Точное\s+наличие\s+и\s+возможность\s+отгрузки\s+должен\s+подтвердить\s+менеджер\s+по\s+актуальному\s+складу\.?/giu, 'Актуальный склад и возможность отгрузки сверю перед оформлением.')
-    .replace(/Точную\s+стоимость\s+и\s+условия\s+доставки\s+должен\s+подтвердить\s+менеджер\s+или\s+логистика\s+по\s+адресу\s+и\s+способу\s+отправки\.?/giu, 'Точную стоимость и условия доставки посчитаю по адресу и способу отправки через логистику.')
-    .replace(/Точные\s+коммерческие\s+условия\s+должен\s+подтвердить\s+менеджер\.?/giu, 'Точные коммерческие условия сверю перед оформлением.')
-    .replace(/Актуальный склад и условия отгрузки сверю перед оформлением\.\s*Актуальный склад и возможность отгрузки сверю перед оформлением\./giu, 'Актуальный склад и возможность отгрузки сверю перед оформлением.')
     .replace(/из\s+наличия/giu, 'из каталога')
     .replace(/(?:^|\n)\s*отлично,\s*беру\s+комплект:?/giu, '\nОк, комплект понятен:')
     .replace(/(?:^|\n)\s*беру\s+комплект:?/giu, '\nКомплект понятен:')
@@ -7623,7 +7618,6 @@ function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
   if (plan?.followUpPolicy === 'answerNowNoDeferredOffer') {
     cleaned = stripDeferredOfferTail(cleaned);
   }
-  cleaned = sanitizeThirdPersonManagerRole(cleaned);
   return sanitizeVisibleAnswerNumbers(cleaned).trim();
 }
 
@@ -7906,7 +7900,8 @@ export class AssistantService {
             'Use only the provided catalog cards, dialogue memory, lead state, and safety contracts.',
             'If product cards are shown, the first visible card is the primary recommendation. Do not recommend hidden cards as visible cards.',
             'Do not name product IDs or SKUs unless they are buyer-facing model names from productCardsShown.',
-            'Do not invent stock, delivery price, discount, delivery time, or final terms. Say you will verify them through specialist/logistics when needed.',
+            'Do not invent stock, delivery price, discount, delivery time, or final terms. Say in first person that you will verify them through stock, logistics, or a responsible specialist when needed.',
+            'Never write that a third-person manager will confirm/check/call. You are the AI manager in this chat; write "я сверю", "я посчитаю", or "я передам запрос".',
             'If leadStateMachine.state is created, confirm the contact was received and do not ask for it again.',
             'If leadStateMachine says contact or name is missing and lead policy allows it, ask only for the missing item.',
             'If leadStateMachine forbids contact, do not ask for name, phone, contact, callback, or form.',
@@ -7952,6 +7947,7 @@ export class AssistantService {
             'Do not output JSON, markdown fences, diagnostics, or policy names.',
             'If leadStateMachine.leadCreated is true, confirm the contact/request was received and do not ask for name, phone, contact, callback, or a form again.',
             'For stock, delivery, discount, deadlines, or exact commercial terms, never promise the final fact. Say in first person that you will verify/check/calculate it through logistics, stock, or the responsible specialist.',
+            'Do not phrase the AI assistant as a separate third-person manager. Replace "менеджер уточнит/проверит/свяжется" with first-person wording such as "я сверю по складу", "я посчитаю через логистику", or "я передам запрос профильному специалисту".',
             'Use only catalog/product facts already present in the provided answer context. Do not invent new products, prices, stock, delivery cost, or dates.',
             'Keep the response concise and natural.'
           ].join('\n')
