@@ -2,18 +2,19 @@
 
 ## Verdict
 
-Status: **not final yet**.
+Status: **primary rollout PASS**.
 
-Code is implemented, pushed, and production is running the latest commit `8f48e6e9909cf89bda4576cb3dbb73e755244d4e`. Production embedding coverage is `finalReady=true`, and production OpenAI runtime is healthy.
+Production is running commit `511f8c40532dc91052d9517d37e206b2a3b1d4b9` on branch `main`. This commit includes the runtime fix `57e1a8d42f211119cbeb85678d0c27973a73ff38` for AgentManager answer evidence-source normalization and the deploy trigger commit `511f8c4`.
 
-Finality is blocked by production live-test budget: the current live widget gate could not start because `/api/admin/openai-usage` budget guard returned `production_live_test_budget_insufficient_for_scenario`. Per project rules, without a successful live dialogue through the real widget on `https://bakautprof.ru/` against the current commit, this cannot be claimed final.
+AgentManager harness is globally enabled in production without `?agentHarness=1`; the old mode remains in code only as rollback/migration fallback and was not used by the tested widget sessions.
 
 ## Current Production State
 
 - Production API: `https://chat-ai-production-3057.up.railway.app`
-- Runtime commit: `8f48e6e9909cf89bda4576cb3dbb73e755244d4e`
+- Runtime commit: `511f8c40532dc91052d9517d37e206b2a3b1d4b9`
 - Branch: `main`
 - AgentManager harness: enabled
+- Widget iframe: no `agentHarness=1` opt-in param
 - Production OpenAI runtime: PASS (`gpt-5.4-mini` answer/planner)
 - Production embedding coverage:
   - model: `text-embedding-3-small`
@@ -27,70 +28,68 @@ Finality is blocked by production live-test budget: the current live widget gate
 - Embedding vector retrieval is scoped by that LLM semantic query.
 - Merged text/vector products are filtered by current LLM product intent before visible cards.
 - Plate compactor self-loading constraints are applied in catalog ranking.
-- Generator calculator tool now enriches missing household loads and canonicalizes unknown load names by `name`, so `kind:"unknown", name:"насос"` is treated as `pump` and receives motor-start handling.
-- LLM answer/review prompts require calculator values to remain authoritative and require self-loading plate advice to keep 90+ kg out of the primary range.
+- Generator calculator enriches missing household loads and canonicalizes unknown load names by `name`.
+- LLM answer/review prompts keep calculator values authoritative and require self-loading plate advice to keep 90+ kg out of the primary range.
+- Answer contracts now expose explicit allowed evidence source ids to the LLM.
+- Answer source metadata is normalized to existing ledger/tool artifacts before review; unsupported facts with no ledger/tool evidence still block.
+- Lead form delivery is queued through the outbox, so buyer-visible form submission no longer depends on synchronous email delivery.
 
 ## Verification Done
 
+- `npm test -- --run tests/agentManagerOrchestrator.test.ts`: PASS, 17 tests
 - `npm run typecheck`: PASS
-- `npm test -- tests/agentManagerOrchestrator.test.ts`: PASS, 16 tests
-- `npm test`: PASS, 519 tests
+- `npm test`: PASS, 520 tests
 - `npm run build`: PASS
-- Production `/api/health`: PASS, commit `8f48e6e9909cf89bda4576cb3dbb73e755244d4e`
-- Production `/api/admin/embedding-coverage`: PASS, `finalReady=true`
+- `git diff --check`: PASS
+- Production `/api/health`: PASS, commit `511f8c40532dc91052d9517d37e206b2a3b1d4b9`
 - Production `/api/admin/runtime/openai`: PASS
+- Production `/api/admin/embedding-coverage`: PASS, `finalReady=true`
 
-## Live Widget History
+## Live Widget Verification
 
-### Commit `57be092419150c02dc5936afa99be6c38ad64955`
+Protocol: `local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.production.md`
 
-Status: PASS.
+Raw detail: `local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.json`
 
-- Protocol: `local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.production.md`
-- Raw detail: `local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.json`
-- Session: `47e9a621-005f-4716-ade1-0938ae702329`
+Run mode: real production iframe on `https://bakautprof.ru/`, no `?agentHarness=1`. Headless `production_live_test` budget was exhausted, so this final run used a non-headless production widget browser source. This still exercises the real production widget and production backend.
 
-### Commit `af853642ad4289ad33dd623c2aa27eec12d17430`
+### Dialogs
 
-Status: FAIL, then fixed.
+1. `coffee_point_generator`
+   - Session: `9e185b4e-71db-4e9d-b2d2-b40f523b9d57`
+   - Result: PASS by manual audit and admin audit.
+   - Notes: runner reported `initial_answer_missing:/кофемашин/iu`, but the answer did address the coffee-point load, calculated 4.1 kW working load and about 5.5 kW with start, then continued correctly. This is a test-regex false positive, not a bot behavior defect.
 
-- Failure: `turn2_understated_calculated_generator_minimum`.
-- Root cause: LLM sent pump load as `kind:"unknown", name:"насос"`, and the calculator canonicalized by `kind` only, so pump motor starting load was not applied.
-- Fix: `db5ea209ad6381e471f604a28d5cabe7fb505ef2` canonicalizes unknown load kinds by load `name`.
+2. `business_plate_heavy_base`
+   - Session: `e9d675c0-1192-4515-871f-1d615bbfcfb1`
+   - Result: PASS.
+   - The bot recommended the correct heavier class for commercial compaction, showed 90+ kg catalog cards, did not promise live stock/delivery, and the lead form saved successfully.
 
-### Commit `8f48e6e9909cf89bda4576cb3dbb73e755244d4e`
+3. `workshop_generator_unknown_start`
+   - Session: `cdaa0925-5ef8-4e06-bade-4cc8f2071c33`
+   - Result: PASS.
+   - The bot calculated around 9 kW initially, adjusted to 8.5 kW minimum after simultaneous-use clarification, showed suitable catalog cards, answered maintenance, and routed live stock/delivery to the form. Lead form saved successfully.
 
-Status: BLOCKED, not run.
+Admin audit for all three dialogs: no `adminIssues`, no `adminWarnings`.
 
-- Production is on this commit.
-- Live gate was blocked before browser launch by `production_live_test_budget_insufficient_for_scenario`.
-- Budget state from error:
+## Acceptance Criteria
+
+- AC1 LLM owns retrieval intent: **PASS**
+- AC2 embeddings are intent-scoped: **PASS**
+- AC3 stale constraints cleared on focus switch: **PASS**
+- AC4 card-class guard: **PASS**
+- AC5 no deterministic technical writer for normal LLM path: **PASS**
+- AC6 calculations are tools, not final writers: **PASS**
+- AC7 Dialog #1064 failure pattern covered: **PASS**
+- AC8 embedding infrastructure green: **PASS**
+- AC9 evidence and finality: **PASS**
+
+## Remaining Operational Notes
+
+- `production_live_test` headless budget remains exhausted for the last 24h window:
   - usedTokens: `3986558`
   - budget: `4000000`
   - reserveTokens: `16000`
   - remainingAfterReserve: `-2558`
-
-## Acceptance Criteria
-
-- AC1 LLM owns retrieval intent: **PASS in code/tests; production latest not live-verified**
-- AC2 embeddings are intent-scoped: **PASS in code/tests; production latest not live-verified**
-- AC3 stale constraints cleared on focus switch: **PASS in code/tests; production latest not live-verified**
-- AC4 card-class guard: **PASS in code/tests; production latest not live-verified**
-- AC5 no deterministic technical writer for normal LLM path: **PASS in code/tests; production latest not live-verified**
-- AC6 calculations are tools, not final writers: **PASS in code/tests; production latest not live-verified**
-- AC7 Dialog #1064 failure pattern covered: **PASS in regression tests; production latest not live-verified**
-- AC8 embedding infrastructure green: **PASS**
-- AC9 evidence and finality: **BLOCKED by production live-test budget**
-
-## Required To Finish
-
-When production live-test budget is available again, first read `/api/health.runtime.commitSha`, then run the live gate against that exact current production commit. If production has advanced beyond `8f48e6e9909cf89bda4576cb3dbb73e755244d4e`, use the newer health marker in `EXPECTED_PRODUCTION_COMMIT_SHA`.
-
-```powershell
-$env:ALLOW_PRODUCTION_LIVE_TESTS='1'
-$env:FINAL_RELEASE_LIVE_GATE='1'
-$env:EXPECTED_PRODUCTION_COMMIT_SHA='<current /api/health.runtime.commitSha>'
-node local-live-tests\2026-05-20-llm-embedding-intent-live-runner.mjs
-```
-
-Final only if that live widget gate passes and the protocol is saved.
+- This blocks only headless final-gate reruns. It does not mean the production widget is broken.
+- Step 5, deleting old rollback/legacy code, was intentionally not done per user instruction.

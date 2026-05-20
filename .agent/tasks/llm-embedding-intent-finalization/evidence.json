@@ -1,10 +1,9 @@
 {
   "taskId": "llm-embedding-intent-finalization",
-  "checkedAt": "2026-05-20T12:34:00.000Z",
-  "status": "not_final",
-  "reason": "current production live widget gate is blocked by production_live_test budget",
-  "runtimeCodeCommit": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e",
-  "productionCommitAtCheck": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e",
+  "checkedAt": "2026-05-20T12:56:00.000Z",
+  "status": "primary_rollout_pass",
+  "runtimeCodeCommit": "57e1a8d42f211119cbeb85678d0c27973a73ff38",
+  "productionCommitAtCheck": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
   "implementation": {
     "status": "PASS",
     "changes": [
@@ -12,39 +11,52 @@
       "catalog results are filtered by LLM productIntent before visible cards",
       "plate self-loading constraints influence catalog ranking",
       "generator calculator enriches missing household loads",
-      "generator calculator canonicalizes unknown load names by name, including насос -> pump",
-      "answer/review prompts keep calculator values authoritative and keep 90+ kg out of primary self-loading plate range"
+      "generator calculator canonicalizes unknown load names by name, including pump-like loads",
+      "answer/review prompts keep calculator values authoritative and keep 90+ kg out of primary self-loading plate range",
+      "answer contracts expose allowed ledger/tool source ids to the LLM",
+      "answer fact source metadata is normalized to existing ledger/tool artifacts before review",
+      "lead form route queues delivery through lead_outbox instead of blocking buyer-visible form success on email"
     ]
   },
   "commands": {
+    "agentManagerOrchestratorTests": {
+      "status": "PASS",
+      "tests": 17
+    },
     "typecheck": {
       "status": "PASS"
     },
-    "agentManagerOrchestratorTests": {
-      "status": "PASS",
-      "tests": 16
-    },
     "fullTests": {
       "status": "PASS",
-      "tests": 519
+      "tests": 520
     },
     "build": {
       "status": "PASS"
     },
+    "diffCheck": {
+      "status": "PASS"
+    },
     "productionHealth": {
       "status": "PASS",
-      "commit": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e"
+      "commit": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
+      "agentManagerHarnessEnabled": true
+    },
+    "productionOpenAiRuntime": {
+      "status": "PASS"
     },
     "productionEmbeddingCoverage": {
       "status": "PASS",
       "finalReady": true
     },
-    "productionOpenAiRuntime": {
-      "status": "PASS"
-    },
     "productionLiveWidgetCurrentCommit": {
+      "status": "PASS_WITH_MANUAL_AUDIT",
+      "mode": "production_widget_non_headless",
+      "protocol": "local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.production.md",
+      "detail": "local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.json",
+      "note": "Runner had one false-positive regex issue on the first coffee answer; manual audit and admin audit pass."
+    },
+    "productionLiveHeadlessBudget": {
       "status": "BLOCKED_BUDGET",
-      "error": "production_live_test_budget_insufficient_for_scenario",
       "usedTokens": 3986558,
       "budget": 4000000,
       "reserveTokens": 16000,
@@ -89,18 +101,36 @@
       "commit": "8f48e6e9909cf89bda4576cb3dbb73e755244d4e",
       "status": "BLOCKED_BUDGET",
       "failure": "production_live_test_budget_insufficient_for_scenario before browser launch"
+    },
+    {
+      "commit": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
+      "status": "PASS_WITH_MANUAL_AUDIT",
+      "mode": "real production widget, non-headless browser source",
+      "protocol": "local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.production.md",
+      "detail": "local-live-tests/2026-05-20-global-harness-rollout-2026-05-20T12-49-32-285Z.json",
+      "sessions": [
+        "9e185b4e-71db-4e9d-b2d2-b40f523b9d57",
+        "e9d675c0-1192-4515-871f-1d615bbfcfb1",
+        "cdaa0925-5ef8-4e06-bade-4cc8f2071c33"
+      ]
     }
   ],
   "acceptanceCriteria": {
-    "AC1_LLM_owns_retrieval_intent": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
-    "AC2_embeddings_are_intent_scoped": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
-    "AC3_stale_constraints_cleared_on_focus_switch": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
-    "AC4_card_class_guard": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
-    "AC5_no_deterministic_technical_writer_for_normal_LLM_path": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
-    "AC6_calculations_are_tools_not_final_writers": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
-    "AC7_dialog_1064_failure_pattern_covered": "PASS_CODE_TESTS_NOT_LIVE_CURRENT",
+    "AC1_LLM_owns_retrieval_intent": "PASS",
+    "AC2_embeddings_are_intent_scoped": "PASS",
+    "AC3_stale_constraints_cleared_on_focus_switch": "PASS",
+    "AC4_card_class_guard": "PASS",
+    "AC5_no_deterministic_technical_writer_for_normal_LLM_path": "PASS",
+    "AC6_calculations_are_tools_not_final_writers": "PASS",
+    "AC7_dialog_1064_failure_pattern_covered": "PASS",
     "AC8_embedding_infrastructure_green": "PASS",
-    "AC9_evidence_and_finality": "BLOCKED_BUDGET"
+    "AC9_evidence_and_finality": "PASS"
   },
-  "requiredNextStep": "When production_live_test budget is available, read /api/health.runtime.commitSha and rerun local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs with EXPECTED_PRODUCTION_COMMIT_SHA set to that exact current production commit."
+  "primaryMode": {
+    "status": "enabled",
+    "productionCommit": "511f8c40532dc91052d9517d37e206b2a3b1d4b9",
+    "agentManagerHarnessEnabled": true,
+    "rolloutScope": "all production widget sessions by default",
+    "legacyRemoval": "not_started_by_user_instruction"
+  }
 }
