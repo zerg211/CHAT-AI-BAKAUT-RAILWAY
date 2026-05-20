@@ -81,7 +81,7 @@ const schema = z.object({
   OPENAI_HEADLESS_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(4000000),
   OPENAI_BUDGET_GUARD_RESERVE_TOKENS: defaultNonNegativeInt(16000),
   OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(true),
-  AGENT_MANAGER_HARNESS_ENABLED: booleanFlag(false),
+  AGENT_MANAGER_HARNESS_ENABLED: booleanFlag(process.env.NODE_ENV !== 'test'),
   AGENT_MANAGER_LEDGER_STATE_ENABLED: booleanFlag(false),
   AGENT_MANAGER_LLM_ANSWER_STEP_ENABLED: booleanFlag(false),
   AGENT_MANAGER_TURN_CHECKPOINT_RECOVERY_ENABLED: booleanFlag(false),
