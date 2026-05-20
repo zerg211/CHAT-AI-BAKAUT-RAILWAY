@@ -2,100 +2,116 @@
 
 ## Verdict
 
-Status: **not final yet**.
+Status: **final**.
 
-Code implementation is pushed to GitHub as `afdfc62380b23816ada1df4bf0d6c72f135c135e`, and local verification is green. Production is not yet running this commit at the time of this evidence pass: `/api/health` reports `8a33c3bd1f4c4343035c5d9e9947b30c06b4c7c1`.
+Production is running commit `57be092419150c02dc5936afa99be6c38ad64955`, production embedding coverage is `finalReady=true`, and the real widget live gate on `https://bakautprof.ru/` passed manual + metadata audit.
 
-Finality is blocked until Railway runs the new commit and a live widget dialogue through `https://bakautprof.ru/` passes manual + metadata audit.
+## Final Runtime Evidence
 
-## Implementation Evidence
+- Production API: `https://chat-ai-production-3057.up.railway.app`
+- Runtime commit: `57be092419150c02dc5936afa99be6c38ad64955`
+- Branch: `main`
+- AgentManager harness: enabled
+- Production OpenAI runtime: PASS (`gpt-5.4-mini` answer/planner)
+- Production embedding coverage:
+  - model: `text-embedding-3-small`
+  - products: `3999 / 4325 usable`, coverage `0.9246242774566474`
+  - catalog pages: `102 / 102 usable`, coverage `1`
+  - finalReady: `true`
+
+## Live Widget Gate
+
+Status: **PASS**.
+
+- Protocol: `local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.production.md`
+- Raw detail: `local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.json`
+- Session: `47e9a621-005f-4716-ade1-0938ae702329`
+- Scenario: generator sizing, pump-power update, switch to plate compactor, explicit plate catalog request.
+
+Buyer-visible audit:
+
+- PASS: no canned `fast_technical_orientation` phrase.
+- PASS: generator first turn used calculator profile and clearly marked `5 kW` as the calculated minimum from estimated loads.
+- PASS: after pump `1.1 kW`, answer used calculated minimum `4.5 kW` and practical `5 kW` class.
+- PASS: plate turn switched context from generator to plate compactor.
+- PASS: explicit plate catalog request showed plate cards only.
+- PASS: visible plate cards were in the self-loading range (`60-72 kg`), not stale generator cards or heavy 90+ kg first choices.
+
+Admin metadata audit:
+
+- PASS: `agentManager=true` on all turns.
+- PASS: `recovered=false` on all turns.
+- PASS: no fallback/recovery diagnostics.
+- PASS: `catalog.search` plate request used `retrieval.intent="plate"` and `usedEmbeddings=true`.
+- PASS: plate metadata product cards contain plate compactors only.
+- PASS: generator calculator tool profile is present on both generator turns.
+
+## Acceptance Criteria
 
 ### AC1: LLM owns retrieval intent
 
-Status: **PASS, local code**.
+Status: **PASS**.
 
-- `src/ai/agentManagerOrchestrator.ts` now requires LLM tool calls to provide `semanticQuery` and `productIntent` for catalog search.
-- `toolRequestProductIntent(...)` extracts product class from the LLM tool request before fallback heuristics.
-- `inferVisibleCardIntent(...)` prioritizes current LLM tool requests before prior dialogue state.
+`catalog.search` tool requests carry LLM-owned `productIntent` and `semanticQuery`. Runtime metadata shows the plate request used `intent=plate` after prior generator context.
 
 ### AC2: Embeddings are intent-scoped
 
-Status: **PASS, local code**.
+Status: **PASS**.
 
-- `catalog.search` passes `embeddingQuery: semanticQuery` into `searchCatalogProducts(...)`.
-- Runtime tool payload exposes `retrieval.intent`, `retrieval.query`, `retrieval.embeddingQuery`, `retrieval.textCount`, `retrieval.vectorCount`, and `retrieval.usedEmbeddings`.
-- This makes vector retrieval auditable and tied to the LLM-understood current focus.
+Embeddings are called with the LLM semantic query, and the merged text/vector result is filtered by current product intent. Live metadata shows `usedEmbeddings=true` and `embeddingQuery` scoped to plate compactors.
 
 ### AC3: stale constraints cleared on focus switch
 
-Status: **PASS, local code**.
+Status: **PASS**.
 
-- `src/ai/assistant.ts` now prioritizes planner/LLM product intent before stale profile/state intent in `productIntentFromSelection(...)`.
-- This prevents old generator constraints from controlling a new plate-compactor turn.
+The live dialogue switched from generator to plate compactor. No generator cards were shown on the plate turns.
 
 ### AC4: card-class guard
 
-Status: **PASS, local tests**.
+Status: **PASS**.
 
-- `searchCatalogProducts(...)` filters merged text/vector results by LLM `productIntent`.
-- Wrong-class candidates are dropped and traced as `catalog_products_filtered_by_intent:<intent>:<count>`.
-- Regression test proves a stale vector generator candidate is not shown on a plate-compactor turn.
+Wrong-class candidates are filtered before visible cards. Live metadata includes intent filtering and no generator cards in plate metadata.
 
 ### AC5: no deterministic technical writer for normal LLM path
 
-Status: **PASS, local tests**.
+Status: **PASS**.
 
-- `legacyAnswerWriterAllowed('fast_technical_orientation')` is disabled by default when legacy writers are disabled.
-- Tests assert the ordinary generator/plate technical orientation path does not emit `fast_technical_orientation` and does not start with the canned phrase.
+No `fast_technical_orientation` answer mode appeared in production metadata, and the canned phrase did not appear in the widget.
 
 ### AC6: calculations are tools, not final writers
 
-Status: **PASS, local tests**.
+Status: **PASS**.
 
-- Existing generator calculation traces remain available.
-- The primary answer path stays LLM/planner-owned unless an emergency deterministic fallback is explicitly marked.
+Generator sizing is tool-grounded: the calculator produces `requiredNominalKw` / `requiredStartingKw`, and the LLM answer uses those values. The second generator turn produced `requiredNominalKw=4.5` and `requiredStartingKw=4.5`.
 
 ### AC7: Dialog #1064 failure pattern covered
 
-Status: **PASS, local tests**.
+Status: **PASS**.
 
-- `tests/agentManagerOrchestrator.test.ts` includes a regression where the dialogue has prior generator history, the current LLM tool request asks for a plate compactor, vector search returns a generator, and visible cards remain plate-only.
-- `tests/assistantFallback.test.ts` covers technical orientation through the LLM planner path instead of the canned fast writer.
+Regression tests and production live gate cover the failure pattern: after generator context, a plate-compactor request remains plate-scoped through LLM intent, semantic embedding query, catalog filtering, and visible cards.
 
 ### AC8: embedding infrastructure remains green
 
-Status: **PASS, local runtime checks**.
+Status: **PASS**.
 
-- `npm run embeddings:coverage` succeeds.
-- `npm run embeddings:backfill -- --dry-run --limit=50` succeeds.
-- Existing test suite remains green.
+Local command `npm run embeddings:coverage` succeeds. Production coverage endpoint is final-ready.
 
 ### AC9: evidence and finality
 
-Status: **BLOCKED, production live gate**.
+Status: **PASS**.
 
-- Evidence files exist under `.agent/tasks/llm-embedding-intent-finalization/`.
-- Production admin auth works.
-- Production OpenAI runtime is healthy.
-- Production embedding coverage is final-ready:
-  - products coverage: `0.9246242774566474`
-  - catalog pages coverage: `1`
-  - model: `text-embedding-3-small`
-- Blocker: Railway health marker still reports old commit `8a33c3bd1f4c4343035c5d9e9947b30c06b4c7c1`, not `afdfc62380b23816ada1df4bf0d6c72f135c135e`.
-- Live widget verification has not been run against the new code because production is not yet on the new commit.
+Code is pushed, production is on the target commit, production coverage targets are met, live widget protocol is saved, and every audited acceptance criterion is PASS.
 
 ## Verification Commands
 
-Raw command outputs are saved under `.agent/tasks/llm-embedding-intent-finalization/raw/`.
-
 - `npm run typecheck`: PASS
-- `npm test -- tests/agentManagerOrchestrator.test.ts tests/agentManagerConfig.test.ts tests/assistantFallback.test.ts tests/recommendationRanking.test.ts`: PASS, 238 tests
-- `npm test`: PASS, 510 tests
+- `npm test -- tests/agentManagerOrchestrator.test.ts tests/recommendationRanking.test.ts tests/assistantFallback.test.ts tests/factClaimPlanner.test.ts tests/chatStream.test.ts`: PASS, 251 tests
+- `npm test`: PASS, 517 tests
 - `npm run build`: PASS
-- `npm run migrate`: PASS
-- `npm run embeddings:coverage`: PASS
-- `npm run embeddings:backfill -- --dry-run --limit=50`: PASS
-- production preflight: admin runtime PASS, production coverage PASS, deploy marker BLOCKED
+- `npm run embeddings:coverage`: PASS locally, local DB not final-ready
+- Production `/api/admin/embedding-coverage`: PASS, `finalReady=true`
+- Production `/api/admin/runtime/openai`: PASS
+- Production live widget gate: PASS
 
 ## Raw Artifacts
 
@@ -103,18 +119,6 @@ Raw command outputs are saved under `.agent/tasks/llm-embedding-intent-finalizat
 - `raw/targeted-tests.txt`
 - `raw/full-tests.txt`
 - `raw/build.txt`
-- `raw/migrate.txt`
 - `raw/embedding-coverage-local.txt`
-- `raw/embedding-backfill-dry-run.txt`
-- `raw/production-preflight.txt`
-
-## Next Required Step
-
-After Railway updates `/api/health.runtime.commitSha` to a commit containing `afdfc62`, run a live adaptive dialogue through the real widget on `https://bakautprof.ru/`:
-
-1. Start with a generator sizing consultation.
-2. Provide pump power to verify calculation path and absence of stale default `5-6 кВт` wording.
-3. Switch to a plate-compactor question.
-4. Verify visible cards are plate-compactor cards only, not generators.
-5. Audit admin metadata for LLM `productIntent`, intent-scoped `embeddingQuery`, no unmarked fallback/recovery, and card/answer consistency.
-6. Save the live protocol under `local-live-tests/*.production.md`.
+- `raw/production-final-preflight.txt`
+- `raw/production-live-widget.txt`

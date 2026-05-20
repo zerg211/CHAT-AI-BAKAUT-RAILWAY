@@ -1,0 +1,22 @@
+Production final preflight: PASS
+
+/api/health:
+commitSha=57be092419150c02dc5936afa99be6c38ad64955
+branch=main
+agentManagerHarnessEnabled=true
+answerModel=gpt-5.4-mini
+plannerModel=gpt-5.4-mini
+
+/api/admin/embedding-coverage:
+model=text-embedding-3-small
+finalReady=true
+products total=4325 embedded=4325 usable=3999 coverage=0.9246242774566474 ready=true
+catalog_pages total=102 embedded=102 usable=102 coverage=1 ready=true
+troubleshooting_cases total=0 embedded=0 usable=0 coverage=0 ready=false
+
+/api/admin/runtime/openai:
+ok=true
+provider=openai
+class=ok
+answerModel=gpt-5.4-mini
+plannerModel=gpt-5.4-mini

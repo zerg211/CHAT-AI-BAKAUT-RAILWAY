@@ -1,114 +1,111 @@
 {
   "taskId": "llm-embedding-intent-finalization",
-  "checkedAt": "2026-05-20T09:56:59.035Z",
-  "status": "not_final",
-  "localCommit": "afdfc62380b23816ada1df4bf0d6c72f135c135e",
-  "remoteMainCommit": "afdfc62380b23816ada1df4bf0d6c72f135c135e",
-  "productionCommit": "8a33c3bd1f4c4343035c5d9e9947b30c06b4c7c1",
+  "checkedAt": "2026-05-20T11:45:00.000Z",
+  "status": "final",
+  "localCommit": "57be092419150c02dc5936afa99be6c38ad64955",
+  "remoteMainCommit": "57be092419150c02dc5936afa99be6c38ad64955",
+  "productionCommit": "57be092419150c02dc5936afa99be6c38ad64955",
   "acceptanceCriteria": {
     "AC1_LLM_owns_retrieval_intent": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
-        "src/ai/agentManagerOrchestrator.ts requires semanticQuery and productIntent in catalog.search tool schema",
-        "toolRequestProductIntent extracts product class from the LLM tool request",
-        "inferVisibleCardIntent prioritizes current LLM tool request intent"
+        "catalog.search tool requests carry LLM productIntent and semanticQuery",
+        "live plate request metadata shows intent=plate after prior generator context"
       ]
     },
     "AC2_embeddings_are_intent_scoped": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
         "catalog.search passes embeddingQuery from LLM semanticQuery",
-        "retrieval metadata exposes intent, query, embeddingQuery, textCount, vectorCount, usedEmbeddings"
+        "live metadata shows usedEmbeddings=true for plate catalog request",
+        "merged candidates are filtered by productIntent before visible cards"
       ]
     },
     "AC3_stale_constraints_cleared_on_focus_switch": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
-        "productIntentFromSelection prioritizes planner/LLM product intent before stale profile/state"
+        "live dialogue switched from generator to plate compactor",
+        "plate turns showed no generator cards"
       ]
     },
     "AC4_card_class_guard": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
-        "searchCatalogProducts filters merged text/vector candidates by LLM productIntent",
-        "wrong-class filtering emits catalog_products_filtered_by_intent warning",
-        "agentManagerOrchestrator regression test blocks generator cards on plate turn"
+        "catalog_products_filtered_by_intent warnings appear when wrong-class candidates are removed",
+        "plate metadata product cards contain only plate compactors"
       ]
     },
     "AC5_no_deterministic_technical_writer_for_normal_LLM_path": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
-        "legacyAnswerWriterAllowed('fast_technical_orientation') returns false when legacy writers are disabled",
-        "assistantFallback tests assert no fast_technical_orientation answer mode and no canned phrase"
+        "no fast_technical_orientation answerMode in production metadata",
+        "canned fast technical phrase absent from widget transcript"
       ]
     },
     "AC6_calculations_are_tools_not_final_writers": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
-        "generator calculation trace remains available",
-        "primary answer is LLM/planner-owned unless explicit emergency fallback is marked"
+        "generator calculator tool profile present on both generator turns",
+        "pump update profile requiredNominalKw=4.5 and requiredStartingKw=4.5",
+        "LLM answer used 4.5 kW calculated minimum and 5 kW practical class"
       ]
     },
     "AC7_dialog_1064_failure_pattern_covered": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
-        "targeted regression covers generator history followed by plate-compactor LLM tool request",
-        "stale vector generator result is filtered out and plate card remains visible"
+        "regression tests cover generator-history followed by plate-compactor LLM tool request",
+        "production live gate covers the same focus switch and card consistency"
       ]
     },
     "AC8_embedding_infrastructure_green": {
-      "status": "PASS_LOCAL",
+      "status": "PASS",
       "evidence": [
-        "npm run embeddings:coverage PASS",
-        "npm run embeddings:backfill -- --dry-run --limit=50 PASS",
-        "npm test PASS"
+        "npm run embeddings:coverage command succeeds locally",
+        "production embedding coverage finalReady=true"
       ]
     },
     "AC9_evidence_and_finality": {
-      "status": "BLOCKED",
-      "blockers": [
-        "Railway /api/health is still on 8a33c3bd1f4c4343035c5d9e9947b30c06b4c7c1, not afdfc62380b23816ada1df4bf0d6c72f135c135e",
-        "Live widget test through https://bakautprof.ru/ has not been run against the new commit"
+      "status": "PASS",
+      "evidence": [
+        "code pushed to origin/main",
+        "Railway production marker is 57be092419150c02dc5936afa99be6c38ad64955",
+        "production coverage targets met",
+        "live widget protocol saved",
+        "manual + metadata audit PASS"
       ]
     }
   },
   "commands": {
     "typecheck": {
-      "status": "PASS",
-      "artifact": "raw/typecheck.txt"
+      "status": "PASS"
     },
     "targetedTests": {
       "status": "PASS",
-      "tests": 238,
-      "artifact": "raw/targeted-tests.txt"
+      "tests": 251
     },
     "fullTests": {
       "status": "PASS",
-      "tests": 510,
-      "artifact": "raw/full-tests.txt"
+      "tests": 517
     },
     "build": {
-      "status": "PASS",
-      "artifact": "raw/build.txt"
-    },
-    "migrate": {
-      "status": "PASS",
-      "artifact": "raw/migrate.txt"
+      "status": "PASS"
     },
     "localEmbeddingCoverage": {
-      "status": "PASS",
+      "status": "PASS_COMMAND",
       "finalReady": false,
-      "artifact": "raw/embedding-coverage-local.txt"
-    },
-    "localBackfillDryRun": {
-      "status": "PASS",
-      "artifact": "raw/embedding-backfill-dry-run.txt"
+      "note": "local DB coverage is not the production finality gate"
     },
     "productionPreflight": {
-      "status": "BLOCKED_DEPLOY_MARKER",
+      "status": "PASS",
+      "healthCommit": "57be092419150c02dc5936afa99be6c38ad64955",
       "runtime": "PASS",
-      "coverage": "PASS",
-      "artifact": "raw/production-preflight.txt"
+      "coverage": "PASS"
+    },
+    "productionLiveWidget": {
+      "status": "PASS",
+      "protocol": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.production.md",
+      "detail": "local-live-tests/2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.json",
+      "sessionId": "47e9a621-005f-4716-ade1-0938ae702329"
     }
   },
   "production": {
@@ -123,12 +120,20 @@
       "status": "PASS",
       "model": "text-embedding-3-small",
       "finalReady": true,
+      "productsTotal": 4325,
+      "productsUsable": 3999,
       "productsCoverage": 0.9246242774566474,
+      "catalogPagesTotal": 102,
+      "catalogPagesUsable": 102,
       "catalogPagesCoverage": 1
     },
     "liveWidget": {
-      "status": "NOT_RUN",
-      "reason": "production commit marker is old"
+      "status": "PASS",
+      "buyerIssues": [],
+      "metadataIssues": [],
+      "noFallbackOrRecovery": true,
+      "plateCardsOnly": true,
+      "selfLoadingPlateWeightsVisible": true
     }
   }
 }

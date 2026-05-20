@@ -1,0 +1,23 @@
+Production live widget gate: PASS
+
+Command:
+ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 EXPECTED_PRODUCTION_COMMIT_SHA=57be092419150c02dc5936afa99be6c38ad64955 node local-live-tests/2026-05-20-llm-embedding-intent-live-runner.mjs
+
+Output:
+{
+  "ok": true,
+  "protocolPath": "local-live-tests\\2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.production.md",
+  "detailPath": "local-live-tests\\2026-05-20-llm-embedding-intent-2026-05-20T11-38-27-888Z.json",
+  "sessionId": "47e9a621-005f-4716-ade1-0938ae702329",
+  "commit": "57be092419150c02dc5936afa99be6c38ad64955"
+}
+
+Manual audit summary:
+- Buyer-visible issues: none.
+- Admin metadata issues: none.
+- No fallback/recovery.
+- No fast_technical_orientation.
+- Generator calculator profile used on generator turns.
+- Pump update calculated requiredNominalKw=4.5 and requiredStartingKw=4.5.
+- Plate catalog request used embeddings with productIntent=plate.
+- Visible plate cards were 60-72 kg and plate-only.
