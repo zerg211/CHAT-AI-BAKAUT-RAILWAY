@@ -1466,6 +1466,7 @@ export class ProductRepository {
     const result = await this.db.query(
       `WITH ranked AS (
          SELECT ${PRODUCT_RESPONSE_COLUMNS},
+           updated_at,
            ts_rank_cd(search_tsv, websearch_to_tsquery('russian', $1)) AS retrieval_score,
            (
              SELECT count(*)::int

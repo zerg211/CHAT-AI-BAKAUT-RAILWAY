@@ -21,7 +21,7 @@ import { calculateGeneratorLoadProfile } from './loadProfile.js';
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts } from './productComparisonResearch.js';
-import { inferProductIntent, isCoreEquipment, productMatchesIntent, productMentionedInText } from './productClassifier.js';
+import { compactModelText, displayProductBrand, extractModelTokens, inferProductIntent, isCoreEquipment, productMatchesIntent, productMentionedInText } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 
@@ -209,6 +209,30 @@ function inferVisibleCardIntent(input: {
   return textIntent !== 'unknown' ? textIntent : latestActiveNeedProductClass(input.needState);
 }
 
+function productModelMentionedInText(product: Product, text: string) {
+  const compactText = compactModelText(text);
+  if (!compactText) return false;
+  const modelTokens = extractModelTokens(product.name)
+    .map((token) => compactModelText(token))
+    .filter((token) => token.length >= 5);
+  return modelTokens.some((token) => compactText.includes(token));
+}
+
+function productBrandMentionedInText(product: Product, text: string) {
+  const compactText = compactModelText(text);
+  const brand = displayProductBrand(product) || product.brand;
+  const compactBrand = compactModelText(brand ?? '');
+  return compactBrand.length >= 3 && compactText.includes(compactBrand);
+}
+
+function answerMentionedProducts(products: Product[], answerText: string) {
+  const exactModelMatches = products.filter((product) => productModelMentionedInText(product, answerText));
+  const exactWithBrand = exactModelMatches.filter((product) => productBrandMentionedInText(product, answerText));
+  if (exactWithBrand.length) return exactWithBrand;
+  if (exactModelMatches.length) return exactModelMatches;
+  return products.filter((product) => productMentionedInText(product, answerText));
+}
+
 function selectProductsForVisibleCards(input: {
   products: Product[];
   userMessage: string;
@@ -219,7 +243,7 @@ function selectProductsForVisibleCards(input: {
 }) {
   const unique = uniqueProducts(input.products);
   const cardIntent = inferVisibleCardIntent(input);
-  const mentioned = unique.filter((product) => productMentionedInText(product, input.answerText));
+  const mentioned = answerMentionedProducts(unique, input.answerText);
   const mentionedMatchingIntent = cardIntent === 'unknown'
     ? mentioned
     : mentioned.filter((product) => productMatchesIntent(product, cardIntent));

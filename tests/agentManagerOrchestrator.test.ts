@@ -360,6 +360,71 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.cardSelection?.droppedProductIds).toEqual([]);
   });
 
+  it('prefers exact answer-mentioned product models over broad same-brand card expansion', async () => {
+    class SameBrandProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          { ...product('evo-6200', 'Generator EVOline BQH 6200 E 5 kW', 'Generators'), brand: 'EVOline' },
+          { ...product('evo-7500', 'Generator EVOline BQH 7500 E 6 kW', 'Generators'), brand: 'EVOline' },
+          { ...product('zongshen-6200', 'Generator Zongshen BQH 6200 E 5 kW', 'Generators'), brand: 'Zongshen' }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const catalogModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for generator catalog options',
+          dialogueUnderstanding: 'the answer should show the exact selected generator model',
+          nextStepRationale: 'search catalog and answer with the selected product',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator EVOline BQH 6200 E',
+              limit: 8,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: null,
+              notes: null
+            },
+            rationale: 'buyer needs a generator card',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'The best reserve option is EVOline BQH 6200 E.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new SameBrandProducts() as never, new FakeLeads() as never, catalogModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show generator options for coffee point.'
+    });
+
+    expect(payload.productCards.map((card) => card.id)).toEqual(['evo-6200']);
+  });
+
   it('captures a provided contact through lead outbox before confirming receipt', async () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
