@@ -1,0 +1,54 @@
+{
+  "taskId": "llm-router-fast-path-finalization",
+  "status": "local_pass_not_final",
+  "finalReady": false,
+  "acceptanceCriteria": {
+    "AC1": "PASS_LOCAL",
+    "AC2": "PASS_LOCAL_LLM_ANSWERS_AND_LEAD_CONFIRMATION",
+    "AC3": "PASS_LOCAL_HARD_CONSTRAINTS_AND_CREATED_LEAD_GUARD",
+    "AC4": "PASS_LOCAL",
+    "AC5": "PASS_LOCAL"
+  },
+  "commands": [
+    {
+      "command": "npm run typecheck",
+      "status": "PASS",
+      "artifact": "artifacts/typecheck.txt"
+    },
+    {
+      "command": "npm test -- tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts tests/remediationCommercialFallback.test.ts tests/assistantLegacyWriterGuard.test.ts tests/postAnswerVerifier.test.ts",
+      "status": "PASS",
+      "artifact": "artifacts/targeted-tests.txt"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "artifact": "artifacts/full-tests.txt"
+    },
+    {
+      "command": "npm run migrate",
+      "status": "PASS",
+      "artifact": "artifacts/migrate.txt"
+    },
+    {
+      "command": "npm run embeddings:coverage",
+      "status": "PASS_COMMAND_LOCAL_NOT_READY",
+      "artifact": "artifacts/embedding-coverage.txt"
+    },
+    {
+      "command": "npm run embeddings:backfill -- --dry-run --limit=50",
+      "status": "PASS",
+      "artifact": "artifacts/embedding-backfill-dry-run.txt"
+    }
+  ],
+  "finalityBlockers": [
+    "commit_push_pending",
+    "railway_deploy_observation_pending",
+    "production_widget_live_gate_pending"
+  ],
+  "notes": [
+    "Local lead-created confirmation is now LLM-authored from autoLead/LeadStateMachine context instead of a deterministic template override.",
+    "Post-answer verification blocks repeated contact requests after lead/contact creation.",
+    "Local embedding coverage command passes but local DB finalReady=false; this is not production embedding evidence."
+  ]
+}
