@@ -58,12 +58,12 @@ function message(content: string, role: Message['role'] = 'user'): Message {
   };
 }
 
-function product(id: string, name: string): Product {
+function product(id: string, name: string, category = 'Generators'): Product {
   return {
     id,
     name,
     brand: 'TEST',
-    category: 'Generators',
+    category,
     price: 1000,
     currency: 'RUB',
     sourceUrl: `https://example.test/${id}`,
@@ -287,6 +287,74 @@ describe('AgentManagerOrchestrator', () => {
       }
     });
     expect(payload.productCards.map((card) => card.id)).toEqual(expect.arrayContaining(['text-product', 'vector-product']));
+  });
+
+  it('filters cross-class catalog noise out of visible product cards', async () => {
+    class NoisyProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('generator-fit', 'Generator Dinking DK9000iE 7 kW', 'Generators'),
+          product('plate-noise', 'Vibroplita Wacker 90 kg', 'Vibroplita'),
+          product('cutter-noise', 'Cutter Husqvarna 350 mm', 'Cutters')
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const catalogModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for generator options for a coffee point',
+          dialogueUnderstanding: 'the buyer needs a generator, not compaction or cutting equipment',
+          nextStepRationale: 'search catalog and answer with suitable generator options',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator for coffee point 6 kW reserve',
+              limit: 8,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: null,
+              notes: null
+            },
+            rationale: 'buyer asked for generator options from the catalog',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'From the found catalog options, Generator Dinking DK9000iE is the relevant reserve option for the coffee point.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new NoisyProducts() as never, new FakeLeads() as never, catalogModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show generator options for coffee point.'
+    });
+
+    expect(payload.productCards.map((card) => card.id)).toEqual(['generator-fit']);
+    expect(payload.productCards.map((card) => card.id)).not.toContain('plate-noise');
+    expect(payload.productCards.map((card) => card.id)).not.toContain('cutter-noise');
+    expect((payload.metadata as { cardSelection?: { droppedProductIds?: string[] } }).cardSelection?.droppedProductIds).toEqual(expect.arrayContaining(['plate-noise', 'cutter-noise']));
   });
 
   it('captures a provided contact through lead outbox before confirming receipt', async () => {

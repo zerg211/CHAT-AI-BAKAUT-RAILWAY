@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
-import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductElectricalLoadItem } from '../shared/types.js';
+import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductElectricalLoadItem, ProductSelectionClass } from '../shared/types.js';
 import {
   AgentIntentContractSchema,
   AnswerContractSchema,
@@ -21,6 +21,7 @@ import { calculateGeneratorLoadProfile } from './loadProfile.js';
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts } from './productComparisonResearch.js';
+import { inferProductIntent, isCoreEquipment, productMatchesIntent, productMentionedInText } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 
@@ -148,6 +149,113 @@ function productCards(products: Product[], reasons: string[] = []): ProductCard[
     reasons,
     caveats: []
   }));
+}
+
+function uniqueProducts(products: Product[]) {
+  const seen = new Set<string>();
+  const unique: Product[] = [];
+  for (const product of products) {
+    if (seen.has(product.id)) continue;
+    seen.add(product.id);
+    unique.push(product);
+  }
+  return unique;
+}
+
+function latestActiveNeedProductClass(needState: CustomerNeedState): ProductSelectionClass {
+  const classes = (needState.activeNeeds ?? [])
+    .map((need) => need.productClass)
+    .filter((value): value is ProductSelectionClass => value !== 'commercial' && value !== 'unknown');
+  return classes.length ? classes[classes.length - 1] : 'unknown';
+}
+
+function toolRequestSemanticText(intent: AgentIntentContract) {
+  return intent.toolRequests.map((request) => {
+    const args = request.args as Record<string, unknown>;
+    const productNames = Array.isArray(args.productNames) ? args.productNames.filter((item): item is string => typeof item === 'string') : [];
+    const comparisonAttributes = Array.isArray(args.comparisonAttributes) ? args.comparisonAttributes.filter((item): item is string => typeof item === 'string') : [];
+    return [
+      request.rationale,
+      typeof args.query === 'string' ? args.query : '',
+      typeof args.reason === 'string' ? args.reason : '',
+      typeof args.notes === 'string' ? args.notes : '',
+      productNames.join(' '),
+      comparisonAttributes.join(' ')
+    ].filter(Boolean).join(' ');
+  }).join('\n');
+}
+
+function inferVisibleCardIntent(input: {
+  userMessage: string;
+  history: Message[];
+  intent: AgentIntentContract;
+  answerText: string;
+  needState: CustomerNeedState;
+}): ProductSelectionClass {
+  const recentHistory = input.history
+    .slice(-6)
+    .map((message) => message.content)
+    .join('\n');
+  const semanticText = [
+    recentHistory,
+    input.userMessage,
+    input.intent.userMessageSummary,
+    input.intent.dialogueUnderstanding,
+    input.intent.nextStepRationale,
+    toolRequestSemanticText(input.intent),
+    input.answerText
+  ].filter(Boolean).join('\n');
+  const textIntent = inferProductIntent(semanticText);
+  return textIntent !== 'unknown' ? textIntent : latestActiveNeedProductClass(input.needState);
+}
+
+function selectProductsForVisibleCards(input: {
+  products: Product[];
+  userMessage: string;
+  history: Message[];
+  intent: AgentIntentContract;
+  answerText: string;
+  needState: CustomerNeedState;
+}) {
+  const unique = uniqueProducts(input.products);
+  const cardIntent = inferVisibleCardIntent(input);
+  const mentioned = unique.filter((product) => productMentionedInText(product, input.answerText));
+  const mentionedMatchingIntent = cardIntent === 'unknown'
+    ? mentioned
+    : mentioned.filter((product) => productMatchesIntent(product, cardIntent));
+
+  let selected: Product[];
+  if (mentionedMatchingIntent.length) {
+    selected = mentionedMatchingIntent;
+  } else if (mentioned.length && cardIntent === 'unknown') {
+    selected = mentioned;
+  } else if (cardIntent !== 'unknown') {
+    selected = unique.filter((product) => productMatchesIntent(product, cardIntent));
+  } else {
+    selected = unique.filter((product) => isCoreEquipment(product));
+  }
+
+  if (cardIntent === 'unknown' && !mentioned.length) {
+    selected = [];
+  }
+
+  const selectedProducts = uniqueProducts(selected).slice(0, 8);
+  const selectedIds = new Set(selectedProducts.map((product) => product.id));
+  const droppedProductIds = unique
+    .filter((product) => !selectedIds.has(product.id))
+    .map((product) => product.id);
+  const warnings = droppedProductIds.length
+    ? [`product_cards_filtered:${droppedProductIds.length}`]
+    : [];
+
+  return {
+    intent: cardIntent,
+    products: selectedProducts,
+    selectedProductIds: selectedProducts.map((product) => product.id),
+    answerMentionedProductIds: mentioned.map((product) => product.id),
+    droppedProductIds,
+    warnings
+  };
 }
 
 function extractContact(text: string) {
@@ -823,7 +931,15 @@ export class AgentManagerOrchestrator {
       status: 'final'
     });
 
-    const cards = productCards(products.slice(0, 8), ['Подобрано agent-manager harness по текущему диалогу и инструментам.']);
+    const cardSelection = selectProductsForVisibleCards({
+      products,
+      userMessage,
+      history,
+      intent,
+      answerText: finalText,
+      needState: needStateSnapshot
+    });
+    const cards = productCards(cardSelection.products, ['Найдено в каталоге под текущий запрос.']);
     const metadata = {
       agentManager: true,
       recovered: input.recovered,
@@ -834,11 +950,13 @@ export class AgentManagerOrchestrator {
       answerContract: answer,
       preSendReview: review,
       toolResults,
+      cardSelection,
       productCards: cards,
       needStateSnapshot,
       warnings: [
         ...ledgerState.warnings,
-        ...toolResults.flatMap((result) => result.warnings)
+        ...toolResults.flatMap((result) => result.warnings),
+        ...cardSelection.warnings
       ]
     };
 
