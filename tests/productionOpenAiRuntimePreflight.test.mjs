@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   checkProductionLiveTestBudget,
   checkProductionOpenAiRuntime,
@@ -14,6 +15,12 @@ function response(status, body) {
 }
 
 describe('production OpenAI runtime preflight', () => {
+  it('keeps the headless live-test budget above the final scenario burn rate', () => {
+    const configSource = readFileSync(new URL('../src/config.ts', import.meta.url), 'utf8');
+
+    expect(configSource).toContain('OPENAI_HEADLESS_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(6000000)');
+  });
+
   it('passes when the admin runtime probe is healthy', async () => {
     const result = await checkProductionOpenAiRuntime({
       token: 'admin',
