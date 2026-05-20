@@ -18,6 +18,14 @@ describe('agent manager integration source guards', () => {
     expect(research).toContain('summaryForAnswer');
   });
 
+  it('orders catalog search by the selected retrieval score alias', () => {
+    const repositories = readFileSync('src/db/repositories.ts', 'utf8');
+
+    expect(repositories).toContain('AS retrieval_score');
+    expect(repositories).toContain('ORDER BY retrieval_score DESC NULLS LAST, updated_at DESC');
+    expect(repositories).not.toContain('ORDER BY rank DESC NULLS LAST, updated_at DESC');
+  });
+
   it('starts the lead outbox worker through the feature flag controlled worker', () => {
     const app = readFileSync('src/app.ts', 'utf8');
     const worker = readFileSync('src/ai/leadOutbox.ts', 'utf8');

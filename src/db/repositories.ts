@@ -1478,7 +1478,7 @@ export class ProductRepository {
                 OR lower(coalesce(source_url, '')) LIKE '%' || lower(token) || '%'
            )
          )
-       ORDER BY rank DESC NULLS LAST, updated_at DESC
+       ORDER BY retrieval_score DESC NULLS LAST, updated_at DESC
        LIMIT $2`,
       [normalized, limit, tokens]
     );

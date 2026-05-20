@@ -18,6 +18,7 @@ import {
 } from './agentManagerContracts.js';
 import { deriveNeedStateSnapshotFromLedger, reduceDialogueLedger, type ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
 import { calculateGeneratorLoadProfile } from './loadProfile.js';
+import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts } from './productComparisonResearch.js';
 import { emptyNeedState } from './needState.js';
@@ -589,11 +590,15 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
 }
 
 export class AgentManagerOrchestrator {
+  private readonly embeddingCoverageCache = new Map<string, { usable: boolean; expiresAt: number }>();
+  private readonly queryEmbeddingCache = new Map<string, { value: number[]; expiresAt: number }>();
+
   constructor(
     private readonly conversations = new ConversationRepository(),
     private readonly products = new ProductRepository(),
     private readonly leads = new LeadRepository(),
-    private readonly model: AgentManagerModel = new OpenAIAgentManagerModel()
+    private readonly model: AgentManagerModel = new OpenAIAgentManagerModel(),
+    private readonly embedQuery: (text: string, signal?: AbortSignal) => Promise<number[] | undefined | null> = createEmbedding
   ) {}
 
   async generateAnswer(input: AgentManagerGenerateInput): Promise<ChatResponsePayload> {
@@ -891,14 +896,24 @@ export class AgentManagerOrchestrator {
             ? request.args.query
             : input.userMessage;
           const limit = Math.max(1, Math.min(12, Number(request.args.limit ?? 8)));
-          const products = await this.products.searchProducts(query, limit);
+          const search = await this.searchCatalogProducts(query, limit, input.signal);
+          const products = search.products;
           products.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
             requestId: request.id,
             tool: request.tool,
             status: products.length ? 'ok' : 'not_found',
-            payload: { query, productIds: products.map((product) => product.id), products },
-            warnings: products.length ? [] : ['catalog_search_no_matches']
+            payload: {
+              query,
+              productIds: products.map((product) => product.id),
+              products,
+              retrieval: {
+                textCount: search.textCount,
+                vectorCount: search.vectorCount,
+                usedEmbeddings: search.vectorCount > 0
+              }
+            },
+            warnings: products.length ? search.warnings : [...search.warnings, 'catalog_search_no_matches']
           });
         } else if (request.tool === 'catalog.getProductDetails') {
           const names = Array.isArray(request.args.productNames)
@@ -908,8 +923,8 @@ export class AgentManagerOrchestrator {
             ? names
             : [typeof request.args.query === 'string' && request.args.query.trim() ? request.args.query : input.userMessage];
           for (const query of queries.slice(0, 4)) {
-            const found = await this.products.searchProducts(query, 4);
-            found.forEach((product) => productsById.set(product.id, product));
+            const found = await this.searchCatalogProducts(query, 4, input.signal);
+            found.products.forEach((product) => productsById.set(product.id, product));
           }
           result = ToolResultSchema.parse({
             requestId: request.id,
@@ -935,8 +950,8 @@ export class AgentManagerOrchestrator {
           });
         } else if (request.tool === 'web.researchProductFacts') {
           if (productsById.size < 2) {
-            const found = await this.products.searchProducts(input.userMessage, 4);
-            found.forEach((product) => productsById.set(product.id, product));
+            const found = await this.searchCatalogProducts(input.userMessage, 4, input.signal);
+            found.products.forEach((product) => productsById.set(product.id, product));
           }
           const selectedProducts = [...productsById.values()].slice(0, 4);
           const research = await researchProductComparisonFacts({
@@ -1037,6 +1052,86 @@ export class AgentManagerOrchestrator {
     }
 
     return { toolResults, products: [...productsById.values()] };
+  }
+
+  private async canUseProductEmbeddings() {
+    const coverageFn = (this.products as unknown as {
+      getEmbeddingCoverage?: ProductRepository['getEmbeddingCoverage'];
+    }).getEmbeddingCoverage;
+    if (!coverageFn) return false;
+
+    const key = `products:${config.OPENAI_EMBEDDING_MODEL}`;
+    const cached = this.embeddingCoverageCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.usable;
+
+    try {
+      const coverage = await coverageFn.call(this.products, 'products', config.OPENAI_EMBEDDING_MODEL);
+      const usable = coverage.total > 0 && coverage.coverage >= config.EMBEDDING_MIN_COVERAGE;
+      this.embeddingCoverageCache.set(key, { usable, expiresAt: now + 60_000 });
+      return usable;
+    } catch (error) {
+      console.warn('Agent manager embedding coverage check failed', safeError(error));
+      this.embeddingCoverageCache.set(key, { usable: false, expiresAt: now + 15_000 });
+      return false;
+    }
+  }
+
+  private async createCachedQueryEmbedding(text: string, signal?: AbortSignal) {
+    const key = `${config.OPENAI_EMBEDDING_MODEL}:${text.slice(0, 8000)}`;
+    const cached = this.queryEmbeddingCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.value;
+
+    const embedding = await this.embedQuery(text, signal).catch(() => null);
+    if (!embedding?.length) return null;
+
+    if (this.queryEmbeddingCache.size >= 200) {
+      const oldest = this.queryEmbeddingCache.keys().next().value;
+      if (oldest) this.queryEmbeddingCache.delete(oldest);
+    }
+    this.queryEmbeddingCache.set(key, { value: embedding, expiresAt: now + 10 * 60_000 });
+    return embedding;
+  }
+
+  private async searchCatalogProducts(query: string, limit: number, signal?: AbortSignal) {
+    const warnings: string[] = [];
+    let firstError: unknown = null;
+    let textProducts: Product[] = [];
+    let vectorProducts: Product[] = [];
+
+    try {
+      textProducts = await this.products.searchProducts(query, Math.max(limit, limit * 3));
+    } catch (error) {
+      firstError = error;
+      warnings.push(`catalog_text_search_error:${safeError(error).code ?? safeError(error).message}`);
+    }
+
+    const vectorSearchFn = (this.products as unknown as {
+      vectorSearch?: ProductRepository['vectorSearch'];
+    }).vectorSearch;
+    if (vectorSearchFn && await this.canUseProductEmbeddings()) {
+      const embedding = await this.createCachedQueryEmbedding(query, signal);
+      if (embedding) {
+        try {
+          vectorProducts = await vectorSearchFn.call(this.products, embedding, Math.max(limit, limit * 3));
+        } catch (error) {
+          firstError ??= error;
+          warnings.push(`catalog_vector_search_error:${safeError(error).code ?? safeError(error).message}`);
+        }
+      }
+    }
+
+    const byId = new Map<string, Product>();
+    for (const product of [...textProducts, ...vectorProducts]) byId.set(product.id, product);
+    const products = [...byId.values()].slice(0, limit);
+    if (!products.length && firstError) throw firstError;
+    return {
+      products,
+      textCount: textProducts.length,
+      vectorCount: vectorProducts.length,
+      warnings
+    };
   }
 
   private async review(input: AgentManagerReviewInput): Promise<PreSendReview> {

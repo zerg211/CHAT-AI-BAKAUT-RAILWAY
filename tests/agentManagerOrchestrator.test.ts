@@ -121,6 +121,23 @@ class FakeProducts {
   }
 }
 
+class HybridProducts extends FakeProducts {
+  vectorCalls = 0;
+
+  async searchProducts() {
+    return [product('text-product', 'Generator text match 6 kW')];
+  }
+
+  async getEmbeddingCoverage() {
+    return { target: 'products', total: 10, embedded: 10, usable: 10, coverage: 1 };
+  }
+
+  async vectorSearch() {
+    this.vectorCalls += 1;
+    return [product('vector-product', 'Generator vector match 7 kW')];
+  }
+}
+
 class FakeLeads {
   created: unknown[] = [];
   async createLead(input: unknown) {
@@ -198,6 +215,78 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(1);
     expect(payload.needState.activeNeeds[0]).toMatchObject({ id: 'ledger-current', productClass: 'generator' });
     expect(payload.needState.activeNeeds[0]?.openQuestions).not.toContain('What is the coffee machine power?');
+  });
+
+  it('uses product embeddings inside catalog tools when embedding coverage is usable', async () => {
+    const conversations = new FakeConversations();
+    const products = new HybridProducts();
+    const catalogModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for coffee point generator options',
+          dialogueUnderstanding: 'catalog options are needed',
+          nextStepRationale: 'search catalog using the buyer need',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator for coffee point 6 kW reserve',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: null,
+              notes: null
+            },
+            rationale: 'buyer asked for options from the catalog',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'I found a minimal option and a reserve option.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      catalogModel,
+      async () => [0.1, 0.2, 0.3]
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show generator options for coffee point.'
+    });
+
+    expect(products.vectorCalls).toBe(1);
+    const metadata = payload.metadata as { toolResults?: Array<{ payload?: unknown }> };
+    expect(metadata.toolResults?.[0]?.payload).toMatchObject({
+      productIds: expect.arrayContaining(['text-product', 'vector-product']),
+      retrieval: {
+        usedEmbeddings: true,
+        textCount: 1,
+        vectorCount: 1
+      }
+    });
+    expect(payload.productCards.map((card) => card.id)).toEqual(expect.arrayContaining(['text-product', 'vector-product']));
   });
 
   it('captures a provided contact through lead outbox before confirming receipt', async () => {
