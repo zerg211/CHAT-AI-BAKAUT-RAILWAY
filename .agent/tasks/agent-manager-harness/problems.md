@@ -28,4 +28,4 @@ Status after 2026-05-20 local implementation: code, tests, build, migration, and
 - Admin trace API and compact admin trace rendering are implemented.
 - Production widget URL opt-in is implemented locally so the harness can be tested in production without exposing it to all buyers.
 - Legacy catalog/commercial fast-path deterministic answer writers are replaced by LLM route/answer contracts locally.
-- Local lead creation now forces a buyer-visible contact-received confirmation instead of repeating the contact request.
+- Local lead creation now passes saved `autoLead` context into the LLM answer step, and post-answer verification blocks repeated contact requests after created leads.

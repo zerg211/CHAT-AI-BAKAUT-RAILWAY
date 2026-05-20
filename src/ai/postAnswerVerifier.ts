@@ -76,6 +76,7 @@ function factClaimAuditSeverity(warning: string): PostAnswerVerificationIssue['s
 
 const deterministicRepairableIssueCodes = new Set([
   'lead_contact_ask_forbidden',
+  'lead_contact_ask_after_created',
   'unverified_specialist_fact_promise',
   'fact_claim_audit:availability_claim_without_specialist_verification_wording',
   'fact_claim_audit:delivery_claim_without_specialist_verification_wording',
@@ -111,6 +112,13 @@ export function verifyPostAnswer(input: {
       code: 'lead_contact_ask_forbidden',
       severity: 'error',
       message: 'Answer asks for contact while lead policy forbids contact collection.'
+    });
+  }
+  if (input.leadStateMachine.leadCreated && hasContactAsk(input.answer)) {
+    issues.push({
+      code: 'lead_contact_ask_after_created',
+      severity: 'error',
+      message: 'Answer asks for contact even though the lead/contact was already captured.'
     });
   }
 
@@ -195,7 +203,7 @@ export function repairAnswerForPostAnswerVerification(input: {
   let repaired = input.answer.trim();
   const issueCodes = new Set(input.verification.issues.map((issue) => issue.code));
 
-  if (issueCodes.has('lead_contact_ask_forbidden')) {
+  if (issueCodes.has('lead_contact_ask_forbidden') || issueCodes.has('lead_contact_ask_after_created')) {
     repaired = stripContactAskSentences(repaired);
   }
   if (issueCodes.has('unverified_specialist_fact_promise')) {

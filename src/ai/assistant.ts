@@ -7063,46 +7063,6 @@ function deterministicLeadCollectionAnswer(
   ].filter(Boolean).join(' ');
 }
 
-function leadCreatedConfirmationAnswer(input: {
-  cards: ProductCard[];
-  userMessage: string;
-  autoLead?: AutoLeadResult | null;
-}) {
-  const normalized = input.userMessage.replace(/\s+/g, ' ').trim();
-  const lower = normalized.toLowerCase();
-  const topics = [
-    /доставк|логист/iu.test(lower) ? 'доставку' : '',
-    /налич|склад/iu.test(lower) ? 'наличие' : '',
-    /скидк|спецуслов|услови/iu.test(lower) ? 'финальные условия' : '',
-    /цен|стоимост/iu.test(lower) ? 'актуальную цену' : '',
-    /срок/iu.test(lower) ? 'сроки' : ''
-  ].filter(Boolean);
-  const uniqueTopics = [...new Set(topics)];
-  const topicText = uniqueTopics.length ? uniqueTopics.join(', ') : 'детали по запросу';
-  const selectedNames = input.cards
-    .slice(0, 2)
-    .map((card) => card.name.trim())
-    .filter(Boolean);
-  const itemText = selectedNames.length
-    ? 'по выбранным позициям'
-    : /(?:этим|выбран|позици|модел)/iu.test(lower)
-      ? 'по выбранным позициям'
-      : 'по вашему запросу';
-  const specialistPath = /доставк|логист/iu.test(lower)
-    ? /налич|склад/iu.test(lower)
-      ? 'через логистику и склад'
-      : 'через логистику'
-    : /налич|склад/iu.test(lower)
-      ? 'по складу'
-      : 'у профильного специалиста';
-  const leadName = input.autoLead?.lead?.name?.trim();
-  const hasPhone = Boolean(input.autoLead?.lead?.phone);
-  const greeting = leadName ? `${leadName}, контакт получил.` : 'Контакт получил.';
-  const returnText = hasPhone ? 'перезвоню с точным ответом' : 'вернусь с точным ответом';
-
-  return `${greeting} Проверю ${topicText} ${itemText} ${specialistPath} и ${returnText}.`;
-}
-
 function operationalHandoffContext(userMessage: string, fallbackItemsText: string) {
   const normalized = userMessage.replace(/\s+/g, ' ').trim();
   const lower = normalized.toLowerCase();
@@ -10898,6 +10858,15 @@ export class AssistantService {
       missing: autoLeadResult?.missing,
       error: autoLeadResult?.error
     });
+    const autoLeadForAnswer = autoLeadResult ? {
+      created: autoLeadResult.created,
+      name: autoLeadResult.lead?.name,
+      hasPhone: Boolean(autoLeadResult.lead?.phone),
+      hasEmail: Boolean(autoLeadResult.lead?.email),
+      emailStatus: autoLeadResult.emailStatus,
+      missing: autoLeadResult.missing,
+      error: autoLeadResult.error
+    } : null;
     const policyGate: PolicyGateResult = runPolicyGate({
       contract: agentContractV2,
       requirementLedger,
@@ -11159,6 +11128,7 @@ export class AssistantService {
       policyGate,
       policyGateEnforcement,
       leadDraft,
+      autoLead: autoLeadForAnswer,
       runtimeContracts: runtimeContractsForAnswer,
       leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
       leadCreated: autoLeadResult?.created ?? false,
@@ -11239,6 +11209,9 @@ export class AssistantService {
       `RequirementLedger: active=${requirementLedger.activeRequirementIds.join(',') || 'none'}; hardConstraints=${requirementLedger.hardConstraintKeys.join(',') || 'none'}; alternativeMode=${requirementLedger.alternativeMode}.`,
       `FactClaimPlanner: allowedSources=${factClaimPlanner.allowedSources.join(',')}; forbiddenClaims=${factClaimPlanner.forbiddenClaims.join(',')}; requiredDisclaimers=${factClaimPlanner.requiredDisclaimers.join(',') || 'none'}.`,
       `LeadStateMachine: state=${leadStateMachine.state}; nextAction=${leadStateMachine.nextAction}; missing=${leadStateMachine.missing ?? 'none'}.`,
+      leadStateMachine.state === 'created'
+        ? 'LeadStateMachine is created: runtime tools have already saved the lead/contact. Write the final buyer-visible confirmation yourself, confirm the contact was received, explain what will be checked, and do not ask for contact or form again.'
+        : '',
       technicalCurrentLevelAnswerGuidance(answerAgentTurnContract),
       commercialManagerVerificationGuidance(answerAgentTurnContract),
       suppressLeadRequestByContract
@@ -11362,55 +11335,39 @@ export class AssistantService {
       }).catch((error) => console.warn('Conversation turn answering update failed', safeError(error)));
     }
 
-    const proactiveCommercialAnswer = '';
-    const createdLeadConfirmationAnswer = '';
-    const proactiveCatalogSelectionAnswer = '';
-    const shouldUseProactiveCatalogSelectionAnswer = false;
+    const answerRequest: Record<string, unknown> = buildAnswerRequest(answerProfile.model, answerProfile.effort);
+    if (mustUseWebSearch) {
+      answerRequest.tools = [{
+        type: 'web_search_preview',
+        search_context_size: searchContextSize
+      }];
+      answerRequest.tool_choice = { type: 'web_search_preview' };
+    }
 
-    if (createdLeadConfirmationAnswer) {
-      answer = createdLeadConfirmationAnswer;
-      completedResponse = undefined;
-    } else if (proactiveCommercialAnswer && shouldUseProactiveCommercialDeterministicAnswer(answerAgentTurnContract, input.userMessage)) {
-      answer = proactiveCommercialAnswer;
-      completedResponse = undefined;
-    } else if (shouldUseProactiveCatalogSelectionAnswer) {
-      answer = proactiveCatalogSelectionAnswer;
-      completedResponse = undefined;
-    } else {
-      const answerRequest: Record<string, unknown> = buildAnswerRequest(answerProfile.model, answerProfile.effort);
-      if (mustUseWebSearch) {
-        answerRequest.tools = [{
-          type: 'web_search_preview',
-          search_context_size: searchContextSize
-        }];
-        answerRequest.tool_choice = { type: 'web_search_preview' };
-      }
-
-      try {
-        const result = await executeAnswerRequest(answerRequest, 'answer');
-        answer = result.answer;
-        completedResponse = result.completedResponse;
-      } catch (error) {
-        if (answerProfile.model !== config.OPENAI_ANSWER_MODEL) {
-          try {
-            const fallbackAnswerRequest: Record<string, unknown> = buildAnswerRequest(config.OPENAI_ANSWER_MODEL, config.OPENAI_ANSWER_REASONING_EFFORT);
-            if (mustUseWebSearch) {
-              fallbackAnswerRequest.tools = [{
-                type: 'web_search_preview',
-                search_context_size: searchContextSize
-              }];
-              fallbackAnswerRequest.tool_choice = { type: 'web_search_preview' };
-            }
-            const result = await executeAnswerRequest(fallbackAnswerRequest, 'answer_fallback');
-            answer = result.answer;
-            completedResponse = result.completedResponse;
-          } catch (fallbackError) {
-            console.warn('Deep answer fallback failed', safeError(fallbackError));
-            failAnswerGeneration(fallbackError);
+    try {
+      const result = await executeAnswerRequest(answerRequest, 'answer');
+      answer = result.answer;
+      completedResponse = result.completedResponse;
+    } catch (error) {
+      if (answerProfile.model !== config.OPENAI_ANSWER_MODEL) {
+        try {
+          const fallbackAnswerRequest: Record<string, unknown> = buildAnswerRequest(config.OPENAI_ANSWER_MODEL, config.OPENAI_ANSWER_REASONING_EFFORT);
+          if (mustUseWebSearch) {
+            fallbackAnswerRequest.tools = [{
+              type: 'web_search_preview',
+              search_context_size: searchContextSize
+            }];
+            fallbackAnswerRequest.tool_choice = { type: 'web_search_preview' };
           }
-        } else {
-          failAnswerGeneration(error);
+          const result = await executeAnswerRequest(fallbackAnswerRequest, 'answer_fallback');
+          answer = result.answer;
+          completedResponse = result.completedResponse;
+        } catch (fallbackError) {
+          console.warn('Deep answer fallback failed', safeError(fallbackError));
+          failAnswerGeneration(fallbackError);
         }
+      } else {
+        failAnswerGeneration(error);
       }
     }
 
@@ -11465,14 +11422,11 @@ export class AssistantService {
 
     const usedWebSearch = responseUsedWebSearch(completedResponse);
     const rawAnswer = answer;
-    if (autoLeadResult?.created) {
-      answer = leadCreatedConfirmationAnswer({
-        cards,
-        userMessage: input.userMessage,
-        autoLead: autoLeadResult
-      });
+    const leadCreatedThisTurn = autoLeadResult?.created ?? false;
+    answer = sanitizeVisibleAnswer(answer, effectivePlan);
+    if (leadCreatedThisTurn) {
+      answer = ensureCommercialManagerVerification(answer, answerAgentTurnContract);
     } else {
-      answer = sanitizeVisibleAnswer(answer, effectivePlan);
       answer = repairAnswerForFinalCards(answer, cards, productsForCardSelection, needState, input.userMessage, effectivePlan);
       answer = repairGeneratorLoadMinimumText(answer, loadProfileForAnswer, {
         cards,
@@ -12039,13 +11993,6 @@ export class AssistantService {
       });
       if (policyGateEnforcement.mode === 'hard_block') {
         throw new Error(`Recovered answer blocked by policy gate: ${policyGateEnforcement.hardBlockReasons.join(', ')}`);
-      }
-      if (recoveredAutoLeadResult?.created) {
-        answer = leadCreatedConfirmationAnswer({
-          cards: recoveredSelection.cards,
-          userMessage: latestUserText,
-          autoLead: recoveredAutoLeadResult
-        });
       }
       const postAnswerCheck = applyPostAnswerVerificationPolicy({
         answer,
@@ -13497,7 +13444,6 @@ export const assistantTestHooks = {
   sanitizeSelfExcludingSelectionState,
   explicitCriteriaFromTurn,
   generatorSizingPolicyForAnswer,
-  leadCreatedConfirmationAnswer,
   deterministicLeadCollectionAnswer,
   deterministicCommercialHandoffFallback,
   isMixedCatalogAndCommercialQuestion,

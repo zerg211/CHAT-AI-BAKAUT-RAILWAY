@@ -491,9 +491,9 @@ describe('assistant generateAnswer control-plane metadata', () => {
     expect(answerRequest?.tool_choice).toEqual({ type: 'web_search_preview' });
   });
 
-  it('commits a lead and replaces the current turn with a short contact confirmation', async () => {
+  it('commits a lead and preserves the LLM-written contact confirmation', async () => {
     openAiCreate.mockResolvedValue({
-      output_text: 'Алексей, контакт получил. Проверю доставку и наличие по выбранным позициям и перезвоню с точным ответом.'
+      output_text: 'LLM: Алексей, контакт получил. Проверю доставку и наличие по выбранным позициям и перезвоню с точным ответом.'
     });
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
@@ -509,6 +509,7 @@ describe('assistant generateAnswer control-plane metadata', () => {
     expect(result.leadRequested).toBe(false);
     expect(result.productCards).toHaveLength(0);
     expect(conversations.messages.at(-1)?.metadata?.productCards).toEqual([]);
+    expect(result.answer).toMatch(/^LLM:/u);
     expect(result.answer).toMatch(/Алексей, контакт получил\./iu);
     expect(result.answer).toMatch(/Проверю.*доставку.*наличие.*по выбранным позициям/iu);
     expect(result.answer).toMatch(/перезвоню с точным ответом/iu);

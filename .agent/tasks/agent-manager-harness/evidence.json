@@ -18,10 +18,10 @@
       "tests": 6
     },
     {
-      "command": "npm test -- --run tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts tests/agentManagerRuntime.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "command": "npm test -- --run tests/postAnswerVerifier.test.ts tests/assistantControlPlaneGenerate.test.ts tests/assistantFallback.test.ts tests/assistantLegacyWriterGuard.test.ts",
       "status": "PASS",
       "testFiles": 4,
-      "tests": 34
+      "tests": 38
     },
     {
       "command": "npm run typecheck",
@@ -31,7 +31,7 @@
       "command": "npm test",
       "status": "PASS",
       "testFiles": 58,
-      "tests": 495
+      "tests": 496
     },
     {
       "command": "npm run build",
@@ -61,7 +61,8 @@
     "health endpoint exposes runtime commit/branch marker for production deploy verification",
     "production widget URL opt-in is available without enabling the harness for all buyers",
     "legacy catalog/commercial fast paths use LLM route and answer contracts instead of deterministic user-visible commercial/catalog text",
-    "local lead creation forces contact-received confirmation instead of repeating the contact request"
+    "local lead creation passes saved autoLead context into the LLM answer step",
+    "post-answer verification blocks repeated contact requests after a lead/contact has already been created"
   ],
   "remainingRisks": [
     "production widget behavior is not verified until rollout",

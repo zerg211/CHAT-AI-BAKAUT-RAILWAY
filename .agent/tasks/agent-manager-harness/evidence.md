@@ -33,7 +33,7 @@ Local implementation now covers the full harness slice needed before feature-fla
 - `/api/health` runtime marker now exposes the harness flag state and URL opt-in parameter;
 - chat route recovery now uses the same session-aware activation check as answer generation;
 - legacy catalog/commercial fast writers no longer make the semantic decision or render deterministic user-visible text: an LLM route contract selects the path and an LLM answer contract writes the response;
-- after a local lead is created, legacy paths replace unsafe/redundant contact text with a contact-received confirmation, so the buyer is not asked again for the same phone/name.
+- after a local lead is created, the LLM answer step receives the saved `autoLead` context and explicit "contact already saved" guidance; post-answer verification blocks repeated contact requests after created leads.
 
 ## Verification
 
@@ -46,14 +46,14 @@ PASS: 3 files, 12 tests
 npm test -- --run tests/agentManagerIntegrationSource.test.ts
 PASS: 1 file, 6 tests
 
-npm test -- --run tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts tests/agentManagerRuntime.test.ts tests/agentManagerIntegrationSource.test.ts
-PASS: 4 files, 34 tests
+npm test -- --run tests/postAnswerVerifier.test.ts tests/assistantControlPlaneGenerate.test.ts tests/assistantFallback.test.ts tests/assistantLegacyWriterGuard.test.ts
+PASS: 4 files, 38 tests
 
 npm run typecheck
 PASS
 
 npm test
-PASS: 58 files, 495 tests
+PASS: 58 files, 496 tests
 
 npm run build
 PASS
@@ -72,7 +72,8 @@ PASS: no whitespace errors; line-ending warnings only
 - `tests/agentManagerComparisonResearch.test.ts`: proves visible comparison targets bind to catalog products, web research runs, and conflicts create data-quality issues.
 - `tests/leadOutbox.test.ts`: proves external lead delivery failure remains in outbox for retry without buyer action.
 - `tests/agentManagerRuntime.test.ts`: proves default-off runtime behavior and production widget URL opt-in through `?agentHarness=1`.
-- `tests/assistantFallback.test.ts` and `tests/assistantControlPlaneGenerate.test.ts`: prove catalog/commercial fast-path semantics and wording now pass through LLM route/answer contracts, recovery continues the saved turn through LLM when deterministic commercial recovery is disabled, and local lead creation produces a clear contact-received confirmation.
+- `tests/assistantFallback.test.ts` and `tests/assistantControlPlaneGenerate.test.ts`: prove catalog/commercial fast-path semantics and wording now pass through LLM route/answer contracts, recovery continues the saved turn through LLM when deterministic commercial recovery is disabled, and local lead creation preserves the LLM-written contact-received confirmation.
+- `tests/postAnswerVerifier.test.ts`: proves repeated contact requests are blocked and repairable after a lead/contact has already been created.
 - `tests/agentManagerIntegrationSource.test.ts`: proves assistant/chat routes use session-aware harness activation, saved-turn recovery is attempted before buyer-visible error in the harness path, admin trace UI rendering is present, and health exposes runtime deploy/opt-in markers.
 
 ## Production Status

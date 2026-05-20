@@ -161,6 +161,38 @@ describe('post-answer verifier', () => {
     });
   });
 
+  it('blocks repeated contact requests after the lead was already created', () => {
+    const createdLeadState: LeadStateMachine = {
+      ...leadStateMachine,
+      state: 'created',
+      nextAction: 'confirm_created_lead',
+      leadPolicy: 'required_now',
+      hasContactInTurn: true,
+      leadRequested: true,
+      leadCreated: true
+    };
+    const verification = verifyPostAnswer({
+      answer: 'Contact received. Leave your phone number again so I can create the request.',
+      factClaimPlanner,
+      leadStateMachine: createdLeadState,
+      cardManifest
+    });
+    const repaired = repairAnswerForPostAnswerVerification({
+      answer: 'Contact received. Leave your phone number again so I can create the request.',
+      verification
+    });
+
+    expect(verification.status).toBe('error');
+    expect(verification.issues.map((issue) => issue.code)).toContain('lead_contact_ask_after_created');
+    expect(classifyPostAnswerRecovery(verification)).toMatchObject({
+      repairableIssues: ['lead_contact_ask_after_created'],
+      unrecoverableIssues: [],
+      canAttemptDeterministicRepair: true,
+      requiresRegenerationOrTooling: false
+    });
+    expect(repaired).toBe('Contact received.');
+  });
+
   it('flags unverified live stock, delivery, discount, or exact commercial promises', () => {
     const result = verifyPostAnswer({
       answer: 'Товар есть в наличии, доставка будет бесплатной.',
