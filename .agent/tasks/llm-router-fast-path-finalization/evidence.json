@@ -4,7 +4,7 @@
   "finalReady": false,
   "acceptanceCriteria": {
     "AC1": "PASS_LOCAL",
-    "AC2": "PASS_LOCAL_LLM_ANSWERS_AND_LEAD_CONFIRMATION",
+    "AC2": "PASS_LOCAL_LLM_ANSWERS_LEAD_CONFIRMATION_AND_POST_VERIFICATION_REWRITE",
     "AC3": "PASS_LOCAL_HARD_CONSTRAINTS_AND_CREATED_LEAD_GUARD",
     "AC4": "PASS_LOCAL",
     "AC5": "PASS_LOCAL"
@@ -44,11 +44,19 @@
   "finalityBlockers": [
     "commit_push_pending",
     "railway_deploy_observation_pending",
-    "production_widget_live_gate_pending"
+    "production_widget_live_gate_pending_after_local_fix"
   ],
+  "productionLiveGate": {
+    "attempted": true,
+    "status": "FAIL_BEFORE_LOCAL_REWRITE_FIX",
+    "protocol": "local-live-tests/2026-05-20-production-diverse-buyer-audit-2026-05-20T07-34-41-926Z.production.md",
+    "productionCommit": "393b306",
+    "failure": "final lead/order-check turn hit recovery_failed after post-answer verification rejected unsafe commercial wording"
+  },
   "notes": [
     "Local lead-created confirmation is now LLM-authored from autoLead/LeadStateMachine context instead of a deterministic template override.",
     "Post-answer verification blocks repeated contact requests after lead/contact creation.",
+    "If post-answer verification rejects an LLM answer, an LLM rewrite is attempted before final rejection; code then verifies the rewritten answer.",
     "Local embedding coverage command passes but local DB finalReady=false; this is not production embedding evidence."
   ]
 }
