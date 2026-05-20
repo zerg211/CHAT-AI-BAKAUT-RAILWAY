@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ConversationRepository, LeadRepository } from '../db/repositories.js';
-import { sendLeadEmail } from '../email/httpEmail.js';
+import { safeError } from '../ai/responseUtils.js';
 
 const leadSchema = z.object({
   sessionId: z.string().uuid().optional(),
@@ -20,14 +20,43 @@ export async function registerLeadRoutes(app: FastifyInstance) {
   app.post('/api/leads', async (request, reply) => {
     const input = leadSchema.parse(request.body ?? {});
     const lead = await leads.createLead(input);
-    const session = lead.sessionId ? await conversations.getSession(lead.sessionId) : null;
-    const messages = lead.sessionId ? await conversations.listMessages(lead.sessionId, 60) : [];
-    const emailResult = await sendLeadEmail(lead, { session, messages });
-    const updated = await leads.markEmailResult(
-      lead.id,
-      emailResult.ok ? 'sent_email' : 'email_failed',
-      emailResult as unknown as Record<string, unknown>
-    );
-    return reply.send({ lead: updated, email: emailResult });
+    let queued = false;
+    let outboxId: string | undefined;
+
+    if (lead.sessionId) {
+      try {
+        const turns = await conversations.listTurns(lead.sessionId, 200);
+        const latestTurn = turns.at(-1);
+        if (latestTurn) {
+          const outbox = await conversations.enqueueLeadOutbox({
+            leadId: lead.id,
+            sessionId: lead.sessionId,
+            turnId: latestTurn.id,
+            destination: 'lead_email',
+            payload: { leadId: lead.id, source: 'lead_form' }
+          });
+          queued = Boolean(outbox);
+          outboxId = typeof outbox?.id === 'string' ? outbox.id : undefined;
+        }
+      } catch (error) {
+        request.log.warn({ error: safeError(error), leadId: lead.id }, 'lead form outbox enqueue failed');
+        await leads.markEmailResult(lead.id, 'email_failed', {
+          ok: false,
+          queued: false,
+          error: 'lead_outbox_enqueue_failed',
+          detail: safeError(error)
+        });
+      }
+    }
+
+    return reply.send({
+      lead,
+      email: {
+        ok: false,
+        queued,
+        outboxId,
+        status: queued ? 'queued' : 'saved_without_outbox'
+      }
+    });
   });
 }
