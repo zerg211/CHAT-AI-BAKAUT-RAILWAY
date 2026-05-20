@@ -21,7 +21,7 @@ import { calculateGeneratorLoadProfile } from './loadProfile.js';
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts } from './productComparisonResearch.js';
-import { compactModelText, displayProductBrand, extractModelTokens, inferProductIntent, isCoreEquipment, productMatchesIntent, productMentionedInText } from './productClassifier.js';
+import { compactModelText, displayProductBrand, extractGeneratorPowerForHardSelection, extractModelTokens, inferProductIntent, isCoreEquipment, productMatchesIntent, productMentionedInText } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 
@@ -231,6 +231,66 @@ function answerMentionedProducts(products: Product[], answerText: string) {
   if (exactWithBrand.length) return exactWithBrand;
   if (exactModelMatches.length) return exactModelMatches;
   return products.filter((product) => productMentionedInText(product, answerText));
+}
+
+function parseKw(value: string) {
+  const parsed = Number(value.replace(',', '.'));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function requestedPowerRangeKw(text: string) {
+  const range = text.match(/(\d+(?:[,.]\d+)?)\s*(?:-|–|—|до)\s*(\d+(?:[,.]\d+)?)\s*(?:квт|kw|kva|ква)/iu);
+  if (range) {
+    const left = parseKw(range[1]);
+    const right = parseKw(range[2]);
+    if (left !== undefined && right !== undefined) {
+      return {
+        min: Math.min(left, right),
+        max: Math.max(left, right)
+      };
+    }
+  }
+  const exact = text.match(/(\d+(?:[,.]\d+)?)\s*(?:квт|kw|kva|ква)/iu);
+  const kw = exact ? parseKw(exact[1]) : undefined;
+  return kw !== undefined ? { min: Math.max(0.1, kw - 0.75), max: kw + 0.75 } : undefined;
+}
+
+function generatorPowerFitScore(product: Product, range: { min: number; max: number }) {
+  const power = extractGeneratorPowerForHardSelection(product);
+  const nominal = power.nominalKw ?? power.maxKw;
+  if (nominal === undefined) return -10_000;
+
+  const target = (range.min + range.max) / 2;
+  const distance = nominal < range.min
+    ? range.min - nominal
+    : nominal > range.max
+      ? nominal - range.max
+      : 0;
+  let score = 100 - Math.abs(nominal - target);
+  if (nominal >= range.min && nominal <= range.max) score += 50;
+  if (power.maxKw !== undefined && nominal < range.min && power.maxKw >= range.min) score += 25;
+  score -= distance * 12;
+  if (nominal > range.max * 3 && nominal > range.max + 20) score -= 10_000;
+  return score;
+}
+
+function rankCatalogProductsByNumericFit(input: {
+  products: Product[];
+  intent: ProductSelectionClass;
+  query: string;
+  semanticContext: string;
+}) {
+  if (input.intent !== 'generator' && input.intent !== 'weldingGenerator') return input.products;
+  const range = requestedPowerRangeKw(input.query) ?? requestedPowerRangeKw(input.semanticContext);
+  if (!range) return input.products;
+  return input.products
+    .map((product, index) => ({
+      product,
+      index,
+      score: generatorPowerFitScore(product, range)
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((item) => item.product);
 }
 
 function selectProductsForVisibleCards(input: {
@@ -1284,7 +1344,13 @@ export class AgentManagerOrchestrator {
     if (productIntent !== 'unknown' && matchingProducts.length !== mergedProducts.length) {
       warnings.push(`catalog_products_filtered_by_intent:${productIntent}:${mergedProducts.length - matchingProducts.length}`);
     }
-    const products = matchingProducts.slice(0, limit);
+    const rankedProducts = rankCatalogProductsByNumericFit({
+      products: matchingProducts,
+      intent: productIntent,
+      query,
+      semanticContext
+    });
+    const products = rankedProducts.slice(0, limit);
     if (!products.length && firstError) throw firstError;
     return {
       products,

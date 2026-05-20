@@ -425,6 +425,73 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).toEqual(['evo-6200']);
   });
 
+  it('ranks generator catalog matches by requested kW range before oversized same-class results', async () => {
+    class PowerRangeProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          { ...product('huge', 'Generator ENERGY WE900WPS 700 kW', 'Generators'), specs: { power: '700 kW' } },
+          { ...product('six', 'Generator EVOline BQH 7500 E 6 kW', 'Generators'), specs: { power: '6 kW' } },
+          { ...product('five', 'Generator EVOline BQH 6200 E 5 kW', 'Generators'), specs: { power: '5 kW' } }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const catalogModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for 6-7 kW generator options',
+          dialogueUnderstanding: 'generator options around the requested power range are needed',
+          nextStepRationale: 'search catalog with the kW range and avoid oversized industrial units',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'генератор 6-7 кВт для кофейной точки',
+              limit: 2,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: null,
+              notes: null
+            },
+            rationale: 'buyer asked for generators around 6-7 kW',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'The closest catalog option is EVOline BQH 7500 E 6 kW.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PowerRangeProducts() as never, new FakeLeads() as never, catalogModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show generator options around 6-7 kW.'
+    });
+
+    const metadata = payload.metadata as { toolResults?: Array<{ payload?: { productIds?: string[] } }> };
+    expect(metadata.toolResults?.[0]?.payload?.productIds).toEqual(['six', 'five']);
+    expect(metadata.toolResults?.[0]?.payload?.productIds).not.toContain('huge');
+  });
+
   it('captures a provided contact through lead outbox before confirming receipt', async () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
