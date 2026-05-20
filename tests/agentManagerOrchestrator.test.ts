@@ -462,6 +462,147 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.cardSelection?.intent).toBe('plate');
   });
 
+  it('keeps self-loading plate constraints in semantic catalog ranking', async () => {
+    class PlateProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          { ...product('plate-100', 'Vibroplita Wacker VP100 100 kg', 'Vibroplita'), specs: { weight: '100 kg' } },
+          { ...product('plate-55', 'Vibroplita TSS VP55 55 kg', 'Vibroplita'), specs: { weight: '55 kg' } },
+          { ...product('plate-72', 'Vibroplita Champion PC72 72 kg', 'Vibroplita'), specs: { weight: '72 kg' } }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const catalogModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer needs a plate compactor for a small paving driveway and will load it alone',
+          dialogueUnderstanding: 'the current product class is a plate compactor and transport weight matters',
+          nextStepRationale: 'search plate compactors using the transport constraint',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'vibroplita 80-100 kg for paving slabs',
+              semanticQuery: 'plate compactor small driveway paving slabs sand crushed stone self loading',
+              productIntent: 'plate',
+              limit: 3,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'buyer will load the machine alone',
+              notes: null
+            },
+            rationale: 'buyer asked what plate weight to choose for a small driveway',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'For self-loading, start with the lighter 55-72 kg plate compactors before 100 kg machines.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PlateProducts() as never, new FakeLeads() as never, catalogModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Need a plate compactor for a small paving driveway over sand and crushed stone. I will load it myself. What weight should I choose?'
+    });
+
+    const metadata = payload.metadata as { toolResults?: Array<{ payload?: { productIds?: string[] } }> };
+    expect(metadata.toolResults?.[0]?.payload?.productIds?.slice(0, 2)).toEqual(['plate-55', 'plate-72']);
+    expect(payload.productCards.map((card) => card.id).slice(0, 2)).toEqual(['plate-55', 'plate-72']);
+  });
+
+  it('enriches AgentManager generator calculator loads without turning nulls into zero', async () => {
+    const conversations = new FakeConversations();
+    const calcModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer gave pump power and household generator loads',
+          dialogueUnderstanding: 'generator sizing should use pump, fridge, boiler and light with pump/fridge simultaneous start',
+          nextStepRationale: 'calculate the generator load profile',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'pump', name: 'pump', count: 1, runningKw: 1.1, startingKw: null, source: 'explicit_user', evidence: 'pump nameplate 1.1 kW' },
+                { kind: 'refrigerator', name: 'household refrigerator', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'ordinary household refrigerator' },
+                { kind: 'gas_boiler', name: 'gas boiler', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'small gas boiler controls' },
+                { kind: 'lighting', name: 'small light', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'small lighting' }
+              ],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump', 'refrigerator'],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'calculate from declared loads',
+              notes: null
+            },
+            rationale: 'buyer asks what generator power is needed',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        const profile = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } })?.profile;
+        return {
+          answerText: `Calculated minimum is ${profile?.requiredNominalKw} kW nominal.`,
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['generator-load'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, calcModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Pump is 1.1 kW, ordinary refrigerator, gas boiler and small lights. Pump and refrigerator may start together.'
+    });
+
+    const metadata = payload.metadata as { toolResults?: Array<{ payload?: { loads?: Array<{ kind?: string; runningKw?: number }>; profile?: { requiredNominalKw?: number; requiredStartingKw?: number } }; warnings?: string[] }> };
+    expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => [item.kind, item.runningKw])).toEqual([
+      ['pump', 1.1],
+      ['refrigerator', 0.25],
+      ['boiler', 0.15],
+      ['lighting', 0.2]
+    ]);
+    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredStartingKw).toBeCloseTo(4.5, 5);
+    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(4.5);
+    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('generator_load_estimate_used:refrigerator');
+  });
+
   it('prefers exact answer-mentioned product models over broad same-brand card expansion', async () => {
     class SameBrandProducts extends FakeProducts {
       async searchProducts() {
@@ -787,6 +928,54 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: 'Alexey, +7 900 000-00-11'
     })).rejects.toThrow(/lead_confirmation_without_local_capture/);
     expect(conversations.assistantSaves).toHaveLength(0);
+  });
+
+  it('rewrites a premature lead confirmation to a form offer when no contact was provided', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const unsafeModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks delivery availability without contact',
+          dialogueUnderstanding: 'delivery and stock require specialist verification, but no contact is present',
+          nextStepRationale: 'offer contact form',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:missing',
+            tool: 'lead.capture',
+            args: {},
+            rationale: 'buyer has not provided contact yet',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Contact received, I will check delivery and stock.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:missing'],
+          leadAction: 'confirm_contact_received',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, unsafeModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Можно проверить наличие и доставку?'
+    });
+
+    expect(payload.answer).toContain('Оставьте имя и телефон');
+    expect(payload.answer).not.toContain('Contact received');
+    expect(payload.leadRequested).toBe(true);
+    expect(payload.leadCreated).toBe(false);
+    expect(leads.created).toHaveLength(0);
+    expect(conversations.assistantSaves).toHaveLength(1);
   });
 
   it('routes high-risk source disagreements to adjudication instead of sending a final answer', async () => {

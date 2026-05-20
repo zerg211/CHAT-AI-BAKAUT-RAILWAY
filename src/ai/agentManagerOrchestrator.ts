@@ -17,11 +17,12 @@ import {
   type ToolResult
 } from './agentManagerContracts.js';
 import { deriveNeedStateSnapshotFromLedger, reduceDialogueLedger, type ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
-import { calculateGeneratorLoadProfile } from './loadProfile.js';
+import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
+import { generatorReferenceLoadItemsFromText } from './generatorLoadReference.js';
 import { researchProductComparisonFacts } from './productComparisonResearch.js';
-import { compactModelText, displayProductBrand, extractGeneratorPowerForHardSelection, extractModelTokens, inferProductIntent, isCoreEquipment, productMatchesIntent, productMentionedInText } from './productClassifier.js';
+import { compactModelText, displayProductBrand, extractGeneratorPowerForHardSelection, extractModelTokens, extractWeightKg, inferProductIntent, isCoreEquipment, parseWeightNeedRangeKg, productMatchesIntent, productMentionedInText } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 
@@ -335,12 +336,69 @@ function generatorPowerFitScore(product: Product, range: { min: number; max: num
   return score;
 }
 
+function isSelfLoadingPlateText(text: string) {
+  return /(?:self[-\s]?loading|load(?:ing)?\s+(?:it\s+)?myself|one[-\s]?person|\u0433\u0440\u0443\u0437\w{0,16}[^.!?\n]{0,35}\u0441\u0430\u043c|\u0441\u0430\u043c[^.!?\n]{0,35}\u0433\u0440\u0443\u0437|\u0432\s+\u043e\u0434\u043d\u043e\u0433\u043e|\u043e\u0434\u043d\u043e\u043c\u0443)/iu.test(text);
+}
+
+function isSmallPlateSiteText(text: string) {
+  return /(?:small\s+(?:site|area|driveway)|driveway|paving|slabs?|sand|crushed\s+stone|garden|yard|\u043d\u0435\u0431\u043e\u043b\u044c\u0448\w{0,12}\s+\u043f\u043b\u043e\u0449\u0430\u0434|\u0432\u044a\u0435\u0437\u0434|\u043f\u043b\u0438\u0442\u043a|\u043f\u0435\u0441\u043e\u043a|\u0449\u0435\u0431|\u0434\u0432\u043e\u0440|\u0434\u043e\u0440\u043e\u0436)/iu.test(text);
+}
+
+function isHeavyPlateSiteText(text: string) {
+  return /(?:reversible|heavy[-\s]?duty|industrial|road\s+base|parking|crew|\u0440\u0435\u0432\u0435\u0440\u0441\u0438\u0432|\u0442\u044f\u0436[^\s,.!?]*|\u0434\u043e\u0440\u043e\u0433|\u043f\u0430\u0440\u043a\u043e\u0432|\u043a\u0430\u0442\u043e\u043a|\u0431\u0440\u0438\u0433\u0430\u0434|\u043e\u0431\u044a\u0435\u043a\u0442)/iu.test(text);
+}
+
+function requestedPlateWeightRangeKg(input: {
+  userMessage: string;
+  query: string;
+  semanticContext: string;
+}) {
+  const userExplicit = parseWeightNeedRangeKg(input.userMessage);
+  if (userExplicit) return { ...userExplicit, source: 'explicit_user' as const };
+
+  const joined = [input.userMessage, input.query, input.semanticContext].join('\n');
+  if (isSelfLoadingPlateText(joined)) return { min: 40, max: 75, source: 'self_loading' as const };
+  if (isSmallPlateSiteText(joined) && !isHeavyPlateSiteText(joined)) return { min: 45, max: 95, source: 'small_site' as const };
+
+  const plannerExplicit = parseWeightNeedRangeKg(input.query) ?? parseWeightNeedRangeKg(input.semanticContext);
+  return plannerExplicit ? { ...plannerExplicit, source: 'planner' as const } : undefined;
+}
+
+function plateWeightFitScore(product: Product, range: { min: number; max: number; source: string }) {
+  const weight = extractWeightKg(product);
+  if (weight === undefined) return range.source === 'self_loading' ? -25 : 0;
+
+  const target = range.source === 'self_loading'
+    ? Math.min(62, Math.max(range.min, (range.min + range.max) / 2))
+    : (range.min + range.max) / 2;
+  let score = 120 - Math.abs(weight - target);
+  if (weight >= range.min && weight <= range.max) score += 80;
+  if (weight < range.min) score -= (range.min - weight) * 2;
+  if (weight > range.max) score -= (weight - range.max) * (range.source === 'self_loading' ? 10 : 5);
+  if (range.source === 'self_loading' && weight > 90) score -= 300;
+  if (range.source === 'self_loading' && weight > 120) score -= 1_000;
+  return score;
+}
+
 function rankCatalogProductsByNumericFit(input: {
   products: Product[];
   intent: ProductSelectionClass;
   query: string;
   semanticContext: string;
+  userMessage: string;
 }) {
+  if (input.intent === 'plate') {
+    const range = requestedPlateWeightRangeKg(input);
+    if (!range) return input.products;
+    return input.products
+      .map((product, index) => ({
+        product,
+        index,
+        score: plateWeightFitScore(product, range)
+      }))
+      .sort((left, right) => right.score - left.score || left.index - right.index)
+      .map((item) => item.product);
+  }
   if (input.intent !== 'generator' && input.intent !== 'weldingGenerator') return input.products;
   const range = requestedPowerRangeKw(input.query) ?? requestedPowerRangeKw(input.semanticContext);
   if (!range) return input.products;
@@ -422,21 +480,141 @@ function extractContact(text: string) {
   };
 }
 
-function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string): ProductElectricalLoadItem[] {
+function hasLeadContact(contact: ReturnType<typeof extractContact>) {
+  return Boolean(contact.phone || contact.email);
+}
+
+function leadCaptureMissingContact(toolResults: ToolResult[]) {
+  return toolResults.some((result) =>
+    result.tool === 'lead.capture' &&
+    result.status !== 'ok' &&
+    result.warnings.some((warning) => warning === 'lead_contact_missing' || warning === 'lead_name_missing')
+  );
+}
+
+function leadCaptureMissingName(toolResults: ToolResult[]) {
+  return toolResults.some((result) =>
+    result.tool === 'lead.capture' &&
+    result.status !== 'ok' &&
+    result.warnings.includes('lead_name_missing')
+  );
+}
+
+function leadCaptureRepairText(input: {
+  contact: ReturnType<typeof extractContact>;
+  toolResults: ToolResult[];
+}) {
+  if (hasLeadContact(input.contact) && leadCaptureMissingName(input.toolResults)) {
+    return 'Телефон получил. Напишите, пожалуйста, имя, и я передам выбранные позиции на проверку наличия, доставки и условий. После проверки с вами свяжутся с точным ответом.';
+  }
+  return 'Наличие, доставку, сроки и индивидуальные условия нужно проверить по складу и логистике. Оставьте имя и телефон в форме, и я передам выбранные позиции на проверку; после проверки с вами свяжутся с точным ответом.';
+}
+
+function positiveNumberFromToolArg(value: unknown) {
+  if (value === null || value === undefined || value === '') return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function countFromToolArg(value: unknown) {
+  const parsed = Number(value ?? 1);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.max(1, Math.min(12, Math.round(parsed)))
+    : 1;
+}
+
+function canonicalToolLoadKind(kind: unknown, name: unknown) {
+  const raw = `${String(kind ?? '')} ${String(name ?? '')}`.toLowerCase().replace(/[\s-]+/g, '_');
+  if (/gas_?boiler|baxi|\u0433\u0430\u0437\w*_\u043a\u043e\u0442|\u043a\u043e\u0442[\u0435\u0451]\u043b/u.test(raw)) return 'boiler';
+  return canonicalElectricalLoadKind(typeof kind === 'string' ? kind : typeof name === 'string' ? name : undefined);
+}
+
+function fallbackLoadForKind(kind: string, evidence: string): ProductElectricalLoadItem | undefined {
+  if (kind === 'refrigerator') {
+    return { kind, name: 'refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence };
+  }
+  if (kind === 'lighting') {
+    return { kind, name: 'lighting', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence };
+  }
+  if (kind === 'boiler') {
+    return { kind, name: 'gas boiler controls', count: 1, runningKw: 0.15, startingKw: 0.15, source: 'estimated_average', evidence };
+  }
+  if (kind === 'pump') {
+    return { kind, name: 'pump', count: 1, runningKw: 0.8, startingKw: 3, source: 'estimated_average', evidence };
+  }
+  return undefined;
+}
+
+function loadIdentity(item: ProductElectricalLoadItem) {
+  return canonicalToolLoadKind(item.kind, item.name);
+}
+
+function loadEstimateByKind(items: ProductElectricalLoadItem[]) {
+  const map = new Map<string, ProductElectricalLoadItem>();
+  for (const item of items) {
+    const kind = loadIdentity(item);
+    if (!map.has(kind)) map.set(kind, item);
+  }
+  return map;
+}
+
+function sourceFromToolArg(value: unknown): ProductElectricalLoadItem['source'] {
+  return value === 'web_average' || value === 'catalog_fact' || value === 'estimated_average'
+    ? value
+    : 'explicit_user';
+}
+
+function shouldIgnoreGeneratorReferenceLoad(item: ProductElectricalLoadItem, evidence: string) {
+  const text = evidence.toLowerCase();
+  const gasBoilerContext = /gas\s+boiler|baxi|\u0433\u0430\u0437\w{0,16}\s+\u043a\u043e\u0442[\u0435\u0451]\u043b|\u043a\u043e\u0442[\u0435\u0451]\u043b[^.!?\n]{0,32}\u0433\u0430\u0437/u.test(text);
+  return gasBoilerContext && canonicalElectricalLoadKind(item.kind) === 'heating_resistive';
+}
+
+function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string): {
+  loads: ProductElectricalLoadItem[];
+  warnings: string[];
+} {
   const rawLoads = Array.isArray(args.loads) ? args.loads : [];
-  return rawLoads
+  const referenceLoads = generatorReferenceLoadItemsFromText(fallbackEvidence)
+    .filter((item) => !shouldIgnoreGeneratorReferenceLoad(item, fallbackEvidence));
+  const referenceByKind = loadEstimateByKind(referenceLoads);
+  const warnings = new Set<string>();
+  const loads: ProductElectricalLoadItem[] = rawLoads
     .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    .map((item) => ({
-      kind: String(item.kind ?? item.name ?? 'unknown_load'),
-      name: typeof item.name === 'string' ? item.name : undefined,
-      count: Math.max(1, Math.min(12, Math.round(Number(item.count ?? 1)))),
-      runningKw: Number.isFinite(Number(item.runningKw)) ? Number(item.runningKw) : undefined,
-      startingKw: Number.isFinite(Number(item.startingKw)) ? Number(item.startingKw) : undefined,
-      source: item.source === 'web_average' || item.source === 'catalog_fact' || item.source === 'estimated_average'
-        ? item.source
-        : 'explicit_user',
-      evidence: typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence
-    }));
+    .map<ProductElectricalLoadItem>((item) => {
+      const kind = canonicalToolLoadKind(item.kind, item.name);
+      const source = sourceFromToolArg(item.source);
+      const evidence = typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence;
+      const reference = referenceByKind.get(kind) ?? fallbackLoadForKind(kind, evidence);
+      const explicitRunningKw = positiveNumberFromToolArg(item.runningKw);
+      const explicitStartingKw = positiveNumberFromToolArg(item.startingKw);
+      const canUseEstimate = source !== 'explicit_user' || explicitRunningKw === undefined;
+      const runningKw = explicitRunningKw ?? (canUseEstimate ? reference?.runningKw : undefined);
+      const startingKw = explicitStartingKw ?? (canUseEstimate ? reference?.startingKw : undefined);
+      if ((explicitRunningKw === undefined || explicitStartingKw === undefined) && (reference?.runningKw || reference?.startingKw)) {
+        warnings.add(`generator_load_estimate_used:${kind}`);
+      }
+      return {
+        kind,
+        name: typeof item.name === 'string' && item.name.trim() ? item.name : reference?.name,
+        count: countFromToolArg(item.count),
+        runningKw,
+        startingKw,
+        source: explicitRunningKw === undefined && reference ? reference.source : source,
+        evidence
+      };
+    });
+
+  const existingKinds = new Set(loads.map(loadIdentity));
+  for (const reference of referenceLoads) {
+    const kind = loadIdentity(reference);
+    if (existingKinds.has(kind)) continue;
+    loads.push(reference);
+    existingKinds.add(kind);
+    warnings.add(`generator_load_reference_added:${kind}`);
+  }
+
+  return { loads, warnings: [...warnings] };
 }
 
 const nullableStringJsonSchema = { type: ['string', 'null'] } as const;
@@ -783,8 +961,12 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Отвечай по-русски, кратко, понятно, как живой менеджер.',
             'Опирайся только на ledger, catalog/tool results, checked research facts и текущий диалог.',
             'Если точного dB, наличия, доставки, скидки или срока нет в фактах, честно скажи, что это нужно уточнить, и при необходимости предложи форму.',
-            'Если контакт уже есть в текущей реплике/tool result, подтверди получение контакта и не проси его повторно.',
+            'Если lead.capture вернул ok, подтверди получение контакта и не проси его повторно.',
+            'Если lead.capture вернул not_found/error из-за отсутствия имени или телефона, НЕ подтверждай контакт и НЕ говори, что запрос уже передан; поставь leadAction="offer_form" и попроси оставить недостающий контакт в форме.',
             'Не задавай лишних вопросов. Если вопрос нужен, он должен быть реально нужен для следующего шага.',
+            'If toolResults contains calculator.generatorLoad with status ok, treat payload.profile.requiredNominalKw and requiredStartingKw as the authoritative calculated minimum. Do not replace that number with a broader or higher default class. A higher class may be described only as comfort/reserve, not as the calculated minimum.',
+            'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
+            'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'Верни только JSON AnswerContract.'
           ].join('\n')
         },
@@ -826,6 +1008,8 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Ты evidence-bound reviewer ответа AI менеджера БАКАУТ.',
             'Проверь только по фактам ledger/toolResults/products.',
             'Блокируй или требуй rewrite, если ответ спрашивает уже известное, обещает непроверенное наличие/доставку/скидку/срок, противоречит текущему диалогу или просит повторить контакт, который уже есть.',
+            'For calculator.generatorLoad, block or rewrite any answer that states a calculated minimum inconsistent with payload.profile.requiredNominalKw/requiredStartingKw.',
+            'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')
         },
@@ -1057,6 +1241,16 @@ export class AgentManagerOrchestrator {
     const finalText = review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()
       ? review.revisedAnswerText.trim()
       : answer.answerText.trim();
+    const finalLeadAction = review.issues.some((issue) =>
+      issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
+    )
+      ? 'offer_form'
+      : answer.leadAction;
+    const finalAnswerContract: AnswerContract = {
+      ...answer,
+      answerText: finalText,
+      leadAction: finalLeadAction
+    };
     if (review.verdict === 'block') {
       throw new Error(`Agent manager answer blocked: ${review.issues.map((issue) => issue.code).join(', ')}`);
     }
@@ -1075,7 +1269,7 @@ export class AgentManagerOrchestrator {
       sessionId: input.sessionId,
       turnId: input.turnId,
       answerText: finalText,
-      contract: answer,
+      contract: finalAnswerContract,
       review,
       status: 'final'
     });
@@ -1096,7 +1290,7 @@ export class AgentManagerOrchestrator {
       ledgerState,
       ledgerEventIds: newEvents.map((event) => event.eventId),
       intentContract: intent,
-      answerContract: answer,
+      answerContract: finalAnswerContract,
       preSendReview: review,
       toolResults,
       cardSelection,
@@ -1136,7 +1330,7 @@ export class AgentManagerOrchestrator {
       needState: needStateSnapshot,
       productCards: cards,
       usedWebSearch: toolResults.some((result) => result.tool === 'web.researchProductFacts' && result.status === 'ok'),
-      leadRequested: answer.leadAction === 'offer_form',
+      leadRequested: finalLeadAction === 'offer_form',
       leadCreated: toolResults.some((result) => result.tool === 'lead.capture' && result.status === 'ok'),
       assistantMessageId: assistantMessage.id,
       metadata
@@ -1166,6 +1360,7 @@ export class AgentManagerOrchestrator {
             query,
             limit,
             signal: input.signal,
+            userMessage: input.userMessage,
             semanticContext: [semanticQuery, input.userMessage, request.rationale].join('\n'),
             productIntent,
             embeddingQuery: semanticQuery
@@ -1205,6 +1400,7 @@ export class AgentManagerOrchestrator {
               query,
               limit: 4,
               signal: input.signal,
+              userMessage: input.userMessage,
               semanticContext: [semanticQuery, query, input.userMessage, request.rationale].join('\n'),
               productIntent,
               embeddingQuery: semanticQuery
@@ -1219,7 +1415,7 @@ export class AgentManagerOrchestrator {
             warnings: productsById.size ? [] : ['product_details_no_matches']
           });
         } else if (request.tool === 'calculator.generatorLoad') {
-          const loads = loadsFromArgs(request.args, input.userMessage);
+          const { loads, warnings } = loadsFromArgs(request.args, input.userMessage);
           const profile = calculateGeneratorLoadProfile(loads, {
             simultaneousStarting: request.args.simultaneousStarting === true,
             simultaneousStartingKinds: Array.isArray(request.args.simultaneousStartingKinds)
@@ -1231,7 +1427,7 @@ export class AgentManagerOrchestrator {
             tool: request.tool,
             status: profile ? 'ok' : 'not_found',
             payload: { loads, profile },
-            warnings: profile ? [] : ['no_usable_loads_for_generator_calculation']
+            warnings: profile ? warnings : [...warnings, 'no_usable_loads_for_generator_calculation']
           });
         } else if (request.tool === 'web.researchProductFacts') {
           if (productsById.size < 2) {
@@ -1239,6 +1435,7 @@ export class AgentManagerOrchestrator {
               query: input.userMessage,
               limit: 4,
               signal: input.signal,
+              userMessage: input.userMessage,
               semanticContext: input.userMessage,
               productIntent: toolRequestProductIntent(request, input.userMessage),
               embeddingQuery: toolRequestScopedQuery(request, input.userMessage).semanticQuery
@@ -1390,6 +1587,7 @@ export class AgentManagerOrchestrator {
     query: string;
     limit: number;
     signal?: AbortSignal;
+    userMessage?: string;
     semanticContext?: string;
     productIntent?: ProductSelectionClass;
     embeddingQuery?: string;
@@ -1441,7 +1639,8 @@ export class AgentManagerOrchestrator {
       products: matchingProducts,
       intent: productIntent,
       query,
-      semanticContext
+      semanticContext,
+      userMessage: input.userMessage ?? query
     });
     const products = rankedProducts.slice(0, limit);
     if (!products.length && firstError) throw firstError;
@@ -1504,12 +1703,29 @@ export class AgentManagerOrchestrator {
     }
     const leadCaptureOk = input.toolResults.some((result) => result.tool === 'lead.capture' && result.status === 'ok');
     if ((input.answer.leadAction === 'capture_contact' || input.answer.leadAction === 'confirm_contact_received') && !leadCaptureOk) {
-      mechanicalIssues.push({
-        code: 'lead_confirmation_without_local_capture',
-        severity: 'high',
-        message: 'The bot may confirm a contact only after local lead and outbox capture succeeded.',
-        evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'lead.capture'))
-      });
+      const contactMissing = leadCaptureMissingContact(input.toolResults);
+      if (contactMissing && !hasLeadContact(contactInTurn)) {
+        mechanicalIssues.push({
+          code: 'lead_capture_missing_contact_offer_form',
+          severity: 'medium',
+          message: 'The answer tried to confirm a lead before the buyer provided contact data; rewrite to offer the contact form.',
+          evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'lead.capture'))
+        });
+      } else if (contactMissing && hasLeadContact(contactInTurn) && leadCaptureMissingName(input.toolResults)) {
+        mechanicalIssues.push({
+          code: 'lead_capture_missing_name',
+          severity: 'medium',
+          message: 'The answer tried to confirm a lead before the buyer provided a name; rewrite to acknowledge the phone and ask for the missing name.',
+          evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'lead.capture'))
+        });
+      } else {
+        mechanicalIssues.push({
+          code: 'lead_confirmation_without_local_capture',
+          severity: 'high',
+          message: 'The bot may confirm a contact only after local lead and outbox capture succeeded.',
+          evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'lead.capture'))
+        });
+      }
     }
     const requiresAdjudication = input.answer.riskFlags.some((flag) => /high[_-]?risk[_-]?disagreement|needs?[_-]?adjudication|requires?[_-]?adjudication|source[_-]?conflict[_-]?unresolved/iu.test(flag))
       || input.toolResults.some((result) => result.warnings.some((warning) => /high[_-]?risk[_-]?disagreement|unresolved[_-]?conflict|needs?[_-]?adjudication|requires?[_-]?adjudication/iu.test(warning)));
@@ -1542,6 +1758,16 @@ export class AgentManagerOrchestrator {
       return {
         verdict: 'block',
         issues: blockingIssues
+      };
+    }
+    const leadCaptureRepairIssue = mechanicalIssues.find((issue) =>
+      issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
+    );
+    if (leadCaptureRepairIssue) {
+      return {
+        verdict: 'rewrite_required',
+        issues: mechanicalIssues,
+        revisedAnswerText: leadCaptureRepairText({ contact: contactInTurn, toolResults: input.toolResults })
       };
     }
     if (mechanicalIssues.length) {
