@@ -104,14 +104,14 @@ Observed before this fix:
 Fresh production live gate after the LLM rewrite fix:
 
 ```bash
-ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 EXPECTED_REMEDIATION_CONTRACT_VERSION=2026-05-19-generator-load-scenarios-recovery-v38 PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS=0 EXPECTED_PRODUCTION_COMMIT_SHA=b89509245cc3c63006f770d4224179ba8fbbfe8a node local-live-tests/2026-05-20-ai-manager-voice-live-runner.mjs
+ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 EXPECTED_REMEDIATION_CONTRACT_VERSION=2026-05-19-generator-load-scenarios-recovery-v38 PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS=0 EXPECTED_PRODUCTION_COMMIT_SHA=ea1a0f0d4d69fed5ff41d1c2fe500c527769d27e node local-live-tests/2026-05-20-ai-manager-voice-live-runner.mjs
 ```
 
 Result: PASS.
 
-- Protocol: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.production.md`
-- Admin detail: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.json`
-- Production commit tested: `b89509245cc3c63006f770d4224179ba8fbbfe8a` (`ef68b64` is an ancestor and contains the LLM rewrite fix)
+- Protocol: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-26-57-562Z.production.md`
+- Admin detail: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-26-57-562Z.json`
+- Production commit tested: `ea1a0f0d4d69fed5ff41d1c2fe500c527769d27e` (`ef68b64` is an ancestor and contains the LLM rewrite fix)
 - Buyer issues: 0
 - Code/metadata issues: 0
 - Lead submissions for session: 1
@@ -120,4 +120,4 @@ Result: PASS.
 - `postAnswerVerification.status=pass` on every assistant turn.
 - Commercial handoff turn used `answerMode=llm_fast_commercial_handoff`, `commercialAction=explain_manager_required`, `leadRequested=true`, and no `third_person_manager_role_handoff`.
 
-Current status: final for the LLM commercial handoff voice/remediation scope.
+Current status: final for the LLM commercial handoff voice/remediation scope. A previous PASS was also captured on `b89509245cc3c63006f770d4224179ba8fbbfe8a`; the latest PASS above supersedes it because it matches the newer production runtime.

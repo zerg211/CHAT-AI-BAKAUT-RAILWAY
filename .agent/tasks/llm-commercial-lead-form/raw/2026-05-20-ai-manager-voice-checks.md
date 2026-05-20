@@ -47,9 +47,9 @@ PASS.
 ## Notes
 
 - Production live gate passed after deploy.
-- Protocol: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.production.md`.
-- Admin detail: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-00-52-322Z.json`.
-- Production commit tested: `b89509245cc3c63006f770d4224179ba8fbbfe8a`; implementation commit `ef68b6435ecaade530122d43b458f33b1f19e394` is an ancestor.
+- Protocol: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-26-57-562Z.production.md`.
+- Admin detail: `local-live-tests/2026-05-20-ai-manager-voice-2026-05-20T09-26-57-562Z.json`.
+- Production commit tested: `ea1a0f0d4d69fed5ff41d1c2fe500c527769d27e`; implementation commit `ef68b6435ecaade530122d43b458f33b1f19e394` is an ancestor.
 - Buyer issues: 0.
 - Code/metadata issues: 0.
 - Lead submissions: 1.
