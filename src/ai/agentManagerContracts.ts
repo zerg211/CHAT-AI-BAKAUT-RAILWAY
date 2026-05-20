@@ -43,7 +43,7 @@ export const LedgerStateDeltaEventSchema = DialogueLedgerEventSchema.omit({
   eventId: true,
   createdAt: true
 }).extend({
-  eventId: nonEmptyString.optional()
+  eventId: nonEmptyString.nullable().optional()
 }).strict();
 
 export const LedgerStateDeltaSchema = z.object({
@@ -75,7 +75,7 @@ export const ToolResultSchema = z.object({
 }).strict();
 
 export const AgentIntentContractSchema = z.object({
-  turnId: z.string().uuid().optional(),
+  turnId: z.string().uuid().nullable().optional(),
   userMessageSummary: nonEmptyString,
   dialogueUnderstanding: nonEmptyString,
   nextStepRationale: nonEmptyString,
@@ -110,7 +110,7 @@ export const PreSendReviewSchema = z.object({
     message: nonEmptyString,
     evidence: nonEmptyString
   }).strict()).default([]),
-  revisedAnswerText: z.string().optional()
+  revisedAnswerText: z.string().nullable().optional()
 }).strict();
 
 export type DialogueLedgerEvent = z.infer<typeof DialogueLedgerEventSchema>;

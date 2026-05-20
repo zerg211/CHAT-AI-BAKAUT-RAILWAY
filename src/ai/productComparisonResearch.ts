@@ -112,11 +112,11 @@ export async function researchProductComparisonFacts(input: {
                 properties: {
                   productName: { type: 'string' },
                   attribute: { type: 'string' },
-                  catalogValue: { type: 'string' },
+                  catalogValue: { type: ['string', 'null'] },
                   webValues: { type: 'array', items: { type: 'string' } },
                   resolution: { type: 'string' }
                 },
-                required: ['productName', 'attribute', 'webValues', 'resolution']
+                required: ['productName', 'attribute', 'catalogValue', 'webValues', 'resolution']
               }
             },
             summaryForAnswer: { type: 'string' },
@@ -137,7 +137,12 @@ export async function researchProductComparisonFacts(input: {
   return {
     usedWebSearch: parsed.usedWebSearch === true,
     facts: Array.isArray(parsed.facts) ? parsed.facts as ProductComparisonResearchFact[] : [],
-    conflicts: Array.isArray(parsed.conflicts) ? parsed.conflicts as ProductComparisonResearchConflict[] : [],
+    conflicts: Array.isArray(parsed.conflicts)
+      ? (parsed.conflicts as Array<ProductComparisonResearchConflict & { catalogValue?: string | null }>).map((conflict) => ({
+          ...conflict,
+          catalogValue: typeof conflict.catalogValue === 'string' ? conflict.catalogValue : undefined
+        }))
+      : [],
     summaryForAnswer: typeof parsed.summaryForAnswer === 'string' ? parsed.summaryForAnswer : '',
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings.filter((item): item is string => typeof item === 'string') : []
   };
