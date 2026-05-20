@@ -14,6 +14,7 @@ Date: 2026-05-20
 - `AC7`: PASS locally. Comparison target binding, web research call, and conflict recording are covered by tests.
 - `AC8`: PASS locally. Lead capture is local first, external delivery retries through outbox, and confirmation is blocked unless local capture/outbox succeeded.
 - `AC9`: PASS locally. Trace storage, admin API, and compact admin trace rendering are implemented; production live trace review remains part of the rollout gate.
+- Deploy marker: PASS locally. `/api/health` exposes Railway commit/branch marker so production rollout can be tied to a specific pushed commit.
 
 ## Done Definition Status
 

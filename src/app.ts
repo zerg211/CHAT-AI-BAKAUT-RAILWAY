@@ -64,6 +64,10 @@ export async function buildApp() {
     ok: true,
     answerModel: config.OPENAI_ANSWER_MODEL,
     plannerModel: config.OPENAI_PLANNER_MODEL,
+    runtime: {
+      commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
+      branch: process.env.RAILWAY_GIT_BRANCH ?? process.env.GIT_BRANCH ?? null
+    },
     remediation: {
       contractVersion: REMEDIATION_CONTRACT_VERSION,
       runtimeArtifacts: REMEDIATION_RUNTIME_ARTIFACTS

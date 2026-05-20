@@ -26,6 +26,13 @@ describe('agent manager integration source guards', () => {
     expect(worker).toContain('if (!config.AGENT_MANAGER_HARNESS_ENABLED && !config.AGENT_MANAGER_LEAD_OUTBOX_ENABLED) return undefined;');
   });
 
+  it('exposes a production runtime marker through health for deploy verification', () => {
+    const app = readFileSync('src/app.ts', 'utf8');
+
+    expect(app).toContain('commitSha: process.env.RAILWAY_GIT_COMMIT_SHA');
+    expect(app).toContain('branch: process.env.RAILWAY_GIT_BRANCH');
+  });
+
   it('tries same-turn recovery before returning a saved-turn error in the harness path', () => {
     const route = readFileSync('src/routes/chat.ts', 'utf8');
 

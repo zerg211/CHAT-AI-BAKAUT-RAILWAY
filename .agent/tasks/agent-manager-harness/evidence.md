@@ -39,13 +39,13 @@ npm test -- --run tests/dialogueLedgerReducer.test.ts tests/agentManagerOrchestr
 PASS: 3 files, 12 tests
 
 npm test -- --run tests/agentManagerIntegrationSource.test.ts
-PASS: 1 file, 5 tests
+PASS: 1 file, 6 tests
 
 npm run typecheck
 PASS
 
 npm test
-PASS: 57 files, 492 tests
+PASS: 57 files, 493 tests
 
 npm run build
 PASS
@@ -63,7 +63,7 @@ PASS: no whitespace errors; line-ending warnings only
 - `tests/agentManagerOrchestrator.test.ts`: proves ledger-derived active context, checkpoint recovery, final-answer-contract resume, lead capture before confirmation, unsupported-source blocking, and adjudication blocking.
 - `tests/agentManagerComparisonResearch.test.ts`: proves visible comparison targets bind to catalog products, web research runs, and conflicts create data-quality issues.
 - `tests/leadOutbox.test.ts`: proves external lead delivery failure remains in outbox for retry without buyer action.
-- `tests/agentManagerIntegrationSource.test.ts`: proves assistant/chat routes are wired through the harness flag, saved-turn recovery is attempted before buyer-visible error in the harness path, and admin trace UI rendering is present.
+- `tests/agentManagerIntegrationSource.test.ts`: proves assistant/chat routes are wired through the harness flag, saved-turn recovery is attempted before buyer-visible error in the harness path, admin trace UI rendering is present, and health exposes a runtime deploy marker.
 
 ## Production Status
 

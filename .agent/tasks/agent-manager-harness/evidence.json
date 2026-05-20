@@ -15,7 +15,7 @@
       "command": "npm test -- --run tests/agentManagerIntegrationSource.test.ts",
       "status": "PASS",
       "testFiles": 1,
-      "tests": 5
+      "tests": 6
     },
     {
       "command": "npm run typecheck",
@@ -25,7 +25,7 @@
       "command": "npm test",
       "status": "PASS",
       "testFiles": 57,
-      "tests": 492
+      "tests": 493
     },
     {
       "command": "npm run build",
@@ -51,7 +51,8 @@
     "reviewer blocks contact confirmation without successful local lead/outbox capture",
     "reviewer blocks high-risk source disagreement for adjudication",
     "comparison research flow records data-quality conflicts",
-    "lead delivery failure retries without buyer action"
+    "lead delivery failure retries without buyer action",
+    "health endpoint exposes runtime commit/branch marker for production deploy verification"
   ],
   "remainingRisks": [
     "production widget behavior is not verified until rollout",
