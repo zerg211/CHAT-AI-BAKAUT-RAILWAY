@@ -1014,7 +1014,12 @@ export class AgentManagerOrchestrator {
             ? request.args.query
             : input.userMessage;
           const limit = Math.max(1, Math.min(12, Number(request.args.limit ?? 8)));
-          const search = await this.searchCatalogProducts(query, limit, input.signal);
+          const search = await this.searchCatalogProducts(
+            query,
+            limit,
+            input.signal,
+            [input.userMessage, query, request.rationale].join('\n')
+          );
           const products = search.products;
           products.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
@@ -1041,7 +1046,12 @@ export class AgentManagerOrchestrator {
             ? names
             : [typeof request.args.query === 'string' && request.args.query.trim() ? request.args.query : input.userMessage];
           for (const query of queries.slice(0, 4)) {
-            const found = await this.searchCatalogProducts(query, 4, input.signal);
+            const found = await this.searchCatalogProducts(
+              query,
+              4,
+              input.signal,
+              [input.userMessage, query, request.rationale].join('\n')
+            );
             found.products.forEach((product) => productsById.set(product.id, product));
           }
           result = ToolResultSchema.parse({
@@ -1068,7 +1078,7 @@ export class AgentManagerOrchestrator {
           });
         } else if (request.tool === 'web.researchProductFacts') {
           if (productsById.size < 2) {
-            const found = await this.searchCatalogProducts(input.userMessage, 4, input.signal);
+            const found = await this.searchCatalogProducts(input.userMessage, 4, input.signal, input.userMessage);
             found.products.forEach((product) => productsById.set(product.id, product));
           }
           const selectedProducts = [...productsById.values()].slice(0, 4);
@@ -1212,7 +1222,7 @@ export class AgentManagerOrchestrator {
     return embedding;
   }
 
-  private async searchCatalogProducts(query: string, limit: number, signal?: AbortSignal) {
+  private async searchCatalogProducts(query: string, limit: number, signal?: AbortSignal, semanticContext = query) {
     const warnings: string[] = [];
     let firstError: unknown = null;
     let textProducts: Product[] = [];
@@ -1242,7 +1252,15 @@ export class AgentManagerOrchestrator {
 
     const byId = new Map<string, Product>();
     for (const product of [...textProducts, ...vectorProducts]) byId.set(product.id, product);
-    const products = [...byId.values()].slice(0, limit);
+    const mergedProducts = [...byId.values()];
+    const productIntent = inferProductIntent(semanticContext);
+    const matchingProducts = productIntent === 'unknown'
+      ? mergedProducts
+      : mergedProducts.filter((product) => productMatchesIntent(product, productIntent));
+    if (productIntent !== 'unknown' && matchingProducts.length !== mergedProducts.length) {
+      warnings.push(`catalog_products_filtered_by_intent:${productIntent}:${mergedProducts.length - matchingProducts.length}`);
+    }
+    const products = matchingProducts.slice(0, limit);
     if (!products.length && firstError) throw firstError;
     return {
       products,

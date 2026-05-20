@@ -22,7 +22,8 @@ describe('agent manager integration source guards', () => {
     const repositories = readFileSync('src/db/repositories.ts', 'utf8');
 
     expect(repositories).toContain('AS retrieval_score');
-    expect(repositories).toContain('ORDER BY retrieval_score DESC NULLS LAST, updated_at DESC');
+    expect(repositories).toContain('token_match_count');
+    expect(repositories).toContain('ORDER BY retrieval_score DESC NULLS LAST, token_match_count DESC, updated_at DESC');
     expect(repositories).not.toContain('ORDER BY rank DESC NULLS LAST, updated_at DESC');
   });
 

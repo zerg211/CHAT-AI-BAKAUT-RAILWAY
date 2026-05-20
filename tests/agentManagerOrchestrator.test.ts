@@ -354,7 +354,10 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).toEqual(['generator-fit']);
     expect(payload.productCards.map((card) => card.id)).not.toContain('plate-noise');
     expect(payload.productCards.map((card) => card.id)).not.toContain('cutter-noise');
-    expect((payload.metadata as { cardSelection?: { droppedProductIds?: string[] } }).cardSelection?.droppedProductIds).toEqual(expect.arrayContaining(['plate-noise', 'cutter-noise']));
+    const metadata = payload.metadata as { toolResults?: Array<{ payload?: { productIds?: string[] }; warnings?: string[] }>; cardSelection?: { droppedProductIds?: string[] } };
+    expect(metadata.toolResults?.[0]?.payload?.productIds).toEqual(['generator-fit']);
+    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('catalog_products_filtered_by_intent:generator:2');
+    expect(metadata.cardSelection?.droppedProductIds).toEqual([]);
   });
 
   it('captures a provided contact through lead outbox before confirming receipt', async () => {

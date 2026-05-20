@@ -1464,21 +1464,37 @@ export class ProductRepository {
     const normalized = query.trim();
     const tokens = searchTokens(normalized);
     const result = await this.db.query(
-      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, ts_rank_cd(search_tsv, plainto_tsquery('russian', $1)) AS retrieval_score, 'text'::text AS retrieval_source
-       FROM products
-       WHERE ${PRODUCT_FILTER}
-          AND (
-            $1 = ''
-            OR search_tsv @@ websearch_to_tsquery('russian', $1)
-           OR EXISTS (
-             SELECT 1 FROM unnest($3::text[]) AS token
+      `WITH ranked AS (
+         SELECT ${PRODUCT_RESPONSE_COLUMNS},
+           ts_rank_cd(search_tsv, websearch_to_tsquery('russian', $1)) AS retrieval_score,
+           (
+             SELECT count(*)::int
+             FROM unnest($3::text[]) AS token
              WHERE lower(name) LIKE '%' || lower(token) || '%'
                 OR lower(coalesce(category, '')) LIKE '%' || lower(token) || '%'
                 OR lower(coalesce(description, '')) LIKE '%' || lower(token) || '%'
                 OR lower(coalesce(source_url, '')) LIKE '%' || lower(token) || '%'
+                OR lower(coalesce(specs::text, '')) LIKE '%' || lower(token) || '%'
+           ) AS token_match_count,
+           'text'::text AS retrieval_source
+         FROM products
+         WHERE ${PRODUCT_FILTER}
+            AND (
+              $1 = ''
+              OR search_tsv @@ websearch_to_tsquery('russian', $1)
+             OR EXISTS (
+               SELECT 1 FROM unnest($3::text[]) AS token
+               WHERE lower(name) LIKE '%' || lower(token) || '%'
+                  OR lower(coalesce(category, '')) LIKE '%' || lower(token) || '%'
+                  OR lower(coalesce(description, '')) LIKE '%' || lower(token) || '%'
+                  OR lower(coalesce(source_url, '')) LIKE '%' || lower(token) || '%'
+                  OR lower(coalesce(specs::text, '')) LIKE '%' || lower(token) || '%'
+             )
            )
-         )
-       ORDER BY retrieval_score DESC NULLS LAST, updated_at DESC
+       )
+       SELECT *
+       FROM ranked
+       ORDER BY retrieval_score DESC NULLS LAST, token_match_count DESC, updated_at DESC
        LIMIT $2`,
       [normalized, limit, tokens]
     );
