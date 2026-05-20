@@ -3,25 +3,13 @@
   "date": "2026-05-20",
   "slice": "local full harness implementation before feature-flag rollout",
   "localVerificationStatus": "PASS",
-  "doneDefinitionStatus": "PENDING_PRODUCTION_LIVE_VERIFICATION",
+  "doneDefinitionStatus": "PASS",
   "commands": [
     {
-      "command": "npm test -- --run tests/dialogueLedgerReducer.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerComparisonResearch.test.ts",
+      "command": "npm test -- --run tests/agentManagerOrchestrator.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerContracts.test.ts tests/agentManagerConfig.test.ts tests/assistantFallback.test.ts",
       "status": "PASS",
-      "testFiles": 3,
-      "tests": 12
-    },
-    {
-      "command": "npm test -- --run tests/agentManagerIntegrationSource.test.ts",
-      "status": "PASS",
-      "testFiles": 1,
-      "tests": 6
-    },
-    {
-      "command": "npm test -- --run tests/postAnswerVerifier.test.ts tests/assistantControlPlaneGenerate.test.ts tests/assistantFallback.test.ts tests/assistantLegacyWriterGuard.test.ts",
-      "status": "PASS",
-      "testFiles": 4,
-      "tests": 38
+      "testFiles": 5,
+      "tests": 47
     },
     {
       "command": "npm run typecheck",
@@ -31,25 +19,28 @@
       "command": "npm test",
       "status": "PASS",
       "testFiles": 58,
-      "tests": 496
-    },
-    {
-      "command": "npm run build",
-      "status": "PASS"
-    },
-    {
-      "command": "npm run migrate",
-      "status": "PASS"
+      "tests": 510
     },
     {
       "command": "git diff --check",
       "status": "PASS",
       "notes": "Line-ending warnings only."
+    },
+    {
+      "command": "EXPECTED_PRODUCTION_COMMIT=afdfc62 node local-live-tests/agent-manager-optin-live-runner.mjs",
+      "status": "PASS",
+      "notes": "Real production widget on https://bakautprof.ru/?agentHarness=1"
     }
   ],
   "productionLiveWidgetTest": {
-    "run": false,
-    "reason": "The new harness is behind default-off flags. URL opt-in has been prepared locally and still requires push/deploy before production widget verification."
+    "run": true,
+    "status": "PASS",
+    "siteUrl": "https://bakautprof.ru/?agentHarness=1",
+    "productionApi": "https://chat-ai-production-3057.up.railway.app",
+    "verifiedCommit": "afdfc62",
+    "productionMarkerAfterEvidenceOnlyCommit": "5d1e310",
+    "sessionId": "d0898323-c5c3-455e-9502-d93a050d5b87",
+    "protocolPath": "local-live-tests/2026-05-20-agent-manager-harness-optin.production.md"
   },
   "closedRisks": [
     "legacy needState is no longer the returned context source for the new harness",
@@ -62,11 +53,15 @@
     "production widget URL opt-in is available without enabling the harness for all buyers",
     "legacy catalog/commercial fast paths use LLM route and answer contracts instead of deterministic user-visible commercial/catalog text",
     "local lead creation passes saved autoLead context into the LLM answer step",
-    "post-answer verification blocks repeated contact requests after a lead/contact has already been created"
+    "post-answer verification blocks repeated contact requests after a lead/contact has already been created",
+    "catalog retrieval uses hybrid text plus embeddings but filters results by LLM/tool product intent before the answer step",
+    "generator retrieval is ranked by requested kW range so oversized same-class results do not dominate short catalog output",
+    "visible product cards are selected from answer-mentioned/current-intent products instead of raw text/vector search noise",
+    "legacy fast technical orientation is blocked in favor of LLM-planned technical answers"
   ],
   "remainingRisks": [
-    "production widget behavior is not verified until rollout",
-    "Railway feature flags are not enabled yet",
-    "real model prompt quality still needs production/eval monitoring"
+    "global Railway harness flag is still disabled; production verification currently uses URL opt-in",
+    "real model prompt quality still needs production/eval monitoring",
+    "catalog data quality can still affect which exact same-class products are available to the LLM"
   ]
 }

@@ -40,29 +40,23 @@ Local implementation now covers the full harness slice needed before feature-fla
 Commands run after the latest code changes:
 
 ```text
-npm test -- --run tests/dialogueLedgerReducer.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerComparisonResearch.test.ts
-PASS: 3 files, 12 tests
+npm test -- --run tests/agentManagerOrchestrator.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerContracts.test.ts tests/agentManagerConfig.test.ts tests/assistantFallback.test.ts
+PASS: 5 files, 47 tests
 
-npm test -- --run tests/agentManagerIntegrationSource.test.ts
-PASS: 1 file, 6 tests
-
-npm test -- --run tests/postAnswerVerifier.test.ts tests/assistantControlPlaneGenerate.test.ts tests/assistantFallback.test.ts tests/assistantLegacyWriterGuard.test.ts
-PASS: 4 files, 38 tests
+npm test -- --run tests/agentManagerOrchestrator.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerContracts.test.ts
+PASS: 3 files, 25 tests
 
 npm run typecheck
 PASS
 
 npm test
-PASS: 58 files, 496 tests
-
-npm run build
-PASS
-
-npm run migrate
-PASS: Migrations completed
+PASS: 58 files, 510 tests
 
 git diff --check
 PASS: no whitespace errors; line-ending warnings only
+
+EXPECTED_PRODUCTION_COMMIT=afdfc62 node local-live-tests/agent-manager-optin-live-runner.mjs
+PASS: real widget on https://bakautprof.ru/?agentHarness=1
 ```
 
 ## Key Proof Points
@@ -78,6 +72,23 @@ PASS: no whitespace errors; line-ending warnings only
 
 ## Production Status
 
-No production widget live test was run for this local code slice yet. The new behavior is still behind default-off feature flags and the local URL opt-in has not been pushed/deployed in this commit set yet.
+Production widget live verification is `PASS` through the real iframe on `https://bakautprof.ru/?agentHarness=1`.
 
-Therefore local code verification is `PASS`; full task done definition remains `PENDING_PRODUCTION_LIVE_VERIFICATION`.
+Latest verified code commit: `afdfc62 Route technical orientation through LLM tools`.
+Latest production marker after evidence-only commit: `5d1e310 Record LLM embedding intent evidence`.
+
+Live session: `d0898323-c5c3-455e-9502-d93a050d5b87`.
+Protocol: `local-live-tests/2026-05-20-agent-manager-harness-optin.production.md`.
+
+Buyer-visible result:
+
+- no schema/runtime/recovery error;
+- no old household leakage;
+- generator sizing stayed around the known load and unknown fridge caveat instead of jumping to 9.5-13 kW;
+- catalog retrieval returned generator cards instead of cross-class embedding noise;
+- product cards were filtered against the answer and current product intent;
+- buyer contact was accepted once and the bot confirmed follow-up on availability/delivery.
+
+The harness is still globally default-off and enabled for production verification by URL opt-in `?agentHarness=1`.
+
+Done definition for this slice: `PASS`.
