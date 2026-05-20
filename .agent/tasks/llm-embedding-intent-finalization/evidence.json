@@ -1,0 +1,134 @@
+{
+  "taskId": "llm-embedding-intent-finalization",
+  "checkedAt": "2026-05-20T09:56:59.035Z",
+  "status": "not_final",
+  "localCommit": "afdfc62380b23816ada1df4bf0d6c72f135c135e",
+  "remoteMainCommit": "afdfc62380b23816ada1df4bf0d6c72f135c135e",
+  "productionCommit": "8a33c3bd1f4c4343035c5d9e9947b30c06b4c7c1",
+  "acceptanceCriteria": {
+    "AC1_LLM_owns_retrieval_intent": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "src/ai/agentManagerOrchestrator.ts requires semanticQuery and productIntent in catalog.search tool schema",
+        "toolRequestProductIntent extracts product class from the LLM tool request",
+        "inferVisibleCardIntent prioritizes current LLM tool request intent"
+      ]
+    },
+    "AC2_embeddings_are_intent_scoped": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "catalog.search passes embeddingQuery from LLM semanticQuery",
+        "retrieval metadata exposes intent, query, embeddingQuery, textCount, vectorCount, usedEmbeddings"
+      ]
+    },
+    "AC3_stale_constraints_cleared_on_focus_switch": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "productIntentFromSelection prioritizes planner/LLM product intent before stale profile/state"
+      ]
+    },
+    "AC4_card_class_guard": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "searchCatalogProducts filters merged text/vector candidates by LLM productIntent",
+        "wrong-class filtering emits catalog_products_filtered_by_intent warning",
+        "agentManagerOrchestrator regression test blocks generator cards on plate turn"
+      ]
+    },
+    "AC5_no_deterministic_technical_writer_for_normal_LLM_path": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "legacyAnswerWriterAllowed('fast_technical_orientation') returns false when legacy writers are disabled",
+        "assistantFallback tests assert no fast_technical_orientation answer mode and no canned phrase"
+      ]
+    },
+    "AC6_calculations_are_tools_not_final_writers": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "generator calculation trace remains available",
+        "primary answer is LLM/planner-owned unless explicit emergency fallback is marked"
+      ]
+    },
+    "AC7_dialog_1064_failure_pattern_covered": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "targeted regression covers generator history followed by plate-compactor LLM tool request",
+        "stale vector generator result is filtered out and plate card remains visible"
+      ]
+    },
+    "AC8_embedding_infrastructure_green": {
+      "status": "PASS_LOCAL",
+      "evidence": [
+        "npm run embeddings:coverage PASS",
+        "npm run embeddings:backfill -- --dry-run --limit=50 PASS",
+        "npm test PASS"
+      ]
+    },
+    "AC9_evidence_and_finality": {
+      "status": "BLOCKED",
+      "blockers": [
+        "Railway /api/health is still on 8a33c3bd1f4c4343035c5d9e9947b30c06b4c7c1, not afdfc62380b23816ada1df4bf0d6c72f135c135e",
+        "Live widget test through https://bakautprof.ru/ has not been run against the new commit"
+      ]
+    }
+  },
+  "commands": {
+    "typecheck": {
+      "status": "PASS",
+      "artifact": "raw/typecheck.txt"
+    },
+    "targetedTests": {
+      "status": "PASS",
+      "tests": 238,
+      "artifact": "raw/targeted-tests.txt"
+    },
+    "fullTests": {
+      "status": "PASS",
+      "tests": 510,
+      "artifact": "raw/full-tests.txt"
+    },
+    "build": {
+      "status": "PASS",
+      "artifact": "raw/build.txt"
+    },
+    "migrate": {
+      "status": "PASS",
+      "artifact": "raw/migrate.txt"
+    },
+    "localEmbeddingCoverage": {
+      "status": "PASS",
+      "finalReady": false,
+      "artifact": "raw/embedding-coverage-local.txt"
+    },
+    "localBackfillDryRun": {
+      "status": "PASS",
+      "artifact": "raw/embedding-backfill-dry-run.txt"
+    },
+    "productionPreflight": {
+      "status": "BLOCKED_DEPLOY_MARKER",
+      "runtime": "PASS",
+      "coverage": "PASS",
+      "artifact": "raw/production-preflight.txt"
+    }
+  },
+  "production": {
+    "apiBase": "https://chat-ai-production-3057.up.railway.app",
+    "adminAuth": "PASS",
+    "openAiRuntime": {
+      "status": "PASS",
+      "answerModel": "gpt-5.4-mini",
+      "plannerModel": "gpt-5.4-mini"
+    },
+    "embeddingCoverage": {
+      "status": "PASS",
+      "model": "text-embedding-3-small",
+      "finalReady": true,
+      "productsCoverage": 0.9246242774566474,
+      "catalogPagesCoverage": 1
+    },
+    "liveWidget": {
+      "status": "NOT_RUN",
+      "reason": "production commit marker is old"
+    }
+  }
+}
