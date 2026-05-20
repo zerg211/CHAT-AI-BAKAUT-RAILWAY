@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository, type EmbeddingCoverageTarget } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { ActiveCustomerNeed, AgentToolTraceItem, AgentTurnContract, AgentTurnContractV2, BotCommitment, CardDisplayOptions, CardManifest, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, ExecutionContract, FactClaimPlanner, GeneratorPowerProfile, Lead, LeadDraft, LeadStateMachine, MentionedProductMemory, Message, PolicyGateEnforcement, PolicyGateResult, PostAnswerVerificationRecovery, Product, ProductCard, ProductElectricalLoadItem, ProductEvidenceRegistry, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, RequirementLedger, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
+import type { ActiveCustomerNeed, AgentToolTraceItem, AgentTurnContract, AgentTurnContractV2, BotCommitment, CardDisplayOptions, CardManifest, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, ExecutionContract, FactClaimPlanner, GeneratorPowerProfile, Lead, LeadDraft, LeadStateMachine, MentionedProductMemory, Message, PolicyGateEnforcement, PolicyGateResult, PostAnswerVerification, PostAnswerVerificationRecovery, Product, ProductCard, ProductElectricalLoadItem, ProductEvidenceRegistry, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, RequirementLedger, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { embeddingMetadataForText } from './embeddingUtils.js';
@@ -7925,6 +7925,150 @@ export class AssistantService {
     return contract;
   }
 
+  private async rewriteAnswerForPostVerification(input: {
+    answer: string;
+    userMessage: string;
+    history: Message[];
+    contract: AgentTurnContract;
+    leadStateMachine: LeadStateMachine;
+    factClaimPlanner: FactClaimPlanner;
+    cardManifest: CardManifest;
+    postAnswerVerification: PostAnswerVerification;
+    signal?: AbortSignal;
+  }) {
+    const client = createOpenAIClient();
+    if (!client) return null;
+    const issueCodes = input.postAnswerVerification.issues.map((issue) => issue.code);
+    const request = {
+      model: config.OPENAI_ANSWER_MODEL,
+      reasoning: { effort: 'none' },
+      max_output_tokens: Math.min(config.OPENAI_MAX_OUTPUT_TOKENS, 900),
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are the BAKAUT AI sales manager. Rewrite the buyer-visible answer in Russian.',
+            'The previous answer failed hard post-answer verification. Keep useful content, but fix every listed issue.',
+            'Do not output JSON, markdown fences, diagnostics, or policy names.',
+            'If leadStateMachine.leadCreated is true, confirm the contact/request was received and do not ask for name, phone, contact, callback, or a form again.',
+            'For stock, delivery, discount, deadlines, or exact commercial terms, never promise the final fact. Say in first person that you will verify/check/calculate it through logistics, stock, or the responsible specialist.',
+            'Use only catalog/product facts already present in the provided answer context. Do not invent new products, prices, stock, delivery cost, or dates.',
+            'Keep the response concise and natural.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: yaml.dump(cleanEmpty({
+            latestUserMessage: input.userMessage,
+            recentHistory: compactHistoryForAI(input.history, 8, 500),
+            answerToRewrite: input.answer,
+            verificationIssues: input.postAnswerVerification.issues,
+            agentTurnContract: input.contract,
+            leadStateMachine: input.leadStateMachine,
+            factClaimPlanner: {
+              forbiddenClaims: input.factClaimPlanner.forbiddenClaims,
+              requiredDisclaimers: input.factClaimPlanner.requiredDisclaimers,
+              allowedSources: input.factClaimPlanner.allowedSources,
+              risk: input.factClaimPlanner.risk
+            },
+            cardManifest: {
+              visibleProductIds: input.cardManifest.visibleProductIds,
+              hiddenProductIds: input.cardManifest.hiddenProductIds,
+              warnings: input.cardManifest.warnings
+            }
+          }))
+        }
+      ]
+    };
+    try {
+      const response: any = await client.responses.create(request, input.signal ? { signal: input.signal } : undefined);
+      logOpenAIUsage('post_answer_llm_rewrite', config.OPENAI_ANSWER_MODEL, response);
+      const rewritten = sanitizeVisibleAnswer(extractResponseText(response));
+      if (!rewritten || rewritten === input.answer.trim()) return null;
+      return {
+        answer: rewritten,
+        issueCodes
+      };
+    } catch (error) {
+      if (input.signal?.aborted) throw new Error('AI post-answer rewrite aborted');
+      console.warn('LLM post-answer rewrite failed', safeError(error));
+      return null;
+    }
+  }
+
+  private async verifyAnswerWithLlmRewrite(input: {
+    answer: string;
+    userMessage: string;
+    history: Message[];
+    contract: AgentTurnContract;
+    leadStateMachine: LeadStateMachine;
+    factClaimPlanner: FactClaimPlanner;
+    cardManifest: CardManifest;
+    productEvidenceRegistry?: ProductEvidenceRegistry;
+    signal?: AbortSignal;
+  }) {
+    const initialFactClaimAudit = auditAnswerFactClaims({
+      answer: input.answer,
+      factClaimPlanner: input.factClaimPlanner,
+      cardManifest: input.cardManifest
+    });
+    const initialPostAnswerVerification = verifyPostAnswer({
+      answer: input.answer,
+      factClaimPlanner: input.factClaimPlanner,
+      leadStateMachine: input.leadStateMachine,
+      cardManifest: input.cardManifest,
+      factClaimAudit: initialFactClaimAudit,
+      productEvidenceRegistry: input.productEvidenceRegistry
+    });
+    if (initialPostAnswerVerification.status !== 'error') {
+      return applyPostAnswerVerificationPolicy({
+        answer: input.answer,
+        factClaimPlanner: input.factClaimPlanner,
+        leadStateMachine: input.leadStateMachine,
+        cardManifest: input.cardManifest,
+        productEvidenceRegistry: input.productEvidenceRegistry
+      });
+    }
+
+    const rewrite = await this.rewriteAnswerForPostVerification({
+      answer: input.answer,
+      userMessage: input.userMessage,
+      history: input.history,
+      contract: input.contract,
+      leadStateMachine: input.leadStateMachine,
+      factClaimPlanner: input.factClaimPlanner,
+      cardManifest: input.cardManifest,
+      postAnswerVerification: initialPostAnswerVerification,
+      signal: input.signal
+    });
+    if (!rewrite) {
+      return applyPostAnswerVerificationPolicy({
+        answer: input.answer,
+        factClaimPlanner: input.factClaimPlanner,
+        leadStateMachine: input.leadStateMachine,
+        cardManifest: input.cardManifest,
+        productEvidenceRegistry: input.productEvidenceRegistry
+      });
+    }
+
+    const check = applyPostAnswerVerificationPolicy({
+      answer: rewrite.answer,
+      factClaimPlanner: input.factClaimPlanner,
+      leadStateMachine: input.leadStateMachine,
+      cardManifest: input.cardManifest,
+      productEvidenceRegistry: input.productEvidenceRegistry
+    });
+    check.postAnswerVerificationRecovery.attempted = true;
+    check.postAnswerVerificationRecovery.method = 'llm_rewrite';
+    check.postAnswerVerificationRecovery.issuesBefore = rewrite.issueCodes;
+    check.postAnswerVerificationRecovery.issuesAfter = check.postAnswerVerification.issues.map((issue) => issue.code);
+    check.postAnswerVerificationRecovery.recovered = check.postAnswerVerification.status !== 'error';
+    check.postAnswerVerificationRecovery.reason = check.postAnswerVerificationRecovery.recovered
+      ? 'llm_rewrite_cleared_post_answer_issues'
+      : 'llm_rewrite_left_post_answer_errors';
+    return check;
+  }
+
   private async canUseEmbeddings(target: EmbeddingCoverageTarget) {
     const coverageFn = (this.products as unknown as {
       getEmbeddingCoverage?: ProductRepository['getEmbeddingCoverage'];
@@ -8473,12 +8617,16 @@ export class AssistantService {
       return null;
     }
 
-    const postAnswerCheck = applyPostAnswerVerificationPolicy({
+    const postAnswerCheck = await this.verifyAnswerWithLlmRewrite({
       answer,
+      userMessage: input.userMessage,
+      history,
+      contract,
       factClaimPlanner,
       leadStateMachine,
       cardManifest,
-      productEvidenceRegistry
+      productEvidenceRegistry,
+      signal: input.signal
     });
     answer = postAnswerCheck.answer;
     const factClaimAudit = postAnswerCheck.factClaimAudit;
@@ -8713,12 +8861,16 @@ export class AssistantService {
       throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
     }
 
-    const postAnswerCheck = applyPostAnswerVerificationPolicy({
+    const postAnswerCheck = await this.verifyAnswerWithLlmRewrite({
       answer,
+      userMessage: input.userMessage,
+      history,
+      contract,
       factClaimPlanner,
       leadStateMachine,
       cardManifest,
-      productEvidenceRegistry
+      productEvidenceRegistry,
+      signal: input.signal
     });
     answer = postAnswerCheck.answer;
     const factClaimAudit = postAnswerCheck.factClaimAudit;
@@ -8979,12 +9131,16 @@ export class AssistantService {
       return null;
     }
 
-    const postAnswerCheck = applyPostAnswerVerificationPolicy({
+    const postAnswerCheck = await this.verifyAnswerWithLlmRewrite({
       answer,
+      userMessage: latestUserMessage,
+      history,
+      contract,
       factClaimPlanner,
       leadStateMachine,
       cardManifest,
-      productEvidenceRegistry
+      productEvidenceRegistry,
+      signal: input.signal
     });
     answer = postAnswerCheck.answer;
     const factClaimAudit = postAnswerCheck.factClaimAudit;
@@ -11454,12 +11610,16 @@ export class AssistantService {
       input.userMessage,
       effectivePlan
     );
-    const postAnswerCheck = applyPostAnswerVerificationPolicy({
+    const postAnswerCheck = await this.verifyAnswerWithLlmRewrite({
       answer,
+      userMessage: input.userMessage,
+      history,
+      contract: answerAgentTurnContract,
       factClaimPlanner,
       leadStateMachine,
       cardManifest,
-      productEvidenceRegistry
+      productEvidenceRegistry,
+      signal: input.signal
     });
     answer = postAnswerCheck.answer;
     const factClaimAudit = postAnswerCheck.factClaimAudit;
@@ -11994,12 +12154,16 @@ export class AssistantService {
       if (policyGateEnforcement.mode === 'hard_block') {
         throw new Error(`Recovered answer blocked by policy gate: ${policyGateEnforcement.hardBlockReasons.join(', ')}`);
       }
-      const postAnswerCheck = applyPostAnswerVerificationPolicy({
+      const postAnswerCheck = await this.verifyAnswerWithLlmRewrite({
         answer,
+        userMessage: latestUserText,
+        history,
+        contract,
         factClaimPlanner,
         leadStateMachine,
         cardManifest,
-        productEvidenceRegistry
+        productEvidenceRegistry,
+        signal: input.signal
       });
       answer = postAnswerCheck.answer;
       const factClaimAudit = postAnswerCheck.factClaimAudit;

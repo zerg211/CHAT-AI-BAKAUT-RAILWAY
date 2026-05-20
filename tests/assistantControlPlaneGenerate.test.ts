@@ -531,8 +531,39 @@ describe('assistant generateAnswer control-plane metadata', () => {
     expect(result.metadata?.toolTrace?.find((item) => item.tool === 'createLead')).toMatchObject({ ok: true, risk: 'sensitive' });
   });
 
+  it('uses an LLM rewrite instead of a template when post-answer verification rejects a created-lead answer', async () => {
+    openAiCreate.mockReset();
+    openAiCreate
+      .mockResolvedValueOnce({
+        output_text: 'Contact received. Leave your phone number again so I can create the request.'
+      })
+      .mockResolvedValueOnce({
+        output_text: 'Алексей, контакт получил. Проверю доставку и наличие по выбранным позициям и вернусь с точным ответом.'
+      });
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const assistant = new ControlPlaneAssistant(conversations as never, new FakeProducts([generator()]) as never, false, 'lead', leads as never);
+
+    const result = await assistant.generateAnswer({
+      sessionId,
+      userMessage: 'Да, проверьте наличие и доставку. Меня зовут Алексей, телефон +7 900 000-00-11.'
+    });
+
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
+    expect(result.leadCreated).toBe(true);
+    expect(result.answer).toMatch(/Алексей, контакт получил\./iu);
+    expect(result.answer).not.toMatch(/Leave your phone number again/iu);
+    expect(result.metadata?.postAnswerVerification?.status).toBe('pass');
+    expect(result.metadata?.postAnswerVerificationRecovery).toMatchObject({
+      attempted: true,
+      recovered: true,
+      method: 'llm_rewrite',
+      issuesBefore: expect.arrayContaining(['lead_contact_ask_after_created'])
+    });
+  });
+
   it('fast-confirms contact from prior cards and records autoLead metadata', async () => {
-    openAiCreate.mockClear();
+    openAiCreate.mockReset();
     openAiCreate
       .mockResolvedValueOnce(llmFastRouteResponse({ route: 'commercial_handoff' }))
       .mockResolvedValueOnce(llmFastAnswerResponse(

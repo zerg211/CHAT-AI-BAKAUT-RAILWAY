@@ -5,11 +5,47 @@ import {
   normalizeLedgerStateDeltaEvents,
   type LedgerStateDelta
 } from '../src/ai/agentManagerContracts.js';
+import { agentManagerStructuredFormats } from '../src/ai/agentManagerOrchestrator.js';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const turnId = '22222222-2222-4222-8222-222222222222';
 
+function walkJsonSchemaObjects(schema: unknown, visit: (schema: Record<string, unknown>, path: string) => void, path = '$') {
+  if (!schema || typeof schema !== 'object') return;
+  const object = schema as Record<string, unknown>;
+  const looksLikeObjectSchema = object.type === 'object' || Boolean(object.properties);
+  if (looksLikeObjectSchema) visit(object, path);
+  const properties = object.properties;
+  if (properties && typeof properties === 'object') {
+    for (const [key, value] of Object.entries(properties as Record<string, unknown>)) {
+      walkJsonSchemaObjects(value, visit, `${path}.properties.${key}`);
+    }
+  }
+  if (object.items) walkJsonSchemaObjects(object.items, visit, `${path}.items`);
+  for (const key of ['anyOf', 'oneOf', 'allOf'] as const) {
+    const variants = object[key];
+    if (Array.isArray(variants)) {
+      variants.forEach((variant, index) => walkJsonSchemaObjects(variant, visit, `${path}.${key}[${index}]`));
+    }
+  }
+}
+
 describe('agent manager contracts', () => {
+  it('uses strict OpenAI response-format schemas without open object payloads', () => {
+    for (const [name, format] of Object.entries(agentManagerStructuredFormats)) {
+      const schema = format.format.schema;
+      walkJsonSchemaObjects(schema, (object, path) => {
+        expect(object.additionalProperties, `${name} ${path}`).toBe(false);
+        const properties = object.properties && typeof object.properties === 'object'
+          ? Object.keys(object.properties as Record<string, unknown>)
+          : [];
+        if (properties.length) {
+          expect(object.required, `${name} ${path}`).toEqual(expect.arrayContaining(properties));
+        }
+      });
+    }
+  });
+
   it('requires evidence, source, and status for ledger events', () => {
     const result = DialogueLedgerEventSchema.safeParse({
       sessionId,

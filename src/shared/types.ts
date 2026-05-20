@@ -762,7 +762,7 @@ export interface PostAnswerVerificationRecovery {
   recovered: boolean;
   issuesBefore: string[];
   issuesAfter: string[];
-  method?: 'none' | 'deterministic_text_repair';
+  method?: 'none' | 'deterministic_text_repair' | 'llm_rewrite';
   repairableIssues?: string[];
   unrecoverableIssues?: string[];
   reason?: string;

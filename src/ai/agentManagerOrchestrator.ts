@@ -185,6 +185,118 @@ function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string):
     }));
 }
 
+const nullableStringJsonSchema = { type: ['string', 'null'] } as const;
+const nullableNumberJsonSchema = { type: ['number', 'null'] } as const;
+const nullableBooleanJsonSchema = { type: ['boolean', 'null'] } as const;
+const stringArrayJsonSchema = { type: 'array', items: { type: 'string' } } as const;
+const scalarValueJsonSchema = { type: ['string', 'number', 'boolean', 'null'] } as const;
+
+const ledgerPayloadJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    factKey: nullableStringJsonSchema,
+    value: scalarValueJsonSchema,
+    valueText: nullableStringJsonSchema,
+    unit: nullableStringJsonSchema,
+    questionId: nullableStringJsonSchema,
+    text: nullableStringJsonSchema,
+    answer: scalarValueJsonSchema,
+    answerKnown: nullableBooleanJsonSchema,
+    targetEventIds: stringArrayJsonSchema,
+    targetQuestionIds: stringArrayJsonSchema,
+    closesQuestionIds: stringArrayJsonSchema,
+    supersedesEventIds: stringArrayJsonSchema,
+    negatesEventIds: stringArrayJsonSchema,
+    needId: nullableStringJsonSchema,
+    productId: nullableStringJsonSchema,
+    productIds: stringArrayJsonSchema,
+    toolRequestId: nullableStringJsonSchema,
+    sourceResultId: nullableStringJsonSchema,
+    notes: nullableStringJsonSchema
+  },
+  required: [
+    'factKey',
+    'value',
+    'valueText',
+    'unit',
+    'questionId',
+    'text',
+    'answer',
+    'answerKnown',
+    'targetEventIds',
+    'targetQuestionIds',
+    'closesQuestionIds',
+    'supersedesEventIds',
+    'negatesEventIds',
+    'needId',
+    'productId',
+    'productIds',
+    'toolRequestId',
+    'sourceResultId',
+    'notes'
+  ]
+} as const;
+
+const contactArgsJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: nullableStringJsonSchema,
+    phone: nullableStringJsonSchema,
+    email: nullableStringJsonSchema,
+    preferredContact: nullableStringJsonSchema,
+    comment: nullableStringJsonSchema
+  },
+  required: ['name', 'phone', 'email', 'preferredContact', 'comment']
+} as const;
+
+const loadItemArgsJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: nullableStringJsonSchema,
+    name: nullableStringJsonSchema,
+    count: nullableNumberJsonSchema,
+    runningKw: nullableNumberJsonSchema,
+    startingKw: nullableNumberJsonSchema,
+    source: { type: ['string', 'null'], enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', null] },
+    evidence: nullableStringJsonSchema
+  },
+  required: ['kind', 'name', 'count', 'runningKw', 'startingKw', 'source', 'evidence']
+} as const;
+
+const toolArgsJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    query: nullableStringJsonSchema,
+    limit: nullableNumberJsonSchema,
+    productIds: stringArrayJsonSchema,
+    productNames: stringArrayJsonSchema,
+    comparisonAttributes: stringArrayJsonSchema,
+    loads: { type: 'array', items: loadItemArgsJsonSchema },
+    simultaneousStarting: nullableBooleanJsonSchema,
+    simultaneousStartingKinds: stringArrayJsonSchema,
+    contact: contactArgsJsonSchema,
+    reason: nullableStringJsonSchema,
+    notes: nullableStringJsonSchema
+  },
+  required: [
+    'query',
+    'limit',
+    'productIds',
+    'productNames',
+    'comparisonAttributes',
+    'loads',
+    'simultaneousStarting',
+    'simultaneousStartingKinds',
+    'contact',
+    'reason',
+    'notes'
+  ]
+} as const;
+
 const ledgerDeltaFormat = {
   format: {
     type: 'json_schema',
@@ -200,18 +312,18 @@ const ledgerDeltaFormat = {
             type: 'object',
             additionalProperties: false,
             properties: {
-              eventId: { type: 'string' },
+              eventId: nullableStringJsonSchema,
               eventType: {
                 type: 'string',
                 enum: ['fact.observed', 'fact.confirmed', 'fact.superseded', 'fact.negated', 'question.asked', 'question.answered', 'question.closed', 'need.opened', 'need.updated', 'need.closed', 'tool.artifact.linked']
               },
               scope: { type: 'string', enum: ['dialogue', 'turn', 'need', 'product', 'lead', 'tool', 'question'] },
-              payload: { type: 'object', additionalProperties: true },
+              payload: ledgerPayloadJsonSchema,
               evidence: { type: 'string' },
               source: { type: 'string', enum: ['llm_state_delta', 'tool_result', 'system_reducer', 'admin_curation', 'catalog', 'web'] },
               status: { type: 'string', enum: ['active', 'superseded', 'negated', 'closed', 'rejected'] }
             },
-            required: ['eventType', 'scope', 'payload', 'evidence', 'source', 'status']
+            required: ['eventId', 'eventType', 'scope', 'payload', 'evidence', 'source', 'status']
           }
         }
       },
@@ -226,7 +338,7 @@ const toolRequestJsonSchema = {
   properties: {
     id: { type: 'string' },
     tool: { type: 'string', enum: ['catalog.search', 'catalog.getProductDetails', 'calculator.generatorLoad', 'web.researchProductFacts', 'lead.capture'] },
-    args: { type: 'object', additionalProperties: true },
+    args: toolArgsJsonSchema,
     rationale: { type: 'string' },
     required: { type: 'boolean' }
   },
@@ -241,7 +353,7 @@ const intentContractFormat = {
       type: 'object',
       additionalProperties: false,
       properties: {
-        turnId: { type: 'string' },
+        turnId: nullableStringJsonSchema,
         userMessageSummary: { type: 'string' },
         dialogueUnderstanding: { type: 'string' },
         nextStepRationale: { type: 'string' },
@@ -250,7 +362,7 @@ const intentContractFormat = {
         mustNotAskQuestionIds: { type: 'array', items: { type: 'string' } },
         riskFlags: { type: 'array', items: { type: 'string' } }
       },
-      required: ['userMessageSummary', 'dialogueUnderstanding', 'nextStepRationale', 'requiresTools', 'toolRequests', 'mustNotAskQuestionIds', 'riskFlags']
+      required: ['turnId', 'userMessageSummary', 'dialogueUnderstanding', 'nextStepRationale', 'requiresTools', 'toolRequests', 'mustNotAskQuestionIds', 'riskFlags']
     }
   }
 } as const;
@@ -272,7 +384,7 @@ const answerContractFormat = {
             properties: {
               factKey: { type: 'string' },
               sourceEventIds: { type: 'array', items: { type: 'string' } },
-              value: {}
+              value: scalarValueJsonSchema
             },
             required: ['factKey', 'sourceEventIds', 'value']
           }
@@ -322,11 +434,18 @@ const preSendReviewFormat = {
             required: ['code', 'severity', 'message', 'evidence']
           }
         },
-        revisedAnswerText: { type: 'string' }
+        revisedAnswerText: nullableStringJsonSchema
       },
-      required: ['verdict', 'issues']
+      required: ['verdict', 'issues', 'revisedAnswerText']
     }
   }
+} as const;
+
+export const agentManagerStructuredFormats = {
+  ledgerDeltaFormat,
+  intentContractFormat,
+  answerContractFormat,
+  preSendReviewFormat
 } as const;
 
 class OpenAIAgentManagerModel implements AgentManagerModel {
