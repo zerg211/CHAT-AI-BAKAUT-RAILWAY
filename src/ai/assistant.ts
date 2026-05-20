@@ -60,6 +60,7 @@ import { buildLeadDraft, shouldCommitLeadFromDraft } from './leadDraft.js';
 import { sourcePolicyRequiresWeb } from './sourcePolicy.js';
 import { disabledLegacyWriterMetadata, legacyAnswerWriterAllowed } from './agentManagerConfig.js';
 import { AgentManagerOrchestrator } from './agentManagerOrchestrator.js';
+import { isAgentManagerHarnessEnabledForSession } from './agentManagerRuntime.js';
 import { applyContractNeedDelta } from './requirementDelta.js';
 import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 import {
@@ -348,6 +349,219 @@ type RequiredProductTraits = {
   powerReasoning: string;
   provenance?: ProductSelectionCriteria['provenance'];
 };
+
+type LlmFastTurnRouteName = 'none' | 'catalog_selection' | 'commercial_handoff';
+type LlmFastTurnPricePolicy = 'none' | 'visible_cards_only';
+
+type LlmFastTurnDecision = {
+  route: LlmFastTurnRouteName;
+  confidence: number;
+  rationale: string;
+  answerTask: AgentTurnContract['answerTask'];
+  taskType: NonNullable<AgentTurnContract['taskType']>;
+  catalogAction: NonNullable<AgentTurnContract['catalogAction']>;
+  commercialAction: NonNullable<AgentTurnContract['commercialAction']>;
+  productCardsPolicy: NonNullable<AgentTurnContract['productCardsPolicy']>;
+  cardsRole: AgentTurnContract['cardsRole'];
+  leadAllowed: boolean;
+  leadAllowedReason: string;
+  currentFocus: string;
+  mustAnswerNow: string[];
+  answerGuidance: string;
+  pricePolicy: LlmFastTurnPricePolicy;
+  usePriorShownCards: boolean;
+  needsCatalogSelection: boolean;
+  createLeadIfContactPresent: boolean;
+  warnings: string[];
+};
+
+type LlmFastTurnAnswerContract = {
+  answer: string;
+  leadRequested: boolean;
+  namedProductIds: string[];
+  factsUsed: string[];
+  safetyNotes: string[];
+  rationale: string;
+};
+
+const LLM_FAST_TURN_MIN_CONFIDENCE = 0.62;
+
+const llmFastTurnRouteTextFormat = {
+  format: {
+    type: 'json_schema',
+    name: 'llm_fast_turn_route',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        route: { type: 'string', enum: ['none', 'catalog_selection', 'commercial_handoff'] },
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+        rationale: { type: 'string' },
+        answerTask: { type: 'string', enum: ['technical_explanation', 'comparison', 'product_selection', 'mixed', 'lead_handoff'] },
+        taskType: {
+          type: 'string',
+          enum: [
+            'pure_delivery',
+            'pure_availability',
+            'product_selection',
+            'product_selection_with_delivery',
+            'product_selection_with_availability',
+            'technical_answer',
+            'comparison',
+            'contact_refusal_continue_selection'
+          ]
+        },
+        catalogAction: { type: 'string', enum: ['none', 'exact_model_lookup', 'find_matching_products', 'verify_catalog_absence'] },
+        commercialAction: { type: 'string', enum: ['none', 'explain_manager_required', 'offer_contact_after_answer'] },
+        productCardsPolicy: { type: 'string', enum: ['none', 'show_exact_matches', 'show_matching_products', 'supporting_only'] },
+        cardsRole: { type: 'string', enum: ['none', 'supporting', 'primary'] },
+        leadAllowed: { type: 'boolean' },
+        leadAllowedReason: { type: 'string' },
+        currentFocus: { type: 'string' },
+        mustAnswerNow: { type: 'array', items: { type: 'string' } },
+        answerGuidance: { type: 'string' },
+        pricePolicy: { type: 'string', enum: ['none', 'visible_cards_only'] },
+        usePriorShownCards: { type: 'boolean' },
+        needsCatalogSelection: { type: 'boolean' },
+        createLeadIfContactPresent: { type: 'boolean' },
+        warnings: { type: 'array', items: { type: 'string' } }
+      },
+      required: [
+        'route',
+        'confidence',
+        'rationale',
+        'answerTask',
+        'taskType',
+        'catalogAction',
+        'commercialAction',
+        'productCardsPolicy',
+        'cardsRole',
+        'leadAllowed',
+        'leadAllowedReason',
+        'currentFocus',
+        'mustAnswerNow',
+        'answerGuidance',
+        'pricePolicy',
+        'usePriorShownCards',
+        'needsCatalogSelection',
+        'createLeadIfContactPresent',
+        'warnings'
+      ]
+    }
+  }
+} as const;
+
+const llmFastTurnAnswerTextFormat = {
+  format: {
+    type: 'json_schema',
+    name: 'llm_fast_turn_answer',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        answer: { type: 'string' },
+        leadRequested: { type: 'boolean' },
+        namedProductIds: { type: 'array', items: { type: 'string' } },
+        factsUsed: { type: 'array', items: { type: 'string' } },
+        safetyNotes: { type: 'array', items: { type: 'string' } },
+        rationale: { type: 'string' }
+      },
+      required: ['answer', 'leadRequested', 'namedProductIds', 'factsUsed', 'safetyNotes', 'rationale']
+    }
+  }
+} as const;
+
+function stringArray(value: unknown, limit = 12) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function enumValue<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? value as T
+    : fallback;
+}
+
+function coerceLlmFastTurnDecision(value: unknown): LlmFastTurnDecision {
+  const object = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  const route = enumValue(object.route, ['none', 'catalog_selection', 'commercial_handoff'] as const, 'none');
+  const routeDefaults = route === 'commercial_handoff'
+    ? {
+        answerTask: 'lead_handoff' as const,
+        taskType: 'pure_delivery' as const,
+        catalogAction: 'none' as const,
+        commercialAction: 'explain_manager_required' as const,
+        productCardsPolicy: 'none' as const,
+        cardsRole: 'none' as const,
+        pricePolicy: 'visible_cards_only' as const,
+        usePriorShownCards: true,
+        needsCatalogSelection: false
+      }
+    : route === 'catalog_selection'
+      ? {
+          answerTask: 'product_selection' as const,
+          taskType: 'product_selection' as const,
+          catalogAction: 'find_matching_products' as const,
+          commercialAction: 'none' as const,
+          productCardsPolicy: 'show_matching_products' as const,
+          cardsRole: 'primary' as const,
+          pricePolicy: 'visible_cards_only' as const,
+          usePriorShownCards: false,
+          needsCatalogSelection: true
+        }
+      : {
+          answerTask: 'technical_explanation' as const,
+          taskType: 'technical_answer' as const,
+          catalogAction: 'none' as const,
+          commercialAction: 'none' as const,
+          productCardsPolicy: 'none' as const,
+          cardsRole: 'none' as const,
+          pricePolicy: 'none' as const,
+          usePriorShownCards: false,
+          needsCatalogSelection: false
+        };
+  return {
+    route,
+    confidence: clamp01(object.confidence, 0),
+    rationale: typeof object.rationale === 'string' ? object.rationale.trim() : '',
+    answerTask: enumValue(object.answerTask, ['technical_explanation', 'comparison', 'product_selection', 'mixed', 'lead_handoff'] as const, routeDefaults.answerTask),
+    taskType: enumValue(object.taskType, ['pure_delivery', 'pure_availability', 'product_selection', 'product_selection_with_delivery', 'product_selection_with_availability', 'technical_answer', 'comparison', 'contact_refusal_continue_selection'] as const, routeDefaults.taskType),
+    catalogAction: enumValue(object.catalogAction, ['none', 'exact_model_lookup', 'find_matching_products', 'verify_catalog_absence'] as const, routeDefaults.catalogAction),
+    commercialAction: enumValue(object.commercialAction, ['none', 'explain_manager_required', 'offer_contact_after_answer'] as const, routeDefaults.commercialAction),
+    productCardsPolicy: enumValue(object.productCardsPolicy, ['none', 'show_exact_matches', 'show_matching_products', 'supporting_only'] as const, routeDefaults.productCardsPolicy),
+    cardsRole: enumValue(object.cardsRole, ['none', 'supporting', 'primary'] as const, routeDefaults.cardsRole),
+    leadAllowed: object.leadAllowed === true,
+    leadAllowedReason: typeof object.leadAllowedReason === 'string' && object.leadAllowedReason.trim()
+      ? object.leadAllowedReason.trim()
+      : 'LLM fast-turn route did not allow a contact handoff for this turn',
+    currentFocus: typeof object.currentFocus === 'string' && object.currentFocus.trim()
+      ? object.currentFocus.trim()
+      : route,
+    mustAnswerNow: stringArray(object.mustAnswerNow, 6),
+    answerGuidance: typeof object.answerGuidance === 'string' ? object.answerGuidance.trim() : '',
+    pricePolicy: enumValue(object.pricePolicy, ['none', 'visible_cards_only'] as const, routeDefaults.pricePolicy),
+    usePriorShownCards: typeof object.usePriorShownCards === 'boolean' ? object.usePriorShownCards : routeDefaults.usePriorShownCards,
+    needsCatalogSelection: typeof object.needsCatalogSelection === 'boolean' ? object.needsCatalogSelection : routeDefaults.needsCatalogSelection,
+    createLeadIfContactPresent: object.createLeadIfContactPresent === true,
+    warnings: stringArray(object.warnings, 12)
+  };
+}
+
+function coerceLlmFastTurnAnswerContract(value: unknown): LlmFastTurnAnswerContract {
+  const object = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    answer: typeof object.answer === 'string' ? object.answer.trim() : '',
+    leadRequested: object.leadRequested === true,
+    namedProductIds: stringArray(object.namedProductIds, 24),
+    factsUsed: stringArray(object.factsUsed, 24),
+    safetyNotes: stringArray(object.safetyNotes, 24),
+    rationale: typeof object.rationale === 'string' ? object.rationale.trim() : ''
+  };
+}
 
 
 
@@ -7507,6 +7721,250 @@ export class AssistantService {
     this.agentManager = new AgentManagerOrchestrator(this.conversations, this.products, this.leads);
   }
 
+  private shouldConsiderLlmFastTurnRoute(needState: CustomerNeedState, history: Message[]) {
+    const selection = needState.selectionState;
+    const hasSelectionContext = Boolean(selection && (
+      selection.targetProductClass !== 'unknown' ||
+      selection.currentProductClass !== 'unknown' ||
+      selection.hardConstraints?.productIntent !== 'unknown' ||
+      hasMaterialHardConstraints(selection) ||
+      Boolean(selection.loadProfile?.items?.length)
+    ));
+    return hasSelectionContext ||
+      (needState.activeNeeds ?? []).length > 0 ||
+      lastVisibleShownProductCardPayloads(history).length > 0 ||
+      allShownProductCards(history).length > 0;
+  }
+
+  private llmFastTurnContract(decision: LlmFastTurnDecision, needState: CustomerNeedState): AgentTurnContract {
+    const mustAnswerNow = decision.mustAnswerNow.length
+      ? decision.mustAnswerNow
+      : decision.route === 'commercial_handoff'
+        ? ['answer the buyer commercial question safely and use specialist verification policy']
+        : ['select grounded catalog cards and answer from the shown cards'];
+    return {
+      answerTask: decision.answerTask,
+      taskType: decision.taskType,
+      catalogAction: decision.catalogAction,
+      commercialAction: decision.commercialAction,
+      productCardsPolicy: decision.productCardsPolicy,
+      mustAnswerNow,
+      activeNeeds: (needState.activeNeeds ?? []).map((need) => ({
+        id: need.id,
+        productClass: need.productClass,
+        summary: need.summary
+      })),
+      currentFocus: decision.currentFocus || decision.route,
+      cardsRole: decision.cardsRole,
+      leadAllowed: decision.leadAllowed,
+      leadAllowedReason: decision.leadAllowedReason,
+      errorRecoveryPriority: decision.answerGuidance ||
+        (decision.route === 'commercial_handoff'
+          ? 'LLM must answer the commercial handoff safely without exact stock, delivery, discount, or terms promises.'
+          : 'LLM must answer from grounded catalog cards without using deterministic canned text.'),
+      validatorWarnings: [
+        'llm_fast_turn_contract',
+        `llm_fast_turn_route_${decision.route}`,
+        ...decision.warnings
+      ]
+    };
+  }
+
+  private async planLlmFastTurnRoute(input: {
+    client: ReturnType<typeof createOpenAIClient>;
+    session: ConversationSession;
+    needState: CustomerNeedState;
+    history: Message[];
+    userMessage: string;
+    signal?: AbortSignal;
+    diagnostics: AiGenerationDiagnostics;
+  }) {
+    if (!input.client || !this.shouldConsiderLlmFastTurnRoute(input.needState, input.history)) return null;
+    const visiblePriorCards = lastVisibleShownProductCardPayloads(input.history);
+    const allPriorCards = allShownProductCards(input.history);
+    const selection = input.needState.selectionState;
+    const payload = {
+      latestUserMessage: input.userMessage,
+      recentHistory: compactHistoryForAI(input.history, 10, 500),
+      needState: {
+        lastSummary: input.needState.lastSummary,
+        activeNeeds: (input.needState.activeNeeds ?? []).map((need) => ({
+          id: need.id,
+          productClass: need.productClass,
+          summary: need.summary,
+          constraints: need.constraints,
+          openQuestions: need.openQuestions
+        })),
+        selectionState: selection ? {
+          currentProductClass: selection.currentProductClass,
+          targetProductClass: selection.targetProductClass,
+          confidence: selection.confidence,
+          hardConstraints: selection.hardConstraints,
+          activeRequirement: selection.activeRequirement,
+          loadProfile: selection.loadProfile,
+          unknowns: selection.unknowns
+        } : null
+      },
+      visiblePriorCards: visiblePriorCards.slice(0, 12).map((card) => ({
+        id: card.id,
+        name: card.name,
+        category: card.category,
+        price: card.price,
+        currency: card.currency
+      })),
+      allPriorCardIds: allPriorCards.map((card) => card.id).slice(0, 24),
+      structuralEligibility: {
+        hasNeedState: (input.needState.activeNeeds ?? []).length > 0,
+        hasSelectionState: Boolean(selection),
+        hasVisiblePriorCards: visiblePriorCards.length > 0
+      }
+    };
+    const request = {
+      model: config.OPENAI_PLANNER_MODEL,
+      reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
+      max_output_tokens: Math.min(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS, 1400),
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are the lightweight turn router for the BAKAUT AI sales manager.',
+            'Decide semantically, from dialogue context, whether this turn can skip the heavyweight planner.',
+            'This is not keyword matching. Understand the buyer intent, the visible cards, and the extracted need state.',
+            'Return route=none unless the turn is clearly one of these:',
+            '1. catalog_selection: the buyer wants product cards from the already extracted need state; may also ask safe stock/delivery orientation.',
+            '2. commercial_handoff: the buyer asks stock, delivery, discount, order terms, or specialist verification about already shown or already selected products, without asking for a new product selection.',
+            'For commercial facts, never allow exact stock, exact delivery cost, discount, timing, or final terms as facts. These require specialist/logistics verification.',
+            'If contact is already present and the buyer wants verification, set createLeadIfContactPresent=true. If the buyer refuses a call/contact, leadAllowed=false.',
+            'If route=none, set all actions to none and confidence to your actual confidence.',
+            'Return only JSON that matches the schema.'
+          ].join('\n')
+        },
+        { role: 'user', content: JSON.stringify(payload) }
+      ],
+      text: llmFastTurnRouteTextFormat
+    };
+    try {
+      const { response, parsed } = await createStructuredJsonResponse(input.client, request, 'llm_fast_turn_route', input.signal);
+      logOpenAIUsage('llm_fast_turn_route', config.OPENAI_PLANNER_MODEL, response);
+      const decision = coerceLlmFastTurnDecision(parsed);
+      if (decision.route === 'none' || decision.confidence < LLM_FAST_TURN_MIN_CONFIDENCE) return null;
+      if (decision.route === 'catalog_selection' && !input.needState.selectionState) return null;
+      if (decision.route === 'commercial_handoff' && !decision.usePriorShownCards && !visiblePriorCards.length && !(input.needState.activeNeeds ?? []).length) return null;
+      return decision;
+    } catch (error) {
+      markAiFallback(input.diagnostics, 'turnPlanningFallback', error, 'llm_fast_turn_router_failed');
+      console.warn('LLM fast-turn router failed; falling through to full LLM planner', safeError(error));
+      return null;
+    }
+  }
+
+  private async composeLlmFastTurnAnswer(input: {
+    client: ReturnType<typeof createOpenAIClient>;
+    decision: LlmFastTurnDecision;
+    contract: AgentTurnContract;
+    userMessage: string;
+    history: Message[];
+    needState: CustomerNeedState;
+    cards: ProductCard[];
+    visibleProductIds: string[];
+    hiddenProductIds: string[];
+    selectionResult: ProductSelectionResult;
+    leadDraft?: LeadDraft;
+    leadStateMachine: LeadStateMachine;
+    autoLeadResult?: unknown;
+    policyGate: PolicyGateResult;
+    policyGateEnforcement: PolicyGateEnforcement;
+    factClaimPlanner: FactClaimPlanner;
+    cardManifest: CardManifest;
+    signal?: AbortSignal;
+  }) {
+    if (!input.client) throw new Error('OpenAI client is not configured');
+    const visibleIdSet = new Set(input.visibleProductIds);
+    const payload = {
+      route: input.decision,
+      agentTurnContract: input.contract,
+      latestUserMessage: input.userMessage,
+      recentHistory: compactHistoryForAI(input.history, 8, 500),
+      needStateSummary: {
+        lastSummary: input.needState.lastSummary,
+        activeNeeds: (input.needState.activeNeeds ?? []).map((need) => ({
+          id: need.id,
+          productClass: need.productClass,
+          summary: need.summary,
+          constraints: need.constraints,
+          openQuestions: need.openQuestions
+        })),
+        selectionState: input.needState.selectionState ? {
+          currentProductClass: input.needState.selectionState.currentProductClass,
+          targetProductClass: input.needState.selectionState.targetProductClass,
+          confidence: input.needState.selectionState.confidence,
+          hardConstraints: input.needState.selectionState.hardConstraints,
+          loadProfile: input.needState.selectionState.loadProfile,
+          unknowns: input.needState.selectionState.unknowns
+        } : null
+      },
+      productCardsShown: input.cards.map((card) => ({
+        id: card.id,
+        name: card.name,
+        brand: card.brand,
+        category: card.category,
+        price: card.price,
+        currency: card.currency,
+        specs: card.specs,
+        visibleFirst: visibleIdSet.has(card.id),
+        reasons: card.reasons.slice(0, 3)
+      })),
+      productCardDisplay: {
+        visibleProductIds: input.visibleProductIds,
+        hiddenProductIds: input.hiddenProductIds
+      },
+      selectionResult: {
+        confidence: input.selectionResult.confidence,
+        missingQuestions: input.selectionResult.missingQuestions,
+        rejectedProductIds: input.selectionResult.rejectedProducts.map((item) => item.productId).slice(0, 16)
+      },
+      leadDraft: input.leadDraft,
+      leadStateMachine: input.leadStateMachine,
+      autoLeadResult: input.autoLeadResult,
+      safetyContracts: {
+        policyGate: input.policyGate,
+        policyGateEnforcement: input.policyGateEnforcement,
+        factClaimPlanner: input.factClaimPlanner,
+        cardManifest: input.cardManifest
+      }
+    };
+    const request = {
+      model: config.OPENAI_ANSWER_MODEL,
+      reasoning: { effort: 'none' },
+      max_output_tokens: Math.min(config.OPENAI_MAX_OUTPUT_TOKENS, 900),
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are the BAKAUT AI sales manager writing the buyer-visible answer in Russian.',
+            'The LLM owns the wording and the final response. Do not use canned templates.',
+            'Use only the provided catalog cards, dialogue memory, lead state, and safety contracts.',
+            'If product cards are shown, the first visible card is the primary recommendation. Do not recommend hidden cards as visible cards.',
+            'Do not name product IDs or SKUs unless they are buyer-facing model names from productCardsShown.',
+            'Do not invent stock, delivery price, discount, delivery time, or final terms. Say you will verify them through specialist/logistics when needed.',
+            'If leadStateMachine.state is created, confirm the contact was received and do not ask for it again.',
+            'If leadStateMachine says contact or name is missing and lead policy allows it, ask only for the missing item.',
+            'If leadStateMachine forbids contact, do not ask for name, phone, contact, callback, or form.',
+            'Keep the answer concise and natural: 1-3 short paragraphs or compact bullets when useful.',
+            'Return only JSON that matches the schema.'
+          ].join('\n')
+        },
+        { role: 'user', content: yaml.dump(cleanEmpty(payload)) }
+      ],
+      text: llmFastTurnAnswerTextFormat
+    };
+    const { response, parsed } = await createStructuredJsonResponse(input.client, request, 'llm_fast_turn_answer', input.signal);
+    logOpenAIUsage('llm_fast_turn_answer', config.OPENAI_ANSWER_MODEL, response);
+    const contract = coerceLlmFastTurnAnswerContract(parsed);
+    if (!contract.answer) throw new Error('LLM fast-turn answer returned empty answer');
+    return contract;
+  }
+
   private async canUseEmbeddings(target: EmbeddingCoverageTarget) {
     const coverageFn = (this.products as unknown as {
       getEmbeddingCoverage?: ProductRepository['getEmbeddingCoverage'];
@@ -7806,48 +8264,18 @@ export class AssistantService {
 
   private async tryFastCatalogSelection(
     input: GenerateAnswerInput,
+    session: ConversationSession,
     needState: CustomerNeedState,
     history: Message[],
-    aiDiagnostics: AiGenerationDiagnostics
+    aiDiagnostics: AiGenerationDiagnostics,
+    decision: LlmFastTurnDecision,
+    client: ReturnType<typeof createOpenAIClient>
   ): Promise<ChatResponsePayload | null> {
-    if (!legacyAnswerWriterAllowed('fast_catalog_selection')) return null;
-    if (!shouldUseFastCatalogSelection({
-      userMessage: input.userMessage,
-      needState,
-      history
-    })) return null;
-
-    const mixedCatalogCommercial = isMixedCatalogAndCommercialQuestion(input.userMessage);
-    const mixedCommercialTaskType: AgentTurnContract['taskType'] = /(?:\u0434\u043e\u0441\u0442\u0430\u0432|\u043b\u043e\u0433\u0438\u0441\u0442|shipping|delivery)/iu.test(input.userMessage)
-      ? 'product_selection_with_delivery'
-      : 'product_selection_with_availability';
+    if (decision.route !== 'catalog_selection') return null;
     const catalogSearchQuery = productSearchText(input.userMessage, needState);
     const plan = this.fastCatalogSelectionPlan(input, needState, catalogSearchQuery);
-    const contract: AgentTurnContract = {
-      answerTask: 'product_selection',
-      taskType: mixedCatalogCommercial ? mixedCommercialTaskType : 'product_selection',
-      catalogAction: 'find_matching_products',
-      commercialAction: mixedCatalogCommercial ? 'explain_manager_required' : 'none',
-      productCardsPolicy: 'show_matching_products',
-      mustAnswerNow: mixedCatalogCommercial
-        ? ['show grounded catalog options from current structured need state', 'explain that stock, delivery, and final commercial terms need verification']
-        : ['show grounded catalog options from current structured need state'],
-      activeNeeds: (needState.activeNeeds ?? []).map((need) => ({
-        id: need.id,
-        productClass: need.productClass,
-        summary: need.summary
-      })),
-      currentFocus: 'catalog_selection',
-      cardsRole: 'primary',
-      leadAllowed: false,
-      leadAllowedReason: mixedCatalogCommercial
-        ? 'mixed catalog and commercial turn; answer selection first and verify commercial facts before any final promise'
-        : 'catalog selection turn; buyer has not asked for delivery, stock, discount, or final commercial terms',
-      errorRecoveryPriority: 'Select products from catalog and answer with visible cards without waiting for the heavyweight planner.',
-      validatorWarnings: mixedCatalogCommercial
-        ? ['fast_catalog_selection_contract', 'fast_catalog_mixed_commercial_contract']
-        : ['fast_catalog_selection_contract']
-    };
+    const contract = this.llmFastTurnContract(decision, needState);
+    if (contract.catalogAction !== 'find_matching_products' || contract.productCardsPolicy === 'none') return null;
 
     const provisionalRenderContract = this.buildCatalogFastRenderContract(contract, needState, [], catalogSearchQuery);
     let selectionResult = await this.selectProductsForTurn(
@@ -7943,18 +8371,6 @@ export class AssistantService {
     const finalCards = finalCardsDecisionFromCards(cards, selectionResult, plan, initialVisibleCount);
     const cardDisplay = cardDisplayOptions(finalCards.initialVisibleCount, finalCards.cards);
     const selectedProductIds = finalCards.visibleProductIds;
-    let answer = deterministicAnswerGenerationFallback({
-      cards: finalCards.cards,
-      selectionResult,
-      structuredCatalogSlice: null,
-      finalCards,
-      contract,
-      latestUserMessage: input.userMessage
-    }).trim();
-    if (!answer) return null;
-    if (mixedCatalogCommercial) {
-      answer = `${answer}\n\n${fastCatalogCommercialVerificationText(input.userMessage)}`;
-    }
 
     const renderContract = this.buildCatalogFastRenderContract(contract, updatedNeedState, selectedProductIds, catalogSearchQuery);
     const requirementLedger = buildRequirementLedger({
@@ -7996,13 +8412,29 @@ export class AssistantService {
     const leadDraft = buildLeadDraft({
       contract: agentContractV2,
       registry: productEvidenceRegistry,
-      buyerQuestion: input.userMessage
+      buyerQuestion: input.userMessage,
+      contact: hasLikelyContactText(input.userMessage) ? extractLeadContactDetails(input.userMessage) : undefined
     });
+    const extractedLeadContact = hasLikelyContactText(input.userMessage)
+      ? extractLeadContactDetails(input.userMessage)
+      : undefined;
+    const leadRequestedForAnswer = Boolean(leadDraft) && contract.leadAllowed && !shouldSuppressLeadRequestFromContract(contract, input.userMessage);
+    const shouldCreateLead = decision.createLeadIfContactPresent && shouldCommitLeadFromDraft({
+      draft: leadDraft,
+      leadRequested: leadRequestedForAnswer,
+      executionLeadPolicy: executionContract.leadPolicy,
+      contact: extractedLeadContact
+    });
+    const autoLeadResult = shouldCreateLead
+      ? await this.createLeadFromChatContact({ ...session, needState: updatedNeedState }, history, finalCards.cards, input.userMessage, updatedNeedState, input.turnId)
+      : null;
     const leadStateMachine = buildLeadStateMachine({
       executionContract,
-      hasContactInTurn: false,
-      leadRequested: false,
-      leadCreated: false
+      hasContactInTurn: Boolean(extractedLeadContact),
+      leadRequested: leadRequestedForAnswer,
+      leadCreated: autoLeadResult?.created ?? false,
+      missing: autoLeadResult?.missing,
+      error: autoLeadResult?.error
     });
     const policyGate = runPolicyGate({
       contract: agentContractV2,
@@ -8021,7 +8453,7 @@ export class AssistantService {
       },
       productEvidenceRegistry,
       leadDraft,
-      autoLeadResult: null,
+      autoLeadResult,
       webSearchEnabled: false
     }));
     const toolResults = await toolRegistry.executePlan(agentContractV2.toolPlan, {
@@ -8031,7 +8463,7 @@ export class AssistantService {
       needState: updatedNeedState,
       signal: input.signal,
       policy: {
-        leadAllowed: false,
+        leadAllowed: agentContractV2.leadPolicy !== 'forbidden',
         webAllowed: !agentContractV2.sourcePolicy.forbidden.includes('web'),
         webPurpose: agentContractV2.sourcePolicy.webPurpose
       }
@@ -8049,6 +8481,36 @@ export class AssistantService {
         'fast_catalog_policy_gate_blocked'
       );
       throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
+    }
+
+    let llmFastTurnAnswer: LlmFastTurnAnswerContract;
+    let answer = '';
+    try {
+      llmFastTurnAnswer = await this.composeLlmFastTurnAnswer({
+        client,
+        decision,
+        contract,
+        userMessage: input.userMessage,
+        history,
+        needState: updatedNeedState,
+        cards: finalCards.cards,
+        visibleProductIds: finalCards.visibleProductIds,
+        hiddenProductIds: finalCards.hiddenProductIds,
+        selectionResult,
+        leadDraft: leadDraft ?? undefined,
+        leadStateMachine,
+        autoLeadResult,
+        policyGate,
+        policyGateEnforcement,
+        factClaimPlanner,
+        cardManifest,
+        signal: input.signal
+      });
+      answer = llmFastTurnAnswer.answer;
+    } catch (error) {
+      markAiFallback(aiDiagnostics, 'answerGenerationFallback', error, 'llm_fast_catalog_answer_failed');
+      console.warn('LLM fast catalog answer failed; falling through to full LLM planner', safeError(error));
+      return null;
     }
 
     const postAnswerCheck = applyPostAnswerVerificationPolicy({
@@ -8090,7 +8552,9 @@ export class AssistantService {
       agentContractV2,
       sourcePolicy: agentContractV2.sourcePolicy,
       toolTrace,
-      answerMode: 'fast_catalog_selection',
+      answerMode: 'llm_fast_catalog_selection',
+      llmFastTurnRoute: decision,
+      llmFastTurnAnswer,
       cardPolicy: 'showProducts',
       cardsRole: contract.cardsRole,
       leadAllowed: contract.leadAllowed,
@@ -8110,6 +8574,13 @@ export class AssistantService {
       postAnswerVerificationRecovery,
       aiDiagnostics,
       productCards: finalCards.cards,
+      autoLead: autoLeadResult ? {
+        created: autoLeadResult.created,
+        leadId: autoLeadResult.lead?.id,
+        emailStatus: autoLeadResult.emailStatus,
+        missing: autoLeadResult.missing,
+        error: autoLeadResult.error
+      } : undefined,
       activeNeedsAfter: updatedNeedState.activeNeeds ?? [],
       warnings: contractWarnings,
       contractWarnings
@@ -8141,8 +8612,8 @@ export class AssistantService {
       productCards: finalCards.cards,
       cardDisplay,
       usedWebSearch: false,
-      leadRequested: false,
-      leadCreated: false,
+      leadRequested: leadRequestedForAnswer && !autoLeadResult?.created,
+      leadCreated: autoLeadResult?.created ?? false,
       assistantMessageId: assistantMessage.id,
       metadata
     };
@@ -8375,51 +8846,29 @@ export class AssistantService {
     };
   }
 
-  private async tryFastCommercialHandoff(input: GenerateAnswerInput, session: ConversationSession, history: Message[], aiDiagnostics: AiGenerationDiagnostics): Promise<ChatResponsePayload | null> {
-    if (!legacyAnswerWriterAllowed('fast_commercial_contact_confirmation')) return null;
+  private async tryFastCommercialHandoff(
+    input: GenerateAnswerInput,
+    session: ConversationSession,
+    history: Message[],
+    aiDiagnostics: AiGenerationDiagnostics,
+    decision: LlmFastTurnDecision,
+    client: ReturnType<typeof createOpenAIClient>
+  ): Promise<ChatResponsePayload | null> {
+    if (decision.route !== 'commercial_handoff') return null;
     const latestUserMessage = input.userMessage;
-    if (!isExplicitCommercialQuestion(latestUserMessage)) return null;
-    if (isShownProductChoiceOrComparisonQuestion(latestUserMessage)) return null;
-
-    const contactRefusal = isContactRefusalTechnicalSummaryRequest(latestUserMessage);
     const visibleCommercialCards = lastVisibleShownProductCardPayloads(history);
-    const commercialCards = visibleCommercialCards.length ? visibleCommercialCards : allShownProductCards(history);
+    const commercialCards = decision.usePriorShownCards
+      ? (visibleCommercialCards.length ? visibleCommercialCards : allShownProductCards(history))
+      : [];
     const hasPriorProductContext = commercialCards.length > 0 || (session.needState.activeNeeds ?? []).length > 0;
-    const commercialQuestionAboutShownProducts = commercialCards.length > 0 && isCommercialQuestionAboutShownProducts(latestUserMessage);
-    if (isMixedCatalogAndCommercialQuestion(latestUserMessage) && !commercialQuestionAboutShownProducts) return null;
-    const asksNewCatalogWork = /(?:покаж|подбер|выбер|вариант|модел|какие\s+[^.!?\n]{0,80}есть|show|select|recommend)/iu.test(latestUserMessage);
-    const asksSpecificCatalogItem = inferProductIntent(latestUserMessage) !== 'unknown' ||
-      extractModelTokens(latestUserMessage).length > 0;
-    if (!hasPriorProductContext && asksNewCatalogWork) return null;
-    if (!hasPriorProductContext && asksSpecificCatalogItem) return null;
+    if (!hasPriorProductContext) return null;
 
     const selectedProductIds = commercialCards.map((card) => card.id).slice(0, 24);
     const extractedLeadContact = hasLikelyContactText(latestUserMessage)
       ? extractLeadContactDetails(latestUserMessage)
       : undefined;
-    const contract: AgentTurnContract = {
-      answerTask: 'lead_handoff',
-      taskType: /(?:налич|склад|stock)/iu.test(latestUserMessage) && !/(?:достав|логист|delivery|shipping)/iu.test(latestUserMessage)
-        ? 'pure_availability'
-        : 'pure_delivery',
-      catalogAction: 'none',
-      commercialAction: 'explain_manager_required',
-      productCardsPolicy: 'none',
-      mustAnswerNow: ['answer delivery, stock, discount, and final terms safely from business policy and prior shown cards'],
-      activeNeeds: (session.needState.activeNeeds ?? []).map((need) => ({
-        id: need.id,
-        productClass: need.productClass,
-        summary: need.summary
-      })),
-      currentFocus: 'commercial',
-      cardsRole: 'none',
-      leadAllowed: !contactRefusal,
-      leadAllowedReason: contactRefusal
-        ? 'buyer explicitly asked to continue without a call or contact pressure'
-        : 'delivery, stock, discount, and final commercial terms require specialist/logistics verification',
-      errorRecoveryPriority: 'Give a safe commercial answer without promising final stock, delivery, discount, or exact terms.',
-      validatorWarnings: ['fast_commercial_handoff_contract']
-    };
+    const contract = this.llmFastTurnContract(decision, session.needState);
+    if (contract.commercialAction !== 'explain_manager_required') return null;
 
     const selectionResult: ProductSelectionResult = {
       state: session.needState.selectionState,
@@ -8432,15 +8881,6 @@ export class AssistantService {
       confidence: commercialCards.length ? 0.72 : 0.55,
       trace: { source: 'fast_commercial_handoff_prior_cards' }
     };
-    let answer = deterministicCommercialHandoffFallback({
-      cards: commercialCards,
-      selectionResult,
-      contract,
-      latestUserMessage,
-      leadContact: extractedLeadContact
-    }).trim();
-    if (!answer) return null;
-
     const renderContract = this.buildCommercialFastRenderContract(contract, session.needState, selectedProductIds);
     const requirementLedger = buildRequirementLedger({
       needState: session.needState,
@@ -8502,14 +8942,6 @@ export class AssistantService {
       missing: autoLeadResult?.missing,
       error: autoLeadResult?.error
     });
-    if (autoLeadResult?.created) {
-      answer = leadCreatedConfirmationAnswer({
-        cards: commercialCards,
-        userMessage: latestUserMessage,
-        autoLead: autoLeadResult
-      });
-    }
-
     const policyGate = runPolicyGate({
       contract: agentContractV2,
       requirementLedger,
@@ -8557,6 +8989,36 @@ export class AssistantService {
       throw aiStageFailure('answer generation', aiDiagnostics.answerGenerationFallback);
     }
 
+    let llmFastTurnAnswer: LlmFastTurnAnswerContract;
+    let answer = '';
+    try {
+      llmFastTurnAnswer = await this.composeLlmFastTurnAnswer({
+        client,
+        decision,
+        contract,
+        userMessage: latestUserMessage,
+        history,
+        needState: session.needState,
+        cards: commercialCards,
+        visibleProductIds: selectedProductIds,
+        hiddenProductIds: [],
+        selectionResult,
+        leadDraft: leadDraft ?? undefined,
+        leadStateMachine,
+        autoLeadResult,
+        policyGate,
+        policyGateEnforcement,
+        factClaimPlanner,
+        cardManifest,
+        signal: input.signal
+      });
+      answer = llmFastTurnAnswer.answer;
+    } catch (error) {
+      markAiFallback(aiDiagnostics, 'answerGenerationFallback', error, 'llm_fast_commercial_answer_failed');
+      console.warn('LLM fast commercial answer failed; falling through to full LLM planner', safeError(error));
+      return null;
+    }
+
     const postAnswerCheck = applyPostAnswerVerificationPolicy({
       answer,
       factClaimPlanner,
@@ -8586,6 +9048,7 @@ export class AssistantService {
       ...policyGateEnforcement.repairedReasons,
       ...factClaimPlanner.warnings,
       ...factClaimAudit.warnings,
+      ...llmFastTurnAnswer.safetyNotes,
       ...leadStateMachine.warnings,
       ...postAnswerVerification.issues.map((issue) => issue.code)
     ];
@@ -8595,7 +9058,9 @@ export class AssistantService {
       agentContractV2,
       sourcePolicy: agentContractV2.sourcePolicy,
       toolTrace,
-      answerMode: 'fast_commercial_handoff',
+      answerMode: 'llm_fast_commercial_handoff',
+      llmFastTurnRoute: decision,
+      llmFastTurnAnswer,
       cardPolicy: 'textOnly',
       cardsRole: contract.cardsRole,
       leadAllowed: contract.leadAllowed,
@@ -9737,11 +10202,11 @@ export class AssistantService {
   }
 
   async generateAnswer(input: GenerateAnswerInput): Promise<ChatResponsePayload> {
-    if (config.AGENT_MANAGER_HARNESS_ENABLED) {
-      return this.agentManager.generateAnswer(input);
-    }
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
+    if (isAgentManagerHarnessEnabledForSession(session)) {
+      return this.agentManager.generateAnswer(input);
+    }
     const consistencyGuard = getSessionGuard(input.sessionId);
     const traceTotal = traceTimer('generateAnswer', input.sessionId);
     const aiDiagnostics = emptyAiGenerationDiagnostics();
@@ -9794,16 +10259,25 @@ export class AssistantService {
     await this.conversations.updateSessionTopic(input.sessionId, deriveConversationTopic(input.userMessage, needState))
       .catch((error) => console.warn('Conversation topic update failed', safeError(error)));
 
-    const fastCommercialContactConfirmation = legacyAnswerWriterAllowed('fast_commercial_contact_confirmation') &&
-      shouldTryFastCommercialHandoff(input.userMessage, history)
-      ? await this.tryFastCommercialHandoff(input, { ...session, needState }, history, aiDiagnostics)
-      : null;
-    if (fastCommercialContactConfirmation) return fastCommercialContactConfirmation;
+    const llmFastTurnDecision = await this.planLlmFastTurnRoute({
+      client,
+      session: { ...session, needState },
+      needState,
+      history,
+      userMessage: input.userMessage,
+      signal: input.signal,
+      diagnostics: aiDiagnostics
+    });
 
-    const fastCatalogSelection = legacyAnswerWriterAllowed('fast_catalog_selection')
-      ? await this.tryFastCatalogSelection(input, needState, history, aiDiagnostics)
+    const llmFastCommercialHandoff = llmFastTurnDecision?.route === 'commercial_handoff'
+      ? await this.tryFastCommercialHandoff(input, { ...session, needState }, history, aiDiagnostics, llmFastTurnDecision, client)
       : null;
-    if (fastCatalogSelection) return fastCatalogSelection;
+    if (llmFastCommercialHandoff) return llmFastCommercialHandoff;
+
+    const llmFastCatalogSelection = llmFastTurnDecision?.route === 'catalog_selection'
+      ? await this.tryFastCatalogSelection(input, { ...session, needState }, needState, history, aiDiagnostics, llmFastTurnDecision, client)
+      : null;
+    if (llmFastCatalogSelection) return llmFastCatalogSelection;
 
     const fastTechnicalOrientation = legacyAnswerWriterAllowed('fast_technical_orientation')
       ? await this.tryFastTechnicalOrientation(input, needState, history, aiDiagnostics)
@@ -10888,42 +11362,10 @@ export class AssistantService {
       }).catch((error) => console.warn('Conversation turn answering update failed', safeError(error)));
     }
 
-    const proactiveCommercialAnswer = legacyAnswerWriterAllowed('proactive_commercial_answer')
-      ? deterministicCommercialHandoffFallback({
-          cards,
-          selectionResult,
-          contract: answerAgentTurnContract,
-          latestUserMessage: input.userMessage
-        }).trim()
-      : '';
-    const createdLeadConfirmationAnswer = autoLeadResult?.created && legacyAnswerWriterAllowed('lead_confirmation_answer')
-      ? leadCreatedConfirmationAnswer({
-          cards,
-          userMessage: input.userMessage,
-          autoLead: autoLeadResult
-        }).trim()
-      : '';
-    const proactiveCatalogSelectionAnswer = legacyAnswerWriterAllowed('proactive_catalog_selection_answer')
-      ? deterministicRecoveredSelectionAnswer({
-          contract: answerAgentTurnContract,
-          cards,
-          state: needState,
-          latestUserMessage: input.userMessage
-        }).trim()
-      : '';
-    const shouldUseProactiveCatalogSelectionAnswer = Boolean(
-      proactiveCatalogSelectionAnswer &&
-      cards.length > 0 &&
-      !leadRequestedForAnswer &&
-      !mustUseWebSearch &&
-      !answerCurrentLineupStyle &&
-      !serviceCostStyle &&
-      !detailedFactStyle &&
-      answerAgentTurnContract.catalogAction === 'find_matching_products' &&
-      answerAgentTurnContract.productCardsPolicy !== 'none' &&
-      answerAgentTurnContract.cardsRole !== 'none' &&
-      ['product_selection', 'mixed'].includes(answerAgentTurnContract.answerTask)
-    );
+    const proactiveCommercialAnswer = '';
+    const createdLeadConfirmationAnswer = '';
+    const proactiveCatalogSelectionAnswer = '';
+    const shouldUseProactiveCatalogSelectionAnswer = false;
 
     if (createdLeadConfirmationAnswer) {
       answer = createdLeadConfirmationAnswer;
@@ -11024,7 +11466,7 @@ export class AssistantService {
     const usedWebSearch = responseUsedWebSearch(completedResponse);
     const rawAnswer = answer;
     if (autoLeadResult?.created) {
-      answer = createdLeadConfirmationAnswer || leadCreatedConfirmationAnswer({
+      answer = leadCreatedConfirmationAnswer({
         cards,
         userMessage: input.userMessage,
         autoLead: autoLeadResult
@@ -11352,11 +11794,11 @@ export class AssistantService {
   }
 
   async recoverTurn(input: { sessionId: string; turnId: string; onDelta?: (text: string) => void | Promise<void>; signal?: AbortSignal }): Promise<ChatResponsePayload> {
-    if (config.AGENT_MANAGER_HARNESS_ENABLED) {
-      return this.agentManager.recoverTurn(input);
-    }
     const session = await this.conversations.getSession(input.sessionId);
     if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
+    if (isAgentManagerHarnessEnabledForSession(session)) {
+      return this.agentManager.recoverTurn(input);
+    }
     let turn = await this.conversations.getTurn(input.sessionId, input.turnId);
     if (!turn) throw new Error('Conversation turn not found');
     const completedTurnPayload = async () => {
@@ -11558,13 +12000,6 @@ export class AssistantService {
         missing: recoveredAutoLeadResult?.missing,
         error: recoveredAutoLeadResult?.error
       });
-      if (recoveredAutoLeadResult?.created) {
-        answer = leadCreatedConfirmationAnswer({
-          cards: recoveredSelection.cards,
-          userMessage: latestUserText,
-          autoLead: recoveredAutoLeadResult
-        });
-      }
       const policyGate = runPolicyGate({
         contract: agentContractV2,
         requirementLedger,
@@ -11604,6 +12039,13 @@ export class AssistantService {
       });
       if (policyGateEnforcement.mode === 'hard_block') {
         throw new Error(`Recovered answer blocked by policy gate: ${policyGateEnforcement.hardBlockReasons.join(', ')}`);
+      }
+      if (recoveredAutoLeadResult?.created) {
+        answer = leadCreatedConfirmationAnswer({
+          cards: recoveredSelection.cards,
+          userMessage: latestUserText,
+          autoLead: recoveredAutoLeadResult
+        });
       }
       const postAnswerCheck = applyPostAnswerVerificationPolicy({
         answer,
@@ -11695,13 +12137,14 @@ export class AssistantService {
       };
     };
     if (
+      false &&
       deterministicRecoveryAllowed &&
       latestUser &&
       isExplicitCommercialQuestion(latestUserText) &&
-      !isMixedCatalogAndCommercialQuestion(latestUserText, storedContract) &&
+      !isMixedCatalogAndCommercialQuestion(latestUserText, storedContract ?? undefined) &&
       (!storedContract ||
-        storedContract.commercialAction === 'explain_manager_required' ||
-        shouldUseProactiveCommercialDeterministicAnswer(storedContract, latestUserText))
+        storedContract?.commercialAction === 'explain_manager_required' ||
+        shouldUseProactiveCommercialDeterministicAnswer(storedContract as AgentTurnContract, latestUserText))
     ) {
       const commercialCards = allShownProductCards(history);
       const commercialRecoveryAllowsLead = !isContactRefusalTechnicalSummaryRequest(latestUserText);
@@ -11712,7 +12155,7 @@ export class AssistantService {
         commercialAction: 'explain_manager_required',
         productCardsPolicy: 'none',
         mustAnswerNow: ['answer delivery, discount, and rough total safely from already shown cards'],
-        activeNeeds: (session.needState.activeNeeds ?? []).map((need) => ({
+        activeNeeds: (session!.needState.activeNeeds ?? []).map((need) => ({
           id: need.id,
           productClass: need.productClass,
           summary: need.summary
@@ -11728,16 +12171,16 @@ export class AssistantService {
       };
       const effectiveCommercialContract = {
         ...commercialContract,
-        activeNeeds: storedContract?.activeNeeds?.length ? storedContract.activeNeeds : commercialContract.activeNeeds,
+        activeNeeds: storedContract?.activeNeeds?.length ? storedContract!.activeNeeds : commercialContract.activeNeeds,
         leadAllowed: storedContract?.leadAllowed === false ? false : commercialContract.leadAllowed,
         leadAllowedReason: storedContract?.leadAllowed === false
-          ? storedContract.leadAllowedReason
+          ? storedContract!.leadAllowedReason
           : commercialContract.leadAllowedReason
       };
       const answer = deterministicCommercialHandoffFallback({
         cards: commercialCards,
         selectionResult: {
-          state: session.needState.selectionState,
+          state: session!.needState.selectionState,
           matchedProducts: commercialCards.map(productFromCard),
           visibleProducts: commercialCards.map(productFromCard),
           hiddenProducts: [],

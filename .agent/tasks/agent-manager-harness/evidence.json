@@ -18,14 +18,20 @@
       "tests": 6
     },
     {
+      "command": "npm test -- --run tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts tests/agentManagerRuntime.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "status": "PASS",
+      "testFiles": 4,
+      "tests": 34
+    },
+    {
       "command": "npm run typecheck",
       "status": "PASS"
     },
     {
       "command": "npm test",
       "status": "PASS",
-      "testFiles": 57,
-      "tests": 493
+      "testFiles": 58,
+      "tests": 495
     },
     {
       "command": "npm run build",
@@ -43,7 +49,7 @@
   ],
   "productionLiveWidgetTest": {
     "run": false,
-    "reason": "The new harness is behind default-off flags and requires push/deploy plus explicit flag enablement before it is active on production."
+    "reason": "The new harness is behind default-off flags. URL opt-in has been prepared locally and still requires push/deploy before production widget verification."
   },
   "closedRisks": [
     "legacy needState is no longer the returned context source for the new harness",
@@ -52,7 +58,10 @@
     "reviewer blocks high-risk source disagreement for adjudication",
     "comparison research flow records data-quality conflicts",
     "lead delivery failure retries without buyer action",
-    "health endpoint exposes runtime commit/branch marker for production deploy verification"
+    "health endpoint exposes runtime commit/branch marker for production deploy verification",
+    "production widget URL opt-in is available without enabling the harness for all buyers",
+    "legacy catalog/commercial fast paths use LLM route and answer contracts instead of deterministic user-visible commercial/catalog text",
+    "local lead creation forces contact-received confirmation instead of repeating the contact request"
   ],
   "remainingRisks": [
     "production widget behavior is not verified until rollout",

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState, mergeProductSelectionState } from '../src/ai/needState.js';
 import type { AgentTurnContract, ConversationSession, ConversationTurn, Lead, Message, MessageRole, Product } from '../src/shared/types.js';
 
-const openAiCreate = vi.hoisted(() => vi.fn(async () => {
+const openAiCreate = vi.hoisted(() => vi.fn<(...args: any[]) => Promise<any>>(async () => {
   throw new Error('unsupported_country_region_territory');
 }));
 
@@ -19,6 +19,89 @@ vi.mock('../src/email/httpEmail.js', () => ({
 const { AssistantService, assistantTestHooks } = await import('../src/ai/assistant.js');
 
 const ru = (value: string) => JSON.parse(`"${value}"`) as string;
+
+function llmFastRouteResponse(overrides: Record<string, unknown> = {}) {
+  const route = typeof overrides.route === 'string' ? overrides.route : 'none';
+  const defaults = route === 'commercial_handoff'
+    ? {
+        confidence: 0.9,
+        answerTask: 'lead_handoff',
+        taskType: 'pure_delivery',
+        catalogAction: 'none',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'none',
+        cardsRole: 'none',
+        leadAllowed: true,
+        leadAllowedReason: 'specialist verification requires a captured contact',
+        currentFocus: 'commercial verification',
+        mustAnswerNow: ['confirm the received contact and explain specialist verification'],
+        answerGuidance: 'confirm the contact once and do not ask for it again',
+        pricePolicy: 'visible_cards_only',
+        usePriorShownCards: true,
+        needsCatalogSelection: false,
+        createLeadIfContactPresent: true
+      }
+    : route === 'catalog_selection'
+      ? {
+          confidence: 0.9,
+          answerTask: 'product_selection',
+          taskType: 'product_selection',
+          catalogAction: 'find_matching_products',
+          commercialAction: 'none',
+          productCardsPolicy: 'show_matching_products',
+          cardsRole: 'primary',
+          leadAllowed: false,
+          leadAllowedReason: 'catalog selection turn',
+          currentFocus: 'catalog selection',
+          mustAnswerNow: ['show matching catalog cards and answer from them'],
+          answerGuidance: 'answer from selected catalog cards',
+          pricePolicy: 'visible_cards_only',
+          usePriorShownCards: false,
+          needsCatalogSelection: true,
+          createLeadIfContactPresent: false
+        }
+      : {
+          confidence: 0.3,
+          answerTask: 'technical_explanation',
+          taskType: 'technical_answer',
+          catalogAction: 'none',
+          commercialAction: 'none',
+          productCardsPolicy: 'none',
+          cardsRole: 'none',
+          leadAllowed: false,
+          leadAllowedReason: 'no commercial handoff needed',
+          currentFocus: 'technical orientation',
+          mustAnswerNow: [],
+          answerGuidance: 'full fast route is not needed',
+          pricePolicy: 'none',
+          usePriorShownCards: false,
+          needsCatalogSelection: false,
+          createLeadIfContactPresent: false
+        };
+  return {
+    output_text: JSON.stringify({
+      route,
+      rationale: 'test route',
+      warnings: [],
+      ...defaults,
+      ...overrides
+    })
+  };
+}
+
+function llmFastAnswerResponse(answer: string, overrides: Record<string, unknown> = {}) {
+  return {
+    output_text: JSON.stringify({
+      answer,
+      leadRequested: false,
+      namedProductIds: [],
+      factsUsed: [],
+      safetyNotes: [],
+      rationale: 'test answer',
+      ...overrides
+    })
+  };
+}
 
 function testProduct(id: string, name: string, price: number, specs: Record<string, unknown> = {}): Product {
   return {
@@ -300,6 +383,7 @@ describe('assistant OpenAI failure fallback', () => {
 
   it('answers broad technical orientation from extracted need state without planner recovery', async () => {
     openAiCreate.mockClear();
+    openAiCreate.mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }));
     const conversations = new FakeConversations();
     const baseNeedState = emptyNeedState();
     conversations.session = {
@@ -378,7 +462,7 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: 'Подскажите, какой генератор лучше взять для дома: насос, холодильник, котел и свет. И нужна небольшая виброплита для въезда.'
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(openAiCreate).toHaveBeenCalledTimes(1);
     expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u0441\\u043e\\u0441'));
     expect(result.productCards).toHaveLength(0);
     expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
@@ -405,6 +489,12 @@ describe('assistant OpenAI failure fallback', () => {
 
   it('shows catalog cards through fast catalog selection after LLM extracted the need state', async () => {
     openAiCreate.mockClear();
+    openAiCreate
+      .mockResolvedValueOnce(llmFastRouteResponse({ route: 'catalog_selection' }))
+      .mockResolvedValueOnce(llmFastAnswerResponse(
+        `${ru('\\u041e\\u0441\\u043d\\u043e\\u0432\\u043d\\u043e\\u0439')} вариант - Generator gasoline TSS 12000 12 kW 220 V. ${ru('\\u0417\\u0430\\u043f\\u0430\\u0441')} - Generator gasoline TSS 14000 13.8 kW 220 V. ${ru('\\u0420\\u045b\\u0421\\u0403\\u0420\\u0405\\u0420\\u0455\\u0420\\u0406\\u0420\\u0405\\u0420\\u0455\\u0420\\u2116')}.`,
+        { namedProductIds: ['fit-main', 'fit-reserve'], factsUsed: ['catalog cards'] }
+      ));
     const conversations = new FakeConversations();
     const baseNeedState = emptyNeedState();
     conversations.session = {
@@ -512,8 +602,8 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: 'Покажите несколько бензиновых вариантов 220 В из каталога и объясните, какой практичнее как основной, а какой с запасом.'
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
-    expect(result.metadata?.answerMode).toBe('fast_catalog_selection');
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
+    expect(result.metadata?.answerMode).toBe('llm_fast_catalog_selection');
     expect(result.productCards.map((card) => card.id)).toEqual(expect.arrayContaining(['fit-main', 'fit-reserve']));
     expect(result.productCards.map((card) => card.id)).not.toContain('weak-diesel');
     expect(result.answer).toMatch(/Основной|Запас/iu);
@@ -592,6 +682,18 @@ describe('assistant OpenAI failure fallback', () => {
       category: ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b')
     };
     const generator = testProduct('generator-1', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 60_000);
+    openAiCreate
+      .mockResolvedValueOnce(llmFastRouteResponse({
+        route: 'catalog_selection',
+        taskType: 'product_selection_with_delivery',
+        commercialAction: 'explain_manager_required',
+        mustAnswerNow: ['show matching vibroplate cards and safely answer delivery/stock process'],
+        answerGuidance: 'do not promise exact stock or delivery terms'
+      }))
+      .mockResolvedValueOnce(llmFastAnswerResponse(
+        `${ru('\\u041f\\u043e\\u043a\\u0430\\u0437\\u044b\\u0432\\u0430\\u044e')} ${plate.name}: по весу попадает в 80-100 кг. ${ru('\\u041d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435')} и доставку сверим через логистику перед оформлением.`,
+        { namedProductIds: ['plate-90'], factsUsed: ['catalog cards'] }
+      ));
     class FastMixedCatalogAssistant extends AssistantService {
       async updateNeedState() {
         return conversations.session.needState;
@@ -609,8 +711,8 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: ru('\\u041f\\u043e\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435 \\u0438\\u0437 \\u043a\\u0430\\u0442\\u0430\\u043b\\u043e\\u0433\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u044b \\u043f\\u0440\\u0438\\u043c\\u0435\\u0440\\u043d\\u043e 80-100 \\u043a\\u0433 \\u0438 \\u0441\\u043e\\u0440\\u0438\\u0435\\u043d\\u0442\\u0438\\u0440\\u0443\\u0439\\u0442\\u0435, \\u0435\\u0441\\u0442\\u044c \\u043b\\u0438 \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435 \\u0438 \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430.')
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
-    expect(result.metadata?.answerMode).toBe('fast_catalog_selection');
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
+    expect(result.metadata?.answerMode).toBe('llm_fast_catalog_selection');
     expect(result.productCards.map((card) => card.id)).toContain('plate-90');
     expect(result.productCards.map((card) => card.id)).not.toContain('generator-1');
     expect(result.answer).toMatch(new RegExp(`${ru('\\u041d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435')}.*${ru('\\u0441\\u0432\\u0435\\u0440\\u044e')}|${ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432')}.*${ru('\\u043b\\u043e\\u0433\\u0438\\u0441\\u0442')}`, 'iu'));
@@ -629,6 +731,7 @@ describe('assistant OpenAI failure fallback', () => {
 
   it('does not introduce plate guidance into a generator-only technical orientation', async () => {
     openAiCreate.mockClear();
+    openAiCreate.mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }));
     const conversations = new FakeConversations();
     const baseNeedState = emptyNeedState();
     conversations.session = {
@@ -697,7 +800,7 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: ru('\\u041f\\u043e\\u0434\\u0441\\u043a\\u0430\\u0436\\u0438\\u0442\\u0435, \\u043a\\u0430\\u043a\\u043e\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u043b\\u0443\\u0447\\u0448\\u0435 \\u0432\\u0437\\u044f\\u0442\\u044c \\u0434\\u043b\\u044f \\u0434\\u043e\\u043c\\u0430: \\u043d\\u0430\\u0441\\u043e\\u0441, \\u0445\\u043e\\u043b\\u043e\\u0434\\u0438\\u043b\\u044c\\u043d\\u0438\\u043a, \\u043a\\u043e\\u0442\\u0435\\u043b \\u0438 \\u0441\\u0432\\u0435\\u0442?')
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(openAiCreate).toHaveBeenCalledTimes(1);
     expect(result.answer.toLowerCase()).toContain(ru('\\u043d\\u0430\\u0441\\u043e\\u0441'));
     expect(result.answer.toLowerCase()).not.toContain(ru('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442'));
     expect(result.productCards).toHaveLength(0);
@@ -707,6 +810,7 @@ describe('assistant OpenAI failure fallback', () => {
 
   it('answers plate weight orientation through the fast path after generator cards were shown', async () => {
     openAiCreate.mockClear();
+    openAiCreate.mockResolvedValueOnce(llmFastRouteResponse({ route: 'none' }));
     const previousGenerator = testProduct('generator-previous', ru('\\u0413\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440 \\u0431\\u0435\\u043d\\u0437\\u0438\\u043d\\u043e\\u0432\\u044b\\u0439 5 \\u043a\\u0412\\u0442'), 82_000);
     const conversations = new FakeConversations();
     conversations.messages.push({
@@ -800,7 +904,7 @@ describe('assistant OpenAI failure fallback', () => {
       userMessage: ru('\\u0415\\u0449\\u0435 \\u043d\\u0443\\u0436\\u043d\\u0430 \\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 \\u0434\\u043b\\u044f \\u0432\\u044a\\u0435\\u0437\\u0434\\u0430 \\u043f\\u043e\\u0434 \\u043f\\u043b\\u0438\\u0442\\u043a\\u0443. \\u0422\\u0430\\u043c \\u043f\\u0435\\u0441\\u043e\\u043a \\u0438 \\u0449\\u0435\\u0431\\u0435\\u043d\\u044c, \\u043f\\u043b\\u043e\\u0449\\u0430\\u0434\\u044c \\u043d\\u0435\\u0431\\u043e\\u043b\\u044c\\u0448\\u0430\\u044f, \\u0433\\u0440\\u0443\\u0437\\u0438\\u0442\\u044c \\u0431\\u0443\\u0434\\u0443 \\u0441\\u0430\\u043c. \\u041a\\u0430\\u043a\\u043e\\u0439 \\u0432\\u0435\\u0441 \\u0441\\u043c\\u043e\\u0442\\u0440\\u0435\\u0442\\u044c?')
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(openAiCreate).toHaveBeenCalledTimes(1);
     expect(result.productCards).toHaveLength(0);
     expect(result.metadata?.answerMode).toBe('fast_technical_orientation');
     expect(result.metadata?.recovered).toBeUndefined();
@@ -883,7 +987,7 @@ describe('assistant OpenAI failure fallback', () => {
     });
   });
 
-  it('uses deterministic commercial recovery even when a stored commercial contract exists', async () => {
+  it('uses LLM commercial recovery when a stored commercial contract exists', async () => {
     const conversations = new FakeConversations();
     const plate = testProduct('plate-1', ru('\\u0412\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442\\u0430 REDVERG RD-29155'), 54_000);
     conversations.messages.push({
@@ -947,6 +1051,9 @@ describe('assistant OpenAI failure fallback', () => {
       updatedAt: new Date().toISOString()
     };
     openAiCreate.mockClear();
+    openAiCreate.mockResolvedValueOnce({
+      output_text: `${ru('\\u041f\\u043e \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0435')} точную стоимость и условия нужно сверить через логистику. По скидке и коммерческим условиям тоже не обещаю заранее: это проверит менеджер по выбранному комплекту.`
+    });
     const assistant = new AssistantService(conversations as never, new FakeProducts([plate]) as never);
 
     const result = await assistant.recoverTurn({
@@ -954,7 +1061,7 @@ describe('assistant OpenAI failure fallback', () => {
       turnId: conversations.turn.id
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(openAiCreate).toHaveBeenCalledTimes(1);
     expect(result.answer.toLowerCase()).toContain(ru('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432'));
     expect(result.answer).toMatch(new RegExp(`${ru('\\u0441\\u043a\\u0438\\u0434')}|${ru('\\u043a\\u043e\\u043c\\u043c\\u0435\\u0440\\u0447')}`, 'iu'));
     expect(result.answer).not.toMatch(new RegExp(`${ru('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d')}|${ru('\\u043d\\u043e\\u043c\\u0435\\u0440')}`, 'iu'));
@@ -1105,6 +1212,9 @@ describe('assistant OpenAI failure fallback', () => {
       updatedAt: new Date().toISOString()
     };
     openAiCreate.mockClear();
+    openAiCreate.mockResolvedValueOnce({
+      output_text: `${ru('\\u0414\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443')} до Азова и наличие по этой позиции нужно уточнить через логистику и склад. Оставьте имя и телефон, чтобы менеджер вернулся с точным ответом.`
+    });
     const assistant = new AssistantService(conversations as never, new FakeProducts([plate]) as never);
 
     const result = await assistant.recoverTurn({
@@ -1112,7 +1222,7 @@ describe('assistant OpenAI failure fallback', () => {
       turnId: conversations.turn.id
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(openAiCreate).toHaveBeenCalledTimes(1);
     expect(result.leadRequested).toBe(true);
     expect(result.metadata?.leadDraft).toMatchObject({ reason: 'delivery' });
     expect(result.metadata?.leadStateMachine).toMatchObject({

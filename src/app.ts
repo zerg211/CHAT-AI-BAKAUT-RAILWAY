@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import { config } from './config.js';
 import { ConversationRepository } from './db/repositories.js';
 import { startLeadOutboxWorker } from './ai/leadOutbox.js';
+import { AGENT_MANAGER_URL_OPT_IN_PARAM } from './ai/agentManagerRuntime.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
@@ -66,7 +67,9 @@ export async function buildApp() {
     plannerModel: config.OPENAI_PLANNER_MODEL,
     runtime: {
       commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
-      branch: process.env.RAILWAY_GIT_BRANCH ?? process.env.GIT_BRANCH ?? null
+      branch: process.env.RAILWAY_GIT_BRANCH ?? process.env.GIT_BRANCH ?? null,
+      agentManagerHarnessEnabled: config.AGENT_MANAGER_HARNESS_ENABLED,
+      agentManagerUrlOptInParam: AGENT_MANAGER_URL_OPT_IN_PARAM
     },
     remediation: {
       contractVersion: REMEDIATION_CONTRACT_VERSION,

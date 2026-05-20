@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState, emptyProductSelectionState } from '../src/ai/needState.js';
 import type { ConversationSession, Lead, Message, MessageRole, Product } from '../src/shared/types.js';
 
-const openAiCreate = vi.hoisted(() => vi.fn(async () => ({ output_text: 'TSS SGG 8000EH подходит по текущим критериям. Карточку показываю ниже.' })));
+const openAiCreate = vi.hoisted(() => vi.fn<(...args: any[]) => Promise<any>>(async () => ({ output_text: 'TSS SGG 8000EH подходит по текущим критериям. Карточку показываю ниже.' })));
 
 vi.mock('../src/ai/openaiClient.js', () => ({
   createOpenAIClient: () => ({ responses: { create: openAiCreate } }),
@@ -17,6 +17,70 @@ vi.mock('../src/email/httpEmail.js', () => ({
 const { AssistantService, assistantTestHooks } = await import('../src/ai/assistant.js');
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
+
+function llmFastRouteResponse(overrides: Record<string, unknown> = {}) {
+  const route = typeof overrides.route === 'string' ? overrides.route : 'none';
+  const defaults = route === 'commercial_handoff'
+    ? {
+        confidence: 0.9,
+        answerTask: 'lead_handoff',
+        taskType: 'pure_delivery',
+        catalogAction: 'none',
+        commercialAction: 'explain_manager_required',
+        productCardsPolicy: 'none',
+        cardsRole: 'none',
+        leadAllowed: true,
+        leadAllowedReason: 'specialist verification requires a captured contact',
+        currentFocus: 'commercial verification',
+        mustAnswerNow: ['confirm received contact and explain specialist verification'],
+        answerGuidance: 'confirm the contact once and do not ask for it again',
+        pricePolicy: 'visible_cards_only',
+        usePriorShownCards: true,
+        needsCatalogSelection: false,
+        createLeadIfContactPresent: true
+      }
+    : {
+        confidence: 0.3,
+        answerTask: 'technical_explanation',
+        taskType: 'technical_answer',
+        catalogAction: 'none',
+        commercialAction: 'none',
+        productCardsPolicy: 'none',
+        cardsRole: 'none',
+        leadAllowed: false,
+        leadAllowedReason: 'no commercial handoff needed',
+        currentFocus: 'none',
+        mustAnswerNow: [],
+        answerGuidance: '',
+        pricePolicy: 'none',
+        usePriorShownCards: false,
+        needsCatalogSelection: false,
+        createLeadIfContactPresent: false
+      };
+  return {
+    output_text: JSON.stringify({
+      route,
+      rationale: 'test route',
+      warnings: [],
+      ...defaults,
+      ...overrides
+    })
+  };
+}
+
+function llmFastAnswerResponse(answer: string, overrides: Record<string, unknown> = {}) {
+  return {
+    output_text: JSON.stringify({
+      answer,
+      leadRequested: false,
+      namedProductIds: [],
+      factsUsed: [],
+      safetyNotes: [],
+      rationale: 'test answer',
+      ...overrides
+    })
+  };
+}
 
 function generator(): Product {
   return {
@@ -429,7 +493,7 @@ describe('assistant generateAnswer control-plane metadata', () => {
 
   it('commits a lead and replaces the current turn with a short contact confirmation', async () => {
     openAiCreate.mockResolvedValue({
-      output_text: 'Доставка есть, но точную стоимость и условия посчитаю через логистику. По видимым карточкам нижний ориентир комплекта: TSS SGG 8000EH. Оставьте имя и телефон.'
+      output_text: 'Алексей, контакт получил. Проверю доставку и наличие по выбранным позициям и перезвоню с точным ответом.'
     });
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
@@ -468,6 +532,12 @@ describe('assistant generateAnswer control-plane metadata', () => {
 
   it('fast-confirms contact from prior cards and records autoLead metadata', async () => {
     openAiCreate.mockClear();
+    openAiCreate
+      .mockResolvedValueOnce(llmFastRouteResponse({ route: 'commercial_handoff' }))
+      .mockResolvedValueOnce(llmFastAnswerResponse(
+        'Алексей, контакт получил. Проверим наличие и доставку по выбранным позициям и вернемся с точным ответом.',
+        { namedProductIds: ['tss-8'], factsUsed: ['visible catalog card'], leadRequested: false }
+      ));
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
     const product = generator();
@@ -528,9 +598,10 @@ describe('assistant generateAnswer control-plane metadata', () => {
       userMessage: 'Давайте проверим наличие и доставку по этим позициям. Меня зовут Алексей, телефон +7 900 000-00-11.'
     });
 
-    expect(openAiCreate).not.toHaveBeenCalled();
+    expect(openAiCreate).toHaveBeenCalledTimes(2);
     expect(leads.leads).toHaveLength(1);
-    expect(result.metadata?.answerMode).toBe('fast_commercial_handoff');
+    expect(result.metadata?.answerMode).toBe('llm_fast_commercial_handoff');
+    expect(result.metadata?.llmFastTurnRoute).toMatchObject({ route: 'commercial_handoff' });
     expect(result.metadata?.autoLead).toMatchObject({
       created: true,
       emailStatus: 'sent_email'

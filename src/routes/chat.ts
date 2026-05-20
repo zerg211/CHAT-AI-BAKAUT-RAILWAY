@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
+import { isAgentManagerHarnessEnabledForSession } from '../ai/agentManagerRuntime.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
 import { ConversationRepository } from '../db/repositories.js';
@@ -136,7 +137,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
       statusTimer = null;
       send('done', payload);
     } catch (error) {
-      if (!controller.signal.aborted && config.AGENT_MANAGER_HARNESS_ENABLED) {
+      const agentManagerHarnessEnabled = isAgentManagerHarnessEnabledForSession(session);
+      if (!controller.signal.aborted && agentManagerHarnessEnabled) {
         try {
           const recoveredPayload = await runWithOpenAIUsageContext({
             sessionId: params.id,
@@ -165,7 +167,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         errorCode: controller.signal.aborted ? 'generation_aborted_or_timeout' : 'generation_failed',
         errorMessage: safeErrorMessage(error)
       }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
-      const message = config.AGENT_MANAGER_HARNESS_ENABLED
+      const message = agentManagerHarnessEnabled
         ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
         : controller.signal.aborted
           ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
@@ -204,6 +206,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     };
 
     let statusTimer: NodeJS.Timeout | null = null;
+    let sessionForRecovery: Awaited<ReturnType<ConversationRepository['getSession']>> | null = null;
     try {
       send('turn', { turnId: params.turnId, recovered: true });
       send('status', { status: 'Ответ оборвался, восстанавливаю...' });
@@ -213,12 +216,12 @@ export async function registerChatRoutes(app: FastifyInstance) {
         send('status', { status: generationStatusMessages[statusIndex] });
       }, 12_000);
       statusTimer.unref?.();
-      const session = await conversations.getSession(params.id);
+      sessionForRecovery = await conversations.getSession(params.id);
       const payload = await runWithOpenAIUsageContext({
         sessionId: params.id,
         turnId: params.turnId,
-        pageUrl: session?.pageUrl,
-        userAgent: session?.userAgent
+        pageUrl: sessionForRecovery?.pageUrl,
+        userAgent: sessionForRecovery?.userAgent
       }, () => assistant.recoverTurn({
         sessionId: params.id,
         turnId: params.turnId,
@@ -238,8 +241,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
       app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(error) }, 'chat recovery failed');
       send('error', {
         turnId: params.turnId,
-        recoverable: config.AGENT_MANAGER_HARNESS_ENABLED,
-        error: config.AGENT_MANAGER_HARNESS_ENABLED
+        recoverable: isAgentManagerHarnessEnabledForSession(sessionForRecovery),
+        error: isAgentManagerHarnessEnabledForSession(sessionForRecovery)
           ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
           : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
       });

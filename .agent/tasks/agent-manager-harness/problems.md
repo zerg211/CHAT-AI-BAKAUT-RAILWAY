@@ -5,10 +5,11 @@ Status after 2026-05-20 local implementation: code, tests, build, migration, and
 ## Remaining Before Production Activation
 
 - Push branch to GitHub and let Railway auto-deploy. Do not use manual Railway deploy commands unless explicitly requested.
-- Enable flags in a controlled order, starting with `AGENT_MANAGER_HARNESS_ENABLED=true`.
-- Run production widget live checks through `https://bakautprof.ru/`, not direct API/local iframe.
+- Confirm production `/api/health` shows the pushed commit and `agentManagerUrlOptInParam`.
+- Run production widget live checks through `https://bakautprof.ru/?agentHarness=1`, not direct API/local iframe.
 - Save live protocols under `local-live-tests/*.production.md`.
 - Verify admin metadata/traces for every production live dialogue.
+- After opt-in verification passes, decide whether to enable flags globally in a controlled order, starting with `AGENT_MANAGER_HARNESS_ENABLED=true`.
 
 ## Remaining Product/Operations Work
 
@@ -25,3 +26,6 @@ Status after 2026-05-20 local implementation: code, tests, build, migration, and
 - Product comparison web research and conflict recording are implemented.
 - Reviewer blocks unsupported sources, unexecuted tools, bad lead confirmation, and high-risk adjudication cases.
 - Admin trace API and compact admin trace rendering are implemented.
+- Production widget URL opt-in is implemented locally so the harness can be tested in production without exposing it to all buyers.
+- Legacy catalog/commercial fast-path deterministic answer writers are replaced by LLM route/answer contracts locally.
+- Local lead creation now forces a buyer-visible contact-received confirmation instead of repeating the contact request.

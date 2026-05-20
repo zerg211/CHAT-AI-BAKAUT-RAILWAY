@@ -6,8 +6,8 @@ describe('agent manager integration source guards', () => {
     const assistant = readFileSync('src/ai/assistant.ts', 'utf8');
 
     expect(assistant).toContain('new AgentManagerOrchestrator(this.conversations, this.products, this.leads)');
-    expect(assistant).toContain('if (config.AGENT_MANAGER_HARNESS_ENABLED) {\n      return this.agentManager.generateAnswer(input);');
-    expect(assistant).toContain('if (config.AGENT_MANAGER_HARNESS_ENABLED) {\n      return this.agentManager.recoverTurn(input);');
+    expect(assistant).toContain('if (isAgentManagerHarnessEnabledForSession(session)) {\n      return this.agentManager.generateAnswer(input);');
+    expect(assistant).toContain('if (isAgentManagerHarnessEnabledForSession(session)) {\n      return this.agentManager.recoverTurn(input);');
   });
 
   it('uses web search inside the comparison research module', () => {
@@ -31,14 +31,15 @@ describe('agent manager integration source guards', () => {
 
     expect(app).toContain('commitSha: process.env.RAILWAY_GIT_COMMIT_SHA');
     expect(app).toContain('branch: process.env.RAILWAY_GIT_BRANCH');
+    expect(app).toContain('agentManagerUrlOptInParam: AGENT_MANAGER_URL_OPT_IN_PARAM');
   });
 
   it('tries same-turn recovery before returning a saved-turn error in the harness path', () => {
     const route = readFileSync('src/routes/chat.ts', 'utf8');
 
-    expect(route).toContain('if (!controller.signal.aborted && config.AGENT_MANAGER_HARNESS_ENABLED)');
+    expect(route).toContain('if (!controller.signal.aborted && agentManagerHarnessEnabled)');
     expect(route).toContain('assistant.recoverTurn({');
-    expect(route).toContain('recoverable: config.AGENT_MANAGER_HARNESS_ENABLED');
+    expect(route).toContain('recoverable: isAgentManagerHarnessEnabledForSession(sessionForRecovery)');
   });
 
   it('renders agent manager traces in the admin conversation detail UI', () => {

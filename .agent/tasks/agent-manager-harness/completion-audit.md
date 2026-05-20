@@ -15,6 +15,8 @@ Date: 2026-05-20
 - `AC8`: PASS locally. Lead capture is local first, external delivery retries through outbox, and confirmation is blocked unless local capture/outbox succeeded.
 - `AC9`: PASS locally. Trace storage, admin API, and compact admin trace rendering are implemented; production live trace review remains part of the rollout gate.
 - Deploy marker: PASS locally. `/api/health` exposes Railway commit/branch marker so production rollout can be tied to a specific pushed commit.
+- Production opt-in marker: PASS locally. `/api/health` exposes `agentManagerUrlOptInParam`, and session routing can enable the harness from production widget page URL `?agentHarness=1` without globally enabling the harness for all buyers.
+- Legacy commercial/catalog fast-path reduction: PASS locally. The remaining fast catalog/commercial path is LLM route contract + LLM answer contract, not deterministic commercial/catalog text; lead-created confirmation remains a hard business invariant.
 
 ## Done Definition Status
 
@@ -28,6 +30,6 @@ The next gate is rollout verification, not more local code work:
 
 1. Commit/push the branch.
 2. Wait for Railway auto-deploy.
-3. Enable the harness flags in the agreed order.
-4. Run the required production widget live dialogues.
+3. Verify `/api/health` exposes the new commit and URL opt-in marker.
+4. Run the required production widget live dialogues with `https://bakautprof.ru/?agentHarness=1`.
 5. Save protocols and trace audit.

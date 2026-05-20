@@ -29,6 +29,11 @@ Local implementation now covers the full harness slice needed before feature-fla
   - high-risk source disagreement is blocked for adjudication;
   - unsupported/unverified claim risk flags are blocked;
 - admin trace storage, admin API exposure, and compact trace rendering in the admin conversation detail UI.
+- production-widget opt-in activation through page URL query `?agentHarness=1`, while global harness flag remains default-off;
+- `/api/health` runtime marker now exposes the harness flag state and URL opt-in parameter;
+- chat route recovery now uses the same session-aware activation check as answer generation;
+- legacy catalog/commercial fast writers no longer make the semantic decision or render deterministic user-visible text: an LLM route contract selects the path and an LLM answer contract writes the response;
+- after a local lead is created, legacy paths replace unsafe/redundant contact text with a contact-received confirmation, so the buyer is not asked again for the same phone/name.
 
 ## Verification
 
@@ -41,11 +46,14 @@ PASS: 3 files, 12 tests
 npm test -- --run tests/agentManagerIntegrationSource.test.ts
 PASS: 1 file, 6 tests
 
+npm test -- --run tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts tests/agentManagerRuntime.test.ts tests/agentManagerIntegrationSource.test.ts
+PASS: 4 files, 34 tests
+
 npm run typecheck
 PASS
 
 npm test
-PASS: 57 files, 493 tests
+PASS: 58 files, 495 tests
 
 npm run build
 PASS
@@ -63,10 +71,12 @@ PASS: no whitespace errors; line-ending warnings only
 - `tests/agentManagerOrchestrator.test.ts`: proves ledger-derived active context, checkpoint recovery, final-answer-contract resume, lead capture before confirmation, unsupported-source blocking, and adjudication blocking.
 - `tests/agentManagerComparisonResearch.test.ts`: proves visible comparison targets bind to catalog products, web research runs, and conflicts create data-quality issues.
 - `tests/leadOutbox.test.ts`: proves external lead delivery failure remains in outbox for retry without buyer action.
-- `tests/agentManagerIntegrationSource.test.ts`: proves assistant/chat routes are wired through the harness flag, saved-turn recovery is attempted before buyer-visible error in the harness path, admin trace UI rendering is present, and health exposes a runtime deploy marker.
+- `tests/agentManagerRuntime.test.ts`: proves default-off runtime behavior and production widget URL opt-in through `?agentHarness=1`.
+- `tests/assistantFallback.test.ts` and `tests/assistantControlPlaneGenerate.test.ts`: prove catalog/commercial fast-path semantics and wording now pass through LLM route/answer contracts, recovery continues the saved turn through LLM when deterministic commercial recovery is disabled, and local lead creation produces a clear contact-received confirmation.
+- `tests/agentManagerIntegrationSource.test.ts`: proves assistant/chat routes use session-aware harness activation, saved-turn recovery is attempted before buyer-visible error in the harness path, admin trace UI rendering is present, and health exposes runtime deploy/opt-in markers.
 
 ## Production Status
 
-No production widget live test was run for this local code slice. The new behavior is still behind default-off feature flags and is not active on `https://bakautprof.ru/` until branch push, Railway auto-deploy, and explicit flag enablement.
+No production widget live test was run for this local code slice yet. The new behavior is still behind default-off feature flags and the local URL opt-in has not been pushed/deployed in this commit set yet.
 
 Therefore local code verification is `PASS`; full task done definition remains `PENDING_PRODUCTION_LIVE_VERIFICATION`.
