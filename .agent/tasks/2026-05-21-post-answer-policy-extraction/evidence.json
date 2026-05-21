@@ -1,0 +1,42 @@
+{
+  "taskId": "2026-05-21-post-answer-policy-extraction",
+  "refactor": {
+    "type": "pure_extraction",
+    "newModule": "src/ai/postAnswerVerificationPolicy.ts",
+    "updatedModule": "src/ai/assistant.ts",
+    "assistantTestHookPreserved": true,
+    "assistantLinesAfter": 12649,
+    "behaviorChangeExpected": false
+  },
+  "checks": [
+    {
+      "command": "npm test -- tests/assistantFallback.test.ts tests/postAnswerVerifier.test.ts",
+      "status": "PASS",
+      "testFiles": 2,
+      "tests": 30
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "detail": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "testFiles": 66,
+      "tests": 562
+    }
+  ],
+  "productionPromptfoo": {
+    "rerun": false,
+    "reason": "Pure extraction with no prompt text, API, model, tool, or business behavior change."
+  }
+}

@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository, type EmbeddingCoverageTarget } from '../db/repositories.js';
 import yaml from 'js-yaml';
-import type { ActiveCustomerNeed, AgentToolTraceItem, AgentTurnContract, AgentTurnContractV2, BotCommitment, CardDisplayOptions, CardManifest, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, ExecutionContract, FactClaimPlanner, GeneratorPowerProfile, Lead, LeadDraft, LeadStateMachine, MentionedProductMemory, Message, PolicyGateEnforcement, PolicyGateResult, PostAnswerVerification, PostAnswerVerificationRecovery, Product, ProductCard, ProductElectricalLoadItem, ProductEvidenceRegistry, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, RequirementLedger, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
+import type { ActiveCustomerNeed, AgentToolTraceItem, AgentTurnContract, AgentTurnContractV2, BotCommitment, CardDisplayOptions, CardManifest, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, ExecutionContract, FactClaimPlanner, GeneratorPowerProfile, Lead, LeadDraft, LeadStateMachine, MentionedProductMemory, Message, PolicyGateEnforcement, PolicyGateResult, PostAnswerVerification, Product, ProductCard, ProductElectricalLoadItem, ProductEvidenceRegistry, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, RequirementLedger, SemanticMemory, SemanticMemorySource, SemanticRequirement, SemanticRequirementKind, SemanticRequirementStatus, SemanticRequirementStrictness, SemanticSelectionPolicy, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { embeddingMetadataForText } from './embeddingUtils.js';
@@ -47,7 +47,7 @@ import { buildCardManifest, enforceVisibleCardConstraints } from './cardManifest
 import { buildExecutionContract } from './executionContract.js';
 import { auditAnswerFactClaims, buildFactClaimPlanner } from './factClaimPlanner.js';
 import { buildLeadStateMachine } from './leadStateMachine.js';
-import { classifyPostAnswerRecovery, repairAnswerForPostAnswerVerification, verifyPostAnswer } from './postAnswerVerifier.js';
+import { verifyPostAnswer } from './postAnswerVerifier.js';
 import { buildRequirementLedger } from './requirementLedger.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 import { coercePlannerAgentTurnContractV2, contractV2ToLegacyAgentContract, deriveAgentTurnContractV2 } from './agentTurnContractV2.js';
@@ -72,6 +72,7 @@ import {
   type LlmFastTurnAnswerContract,
   type LlmFastTurnDecision
 } from './llmFastTurnContracts.js';
+import { applyPostAnswerVerificationPolicy } from './postAnswerVerificationPolicy.js';
 import {
   buildTroubleshootingCaseDraft,
   buildTroubleshootingSearchQuery
@@ -155,83 +156,6 @@ function runtimeResponseMetadata(runtimeDecision: AgentManagerRuntimeDecision, l
       reason: runtimeDecision.reason,
       legacyAnswerWritersDisabled: runtimeDecision.legacyAnswerWritersDisabled
     }
-  };
-}
-
-function applyPostAnswerVerificationPolicy(input: {
-  answer: string;
-  factClaimPlanner: FactClaimPlanner;
-  leadStateMachine: LeadStateMachine;
-  cardManifest: CardManifest;
-  productEvidenceRegistry?: ProductEvidenceRegistry;
-}) {
-  let answer = input.answer.trim();
-  let factClaimAudit = auditAnswerFactClaims({
-    answer,
-    factClaimPlanner: input.factClaimPlanner,
-    cardManifest: input.cardManifest
-  });
-  let postAnswerVerification = verifyPostAnswer({
-    answer,
-    factClaimPlanner: input.factClaimPlanner,
-    leadStateMachine: input.leadStateMachine,
-    cardManifest: input.cardManifest,
-    factClaimAudit,
-    productEvidenceRegistry: input.productEvidenceRegistry
-  });
-  const postAnswerVerificationRecovery: PostAnswerVerificationRecovery = {
-    attempted: false,
-    recovered: false,
-    issuesBefore: postAnswerVerification.issues.map((issue) => issue.code),
-    issuesAfter: postAnswerVerification.issues.map((issue) => issue.code),
-    method: 'none',
-    repairableIssues: [],
-    unrecoverableIssues: [],
-    reason: undefined
-  };
-
-  if (postAnswerVerification.status === 'error') {
-    const recoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
-    postAnswerVerificationRecovery.repairableIssues = recoveryPolicy.repairableIssues;
-    postAnswerVerificationRecovery.unrecoverableIssues = recoveryPolicy.unrecoverableIssues;
-    postAnswerVerificationRecovery.reason = recoveryPolicy.requiresRegenerationOrTooling
-      ? 'unrecoverable_issues_require_regeneration_or_tooling'
-      : 'deterministic_text_repair_available';
-    const repairedAnswer = repairAnswerForPostAnswerVerification({ answer, verification: postAnswerVerification });
-    if (repairedAnswer !== answer) {
-      postAnswerVerificationRecovery.attempted = true;
-      postAnswerVerificationRecovery.method = 'deterministic_text_repair';
-      answer = repairedAnswer;
-      factClaimAudit = auditAnswerFactClaims({
-        answer,
-        factClaimPlanner: input.factClaimPlanner,
-        cardManifest: input.cardManifest
-      });
-      postAnswerVerification = verifyPostAnswer({
-        answer,
-        factClaimPlanner: input.factClaimPlanner,
-        leadStateMachine: input.leadStateMachine,
-        cardManifest: input.cardManifest,
-        factClaimAudit,
-        productEvidenceRegistry: input.productEvidenceRegistry
-      });
-      postAnswerVerificationRecovery.recovered = postAnswerVerification.status !== 'error';
-      postAnswerVerificationRecovery.issuesAfter = postAnswerVerification.issues.map((issue) => issue.code);
-      if (!postAnswerVerificationRecovery.recovered) {
-        const afterRecoveryPolicy = classifyPostAnswerRecovery(postAnswerVerification);
-        postAnswerVerificationRecovery.unrecoverableIssues = afterRecoveryPolicy.unrecoverableIssues;
-        postAnswerVerificationRecovery.reason = afterRecoveryPolicy.requiresRegenerationOrTooling
-          ? 'deterministic_text_repair_left_unrecoverable_issues'
-          : 'deterministic_text_repair_did_not_clear_errors';
-      }
-    }
-  }
-
-  return {
-    answer,
-    factClaimAudit,
-    postAnswerVerification,
-    postAnswerVerificationRecovery
   };
 }
 
