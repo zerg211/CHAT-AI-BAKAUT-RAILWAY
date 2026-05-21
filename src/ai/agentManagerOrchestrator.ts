@@ -416,6 +416,26 @@ function productLookupText(product: Product) {
   ].filter(Boolean).join(' ');
 }
 
+function compactProductDescription(value: unknown, limit = 1200) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return null;
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function answerProductContext(product: Product) {
+  return {
+    id: product.id,
+    name: product.name,
+    brand: product.brand,
+    category: product.category,
+    price: product.price,
+    currency: product.currency,
+    specs: product.specs,
+    description: compactProductDescription(product.description),
+    sourceUrl: product.sourceUrl
+  };
+}
+
 function textMatchesTargetName(value: unknown, targetName: string) {
   const targetTokens = modelIdentifierTokens(targetName);
   if (targetTokens.length) {
@@ -663,6 +683,15 @@ function startControlCoverageUncertaintyLine(coverage: unknown[]) {
   return statements.length ? `По деталям запуска: ${statements.join('; ')}.` : '';
 }
 
+function hasConfirmedStartControlCoverage(coverage: unknown[]) {
+  return coverage.some((item) => {
+    if (!item || typeof item !== 'object') return false;
+    const coverageItem = item as { attribute?: unknown; status?: unknown; value?: unknown };
+    return coverageItem.status === 'confirmed' &&
+      startControlCoverageLabels(coverageItem.attribute, coverageItem.value).length > 0;
+  });
+}
+
 function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
   const lines: string[] = [];
   for (const result of toolResults) {
@@ -692,7 +721,8 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
       const status = (item as { status?: unknown }).status;
       return status === 'not_confirmed' || status === 'ambiguous' || status === 'not_found';
     });
-    if (!hasUncertainCoverage) continue;
+    const hasConfirmedStartControl = hasConfirmedStartControlCoverage(coverage);
+    if (!hasUncertainCoverage && !hasConfirmedStartControl) continue;
     lines.push(directAnswer);
     const uncertaintyLine = startControlCoverageUncertaintyLine(coverage);
     if (uncertaintyLine) lines.push(uncertaintyLine);
@@ -1150,16 +1180,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             toolResults: input.toolResults,
             requiredResponseClauses: input.requiredResponseClauses ?? [],
             availableEvidenceSources: answerEvidenceSourceHints(input),
-            products: input.products.map((product) => ({
-              id: product.id,
-              name: product.name,
-              brand: product.brand,
-              category: product.category,
-              price: product.price,
-              currency: product.currency,
-              specs: product.specs,
-              sourceUrl: product.sourceUrl
-            }))
+            products: input.products.map(answerProductContext)
           })
         }
       ],
@@ -1199,6 +1220,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             intent: input.intent,
             toolResults: input.toolResults,
             requiredResponseClauses: input.requiredResponseClauses ?? [],
+            products: input.products.map(answerProductContext),
             answer: input.answer
           })
         }

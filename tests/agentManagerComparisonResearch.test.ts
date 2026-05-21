@@ -54,7 +54,7 @@ function turn(): ConversationTurn {
   };
 }
 
-function product(id: string, name: string, specs: Record<string, unknown>): Product {
+function product(id: string, name: string, specs: Record<string, unknown>, description?: string): Product {
   return {
     id,
     name,
@@ -63,6 +63,7 @@ function product(id: string, name: string, specs: Record<string, unknown>): Prod
     price: 1000,
     currency: 'RUB',
     sourceUrl: `https://example.test/${id}`,
+    description,
     specs
   };
 }
@@ -419,7 +420,7 @@ describe('AgentManager comparison research flow', () => {
     }]);
     expect(metadata.toolResults?.[0]?.warnings).toContain('exact_catalog_product_absent:FIRMAN RD2910E');
     expect(payload.answer).toContain('START');
-    expect(payload.answer).toContain('точной RD2910E нет');
+    expect(payload.answer).toContain('точной модели FIRMAN RD2910E нет');
     expect(payload.productCards).toEqual([]);
   });
 
@@ -523,6 +524,119 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.answer).not.toContain('запускается ключом/замком');
     expect(payload.answer).toContain('В каталоге БАКАУТ FIRMAN RD3910E есть.');
     expect(payload.answer).not.toContain('Из близких вариантов');
+    expect(payload.metadata?.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
+      ])
+    });
+  });
+
+  it('rewrites exact-model answers to checked catalog description guidance when the answer omits it', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false,
+      facts: [{
+        productName: 'FIRMAN RD3910E',
+        attribute: 'start control',
+        value: 'запуск поворотом ключа электростартера',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'catalog.description: запуск двигателя осуществляется поворотом ключа электростартера',
+        sourceUrl: 'https://example.test/rd3910e',
+        sourceTitle: 'FIRMAN RD3910E catalog card'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'RD3910E запускается с ключа электростартера, плюс есть ручной запуск. Кнопочный запуск не подтвержден.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'key start',
+          status: 'confirmed',
+          value: 'поворот ключа электростартера',
+          evidence: 'catalog.description',
+          sourceUrl: 'https://example.test/rd3910e',
+          sourceTitle: 'FIRMAN RD3910E catalog card'
+        }]
+      },
+      summaryForAnswer: 'Catalog description confirms key electric start and manual start.',
+      warnings: ['catalog_fact_extraction_used', 'exact_catalog_description_extracted']
+    });
+
+    class PresentCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product(
+            'rd3910e',
+            'FIRMAN RD3910E generator 2.5 kW',
+            { starter: 'manual / electric' },
+            'Запуск двигателя осуществляется поворотом ключа электростартера. Также предусмотрен ручной стартер.'
+          )
+        ];
+      }
+    }
+
+    const omittingModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks whether FIRMAN RD3910E is key or button start',
+          dialogueUnderstanding: 'single exact technical fact for a named catalog model',
+          nextStepRationale: 'verify exact model start-control mechanism',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:rd3910e-catalog',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'FIRMAN RD3910E key or button start',
+              semanticQuery: 'FIRMAN RD3910E ignition key or push-button start control',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['FIRMAN RD3910E'],
+              comparisonAttributes: ['key start', 'push-button start', 'start control'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model start-control fact',
+              notes: 'answer key/button mechanism directly'
+            },
+            rationale: 'exact model fact must be grounded in catalog description when present',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('answer_checked_research_guidance');
+        return {
+          answerText: 'RD3910E есть в каталоге, стартер ручной/электро. По ключу или кнопке точной строки нет.',
+          factsUsed: [({
+            factKey: 'firman_rd3910e.start_control',
+            sourceEventIds: ['web:rd3910e-catalog'],
+            value: 'manual / electric'
+          })],
+          questionsAsked: [],
+          toolResultIds: ['web:rd3910e-catalog'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, omittingModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Firman RD3910E - заводится с ключа или с кнопки?'
+    });
+
+    expect(payload.answer).toContain('ключа электростартера');
+    expect(payload.answer).not.toContain('По ключу или кнопке точной строки нет');
+    expect(payload.answer).toContain('В каталоге БАКАУТ FIRMAN RD3910E есть.');
     expect(payload.metadata?.preSendReview).toMatchObject({
       verdict: 'rewrite_required',
       issues: expect.arrayContaining([

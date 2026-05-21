@@ -23,6 +23,10 @@ describe('agent manager integration source guards', () => {
     expect(research).toContain('Do not stop at a broad fact like "electric starter"');
     expect(research).toContain('answerGuidance.directAnswer');
     expect(research).toContain('switch turned/held in START');
+    expect(research).toContain('catalog_product_fact_extraction');
+    expect(research).toContain('description является обязательным источником каталожных фактов');
+    expect(research).toContain('catalogExtraction');
+    expect(research).toContain('catalog_fact_extraction_used');
     expect(research).toContain("search_context_size: targetProductNames.length ? 'high' : 'medium'");
     const orchestrator = readFileSync('src/ai/agentManagerOrchestrator.ts', 'utf8');
     expect(orchestrator).toContain('answerText must include all three parts in this order');
@@ -30,6 +34,8 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('requiredResponseClausesForToolResults');
     expect(orchestrator).toContain('answerText must satisfy every clause by meaning');
     expect(orchestrator).toContain('answer_checked_research_guidance');
+    expect(orchestrator).toContain('hasConfirmedStartControlCoverage');
+    expect(orchestrator).toContain('description: compactProductDescription(product.description)');
   });
 
   it('keeps blocked generator clarifications self-contained', () => {
