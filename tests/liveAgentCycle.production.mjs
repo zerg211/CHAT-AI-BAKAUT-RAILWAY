@@ -213,6 +213,24 @@ function assertNoDuplicateLoadKinds(loadProfile, phase) {
   }
 }
 
+function assertAgentManagerMetadata(metadata, turnLabel) {
+  if (!metadata.intentContract) throw new Error(`Missing AgentManager intentContract in production ${turnLabel}`);
+  if (!metadata.answerContract) throw new Error(`Missing AgentManager answerContract in production ${turnLabel}`);
+  if (!metadata.preSendReview) throw new Error(`Missing AgentManager preSendReview in production ${turnLabel}`);
+  if (!metadata.selectionReadiness) throw new Error(`Missing AgentManager selectionReadiness in production ${turnLabel}`);
+  if (!metadata.cardSelection) throw new Error(`Missing AgentManager cardSelection in production ${turnLabel}`);
+  if (!Array.isArray(metadata.toolResults)) throw new Error(`Missing AgentManager toolResults in production ${turnLabel}`);
+  if (!metadata.ledgerState) throw new Error(`Missing AgentManager ledgerState in production ${turnLabel}`);
+  if (metadata.selectionReadiness.status !== 'ready_for_cards' && (metadata.productCards ?? []).length) {
+    throw new Error(`AgentManager exposed product cards while selectionReadiness blocked cards in production ${turnLabel}`);
+  }
+  for (const result of metadata.toolResults) {
+    if (result.tool === 'calculator.generatorLoad') {
+      assertNoDuplicateLoadKinds({ items: result.payload?.loads ?? [] }, `${turnLabel} calculator.generatorLoad`);
+    }
+  }
+}
+
 async function fetchProductionConversation(sessionId) {
   const token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY;
   if (!token) return null;
@@ -257,6 +275,10 @@ function assertProductionMetadata(detail) {
     if (warnings.includes('contract_source:legacy_text_fallback')) {
       throw new Error(`Legacy text contract fallback in production turn ${index + 1}`);
     }
+    if (metadata.agentManager === true) {
+      assertAgentManagerMetadata(metadata, `turn ${index + 1}`);
+      return;
+    }
     if (!metadata.executionContract) {
       throw new Error(`Missing executionContract in production turn ${index + 1}`);
     }
@@ -296,7 +318,7 @@ function assertProductionMetadata(detail) {
   }
 
   notes.push('- PASS: production admin metadata has no AI fallback diagnostics or legacy text turn contracts.');
-  notes.push('- PASS: executionContract/cardManifest metadata exists and visible cards do not violate hard constraints.');
+  notes.push('- PASS: runtime metadata exists for legacy executionContract or current AgentManager contracts, and visible cards do not violate hard constraints.');
   notes.push('- PASS: structured generator load profile has no duplicate pump/light/tool refinements.');
   return notes;
 }

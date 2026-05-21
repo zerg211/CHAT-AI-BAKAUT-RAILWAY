@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-21-generator-estimate-only-card-gate",
-  "status": "pending_production_live",
+  "status": "pass",
   "localChecks": [
     {
       "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
@@ -23,8 +23,22 @@
     "reason": "Local OpenAI-dependent checks are invalid here: 403 Country, region, or territory not supported"
   },
   "productionLive": {
-    "run": false,
-    "reason": "Must run after commit/push and Railway deployment of the pushed commit"
+    "run": true,
+    "deployedCommit": "4b5eaea10366b715758adea99c4cff1d56584ba8",
+    "promptfoo": {
+      "command": "PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/ npm run evals -- -o .agent/tasks/2026-05-21-generator-estimate-only-card-gate/production-evals-after-4b5eaea.json",
+      "status": "pass",
+      "testPassCount": 6,
+      "testFailCount": 0,
+      "score": 6,
+      "assertPassCount": 27,
+      "assertFailCount": 0,
+      "artifact": ".agent/tasks/2026-05-21-generator-estimate-only-card-gate/production-evals-after-4b5eaea.json"
+    },
+    "command": "ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 ALLOW_FIXED_PRODUCTION_REPLAY=1 npm run test:live:production",
+    "status": "pass",
+    "protocolPath": "local-live-tests/2026-05-21-bakautprof-production-agent-cycle.production.md",
+    "note": "The first production run failed on stale legacy metadata expectations; the live gate was updated to validate current AgentManager metadata and then passed against the deployed code."
   },
   "acceptanceCriteria": {
     "AC1": "pass",
@@ -32,6 +46,6 @@
     "AC3": "pass",
     "AC4": "pass",
     "AC5": "pass",
-    "AC6": "pending"
+    "AC6": "pass"
   }
 }
