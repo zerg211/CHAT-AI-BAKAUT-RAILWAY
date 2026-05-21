@@ -572,9 +572,11 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
     });
     if (!hasUncertainCoverage) continue;
     lines.push(directAnswer);
+    let hasAbsentTarget = false;
     for (const presence of payload.catalogPresence ?? []) {
       if (!presence.productName) continue;
       if (presence.status === 'absent') {
+        hasAbsentTarget = true;
         lines.push(`В каталоге БАКАУТ точной модели ${presence.productName} нет.`);
       } else if (presence.status === 'present') {
         lines.push(`В каталоге БАКАУТ ${presence.productName} есть.`);
@@ -584,7 +586,7 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
       .map((product) => typeof product.name === 'string' ? product.name.trim() : '')
       .filter(Boolean))
       .slice(0, 4);
-    if (nearbyNames.length) {
+    if (hasAbsentTarget && nearbyNames.length) {
       lines.push(`Из близких вариантов в каталоге: ${nearbyNames.join('; ')}.`);
     }
   }

@@ -8,6 +8,8 @@ This pass strengthens exact-model web research and answer handoff without adding
 
 The first production widget check after the previous commit exposed a remaining defect in conversation #1298: the metadata correctly marked `ignition control` for `FIRMAN RD3910E` as `ambiguous`, but the buyer-visible answer still said the model starts by key/ignition lock. This follow-up fix makes `answerGuidance` authoritative for exact-model uncertain coverage before the final answer is saved.
 
+The next production widget check, conversation #1318, verified that the key/ignition-lock overclaim was removed, but showed one refinement: a present exact model should not get "nearby alternatives" appended. The safe rewrite now appends nearby catalog models only when at least one exact target is absent from the catalog.
+
 ## Changed Files
 
 - `src/ai/productComparisonResearch.ts`
@@ -31,6 +33,7 @@ Public APIs and database schema stay stable. Buyer-visible behavior can improve 
 - the answer contract must include that checked guidance by meaning;
 - not-confirmed/ambiguous coverage must not become a categorical negative claim.
 - if the generated answer still broadens an uncertain exact-model fact, pre-send review rewrites to the checked `answerGuidance.directAnswer` plus structured catalog context.
+- nearby catalog alternatives are appended only for absent exact targets, not for present exact catalog models.
 
 ## Production Gate
 
@@ -45,6 +48,7 @@ Pending after follow-up commit/push and Railway auto-deploy:
 - AC2 PASS locally: focused test verifies `answer_checked_research_guidance` reaches required response clauses.
 - AC3 PASS locally: research contract includes `answerGuidance` with practical start-control coverage.
 - AC4 PASS locally: pre-send review guidance and deterministic safe rewrite prevent turning not-confirmed/ambiguous coverage into a categorical buyer-visible claim.
+- AC4b PASS locally: present exact catalog targets do not receive nearby-model alternatives in the safe rewrite.
 - AC5 PASS: no new regex constructs.
 - AC6 PASS: focused tests, typecheck, and build pass.
 - AC7 PENDING: production Promptfoo/widget validation required after deploy.

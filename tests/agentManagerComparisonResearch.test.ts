@@ -522,6 +522,7 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.answer).toContain('ключ/замок и кнопка в источниках не подтверждены');
     expect(payload.answer).not.toContain('запускается ключом/замком');
     expect(payload.answer).toContain('В каталоге БАКАУТ FIRMAN RD3910E есть.');
+    expect(payload.answer).not.toContain('Из близких вариантов');
     expect(payload.metadata?.preSendReview).toMatchObject({
       verdict: 'rewrite_required',
       issues: expect.arrayContaining([

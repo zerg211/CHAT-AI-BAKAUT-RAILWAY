@@ -35,6 +35,8 @@
     "status": "pending",
     "previousFailedConversation": 1298,
     "previousFailure": "RD3910E answer claimed key/ignition-lock start while answerGuidance.coverage marked ignition control ambiguous.",
+    "followUpConversation": 1318,
+    "followUpObservation": "Key/ignition-lock overclaim was removed, but present exact target still received nearby alternatives; fixed locally pending redeploy.",
     "required": [
       "production Promptfoo after Railway deploy",
       "production live widget check through https://bakautprof.ru/"
@@ -45,6 +47,7 @@
     "AC2": "pass_local",
     "AC3": "pass_local",
     "AC4": "pass_local",
+    "AC4b": "pass_local",
     "AC5": "pass",
     "AC6": "pass",
     "AC7": "pending_production_gate"
