@@ -5,19 +5,64 @@ import { extractResponseText, safeError } from './responseUtils.js';
 
 const JSON_RETRY_OUTPUT_TOKEN_MIN = 1800;
 
-export function parseJsonObject(text: string, stage: string): Record<string, unknown> {
+function stripMarkdownJsonFence(text: string) {
   const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1]?.trim();
-  const candidate = fenced || trimmed;
-  const start = candidate.indexOf('{');
-  const end = candidate.lastIndexOf('}');
-  if (start < 0 || end < start) throw new Error(`${stage} did not return a JSON object`);
-  const raw = candidate.slice(start, end + 1);
-  const parsed = JSON.parse(raw);
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${stage} JSON root must be an object`);
+  if (!trimmed.startsWith('```')) return trimmed;
+  const firstLineEnd = trimmed.indexOf('\n');
+  if (firstLineEnd < 0) return trimmed;
+  const closingFence = trimmed.lastIndexOf('```');
+  const bodyEnd = closingFence > firstLineEnd ? closingFence : trimmed.length;
+  return trimmed.slice(firstLineEnd + 1, bodyEnd).trim();
+}
+
+function findBalancedJsonObject(text: string, start: number) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
   }
-  return parsed as Record<string, unknown>;
+  return null;
+}
+
+export function parseJsonObject(text: string, stage: string): Record<string, unknown> {
+  const candidate = stripMarkdownJsonFence(text);
+  let start = candidate.indexOf('{');
+  let lastError: unknown;
+  while (start >= 0) {
+    const raw = findBalancedJsonObject(candidate, start);
+    if (!raw) break;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`${stage} JSON root must be an object`);
+      }
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      lastError = error;
+      start = candidate.indexOf('{', start + 1);
+    }
+  }
+  if (lastError) throw lastError;
+  throw new Error(`${stage} did not return a JSON object`);
 }
 
 function responseTextForJson(response: unknown) {

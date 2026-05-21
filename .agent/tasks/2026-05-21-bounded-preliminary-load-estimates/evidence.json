@@ -1,12 +1,18 @@
 {
   "taskId": "2026-05-21-bounded-preliminary-load-estimates",
-  "status": "pending_production_live",
+  "status": "pending_push_and_production_rerun",
   "localChecks": [
     {
       "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
       "status": "pass",
       "testFiles": 1,
       "tests": 24
+    },
+    {
+      "command": "npm test -- tests/openaiStructured.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "testFiles": 2,
+      "tests": 28
     },
     {
       "command": "npm run typecheck",
@@ -21,26 +27,26 @@
     "run": false,
     "reason": "Local OpenAI-dependent checks are invalid here: 403 Country, region, or territory not supported"
   },
-  "productionLive": {
+  "productionPromptfooAfter5502ed2": {
     "run": true,
-    "deployedCommit": "4f531ac69f986b9fdc70476afdc0d81ba76d4a40",
-    "promptfoo": {
-      "command": "PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/ npm run evals -- -o .agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-4f531ac.json",
-      "status": "pass",
-      "testPassCount": 6,
-      "testFailCount": 0,
-      "artifact": ".agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-4f531ac.json"
-    },
-    "liveGate": {
-      "status": "fail",
-      "command": "ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 ALLOW_FIXED_PRODUCTION_REPLAY=1 npm run test:live:production",
-      "reason": "First vague generator turn produced product cards because bounded_assumption was accepted without structured basis signals.",
-      "artifact": "local-live-tests/production-agent-cycle-failure.json"
-    },
-    "followUpFix": {
-      "status": "pending_production_deploy",
-      "summary": "Added basisSignals validation without user-text regex or keyword matching."
-    }
+    "status": "fail",
+    "passed": 5,
+    "total": 6,
+    "rawArtifact": ".agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-5502ed2.json",
+    "failures": [
+      "generator_load_selection turn 3 failed because AgentManager structured JSON parsing rejected a valid JSON object with trailing text"
+    ]
+  },
+  "productionLiveAfter5502ed2": {
+    "run": true,
+    "status": "pass",
+    "command": "ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 ALLOW_FIXED_PRODUCTION_REPLAY=1 npm run test:live:production",
+    "protocolPath": "local-live-tests/2026-05-21-bakautprof-production-agent-cycle.production.md"
+  },
+  "localFixAfterFailure": "Use a balanced structured JSON object extractor so AgentManager can parse valid JSON contracts with trailing model text. No user-text regex or keyword matching was added.",
+  "productionLive": {
+    "run": false,
+    "reason": "Local fix requires commit/push and Railway deployment before rerun"
   },
   "acceptanceCriteria": {
     "AC1": "pass",
