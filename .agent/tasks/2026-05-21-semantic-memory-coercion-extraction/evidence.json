@@ -1,0 +1,52 @@
+{
+  "taskId": "2026-05-21-semantic-memory-coercion-extraction",
+  "date": "2026-05-21",
+  "verdict": "PASS",
+  "changes": [
+    "Added src/ai/semanticMemoryCoercion.ts.",
+    "Moved semantic-memory coercion helpers out of src/ai/assistant.ts.",
+    "Updated assistant.ts to import coerceSemanticMemory and keep coerceNeedUpdate behavior unchanged.",
+    "Added focused semantic memory coercion tests.",
+    "Did not change prompts, models, OpenAI request shape, product selection, card rendering, recovery logic, or business policy.",
+    "Added no regex constructs."
+  ],
+  "lineCounts": {
+    "src/ai/assistant.ts": 12347,
+    "src/ai/semanticMemoryCoercion.ts": 157
+  },
+  "validation": [
+    {
+      "command": "npm test -- tests/semanticMemoryCoercion.test.ts tests/recommendationRanking.test.ts tests/assistantNeedExtractionSchemas.test.ts",
+      "status": "PASS",
+      "summary": "3 files, 211 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1828."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "71 files, 586 tests"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "Line-ending warnings only"
+    }
+  ],
+  "productionGate": {
+    "promptfooOrWidgetRerun": false,
+    "reason": "Deterministic coercion extraction only; no prompts, model selection, OpenAI request semantics, tools, product/card behavior, or user-facing answer logic changed.",
+    "railwayMarkerRequiredAfterPush": true
+  }
+}
