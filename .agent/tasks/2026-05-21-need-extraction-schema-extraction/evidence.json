@@ -1,0 +1,52 @@
+{
+  "taskId": "2026-05-21-need-extraction-schema-extraction",
+  "date": "2026-05-21",
+  "verdict": "PASS",
+  "changes": [
+    "Added src/ai/assistantNeedExtractionSchemas.ts.",
+    "Moved deterministic need-extraction and semantic-memory schema builders out of src/ai/assistant.ts.",
+    "Updated assistant.ts to import activeNeedSchema, needExtractionSelectionStateSchema, needItemSchema, and semanticMemorySchema.",
+    "Added focused schema contract tests.",
+    "Did not change prompts, models, OpenAI stage names, coercion, product selection, card rendering, recovery logic, or business policy.",
+    "Added no regex constructs."
+  ],
+  "lineCounts": {
+    "src/ai/assistant.ts": 12945,
+    "src/ai/assistantNeedExtractionSchemas.ts": 267
+  },
+  "validation": [
+    {
+      "command": "npm test -- tests/assistantNeedExtractionSchemas.test.ts tests/recommendationRanking.test.ts tests/assistantStructuredJson.test.ts",
+      "status": "PASS",
+      "summary": "3 files, 212 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1828."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "69 files, 579 tests"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "Line-ending warnings only"
+    }
+  ],
+  "productionGate": {
+    "promptfooOrWidgetRerun": false,
+    "reason": "Schema-builder extraction only; no prompts, model selection, OpenAI request semantics, tools, product/card behavior, or user-facing answer logic changed.",
+    "railwayMarkerRequiredAfterPush": true
+  }
+}
