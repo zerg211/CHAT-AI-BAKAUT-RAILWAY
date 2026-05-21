@@ -37,8 +37,15 @@
       "failureCause": "Three LLM rubric components received production judge HTTP 500 because Promptfoo sent oversized full metadata output."
     },
     "afterCompactionFix": {
-      "status": "PENDING",
-      "reason": "Requires commit, push, Railway deployment marker, and production Promptfoo rerun."
+      "command": "npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-21-agentic-generator-budget-gate/production-evals-after-6af7911.json",
+      "status": "PASS",
+      "passed": 6,
+      "failed": 0,
+      "deterministicAverage": 0.9935555555555555,
+      "assertionPassRate": 1,
+      "llmAverage": 0.9649999999999999,
+      "llmAverageStatus": "ready",
+      "llmBlockedCount": 0
     }
   },
   "additionalLocalChecks": [

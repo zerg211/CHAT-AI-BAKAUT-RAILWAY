@@ -42,4 +42,10 @@
 
 ## Next production check
 
-Pending until the compaction fix is committed, pushed, deployed by Railway, and production Promptfoo is rerun.
+- After `6af7911`, `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-21-agentic-generator-budget-gate/production-evals-after-6af7911.json`
+  - PASS: 6/6 cases.
+  - Deterministic average: `0.9935555555555555`.
+  - Assertion pass rate: `1`.
+  - LLM average: `0.9649999999999999`.
+  - LLM blocked count: `0`.
+  - Gates: deterministic above 90%, LLM average above 90%, LLM usable.
