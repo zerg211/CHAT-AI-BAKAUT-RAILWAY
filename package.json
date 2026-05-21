@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run",
     "evals": "node evals/promptfoo/run-promptfoo.cjs eval -c promptfooconfig.yaml --no-table",
+    "lint:no-regex": "node scripts/no-regex-guard.mjs",
     "test:eval:agentic": "vitest run tests/agentRuntimeContractsEval.test.ts tests/agenticCycle876.test.ts tests/agentTurnContract.test.ts tests/recommendationRanking.test.ts",
     "test:remediation:external-readiness": "node tests/remediationExternalReadiness.mjs",
     "test:remediation:railway-source": "node tests/remediationRailwaySourceReadiness.mjs",

@@ -1,0 +1,51 @@
+{
+  "taskId": "2026-05-21-no-new-regex-guard",
+  "status": "pass",
+  "changedFiles": [
+    "scripts/no-regex-guard.mjs",
+    "scripts/no-regex-baseline.json",
+    "package.json"
+  ],
+  "legacyBaseline": {
+    "count": 1844,
+    "storesPatternText": false
+  },
+  "checks": [
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "summary": "No new regex constructs. Legacy baseline: 1844."
+    },
+    {
+      "command": "node --check scripts/no-regex-guard.mjs",
+      "status": "pass"
+    },
+    {
+      "command": "NO_REGEX_BASELINE_PATH=<temp baseline with one id removed> npm run lint:no-regex",
+      "status": "pass",
+      "expectedExitCode": 1,
+      "summary": "Guard rejected one finding as new."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass"
+    }
+  ],
+  "behaviorParity": {
+    "runtimeChanged": false,
+    "publicApiChanged": false,
+    "productionWidgetGateRequired": false,
+    "reason": "Repository tooling only."
+  },
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass"
+  }
+}
