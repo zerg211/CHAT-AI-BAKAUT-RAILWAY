@@ -1,0 +1,51 @@
+{
+  "taskId": "2026-05-21-exact-model-answer-guidance",
+  "status": "pass_pending_production_gate",
+  "changedFiles": [
+    "src/ai/productComparisonResearch.ts",
+    "src/ai/agentManagerOrchestrator.ts",
+    "tests/agentManagerComparisonResearch.test.ts",
+    "tests/agentManagerIntegrationSource.test.ts"
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "testFiles": 3,
+      "tests": 36
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "summary": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass_with_line_ending_warnings"
+    }
+  ],
+  "productionGate": {
+    "status": "pending",
+    "required": [
+      "production Promptfoo after Railway deploy",
+      "production live widget check through https://bakautprof.ru/"
+    ]
+  },
+  "acceptanceCriteria": {
+    "AC1": "pass_local",
+    "AC2": "pass_local",
+    "AC3": "pass_local",
+    "AC4": "pass_local",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pending_production_gate"
+  }
+}

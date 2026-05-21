@@ -393,9 +393,12 @@ function productLookupText(product: Product) {
 }
 
 function productMatchesTargetName(product: Product, targetName: string) {
-  const productText = compactModelText(productLookupText(product));
   const targetTokens = modelIdentifierTokens(targetName);
-  if (targetTokens.length) return targetTokens.every((token) => productText.includes(token));
+  if (targetTokens.length) {
+    const productIdentifierTokens = new Set(modelIdentifierTokens(productLookupText(product)));
+    return targetTokens.every((token) => productIdentifierTokens.has(token));
+  }
+  const productText = compactModelText(productLookupText(product));
   const targetText = compactModelText(targetName);
   return targetText.length >= 5 && productText.includes(targetText);
 }
@@ -481,7 +484,18 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
       catalogPresence?: Array<{ productName?: string; status?: string }>;
       nearbyCatalogProducts?: Array<{ name?: string }>;
       facts?: Array<{ productName?: string; sourceType?: string; confidence?: string }>;
+      answerGuidance?: { directAnswer?: string; completeness?: string };
     };
+    const directAnswer = typeof payload.answerGuidance?.directAnswer === 'string'
+      ? payload.answerGuidance.directAnswer.trim()
+      : '';
+    if (directAnswer && payload.answerGuidance?.completeness !== 'not_answered') {
+      clauses.push({
+        code: 'answer_checked_research_guidance',
+        sourceRequestId: result.requestId,
+        instruction: `Use this checked research guidance to answer the buyer's direct question in simple words, without turning unverified choices into false negatives: ${directAnswer}`
+      });
+    }
     const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
       .map((product) => typeof product.name === 'string' ? product.name.trim() : '')
       .filter(Boolean))
@@ -936,6 +950,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
             'If requiredResponseClauses is non-empty, answerText must satisfy every clause by meaning. Treat these clauses as required semantic content, not optional style advice.',
+            'If web.researchProductFacts payload.answerGuidance.directAnswer is present, use that practical direct answer before broader catalog context. Do not convert answerGuidance.coverage status "not_confirmed" into "no" or "does not have".',
             'Верни только JSON AnswerContract.'
           ].join('\n')
         },
@@ -987,6 +1002,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
+            'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')
         },

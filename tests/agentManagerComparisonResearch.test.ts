@@ -286,6 +286,143 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.productCards).toEqual([]);
   });
 
+  it('does not mark a suffix model as exact and passes practical start-control guidance to the answer', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD2910E',
+        attribute: 'start control',
+        value: 'electric starter operated by the engine/ignition switch in START; push-button start is not confirmed',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'exact-target manual says to move the engine switch to START and hold it briefly',
+        sourceUrl: 'https://example.test/firman-rd2910e-manual',
+        sourceTitle: 'FIRMAN RD2910E manual'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'RD2910E starts by electric starter through the engine/ignition switch turned to START; it is not evidenced as a push-button start.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'start control',
+          status: 'confirmed',
+          value: 'engine/ignition switch to START',
+          evidence: 'exact-target manual start procedure',
+          sourceUrl: 'https://example.test/firman-rd2910e-manual',
+          sourceTitle: 'FIRMAN RD2910E manual'
+        }]
+      },
+      summaryForAnswer: 'RD2910E uses an electric starter through a START switch; push-button start is not confirmed.',
+      warnings: []
+    });
+
+    class SuffixCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('rd2910e1', 'FIRMAN RD2910E1 generator 2 kW', { starter: 'manual / electric' }),
+          product('rd3910e', 'FIRMAN RD3910E generator 2.5 kW', { starter: 'manual / electric' }),
+          product('rd10910e', 'FIRMAN RD10910E generator 7.2 kW', { starter: 'manual / electric' })
+        ];
+      }
+    }
+
+    const exactFactModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks how FIRMAN RD2910E starts',
+          dialogueUnderstanding: 'single exact technical fact for a named model',
+          nextStepRationale: 'look up exact model start-control mechanism',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:start-control',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'FIRMAN RD2910E key or button start',
+              semanticQuery: 'FIRMAN RD2910E ignition key or push-button start control',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['FIRMAN RD2910E'],
+              comparisonAttributes: ['key start', 'push-button start', 'start control'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model start-control fact',
+              notes: 'answer key/button mechanism directly'
+            },
+            rationale: 'exact model fact must not be inferred from suffix model RD2910E1',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        const result = input.toolResults[0]?.payload as {
+          catalogPresence?: Array<{ status?: string; exactProductIds?: string[] }>;
+          nearbyCatalogProducts?: Array<{ name?: string }>;
+          answerGuidance?: { directAnswer?: string };
+        };
+        expect(result.catalogPresence?.[0]).toEqual({
+          productName: 'FIRMAN RD2910E',
+          status: 'absent',
+          exactProductIds: []
+        });
+        expect(result.nearbyCatalogProducts?.map((item) => item.name)).toEqual(expect.arrayContaining([
+          'FIRMAN RD2910E1 generator 2 kW',
+          'FIRMAN RD3910E generator 2.5 kW'
+        ]));
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toEqual(expect.arrayContaining([
+          'answer_checked_research_guidance',
+          'state_exact_catalog_absence',
+          'mention_nearby_catalog_models'
+        ]));
+        expect(input.requiredResponseClauses?.map((clause) => clause.instruction).join('\n')).toContain('engine/ignition switch turned to START');
+        return {
+          answerText: 'RD2910E запускается электростартером через поворот выключателя/замка в START; кнопочный запуск по источнику не подтвержден. В нашем каталоге точной RD2910E нет, рядом есть RD2910E1 и RD3910E.',
+          factsUsed: [{
+            factKey: 'firman_rd2910e.start_control',
+            sourceEventIds: ['web:start-control'],
+            value: 'engine/ignition switch to START'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['web:start-control'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Firman RD2910E - заводится с ключа или с кнопки?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new SuffixCatalogProducts() as never, {} as never, exactFactModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Firman RD2910E - заводится с ключа или с кнопки?'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      targetProductNames: ['FIRMAN RD2910E'],
+      comparisonAttributes: ['key start', 'push-button start', 'start control'],
+      products: expect.arrayContaining([
+        expect.objectContaining({ name: 'FIRMAN RD2910E1 generator 2 kW' })
+      ])
+    }));
+    const metadata = payload.metadata as { toolResults?: Array<{ payload?: { catalogPresence?: unknown[] }; warnings?: string[] }> };
+    expect(metadata.toolResults?.[0]?.payload?.catalogPresence).toEqual([{
+      productName: 'FIRMAN RD2910E',
+      status: 'absent',
+      exactProductIds: []
+    }]);
+    expect(metadata.toolResults?.[0]?.warnings).toContain('exact_catalog_product_absent:FIRMAN RD2910E');
+    expect(payload.answer).toContain('START');
+    expect(payload.answer).toContain('точной RD2910E нет');
+    expect(payload.productCards).toEqual([]);
+  });
+
   it('binds visible comparison targets to products, runs web research, and records conflicts', async () => {
     researchProductComparisonFacts.mockResolvedValue({
       usedWebSearch: true,

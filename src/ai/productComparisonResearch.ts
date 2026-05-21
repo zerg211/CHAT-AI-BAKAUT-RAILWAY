@@ -21,10 +21,24 @@ export interface ProductComparisonResearchConflict {
   resolution: string;
 }
 
+export interface ProductComparisonResearchAnswerGuidance {
+  directAnswer: string;
+  completeness: 'answered' | 'partially_answered' | 'not_answered';
+  coverage: Array<{
+    attribute: string;
+    status: 'confirmed' | 'not_confirmed' | 'contradicted' | 'ambiguous' | 'not_found';
+    value: string;
+    evidence: string;
+    sourceUrl?: string;
+    sourceTitle?: string;
+  }>;
+}
+
 export interface ProductComparisonResearchResult {
   usedWebSearch: boolean;
   facts: ProductComparisonResearchFact[];
   conflicts: ProductComparisonResearchConflict[];
+  answerGuidance: ProductComparisonResearchAnswerGuidance;
   summaryForAnswer: string;
   warnings: string[];
 }
@@ -54,6 +68,9 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
     'ignition key',
     'key start',
     'push button start',
+    'engine switch START',
+    'ignition switch START',
+    'starter switch START',
     'electric starter',
     'recoil starter',
     'ключ зажигания',
@@ -173,6 +190,43 @@ function hasConfirmedExactTargetFacts(result: ProductComparisonResearchResult, t
   );
 }
 
+function defaultAnswerGuidance(): ProductComparisonResearchAnswerGuidance {
+  return {
+    directAnswer: '',
+    completeness: 'not_answered',
+    coverage: []
+  };
+}
+
+function normalizeAnswerGuidance(value: unknown): ProductComparisonResearchAnswerGuidance {
+  if (!value || typeof value !== 'object') return defaultAnswerGuidance();
+  const raw = value as Record<string, unknown>;
+  const completeness = raw.completeness === 'answered' ||
+    raw.completeness === 'partially_answered' ||
+    raw.completeness === 'not_answered'
+    ? raw.completeness
+    : 'not_answered';
+  const allowedStatuses = new Set(['confirmed', 'not_confirmed', 'contradicted', 'ambiguous', 'not_found']);
+  const coverage = Array.isArray(raw.coverage)
+    ? raw.coverage
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        .map((item) => ({
+          attribute: typeof item.attribute === 'string' ? item.attribute : '',
+          status: allowedStatuses.has(String(item.status)) ? item.status as ProductComparisonResearchAnswerGuidance['coverage'][number]['status'] : 'not_found',
+          value: typeof item.value === 'string' ? item.value : '',
+          evidence: typeof item.evidence === 'string' ? item.evidence : '',
+          sourceUrl: typeof item.sourceUrl === 'string' ? item.sourceUrl : undefined,
+          sourceTitle: typeof item.sourceTitle === 'string' ? item.sourceTitle : undefined
+        }))
+        .filter((item) => item.attribute || item.value || item.evidence)
+    : [];
+  return {
+    directAnswer: typeof raw.directAnswer === 'string' ? raw.directAnswer : '',
+    completeness,
+    coverage
+  };
+}
+
 function normalizeResearchParsed(parsed: Record<string, unknown>): ProductComparisonResearchResult {
   return {
     usedWebSearch: parsed.usedWebSearch === true,
@@ -189,6 +243,7 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
           catalogValue: typeof conflict.catalogValue === 'string' ? conflict.catalogValue : undefined
         }))
       : [],
+    answerGuidance: normalizeAnswerGuidance(parsed.answerGuidance),
     summaryForAnswer: typeof parsed.summaryForAnswer === 'string' ? parsed.summaryForAnswer : '',
     warnings: Array.isArray(parsed.warnings) ? parsed.warnings.filter((item): item is string => typeof item === 'string') : []
   };
@@ -212,6 +267,7 @@ export async function researchProductComparisonFacts(input: {
       usedWebSearch: false,
       facts: [],
       conflicts: [],
+      answerGuidance: defaultAnswerGuidance(),
       summaryForAnswer: 'Недостаточно товаров для сравнения.',
       warnings: ['not_enough_products_for_comparison']
     };
@@ -234,6 +290,8 @@ export async function researchProductComparisonFacts(input: {
           'Do not cite bakautprof.ru or provided product.sourceUrl pages as web facts for an absent exact target unless that page is specifically about the exact target model.',
           'If exact external sources state key start, ignition key, electric starter, push button, manual recoil, battery, power, engine, or other requested attributes for the target, return those facts with high or medium confidence.',
           'For binary buyer choices such as key vs push-button, manual vs electric, gasoline vs diesel, continue exact-target web search until each choice is confirmed, contradicted, or explicitly not found in exact-target sources. Do not stop at a broad fact like "electric starter" when the buyer asked about the more specific mechanism.',
+          'For key vs push-button generator questions, inspect the practical start-control mechanism. If exact-target sources show an ignition key, ignition switch, engine switch, starter switch, or a switch turned/held in START, return that as the practical control evidence. If only broad electric starter is found, mark key/button control as not_confirmed instead of saying it is not key or not button.',
+          'Fill answerGuidance.directAnswer with the shortest practical buyer-facing answer supported by exact-target evidence. Use answerGuidance.coverage to show which requested choices are confirmed, not_confirmed, contradicted, ambiguous, or not_found.',
           'Use nearby catalog products only as catalog alternatives/orientation in summaryForAnswer; never as the technical fact for an absent exact target.',
           'If exact target facts cannot be found externally, return no target fact and add warning exact_target_external_fact_not_found instead of returning nearby-model facts.',
           'For web facts, fill sourceUrl/sourceTitle when the source is available.'
@@ -294,10 +352,35 @@ export async function researchProductComparisonFacts(input: {
                 required: ['productName', 'attribute', 'catalogValue', 'webValues', 'resolution']
               }
             },
+            answerGuidance: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                directAnswer: { type: 'string' },
+                completeness: { type: 'string', enum: ['answered', 'partially_answered', 'not_answered'] },
+                coverage: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      attribute: { type: 'string' },
+                      status: { type: 'string', enum: ['confirmed', 'not_confirmed', 'contradicted', 'ambiguous', 'not_found'] },
+                      value: { type: 'string' },
+                      evidence: { type: 'string' },
+                      sourceUrl: { type: ['string', 'null'] },
+                      sourceTitle: { type: ['string', 'null'] }
+                    },
+                    required: ['attribute', 'status', 'value', 'evidence', 'sourceUrl', 'sourceTitle']
+                  }
+                }
+              },
+              required: ['directAnswer', 'completeness', 'coverage']
+            },
             summaryForAnswer: { type: 'string' },
             warnings: { type: 'array', items: { type: 'string' } }
           },
-          required: ['usedWebSearch', 'facts', 'conflicts', 'summaryForAnswer', 'warnings']
+          required: ['usedWebSearch', 'facts', 'conflicts', 'answerGuidance', 'summaryForAnswer', 'warnings']
         }
       }
     }
@@ -314,7 +397,13 @@ export async function researchProductComparisonFacts(input: {
   });
   const primaryResult = normalizeResearchParsed(parsed);
 
-  if (targetProductNames.length && !hasConfirmedExactTargetFacts(primaryResult, targetProductNames)) {
+  if (
+    targetProductNames.length &&
+    (
+      !hasConfirmedExactTargetFacts(primaryResult, targetProductNames) ||
+      primaryResult.answerGuidance.completeness !== 'answered'
+    )
+  ) {
     const retryRequest: Record<string, unknown> = {
       ...request,
       input: [
@@ -326,6 +415,7 @@ export async function researchProductComparisonFacts(input: {
             'Use exactTargetSearchQueries and search public web pages, official manufacturer pages, distributor pages, PDFs, manuals, and specification sheets that mention the exact model/code.',
             'Accept a fact only when sourceUrl, sourceTitle, or evidence names the exact target model/code.',
             'For key vs push-button questions, ignition keys in the kit or ignition-key wording supports key start; absence of push-button wording means push-button is not confirmed.',
+            'If exact-target instructions show an ignition switch, engine switch, starter switch, or a switch turned/held in START, return that practical mechanism in answerGuidance.directAnswer. Do not collapse it to only "electric starter".',
             'Do not use nearby model pages as facts for the target. Return no fact if the exact target still cannot be verified.',
             'Return only JSON.'
           ].join('\n')
@@ -349,11 +439,15 @@ export async function researchProductComparisonFacts(input: {
       signal: input.signal
     });
     const retryResult = normalizeResearchParsed(retry.parsed);
-    if (hasConfirmedExactTargetFacts(retryResult, targetProductNames)) {
+    if (
+      hasConfirmedExactTargetFacts(retryResult, targetProductNames) ||
+      retryResult.answerGuidance.completeness === 'answered'
+    ) {
       return {
         usedWebSearch: primaryResult.usedWebSearch || retryResult.usedWebSearch,
         facts: retryResult.facts,
         conflicts: retryResult.conflicts.length ? retryResult.conflicts : primaryResult.conflicts,
+        answerGuidance: retryResult.answerGuidance,
         summaryForAnswer: retryResult.summaryForAnswer || primaryResult.summaryForAnswer,
         warnings: uniqueStrings([
           ...primaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
