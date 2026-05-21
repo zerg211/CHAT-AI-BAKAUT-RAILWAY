@@ -43,6 +43,15 @@ function productResearchContext(products: Product[]) {
   }));
 }
 
+function exactTargetSearchQueries(targetProductNames: string[], attributes: string[]) {
+  const usefulAttributes = attributes.length
+    ? attributes
+    : ['specification', 'manual', 'starter', 'start method'];
+  return targetProductNames.flatMap((target) =>
+    usefulAttributes.slice(0, 6).map((attribute) => `"${target}" ${attribute}`)
+  );
+}
+
 export async function researchProductComparisonFacts(input: {
   userMessage: string;
   products: Product[];
@@ -51,6 +60,9 @@ export async function researchProductComparisonFacts(input: {
   signal?: AbortSignal;
 }): Promise<ProductComparisonResearchResult> {
   const targetProductNames = (input.targetProductNames ?? [])
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const comparisonAttributes = (input.comparisonAttributes ?? [])
     .map((name) => name.trim())
     .filter(Boolean);
   if (input.products.length < 2 && !targetProductNames.length) {
@@ -75,6 +87,12 @@ export async function researchProductComparisonFacts(input: {
           'Если web и каталог конфликтуют по важному параметру, укажи конфликт и выбери значение только при подтверждении логикой источников.',
           'Не пиши ответ покупателю. Верни только JSON.',
           'If buyerQuestion asks about targetProductNames and the exact model is absent from products, search the web for that exact target model. Do not infer exact target facts from nearby models.',
+          'When targetProductNames is present, search exact quoted target names on the public web with the requested attributes before using nearby catalog products.',
+          'A web fact for a target model is valid only when sourceUrl, sourceTitle, or evidence names the same exact model identifier. Same brand, same family, or nearby model pages are not proof about the target model.',
+          'Do not cite bakautprof.ru or provided product.sourceUrl pages as web facts for an absent exact target unless that page is specifically about the exact target model.',
+          'If exact external sources state key start, ignition key, electric starter, push button, manual recoil, battery, power, engine, or other requested attributes for the target, return those facts with high or medium confidence.',
+          'Use nearby catalog products only as catalog alternatives/orientation in summaryForAnswer; never as the technical fact for an absent exact target.',
+          'If exact target facts cannot be found externally, return no target fact and add warning exact_target_external_fact_not_found instead of returning nearby-model facts.',
           'For web facts, fill sourceUrl/sourceTitle when the source is available.'
         ].join('\n')
       },
@@ -83,7 +101,8 @@ export async function researchProductComparisonFacts(input: {
         content: JSON.stringify({
           buyerQuestion: input.userMessage,
           targetProductNames,
-          comparisonAttributes: input.comparisonAttributes ?? [],
+          comparisonAttributes,
+          exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes),
           products: productResearchContext(input.products)
         })
       }

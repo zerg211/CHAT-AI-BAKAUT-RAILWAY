@@ -17,6 +17,9 @@ describe('agent manager integration source guards', () => {
     expect(research).toContain("type: 'web_search_preview'");
     expect(research).toContain('conflicts');
     expect(research).toContain('summaryForAnswer');
+    expect(research).toContain('exactTargetSearchQueries');
+    expect(research).toContain('Same brand, same family, or nearby model pages are not proof about the target model.');
+    expect(research).toContain('exact_target_external_fact_not_found');
   });
 
   it('orders catalog search by the selected retrieval score alias', () => {
