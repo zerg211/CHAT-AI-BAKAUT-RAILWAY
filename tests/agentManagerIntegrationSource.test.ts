@@ -77,13 +77,14 @@ describe('agent manager integration source guards', () => {
   it('marks runtime mode and legacy paths in stream payloads, saved metadata, and admin UI', () => {
     const route = readFileSync('src/routes/chat.ts', 'utf8');
     const assistant = readFileSync('src/ai/assistant.ts', 'utf8');
+    const runtime = readFileSync('src/ai/agentManagerRuntime.ts', 'utf8');
     const orchestrator = readFileSync('src/ai/agentManagerOrchestrator.ts', 'utf8');
     const client = readFileSync('src/client/main.tsx', 'utf8');
 
     expect(route).toContain('runtimeModeReason: runtimeDecision.reason');
     expect(route).toContain('agentManagerRuntime: runtimeDecision');
-    expect(assistant).toContain("legacyRuntime: {");
-    expect(assistant).toContain("path: legacyPath ?? 'legacy_unknown'");
+    expect(runtime).toContain("legacyRuntime: {");
+    expect(runtime).toContain("path: legacyPath ?? 'legacy_unknown'");
     expect(assistant).toContain("runtimeResponseMetadata(runtimeDecision, 'legacy_full_pipeline')");
     expect(assistant).toContain("runtimeResponseMetadata(getAgentManagerRuntimeDecision(session), 'llm_fast_commercial_handoff')");
     expect(orchestrator).toContain('runtimeModeReason: runtimeDecision.reason');

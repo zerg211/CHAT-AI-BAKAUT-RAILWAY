@@ -49,6 +49,24 @@ export function getAgentManagerRuntimeDecision(session?: Pick<ConversationSessio
   };
 }
 
+export function runtimeResponseMetadata(runtimeDecision: AgentManagerRuntimeDecision, legacyPath?: string) {
+  const metadata = {
+    runtimeMode: runtimeDecision.runtimeMode,
+    runtimeModeReason: runtimeDecision.reason,
+    agentManagerRuntime: runtimeDecision
+  };
+  if (runtimeDecision.runtimeMode !== 'legacy') return metadata;
+  return {
+    ...metadata,
+    legacyRuntime: {
+      active: true,
+      path: legacyPath ?? 'legacy_unknown',
+      reason: runtimeDecision.reason,
+      legacyAnswerWritersDisabled: runtimeDecision.legacyAnswerWritersDisabled
+    }
+  };
+}
+
 export function isAgentManagerHarnessEnabledForSession(session?: Pick<ConversationSession, 'pageUrl'> | null) {
   return getAgentManagerRuntimeDecision(session).agentManagerHarnessEnabled;
 }

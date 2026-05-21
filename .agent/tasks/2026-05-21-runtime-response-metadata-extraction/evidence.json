@@ -1,0 +1,42 @@
+{
+  "taskId": "2026-05-21-runtime-response-metadata-extraction",
+  "refactor": {
+    "type": "pure_extraction",
+    "helper": "runtimeResponseMetadata",
+    "newOwnerModule": "src/ai/agentManagerRuntime.ts",
+    "updatedModule": "src/ai/assistant.ts",
+    "assistantLinesAfter": 12608,
+    "behaviorChangeExpected": false
+  },
+  "checks": [
+    {
+      "command": "npm test -- tests/agentManagerRuntime.test.ts tests/agentManagerIntegrationSource.test.ts tests/assistantFallback.test.ts",
+      "status": "PASS",
+      "testFiles": 3,
+      "tests": 30
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "detail": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "testFiles": 67,
+      "tests": 571
+    }
+  ],
+  "productionPromptfoo": {
+    "rerun": false,
+    "reason": "Pure extraction with no prompt text, API, model, tool, or business behavior change."
+  }
+}

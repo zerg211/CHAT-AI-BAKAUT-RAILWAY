@@ -59,7 +59,7 @@ import { buildLeadDraft, shouldCommitLeadFromDraft } from './leadDraft.js';
 import { sourcePolicyRequiresWeb } from './sourcePolicy.js';
 import { disabledLegacyWriterMetadata, legacyAnswerWriterAllowed } from './agentManagerConfig.js';
 import { AgentManagerOrchestrator } from './agentManagerOrchestrator.js';
-import { getAgentManagerRuntimeDecision, type AgentManagerRuntimeDecision } from './agentManagerRuntime.js';
+import { getAgentManagerRuntimeDecision, runtimeResponseMetadata } from './agentManagerRuntime.js';
 import { applyContractNeedDelta } from './requirementDelta.js';
 import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 import { extractResponseText, extractUrlCitations, logOpenAIUsage, responseUsedWebSearch, safeError } from './responseUtils.js';
@@ -108,24 +108,6 @@ interface GenerateAnswerInput {
   skipUserMessage?: boolean;
   onDelta?: (text: string) => void | Promise<void>;
   signal?: AbortSignal;
-}
-
-function runtimeResponseMetadata(runtimeDecision: AgentManagerRuntimeDecision, legacyPath?: string) {
-  const metadata = {
-    runtimeMode: runtimeDecision.runtimeMode,
-    runtimeModeReason: runtimeDecision.reason,
-    agentManagerRuntime: runtimeDecision
-  };
-  if (runtimeDecision.runtimeMode !== 'legacy') return metadata;
-  return {
-    ...metadata,
-    legacyRuntime: {
-      active: true,
-      path: legacyPath ?? 'legacy_unknown',
-      reason: runtimeDecision.reason,
-      legacyAnswerWritersDisabled: runtimeDecision.legacyAnswerWritersDisabled
-    }
-  };
 }
 
 type TroubleshootingMemoryDecision = {
