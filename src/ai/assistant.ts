@@ -50,7 +50,6 @@ import { buildLeadStateMachine } from './leadStateMachine.js';
 import { classifyPostAnswerRecovery, repairAnswerForPostAnswerVerification, verifyPostAnswer } from './postAnswerVerifier.js';
 import { buildRequirementLedger } from './requirementLedger.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
-import { recordOpenAIUsageOnce } from './openaiUsageGuard.js';
 import { coercePlannerAgentTurnContractV2, contractV2ToLegacyAgentContract, deriveAgentTurnContractV2 } from './agentTurnContractV2.js';
 import { AgentToolRegistry, toolResultToTrace } from './agentTools.js';
 import { createRuntimeArtifactToolHandlers } from './agentRuntimeTools.js';
@@ -63,6 +62,7 @@ import { AgentManagerOrchestrator } from './agentManagerOrchestrator.js';
 import { getAgentManagerRuntimeDecision, type AgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import { applyContractNeedDelta } from './requirementDelta.js';
 import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
+import { extractResponseText, extractUrlCitations, logOpenAIUsage, responseUsedWebSearch, safeError } from './responseUtils.js';
 import {
   buildTroubleshootingCaseDraft,
   buildTroubleshootingSearchQuery
@@ -225,12 +225,6 @@ function applyPostAnswerVerificationPolicy(input: {
     postAnswerVerificationRecovery
   };
 }
-
-type WebCitation = {
-  url: string;
-  title?: string;
-  snippet?: string;
-};
 
 type TroubleshootingMemoryDecision = {
   usable: boolean;
@@ -7431,42 +7425,6 @@ function selectCardsFromTurnContract(products: Product[], state: CustomerNeedSta
 function cardsFromPlan(products: Product[], state: CustomerNeedState, userMessage: string, plan: AssistantTurnPlan) {
   return selectCardsFromPlan(products, state, userMessage, plan).cards;
 }
-function responseUsedWebSearch(value: unknown) {
-  if (!value) return false;
-  if (extractUrlCitations(value).length > 0) return true;
-  return hasResponseNode(value, (object) => {
-    const type = typeof object.type === 'string' ? object.type : '';
-    return /web_search|search_result|url_citation/i.test(type);
-  });
-}
-
-function extractResponseText(value: unknown, depth = 0): string {
-  if (!value || depth > 8) return '';
-  if (typeof value === 'string') return '';
-  if (Array.isArray(value)) {
-    return value.map((item) => extractResponseText(item, depth + 1)).filter(Boolean).join('\n').trim();
-  }
-  if (typeof value !== 'object') return '';
-
-  const object = value as Record<string, unknown>;
-  const objectType = typeof object.type === 'string' ? object.type : '';
-  if (typeof object.output_text === 'string' && object.output_text.trim()) return object.output_text.trim();
-  if (
-    typeof object.text === 'string'
-    && object.text.trim()
-    && (!objectType || /output_text|message|text/i.test(objectType))
-  ) {
-    return object.text.trim();
-  }
-
-  const contentText = extractResponseText(object.content, depth + 1);
-  if (contentText) return contentText;
-  const outputText = extractResponseText(object.output, depth + 1);
-  if (outputText) return outputText;
-  const messageText = extractResponseText(object.message, depth + 1);
-  if (messageText) return messageText;
-  return '';
-}
 
 function normalizeEvidenceUrl(value?: string | null) {
   if (!value) return '';
@@ -13530,71 +13488,6 @@ function turnPlanSchema() {
       'answerGuidance'
     ]
   };
-}
-
-function safeError(error: unknown) {
-  if (!error || typeof error !== 'object') return { message: String(error) };
-  const value = error as { name?: string; status?: number; code?: string; message?: string };
-  return {
-    name: value.name,
-    status: value.status,
-    code: value.code,
-    message: value.message
-  };
-}
-
-function logOpenAIUsage(stage: string, model: string, response: unknown) {
-  if (!response || typeof response !== 'object') return;
-  void recordOpenAIUsageOnce(stage, model, response);
-  if (!config.DEBUG_OPENAI_USAGE) return;
-  const usage = (response as { usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    total_tokens?: number;
-    output_tokens_details?: { reasoning_tokens?: number };
-  } }).usage;
-  if (!usage) return;
-  console.info('OpenAI usage', {
-    stage,
-    model,
-    inputTokens: usage.input_tokens,
-    outputTokens: usage.output_tokens,
-    reasoningTokens: usage.output_tokens_details?.reasoning_tokens,
-    totalTokens: usage.total_tokens
-  });
-}
-
-function hasResponseNode(value: unknown, predicate: (object: Record<string, unknown>) => boolean, depth = 0): boolean {
-  if (!value || depth > 8) return false;
-  if (Array.isArray(value)) return value.some((item) => hasResponseNode(item, predicate, depth + 1));
-  if (typeof value !== 'object') return false;
-
-  const object = value as Record<string, unknown>;
-  if (predicate(object)) return true;
-  return Object.values(object).some((item) => hasResponseNode(item, predicate, depth + 1));
-}
-
-function extractUrlCitations(value: unknown, depth = 0): WebCitation[] {
-  if (!value || depth > 8) return [];
-  if (Array.isArray(value)) return value.flatMap((item) => extractUrlCitations(item, depth + 1));
-  if (typeof value !== 'object') return [];
-
-  const object = value as Record<string, unknown>;
-  const type = typeof object.type === 'string' ? object.type : '';
-  const url = typeof object.url === 'string' ? object.url : undefined;
-  const isCitation = Boolean(url && /url_citation|web_search|search_result|citation/i.test(type));
-  const own: WebCitation[] = isCitation && url
-    ? [{
-        url,
-        title: typeof object.title === 'string' ? object.title : undefined,
-        snippet: typeof object.snippet === 'string' ? object.snippet : undefined
-      }]
-    : [];
-
-  return [
-    ...own,
-    ...Object.values(object).flatMap((item) => extractUrlCitations(item, depth + 1))
-  ].filter((citation, index, all) => all.findIndex((item) => item.url === citation.url) === index);
 }
 
 export const assistantTestHooks = {

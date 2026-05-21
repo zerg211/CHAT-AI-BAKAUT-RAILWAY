@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { recordOpenAIUsageOnce } from './openaiUsageGuard.js';
 
 export type WebCitation = {
   url: string;
@@ -18,7 +19,9 @@ export function safeError(error: unknown) {
 }
 
 export function logOpenAIUsage(stage: string, model: string, response: unknown) {
-  if (!config.DEBUG_OPENAI_USAGE || !response || typeof response !== 'object') return;
+  if (!response || typeof response !== 'object') return;
+  void recordOpenAIUsageOnce(stage, model, response);
+  if (!config.DEBUG_OPENAI_USAGE) return;
   const usage = (response as { usage?: {
     input_tokens?: number;
     output_tokens?: number;
