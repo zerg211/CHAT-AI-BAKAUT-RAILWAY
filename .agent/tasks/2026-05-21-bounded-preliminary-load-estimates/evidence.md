@@ -23,9 +23,9 @@
 - Production deploy marker after push: Railway `/api/health` showed `5c4502b41097519246a6a789780a5962b5c33df3` on branch `main`.
 - Production Promptfoo after `5c4502b` PASS: 6/6. Raw artifact: `.agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-5c4502b.json`.
 - Production live gate after `5c4502b` PASS: `local-live-tests/2026-05-21-bakautprof-production-agent-cycle.production.md`.
-- Final production deploy marker: Railway `/api/health` showed `bcf920e20f7e0870bf3f0e9c04e380b475a8b5a4` on branch `main`.
-- Production Promptfoo after `bcf920e` PASS: 6/6. Raw artifact: `.agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-bcf920e.json`.
-- Production live gate after `bcf920e` PASS: `local-live-tests/2026-05-21-bakautprof-production-agent-cycle.production.md`.
+- Final production deploy marker: Railway `/api/health` showed `16196c31a40c8e8d441545a85840204127682cb8` on branch `main`.
+- Production Promptfoo after `16196c3` PASS: 6/6, score 1.0 on every case. Raw artifact: `.agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-16196c3.json`.
+- Production live gate after `16196c3` PASS: `local-live-tests/2026-05-21-bakautprof-production-agent-cycle.production.md`.
 
 ## Acceptance Criteria
 

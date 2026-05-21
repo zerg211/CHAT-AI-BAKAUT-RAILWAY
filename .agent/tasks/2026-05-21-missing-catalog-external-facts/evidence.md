@@ -35,4 +35,8 @@ git diff -- src/ai/agentManagerOrchestrator.ts src/ai/productComparisonResearch.
 
 ## Production Gate
 
-- Pending until commit/push, Railway auto-deploy, and production widget/eval verification.
+- Railway `/api/health` showed deployed commit `e5559685cca6fec0542d934a0fefa846870f45a3`.
+- Targeted production widget protocol: `local-live-tests/2026-05-21-rd8910e-latest-prod-2026-05-21T16-22-21-520Z.production.md`.
+- Admin detail artifact: `local-live-tests/2026-05-21-rd8910e-latest-prod-2026-05-21T16-22-21-520Z.json`.
+- Widget/admin audit result: PASS. The answer said RD8910E starts with a key, separated the external exact-model fact from BAKAUT catalog, explicitly said RD8910E is not in the BAKAUT catalog, named nearby FIRMAN catalog models, and did not add unasked price/delivery/lead terms.
+- Session id: `d9d6ba2d-4ee3-44e6-9b23-5d40daedb182`.

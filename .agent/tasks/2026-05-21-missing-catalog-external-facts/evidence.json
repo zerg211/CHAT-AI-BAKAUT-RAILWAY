@@ -42,8 +42,15 @@
     }
   ],
   "productionGate": {
-    "status": "PENDING",
-    "reason": "Requires commit/push, Railway auto-deploy, and production widget/eval verification"
+    "status": "PASS",
+    "deployedCommit": "e5559685cca6fec0542d934a0fefa846870f45a3",
+    "widget": {
+      "status": "PASS",
+      "protocolPath": "local-live-tests/2026-05-21-rd8910e-latest-prod-2026-05-21T16-22-21-520Z.production.md",
+      "detailPath": "local-live-tests/2026-05-21-rd8910e-latest-prod-2026-05-21T16-22-21-520Z.json",
+      "sessionId": "d9d6ba2d-4ee3-44e6-9b23-5d40daedb182",
+      "summary": "web.researchProductFacts ran; exact catalog presence was absent; exact web facts were tied to RD8910E; visible answer said it starts with a key, said RD8910E is not in the BAKAUT catalog, named nearby FIRMAN catalog models, and did not add unasked commercial terms"
+    }
   },
   "changedFiles": [
     "src/ai/agentManagerOrchestrator.ts",
