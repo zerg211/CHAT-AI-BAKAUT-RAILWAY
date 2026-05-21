@@ -763,7 +763,75 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.selectionReadiness?.missingFacts).toEqual(expect.arrayContaining(['pump_type_or_power']));
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
     expect(metadata.cardSelection?.suppressedProductIds).toEqual(['p1', 'p2']);
-    expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:generator_load_profile_not_ready');
+    expect(metadata.cardSelection?.warnings?.join('\n')).toMatch(/product_cards_suppressed:/);
+    expect(metadata.answerContract?.riskFlags).toContain('generator_load_profile_not_ready');
+  });
+
+  it('keeps asking for pump details when a generic unknown pump was estimated', async () => {
+    const conversations = new FakeConversations();
+    const unknownPumpModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer has 220 V house, generic unknown pump, fridge, LED light and 1.2 kW grinder',
+          dialogueUnderstanding: 'calculate a conservative estimate but pump type/model/power is still missing',
+          nextStepRationale: 'calculator.generatorLoad can estimate loads, then answer must ask for pump details',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'power_tool', name: 'angle grinder', count: 1, runningKw: 1.2, startingKw: 1.2, source: 'explicit_user', evidence: 'grinder 1.2 kW' }
+              ],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump', 'refrigerator'],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'estimate generator load',
+              notes: null
+            },
+            rationale: 'estimate generator load while pump is unknown',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['unknown_pump_power', 'simultaneous_start_possible']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Calculated minimum is around 4 kW nominal with reserve. I can select options later.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['generator-load'],
+          leadAction: 'none',
+          riskFlags: ['unknown_pump_power']
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, unknownPumpModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Дом 220 В. Насос не знаю какой, модель сейчас не скажу. Холодильник один, свет LED, иногда болгарка 1,2 кВт. Насос с холодильником могут включиться вместе.'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ payload?: { loads?: Array<{ kind?: string }> }; warnings?: string[] }>;
+      selectionReadiness?: { status?: string };
+      answerContract?: { riskFlags?: string[] };
+    };
+    expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).toContain('pump');
+    expect(metadata.toolResults?.[0]?.warnings).toContain('generator_load_estimate_used:pump');
+    expect(metadata.selectionReadiness?.status).toBe('needs_load_profile');
+    expect(payload.answer).toMatch(/тип\/модель|мощност.{0,40}насос|насос.{0,80}шильдик/iu);
     expect(metadata.answerContract?.riskFlags).toContain('generator_load_profile_not_ready');
   });
 
