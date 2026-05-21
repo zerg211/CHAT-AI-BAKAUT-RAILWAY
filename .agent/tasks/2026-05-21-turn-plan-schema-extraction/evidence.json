@@ -1,0 +1,52 @@
+{
+  "taskId": "2026-05-21-turn-plan-schema-extraction",
+  "date": "2026-05-21",
+  "verdict": "PASS",
+  "changes": [
+    "Added src/ai/assistantTurnPlanSchemas.ts.",
+    "Moved deterministic agentContractV2Schema and turnPlanSchema out of src/ai/assistant.ts.",
+    "Updated planner response format to call turnPlanSchema(MAX_PRODUCT_CARDS), preserving the current selected product schema limit.",
+    "Added focused schema tests.",
+    "Did not change prompts, models, OpenAI stage names, planner coercion, fallback logic, product selection, card rendering, recovery logic, or business policy.",
+    "Added no regex constructs."
+  ],
+  "lineCounts": {
+    "src/ai/assistant.ts": 12482,
+    "src/ai/assistantTurnPlanSchemas.ts": 463
+  },
+  "validation": [
+    {
+      "command": "npm test -- tests/assistantTurnPlanSchemas.test.ts tests/assistantNeedExtractionSchemas.test.ts tests/recommendationRanking.test.ts tests/agentTurnContract.test.ts",
+      "status": "PASS",
+      "summary": "4 files, 230 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1828."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "70 files, 582 tests"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "Line-ending warnings only"
+    }
+  ],
+  "productionGate": {
+    "promptfooOrWidgetRerun": false,
+    "reason": "Schema-builder extraction only; no prompts, model selection, OpenAI request semantics, tools, product/card behavior, or user-facing answer logic changed.",
+    "railwayMarkerRequiredAfterPush": true
+  }
+}
