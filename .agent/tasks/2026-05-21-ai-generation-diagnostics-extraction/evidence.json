@@ -1,0 +1,42 @@
+{
+  "taskId": "2026-05-21-ai-generation-diagnostics-extraction",
+  "refactor": {
+    "type": "pure_extraction",
+    "newModule": "src/ai/aiGenerationDiagnostics.ts",
+    "updatedModule": "src/ai/assistant.ts",
+    "testModule": "tests/aiGenerationDiagnostics.test.ts",
+    "assistantLinesAfter": 12625,
+    "behaviorChangeExpected": false
+  },
+  "checks": [
+    {
+      "command": "npm test -- tests/aiGenerationDiagnostics.test.ts tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts",
+      "status": "PASS",
+      "testFiles": 3,
+      "tests": 35
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "detail": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "testFiles": 67,
+      "tests": 569
+    }
+  ],
+  "productionPromptfoo": {
+    "rerun": false,
+    "reason": "Pure extraction with no prompt text, API, model, tool, or business behavior change."
+  }
+}

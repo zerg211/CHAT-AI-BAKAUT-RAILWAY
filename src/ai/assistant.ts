@@ -64,6 +64,12 @@ import { applyContractNeedDelta } from './requirementDelta.js';
 import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 import { extractResponseText, extractUrlCitations, logOpenAIUsage, responseUsedWebSearch, safeError } from './responseUtils.js';
 import {
+  aiStageFailure,
+  emptyAiGenerationDiagnostics,
+  markAiFallback,
+  type AiGenerationDiagnostics
+} from './aiGenerationDiagnostics.js';
+import {
   LLM_FAST_TURN_MIN_CONFIDENCE,
   coerceLlmFastTurnAnswerContract,
   coerceLlmFastTurnDecision,
@@ -102,43 +108,6 @@ interface GenerateAnswerInput {
   skipUserMessage?: boolean;
   onDelta?: (text: string) => void | Promise<void>;
   signal?: AbortSignal;
-}
-
-type AiFallbackDiagnostic = {
-  used: boolean;
-  reason?: string;
-};
-
-type AiGenerationDiagnostics = {
-  needExtractionFallback: AiFallbackDiagnostic;
-  turnPlanningFallback: AiFallbackDiagnostic;
-  answerGenerationFallback: AiFallbackDiagnostic;
-};
-
-type AiFallbackStage = keyof AiGenerationDiagnostics;
-
-function emptyAiGenerationDiagnostics(): AiGenerationDiagnostics {
-  return {
-    needExtractionFallback: { used: false },
-    turnPlanningFallback: { used: false },
-    answerGenerationFallback: { used: false }
-  };
-}
-
-function aiFailureReason(error: unknown, fallback = 'unknown_error') {
-  if (typeof error === 'string') return error;
-  const details = safeError(error);
-  return details.code || details.message || (details.status ? `status_${details.status}` : fallback);
-}
-
-function markAiFallback(diagnostics: AiGenerationDiagnostics | undefined, stage: AiFallbackStage, error: unknown, fallback?: string) {
-  const entry = { used: true, reason: aiFailureReason(error, fallback) };
-  if (diagnostics) diagnostics[stage] = entry;
-  return entry;
-}
-
-function aiStageFailure(stage: string, diagnostic?: AiFallbackDiagnostic): Error {
-  return new Error(`AI ${stage} failed: ${diagnostic?.reason ?? 'unknown_error'}`);
 }
 
 function runtimeResponseMetadata(runtimeDecision: AgentManagerRuntimeDecision, legacyPath?: string) {
