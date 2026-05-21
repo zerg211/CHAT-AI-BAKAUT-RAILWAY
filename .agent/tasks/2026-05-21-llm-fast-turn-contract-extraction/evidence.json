@@ -1,0 +1,45 @@
+{
+  "taskId": "2026-05-21-llm-fast-turn-contract-extraction",
+  "refactor": {
+    "type": "pure_extraction",
+    "newModule": "src/ai/llmFastTurnContracts.ts",
+    "updatedModule": "src/ai/assistant.ts",
+    "testModule": "tests/llmFastTurnContracts.test.ts",
+    "assistantLinesAfter": 12722,
+    "behaviorChangeExpected": false
+  },
+  "checks": [
+    {
+      "command": "npm test -- tests/llmFastTurnContracts.test.ts tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts",
+      "status": "PASS",
+      "testFiles": 3,
+      "tests": 32
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "detail": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "testFiles": 66,
+      "tests": 562
+    }
+  ],
+  "productionPromptfoo": {
+    "rerun": false,
+    "reason": "Pure extraction with no prompt text, API, model, tool, or business behavior change.",
+    "lastPassingRuntimeCommit": "6af7911",
+    "lastPassingDeterministicAverage": 0.9935555555555555,
+    "lastPassingLlmAverage": 0.9649999999999999
+  }
+}
