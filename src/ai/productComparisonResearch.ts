@@ -160,43 +160,6 @@ function compactExactTargetText(value: unknown) {
   return compact;
 }
 
-function factValueIsNegative(value: string) {
-  const normalized = value.toLocaleLowerCase('ru-RU');
-  const negativePhrases = [
-    'not confirmed',
-    'not found',
-    'не найден',
-    'не подтвержден',
-    'не подтвержд'
-  ];
-  let firstNegativeIndex = -1;
-  for (const phrase of negativePhrases) {
-    const index = normalized.indexOf(phrase);
-    if (index >= 0 && (firstNegativeIndex < 0 || index < firstNegativeIndex)) {
-      firstNegativeIndex = index;
-    }
-  }
-  if (firstNegativeIndex < 0) return false;
-  const beforeNegative = normalized.slice(0, firstNegativeIndex);
-  const hasEarlierConfirmedClause = [';', ',', '.', ' plus ', ' also ', ' плюс ', ' также ']
-    .some((separator) => beforeNegative.includes(separator)) &&
-    [
-      'key',
-      'ignition',
-      'engine switch',
-      'starter switch',
-      'electric starter',
-      'electrostarter',
-      'manual recoil',
-      'ключ',
-      'зажиган',
-      'выключател',
-      'электростартер',
-      'ручн'
-    ].some((phrase) => beforeNegative.includes(phrase));
-  return !hasEarlierConfirmedClause;
-}
-
 function factMatchesTarget(fact: ProductComparisonResearchFact, targetName: string) {
   const factText = compactExactTargetText([fact.productName, fact.sourceUrl, fact.sourceTitle, fact.evidence].filter(Boolean).join(' '));
   const targetText = compactExactTargetText(targetName);
@@ -207,16 +170,23 @@ function factMatchesTarget(fact: ProductComparisonResearchFact, targetName: stri
   return targetText.length >= 5 && factText.includes(targetText);
 }
 
+function hasConfirmedAnswerCoverage(result: ProductComparisonResearchResult) {
+  return result.answerGuidance.coverage.some((item) =>
+    item.status === 'confirmed' &&
+    Boolean(item.value.trim() || item.evidence.trim())
+  );
+}
+
 function hasConfirmedExactTargetFacts(
   result: ProductComparisonResearchResult,
   targetProductNames: string[],
   sourceTypes: Array<ProductComparisonResearchFact['sourceType']> = ['web']
 ) {
+  if (!hasConfirmedAnswerCoverage(result)) return false;
   return result.facts.some((fact) =>
     sourceTypes.includes(fact.sourceType) &&
     ['high', 'medium'].includes(fact.confidence) &&
-    targetProductNames.some((targetName) => factMatchesTarget(fact, targetName)) &&
-    !factValueIsNegative(fact.value)
+    targetProductNames.some((targetName) => factMatchesTarget(fact, targetName))
   );
 }
 

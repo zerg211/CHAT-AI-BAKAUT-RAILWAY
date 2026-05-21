@@ -1,0 +1,52 @@
+{
+  "taskId": "2026-05-21-exact-catalog-description-research",
+  "recordedAt": "2026-05-21T23:18:53+03:00",
+  "baseHead": "2f8c691",
+  "status": "local_pass_production_pending",
+  "changes": [
+    "Exact catalog product facts are extracted through structured LLM output before web research when exact catalog cards exist.",
+    "Product descriptions are passed as catalog evidence into extraction, answer composition, and pre-send review context.",
+    "Catalog and web evidence are merged so first-party catalog facts are preserved when web research is needed.",
+    "The latest local cleanup removes the new phrase-based negative-fact guard and requires structured confirmed coverage from the LLM instead."
+  ],
+  "localChecks": [
+    {
+      "command": "npm test -- tests/productComparisonResearch.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "status": "pass",
+      "summary": "3 test files passed, 17 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass",
+      "summary": "tsc --noEmit passed for app and server configs"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass",
+      "summary": "vite build and server TypeScript build passed"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "summary": "73 test files passed, 593 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "summary": "No new regex constructs. Legacy baseline: 1828."
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "summary": "No whitespace errors; CRLF warnings only"
+    }
+  ],
+  "productionChecks": [
+    {
+      "command": "pending after push/Railway marker",
+      "status": "pending",
+      "summary": "Local OpenAI/Promptfoo is invalid in this environment by project rule"
+    }
+  ],
+  "verdict": "local_pass"
+}
