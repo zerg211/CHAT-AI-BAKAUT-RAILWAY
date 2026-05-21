@@ -1,0 +1,36 @@
+{
+  "taskId": "2026-05-21-bounded-preliminary-load-estimates",
+  "status": "pending_production_live",
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "testFiles": 1,
+      "tests": 23
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass"
+    }
+  ],
+  "localOpenAIDependentChecks": {
+    "run": false,
+    "reason": "Local OpenAI-dependent checks are invalid here: 403 Country, region, or territory not supported"
+  },
+  "productionLive": {
+    "run": false,
+    "reason": "Must run after commit/push and Railway deployment of the pushed commit"
+  },
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pending"
+  }
+}

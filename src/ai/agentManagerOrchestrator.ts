@@ -559,6 +559,10 @@ const toolArgsJsonSchema = {
     loads: { type: 'array', items: loadItemArgsJsonSchema },
     simultaneousStarting: nullableBooleanJsonSchema,
     simultaneousStartingKinds: stringArrayJsonSchema,
+    estimateBasis: {
+      type: ['string', 'null'],
+      enum: ['exact_or_user_provided', 'catalog_or_web_fact', 'bounded_assumption', 'unbounded_guess', null]
+    },
     contact: contactArgsJsonSchema,
     reason: nullableStringJsonSchema,
     notes: nullableStringJsonSchema
@@ -574,6 +578,7 @@ const toolArgsJsonSchema = {
     'loads',
     'simultaneousStarting',
     'simultaneousStartingKinds',
+    'estimateBasis',
     'contact',
     'reason',
     'notes'
@@ -795,9 +800,11 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
             'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
-            'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit or estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
-            'For generator selection, do not plan catalog.search when the only available load basis is estimated_average loads. Ask for explicit load, nameplate, model, or catalog/web-grounded load facts first.',
-            'If the buyer asks for preliminary minimum/reserve variants after enough load context exists for an estimate, plan both calculator.generatorLoad and catalog.search; if the load context is too vague for any useful selection, plan clarification instead of catalog.search.',
+            'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit, checked, or bounded estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
+            'For calculator.generatorLoad, set args.estimateBasis: "exact_or_user_provided" for explicit powers, "catalog_or_web_fact" for checked facts, "bounded_assumption" when the buyer wants an approximate selection and the unknown load is bounded by type/function/scenario, or "unbounded_guess" when only vague load names are known.',
+            'For unknown load sources, ask the minimum useful question before exact selection: identify what the consumer does, its type/class, voltage/phase, and simultaneous operation only as needed for the current calculation.',
+            'For generator selection, do not plan catalog.search when the only available load basis is an unbounded guess. Ask for the missing type/function/scenario first.',
+            'If the buyer asks for preliminary minimum/reserve variants after enough load context exists for a bounded estimate, plan both calculator.generatorLoad and catalog.search; if the load context is too vague for any useful selection, plan clarification instead of catalog.search.',
             'Не задавай вопрос, ответ на который уже есть в ledger.'
           ].join('\n')
         },
@@ -833,7 +840,8 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Не задавай лишних вопросов. Если вопрос нужен, он должен быть реально нужен для следующего шага.',
             'If toolResults contains calculator.generatorLoad with status ok, treat payload.profile.requiredNominalKw and requiredStartingKw as the authoritative calculated minimum. Do not replace that number with a broader or higher default class. A higher class may be described only as comfort/reserve, not as the calculated minimum.',
             'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
-            'If calculator.generatorLoad warnings include generator_load_estimate_only or generator_load_invalid_load_kind, do not name catalog products or prices. Set selectionReadiness.canShowProductCards=false and ask for explicit load, nameplate, model, or catalog/web-grounded load facts.',
+            'If calculator.generatorLoad warnings include generator_load_estimate_only, generator_load_unbounded_guess, or generator_load_invalid_load_kind, do not name catalog products or prices. Set selectionReadiness.canShowProductCards=false and ask the minimum useful question to bound the unknown load source.',
+            'If calculator.generatorLoad warnings include generator_load_bounded_assumption, you may show only preliminary product cards when the buyer asked for an approximate selection; keep exact missing facts in selectionReadiness.missingFacts and state the assumptions in answerText.',
             'You must set selectionReadiness for the current answer. It is your semantic decision about whether buyer-visible product cards are useful and honest now.',
             'When selectionReadiness.canShowProductCards is false, answerText must itself explain what is missing or what the next useful question is. The code will not append a canned clarification.',
             'Use selectionReadiness.status="needs_more_info" when product cards would be premature. Use "ready_for_preliminary_cards" only when the buyer asked for a preliminary selection and the executed tools give a usable estimated basis. Use "ready_for_exact_cards" when the facts are strong enough for exact cards.',
@@ -888,7 +896,8 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Проверь только по фактам ledger/toolResults/products.',
             'Блокируй или требуй rewrite, если ответ спрашивает уже известное, обещает непроверенное наличие/доставку/скидку/срок, противоречит текущему диалогу или просит повторить контакт, который уже есть.',
             'For calculator.generatorLoad, block or rewrite any answer that states a calculated minimum inconsistent with payload.profile.requiredNominalKw/requiredStartingKw.',
-            'For generator answers, require rewrite if the answer names catalog products, prices, or product cards when tool results include generator_load_estimate_only, generator_load_invalid_load_kind, or catalog_search_skipped:generator_load_unconfirmed_basis.',
+            'For generator answers, require rewrite if the answer names catalog products, prices, or product cards when tool results include generator_load_estimate_only, generator_load_unbounded_guess, generator_load_invalid_load_kind, or catalog_search_skipped:generator_load_unconfirmed_basis.',
+            'For generator_load_bounded_assumption, allow preliminary product cards only when the answer labels them as approximate, preserves missing exact facts, and does not present assumptions as confirmed nameplate data.',
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
@@ -1355,7 +1364,7 @@ export class AgentManagerOrchestrator {
             });
           }
         } else if (request.tool === 'calculator.generatorLoad') {
-          const { loads, profile, warnings } = buildGeneratorLoadToolPayload({
+          const { loads, profile, estimateBasis, warnings } = buildGeneratorLoadToolPayload({
             request,
             userMessage: input.userMessage
           });
@@ -1363,7 +1372,7 @@ export class AgentManagerOrchestrator {
             requestId: request.id,
             tool: request.tool,
             status: profile ? 'ok' : 'not_found',
-            payload: { loads, profile },
+            payload: { loads, profile, estimateBasis },
             warnings: profile ? warnings : [...warnings, 'no_usable_loads_for_generator_calculation']
           });
         } else if (request.tool === 'web.researchProductFacts') {

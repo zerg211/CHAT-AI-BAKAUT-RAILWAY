@@ -968,6 +968,111 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
 
+  it('allows preliminary generator cards when unknown loads are bounded enough for approximate selection', async () => {
+    const conversations = new FakeConversations();
+    const boundedEstimateModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for approximate minimum and reserve generator options',
+          dialogueUnderstanding: 'pump exact power is unknown, but the load is bounded as a 220 V borehole pump for a household scenario',
+          nextStepRationale: 'calculate a bounded preliminary load profile, then search catalog for approximate generator options',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'pump', name: '220 V borehole pump for a household well', count: 1, runningKw: 1.1, startingKw: 3.5, source: 'estimated_average', evidence: 'bounded assumption: borehole pump, 220 V, household water supply, exact nameplate unavailable' },
+                { kind: 'refrigerator', name: 'ordinary household refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'ordinary household refrigerator' },
+                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: 0.3, startingKw: 0.3, source: 'estimated_average', evidence: 'LED lighting for small house' },
+                { kind: 'handheld_tool', name: 'angle grinder used separately', count: 1, runningKw: 1.2, startingKw: 1.2, source: 'estimated_average', evidence: 'buyer said angle grinder is occasional, not a base simultaneous load' }
+              ],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump', 'refrigerator'],
+              estimateBasis: 'bounded_assumption',
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'buyer asked to estimate approximate minimum and reserve generator options',
+              notes: 'Exact pump nameplate is missing; this is preliminary.'
+            },
+            rationale: 'bounded estimate is useful enough for preliminary cards',
+            required: true
+          }, {
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator 5-6 kW 220 V preliminary',
+              semanticQuery: 'preliminary generator options 5-6 kW 220 V for household borehole pump refrigerator LED light',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              estimateBasis: null,
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'show approximate minimum and reserve catalog options',
+              notes: 'Preliminary cards only.'
+            },
+            rationale: 'buyer requested approximate options',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['bounded_load_assumption', 'exact_pump_power_missing']
+        };
+      },
+      async composeAnswer(input) {
+        const profile = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } })?.profile;
+        return {
+          answerText: `Preliminary calculation is about ${profile?.requiredNominalKw} kW. Generator 5 kW is the minimum orientation, Generator 6 kW is the safer reserve option. Exact pump nameplate is still needed before purchase.`,
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['generator-load', 'catalog-search'],
+          leadAction: 'none',
+          riskFlags: ['bounded_load_assumption'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            missingFacts: ['exact_pump_power_or_model'],
+            rationale: 'The buyer explicitly asked for approximate options and the pump is bounded by type, voltage and household use.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, boundedEstimateModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Pump is a 220 V borehole pump, exact power is unknown. Refrigerator, LED light, sometimes a 1.2 kW grinder. Can you roughly show minimum and reserve generators?'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ status?: string; payload?: { estimateBasis?: string | null }; warnings?: string[] }>;
+      selectionReadiness?: { status?: string; decision?: { status?: string; missingFacts?: string[] } };
+      cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
+    };
+    expect(metadata.toolResults?.[0]?.payload?.estimateBasis).toBe('bounded_assumption');
+    expect(metadata.toolResults?.[0]?.warnings).toContain('generator_load_bounded_assumption');
+    expect(metadata.toolResults?.[0]?.warnings).not.toContain('generator_load_estimate_only');
+    expect(metadata.toolResults?.[1]?.status).toBe('ok');
+    expect(metadata.selectionReadiness?.status).toBe('ready_for_cards');
+    expect(metadata.selectionReadiness?.decision?.status).toBe('ready_for_preliminary_cards');
+    expect(metadata.selectionReadiness?.decision?.missingFacts).toContain('exact_pump_power_or_model');
+    expect(metadata.cardSelection?.warnings ?? []).not.toContain('product_cards_suppressed:generator_load_unconfirmed_basis');
+    expect(payload.productCards.map((card) => card.id)).toEqual(['p1', 'p2']);
+  });
+
   it('allows generator cards after a generator load profile is available', async () => {
     const conversations = new FakeConversations();
     const readyModel = model({

@@ -3,6 +3,7 @@ import type { ToolRequest, ToolResult } from './agentManagerContracts.js';
 import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
 
 const loadProductClassAliases = new Set(['generator', 'weldinggenerator', 'welding_generator', 'platecompactor', 'plate_compactor']);
+const generatorLoadEstimateBases = new Set(['exact_or_user_provided', 'catalog_or_web_fact', 'bounded_assumption', 'unbounded_guess']);
 
 function compactLoadToken(value: unknown) {
   return typeof value === 'string'
@@ -40,6 +41,12 @@ function sourceFromToolArg(value: unknown): ProductElectricalLoadItem['source'] 
   return value === 'web_average' || value === 'catalog_fact' || value === 'estimated_average'
     ? value
     : 'explicit_user';
+}
+
+function estimateBasisFromToolArg(value: unknown) {
+  return typeof value === 'string' && generatorLoadEstimateBases.has(value)
+    ? value
+    : undefined;
 }
 
 function generatorLoadEvidenceForToolRequest(request: ToolRequest, userMessage: string) {
@@ -109,7 +116,8 @@ export function isEstimateOnlyGeneratorLoadPayload(payload: unknown) {
 export function isEstimateOnlyGeneratorLoadResult(result: ToolResult) {
   return result.tool === 'calculator.generatorLoad' &&
     result.status === 'ok' &&
-    isEstimateOnlyGeneratorLoadPayload(result.payload);
+    isEstimateOnlyGeneratorLoadPayload(result.payload) &&
+    !result.warnings.includes('generator_load_bounded_assumption');
 }
 
 export function hasEstimateOnlyGeneratorLoadResult(results: ToolResult[]) {
@@ -118,6 +126,7 @@ export function hasEstimateOnlyGeneratorLoadResult(results: ToolResult[]) {
 
 function hasUnconfirmedGeneratorLoadBasisWarning(result: ToolResult) {
   return result.warnings.includes('generator_load_estimate_only') ||
+    result.warnings.includes('generator_load_unbounded_guess') ||
     result.warnings.includes('generator_load_invalid_load_kind');
 }
 
@@ -134,6 +143,7 @@ export function buildGeneratorLoadToolPayload(input: {
 }) {
   const loadEvidence = generatorLoadEvidenceForToolRequest(input.request, input.userMessage);
   const { loads, warnings } = loadsFromArgs(input.request.args, loadEvidence);
+  const estimateBasis = estimateBasisFromToolArg(input.request.args.estimateBasis);
   const profile = calculateGeneratorLoadProfile(loads, {
     simultaneousStarting: input.request.args.simultaneousStarting === true,
     simultaneousStartingKinds: Array.isArray(input.request.args.simultaneousStartingKinds)
@@ -141,7 +151,13 @@ export function buildGeneratorLoadToolPayload(input: {
       : undefined
   });
   if (profile && isEstimateOnlyGeneratorLoadPayload({ loads })) {
-    warnings.push('generator_load_estimate_only');
+    if (estimateBasis === 'bounded_assumption') {
+      warnings.push('generator_load_bounded_assumption');
+    } else {
+      warnings.push(estimateBasis === 'unbounded_guess'
+        ? 'generator_load_unbounded_guess'
+        : 'generator_load_estimate_only');
+    }
   }
-  return { loads, profile, warnings };
+  return { loads, profile, estimateBasis: estimateBasis ?? null, warnings };
 }
