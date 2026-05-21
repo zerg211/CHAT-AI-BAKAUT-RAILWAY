@@ -196,6 +196,40 @@ async function recoverTurnWithRetries(input) {
   return lastResult;
 }
 
+async function sendMessageWithRetries(input) {
+  let lastError = null;
+  const attempts = input.attempts ?? 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) await sleep(input.delayMs ?? 5000);
+    try {
+      const response = await fetchWithTimeout(`${input.baseUrl}/api/chat/sessions/${input.sessionId}/messages`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message: input.userMessage })
+      }, input.timeoutMs);
+      const rawSse = await readSseResponseText(response);
+      const events = parseSseEvents(rawSse.text);
+      return turnResultFromResponse({
+        userMessage: input.userMessage,
+        response,
+        events,
+        transportError: rawSse.error
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  return {
+    user: input.userMessage,
+    ok: false,
+    answer: '',
+    productCards: [],
+    metadata: null,
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+    transportRetryExhausted: true
+  };
+}
+
 class BakautChatAppProvider {
   constructor(options = {}) {
     this.config = options.config || {};
@@ -239,18 +273,13 @@ class BakautChatAppProvider {
       if (!sessionId) throw new Error(`Session id missing in response: ${JSON.stringify(sessionPayload).slice(0, 1000)}`);
 
       for (const userMessage of messages) {
-        const response = await fetchWithTimeout(`${baseUrl}/api/chat/sessions/${sessionId}/messages`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ message: userMessage })
-        }, timeoutMs);
-        const rawSse = await readSseResponseText(response);
-        const events = parseSseEvents(rawSse.text);
-        const turnResult = turnResultFromResponse({
+        const turnResult = await sendMessageWithRetries({
+          baseUrl,
+          sessionId,
           userMessage,
-          response,
-          events,
-          transportError: rawSse.error
+          timeoutMs,
+          attempts: 3,
+          delayMs: 5000
         });
         if (!turnResult.ok && turnResult.rawError?.recoverable && turnResult.turnId) {
           const recoveryResult = await recoverTurnWithRetries({
