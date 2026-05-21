@@ -1,0 +1,45 @@
+{
+  "taskId": "2026-05-21-assistant-structured-json-extraction",
+  "date": "2026-05-21",
+  "verdict": "PASS",
+  "changes": [
+    "Added src/ai/assistantStructuredJson.ts for assistant-owned structured JSON helpers.",
+    "Updated src/ai/assistant.ts to import the extracted helpers.",
+    "Preserved direct Responses client usage, parse failure warning, retry token floor, caller-side usage logging, and stage-specific parse errors.",
+    "Replaced markdown JSON fence cleanup regex with string operations.",
+    "Updated scripts/no-regex-baseline.json from 1832 to 1828 legacy findings."
+  ],
+  "lineCounts": {
+    "src/ai/assistant.ts": 12551,
+    "src/ai/assistantStructuredJson.ts": 83
+  },
+  "validation": [
+    {
+      "command": "npm test -- tests/assistantStructuredJson.test.ts tests/assistantFallback.test.ts tests/assistantControlPlaneGenerate.test.ts",
+      "status": "PASS",
+      "summary": "3 files, 33 tests"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1828."
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "68 files, 576 tests"
+    }
+  ],
+  "productionGate": {
+    "rerun": false,
+    "reason": "Pure helper extraction plus regex-free equivalent fence handling; no prompt, API, model, tool, product selection, business policy, or user-facing answer logic change."
+  }
+}

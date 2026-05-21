@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1832,
+  "count": 1828,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -608,34 +608,6 @@
       "file": "src/ai/answerSanity.ts",
       "kind": "regexp_constructor_new",
       "hash": "0b2f10354731c6cc",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/assistant.ts|replace_regex_argument|f990d03701ed44c4|1",
-      "file": "src/ai/assistant.ts",
-      "kind": "replace_regex_argument",
-      "hash": "f990d03701ed44c4",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/assistant.ts|replace_regex_argument|7256fb1f30cc298b|1",
-      "file": "src/ai/assistant.ts",
-      "kind": "replace_regex_argument",
-      "hash": "7256fb1f30cc298b",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/assistant.ts|regular_expression_literal|fc73087644786775|1",
-      "file": "src/ai/assistant.ts",
-      "kind": "regular_expression_literal",
-      "hash": "fc73087644786775",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/assistant.ts|regular_expression_literal|bb11a7e9ca25fca9|1",
-      "file": "src/ai/assistant.ts",
-      "kind": "regular_expression_literal",
-      "hash": "bb11a7e9ca25fca9",
       "occurrence": 1
     },
     {

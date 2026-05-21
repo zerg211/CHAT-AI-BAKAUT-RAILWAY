@@ -64,6 +64,14 @@ import { applyContractNeedDelta } from './requirementDelta.js';
 import { isShownProductChoiceOrComparisonQuestion } from './shownProductChoice.js';
 import { extractResponseText, extractUrlCitations, logOpenAIUsage, responseUsedWebSearch, safeError } from './responseUtils.js';
 import {
+  compactHistoryForAI,
+  createStructuredJsonResponse,
+  jsonOutputTokenLimit,
+  parseJsonObject,
+  responseTextForJson,
+  truncateForAI
+} from './assistantStructuredJson.js';
+import {
   aiStageFailure,
   emptyAiGenerationDiagnostics,
   markAiFallback,
@@ -327,14 +335,12 @@ const ANSWER_SUITABLE_PRODUCT_CONTEXT_LIMIT = 12;
 const ANSWER_HIDDEN_CARD_PREVIEW_LIMIT = 12;
 const LARGE_SLICE_VISIBLE_CARDS = 7;
 const PLANNER_CANDIDATE_LIMIT = 16;
-const MIN_JSON_OUTPUT_TOKENS = 2400;
 const PLANNER_HISTORY_LIMIT = 8;
 const PLANNER_HISTORY_CONTENT_LIMIT = 700;
 const PLANNER_PRODUCT_DESCRIPTION_LIMIT = 900;
 const PLANNER_PAGE_SUMMARY_LIMIT = 600;
 const PLANNER_PAGE_CONTENT_LIMIT = 1200;
 const PLANNER_JSON_OUTPUT_TOKEN_MIN = 8000;
-const JSON_RETRY_OUTPUT_TOKEN_MIN = 12000;
 
 function stringArray(value: unknown, limit = 12) {
   if (!Array.isArray(value)) return [];
@@ -343,75 +349,6 @@ function stringArray(value: unknown, limit = 12) {
     .map((item) => item.trim())
     .filter(Boolean)
     .slice(0, limit);
-}
-
-function jsonOutputTokenLimit(value: number) {
-  return Math.max(value, MIN_JSON_OUTPUT_TOKENS);
-}
-
-function truncateForAI(value: unknown, contentLimit: number) {
-  const content = String(value ?? '').trim();
-  return content.length > contentLimit
-    ? `${content.slice(0, contentLimit).trim()}...`
-    : content;
-}
-
-function compactHistoryForAI(history: Message[], limit: number, contentLimit: number) {
-  return history.slice(-limit).map((message) => ({
-    role: message.role,
-    content: truncateForAI(message.content, contentLimit)
-  }));
-}
-
-function parseJsonObject(outputText: string | undefined, stage: string) {
-  const cleaned = String(outputText ?? '')
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```$/i, '')
-    .trim();
-  if (!cleaned) throw new Error(`${stage} returned empty JSON`);
-  try {
-    return JSON.parse(cleaned);
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`${stage} returned invalid JSON: ${message}`);
-  }
-}
-
-function responseTextForJson(response: unknown) {
-  const value = response as { output_text?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
-  try {
-    if (typeof value.output_text === 'string' && value.output_text.trim()) return value.output_text;
-  } catch {
-    // Some SDK response helpers throw when the response was incomplete.
-  }
-  const directText = value.output?.[0]?.content?.[0]?.text;
-  if (typeof directText === 'string' && directText.trim()) return directText;
-  return extractResponseText(response);
-}
-
-async function createStructuredJsonResponse(
-  client: ReturnType<typeof createOpenAIClient>,
-  request: Record<string, unknown>,
-  stage: string,
-  signal?: AbortSignal
-) {
-  if (!client) throw new Error('OpenAI client is not configured');
-  const send = (body: Record<string, unknown>) =>
-    withRetry(() => client.responses.create(body as any, signal ? { signal } : undefined), 2, signal);
-  const response = await send(request);
-  try {
-    return { response, parsed: parseJsonObject(responseTextForJson(response), stage) };
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    console.warn(`[${stage}] Structured JSON parse failed; retrying with a larger output budget`, safeError(error));
-    const currentMax = Number(request.max_output_tokens ?? 0);
-    const retryResponse = await send({
-      ...request,
-      max_output_tokens: Math.max(currentMax * 2, JSON_RETRY_OUTPUT_TOKEN_MIN)
-    });
-    return { response: retryResponse, parsed: parseJsonObject(responseTextForJson(retryResponse), stage) };
-  }
 }
 
 function toNeedItems(items: unknown) {
