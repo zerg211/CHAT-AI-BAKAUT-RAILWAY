@@ -392,15 +392,19 @@ function productLookupText(product: Product) {
   ].filter(Boolean).join(' ');
 }
 
-function productMatchesTargetName(product: Product, targetName: string) {
+function textMatchesTargetName(value: unknown, targetName: string) {
   const targetTokens = modelIdentifierTokens(targetName);
   if (targetTokens.length) {
-    const productIdentifierTokens = new Set(modelIdentifierTokens(productLookupText(product)));
-    return targetTokens.every((token) => productIdentifierTokens.has(token));
+    const valueIdentifierTokens = new Set(modelIdentifierTokens(value));
+    return targetTokens.every((token) => valueIdentifierTokens.has(token));
   }
-  const productText = compactModelText(productLookupText(product));
+  const productText = compactModelText(value);
   const targetText = compactModelText(targetName);
   return targetText.length >= 5 && productText.includes(targetText);
+}
+
+function productMatchesTargetName(product: Product, targetName: string) {
+  return textMatchesTargetName(productLookupText(product), targetName);
 }
 
 function targetBrandCandidates(targetNames: string[]) {
@@ -502,37 +506,89 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
       .slice(0, 4);
     for (const presence of payload.catalogPresence ?? []) {
       if (presence.status !== 'absent' || !presence.productName) continue;
+      const targetProductName = presence.productName;
       const targetFacts = (payload.facts ?? []).filter((fact) =>
         fact.sourceType === 'web' &&
+        typeof fact.productName === 'string' &&
         ['high', 'medium'].includes(String(fact.confidence ?? '')) &&
-        compactModelText(fact.productName).includes(compactModelText(presence.productName))
+        textMatchesTargetName(fact.productName, targetProductName)
       );
       if (targetFacts.length) {
         clauses.push({
           code: 'answer_direct_checked_external_fact',
           sourceRequestId: result.requestId,
-          productName: presence.productName,
-          instruction: `Use checked external web facts to answer the buyer's direct technical question about ${presence.productName}.`
+          productName: targetProductName,
+          instruction: `Use checked external web facts to answer the buyer's direct technical question about ${targetProductName}.`
         });
       }
       clauses.push({
         code: 'state_exact_catalog_absence',
         sourceRequestId: result.requestId,
-        productName: presence.productName,
-        instruction: `Say plainly that the exact model ${presence.productName} is not in the BAKAUT catalog.`
+        productName: targetProductName,
+        instruction: `Say plainly that the exact model ${targetProductName} is not in the BAKAUT catalog.`
       });
       if (nearbyNames.length) {
         clauses.push({
           code: 'mention_nearby_catalog_models',
           sourceRequestId: result.requestId,
-          productName: presence.productName,
+          productName: targetProductName,
           catalogProductNames: nearbyNames,
-          instruction: `Mention these nearby BAKAUT catalog models only as catalog orientation, not as proof about ${presence.productName}: ${nearbyNames.join('; ')}.`
+          instruction: `Mention these nearby BAKAUT catalog models only as catalog orientation, not as proof about ${targetProductName}: ${nearbyNames.join('; ')}.`
         });
       }
     }
   }
   return clauses;
+}
+
+function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
+  const lines: string[] = [];
+  for (const result of toolResults) {
+    if (result.tool !== 'web.researchProductFacts' || result.status !== 'ok') continue;
+    const payload = result.payload as {
+      targetProductNames?: unknown;
+      catalogPresence?: Array<{ productName?: string; status?: string }>;
+      nearbyCatalogProducts?: Array<{ name?: string }>;
+      answerGuidance?: {
+        directAnswer?: unknown;
+        coverage?: unknown;
+      };
+    };
+    const targetNames = Array.isArray(payload.targetProductNames)
+      ? payload.targetProductNames.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+    if (targetNames.length !== 1) continue;
+    const directAnswer = typeof payload.answerGuidance?.directAnswer === 'string'
+      ? payload.answerGuidance.directAnswer.trim()
+      : '';
+    if (!directAnswer) continue;
+    const coverage = Array.isArray(payload.answerGuidance?.coverage)
+      ? payload.answerGuidance.coverage
+      : [];
+    const hasUncertainCoverage = coverage.some((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const status = (item as { status?: unknown }).status;
+      return status === 'not_confirmed' || status === 'ambiguous' || status === 'not_found';
+    });
+    if (!hasUncertainCoverage) continue;
+    lines.push(directAnswer);
+    for (const presence of payload.catalogPresence ?? []) {
+      if (!presence.productName) continue;
+      if (presence.status === 'absent') {
+        lines.push(`В каталоге БАКАУТ точной модели ${presence.productName} нет.`);
+      } else if (presence.status === 'present') {
+        lines.push(`В каталоге БАКАУТ ${presence.productName} есть.`);
+      }
+    }
+    const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
+      .map((product) => typeof product.name === 'string' ? product.name.trim() : '')
+      .filter(Boolean))
+      .slice(0, 4);
+    if (nearbyNames.length) {
+      lines.push(`Из близких вариантов в каталоге: ${nearbyNames.join('; ')}.`);
+    }
+  }
+  return uniqueStrings(lines).join(' ').trim();
 }
 
 const nullableStringJsonSchema = { type: ['string', 'null'] } as const;
@@ -1819,6 +1875,15 @@ export class AgentManagerOrchestrator {
         evidence: input.answer.riskFlags.join(', ')
       });
     }
+    const safeResearchRewrite = researchGuidanceSafeRewrite(input.toolResults);
+    if (safeResearchRewrite && safeResearchRewrite !== input.answer.answerText.trim()) {
+      mechanicalIssues.push({
+        code: 'research_guidance_uncertainty_safe_rewrite',
+        severity: 'high',
+        message: 'Exact-model research has unconfirmed or ambiguous coverage; use checked answerGuidance instead of a broader generated claim.',
+        evidence: safeResearchRewrite
+      });
+    }
     const blockingIssueCodes = new Set([
       'unsupported_fact_source',
       'unknown_tool_result_reference',
@@ -1841,6 +1906,14 @@ export class AgentManagerOrchestrator {
         verdict: 'rewrite_required',
         issues: mechanicalIssues,
         revisedAnswerText: leadCaptureRepairText({ contact: contactInTurn, toolResults: input.toolResults })
+      };
+    }
+    const researchGuidanceRepairIssue = mechanicalIssues.find((issue) => issue.code === 'research_guidance_uncertainty_safe_rewrite');
+    if (researchGuidanceRepairIssue && safeResearchRewrite) {
+      return {
+        verdict: 'rewrite_required',
+        issues: mechanicalIssues,
+        revisedAnswerText: safeResearchRewrite
       };
     }
     if (mechanicalIssues.length) {

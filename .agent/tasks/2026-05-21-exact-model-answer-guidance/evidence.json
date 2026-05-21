@@ -1,18 +1,17 @@
 {
   "taskId": "2026-05-21-exact-model-answer-guidance",
-  "status": "pass_pending_production_gate",
+  "status": "pass_local_after_production_defect_pending_gate",
   "changedFiles": [
     "src/ai/productComparisonResearch.ts",
     "src/ai/agentManagerOrchestrator.ts",
-    "tests/agentManagerComparisonResearch.test.ts",
-    "tests/agentManagerIntegrationSource.test.ts"
+    "tests/agentManagerComparisonResearch.test.ts"
   ],
   "checks": [
     {
       "command": "npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerOrchestrator.test.ts",
       "status": "pass",
       "testFiles": 3,
-      "tests": 36
+      "tests": 38
     },
     {
       "command": "npm run lint:no-regex",
@@ -34,6 +33,8 @@
   ],
   "productionGate": {
     "status": "pending",
+    "previousFailedConversation": 1298,
+    "previousFailure": "RD3910E answer claimed key/ignition-lock start while answerGuidance.coverage marked ignition control ambiguous.",
     "required": [
       "production Promptfoo after Railway deploy",
       "production live widget check through https://bakautprof.ru/"

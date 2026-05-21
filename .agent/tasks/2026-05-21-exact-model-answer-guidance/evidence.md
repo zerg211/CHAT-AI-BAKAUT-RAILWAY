@@ -2,20 +2,21 @@
 
 ## Summary
 
-Status: PASS locally, production gate pending until commit/push/Railway deploy.
+Status: PASS locally after verifier-reported production defect, production gate pending until commit/push/Railway deploy.
 
-This pass strengthens exact-model web research and answer handoff without adding regex. It keeps the semantic answer in the LLM/web research contract, while deterministic code enforces exact model identity and required semantic clauses.
+This pass strengthens exact-model web research and answer handoff without adding regex. It keeps the semantic answer in the LLM/web research contract, while deterministic code enforces exact model identity, required semantic clauses, and a safe rewrite when structured research coverage is uncertain.
+
+The first production widget check after the previous commit exposed a remaining defect in conversation #1298: the metadata correctly marked `ignition control` for `FIRMAN RD3910E` as `ambiguous`, but the buyer-visible answer still said the model starts by key/ignition lock. This follow-up fix makes `answerGuidance` authoritative for exact-model uncertain coverage before the final answer is saved.
 
 ## Changed Files
 
 - `src/ai/productComparisonResearch.ts`
 - `src/ai/agentManagerOrchestrator.ts`
 - `tests/agentManagerComparisonResearch.test.ts`
-- `tests/agentManagerIntegrationSource.test.ts`
 
 ## Local Validation
 
-- `npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerOrchestrator.test.ts` PASS: 3 files, 36 tests.
+- `npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerOrchestrator.test.ts` PASS: 3 files, 38 tests.
 - `npm run lint:no-regex` PASS: no new regex constructs, legacy baseline remains 1832.
 - `npm run typecheck` PASS.
 - `npm run build` PASS.
@@ -29,10 +30,11 @@ Public APIs and database schema stay stable. Buyer-visible behavior can improve 
 - checked web research can provide practical `answerGuidance.directAnswer`;
 - the answer contract must include that checked guidance by meaning;
 - not-confirmed/ambiguous coverage must not become a categorical negative claim.
+- if the generated answer still broadens an uncertain exact-model fact, pre-send review rewrites to the checked `answerGuidance.directAnswer` plus structured catalog context.
 
 ## Production Gate
 
-Pending after commit/push and Railway auto-deploy:
+Pending after follow-up commit/push and Railway auto-deploy:
 
 - production Promptfoo against `https://chat-ai-production-3057.up.railway.app` and `https://bakautprof.ru/`;
 - required production live widget check through `https://bakautprof.ru/`.
@@ -42,7 +44,7 @@ Pending after commit/push and Railway auto-deploy:
 - AC1 PASS locally: focused test verifies `RD2910E1` does not count as exact `RD2910E`.
 - AC2 PASS locally: focused test verifies `answer_checked_research_guidance` reaches required response clauses.
 - AC3 PASS locally: research contract includes `answerGuidance` with practical start-control coverage.
-- AC4 PASS locally: pre-send review guidance forbids turning not-confirmed coverage into a categorical negative.
+- AC4 PASS locally: pre-send review guidance and deterministic safe rewrite prevent turning not-confirmed/ambiguous coverage into a categorical buyer-visible claim.
 - AC5 PASS: no new regex constructs.
 - AC6 PASS: focused tests, typecheck, and build pass.
 - AC7 PENDING: production Promptfoo/widget validation required after deploy.

@@ -423,6 +423,113 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.productCards).toEqual([]);
   });
 
+  it('rewrites exact-model answers to checked guidance when start-control coverage is ambiguous', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD3910E',
+        attribute: 'starting method',
+        value: 'electrostarter; key/button control not confirmed',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'exact-target specification confirms electrostarter only',
+        sourceUrl: 'https://example.test/firman-rd3910e',
+        sourceTitle: 'FIRMAN RD3910E specification'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'По точной спецификации у FIRMAN RD3910E электростартер; ключ/замок и кнопка в источниках не подтверждены.',
+        completeness: 'partially_answered',
+        coverage: [{
+          attribute: 'ignition control',
+          status: 'ambiguous',
+          value: 'key/button control not confirmed',
+          evidence: 'exact-target sources only say electrostarter',
+          sourceUrl: 'https://example.test/firman-rd3910e',
+          sourceTitle: 'FIRMAN RD3910E specification'
+        }]
+      },
+      summaryForAnswer: 'RD3910E has electrostarter; key/button control is not confirmed.',
+      warnings: []
+    });
+
+    class PresentCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('rd3910e', 'FIRMAN RD3910E generator 2.5 kW', { starter: 'manual / electric' })
+        ];
+      }
+    }
+
+    const overconfidentModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks whether FIRMAN RD3910E is key or button start',
+          dialogueUnderstanding: 'single exact technical fact for a named model',
+          nextStepRationale: 'look up exact model start-control mechanism',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:rd3910e',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'FIRMAN RD3910E key or button start',
+              semanticQuery: 'FIRMAN RD3910E ignition key or push-button start control',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['FIRMAN RD3910E'],
+              comparisonAttributes: ['key start', 'push-button start', 'start control'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model start-control fact',
+              notes: 'answer key/button mechanism directly'
+            },
+            rationale: 'exact model fact must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'RD3910E есть и запускается ключом/замком зажигания, а не кнопкой.',
+          factsUsed: [{
+            factKey: 'firman_rd3910e.start_control',
+            sourceEventIds: ['web:rd3910e'],
+            value: 'key start'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['web:rd3910e'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Firman RD3910E есть? Он с ключа или с кнопки?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, overconfidentModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Firman RD3910E есть? Он с ключа или с кнопки?'
+    });
+
+    expect(payload.answer).toContain('ключ/замок и кнопка в источниках не подтверждены');
+    expect(payload.answer).not.toContain('запускается ключом/замком');
+    expect(payload.answer).toContain('В каталоге БАКАУТ FIRMAN RD3910E есть.');
+    expect(payload.metadata?.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
+      ])
+    });
+  });
+
   it('binds visible comparison targets to products, runs web research, and records conflicts', async () => {
     researchProductComparisonFacts.mockResolvedValue({
       usedWebSearch: true,
