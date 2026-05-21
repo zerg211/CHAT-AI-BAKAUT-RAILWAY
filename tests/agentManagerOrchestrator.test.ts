@@ -968,6 +968,112 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
 
+  it('rejects bounded assumptions when estimated motor loads lack minimum basis signals', async () => {
+    const conversations = new FakeConversations();
+    const incompleteBasisModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer has vague dacha loads and no pump type or voltage',
+          dialogueUnderstanding: 'the model tries to estimate from generic load names, but the pump is not bounded enough',
+          nextStepRationale: 'catalog search should be denied because the estimate basis is incomplete',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'pump', name: 'generic water pump', count: 1, runningKw: 0.75, startingKw: 2, source: 'estimated_average', evidence: 'typical small dacha pump', basisSignals: ['buyer_requested_approximation'] },
+                { kind: 'refrigerator', name: 'fridge', count: 1, runningKw: 0.15, startingKw: 0.9, source: 'estimated_average', evidence: 'typical household refrigerator', basisSignals: ['consumer_type_known'] },
+                { kind: 'lighting', name: 'lights', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'estimated_average', evidence: 'basic LED lighting', basisSignals: ['consumer_type_known'] }
+              ],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump', 'refrigerator'],
+              estimateBasis: 'bounded_assumption',
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'estimate generator load',
+              notes: 'Pump exact details are absent.'
+            },
+            rationale: 'attempt bounded estimate',
+            required: true
+          }, {
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator 3-5 kW',
+              semanticQuery: 'generator for dacha generic pump fridge light',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              estimateBasis: null,
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'find generator products',
+              notes: null
+            },
+            rationale: 'find products',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['load_estimation_required']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'I should ask what the pump does, its type and whether it is 220 V or 380 V before showing generator cards.',
+          factsUsed: [],
+          questionsAsked: [{
+            questionId: 'q.generator.bound_unknown_pump',
+            text: 'What does the pump do and is it 220 V or 380 V?',
+            reason: 'A motor load estimate needs type/function and voltage before preliminary cards.'
+          }],
+          toolResultIds: ['generator-load', 'catalog-search'],
+          leadAction: 'none',
+          riskFlags: ['load_estimation_required'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            missingFacts: ['pump_function_or_type', 'pump_voltage_or_phase'],
+            rationale: 'The pump estimate basis is incomplete.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, incompleteBasisModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Need a dacha generator. Exact numbers unknown: refrigerator, pump, lights.'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ status?: string; warnings?: string[] }>;
+      selectionReadiness?: { status?: string; warnings?: string[] };
+      cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
+    };
+    expect(metadata.toolResults?.[0]?.warnings).toEqual(expect.arrayContaining([
+      'generator_load_bounded_basis_incomplete',
+      'generator_load_unbounded_guess'
+    ]));
+    expect(metadata.toolResults?.[1]?.status).toBe('denied');
+    expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
+    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
+    expect(payload.productCards).toEqual([]);
+  });
+
   it('allows preliminary generator cards when unknown loads are bounded enough for approximate selection', async () => {
     const conversations = new FakeConversations();
     const boundedEstimateModel = model({
@@ -990,10 +1096,10 @@ describe('AgentManagerOrchestrator', () => {
               productNames: [],
               comparisonAttributes: [],
               loads: [
-                { kind: 'pump', name: '220 V borehole pump for a household well', count: 1, runningKw: 1.1, startingKw: 3.5, source: 'estimated_average', evidence: 'bounded assumption: borehole pump, 220 V, household water supply, exact nameplate unavailable' },
-                { kind: 'refrigerator', name: 'ordinary household refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'ordinary household refrigerator' },
-                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: 0.3, startingKw: 0.3, source: 'estimated_average', evidence: 'LED lighting for small house' },
-                { kind: 'handheld_tool', name: 'angle grinder used separately', count: 1, runningKw: 1.2, startingKw: 1.2, source: 'estimated_average', evidence: 'buyer said angle grinder is occasional, not a base simultaneous load' }
+                { kind: 'pump', name: '220 V borehole pump for a household well', count: 1, runningKw: 1.1, startingKw: 3.5, source: 'estimated_average', evidence: 'bounded assumption: borehole pump, 220 V, household water supply, exact nameplate unavailable', basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'usage_scope_known', 'buyer_requested_approximation'] },
+                { kind: 'refrigerator', name: 'ordinary household refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'ordinary household refrigerator', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
+                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: 0.3, startingKw: 0.3, source: 'estimated_average', evidence: 'LED lighting for small house', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
+                { kind: 'handheld_tool', name: 'angle grinder used separately', count: 1, runningKw: 1.2, startingKw: 1.2, source: 'estimated_average', evidence: 'buyer said angle grinder is occasional, not a base simultaneous load', basisSignals: ['consumer_type_known', 'usage_scope_known', 'simultaneous_operation_known'] }
               ],
               simultaneousStarting: true,
               simultaneousStartingKinds: ['pump', 'refrigerator'],

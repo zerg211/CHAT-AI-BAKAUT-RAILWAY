@@ -6,7 +6,7 @@
       "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
       "status": "pass",
       "testFiles": 1,
-      "tests": 23
+      "tests": 24
     },
     {
       "command": "npm run typecheck",
@@ -22,8 +22,25 @@
     "reason": "Local OpenAI-dependent checks are invalid here: 403 Country, region, or territory not supported"
   },
   "productionLive": {
-    "run": false,
-    "reason": "Must run after commit/push and Railway deployment of the pushed commit"
+    "run": true,
+    "deployedCommit": "4f531ac69f986b9fdc70476afdc0d81ba76d4a40",
+    "promptfoo": {
+      "command": "PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/ npm run evals -- -o .agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-4f531ac.json",
+      "status": "pass",
+      "testPassCount": 6,
+      "testFailCount": 0,
+      "artifact": ".agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-4f531ac.json"
+    },
+    "liveGate": {
+      "status": "fail",
+      "command": "ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 ALLOW_FIXED_PRODUCTION_REPLAY=1 npm run test:live:production",
+      "reason": "First vague generator turn produced product cards because bounded_assumption was accepted without structured basis signals.",
+      "artifact": "local-live-tests/production-agent-cycle-failure.json"
+    },
+    "followUpFix": {
+      "status": "pending_production_deploy",
+      "summary": "Added basisSignals validation without user-text regex or keyword matching."
+    }
   },
   "acceptanceCriteria": {
     "AC1": "pass",

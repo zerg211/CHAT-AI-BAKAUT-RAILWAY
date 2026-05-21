@@ -4,6 +4,21 @@ import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind } from './lo
 
 const loadProductClassAliases = new Set(['generator', 'weldinggenerator', 'welding_generator', 'platecompactor', 'plate_compactor']);
 const generatorLoadEstimateBases = new Set(['exact_or_user_provided', 'catalog_or_web_fact', 'bounded_assumption', 'unbounded_guess']);
+const generatorLoadBasisSignals = new Set([
+  'consumer_type_known',
+  'consumer_function_known',
+  'voltage_or_phase_known',
+  'usage_scope_known',
+  'simultaneous_operation_known',
+  'buyer_requested_approximation',
+  'catalog_or_web_fact',
+  'explicit_power'
+]);
+const motorLikeLoadKinds = new Set(['pump', 'compressor', 'pressure_washer', 'vacuum', 'concrete_mixer']);
+
+type GeneratorLoadToolItem = ProductElectricalLoadItem & {
+  basisSignals?: string[];
+};
 
 function compactLoadToken(value: unknown) {
   return typeof value === 'string'
@@ -49,6 +64,13 @@ function estimateBasisFromToolArg(value: unknown) {
     : undefined;
 }
 
+function basisSignalsFromToolArg(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item): item is string =>
+    typeof item === 'string' && generatorLoadBasisSignals.has(item)
+  ))];
+}
+
 function generatorLoadEvidenceForToolRequest(request: ToolRequest, userMessage: string) {
   return [
     userMessage,
@@ -71,12 +93,12 @@ function isProductClassLoadKind(value: unknown) {
 }
 
 function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string): {
-  loads: ProductElectricalLoadItem[];
+  loads: GeneratorLoadToolItem[];
   warnings: string[];
 } {
   const rawLoads = Array.isArray(args.loads) ? args.loads : [];
   const warnings = new Set<string>();
-  const loads: ProductElectricalLoadItem[] = [];
+  const loads: GeneratorLoadToolItem[] = [];
 
   for (const item of rawLoads) {
     if (!isObjectRecord(item)) continue;
@@ -84,14 +106,15 @@ function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string):
       warnings.add('generator_load_invalid_load_kind');
       continue;
     }
-    const load: ProductElectricalLoadItem = {
+    const load: GeneratorLoadToolItem = {
       kind: canonicalToolLoadKind(item.kind, item.name),
       name: typeof item.name === 'string' && item.name.trim() ? item.name : undefined,
       count: countFromToolArg(item.count),
       runningKw: positiveNumberFromToolArg(item.runningKw),
       startingKw: positiveNumberFromToolArg(item.startingKw),
       source: sourceFromToolArg(item.source),
-      evidence: typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence
+      evidence: typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence,
+      basisSignals: basisSignalsFromToolArg(item.basisSignals)
     };
     if (load.runningKw !== undefined || load.startingKw !== undefined) {
       loads.push(load);
@@ -100,6 +123,30 @@ function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string):
 
   if (rawLoads.length && !loads.length) warnings.add('generator_load_structured_args_without_usable_kw');
   return { loads, warnings: [...warnings] };
+}
+
+function hasAnyBasisSignal(load: GeneratorLoadToolItem, signals: string[]) {
+  return signals.some((signal) => load.basisSignals?.includes(signal));
+}
+
+function hasBoundedEstimatedLoadBasis(load: GeneratorLoadToolItem) {
+  if (load.source !== 'estimated_average') return true;
+  if (hasAnyBasisSignal(load, ['explicit_power', 'catalog_or_web_fact'])) return true;
+  const kind = canonicalElectricalLoadKind(load.kind);
+  if (!kind || kind === 'unknown' || kind === 'unknown_load') return false;
+  if (motorLikeLoadKinds.has(kind)) {
+    return hasAnyBasisSignal(load, ['consumer_type_known', 'consumer_function_known']) &&
+      hasAnyBasisSignal(load, ['voltage_or_phase_known']);
+  }
+  if (kind === 'handheld_tool') {
+    return hasAnyBasisSignal(load, ['consumer_type_known']) &&
+      hasAnyBasisSignal(load, ['usage_scope_known', 'simultaneous_operation_known']);
+  }
+  return hasAnyBasisSignal(load, ['consumer_type_known', 'consumer_function_known', 'usage_scope_known']);
+}
+
+function hasBoundedAssumptionBasis(loads: GeneratorLoadToolItem[]) {
+  return loads.length > 0 && loads.every(hasBoundedEstimatedLoadBasis);
 }
 
 export function isGeneratorProductClass(value: ProductSelectionClass) {
@@ -127,6 +174,7 @@ export function hasEstimateOnlyGeneratorLoadResult(results: ToolResult[]) {
 function hasUnconfirmedGeneratorLoadBasisWarning(result: ToolResult) {
   return result.warnings.includes('generator_load_estimate_only') ||
     result.warnings.includes('generator_load_unbounded_guess') ||
+    result.warnings.includes('generator_load_bounded_basis_incomplete') ||
     result.warnings.includes('generator_load_invalid_load_kind');
 }
 
@@ -152,7 +200,11 @@ export function buildGeneratorLoadToolPayload(input: {
   });
   if (profile && isEstimateOnlyGeneratorLoadPayload({ loads })) {
     if (estimateBasis === 'bounded_assumption') {
-      warnings.push('generator_load_bounded_assumption');
+      if (hasBoundedAssumptionBasis(loads)) {
+        warnings.push('generator_load_bounded_assumption');
+      } else {
+        warnings.push('generator_load_bounded_basis_incomplete', 'generator_load_unbounded_guess');
+      }
     } else {
       warnings.push(estimateBasis === 'unbounded_guess'
         ? 'generator_load_unbounded_guess'
