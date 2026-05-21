@@ -1,0 +1,233 @@
+description: Bakaut AI chat baseline evals through the user-facing HTTP/SSE chat API
+
+prompts:
+  - '{{caseId}}'
+
+providers:
+  - id: file://evals/promptfoo/chat-app-provider.cjs
+    config:
+      baseUrl: http://localhost:3010
+      timeoutMs: 180000
+
+tests:
+  - description: vague_generator_no_cards_before_load_profile
+    vars:
+      caseId: vague_generator_no_cards_before_load_profile
+      messagesJson: |
+        [
+          "Здравствуйте. Нужен генератор для дачи на случай отключений. Точных цифр нет: холодильник, насос, свет и иногда инструмент. Не хочется переплачивать, но и промахнуться по мощности тоже не хочу."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 90
+          finalMustContainAll:
+            - 'генератор'
+            - 'насос|нагруз|пуск|мощн|шильдик|модель'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
+        config:
+          expectNoCards: true
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          taskMustContainAll:
+            - 'насос|нагруз|пуск|мощн|шильдик|модель'
+
+  - description: generator_load_selection
+    vars:
+      caseId: generator_load_selection
+      messagesJson: |
+        [
+          "Нужен генератор для дачи на случай отключений. Будут холодильник, свет, насос и иногда болгарка, точных цифр пока нет.",
+          "Дом обычный, 220 В. Болгарка 1,2 кВт, насос скважинный, мощность насоса не знаю. Насос и холодильник могут включиться вместе.",
+          "Покажите варианты из каталога до 90 тысяч, но без совсем слабого запаса."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+        config:
+          minTurns: 3
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 90
+          finalMustContainAll:
+            - 'генератор'
+          finalMustContainAny:
+            - 'насос|мощн|запас|кВт'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
+        config:
+          expectCards: true
+          minCards: 1
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
+        config:
+          requiredToolsAny:
+            - searchCatalog
+            - selectProducts
+          expectedTaskTypes:
+            - product_selection
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedTaskTypes:
+            - product_selection
+          taskMustContainAll:
+            - 'генератор'
+
+  - description: commercial_delivery_discount_rules
+    vars:
+      caseId: commercial_delivery_discount_rules
+      messagesJson: |
+        [
+          "Подберите бензогенератор примерно 5 кВт для дома, 220 В, бюджет до 100 тысяч.",
+          "Доставка есть? И можно ли получить скидку, если сразу забрать генератор?"
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+        config:
+          minTurns: 2
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertBusinessRules
+        config:
+          requireSpecialistHandoff: true
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
+        config:
+          expectedLeadPolicies:
+            - optional_after_answer
+            - required_now
+          requiredSourcesAll:
+            - specialist
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectLeadRequested: true
+          expectedTaskTypes:
+            - product_selection_with_delivery
+            - delivery_or_discount
+            - pure_delivery
+          taskMustContainAll:
+            - 'достав|логист|менеджер|специалист|уточн'
+
+  - description: plate_retrieval_grounding
+    vars:
+      caseId: plate_retrieval_grounding
+      messagesJson: |
+        [
+          "Нужна виброплита для дорожек на участке: плитка, песок, иногда немного щебня. Площадь 30-40 квадратов, таскать буду сам.",
+          "Объясните, что важнее для моей задачи: вес, глубина уплотнения или размер подошвы, и покажите подходящие варианты."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+        config:
+          minTurns: 2
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 100
+          finalMustContainAll:
+            - 'виброплит'
+            - 'вес|глубин|подошв|плитк|песок|щеб'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
+        config:
+          expectCards: true
+          minCards: 1
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
+        config:
+          requiredToolsAny:
+            - searchCatalog
+            - selectProducts
+          expectedTaskTypes:
+            - product_selection
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedTaskTypes:
+            - product_selection
+          taskMustContainAll:
+            - 'виброплит'
+
+  - description: web_required_technical_grounding
+    vars:
+      caseId: web_required_technical_grounding
+      messagesJson: |
+        [
+          "Объясните, чем на практике важен THD у инверторного генератора для котла и электроники. Если в каталоге нет точных данных, проверьте факты."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 120
+          finalMustContainAll:
+            - 'THD|гармоник'
+            - 'котл|электроник|инвертор'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
+        config:
+          expectNoCards: true
+          expectWebRequired: true
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
+        config:
+          requiredToolsAny:
+            - webFactSearch
+          expectedFactPolicies:
+            - web_required
+          expectedTaskTypes:
+            - technical_answer
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedTaskTypes:
+            - technical_answer
+          taskMustContainAll:
+            - 'THD|гармоник'
+
+  - description: context_shift_agent_completion
+    vars:
+      caseId: context_shift_agent_completion
+      messagesJson: |
+        [
+          "Сначала подбирал генератор для дома, но сейчас задача другая: нужна виброплита для подготовки основания под плитку.",
+          "Бюджет до 70 тысяч, нужна не слишком тяжелая, чтобы один человек мог перевозить."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+        config:
+          minTurns: 2
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 90
+          finalMustContainAll:
+            - 'виброплит'
+          finalMustNotContain:
+            - 'генератор.*подходит|вариант.*генератор'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
+        config:
+          expectCards: true
+          minCards: 1
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedTaskTypes:
+            - product_selection
+          expectedIntents:
+            - product_selection
+          taskMustContainAll:
+            - 'виброплит'

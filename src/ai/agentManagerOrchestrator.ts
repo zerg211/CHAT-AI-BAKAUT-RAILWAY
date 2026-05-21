@@ -164,6 +164,10 @@ function uniqueProducts(products: Product[]) {
   return unique;
 }
 
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
 function latestActiveNeedProductClass(needState: CustomerNeedState): ProductSelectionClass {
   const classes = (needState.activeNeeds ?? [])
     .map((need) => need.productClass)
@@ -422,7 +426,20 @@ function selectProductsForVisibleCards(input: {
   needState: CustomerNeedState;
 }) {
   const unique = uniqueProducts(input.products);
+  const hasExplicitCardTool = input.intent.toolRequests.some((request) =>
+    request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
+  );
   const cardIntent = inferVisibleCardIntent(input);
+  if (!hasExplicitCardTool) {
+    return {
+      intent: cardIntent,
+      products: [],
+      selectedProductIds: [],
+      answerMentionedProductIds: [],
+      droppedProductIds: unique.map((product) => product.id),
+      warnings: unique.length ? ['product_cards_suppressed:no_explicit_catalog_card_tool'] : []
+    };
+  }
   const mentioned = answerMentionedProducts(unique, input.answerText);
   const mentionedMatchingIntent = cardIntent === 'unknown'
     ? mentioned
@@ -460,6 +477,165 @@ function selectProductsForVisibleCards(input: {
     droppedProductIds,
     warnings
   };
+}
+
+type VisibleCardReadiness = {
+  status: 'ready_for_cards' | 'needs_load_profile';
+  productClass: ProductSelectionClass;
+  missingFacts: string[];
+  rationale: string;
+  warnings: string[];
+};
+
+type VisibleCardSelection = ReturnType<typeof selectProductsForVisibleCards>;
+
+function isGeneratorClass(value: ProductSelectionClass) {
+  return value === 'generator' || value === 'weldingGenerator';
+}
+
+function generatorLoadProfileReady(toolResults: ToolResult[]) {
+  return toolResults.some((result) => {
+    if (result.tool !== 'calculator.generatorLoad' || result.status !== 'ok') return false;
+    const profile = (result.payload as { profile?: { requiredNominalKw?: unknown; requiredStartingKw?: unknown } }).profile;
+    return Number(profile?.requiredNominalKw) > 0 || Number(profile?.requiredStartingKw) > 0;
+  });
+}
+
+function activeFactValue(ledgerState: ReducedDialogueLedgerState, factKey: string) {
+  const fact = ledgerState.factsByKey[factKey];
+  return fact?.status === 'active' ? fact.value : undefined;
+}
+
+function factIsTrue(value: unknown) {
+  return value === true || value === 'true' || value === 'yes' || value === 'да';
+}
+
+function hasGeneratorLoadUncertaintyText(text: string) {
+  return /(?:насос|холодильник|болгарк|инструмент|свет|led|пуск|нагруз|потребител|точн\w*\s+цифр\w*\s+нет|мощност\w*\s+не\s+зна|pump|fridge|refrigerator|tool|startup|starting|load)/iu.test(text);
+}
+
+function hasExplicitPowerTarget(text: string) {
+  return Boolean(requestedPowerRangeKw(text));
+}
+
+function hasGeneratorUncertaintyRisk(input: {
+  intent: AgentIntentContract;
+  answer: AnswerContract;
+  ledgerState: ReducedDialogueLedgerState;
+  semanticText: string;
+}) {
+  const riskText = [
+    ...input.intent.riskFlags,
+    ...input.answer.riskFlags,
+    ...Object.entries(input.ledgerState.factsByKey).map(([key, fact]) => `${key}:${String(fact.value)}`)
+  ].join('\n');
+  if (/power.*uncertain|uncertain.*power|unknown.*pump|pump.*unknown|needs.*load|load.*calculat|load_profile|power_uncertainty|мощност\w*.{0,40}(неизвест|не\s+зна|нет\s+точн)|насос.{0,40}(неизвест|не\s+зна|модель)|пуск\w*.{0,40}(неизвест|не\s+зна)/iu.test(riskText)) {
+    return true;
+  }
+  if (factIsTrue(activeFactValue(input.ledgerState, 'power_uncertainty'))) return true;
+  return hasGeneratorLoadUncertaintyText(input.semanticText) && !hasExplicitPowerTarget(input.semanticText);
+}
+
+function assessVisibleCardReadiness(input: {
+  cardSelection: VisibleCardSelection;
+  userMessage: string;
+  intent: AgentIntentContract;
+  answer: AnswerContract;
+  ledgerState: ReducedDialogueLedgerState;
+  toolResults: ToolResult[];
+}): VisibleCardReadiness {
+  const productClass = input.cardSelection.intent;
+  if (!isGeneratorClass(productClass)) {
+    return {
+      status: 'ready_for_cards',
+      productClass,
+      missingFacts: [],
+      rationale: 'Visible card readiness is not constrained by generator load sizing.',
+      warnings: []
+    };
+  }
+
+  if (generatorLoadProfileReady(input.toolResults)) {
+    return {
+      status: 'ready_for_cards',
+      productClass,
+      missingFacts: [],
+      rationale: 'A generator load profile is available from calculator.generatorLoad.',
+      warnings: []
+    };
+  }
+
+  const semanticText = [
+    input.userMessage,
+    input.intent.userMessageSummary,
+    input.intent.dialogueUnderstanding,
+    input.intent.nextStepRationale,
+    toolRequestSemanticText(input.intent)
+  ].filter(Boolean).join('\n');
+  if (!hasGeneratorUncertaintyRisk({
+    intent: input.intent,
+    answer: input.answer,
+    ledgerState: input.ledgerState,
+    semanticText
+  })) {
+    return {
+      status: 'ready_for_cards',
+      productClass,
+      missingFacts: [],
+      rationale: 'No generator load uncertainty signal is active for this turn.',
+      warnings: []
+    };
+  }
+
+  return {
+    status: 'needs_load_profile',
+    productClass,
+    missingFacts: ['pump_type_or_power', 'starting_loads_or_load_profile'],
+    rationale: 'Generator cards require a usable load profile when pump/startup power is uncertain.',
+    warnings: ['product_cards_suppressed:generator_load_profile_not_ready']
+  };
+}
+
+function suppressVisibleCardsForReadiness(input: {
+  cardSelection: VisibleCardSelection;
+  readiness: VisibleCardReadiness;
+}): VisibleCardSelection & { selectionReadiness: VisibleCardReadiness; suppressedProductIds: string[] } {
+  if (input.readiness.status === 'ready_for_cards') {
+    return {
+      ...input.cardSelection,
+      selectionReadiness: input.readiness,
+      suppressedProductIds: []
+    };
+  }
+
+  const suppressedProductIds = uniqueStrings([
+    ...input.cardSelection.selectedProductIds,
+    ...input.cardSelection.products.map((product) => product.id)
+  ]);
+
+  return {
+    ...input.cardSelection,
+    products: [],
+    selectedProductIds: [],
+    droppedProductIds: uniqueStrings([
+      ...input.cardSelection.droppedProductIds,
+      ...suppressedProductIds
+    ]),
+    warnings: uniqueStrings([
+      ...input.cardSelection.warnings,
+      ...input.readiness.warnings
+    ]),
+    selectionReadiness: input.readiness,
+    suppressedProductIds
+  };
+}
+
+function generatorLoadReadinessAnswer() {
+  return [
+    'Для точного подбора генератора сейчас не хватает главного: какой насос и какая у него мощность или пусковой ток.',
+    'Холодильник и насос дают кратковременные пусковые нагрузки, поэтому конкретную модель лучше не выбирать вслепую.',
+    'Пришлите модель насоса или мощность с шильдика. Если посмотреть нельзя, я посчитаю по типовым значениям и дам предварительный диапазон с запасом.'
+  ].join(' ');
 }
 
 function extractContact(text: string) {
@@ -1322,7 +1498,7 @@ export class AgentManagerOrchestrator {
       answer,
       signal: input.signal
     });
-    const finalText = review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()
+    let finalText = review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()
       ? review.revisedAnswerText.trim()
       : answer.answerText.trim();
     const finalLeadAction = review.issues.some((issue) =>
@@ -1330,11 +1506,6 @@ export class AgentManagerOrchestrator {
     )
       ? 'offer_form'
       : answer.leadAction;
-    const finalAnswerContract: AnswerContract = {
-      ...answer,
-      answerText: finalText,
-      leadAction: finalLeadAction
-    };
     if (review.verdict === 'block') {
       throw new Error(`Agent manager answer blocked: ${review.issues.map((issue) => issue.code).join(', ')}`);
     }
@@ -1349,6 +1520,43 @@ export class AgentManagerOrchestrator {
       verdict: review.verdict,
       issues: review.issues.map((issue) => issue.code)
     });
+    const initialAnswerContract: AnswerContract = {
+      ...answer,
+      answerText: finalText,
+      leadAction: finalLeadAction
+    };
+    const initialCardSelection = selectProductsForVisibleCards({
+      products,
+      userMessage,
+      history,
+      intent,
+      answerText: finalText,
+      needState: needStateSnapshot
+    });
+    const selectionReadiness = assessVisibleCardReadiness({
+      cardSelection: initialCardSelection,
+      userMessage,
+      intent,
+      answer: initialAnswerContract,
+      ledgerState,
+      toolResults
+    });
+    const cardSelection = suppressVisibleCardsForReadiness({
+      cardSelection: initialCardSelection,
+      readiness: selectionReadiness
+    });
+    const readinessSuppressedCards = selectionReadiness.status !== 'ready_for_cards' && cardSelection.suppressedProductIds.length > 0;
+    if (readinessSuppressedCards) {
+      finalText = generatorLoadReadinessAnswer();
+    }
+    const finalAnswerContract: AnswerContract = {
+      ...answer,
+      answerText: finalText,
+      leadAction: finalLeadAction,
+      riskFlags: readinessSuppressedCards
+        ? uniqueStrings([...answer.riskFlags, 'generator_load_profile_not_ready'])
+        : answer.riskFlags
+    };
     await this.conversations.saveAnswerContract({
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -1356,15 +1564,6 @@ export class AgentManagerOrchestrator {
       contract: finalAnswerContract,
       review,
       status: 'final'
-    });
-
-    const cardSelection = selectProductsForVisibleCards({
-      products,
-      userMessage,
-      history,
-      intent,
-      answerText: finalText,
-      needState: needStateSnapshot
     });
     const cards = productCards(cardSelection.products, ['Найдено в каталоге под текущий запрос.']);
     const runtimeDecision = getAgentManagerRuntimeDecision(input.session);
@@ -1382,12 +1581,14 @@ export class AgentManagerOrchestrator {
       preSendReview: review,
       toolResults,
       cardSelection,
+      selectionReadiness,
       productCards: cards,
       needStateSnapshot,
       warnings: [
         ...ledgerState.warnings,
         ...toolResults.flatMap((result) => result.warnings),
-        ...cardSelection.warnings
+        ...cardSelection.warnings,
+        ...selectionReadiness.warnings
       ]
     };
 

@@ -111,6 +111,15 @@ function assertPhase(phase, answer, pageText) {
   assertNoCriticalText(answer, phase);
   const combined = `${answer}\n${pageText}`;
 
+  if (phase === 'unclear_generator_need') {
+    if (hasGeneratorCardText(combined)) {
+      throw new Error('Unclear generator need produced product cards before load profile was known.');
+    }
+    if (!/(насос|нагруз|мощност|пуск|шильдик|модель)/iu.test(answer)) {
+      throw new Error(`Unclear generator answer did not ask for load/pump details before selection: ${answer}`);
+    }
+  }
+
   if (phase === 'generic_pump_unknown') {
     if (hasGeneratorCardText(combined)) {
       throw new Error('Generic unknown pump produced generator cards before pump type or power was known.');

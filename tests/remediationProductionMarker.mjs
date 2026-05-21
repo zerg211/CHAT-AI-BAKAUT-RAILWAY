@@ -1,5 +1,5 @@
 export const expectedRemediationContractVersion =
-  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-19-short-plate-intent-active-v17';
+  process.env.EXPECTED_REMEDIATION_CONTRACT_VERSION || '2026-05-19-generator-load-scenarios-recovery-v38';
 
 export const expectedRemediationRuntimeArtifacts = [
   'agentContractV2',

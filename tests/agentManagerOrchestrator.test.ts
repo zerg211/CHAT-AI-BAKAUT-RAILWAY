@@ -289,6 +289,79 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).toEqual(expect.arrayContaining(['text-product', 'vector-product']));
   });
 
+  it('keeps web-only technical research products out of visible cards', async () => {
+    class ResearchProducts extends FakeProducts {
+      async searchProducts() {
+        return [product('bison-inverter', 'Generator BISON BS2500IS inverter THD 20%', 'Generators')];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const technicalModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for a technical THD explanation',
+          dialogueUnderstanding: 'this is a technical answer with fact checking, not a product selection request',
+          nextStepRationale: 'use web/catalog facts to explain THD without showing product cards',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web-facts',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'THD inverter generator boiler electronics',
+              semanticQuery: 'technical THD explanation for inverter generator boiler electronics',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: ['THD'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'verify missing THD facts',
+              notes: 'technical explanation only'
+            },
+            rationale: 'the buyer asked to verify technical facts',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'THD is harmonic distortion; for a boiler and electronics a lower THD is safer. BISON BS2500IS has a catalog/web THD note, but this is a technical explanation rather than a selection.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web-facts'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new ResearchProducts() as never, new FakeLeads() as never, technicalModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Explain why THD matters for an inverter generator with a boiler. Check facts if catalog data is missing.'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ tool?: string; payload?: { summaryForAnswer?: string } }>;
+      cardSelection?: { warnings?: string[]; droppedProductIds?: string[] };
+    };
+    expect(metadata.toolResults?.[0]).toMatchObject({
+      tool: 'web.researchProductFacts',
+      payload: { summaryForAnswer: 'Недостаточно товаров для сравнения.' }
+    });
+    expect(payload.productCards).toEqual([]);
+    expect(metadata.cardSelection?.droppedProductIds).toEqual(['bison-inverter']);
+    expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:no_explicit_catalog_card_tool');
+  });
+
   it('filters cross-class catalog noise out of visible product cards', async () => {
     class NoisyProducts extends FakeProducts {
       async searchProducts() {
@@ -601,6 +674,179 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.toolResults?.[0]?.payload?.profile?.requiredStartingKw).toBeCloseTo(4.5, 5);
     expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(4.5);
     expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('generator_load_estimate_used:refrigerator');
+  });
+
+  it('suppresses generator cards while pump/load profile is not ready', async () => {
+    const conversations = new FakeConversations();
+    const readinessModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'buyer needs a generator but power is uncertain',
+          events: [{
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'product_category', value: 'generator' },
+            evidence: 'buyer asked for a generator',
+            source: 'llm_state_delta',
+            status: 'active'
+          }, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'power_uncertainty', value: true },
+            evidence: 'buyer has no exact pump/load numbers',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks for a dacha backup generator but does not know pump power',
+          dialogueUnderstanding: 'generator category is clear, but pump/startup load is not ready for product selection',
+          nextStepRationale: 'catalog search was planned even though power is uncertain',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'dacha backup generator',
+              semanticQuery: 'generator for dacha with refrigerator, pump, light and occasional tool, exact pump power unknown',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'find generator products',
+              notes: null
+            },
+            rationale: 'buyer wants generator options',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['power_requirements_uncertain']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'I would show Generator 5 kW and Generator 6 kW as suitable dacha options, but pump startup current is unknown.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: ['power_requirements_uncertain']
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, readinessModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Нужен генератор для дачи. Точных цифр нет: холодильник, насос, свет и иногда инструмент.'
+    });
+
+    const metadata = payload.metadata as {
+      selectionReadiness?: { status?: string; missingFacts?: string[] };
+      cardSelection?: { selectedProductIds?: string[]; suppressedProductIds?: string[]; warnings?: string[] };
+      warnings?: string[];
+      answerContract?: { riskFlags?: string[] };
+    };
+    expect(payload.productCards).toEqual([]);
+    expect(payload.answer).toMatch(/насос|пуск|шильдик|мощност/iu);
+    expect(payload.answer).not.toMatch(/Generator 5 kW|Generator 6 kW/iu);
+    expect(metadata.selectionReadiness?.status).toBe('needs_load_profile');
+    expect(metadata.selectionReadiness?.missingFacts).toEqual(expect.arrayContaining(['pump_type_or_power']));
+    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
+    expect(metadata.cardSelection?.suppressedProductIds).toEqual(['p1', 'p2']);
+    expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:generator_load_profile_not_ready');
+    expect(metadata.answerContract?.riskFlags).toContain('generator_load_profile_not_ready');
+  });
+
+  it('allows generator cards after a generator load profile is available', async () => {
+    const conversations = new FakeConversations();
+    const readyModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer provided generator loads and wants options',
+          dialogueUnderstanding: 'calculate load first, then show catalog options',
+          nextStepRationale: 'calculator.generatorLoad makes product cards safe enough for preliminary selection',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'pump', name: 'pump', count: 1, runningKw: 1, startingKw: 3, source: 'explicit_user', evidence: 'pump 1 kW' },
+                { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'one refrigerator' }
+              ],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump', 'refrigerator'],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'calculate generator load',
+              notes: null
+            },
+            rationale: 'calculate generator load profile',
+            required: true
+          }, {
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator 5-6 kW',
+              semanticQuery: 'generator 5-6 kW after calculated load profile',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'show catalog options',
+              notes: null
+            },
+            rationale: 'search matching generator products after load calculation',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['power_requirements_uncertain']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'After the load calculation, Generator 5 kW and Generator 6 kW are reasonable preliminary options.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['generator-load', 'catalog-search'],
+          leadAction: 'none',
+          riskFlags: ['power_requirements_uncertain']
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, readyModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Pump is 1 kW, refrigerator may start with it. Show 5-6 kW generator options.'
+    });
+
+    const metadata = payload.metadata as { selectionReadiness?: { status?: string } };
+    expect(metadata.selectionReadiness?.status).toBe('ready_for_cards');
+    expect(payload.productCards.length).toBeGreaterThan(0);
   });
 
   it('prefers exact answer-mentioned product models over broad same-brand card expansion', async () => {

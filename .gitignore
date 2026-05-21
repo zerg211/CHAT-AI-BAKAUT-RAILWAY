@@ -7,6 +7,7 @@ coverage/
 test-results/
 playwright-report/
 logs/
+.promptfoo/
 .agent/
 .claude/
 .hermes/
