@@ -9,6 +9,8 @@ export interface ProductComparisonResearchFact {
   sourceType: 'catalog' | 'web' | 'conflict';
   confidence: 'high' | 'medium' | 'low';
   evidence: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
 }
 
 export interface ProductComparisonResearchConflict {
@@ -44,9 +46,14 @@ function productResearchContext(products: Product[]) {
 export async function researchProductComparisonFacts(input: {
   userMessage: string;
   products: Product[];
+  targetProductNames?: string[];
+  comparisonAttributes?: string[];
   signal?: AbortSignal;
 }): Promise<ProductComparisonResearchResult> {
-  if (input.products.length < 2) {
+  const targetProductNames = (input.targetProductNames ?? [])
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (input.products.length < 2 && !targetProductNames.length) {
     return {
       usedWebSearch: false,
       facts: [],
@@ -66,13 +73,17 @@ export async function researchProductComparisonFacts(input: {
           'Сравнивай товары только по проверенным фактам.',
           'Каталог является первым источником. Если важного факта нет или есть конфликт, используй web search.',
           'Если web и каталог конфликтуют по важному параметру, укажи конфликт и выбери значение только при подтверждении логикой источников.',
-          'Не пиши ответ покупателю. Верни только JSON.'
+          'Не пиши ответ покупателю. Верни только JSON.',
+          'If buyerQuestion asks about targetProductNames and the exact model is absent from products, search the web for that exact target model. Do not infer exact target facts from nearby models.',
+          'For web facts, fill sourceUrl/sourceTitle when the source is available.'
         ].join('\n')
       },
       {
         role: 'user',
         content: JSON.stringify({
           buyerQuestion: input.userMessage,
+          targetProductNames,
+          comparisonAttributes: input.comparisonAttributes ?? [],
           products: productResearchContext(input.products)
         })
       }
@@ -99,9 +110,11 @@ export async function researchProductComparisonFacts(input: {
                   value: { type: 'string' },
                   sourceType: { type: 'string', enum: ['catalog', 'web', 'conflict'] },
                   confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-                  evidence: { type: 'string' }
+                  evidence: { type: 'string' },
+                  sourceUrl: { type: ['string', 'null'] },
+                  sourceTitle: { type: ['string', 'null'] }
                 },
-                required: ['productName', 'attribute', 'value', 'sourceType', 'confidence', 'evidence']
+                required: ['productName', 'attribute', 'value', 'sourceType', 'confidence', 'evidence', 'sourceUrl', 'sourceTitle']
               }
             },
             conflicts: {
@@ -128,6 +141,10 @@ export async function researchProductComparisonFacts(input: {
     }
   };
 
+  if (targetProductNames.length) {
+    request.tool_choice = { type: 'web_search_preview' };
+  }
+
   const { parsed } = await createStructuredJsonResponse({
     request,
     stage: 'product_comparison_research',
@@ -136,7 +153,13 @@ export async function researchProductComparisonFacts(input: {
 
   return {
     usedWebSearch: parsed.usedWebSearch === true,
-    facts: Array.isArray(parsed.facts) ? parsed.facts as ProductComparisonResearchFact[] : [],
+    facts: Array.isArray(parsed.facts)
+      ? (parsed.facts as Array<ProductComparisonResearchFact & { sourceUrl?: string | null; sourceTitle?: string | null }>).map((fact) => ({
+          ...fact,
+          sourceUrl: typeof fact.sourceUrl === 'string' ? fact.sourceUrl : undefined,
+          sourceTitle: typeof fact.sourceTitle === 'string' ? fact.sourceTitle : undefined
+        }))
+      : [],
     conflicts: Array.isArray(parsed.conflicts)
       ? (parsed.conflicts as Array<ProductComparisonResearchConflict & { catalogValue?: string | null }>).map((conflict) => ({
           ...conflict,

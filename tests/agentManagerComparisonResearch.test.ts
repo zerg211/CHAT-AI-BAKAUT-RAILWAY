@@ -166,6 +166,126 @@ function model(): AgentManagerModel {
 }
 
 describe('AgentManager comparison research flow', () => {
+  it('answers exact external facts for a named model absent from catalog and exposes nearby catalog models', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD8910E',
+        attribute: 'start method',
+        value: 'electric start with ignition key; manual recoil starter also available',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'external specification lists electric starter, ignition keys, and recoil starter',
+        sourceUrl: 'https://example.test/firman-rd8910e',
+        sourceTitle: 'FIRMAN RD8910E specification'
+      }],
+      conflicts: [],
+      summaryForAnswer: 'RD8910E starts with a key and also has manual recoil start.',
+      warnings: []
+    });
+
+    class MissingCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('rd7910e', 'FIRMAN RD7910E generator 5 kW', { starter: 'manual / electric' }),
+          product('rd10910e', 'FIRMAN RD10910E generator 7.2 kW', { starter: 'manual / electric' }),
+          product('other', 'BISON BS7500 generator 6 kW', { starter: 'electric' })
+        ];
+      }
+    }
+
+    const exactFactModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks how FIRMAN RD8910E starts',
+          dialogueUnderstanding: 'single exact technical fact for a named model',
+          nextStepRationale: 'look up the exact model fact and do not infer from nearby catalog models',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:exact-model',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'FIRMAN RD8910E start method',
+              semanticQuery: 'FIRMAN RD8910E key start or push button start',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['FIRMAN RD8910E'],
+              comparisonAttributes: ['start method'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model technical fact',
+              notes: 'answer direct question first'
+            },
+            rationale: 'exact model fact is missing from catalog context',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        const result = input.toolResults[0]?.payload as {
+          catalogPresence?: Array<{ status?: string }>;
+          nearbyCatalogProducts?: Array<{ name?: string }>;
+        };
+        expect(result.catalogPresence?.[0]?.status).toBe('absent');
+        expect(result.nearbyCatalogProducts?.map((item) => item.name)).toEqual([
+          'FIRMAN RD7910E generator 5 kW',
+          'FIRMAN RD10910E generator 7.2 kW'
+        ]);
+        return {
+          answerText: 'RD8910E starts with a key, not a push button. It also has manual recoil start. This exact model is not in our catalog; nearby FIRMAN catalog models include RD7910E and RD10910E.',
+          factsUsed: [{
+            factKey: 'firman_rd8910e.start_method',
+            sourceEventIds: ['web:exact-model'],
+            value: 'key electric start plus manual recoil'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['web:exact-model'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Firman RD8910E - заводится с ключа или с кнопки?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new MissingCatalogProducts() as never, {} as never, exactFactModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Firman RD8910E - заводится с ключа или с кнопки?'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      targetProductNames: ['FIRMAN RD8910E'],
+      comparisonAttributes: ['start method'],
+      products: expect.arrayContaining([
+        expect.objectContaining({ name: 'FIRMAN RD7910E generator 5 kW' }),
+        expect.objectContaining({ name: 'FIRMAN RD10910E generator 7.2 kW' })
+      ])
+    }));
+    const metadata = payload.metadata as { toolResults?: Array<{ payload?: { catalogPresence?: unknown[]; nearbyCatalogProducts?: unknown[] }; warnings?: string[] }> };
+    expect(metadata.toolResults?.[0]?.payload?.catalogPresence).toEqual([{
+      productName: 'FIRMAN RD8910E',
+      status: 'absent',
+      exactProductIds: []
+    }]);
+    expect(metadata.toolResults?.[0]?.warnings).toContain('exact_catalog_product_absent:FIRMAN RD8910E');
+    expect(payload.answer).toContain('starts with a key');
+    expect(payload.answer).toContain('not in our catalog');
+    expect(payload.answer).toContain('RD7910E');
+    const lowerAnswer = payload.answer.toLocaleLowerCase('en-US');
+    for (const forbidden of ['availability', 'delivery', 'discount', 'callback', 'lead', 'price']) {
+      expect(lowerAnswer).not.toContain(forbidden);
+    }
+    expect(payload.productCards).toEqual([]);
+  });
+
   it('binds visible comparison targets to products, runs web research, and records conflicts', async () => {
     researchProductComparisonFacts.mockResolvedValue({
       usedWebSearch: true,

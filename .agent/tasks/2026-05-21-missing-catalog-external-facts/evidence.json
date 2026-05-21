@@ -1,0 +1,56 @@
+{
+  "taskId": "2026-05-21-missing-catalog-external-facts",
+  "status": "PASS",
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS"
+  },
+  "commands": [
+    {
+      "command": "npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "PASS",
+      "summary": "2 test files passed; 24 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS",
+      "summary": "tsconfig.json and tsconfig.server.json typechecks passed"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "59 test files passed; 528 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS",
+      "summary": "vite build and server tsc passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "no whitespace errors; existing line-ending warnings only"
+    },
+    {
+      "command": "git diff -- src/ai/agentManagerOrchestrator.ts src/ai/productComparisonResearch.ts tests/agentManagerComparisonResearch.test.ts | Select-String -SimpleMatch -Pattern 'RegExp','.match(','.test(','replace(','.toMatch('",
+      "status": "PASS",
+      "summary": "no new regex APIs in the current pass"
+    }
+  ],
+  "productionGate": {
+    "status": "PENDING",
+    "reason": "Requires commit/push, Railway auto-deploy, and production widget/eval verification"
+  },
+  "changedFiles": [
+    "src/ai/agentManagerOrchestrator.ts",
+    "src/ai/productComparisonResearch.ts",
+    "tests/agentManagerComparisonResearch.test.ts",
+    ".agent/tasks/2026-05-21-missing-catalog-external-facts/spec.md",
+    ".agent/tasks/2026-05-21-missing-catalog-external-facts/evidence.md",
+    ".agent/tasks/2026-05-21-missing-catalog-external-facts/evidence.json"
+  ]
+}

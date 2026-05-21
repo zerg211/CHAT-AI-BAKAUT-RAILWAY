@@ -270,6 +270,200 @@ function normalizeAnswerEvidenceSources(input: {
   };
 }
 
+const modelTextConfusables: Record<string, string> = {
+  а: 'a',
+  в: 'b',
+  е: 'e',
+  к: 'k',
+  м: 'm',
+  н: 'h',
+  о: 'o',
+  р: 'p',
+  с: 'c',
+  т: 't',
+  у: 'y',
+  х: 'x'
+};
+
+function normalizeModelText(value: unknown) {
+  const chars: string[] = [];
+  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
+    chars.push(modelTextConfusables[char] ?? char);
+  }
+  return chars.join('');
+}
+
+function compactModelText(value: unknown) {
+  return modelTextTokens(value).join('');
+}
+
+function charCode(char: string) {
+  return char.codePointAt(0) ?? 0;
+}
+
+function isAsciiDigit(char: string) {
+  const code = charCode(char);
+  return code >= 48 && code <= 57;
+}
+
+function isAsciiLetter(char: string) {
+  const code = charCode(char);
+  return code >= 97 && code <= 122;
+}
+
+function isCyrillicLetter(char: string) {
+  const code = charCode(char);
+  return (code >= 0x0430 && code <= 0x044f) || code === 0x0451;
+}
+
+function isModelTokenChar(char: string) {
+  return isAsciiDigit(char) || isAsciiLetter(char) || isCyrillicLetter(char);
+}
+
+function tokenHasLetter(token: string) {
+  for (const char of token) {
+    if (isAsciiLetter(char) || isCyrillicLetter(char)) return true;
+  }
+  return false;
+}
+
+function tokenHasDigit(token: string) {
+  for (const char of token) {
+    if (isAsciiDigit(char)) return true;
+  }
+  return false;
+}
+
+function modelTextTokens(value: unknown) {
+  const tokens: string[] = [];
+  let current = '';
+  for (const char of normalizeModelText(value)) {
+    if (isModelTokenChar(char)) {
+      current += char;
+    } else if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+function modelIdentifierTokens(value: unknown) {
+  return uniqueStrings(
+    modelTextTokens(value)
+      .map(compactModelText)
+      .filter((token) => token.length >= 4 && tokenHasLetter(token) && tokenHasDigit(token))
+  );
+}
+
+function requestStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
+    : [];
+}
+
+function targetProductNamesForRequest(request: ToolRequest) {
+  return uniqueStrings(requestStringArray(request.args.productNames));
+}
+
+function comparisonAttributesForRequest(request: ToolRequest) {
+  return uniqueStrings(requestStringArray(request.args.comparisonAttributes));
+}
+
+function productLookupText(product: Product) {
+  return [
+    product.name,
+    product.brand,
+    product.category,
+    product.externalId,
+    product.slug,
+    product.sourceUrl,
+    JSON.stringify(product.specs ?? {})
+  ].filter(Boolean).join(' ');
+}
+
+function productMatchesTargetName(product: Product, targetName: string) {
+  const productText = compactModelText(productLookupText(product));
+  const targetTokens = modelIdentifierTokens(targetName);
+  if (targetTokens.length) return targetTokens.every((token) => productText.includes(token));
+  const targetText = compactModelText(targetName);
+  return targetText.length >= 5 && productText.includes(targetText);
+}
+
+function targetBrandCandidates(targetNames: string[]) {
+  const genericProductWords = new Set([
+    'generator',
+    'generators',
+    'gasoline',
+    'diesel',
+    'electric',
+    'benzinovyj',
+    'dizelnyj',
+    'генератор',
+    'генераторы',
+    'бензиновый',
+    'дизельный',
+    'электрический'
+  ]);
+  return uniqueStrings(
+    targetNames.flatMap((name) =>
+      modelTextTokens(name)
+        .map((token) => token.trim())
+        .filter((token) => token.length > 1 && tokenHasLetter(token) && !tokenHasDigit(token) && !genericProductWords.has(token))
+        .slice(0, 1)
+    )
+  );
+}
+
+function productHasTargetBrand(product: Product, brandCandidates: string[]) {
+  if (!brandCandidates.length) return false;
+  const productText = compactModelText([product.brand, product.name, product.sourceUrl].filter(Boolean).join(' '));
+  return brandCandidates.some((brand) => productText.includes(compactModelText(brand)));
+}
+
+function compactCatalogProduct(product: Product, relation: string) {
+  return {
+    productId: product.id,
+    name: product.name,
+    brand: product.brand ?? null,
+    category: product.category ?? null,
+    sourceUrl: product.sourceUrl ?? null,
+    specs: product.specs ?? {},
+    relation
+  };
+}
+
+function catalogPresenceForTargets(targetNames: string[], products: Product[]) {
+  return targetNames.map((productName) => {
+    const exactMatches = products.filter((product) => productMatchesTargetName(product, productName));
+    return {
+      productName,
+      status: exactMatches.length ? 'present' : 'absent',
+      exactProductIds: exactMatches.map((product) => product.id)
+    };
+  });
+}
+
+function nearbyCatalogProductsForTargets(targetNames: string[], products: Product[]) {
+  if (!targetNames.length) return [];
+  const brandCandidates = targetBrandCandidates(targetNames);
+  const candidates = products
+    .filter((product) => !targetNames.some((targetName) => productMatchesTargetName(product, targetName)))
+    .map((product) => ({
+      product,
+      sameBrand: productHasTargetBrand(product, brandCandidates)
+    }));
+  const sameBrandCandidates = candidates.filter((candidate) => candidate.sameBrand);
+  return (sameBrandCandidates.length ? sameBrandCandidates : candidates)
+    .sort((a, b) => Number(b.sameBrand) - Number(a.sameBrand))
+    .slice(0, 4)
+    .map(({ product, sameBrand }) => compactCatalogProduct(
+      product,
+      sameBrand ? 'same_brand_same_product_class' : 'same_product_class_comparable'
+    ));
+}
+
 const nullableStringJsonSchema = { type: ['string', 'null'] } as const;
 const nullableNumberJsonSchema = { type: ['number', 'null'] } as const;
 const nullableBooleanJsonSchema = { type: ['boolean', 'null'] } as const;
@@ -599,6 +793,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для сравнения товаров и нехватки важных фактов планируй web.researchProductFacts.',
             'Для подбора товара планируй catalog.search.',
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
+            'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
             'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit or estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
             'For generator selection, do not plan catalog.search when the only available load basis is estimated_average loads. Ask for explicit load, nameplate, model, or catalog/web-grounded load facts first.',
@@ -642,6 +837,9 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'You must set selectionReadiness for the current answer. It is your semantic decision about whether buyer-visible product cards are useful and honest now.',
             'When selectionReadiness.canShowProductCards is false, answerText must itself explain what is missing or what the next useful question is. The code will not append a canned clarification.',
             'Use selectionReadiness.status="needs_more_info" when product cards would be premature. Use "ready_for_preliminary_cards" only when the buyer asked for a preliminary selection and the executed tools give a usable estimated basis. Use "ready_for_exact_cards" when the facts are strong enough for exact cards.',
+            'For a named model that is absent from the BAKAUT catalog but has checked external facts in web.researchProductFacts: first answer the buyer direct technical question in simple words, then state that the exact model is not in our catalog, then mention only genuinely nearby catalog models from payload.nearbyCatalogProducts if they help. Do not say "not found" when catalogPresence.status is "absent"; say the model is not in the catalog.',
+            'Nearby means same brand plus same product class/model family first. If none are present, mention comparable same-class catalog products only as an orientation. Do not present nearby products as proof about the absent target model.',
+            'Do not add availability, delivery, discount, lead form, callback, or price discussion for a pure technical fact question unless the buyer asked for those commercial terms.',
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
@@ -693,6 +891,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For generator answers, require rewrite if the answer names catalog products, prices, or product cards when tool results include generator_load_estimate_only, generator_load_invalid_load_kind, or catalog_search_skipped:generator_load_unconfirmed_basis.',
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
+            'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')
         },
@@ -1039,7 +1238,11 @@ export class AgentManagerOrchestrator {
       answer: finalText,
       needState: needStateSnapshot,
       productCards: cards,
-      usedWebSearch: toolResults.some((result) => result.tool === 'web.researchProductFacts' && result.status === 'ok'),
+      usedWebSearch: toolResults.some((result) =>
+        result.tool === 'web.researchProductFacts' &&
+        result.status === 'ok' &&
+        (result.payload as { usedWebSearch?: unknown }).usedWebSearch === true
+      ),
       leadRequested: finalLeadAction === 'offer_form',
       leadCreated: toolResults.some((result) => result.tool === 'lead.capture' && result.status === 'ok'),
       assistantMessageId: assistantMessage.id,
@@ -1164,15 +1367,21 @@ export class AgentManagerOrchestrator {
             warnings: profile ? warnings : [...warnings, 'no_usable_loads_for_generator_calculation']
           });
         } else if (request.tool === 'web.researchProductFacts') {
-          if (productsById.size < 2) {
+          const targetProductNames = targetProductNamesForRequest(request);
+          const comparisonAttributes = comparisonAttributesForRequest(request);
+          if (productsById.size < 2 || targetProductNames.length) {
+            const scopedQuery = toolRequestScopedQuery(request, input.userMessage);
+            const lookupQuery = targetProductNames.length
+              ? targetProductNames.join(' ')
+              : input.userMessage;
             const found = await this.searchCatalogProducts({
-              query: input.userMessage,
+              query: lookupQuery,
               limit: 4,
               signal: input.signal,
               userMessage: input.userMessage,
-              semanticContext: input.userMessage,
+              semanticContext: [scopedQuery.semanticQuery, lookupQuery, input.userMessage, request.rationale].join('\n'),
               productIntent: toolRequestProductIntent(request, input.userMessage),
-              embeddingQuery: toolRequestScopedQuery(request, input.userMessage).semanticQuery
+              embeddingQuery: scopedQuery.semanticQuery
             });
             found.products.forEach((product) => productsById.set(product.id, product));
           }
@@ -1180,8 +1389,12 @@ export class AgentManagerOrchestrator {
           const research = await researchProductComparisonFacts({
             userMessage: input.userMessage,
             products: selectedProducts,
+            targetProductNames,
+            comparisonAttributes,
             signal: input.signal
           });
+          const catalogPresence = catalogPresenceForTargets(targetProductNames, selectedProducts);
+          const nearbyCatalogProducts = nearbyCatalogProductsForTargets(targetProductNames, selectedProducts);
           for (const conflict of research.conflicts) {
             const product = selectedProducts.find((item) => item.name === conflict.productName);
             await this.products.recordDataQualityIssue({
@@ -1195,9 +1408,20 @@ export class AgentManagerOrchestrator {
           result = ToolResultSchema.parse({
             requestId: request.id,
             tool: request.tool,
-            status: research.warnings.includes('not_enough_products_for_comparison') ? 'not_found' : 'ok',
-            payload: research,
-            warnings: research.warnings
+            status: research.warnings.includes('not_enough_products_for_comparison') && !targetProductNames.length ? 'not_found' : 'ok',
+            payload: {
+              ...research,
+              targetProductNames,
+              comparisonAttributes,
+              catalogPresence,
+              nearbyCatalogProducts
+            },
+            warnings: [
+              ...research.warnings,
+              ...catalogPresence
+                .filter((item) => item.status === 'absent')
+                .map((item) => `exact_catalog_product_absent:${item.productName}`)
+            ]
           });
         } else if (request.tool === 'lead.capture') {
           const contact = {
