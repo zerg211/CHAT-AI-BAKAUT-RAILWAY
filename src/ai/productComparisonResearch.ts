@@ -91,6 +91,7 @@ export async function researchProductComparisonFacts(input: {
           'A web fact for a target model is valid only when sourceUrl, sourceTitle, or evidence names the same exact model identifier. Same brand, same family, or nearby model pages are not proof about the target model.',
           'Do not cite bakautprof.ru or provided product.sourceUrl pages as web facts for an absent exact target unless that page is specifically about the exact target model.',
           'If exact external sources state key start, ignition key, electric starter, push button, manual recoil, battery, power, engine, or other requested attributes for the target, return those facts with high or medium confidence.',
+          'For binary buyer choices such as key vs push-button, manual vs electric, gasoline vs diesel, continue exact-target web search until each choice is confirmed, contradicted, or explicitly not found in exact-target sources. Do not stop at a broad fact like "electric starter" when the buyer asked about the more specific mechanism.',
           'Use nearby catalog products only as catalog alternatives/orientation in summaryForAnswer; never as the technical fact for an absent exact target.',
           'If exact target facts cannot be found externally, return no target fact and add warning exact_target_external_fact_not_found instead of returning nearby-model facts.',
           'For web facts, fill sourceUrl/sourceTitle when the source is available.'
@@ -107,7 +108,7 @@ export async function researchProductComparisonFacts(input: {
         })
       }
     ],
-    tools: [{ type: 'web_search_preview', search_context_size: 'medium' }],
+    tools: [{ type: 'web_search_preview', search_context_size: targetProductNames.length ? 'high' : 'medium' }],
     max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
     text: {
       format: {
