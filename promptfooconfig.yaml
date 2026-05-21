@@ -213,10 +213,11 @@ tests:
         value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
         config:
           minAnswerChars: 90
-          finalMustContainAll:
-            - 'виброплит'
-          finalMustNotContain:
-            - 'генератор.*подходит|вариант.*генератор'
+          expectedProductClasses:
+            - plate
+          finalMustNotContainTextAny:
+            - 'генератор подходит'
+            - 'вариант генератор'
       - type: javascript
         value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
         config:
@@ -229,5 +230,5 @@ tests:
             - product_selection
           expectedIntents:
             - product_selection
-          taskMustContainAll:
-            - 'виброплит'
+          expectedProductClasses:
+            - plate

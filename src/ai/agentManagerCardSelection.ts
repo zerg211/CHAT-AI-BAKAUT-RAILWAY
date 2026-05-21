@@ -395,6 +395,23 @@ export function assessVisibleCardReadiness(input: {
     };
   }
 
+  if (
+    decision.status === 'not_applicable' &&
+    !decision.canShowProductCards &&
+    productClass !== 'unknown' &&
+    !isGeneratorProductClass(productClass) &&
+    input.cardSelection.products.length > 0
+  ) {
+    return {
+      status: 'ready_for_cards',
+      productClass,
+      missingFacts: decision.missingFacts,
+      rationale: `${decision.rationale} Selection readiness was marked not_applicable, so non-generator catalog cards stay visible.`,
+      warnings: ['selection_readiness_not_applicable_preserved_cards'],
+      decision
+    };
+  }
+
   if (decision.canShowProductCards) {
     return {
       status: 'ready_for_cards',

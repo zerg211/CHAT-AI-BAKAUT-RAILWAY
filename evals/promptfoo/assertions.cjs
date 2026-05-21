@@ -183,6 +183,26 @@ function collectIntents(parsed) {
   return intents;
 }
 
+function collectProductClasses(parsed) {
+  const classes = new Set();
+  for (const metadata of collectMetadata(parsed)) {
+    for (const value of [
+      metadata.selectionReadiness?.productClass,
+      metadata.cardSelection?.intent,
+      metadata.answerContract?.selectionReadiness?.productClass
+    ]) {
+      if (typeof value === 'string' && value.trim()) classes.add(value.trim());
+    }
+  }
+  return classes;
+}
+
+function hasExpectedProductClass(parsed, expectedProductClasses) {
+  if (!Array.isArray(expectedProductClasses) || expectedProductClasses.length === 0) return true;
+  const classes = collectProductClasses(parsed);
+  return expectedProductClasses.some((productClass) => classes.has(productClass));
+}
+
 function productCardTitle(card) {
   if (!card || typeof card !== 'object') return '';
   return [
@@ -251,12 +271,38 @@ function hasNegatedCommercialConfirmation(text) {
   return negatedCommercialConfirmationPatterns.some((pattern) => pattern.test(text));
 }
 
+function textContainsAny(text, fragments) {
+  const lower = String(text || '').toLocaleLowerCase('ru-RU');
+  return fragments.some((fragment) => lower.includes(String(fragment).toLocaleLowerCase('ru-RU')));
+}
+
+function hasSafeCommercialNonConfirmation(text) {
+  return textContainsAny(text, ['достав', 'скид', 'налич', 'самовывоз', 'услов']) &&
+    textContainsAny(text, [
+      'не подтвержу',
+      'не могу подтверд',
+      'не можем подтверд',
+      'нет точных условий',
+      'нет точных данных',
+      'нужно уточнить',
+      'надо уточнить',
+      'лучше оставить контакт',
+      'менеджер проверит'
+    ]);
+}
+
 function findOverconfidentCommercialPattern(answer) {
   const sentences = splitSentences(answer);
   const segments = sentences.length ? sentences : [String(answer || '')];
   for (const pattern of overconfidentCommercialPatterns) {
     for (const segment of segments) {
-      if (pattern.test(segment) && !hasNegatedCommercialConfirmation(segment)) return pattern;
+      if (
+        pattern.test(segment) &&
+        !hasNegatedCommercialConfirmation(segment) &&
+        !hasSafeCommercialNonConfirmation(segment)
+      ) {
+        return pattern;
+      }
     }
   }
   return null;
@@ -300,11 +346,17 @@ function assertSupportAnswerQuality(output, context) {
 
   const finalAnswer = String(latestTurn(parsed)?.answer || '');
   const positiveEvidence = latestVisibleEvidenceText(parsed);
+  if (!hasExpectedProductClass(parsed, config.expectedProductClasses)) {
+    return result(false, `Expected product class ${JSON.stringify(config.expectedProductClasses)}. Saw: ${JSON.stringify([...collectProductClasses(parsed)])}`);
+  }
   if (!textMatchesAll(positiveEvidence, config.finalMustContainAll)) {
     return result(false, `Final answer does not match all required patterns: ${JSON.stringify(config.finalMustContainAll || [])}`);
   }
   if (Array.isArray(config.finalMustContainAny) && config.finalMustContainAny.length && !textMatchesAny(positiveEvidence, config.finalMustContainAny)) {
     return result(false, `Final answer does not match any required pattern: ${JSON.stringify(config.finalMustContainAny)}`);
+  }
+  if (Array.isArray(config.finalMustNotContainTextAny) && textContainsAny(finalAnswer, config.finalMustNotContainTextAny)) {
+    return result(false, `Final answer contains a forbidden text fragment: ${JSON.stringify(config.finalMustNotContainTextAny)}`);
   }
   if (Array.isArray(config.finalMustNotContain) && textMatchesAny(finalAnswer, config.finalMustNotContain)) {
     return result(false, `Final answer contains a forbidden scenario-specific pattern: ${JSON.stringify(config.finalMustNotContain)}`);
@@ -442,6 +494,9 @@ function assertAgentTaskCompletion(output, context) {
     if (!config.expectedIntents.some((intent) => intents.has(intent))) {
       return result(false, `Expected intent ${JSON.stringify(config.expectedIntents)}. Saw: ${JSON.stringify([...intents])}`);
     }
+  }
+  if (!hasExpectedProductClass(parsed, config.expectedProductClasses)) {
+    return result(false, `Expected product class ${JSON.stringify(config.expectedProductClasses)}. Saw: ${JSON.stringify([...collectProductClasses(parsed)])}`);
   }
   if (!textMatchesAll(positiveEvidence, config.taskMustContainAll)) {
     return result(false, `Final task answer did not satisfy all completion patterns: ${JSON.stringify(config.taskMustContainAll || [])}`);

@@ -1,5 +1,9 @@
 const DEFAULT_BASE_URL = 'http://localhost:3010';
 const DEFAULT_TIMEOUT_MS = 180000;
+const DEFAULT_SESSION_ATTEMPTS = 5;
+const DEFAULT_MESSAGE_ATTEMPTS = 3;
+const DEFAULT_RECOVERY_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 5000;
 
 function readConfigValue(configValue, envName, fallback, options = {}) {
   const envValue = typeof process.env[envName] === 'string' && process.env[envName].trim()
@@ -84,6 +88,20 @@ async function postJson(url, body, timeoutMs) {
     throw new Error(`HTTP ${response.status} from ${url}: ${text.slice(0, 1000)}`);
   }
   return text ? JSON.parse(text) : {};
+}
+
+async function postJsonWithRetries(input) {
+  let lastError = null;
+  const attempts = input.attempts ?? DEFAULT_SESSION_ATTEMPTS;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) await sleep(input.delayMs ?? DEFAULT_RETRY_DELAY_MS);
+    try {
+      return await postJson(input.url, input.body, input.timeoutMs);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
 }
 
 function normalizeMessages(vars, prompt) {
@@ -243,6 +261,10 @@ class BakautChatAppProvider {
     const vars = context.vars || {};
     const baseUrl = readConfigValue(this.config.baseUrl, 'PROMPTFOO_CHAT_BASE_URL', DEFAULT_BASE_URL, { preferEnv: true }).replace(/\/+$/u, '');
     const timeoutMs = readNumberConfigValue(this.config.timeoutMs, 'PROMPTFOO_CHAT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+    const sessionAttempts = readNumberConfigValue(this.config.sessionAttempts, 'PROMPTFOO_CHAT_SESSION_ATTEMPTS', DEFAULT_SESSION_ATTEMPTS);
+    const messageAttempts = readNumberConfigValue(this.config.messageAttempts, 'PROMPTFOO_CHAT_MESSAGE_ATTEMPTS', DEFAULT_MESSAGE_ATTEMPTS);
+    const recoveryAttempts = readNumberConfigValue(this.config.recoveryAttempts, 'PROMPTFOO_CHAT_RECOVERY_ATTEMPTS', DEFAULT_RECOVERY_ATTEMPTS);
+    const retryDelayMs = readNumberConfigValue(this.config.retryDelayMs, 'PROMPTFOO_CHAT_RETRY_DELAY_MS', DEFAULT_RETRY_DELAY_MS);
     const pageUrl = readConfigValue(
       vars.pageUrl || this.config.pageUrl,
       'PROMPTFOO_CHAT_PAGE_URL',
@@ -265,10 +287,16 @@ class BakautChatAppProvider {
     }
 
     try {
-      const sessionPayload = await postJson(`${baseUrl}/api/chat/sessions`, {
-        visitorId: `promptfoo-${caseId}-${Date.now()}`,
-        pageUrl
-      }, timeoutMs);
+      const sessionPayload = await postJsonWithRetries({
+        url: `${baseUrl}/api/chat/sessions`,
+        body: {
+          visitorId: `promptfoo-${caseId}-${Date.now()}`,
+          pageUrl
+        },
+        timeoutMs,
+        attempts: sessionAttempts,
+        delayMs: retryDelayMs
+      });
       sessionId = sessionPayload.session?.id || null;
       if (!sessionId) throw new Error(`Session id missing in response: ${JSON.stringify(sessionPayload).slice(0, 1000)}`);
 
@@ -278,8 +306,8 @@ class BakautChatAppProvider {
           sessionId,
           userMessage,
           timeoutMs,
-          attempts: 3,
-          delayMs: 5000
+          attempts: messageAttempts,
+          delayMs: retryDelayMs
         });
         if (!turnResult.ok && turnResult.rawError?.recoverable && turnResult.turnId) {
           const recoveryResult = await recoverTurnWithRetries({
@@ -288,8 +316,8 @@ class BakautChatAppProvider {
             turnId: turnResult.turnId,
             userMessage,
             timeoutMs,
-            attempts: 3,
-            delayMs: 5000
+            attempts: recoveryAttempts,
+            delayMs: retryDelayMs
           });
           if (recoveryResult?.ok) {
             turns.push(recoveryResult);
