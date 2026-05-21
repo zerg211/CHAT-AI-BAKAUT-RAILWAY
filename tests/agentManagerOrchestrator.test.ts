@@ -990,9 +990,9 @@ describe('AgentManagerOrchestrator', () => {
               productNames: [],
               comparisonAttributes: [],
               loads: [
-                { kind: 'pump', name: 'generic water pump', count: 1, runningKw: 0.75, startingKw: 2, source: 'estimated_average', evidence: 'typical small dacha pump', basisSignals: ['buyer_requested_approximation'] },
-                { kind: 'refrigerator', name: 'fridge', count: 1, runningKw: 0.15, startingKw: 0.9, source: 'estimated_average', evidence: 'typical household refrigerator', basisSignals: ['consumer_type_known'] },
-                { kind: 'lighting', name: 'lights', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'estimated_average', evidence: 'basic LED lighting', basisSignals: ['consumer_type_known'] }
+                { kind: 'pump', name: 'generic water pump', count: 1, runningKw: 0.75, startingKw: 2, source: 'estimated_average', evidence: 'typical small dacha pump', basisKind: 'generic_load_name', basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'buyer_requested_approximation'] },
+                { kind: 'refrigerator', name: 'fridge', count: 1, runningKw: 0.15, startingKw: 0.9, source: 'estimated_average', evidence: 'typical household refrigerator', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known'] },
+                { kind: 'lighting', name: 'lights', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'estimated_average', evidence: 'basic LED lighting', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known'] }
               ],
               simultaneousStarting: true,
               simultaneousStartingKinds: ['pump', 'refrigerator'],
@@ -1096,10 +1096,10 @@ describe('AgentManagerOrchestrator', () => {
               productNames: [],
               comparisonAttributes: [],
               loads: [
-                { kind: 'pump', name: '220 V borehole pump for a household well', count: 1, runningKw: 1.1, startingKw: 3.5, source: 'estimated_average', evidence: 'bounded assumption: borehole pump, 220 V, household water supply, exact nameplate unavailable', basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'usage_scope_known', 'buyer_requested_approximation'] },
-                { kind: 'refrigerator', name: 'ordinary household refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'ordinary household refrigerator', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
-                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: 0.3, startingKw: 0.3, source: 'estimated_average', evidence: 'LED lighting for small house', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
-                { kind: 'handheld_tool', name: 'angle grinder used separately', count: 1, runningKw: 1.2, startingKw: 1.2, source: 'estimated_average', evidence: 'buyer said angle grinder is occasional, not a base simultaneous load', basisSignals: ['consumer_type_known', 'usage_scope_known', 'simultaneous_operation_known'] }
+                { kind: 'pump', name: '220 V borehole pump for a household well', count: 1, runningKw: 1.1, startingKw: 3.5, source: 'estimated_average', evidence: 'bounded assumption: borehole pump, 220 V, household water supply, exact nameplate unavailable', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'usage_scope_known', 'buyer_requested_approximation'] },
+                { kind: 'refrigerator', name: 'ordinary household refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'ordinary household refrigerator', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
+                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: 0.3, startingKw: 0.3, source: 'estimated_average', evidence: 'LED lighting for small house', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
+                { kind: 'handheld_tool', name: 'angle grinder used separately', count: 1, runningKw: 1.2, startingKw: 1.2, source: 'estimated_average', evidence: 'buyer said angle grinder is occasional, not a base simultaneous load', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known', 'usage_scope_known', 'simultaneous_operation_known'] }
               ],
               simultaneousStarting: true,
               simultaneousStartingKinds: ['pump', 'refrigerator'],

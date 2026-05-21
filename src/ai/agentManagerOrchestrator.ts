@@ -598,6 +598,10 @@ const loadItemArgsJsonSchema = {
     startingKw: nullableNumberJsonSchema,
     source: { type: ['string', 'null'], enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', null] },
     evidence: nullableStringJsonSchema,
+    basisKind: {
+      type: ['string', 'null'],
+      enum: ['exact_power', 'checked_fact', 'specific_type_or_function', 'generic_load_name', 'unknown', null]
+    },
     basisSignals: {
       type: 'array',
       items: {
@@ -615,7 +619,7 @@ const loadItemArgsJsonSchema = {
       }
     }
   },
-  required: ['kind', 'name', 'count', 'runningKw', 'startingKw', 'source', 'evidence', 'basisSignals']
+  required: ['kind', 'name', 'count', 'runningKw', 'startingKw', 'source', 'evidence', 'basisKind', 'basisSignals']
 } as const;
 
 const toolArgsJsonSchema = {
@@ -875,7 +879,9 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
             'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit, checked, or bounded estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
             'For calculator.generatorLoad, set args.estimateBasis: "exact_or_user_provided" for explicit powers, "catalog_or_web_fact" for checked facts, "bounded_assumption" when the buyer wants an approximate selection and the unknown load is bounded by type/function/scenario, or "unbounded_guess" when only vague load names are known.',
-            'For every calculator.generatorLoad load item, set basisSignals from dialogue/tool facts only. For a motor load estimate such as a pump, bounded_assumption requires consumer_type_known or consumer_function_known plus voltage_or_phase_known; otherwise use unbounded_guess and ask one minimal question.',
+            'For every calculator.generatorLoad load item, set basisKind: exact_power for explicit nameplate/user kW, checked_fact for catalog/web facts, specific_type_or_function when an estimated load is bounded by a concrete type, function, or scenario, generic_load_name when only a broad name such as pump/compressor/tool is known, and unknown when the load source itself is unclear.',
+            'For every calculator.generatorLoad load item, set basisSignals from dialogue/tool facts only. Do not set basisKind=specific_type_or_function merely because a broad load class is named; "pump" alone is generic_load_name, while a borehole pump, drainage pump, circulation pump, irrigation pump, or a pump function/scenario can be specific_type_or_function.',
+            'For a motor load estimate such as a pump/compressor/pressure washer, bounded_assumption requires basisKind=specific_type_or_function plus consumer_type_known or consumer_function_known and voltage_or_phase_known; otherwise use unbounded_guess and ask one minimal question.',
             'For unknown load sources, ask the minimum useful question before exact selection: identify what the consumer does, its type/class, voltage/phase, and simultaneous operation only as needed for the current calculation.',
             'For generator selection, do not plan catalog.search when the only available load basis is an unbounded guess. Ask for the missing type/function/scenario first.',
             'If the buyer asks for preliminary minimum/reserve variants after enough load context exists for a bounded estimate, plan both calculator.generatorLoad and catalog.search; if the load context is too vague for any useful selection, plan clarification instead of catalog.search.',

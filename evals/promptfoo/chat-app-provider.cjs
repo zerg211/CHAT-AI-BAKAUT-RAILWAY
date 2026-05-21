@@ -49,6 +49,30 @@ async function fetchWithTimeout(url, options, timeoutMs) {
   }
 }
 
+async function readSseResponseText(response) {
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    return { text: await response.text(), error: null };
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '';
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+    return { text, error: null };
+  } catch (error) {
+    text += decoder.decode();
+    return { text, error };
+  } finally {
+    reader.releaseLock?.();
+  }
+}
+
 async function postJson(url, body, timeoutMs) {
   const response = await fetchWithTimeout(url, {
     method: 'POST',
@@ -96,9 +120,32 @@ function latestErrorPayload(events) {
   return error && typeof error.data === 'object' && error.data ? error.data : null;
 }
 
+function latestTurnPayload(events) {
+  const turn = [...events].reverse().find((event) => event.event === 'turn');
+  return turn && typeof turn.data === 'object' && turn.data ? turn.data : null;
+}
+
 function turnResultFromResponse(input) {
   const done = latestDonePayload(input.events);
   const error = latestErrorPayload(input.events);
+  const turn = latestTurnPayload(input.events);
+  const turnId = done?.turnId || error?.turnId || turn?.turnId || input.turnId || null;
+  const transportError = input.transportError
+    ? {
+      error: input.transportError instanceof Error ? input.transportError.message : String(input.transportError),
+      turnId,
+      recoverable: Boolean(turnId),
+      transport: true
+    }
+    : null;
+  const missingDoneError = !done && !error && turnId
+    ? {
+      error: 'missing done payload',
+      turnId,
+      recoverable: true
+    }
+    : null;
+  const rawError = error || transportError || missingDoneError;
   return {
     user: input.userMessage,
     ok: input.response.ok && Boolean(done) && !error,
@@ -109,10 +156,10 @@ function turnResultFromResponse(input) {
     leadRequested: Boolean(done?.leadRequested),
     leadCreated: Boolean(done?.leadCreated),
     metadata: done?.metadata || null,
-    turnId: done?.turnId || error?.turnId || input.turnId || null,
-    error: error?.error || (!input.response.ok ? `HTTP ${input.response.status}` : null),
+    turnId,
+    error: rawError?.error || (!input.response.ok ? `HTTP ${input.response.status}` : null),
     events: input.events.map((event) => event.event),
-    rawError: error || null,
+    rawError,
     recovered: Boolean(input.recovered)
   };
 }
@@ -165,22 +212,28 @@ class BakautChatAppProvider {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ message: userMessage })
         }, timeoutMs);
-        const rawSse = await response.text();
-        const events = parseSseEvents(rawSse);
-        const turnResult = turnResultFromResponse({ userMessage, response, events });
+        const rawSse = await readSseResponseText(response);
+        const events = parseSseEvents(rawSse.text);
+        const turnResult = turnResultFromResponse({
+          userMessage,
+          response,
+          events,
+          transportError: rawSse.error
+        });
         if (!turnResult.ok && turnResult.rawError?.recoverable && turnResult.turnId) {
           const recoveryResponse = await fetchWithTimeout(`${baseUrl}/api/chat/sessions/${sessionId}/messages/${turnResult.turnId}/recover`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({})
           }, timeoutMs);
-          const recoveryRawSse = await recoveryResponse.text();
-          const recoveryEvents = parseSseEvents(recoveryRawSse);
+          const recoveryRawSse = await readSseResponseText(recoveryResponse);
+          const recoveryEvents = parseSseEvents(recoveryRawSse.text);
           const recoveryResult = turnResultFromResponse({
             userMessage,
             response: recoveryResponse,
             events: recoveryEvents,
             turnId: turnResult.turnId,
+            transportError: recoveryRawSse.error,
             recovered: true
           });
           if (recoveryResult.ok) {

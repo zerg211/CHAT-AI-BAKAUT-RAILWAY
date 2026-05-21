@@ -14,10 +14,18 @@ const generatorLoadBasisSignals = new Set([
   'catalog_or_web_fact',
   'explicit_power'
 ]);
+const generatorLoadBasisKinds = new Set([
+  'exact_power',
+  'checked_fact',
+  'specific_type_or_function',
+  'generic_load_name',
+  'unknown'
+]);
 const motorLikeLoadKinds = new Set(['pump', 'compressor', 'pressure_washer', 'vacuum', 'concrete_mixer']);
 
 type GeneratorLoadToolItem = ProductElectricalLoadItem & {
   basisSignals?: string[];
+  basisKind?: string;
 };
 
 function compactLoadToken(value: unknown) {
@@ -71,6 +79,12 @@ function basisSignalsFromToolArg(value: unknown) {
   ))];
 }
 
+function basisKindFromToolArg(value: unknown) {
+  return typeof value === 'string' && generatorLoadBasisKinds.has(value)
+    ? value
+    : undefined;
+}
+
 function generatorLoadEvidenceForToolRequest(request: ToolRequest, userMessage: string) {
   return [
     userMessage,
@@ -114,7 +128,8 @@ function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string):
       startingKw: positiveNumberFromToolArg(item.startingKw),
       source: sourceFromToolArg(item.source),
       evidence: typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence,
-      basisSignals: basisSignalsFromToolArg(item.basisSignals)
+      basisSignals: basisSignalsFromToolArg(item.basisSignals),
+      basisKind: basisKindFromToolArg(item.basisKind)
     };
     if (load.runningKw !== undefined || load.startingKw !== undefined) {
       loads.push(load);
@@ -131,9 +146,11 @@ function hasAnyBasisSignal(load: GeneratorLoadToolItem, signals: string[]) {
 
 function hasBoundedEstimatedLoadBasis(load: GeneratorLoadToolItem) {
   if (load.source !== 'estimated_average') return true;
+  if (load.basisKind === 'exact_power' || load.basisKind === 'checked_fact') return true;
   if (hasAnyBasisSignal(load, ['explicit_power', 'catalog_or_web_fact'])) return true;
   const kind = canonicalElectricalLoadKind(load.kind);
   if (!kind || kind === 'unknown' || kind === 'unknown_load') return false;
+  if (load.basisKind !== 'specific_type_or_function') return false;
   if (motorLikeLoadKinds.has(kind)) {
     return hasAnyBasisSignal(load, ['consumer_type_known', 'consumer_function_known']) &&
       hasAnyBasisSignal(load, ['voltage_or_phase_known']);
