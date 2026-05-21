@@ -132,4 +132,43 @@ describe('Promptfoo chat app provider', () => {
     });
     expect(result.metadata?.productionLlmGrader).toBe(true);
   });
+
+  it('retries transient production LLM grader failures', async () => {
+    process.env.PROMPTFOO_CHAT_ADMIN_TOKEN = 'test-admin-token';
+    let attempts = 0;
+
+    global.fetch = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response(JSON.stringify({ error: 'Internal server error' }), { status: 500 });
+      }
+      return jsonResponse({
+        ok: true,
+        model: 'gpt-5.4-mini',
+        result: {
+          pass: true,
+          score: 0.94,
+          reason: 'Recovered judge call.'
+        }
+      });
+    }) as typeof fetch;
+
+    const provider = new BakautProductionLlmGraderProvider({
+      config: {
+        baseUrl: 'https://chat.example.test',
+        attempts: 2,
+        retryDelayMs: 1
+      }
+    });
+
+    const result = await provider.callApi('Rendered rubric prompt');
+
+    expect(attempts).toBe(2);
+    expect(result.output).toEqual({
+      pass: true,
+      score: 0.94,
+      reason: 'Recovered judge call.'
+    });
+    expect(result.metadata?.attempt).toBe(2);
+  });
 });

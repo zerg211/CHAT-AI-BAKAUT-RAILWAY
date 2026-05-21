@@ -1,0 +1,47 @@
+{
+  "status": "local_pass_production_pending",
+  "taskId": "2026-05-21-context-shift-budget-card-grounding",
+  "failureEvidence": {
+    "artifact": ".agent/tasks/2026-05-21-production-llm-judge-metric/production-evals-after-f0c3abb.json",
+    "summary": ".agent/tasks/2026-05-21-production-llm-judge-metric/production-evals-after-f0c3abb.summary.json",
+    "contextShiftLlmScore": 0.41,
+    "generatorJudgeFailure": "Production LLM grader failed HTTP 500"
+  },
+  "validations": [
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts tests/promptfooProvider.test.ts tests/promptfooSummary.test.ts",
+      "status": "pass",
+      "result": "3 files, 11 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "result": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "result": "Line-ending warnings only."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "result": "65 files, 555 tests"
+    }
+  ],
+  "regex": {
+    "newRegexConstructs": 0,
+    "legacyBaseline": 1832
+  },
+  "production": {
+    "status": "pending_after_push"
+  }
+}

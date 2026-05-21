@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assessVisibleCardReadiness,
+  selectProductsForVisibleCards,
   suppressVisibleCardsForReadiness
 } from '../src/ai/agentManagerCardSelection.js';
 import type { AnswerContract, ToolResult } from '../src/ai/agentManagerContracts.js';
-import type { Product } from '../src/shared/types.js';
+import type { CustomerNeedState, Product } from '../src/shared/types.js';
 
 function answerContract(selectionReadiness: AnswerContract['selectionReadiness']): AnswerContract {
   return {
@@ -30,12 +31,94 @@ function cardSelection(intent: 'plate' | 'generator', products: Product[]) {
   };
 }
 
+function needStateWithBudget(budgetMax?: number): CustomerNeedState {
+  const budgetConstraint = budgetMax ? [{
+    value: `budget.max: ${budgetMax}`,
+    evidence: 'userMessage',
+    confidence: 1,
+    updatedAt: '2026-05-21T00:00:00.000Z'
+  }] : [];
+  return {
+    activeNeeds: [],
+    semanticMemory: {
+      version: 1,
+      activeRequirementIds: [],
+      requirements: [],
+      mentionedProducts: [],
+      selectionPolicy: {
+        primaryRequirementIds: [],
+        alternativeMode: 'none',
+        explanationRequired: false
+      },
+      botCommitments: []
+    },
+    explicitNeeds: budgetConstraint,
+    implicitNeeds: [],
+    constraints: budgetConstraint,
+    importantCriteria: [],
+    confirmedFacts: budgetConstraint,
+    uncertainInferences: [],
+    contradictions: [],
+    featureSignals: {
+      portable: 0,
+      homeUse: 0,
+      compact: 0,
+      lowNoise: 0,
+      coldStart: 0,
+      professionalDuty: 0,
+      budgetSensitive: 0
+    },
+    selectionState: {
+      currentProductClass: 'unknown',
+      targetProductClass: 'unknown',
+      hardConstraints: {
+        productIntent: 'unknown',
+        productRole: 'unknown',
+        exactModelTokens: [],
+        exactModelTokenRoles: [],
+        mustHaveTraits: [],
+        excludedClasses: [],
+        provenance: {}
+      },
+      softPreferences: {
+        productIntent: 'unknown',
+        productRole: 'unknown',
+        exactModelTokens: [],
+        exactModelTokenRoles: [],
+        mustHaveTraits: [],
+        excludedClasses: [],
+        provenance: {}
+      },
+      unknowns: [],
+      conflicts: [],
+      selectedProductIds: [],
+      matchedProductIds: [],
+      comparisonProductIds: [],
+      rejectedProducts: [],
+      previousCandidateProductIds: [],
+      confidence: 0,
+      updatedAt: '2026-05-21T00:00:00.000Z'
+    },
+    lastSummary: budgetMax ? `budget.max: ${budgetMax}` : ''
+  };
+}
+
 const plate: Product = {
   id: 'plate-1',
   name: 'Виброплита TSS-WP60L 60 кг',
   brand: 'ТСС',
   category: 'Виброплиты',
   price: 65000,
+  currency: 'RUB',
+  specs: {}
+};
+
+const overBudgetPlate: Product = {
+  id: 'plate-over-budget',
+  name: 'Виброплита TSS-WP60TH 72 кг',
+  brand: 'ТСС',
+  category: 'Виброплиты',
+  price: 79592,
   currency: 'RUB',
   specs: {}
 };
@@ -101,5 +184,62 @@ describe('AgentManager visible card readiness', () => {
 
     expect(readiness.status).toBe('blocked_by_tool_safety');
     expect(visible.products).toEqual([]);
+  });
+
+  it('filters selected non-generator cards by structured budget when in-budget options exist', () => {
+    const selection = selectProductsForVisibleCards({
+      products: [overBudgetPlate, plate],
+      userMessage: 'Бюджет до 70 000, нужна не слишком тяжелая.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer narrows plate budget',
+        dialogueUnderstanding: 'budget limit for plate',
+        nextStepRationale: 'show catalog plates',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'виброплита до 70000' },
+          rationale: 'find plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Подойдут Виброплита TSS-WP60TH 72 кг и Виброплита TSS-WP60L 60 кг.',
+      needState: needStateWithBudget(70000)
+    });
+
+    expect(selection.products).toEqual([plate]);
+    expect(selection.droppedProductIds).toContain('plate-over-budget');
+    expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
+  });
+
+  it('keeps selected cards above budget when no in-budget options exist', () => {
+    const selection = selectProductsForVisibleCards({
+      products: [overBudgetPlate],
+      userMessage: 'Бюджет до 70 000, нужна не слишком тяжелая.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer narrows plate budget',
+        dialogueUnderstanding: 'budget limit for plate',
+        nextStepRationale: 'show nearest catalog plates',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'виброплита до 70000' },
+          rationale: 'find nearest plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Ближайший вариант Виброплита TSS-WP60TH 72 кг.',
+      needState: needStateWithBudget(70000)
+    });
+
+    expect(selection.products).toEqual([overBudgetPlate]);
+    expect(selection.warnings).not.toContain('product_cards_filtered_by_budget:1');
   });
 });

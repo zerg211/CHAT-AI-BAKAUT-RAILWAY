@@ -1,5 +1,5 @@
 {
-  "status": "local_pass_production_pending",
+  "status": "metric_wired_followup_needed",
   "taskId": "2026-05-21-production-llm-judge-metric",
   "validations": [
     {
@@ -37,9 +37,18 @@
     }
   ],
   "production": {
-    "status": "pending_after_push",
+    "status": "llm_ready_followup_needed",
     "baseUrl": "https://chat-ai-production-3057.up.railway.app",
-    "pageUrl": "https://bakautprof.ru/"
+    "pageUrl": "https://bakautprof.ru/",
+    "artifact": ".agent/tasks/2026-05-21-production-llm-judge-metric/production-evals-after-f0c3abb.json",
+    "summary": ".agent/tasks/2026-05-21-production-llm-judge-metric/production-evals-after-f0c3abb.summary.json",
+    "result": {
+      "passed": 4,
+      "failed": 2,
+      "deterministicAverage": 0.9488888888888889,
+      "llmAverage": 0.858,
+      "llmAverageStatus": "ready"
+    }
   },
   "regex": {
     "newRegexConstructs": 0,

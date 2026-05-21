@@ -2,7 +2,7 @@
 
 ## Summary
 
-Status: local validation PASS, production Promptfoo rerun pending after push.
+Status: metric wiring PASS, production quality gate needs follow-up fix.
 
 This pass adds a production-backed Promptfoo LLM judge:
 
@@ -23,8 +23,12 @@ This pass adds a production-backed Promptfoo LLM judge:
 
 ## Production Gate
 
-Pending:
+First production run after `f0c3abb`:
 
-- Commit and push this pass.
-- Wait for Railway marker to deploy the pushed commit.
-- Rerun production Promptfoo and verify deterministic average and LLM average are both above 90%.
+- Artifact: `.agent/tasks/2026-05-21-production-llm-judge-metric/production-evals-after-f0c3abb.json`.
+- Summary: `.agent/tasks/2026-05-21-production-llm-judge-metric/production-evals-after-f0c3abb.summary.json`.
+- `llmAverageStatus` became `ready`, proving the production LLM judge path works.
+- Corrected summary after component-score averaging: deterministic average `0.9488888888888889`, LLM average `0.858`.
+- The run failed 2/6: one transient judge HTTP 500 and one real context-shift card grounding issue.
+
+Follow-up task `2026-05-21-context-shift-budget-card-grounding` addresses those defects.

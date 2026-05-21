@@ -152,4 +152,30 @@ describe('promptfoo result summary', () => {
     expect(summary.llm.llmAverageStatus).toBe('ready');
     expect(summary.gates.llmAverageAbove90).toBe(true);
   });
+
+  it('prefers actual LLM component scores over Promptfoo named metric totals', () => {
+    const summary = summarizePromptfooOutput({
+      results: {
+        stats: { successes: 1, failures: 0, errors: 0 },
+        results: [
+          {
+            score: 1,
+            success: true,
+            gradingResult: {
+              componentResults: [
+                { pass: true, score: 0.9, assertion: { type: 'llm-rubric' } },
+                { pass: true, score: 0.8, assertion: { type: 'llm-rubric' } }
+              ]
+            }
+          }
+        ],
+        prompts: [
+          { metrics: { namedScores: { llmAverage: 1.7 } } }
+        ]
+      }
+    });
+
+    expect(summary.llm.llmAverage).toBe(0.8500000000000001);
+    expect(summary.llm.llmAverageStatus).toBe('ready');
+  });
 });

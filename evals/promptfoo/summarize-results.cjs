@@ -138,7 +138,7 @@ function llmAverageStats(promptfooOutput) {
   const collected = collectLlmScores(rows);
   const namedAverage = namedScoreAverage(promptfooOutput, ['llmAverage', 'llm_average', 'llm']);
   const componentAverage = average(collected.scores);
-  const llmAverage = namedAverage ?? componentAverage;
+  const llmAverage = componentAverage ?? namedAverage;
 
   if (llmAverage !== null) {
     return {

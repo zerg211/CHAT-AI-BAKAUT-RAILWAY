@@ -52,6 +52,54 @@ function latestActiveNeedProductClass(needState: CustomerNeedState): ProductSele
   return classes.length ? classes[classes.length - 1] : 'unknown';
 }
 
+function positiveFiniteNumber(value: unknown) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : undefined;
+}
+
+function numberFromStructuredBudgetText(value: string) {
+  const prefix = 'budget.max:';
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed.startsWith(prefix)) return undefined;
+  let numeric = '';
+  let hasDecimal = false;
+  for (const char of trimmed.slice(prefix.length)) {
+    if (char >= '0' && char <= '9') {
+      numeric += char;
+      continue;
+    }
+    if ((char === '.' || char === ',') && !hasDecimal) {
+      numeric += '.';
+      hasDecimal = true;
+    }
+  }
+  return positiveFiniteNumber(numeric);
+}
+
+function budgetMaxFromNeedState(needState: CustomerNeedState) {
+  const hardBudget = positiveFiniteNumber(needState.selectionState?.hardConstraints?.budgetMax);
+  if (hardBudget !== undefined) return hardBudget;
+
+  for (const requirement of Object.values(needState.semanticMemory?.requirements ?? {})) {
+    if (requirement?.kind !== 'budgetRub') continue;
+    const value = requirement.value ?? {};
+    const budget = positiveFiniteNumber(value.max) ?? positiveFiniteNumber(value.amount);
+    if (budget !== undefined) return budget;
+  }
+
+  const textValues = [
+    ...(needState.constraints ?? []).map((item) => item.value),
+    ...(needState.confirmedFacts ?? []).map((item) => item.value),
+    ...(needState.explicitNeeds ?? []).map((item) => item.value),
+    ...(needState.activeNeeds ?? []).flatMap((need) => need.constraints ?? [])
+  ];
+  for (const value of textValues) {
+    const budget = typeof value === 'string' ? numberFromStructuredBudgetText(value) : undefined;
+    if (budget !== undefined) return budget;
+  }
+  return undefined;
+}
+
 function toolRequestSemanticText(intent: AgentIntentContract) {
   return intent.toolRequests.map((request) => {
     const args = request.args as Record<string, unknown>;
@@ -338,14 +386,29 @@ export function selectProductsForVisibleCards(input: {
     selected = [];
   }
 
+  const budgetMax = budgetMaxFromNeedState(input.needState);
+  let budgetFilteredCount = 0;
+  if (budgetMax !== undefined && selected.length) {
+    const withinBudget = selected.filter((product) =>
+      typeof product.price === 'number' &&
+      Number.isFinite(product.price) &&
+      product.price <= budgetMax
+    );
+    if (withinBudget.length) {
+      budgetFilteredCount = selected.length - withinBudget.length;
+      selected = withinBudget;
+    }
+  }
+
   const selectedProducts = uniqueProducts(selected).slice(0, 8);
   const selectedIds = new Set(selectedProducts.map((product) => product.id));
   const droppedProductIds = unique
     .filter((product) => !selectedIds.has(product.id))
     .map((product) => product.id);
-  const warnings = droppedProductIds.length
-    ? [`product_cards_filtered:${droppedProductIds.length}`]
-    : [];
+  const warnings = [
+    ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
+    ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : [])
+  ];
 
   return {
     intent: cardIntent,

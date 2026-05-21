@@ -2,6 +2,8 @@ require('dotenv').config();
 
 const DEFAULT_BASE_URL = 'https://chat-ai-production-3057.up.railway.app';
 const DEFAULT_TIMEOUT_MS = 180000;
+const DEFAULT_ATTEMPTS = 3;
+const DEFAULT_RETRY_DELAY_MS = 4000;
 
 function stripTrailingSlashes(value) {
   let text = String(value || '');
@@ -41,6 +43,10 @@ async function fetchWithTimeout(url, options, timeoutMs) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class BakautProductionLlmGraderProvider {
   constructor(options = {}) {
     this.config = options.config || {};
@@ -64,34 +70,48 @@ class BakautProductionLlmGraderProvider {
       DEFAULT_BASE_URL
     ));
     const timeoutMs = readNumberConfigValue(this.config.timeoutMs, 'PROMPTFOO_CHAT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
-    const response = await fetchWithTimeout(`${baseUrl}/api/admin/evals/llm-rubric`, {
-      method: 'POST',
-      headers: {
-        'authorization': `Bearer ${token}`,
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify({ prompt: String(prompt || '') })
-    }, timeoutMs);
-    const text = await response.text();
-    let payload = null;
-    try {
-      payload = text ? JSON.parse(text) : null;
-    } catch {
-      return {
-        error: `Production LLM grader returned non-JSON HTTP ${response.status}: ${text.slice(0, 500)}`
-      };
-    }
-    if (!response.ok || !payload?.ok) {
-      return {
-        error: `Production LLM grader failed HTTP ${response.status}: ${JSON.stringify(payload).slice(0, 500)}`
-      };
-    }
-    return {
-      output: payload.result,
-      metadata: {
-        model: payload.model,
-        productionLlmGrader: true
+    const attempts = readNumberConfigValue(this.config.attempts, 'PROMPTFOO_CHAT_LLM_GRADER_ATTEMPTS', DEFAULT_ATTEMPTS);
+    const retryDelayMs = readNumberConfigValue(this.config.retryDelayMs, 'PROMPTFOO_CHAT_RETRY_DELAY_MS', DEFAULT_RETRY_DELAY_MS);
+    let lastError = null;
+
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      if (attempt > 1) await sleep(retryDelayMs);
+      try {
+        const response = await fetchWithTimeout(`${baseUrl}/api/admin/evals/llm-rubric`, {
+          method: 'POST',
+          headers: {
+            'authorization': `Bearer ${token}`,
+            'content-type': 'application/json'
+          },
+          body: JSON.stringify({ prompt: String(prompt || '') })
+        }, timeoutMs);
+        const text = await response.text();
+        let payload = null;
+        try {
+          payload = text ? JSON.parse(text) : null;
+        } catch {
+          lastError = `Production LLM grader returned non-JSON HTTP ${response.status}: ${text.slice(0, 500)}`;
+          continue;
+        }
+        if (!response.ok || !payload?.ok) {
+          lastError = `Production LLM grader failed HTTP ${response.status}: ${JSON.stringify(payload).slice(0, 500)}`;
+          continue;
+        }
+        return {
+          output: payload.result,
+          metadata: {
+            model: payload.model,
+            productionLlmGrader: true,
+            attempt
+          }
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
       }
+    }
+
+    return {
+      error: String(lastError || 'Production LLM grader failed without a detailed error.')
     };
   }
 }
