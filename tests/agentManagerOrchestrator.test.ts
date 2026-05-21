@@ -604,7 +604,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id).slice(0, 2)).toEqual(['plate-55', 'plate-72']);
   });
 
-  it('enriches AgentManager generator calculator loads without turning nulls into zero', async () => {
+  it('uses structured AgentManager generator calculator loads without turning nulls into zero', async () => {
     const conversations = new FakeConversations();
     const calcModel = model({
       async planTurn() {
@@ -627,9 +627,10 @@ describe('AgentManagerOrchestrator', () => {
               comparisonAttributes: [],
               loads: [
                 { kind: 'unknown', name: '\u043d\u0430\u0441\u043e\u0441', count: 1, runningKw: 1.1, startingKw: null, source: 'explicit_user', evidence: 'pump nameplate 1.1 kW' },
-                { kind: 'refrigerator', name: 'household refrigerator', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'ordinary household refrigerator' },
-                { kind: 'gas_boiler', name: 'gas boiler', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'small gas boiler controls' },
-                { kind: 'lighting', name: 'small light', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'small lighting' }
+                { kind: 'refrigerator', name: 'household refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'ordinary household refrigerator' },
+                { kind: 'boiler', name: 'gas boiler controls', count: 1, runningKw: 0.15, startingKw: 0.15, source: 'estimated_average', evidence: 'small gas boiler controls' },
+                { kind: 'lighting', name: 'small light', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence: 'small lighting' },
+                { kind: 'unknown_load', name: 'not enough data', count: 1, runningKw: null, startingKw: null, source: 'estimated_average', evidence: 'null values must not become zero or fallback loads' }
               ],
               simultaneousStarting: true,
               simultaneousStartingKinds: ['pump', 'refrigerator'],
@@ -673,7 +674,8 @@ describe('AgentManagerOrchestrator', () => {
     ]);
     expect(metadata.toolResults?.[0]?.payload?.profile?.requiredStartingKw).toBeCloseTo(4.5, 5);
     expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(4.5);
-    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('generator_load_estimate_used:refrigerator');
+    expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).not.toContain('unknown_load');
+    expect(metadata.toolResults?.[0]?.warnings?.join('\n') ?? '').not.toContain('generator_load_estimate_used:refrigerator');
   });
 
   it('suppresses generator cards while pump/load profile is not ready', async () => {
@@ -733,12 +735,23 @@ describe('AgentManagerOrchestrator', () => {
       },
       async composeAnswer() {
         return {
-          answerText: 'I would show Generator 5 kW and Generator 6 kW as suitable dacha options, but pump startup current is unknown.',
+          answerText: 'I cannot honestly show generator cards yet: the pump type/model or nameplate power is missing, and startup load matters for sizing.',
           factsUsed: [],
-          questionsAsked: [],
+          questionsAsked: [{
+            questionId: 'q.generator.pump_identity_or_power',
+            text: 'What pump type/model or nameplate power can you provide?',
+            reason: 'Generator cards depend on pump startup load.'
+          }],
           toolResultIds: ['catalog-search'],
           leadAction: 'none',
-          riskFlags: ['power_requirements_uncertain']
+          riskFlags: ['power_requirements_uncertain'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            missingFacts: ['pump_type_or_power', 'starting_loads_or_load_profile'],
+            rationale: 'The current dialogue does not have enough load facts for product cards.'
+          }
         };
       }
     });
@@ -757,17 +770,18 @@ describe('AgentManagerOrchestrator', () => {
       answerContract?: { riskFlags?: string[] };
     };
     expect(payload.productCards).toEqual([]);
-    expect(payload.answer).toMatch(/насос|пуск|шильдик|мощност/iu);
-    expect(payload.answer).not.toMatch(/Generator 5 kW|Generator 6 kW/iu);
-    expect(metadata.selectionReadiness?.status).toBe('needs_load_profile');
+    expect(payload.answer).toContain('pump type/model');
+    expect(payload.answer).not.toContain('Generator 5 kW');
+    expect(payload.answer).not.toContain('Generator 6 kW');
+    expect(metadata.selectionReadiness?.status).toBe('blocked_by_answer_contract');
     expect(metadata.selectionReadiness?.missingFacts).toEqual(expect.arrayContaining(['pump_type_or_power']));
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
     expect(metadata.cardSelection?.suppressedProductIds).toEqual(['p1', 'p2']);
-    expect(metadata.cardSelection?.warnings?.join('\n')).toMatch(/product_cards_suppressed:/);
-    expect(metadata.answerContract?.riskFlags).toContain('generator_load_profile_not_ready');
+    expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:selection_readiness_contract');
+    expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
 
-  it('keeps asking for pump details when a generic unknown pump was estimated', async () => {
+  it('does not invent generic pump loads and lets the answer contract block premature cards', async () => {
     const conversations = new FakeConversations();
     const unknownPumpModel = model({
       async planTurn() {
@@ -775,7 +789,7 @@ describe('AgentManagerOrchestrator', () => {
           turnId,
           userMessageSummary: 'buyer has 220 V house, generic unknown pump, fridge, LED light and 1.2 kW grinder',
           dialogueUnderstanding: 'calculate a conservative estimate but pump type/model/power is still missing',
-          nextStepRationale: 'calculator.generatorLoad can estimate loads, then answer must ask for pump details',
+          nextStepRationale: 'calculator.generatorLoad can calculate only the structured loads, then answer must ask for pump details',
           requiresTools: true,
           toolRequests: [{
             id: 'generator-load',
@@ -806,12 +820,23 @@ describe('AgentManagerOrchestrator', () => {
       },
       async composeAnswer() {
         return {
-          answerText: 'Calculated minimum is around 4 kW nominal with reserve. I can select options later.',
+          answerText: 'I can only calculate the structured 1.2 kW grinder load now; I still need pump type/model or nameplate power before showing generator cards.',
           factsUsed: [],
-          questionsAsked: [],
+          questionsAsked: [{
+            questionId: 'q.generator.pump_identity_or_power',
+            text: 'What pump type/model or nameplate power can you provide?',
+            reason: 'The pump cannot be added to the calculation without a structured load basis.'
+          }],
           toolResultIds: ['generator-load'],
           leadAction: 'none',
-          riskFlags: ['unknown_pump_power']
+          riskFlags: ['unknown_pump_power'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            missingFacts: ['pump_type_or_power'],
+            rationale: 'The pump is mentioned but not represented as a usable structured load, so cards are not useful yet.'
+          }
         };
       }
     });
@@ -828,11 +853,11 @@ describe('AgentManagerOrchestrator', () => {
       selectionReadiness?: { status?: string };
       answerContract?: { riskFlags?: string[] };
     };
-    expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).toContain('pump');
-    expect(metadata.toolResults?.[0]?.warnings).toContain('generator_load_estimate_used:pump');
-    expect(metadata.selectionReadiness?.status).toBe('needs_load_profile');
-    expect(payload.answer).toMatch(/тип\/модель|мощност.{0,40}насос|насос.{0,80}шильдик/iu);
-    expect(metadata.answerContract?.riskFlags).toContain('generator_load_profile_not_ready');
+    expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).not.toContain('pump');
+    expect(metadata.toolResults?.[0]?.warnings).not.toContain('generator_load_estimate_used:pump');
+    expect(metadata.selectionReadiness?.status).toBe('blocked_by_answer_contract');
+    expect(payload.answer).toContain('pump type/model');
+    expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
 
   it('allows generator cards after a generator load profile is available', async () => {
@@ -900,7 +925,14 @@ describe('AgentManagerOrchestrator', () => {
           questionsAsked: [],
           toolResultIds: ['generator-load', 'catalog-search'],
           leadAction: 'none',
-          riskFlags: ['power_requirements_uncertain']
+          riskFlags: ['power_requirements_uncertain'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            missingFacts: ['exact_pump_power'],
+            rationale: 'The buyer asked for preliminary generator options and a calculated load profile is available.'
+          }
         };
       }
     });
@@ -912,8 +944,9 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: 'Pump is 1 kW, refrigerator may start with it. Show 5-6 kW generator options.'
     });
 
-    const metadata = payload.metadata as { selectionReadiness?: { status?: string } };
+    const metadata = payload.metadata as { selectionReadiness?: { status?: string; decision?: { status?: string } } };
     expect(metadata.selectionReadiness?.status).toBe('ready_for_cards');
+    expect(metadata.selectionReadiness?.decision?.status).toBe('ready_for_preliminary_cards');
     expect(payload.productCards.length).toBeGreaterThan(0);
   });
 

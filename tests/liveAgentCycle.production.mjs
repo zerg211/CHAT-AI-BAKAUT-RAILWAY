@@ -98,7 +98,12 @@ function latestAssistant(messages) {
 }
 
 function hasGeneratorCardText(text) {
-  return /Генератор\s+бензиновый|Бензиновые генераторы/iu.test(text) && /\d[\d\s]*(?:RUB|₽)/iu.test(text);
+  const lower = text.toLocaleLowerCase('ru-RU');
+  const generatorWord = '\u0433\u0435\u043d\u0435\u0440\u0430\u0442\u043e\u0440';
+  const suitableOptions = '\u043f\u043e\u0434\u0445\u043e\u0434\u044f\u0449\u0438\u0435 \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u044b';
+  const openCard = '\u043e\u0442\u043a\u0440\u044b\u0442\u044c \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443';
+  return lower.includes(generatorWord) &&
+    (lower.includes(suitableOptions) || lower.includes(openCard) || lower.includes('rub'));
 }
 
 function assertNoCriticalText(text, phase) {

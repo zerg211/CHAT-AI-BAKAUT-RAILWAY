@@ -1,6 +1,5 @@
 import type { CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
-import type { AgentIntentContract, AnswerContract, ToolRequest, ToolResult } from './agentManagerContracts.js';
-import type { ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
+import type { AgentIntentContract, AnswerContract, AnswerSelectionReadiness, ToolRequest } from './agentManagerContracts.js';
 import {
   compactModelText,
   displayProductBrand,
@@ -59,6 +58,7 @@ function toolRequestSemanticText(intent: AgentIntentContract) {
     const comparisonAttributes = Array.isArray(args.comparisonAttributes) ? args.comparisonAttributes.filter((item): item is string => typeof item === 'string') : [];
     return [
       request.rationale,
+      typeof args.semanticQuery === 'string' ? args.semanticQuery : '',
       typeof args.query === 'string' ? args.query : '',
       typeof args.reason === 'string' ? args.reason : '',
       typeof args.notes === 'string' ? args.notes : '',
@@ -359,154 +359,48 @@ export function selectProductsForVisibleCards(input: {
 type VisibleCardSelection = ReturnType<typeof selectProductsForVisibleCards>;
 
 export type VisibleCardReadiness = {
-  status: 'ready_for_cards' | 'needs_load_profile';
+  status: 'ready_for_cards' | 'blocked_by_answer_contract';
   productClass: ProductSelectionClass;
   missingFacts: string[];
   rationale: string;
   warnings: string[];
+  decision?: AnswerSelectionReadiness;
 };
-
-function isGeneratorClass(value: ProductSelectionClass) {
-  return value === 'generator' || value === 'weldingGenerator';
-}
-
-function generatorLoadProfileReady(toolResults: ToolResult[]) {
-  return toolResults.some((result) => {
-    if (result.tool !== 'calculator.generatorLoad' || result.status !== 'ok') return false;
-    const profile = (result.payload as { profile?: { requiredNominalKw?: unknown; requiredStartingKw?: unknown } }).profile;
-    return Number(profile?.requiredNominalKw) > 0 || Number(profile?.requiredStartingKw) > 0;
-  });
-}
-
-function activeFactValue(ledgerState: ReducedDialogueLedgerState, factKey: string) {
-  const fact = ledgerState.factsByKey[factKey];
-  return fact?.status === 'active' ? fact.value : undefined;
-}
-
-function factIsTrue(value: unknown) {
-  return value === true || value === 'true' || value === 'yes' || value === 'да';
-}
-
-function hasGeneratorLoadUncertaintyText(text: string) {
-  return /(?:насос|холодильник|болгарк|инструмент|свет|led|пуск|нагруз|потребител|точн\w*\s+цифр\w*\s+нет|мощност\w*\s+не\s+зна|pump|fridge|refrigerator|tool|startup|starting|load)/iu.test(text);
-}
-
-function mentionsPump(text: string) {
-  return /(?:\u043d\u0430\u0441\u043e\u0441|\u0441\u043a\u0432\u0430\u0436\u0438\u043d|\u043f\u043e\u0433\u0440\u0443\u0436\u043d|\u043f\u043e\u0432\u0435\u0440\u0445\u043d\u043e\u0441\u0442\u043d|pump|well pump|submersible)/iu.test(text);
-}
-
-function hasTypedPumpSignal(text: string) {
-  return /(?:\u0441\u043a\u0432\u0430\u0436\u0438\u043d|\u043f\u043e\u0433\u0440\u0443\u0436\u043d|\u043f\u043e\u0432\u0435\u0440\u0445\u043d\u043e\u0441\u0442\u043d|\u0446\u0438\u0440\u043a\u0443\u043b\u044f\u0446|\u0434\u0440\u0435\u043d\u0430\u0436\u043d|\u043d\u0430\u0441\u043e\u0441\u043d\w*\s+\u0441\u0442\u0430\u043d\u0446|well pump|submersible|surface pump|circulation pump|\u043d\u0430\u0441\u043e\u0441.{0,80}\d+(?:[,.]\d+)?\s*(?:\u043a\u0412\u0442|kw|\u0412\u0442|W))/iu.test(text);
-}
-
-function hasGenericUnknownPumpSignal(text: string) {
-  return mentionsPump(text) &&
-    !hasTypedPumpSignal(text) &&
-    /(?:\u043d\u0430\u0441\u043e\u0441.{0,80}(?:\u043d\u0435\s+\u0437\u043d\u0430|\u043d\u0435\s+\u0441\u043a\u0430\u0436\u0443|\u043a\u0430\u043a\u043e\u0439|\u043c\u043e\u0434\u0435\u043b\u044c|\u0431\u0435\u0437\s+\u043c\u043e\u0434\u0435\u043b|\u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442)|(?:\u043d\u0435\s+\u0437\u043d\u0430|\u043d\u0435\s+\u0441\u043a\u0430\u0436\u0443).{0,80}\u043d\u0430\u0441\u043e\u0441|unknown.{0,80}pump|pump.{0,80}unknown)/iu.test(text);
-}
-
-export function answerAsksPumpDetails(text: string, answer: AnswerContract) {
-  const questionText = answer.questionsAsked.map((question) => `${question.questionId} ${question.text}`).join('\n');
-  const combined = [text, questionText].join('\n');
-  return /(?:уточн|скаж|напиш|пришл|посмотр|какой|тип|модель|мощност|шильдик).{0,90}насос|насос.{0,90}(?:уточн|скаж|напиш|пришл|посмотр|какой|тип|модель|мощност|шильдик|\?)/iu.test(combined);
-}
-
-export function appendGeneratorPumpQuestion(text: string) {
-  const question = ' Уточните, пожалуйста, тип/модель или мощность насоса с шильдика - без этого подбор конкретной модели генератора будет только предварительным.';
-  return /тип\/модель|мощност\w*\s+насос|насос.{0,80}шильдик/iu.test(text)
-    ? text
-    : `${text.trim()}${question}`;
-}
-
-function hasExplicitPowerTarget(text: string) {
-  return Boolean(requestedPowerRangeKw(text));
-}
-
-function hasGeneratorUncertaintyRisk(input: {
-  intent: AgentIntentContract;
-  answer: AnswerContract;
-  ledgerState: ReducedDialogueLedgerState;
-  semanticText: string;
-}) {
-  const riskText = [
-    ...input.intent.riskFlags,
-    ...input.answer.riskFlags,
-    ...Object.entries(input.ledgerState.factsByKey).map(([key, fact]) => `${key}:${String(fact.value)}`)
-  ].join('\n');
-  if (/power.*uncertain|uncertain.*power|unknown.*pump|pump.*unknown|needs.*load|load.*calculat|load_profile|power_uncertainty|мощност\w*.{0,40}(неизвест|не\s+зна|нет\s+точн)|насос.{0,40}(неизвест|не\s+зна|модель)|пуск\w*.{0,40}(неизвест|не\s+зна)/iu.test(riskText)) {
-    return true;
-  }
-  if (factIsTrue(activeFactValue(input.ledgerState, 'power_uncertainty'))) return true;
-  return hasGeneratorLoadUncertaintyText(input.semanticText) && !hasExplicitPowerTarget(input.semanticText);
-}
 
 export function assessVisibleCardReadiness(input: {
   cardSelection: VisibleCardSelection;
-  userMessage: string;
-  intent: AgentIntentContract;
   answer: AnswerContract;
-  ledgerState: ReducedDialogueLedgerState;
-  toolResults: ToolResult[];
 }): VisibleCardReadiness {
   const productClass = input.cardSelection.intent;
-  if (!isGeneratorClass(productClass)) {
+  const decision = input.answer.selectionReadiness;
+  if (!decision) {
     return {
       status: 'ready_for_cards',
       productClass,
       missingFacts: [],
-      rationale: 'Visible card readiness is not constrained by generator load sizing.',
+      rationale: 'Selection readiness contract was not provided; preserving legacy card behavior.',
       warnings: []
     };
   }
 
-  const semanticText = [
-    input.userMessage,
-    input.intent.userMessageSummary,
-    input.intent.dialogueUnderstanding,
-    input.intent.nextStepRationale,
-    toolRequestSemanticText(input.intent)
-  ].filter(Boolean).join('\n');
-  if (hasGenericUnknownPumpSignal(semanticText)) {
-    return {
-      status: 'needs_load_profile',
-      productClass,
-      missingFacts: ['pump_type_or_power', 'starting_loads_or_load_profile'],
-      rationale: 'The buyer mentioned a pump but did not know its type/model/power, so generator cards remain unsafe.',
-      warnings: ['product_cards_suppressed:generic_pump_unknown']
-    };
-  }
-
-  if (generatorLoadProfileReady(input.toolResults)) {
+  if (decision.canShowProductCards) {
     return {
       status: 'ready_for_cards',
       productClass,
-      missingFacts: [],
-      rationale: 'A generator load profile is available from calculator.generatorLoad.',
-      warnings: []
-    };
-  }
-
-  if (!hasGeneratorUncertaintyRisk({
-    intent: input.intent,
-    answer: input.answer,
-    ledgerState: input.ledgerState,
-    semanticText
-  })) {
-    return {
-      status: 'ready_for_cards',
-      productClass,
-      missingFacts: [],
-      rationale: 'No generator load uncertainty signal is active for this turn.',
-      warnings: []
+      missingFacts: decision.missingFacts,
+      rationale: decision.rationale,
+      warnings: [],
+      decision
     };
   }
 
   return {
-    status: 'needs_load_profile',
+    status: 'blocked_by_answer_contract',
     productClass,
-    missingFacts: ['pump_type_or_power', 'starting_loads_or_load_profile'],
-    rationale: 'Generator cards require a usable load profile when pump/startup power is uncertain.',
-    warnings: ['product_cards_suppressed:generator_load_profile_not_ready']
+    missingFacts: decision.missingFacts,
+    rationale: decision.rationale,
+    warnings: ['product_cards_suppressed:selection_readiness_contract'],
+    decision
   };
 }
 
@@ -542,12 +436,4 @@ export function suppressVisibleCardsForReadiness(input: {
     selectionReadiness: input.readiness,
     suppressedProductIds
   };
-}
-
-export function generatorLoadReadinessAnswer() {
-  return [
-    'Для точного подбора генератора сейчас не хватает главного: какой насос и какая у него мощность или пусковой ток.',
-    'Холодильник и насос дают кратковременные пусковые нагрузки, поэтому конкретную модель лучше не выбирать вслепую.',
-    'Пришлите модель насоса или мощность с шильдика. Если посмотреть нельзя, я посчитаю по типовым значениям и дам предварительный диапазон с запасом.'
-  ].join(' ');
 }

@@ -76,6 +76,12 @@
 - Не запускать ручной деплой через `railway up`, `railway deployment up`, `railway deploy` или похожие команды, если пользователь прямо не попросил именно ручной Railway-деплой.
 - После push проверять продовый marker/виджет, но не пытаться деплоить в Railway напрямую.
 
+## Проверка OpenAI поведения
+
+Локальные проверки, которые вызывают OpenAI через localhost или локальный Promptfoo/live harness, в этой среде невалидны: OpenAI стабильно возвращает `403 Country, region, or territory not supported`. Не тратить время на такие локальные прогоны и не считать их сигналом качества бота.
+
+Для поведения AI-ассистента использовать только путь после `git commit` + `git push` в GitHub, дождаться Railway deployment из GitHub и проверять продовый Railway API/виджет на `https://bakautprof.ru/`. Локально допустимы только проверки без OpenAI-вызовов: typecheck, unit tests с моками, статический аудит кода.
+
 <!-- repo-task-proof-loop:start -->
 ## Repo task proof loop
 

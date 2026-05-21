@@ -1,0 +1,42 @@
+{
+  "taskId": "2026-05-21-selection-readiness-contract",
+  "status": "local_checks_passed_external_eval_blocked",
+  "acceptanceCriteria": {
+    "AC1": {
+      "status": "pass",
+      "evidence": "AnswerSelectionReadinessSchema exists and answerContractFormat requires selectionReadiness."
+    },
+    "AC2": {
+      "status": "pass",
+      "evidence": "agentManagerCardSelection.ts reads answer.selectionReadiness instead of running generator dialogue/ledger readiness heuristics."
+    },
+    "AC3": {
+      "status": "pass",
+      "evidence": "AgentManagerOrchestrator no longer calls canned generator readiness answer helpers; blocked cards add risk flag selection_readiness_blocked_cards."
+    },
+    "AC4": {
+      "status": "pass",
+      "evidence": "tests/agentManagerOrchestrator.test.ts covers blocked cards, generic unknown pump non-invention, and ready preliminary cards."
+    },
+    "AC5": {
+      "status": "pass",
+      "commands": [
+        "npm test",
+        "npm run typecheck",
+        "git diff --check",
+        "npm run build"
+      ],
+      "summary": "Full unit suite 59 files / 526 tests; typecheck/build/diff-check pass."
+    },
+    "AC6": {
+      "status": "blocked",
+      "command": "npm run evals -- -o .agent/tasks/2026-05-21-refactor-completion/raw/local-evals-after-generator-load-selection-readiness.json",
+      "summary": "0/6 tests passed because local OpenAI generation/recovery fails with 403 Country, region, or territory not supported."
+    }
+  },
+  "publicApiChanged": false,
+  "internalContractChanged": true,
+  "productionLiveRequiredAfterDeploy": true,
+  "llmAverage": null,
+  "llmAverageUsable": false
+}

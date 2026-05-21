@@ -85,6 +85,19 @@ export const AgentIntentContractSchema = z.object({
   riskFlags: z.array(z.string()).default([])
 }).strict();
 
+export const AnswerSelectionReadinessSchema = z.object({
+  productClass: nonEmptyString,
+  status: z.enum([
+    'not_applicable',
+    'needs_more_info',
+    'ready_for_preliminary_cards',
+    'ready_for_exact_cards'
+  ]),
+  canShowProductCards: z.boolean(),
+  missingFacts: z.array(nonEmptyString).default([]),
+  rationale: nonEmptyString
+}).strict();
+
 export const AnswerContractSchema = z.object({
   answerText: nonEmptyString,
   factsUsed: z.array(z.object({
@@ -99,7 +112,8 @@ export const AnswerContractSchema = z.object({
   }).strict()).default([]),
   toolResultIds: z.array(nonEmptyString).default([]),
   leadAction: z.enum(['none', 'offer_form', 'capture_contact', 'confirm_contact_received']).default('none'),
-  riskFlags: z.array(z.string()).default([])
+  riskFlags: z.array(z.string()).default([]),
+  selectionReadiness: AnswerSelectionReadinessSchema.optional()
 }).strict();
 
 export const PreSendReviewSchema = z.object({
@@ -119,6 +133,7 @@ export type ToolRequest = z.infer<typeof ToolRequestSchema>;
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 export type AgentIntentContract = z.infer<typeof AgentIntentContractSchema>;
 export type AnswerContract = z.infer<typeof AnswerContractSchema>;
+export type AnswerSelectionReadiness = z.infer<typeof AnswerSelectionReadinessSchema>;
 export type PreSendReview = z.infer<typeof PreSendReviewSchema>;
 
 function stableJson(value: unknown): string {

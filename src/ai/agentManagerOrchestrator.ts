@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
-import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductElectricalLoadItem, ProductSelectionClass } from '../shared/types.js';
+import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
 import {
   AgentIntentContractSchema,
   AnswerContractSchema,
@@ -17,20 +17,15 @@ import {
   type ToolResult
 } from './agentManagerContracts.js';
 import { deriveNeedStateSnapshotFromLedger, reduceDialogueLedger, type ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
-import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
-import { generatorReferenceLoadItemsFromText } from './generatorLoadReference.js';
 import { researchProductComparisonFacts } from './productComparisonResearch.js';
 import { inferProductIntent, productMatchesIntent } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import {
-  answerAsksPumpDetails,
-  appendGeneratorPumpQuestion,
   assessVisibleCardReadiness,
-  generatorLoadReadinessAnswer,
   productSelectionClasses,
   productCards,
   rankCatalogProductsByNumericFit,
@@ -40,6 +35,7 @@ import {
   toolRequestScopedQuery,
   uniqueStrings
 } from './agentManagerCardSelection.js';
+import { buildGeneratorLoadToolPayload } from './agentManagerGeneratorLoad.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -270,128 +266,6 @@ function normalizeAnswerEvidenceSources(input: {
   };
 }
 
-function positiveNumberFromToolArg(value: unknown) {
-  if (value === null || value === undefined || value === '') return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function countFromToolArg(value: unknown) {
-  const parsed = Number(value ?? 1);
-  return Number.isFinite(parsed) && parsed > 0
-    ? Math.max(1, Math.min(12, Math.round(parsed)))
-    : 1;
-}
-
-function canonicalToolLoadKind(kind: unknown, name: unknown) {
-  const raw = `${String(kind ?? '')} ${String(name ?? '')}`.toLowerCase().replace(/[\s-]+/g, '_');
-  if (/gas_?boiler|baxi|\u0433\u0430\u0437\w*_\u043a\u043e\u0442|\u043a\u043e\u0442[\u0435\u0451]\u043b/u.test(raw)) return 'boiler';
-  const canonicalKind = canonicalElectricalLoadKind(typeof kind === 'string' ? kind : undefined);
-  if (!['unknown', 'unknown_load', 'load', 'consumer'].includes(canonicalKind)) return canonicalKind;
-  return canonicalElectricalLoadKind(typeof name === 'string' ? name : undefined);
-}
-
-function fallbackLoadForKind(kind: string, evidence: string): ProductElectricalLoadItem | undefined {
-  if (kind === 'refrigerator') {
-    return { kind, name: 'refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence };
-  }
-  if (kind === 'lighting') {
-    return { kind, name: 'lighting', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence };
-  }
-  if (kind === 'boiler') {
-    return { kind, name: 'gas boiler controls', count: 1, runningKw: 0.15, startingKw: 0.15, source: 'estimated_average', evidence };
-  }
-  if (kind === 'pump') {
-    return { kind, name: 'pump', count: 1, runningKw: 0.8, startingKw: 3, source: 'estimated_average', evidence };
-  }
-  return undefined;
-}
-
-function loadIdentity(item: ProductElectricalLoadItem) {
-  return canonicalToolLoadKind(item.kind, item.name);
-}
-
-function loadEstimateByKind(items: ProductElectricalLoadItem[]) {
-  const map = new Map<string, ProductElectricalLoadItem>();
-  for (const item of items) {
-    const kind = loadIdentity(item);
-    if (!map.has(kind)) map.set(kind, item);
-  }
-  return map;
-}
-
-function sourceFromToolArg(value: unknown): ProductElectricalLoadItem['source'] {
-  return value === 'web_average' || value === 'catalog_fact' || value === 'estimated_average'
-    ? value
-    : 'explicit_user';
-}
-
-function shouldIgnoreGeneratorReferenceLoad(item: ProductElectricalLoadItem, evidence: string) {
-  const text = evidence.toLowerCase();
-  const gasBoilerContext = /gas\s+boiler|baxi|\u0433\u0430\u0437\w{0,16}\s+\u043a\u043e\u0442[\u0435\u0451]\u043b|\u043a\u043e\u0442[\u0435\u0451]\u043b[^.!?\n]{0,32}\u0433\u0430\u0437/u.test(text);
-  return gasBoilerContext && canonicalElectricalLoadKind(item.kind) === 'heating_resistive';
-}
-
-function mentionsPumpLoad(text: string) {
-  return /(?:\u043d\u0430\u0441\u043e\u0441|\u0441\u043a\u0432\u0430\u0436\u0438\u043d|\u043f\u043e\u0433\u0440\u0443\u0436\u043d|\u043f\u043e\u0432\u0435\u0440\u0445\u043d\u043e\u0441\u0442\u043d|pump|well pump|submersible)/iu.test(text);
-}
-
-function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string): {
-  loads: ProductElectricalLoadItem[];
-  warnings: string[];
-} {
-  const rawLoads = Array.isArray(args.loads) ? args.loads : [];
-  const referenceLoads = generatorReferenceLoadItemsFromText(fallbackEvidence)
-    .filter((item) => !shouldIgnoreGeneratorReferenceLoad(item, fallbackEvidence));
-  const referenceByKind = loadEstimateByKind(referenceLoads);
-  const warnings = new Set<string>();
-  const loads: ProductElectricalLoadItem[] = rawLoads
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    .map<ProductElectricalLoadItem>((item) => {
-      const kind = canonicalToolLoadKind(item.kind, item.name);
-      const source = sourceFromToolArg(item.source);
-      const evidence = typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence;
-      const reference = referenceByKind.get(kind) ?? fallbackLoadForKind(kind, evidence);
-      const explicitRunningKw = positiveNumberFromToolArg(item.runningKw);
-      const explicitStartingKw = positiveNumberFromToolArg(item.startingKw);
-      const canUseEstimate = source !== 'explicit_user' || explicitRunningKw === undefined;
-      const runningKw = explicitRunningKw ?? (canUseEstimate ? reference?.runningKw : undefined);
-      const startingKw = explicitStartingKw ?? (canUseEstimate ? reference?.startingKw : undefined);
-      if ((explicitRunningKw === undefined || explicitStartingKw === undefined) && (reference?.runningKw || reference?.startingKw)) {
-        warnings.add(`generator_load_estimate_used:${kind}`);
-      }
-      return {
-        kind,
-        name: typeof item.name === 'string' && item.name.trim() ? item.name : reference?.name,
-        count: countFromToolArg(item.count),
-        runningKw,
-        startingKw,
-        source: explicitRunningKw === undefined && reference ? reference.source : source,
-        evidence
-      };
-    });
-
-  const existingKinds = new Set(loads.map(loadIdentity));
-  for (const reference of referenceLoads) {
-    const kind = loadIdentity(reference);
-    if (existingKinds.has(kind)) continue;
-    loads.push(reference);
-    existingKinds.add(kind);
-    warnings.add(`generator_load_reference_added:${kind}`);
-  }
-  if (!existingKinds.has('pump') && mentionsPumpLoad(fallbackEvidence)) {
-    const fallbackPump = fallbackLoadForKind('pump', fallbackEvidence);
-    if (fallbackPump) {
-      loads.push(fallbackPump);
-      existingKinds.add('pump');
-      warnings.add('generator_load_reference_added:pump');
-      warnings.add('generator_load_estimate_used:pump');
-    }
-  }
-
-  return { loads, warnings: [...warnings] };
-}
-
 const nullableStringJsonSchema = { type: ['string', 'null'] } as const;
 const nullableNumberJsonSchema = { type: ['number', 'null'] } as const;
 const nullableBooleanJsonSchema = { type: ['boolean', 'null'] } as const;
@@ -615,9 +489,24 @@ const answerContractFormat = {
         },
         toolResultIds: { type: 'array', items: { type: 'string' } },
         leadAction: { type: 'string', enum: ['none', 'offer_form', 'capture_contact', 'confirm_contact_received'] },
-        riskFlags: { type: 'array', items: { type: 'string' } }
+        riskFlags: { type: 'array', items: { type: 'string' } },
+        selectionReadiness: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            productClass: { type: 'string' },
+            status: {
+              type: 'string',
+              enum: ['not_applicable', 'needs_more_info', 'ready_for_preliminary_cards', 'ready_for_exact_cards']
+            },
+            canShowProductCards: { type: 'boolean' },
+            missingFacts: { type: 'array', items: { type: 'string' } },
+            rationale: { type: 'string' }
+          },
+          required: ['productClass', 'status', 'canShowProductCards', 'missingFacts', 'rationale']
+        }
       },
-      required: ['answerText', 'factsUsed', 'questionsAsked', 'toolResultIds', 'leadAction', 'riskFlags']
+      required: ['answerText', 'factsUsed', 'questionsAsked', 'toolResultIds', 'leadAction', 'riskFlags', 'selectionReadiness']
     }
   }
 } as const;
@@ -706,6 +595,9 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для сравнения товаров и нехватки важных фактов планируй web.researchProductFacts.',
             'Для подбора товара планируй catalog.search.',
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
+            'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
+            'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit or estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
+            'If the buyer asks for preliminary minimum/reserve variants after enough load context exists for an estimate, plan both calculator.generatorLoad and catalog.search; if the load context is too vague for any useful selection, plan clarification instead of catalog.search.',
             'Не задавай вопрос, ответ на который уже есть в ledger.'
           ].join('\n')
         },
@@ -741,6 +633,9 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Не задавай лишних вопросов. Если вопрос нужен, он должен быть реально нужен для следующего шага.',
             'If toolResults contains calculator.generatorLoad with status ok, treat payload.profile.requiredNominalKw and requiredStartingKw as the authoritative calculated minimum. Do not replace that number with a broader or higher default class. A higher class may be described only as comfort/reserve, not as the calculated minimum.',
             'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
+            'You must set selectionReadiness for the current answer. It is your semantic decision about whether buyer-visible product cards are useful and honest now.',
+            'When selectionReadiness.canShowProductCards is false, answerText must itself explain what is missing or what the next useful question is. The code will not append a canned clarification.',
+            'Use selectionReadiness.status="needs_more_info" when product cards would be premature. Use "ready_for_preliminary_cards" only when the buyer asked for a preliminary selection and the executed tools give a usable estimated basis. Use "ready_for_exact_cards" when the facts are strong enough for exact cards.',
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
@@ -1061,28 +956,18 @@ export class AgentManagerOrchestrator {
     });
     const selectionReadiness = assessVisibleCardReadiness({
       cardSelection: initialCardSelection,
-      userMessage,
-      intent,
-      answer: initialAnswerContract,
-      ledgerState,
-      toolResults
+      answer: initialAnswerContract
     });
     const cardSelection = suppressVisibleCardsForReadiness({
       cardSelection: initialCardSelection,
       readiness: selectionReadiness
     });
-    const readinessSuppressedCards = selectionReadiness.status !== 'ready_for_cards' && cardSelection.suppressedProductIds.length > 0;
-    if (readinessSuppressedCards) {
-      finalText = generatorLoadReadinessAnswer();
-    } else if (selectionReadiness.status !== 'ready_for_cards' && !answerAsksPumpDetails(finalText, initialAnswerContract)) {
-      finalText = appendGeneratorPumpQuestion(finalText);
-    }
     const finalAnswerContract: AnswerContract = {
       ...answer,
       answerText: finalText,
       leadAction: finalLeadAction,
       riskFlags: selectionReadiness.status !== 'ready_for_cards'
-        ? uniqueStrings([...answer.riskFlags, 'generator_load_profile_not_ready'])
+        ? uniqueStrings([...answer.riskFlags, 'selection_readiness_blocked_cards'])
         : answer.riskFlags
     };
     await this.conversations.saveAnswerContract({
@@ -1232,12 +1117,9 @@ export class AgentManagerOrchestrator {
             warnings: productsById.size ? [] : ['product_details_no_matches']
           });
         } else if (request.tool === 'calculator.generatorLoad') {
-          const { loads, warnings } = loadsFromArgs(request.args, input.userMessage);
-          const profile = calculateGeneratorLoadProfile(loads, {
-            simultaneousStarting: request.args.simultaneousStarting === true,
-            simultaneousStartingKinds: Array.isArray(request.args.simultaneousStartingKinds)
-              ? request.args.simultaneousStartingKinds.filter((item): item is string => typeof item === 'string')
-              : undefined
+          const { loads, profile, warnings } = buildGeneratorLoadToolPayload({
+            request,
+            userMessage: input.userMessage
           });
           result = ToolResultSchema.parse({
             requestId: request.id,
