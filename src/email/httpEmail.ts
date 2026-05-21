@@ -32,17 +32,66 @@ function parseRecipients(value?: string) {
     .filter(Boolean);
 }
 
+function isBlankCharacter(character: string) {
+  return character.trim().length === 0;
+}
+
+function compactWhitespace(value: string) {
+  let result = '';
+  let previousWasBlank = false;
+  for (const character of value) {
+    if (isBlankCharacter(character)) {
+      if (!previousWasBlank) result += ' ';
+      previousWasBlank = true;
+      continue;
+    }
+    result += character;
+    previousWasBlank = false;
+  }
+  return result.trim();
+}
+
+function trimTrailingSlashes(value: string) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+function lowerText(value: string) {
+  return value.toLocaleLowerCase('ru-RU');
+}
+
+function hasLabelColon(line: string, label: string) {
+  const normalizedLine = lowerText(line);
+  const normalizedLabel = lowerText(label);
+  if (!normalizedLine.startsWith(normalizedLabel)) return false;
+
+  let index = normalizedLabel.length;
+  while (index < normalizedLine.length && isBlankCharacter(normalizedLine[index] ?? '')) {
+    index += 1;
+  }
+  return normalizedLine[index] === ':';
+}
+
+function equalsWithOptionalTrailingPeriod(line: string, expected: string) {
+  const normalizedLine = lowerText(line);
+  const normalizedExpected = lowerText(expected);
+  return normalizedLine === normalizedExpected || normalizedLine === `${normalizedExpected}.`;
+}
+
 function isResendEndpoint(url: string) {
   try {
     const target = new URL(url);
-    return target.hostname === 'api.resend.com' && target.pathname.replace(/\/+$/, '') === '/emails';
+    return target.hostname === 'api.resend.com' && trimTrailingSlashes(target.pathname) === '/emails';
   } catch {
     return false;
   }
 }
 
 function compactText(value: string, maxLength: number) {
-  const normalized = value.replace(/\s+/g, ' ').trim();
+  const normalized = compactWhitespace(value);
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
 }
@@ -50,12 +99,12 @@ function compactText(value: string, maxLength: number) {
 function stripTranscriptFromQuestion(question?: string | null) {
   if (!question) return '';
   const lines: string[] = [];
-  for (const rawLine of question.replace(/\r/g, '').split('\n')) {
+  for (const rawLine of question.split('\r').join('').split('\n')) {
     const line = rawLine.trim();
     if (!line) continue;
-    if (/^Последние сообщения\s*:/iu.test(line)) break;
-    if (/^(user|assistant|system)\s*:/iu.test(line)) continue;
-    if (/^Контакт оставлен покупателем прямо в чате\.?$/iu.test(line)) continue;
+    if (hasLabelColon(line, 'Последние сообщения')) break;
+    if (hasLabelColon(line, 'user') || hasLabelColon(line, 'assistant') || hasLabelColon(line, 'system')) continue;
+    if (equalsWithOptionalTrailingPeriod(line, 'Контакт оставлен покупателем прямо в чате')) continue;
     lines.push(line);
   }
   return compactText(lines.join('; '), 850);

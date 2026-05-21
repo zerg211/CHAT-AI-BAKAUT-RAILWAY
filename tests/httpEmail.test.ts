@@ -42,7 +42,7 @@ function lead(overrides: Partial<Lead> = {}): Lead {
       'Сводка потребности: нужен бензиновый генератор для дачи, бюджет до 80 тыс.',
       'Показанные/выбранные позиции: SUMEC SU4500i - 79 000 ₽',
       '',
-      'Последние сообщения:',
+      'Последние сообщения   :',
       'user: старая простыня из истории'
     ].join('\n'),
     status: 'pending_email',
@@ -120,7 +120,7 @@ describe('sendLeadEmail', () => {
     );
     vi.doMock('undici', () => ({ fetch: fetchMock }));
     clearEmailEnv();
-    process.env.EMAIL_HTTP_URL = 'https://api.resend.com/emails';
+    process.env.EMAIL_HTTP_URL = 'https://api.resend.com/emails///';
     process.env.EMAIL_HTTP_METHOD = 'POST';
     process.env.EMAIL_HTTP_AUTH_HEADER = 'Authorization: Bearer test-token';
     process.env.EMAIL_FROM = 'Bakaut <orp5@bakaut.biz>';
@@ -130,7 +130,7 @@ describe('sendLeadEmail', () => {
     const result = await sendLeadEmail(lead(), { session: session(), messages: messages() });
 
     expect(result).toMatchObject({ ok: true, status: 200 });
-    expect(fetchMock).toHaveBeenCalledWith('https://api.resend.com/emails', expect.objectContaining({
+    expect(fetchMock).toHaveBeenCalledWith('https://api.resend.com/emails///', expect.objectContaining({
       method: 'POST',
       headers: expect.objectContaining({
         'content-type': 'application/json',

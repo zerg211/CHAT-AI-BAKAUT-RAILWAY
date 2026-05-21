@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1844,
+  "count": 1832,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -8476,90 +8476,6 @@
       "file": "src/db/repositories.ts",
       "kind": "regular_expression_literal",
       "hash": "c2be8b4410f8e831",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|replace_regex_argument|67837526b366b155|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "replace_regex_argument",
-      "hash": "67837526b366b155",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regular_expression_literal|bc23882e995b958b|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regular_expression_literal",
-      "hash": "bc23882e995b958b",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|replace_regex_argument|47138479a7b97fde|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "replace_regex_argument",
-      "hash": "47138479a7b97fde",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regular_expression_literal|c2be8b4410f8e831|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|replace_regex_argument|f2bb76d3ddde3a34|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "replace_regex_argument",
-      "hash": "f2bb76d3ddde3a34",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regular_expression_literal|549672dfd93fbff8|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regular_expression_literal",
-      "hash": "549672dfd93fbff8",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regex_test_call|b6a5ea57f6eafd48|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regex_test_call",
-      "hash": "b6a5ea57f6eafd48",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regular_expression_literal|cec452c635dc5656|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regular_expression_literal",
-      "hash": "cec452c635dc5656",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regex_test_call|a72a1029f5bd9a9e|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regex_test_call",
-      "hash": "a72a1029f5bd9a9e",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regular_expression_literal|ced6cdcac262cb3c|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regular_expression_literal",
-      "hash": "ced6cdcac262cb3c",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regex_test_call|647759e4bd13ed91|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regex_test_call",
-      "hash": "647759e4bd13ed91",
-      "occurrence": 1
-    },
-    {
-      "id": "src/email/httpEmail.ts|regular_expression_literal|d3ea69457458ae95|1",
-      "file": "src/email/httpEmail.ts",
-      "kind": "regular_expression_literal",
-      "hash": "d3ea69457458ae95",
       "occurrence": 1
     },
     {
