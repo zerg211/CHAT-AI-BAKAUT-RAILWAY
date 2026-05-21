@@ -1,5 +1,5 @@
 {
-  "status": "local_pass_production_pending",
+  "status": "pass",
   "taskId": "2026-05-21-eval-provider-card-contract-stability",
   "validations": [
     {
@@ -32,9 +32,15 @@
     }
   ],
   "production": {
-    "status": "pending_after_push",
+    "status": "pass",
+    "commit": "4ceb66129bb7296c008208d16b4139ccf870a07a",
     "baseUrl": "https://chat-ai-production-3057.up.railway.app",
-    "pageUrl": "https://bakautprof.ru/"
+    "pageUrl": "https://bakautprof.ru/",
+    "artifact": ".agent/tasks/2026-05-21-eval-provider-card-contract-stability/production-evals-after-4ceb661.json",
+    "summary": ".agent/tasks/2026-05-21-eval-provider-card-contract-stability/production-evals-after-4ceb661.summary.json",
+    "deterministicAverage": 1,
+    "assertionPassRate": 1,
+    "llmAverageStatus": "not_configured"
   },
   "regex": {
     "newRegexConstructs": 0,

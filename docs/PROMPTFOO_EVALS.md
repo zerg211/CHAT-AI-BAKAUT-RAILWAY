@@ -29,6 +29,7 @@ Optional:
 
 - `PROMPTFOO_CHAT_PAGE_URL`
 - `PROMPTFOO_CHAT_TIMEOUT_MS`
+- `PROMPTFOO_CHAT_ADMIN_TOKEN` for the production LLM grader. If omitted, the grader falls back to `ADMIN_API_KEY` or `ADMIN_PASSWORD` from `.env`.
 
 Production baseline against the widget backend embedded on `https://bakautprof.ru/`:
 
@@ -37,6 +38,8 @@ PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app \
 PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/?agentHarness=1 \
 npm run evals -- --no-cache -j 1
 ```
+
+The suite includes a production-backed `llm-rubric` assertion. The grader calls `POST /api/admin/evals/llm-rubric` on the production backend, so LLM scoring uses Railway's OpenAI access instead of this local machine's OpenAI path.
 
 On Windows PowerShell:
 

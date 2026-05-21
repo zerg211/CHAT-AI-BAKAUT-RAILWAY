@@ -2,7 +2,7 @@
 
 ## Summary
 
-Status: local validation PASS, production Promptfoo rerun pending after push.
+Status: PASS.
 
 This pass keeps the fix in the agent/harness layer instead of adding phrase-specific bot rules:
 
@@ -26,8 +26,9 @@ The working tree also contains a separate exact-model guidance diff in `src/ai/a
 
 ## Production Gate
 
-Pending:
-
-- Commit and push this pass.
-- Wait for Railway to deploy the pushed commit.
-- Rerun production Promptfoo with `PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app` and `PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/`.
+- Pushed commit: `4ceb66129bb7296c008208d16b4139ccf870a07a`.
+- Railway marker reached `4ceb66129bb7296c008208d16b4139ccf870a07a`.
+- Production Promptfoo artifact: `.agent/tasks/2026-05-21-eval-provider-card-contract-stability/production-evals-after-4ceb661.json`.
+- Production Promptfoo summary: `.agent/tasks/2026-05-21-eval-provider-card-contract-stability/production-evals-after-4ceb661.summary.json`.
+- Result: 6/6 passed, deterministic average `1`, assertion pass rate `1`.
+- LLM average status remained `not_configured`; this is handled by task `2026-05-21-production-llm-judge-metric`.

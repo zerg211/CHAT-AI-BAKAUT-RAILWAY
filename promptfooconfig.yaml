@@ -9,6 +9,21 @@ providers:
       baseUrl: http://localhost:3010
       timeoutMs: 180000
 
+defaultTest:
+  assert:
+    - type: llm-rubric
+      provider: file://evals/promptfoo/production-llm-grader-provider.cjs
+      metric: llmAverage
+      threshold: 0.85
+      value: |
+        Score the BAKAUT AI chat conversation from 0 to 1.
+        Give 0.90 or higher only when the assistant behaves like a useful sales/support consultant:
+        it understands the current buyer need, uses context correctly, gives a concrete helpful answer,
+        keeps product cards consistent with the answer, grounds technical claims in available evidence,
+        asks only necessary next questions, and does not overpromise delivery, stock, discounts, timing, or special terms.
+        Deduct for scripted filler, hallucinated facts, stale context, missing handoff for commercial terms,
+        premature product cards, or contradictions between answer text and product cards.
+
 tests:
   - description: vague_generator_no_cards_before_load_profile
     vars:

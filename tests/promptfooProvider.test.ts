@@ -7,8 +7,14 @@ const BakautChatAppProvider = require('../evals/promptfoo/chat-app-provider.cjs'
 }) => {
   callApi: (prompt: string, context?: { vars?: Record<string, unknown> }) => Promise<{ output: string }>;
 };
+const BakautProductionLlmGraderProvider = require('../evals/promptfoo/production-llm-grader-provider.cjs') as new (options?: {
+  config?: Record<string, unknown>;
+}) => {
+  callApi: (prompt: string) => Promise<{ output?: unknown; error?: string; metadata?: Record<string, unknown> }>;
+};
 
 const originalFetch = global.fetch;
+const originalAdminToken = process.env.PROMPTFOO_CHAT_ADMIN_TOKEN;
 
 function jsonResponse(body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -30,6 +36,11 @@ function sseDoneResponse() {
 
 afterEach(() => {
   global.fetch = originalFetch;
+  if (originalAdminToken === undefined) {
+    delete process.env.PROMPTFOO_CHAT_ADMIN_TOKEN;
+  } else {
+    process.env.PROMPTFOO_CHAT_ADMIN_TOKEN = originalAdminToken;
+  }
   vi.restoreAllMocks();
 });
 
@@ -75,5 +86,50 @@ describe('Promptfoo chat app provider', () => {
     expect(messageAttempts).toBe(1);
     expect(output.sessionId).toBe('session-1');
     expect(output.turns[0].ok).toBe(true);
+  });
+
+  it('uses the production admin judge endpoint for LLM grading', async () => {
+    process.env.PROMPTFOO_CHAT_ADMIN_TOKEN = 'test-admin-token';
+    let receivedPrompt = '';
+    let receivedAuthorization = '';
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.endsWith('/api/admin/evals/llm-rubric')) {
+        throw new Error(`Unexpected fetch ${url}`);
+      }
+      receivedAuthorization = String(init?.headers && typeof init.headers === 'object'
+        ? (init.headers as Record<string, string>).authorization
+        : '');
+      const body = JSON.parse(String(init?.body || '{}'));
+      receivedPrompt = body.prompt;
+      return jsonResponse({
+        ok: true,
+        model: 'gpt-5.4-mini',
+        result: {
+          pass: true,
+          score: 0.96,
+          reason: 'Helpful and grounded.'
+        }
+      });
+    }) as typeof fetch;
+
+    const provider = new BakautProductionLlmGraderProvider({
+      config: {
+        baseUrl: 'https://chat.example.test/',
+        timeoutMs: 1000
+      }
+    });
+
+    const result = await provider.callApi('Rendered rubric prompt');
+
+    expect(receivedAuthorization).toBe('Bearer test-admin-token');
+    expect(receivedPrompt).toBe('Rendered rubric prompt');
+    expect(result.output).toEqual({
+      pass: true,
+      score: 0.96,
+      reason: 'Helpful and grounded.'
+    });
+    expect(result.metadata?.productionLlmGrader).toBe(true);
   });
 });
