@@ -28,7 +28,44 @@
     }
   ],
   "productionChecks": {
-    "status": "PENDING",
-    "reason": "Requires commit, push, Railway deployment marker, and production Promptfoo rerun."
-  }
+    "afterE07a67d": {
+      "command": "npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-21-agentic-generator-budget-gate/production-evals-after-e07a67d.json",
+      "status": "FAIL",
+      "deterministicAverage": 0.9063333333333333,
+      "llmAverage": 0.9466666666666667,
+      "llmAverageStatus": "ready",
+      "failureCause": "Three LLM rubric components received production judge HTTP 500 because Promptfoo sent oversized full metadata output."
+    },
+    "afterCompactionFix": {
+      "status": "PENDING",
+      "reason": "Requires commit, push, Railway deployment marker, and production Promptfoo rerun."
+    }
+  },
+  "additionalLocalChecks": [
+    {
+      "command": "npm test -- tests/promptfooProvider.test.ts tests/promptfooSummary.test.ts",
+      "status": "PASS",
+      "testFiles": 2,
+      "tests": 9
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "detail": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "testFiles": 65,
+      "tests": 558
+    }
+  ]
 }

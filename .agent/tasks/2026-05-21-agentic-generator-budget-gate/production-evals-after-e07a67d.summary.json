@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-21-agentic-generator-budget-gate\\production-evals-after-e07a67d.json",
+  "generatedAt": "2026-05-21T18:42:28.380Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 3,
+    "failures": 3,
+    "errors": 0,
+    "averageScore": 0.9063333333333333,
+    "assertionPassRate": 0.9090909090909091,
+    "assertionPassCount": 30,
+    "assertionFailCount": 3,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.9466666666666667,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 3
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

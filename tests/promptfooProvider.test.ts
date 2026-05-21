@@ -209,4 +209,88 @@ describe('Promptfoo chat app provider', () => {
     });
     expect(result.metadata?.attempt).toBe(5);
   });
+
+  it('compacts oversized Promptfoo grading prompts before calling production judge', async () => {
+    process.env.PROMPTFOO_CHAT_ADMIN_TOKEN = 'test-admin-token';
+    let sentPrompt = '';
+    const longDescription = 'very long product description '.repeat(5000);
+    const output = {
+      caseId: 'oversized',
+      turns: [{
+        user: 'Need a generator',
+        ok: true,
+        answer: 'A 5 kW generator is a reasonable preliminary option.',
+        productCards: [{
+          id: 'generator-1',
+          name: 'Generator 5 kW',
+          brand: 'TEST',
+          category: 'Generators',
+          price: 90000,
+          description: longDescription
+        }],
+        metadata: {
+          intentContract: {
+            userMessageSummary: 'generator selection',
+            dialogueUnderstanding: longDescription,
+            toolRequests: [{
+              id: 'catalog-1',
+              tool: 'catalog.search',
+              args: {
+                productIntent: 'generator',
+                query: '5 kW generator',
+                semanticQuery: longDescription
+              },
+              rationale: longDescription
+            }]
+          },
+          toolResults: [{
+            requestId: 'catalog-1',
+            tool: 'catalog.search',
+            status: 'ok',
+            payload: {
+              products: [{
+                id: 'generator-1',
+                name: 'Generator 5 kW',
+                price: 90000,
+                description: longDescription
+              }]
+            }
+          }]
+        }
+      }]
+    };
+    const prompt = JSON.stringify([{
+      role: 'user',
+      content: `<Output>\n${JSON.stringify(output)}\n</Output>\n<Rubric>\nScore quality.\n</Rubric>`
+    }]);
+
+    global.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body || '{}'));
+      sentPrompt = body.prompt;
+      return jsonResponse({
+        ok: true,
+        model: 'gpt-5.4-mini',
+        result: {
+          pass: true,
+          score: 0.95,
+          reason: 'Compact prompt preserved judge inputs.'
+        }
+      });
+    }) as typeof fetch;
+
+    const provider = new BakautProductionLlmGraderProvider({
+      config: {
+        baseUrl: 'https://chat.example.test',
+        maxPromptChars: 20000
+      }
+    });
+
+    const result = await provider.callApi(prompt);
+
+    expect(sentPrompt.length).toBeLessThanOrEqual(20000);
+    expect(sentPrompt).toContain('A 5 kW generator is a reasonable preliminary option.');
+    expect(sentPrompt).toContain('Generator 5 kW');
+    expect(sentPrompt).not.toContain(longDescription);
+    expect(Number(result.metadata?.originalPromptChars)).toBeGreaterThan(Number(result.metadata?.sentPromptChars));
+  });
 });
