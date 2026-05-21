@@ -47,9 +47,87 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
   const usefulAttributes = attributes.length
     ? attributes
     : ['specification', 'manual', 'starter', 'start method'];
-  return targetProductNames.flatMap((target) =>
-    usefulAttributes.slice(0, 6).map((attribute) => `"${target}" ${attribute}`)
+  const defaultAttributes = [
+    'specification',
+    'manual pdf',
+    'instruction',
+    'ignition key',
+    'key start',
+    'push button start',
+    'electric starter',
+    'recoil starter',
+    'ключ зажигания',
+    'кнопка запуска',
+    'электростартер',
+    'ручной стартер'
+  ];
+  return targetProductNames.flatMap((target) => {
+    const aliases = exactTargetAliases(target);
+    const queryAttributes = uniqueStrings([...usefulAttributes, ...defaultAttributes]).slice(0, 14);
+    return aliases.flatMap((alias) => queryAttributes.map((attribute) => `${alias} ${attribute}`));
+  });
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function exactTargetAliases(target: string) {
+  const tokens = target
+    .split(/[^0-9a-zа-яё]+/iu)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const modelTokens = tokens.filter((token) => /[0-9]/u.test(token) && /[a-zа-яё]/iu.test(token));
+  return uniqueStrings([
+    `"${target}"`,
+    target,
+    ...modelTokens,
+    ...modelTokens.map((token) => `"${token}"`)
+  ]);
+}
+
+function compactExactTargetText(value: unknown) {
+  return String(value ?? '').toLocaleLowerCase('ru-RU').replace(/[^0-9a-zа-яё]+/giu, '');
+}
+
+function factMatchesTarget(fact: ProductComparisonResearchFact, targetName: string) {
+  const factText = compactExactTargetText([fact.productName, fact.sourceUrl, fact.sourceTitle, fact.evidence].filter(Boolean).join(' '));
+  const targetText = compactExactTargetText(targetName);
+  const targetTokens = exactTargetAliases(targetName)
+    .map(compactExactTargetText)
+    .filter((token) => token.length >= 4 && /[0-9]/u.test(token));
+  if (targetTokens.length) return targetTokens.some((token) => factText.includes(token));
+  return targetText.length >= 5 && factText.includes(targetText);
+}
+
+function hasConfirmedExactTargetFacts(result: ProductComparisonResearchResult, targetProductNames: string[]) {
+  return result.facts.some((fact) =>
+    fact.sourceType === 'web' &&
+    ['high', 'medium'].includes(fact.confidence) &&
+    targetProductNames.some((targetName) => factMatchesTarget(fact, targetName)) &&
+    !/not confirmed|not found|не найден|не подтвержден|не подтвержд/iu.test(fact.value)
   );
+}
+
+function normalizeResearchParsed(parsed: Record<string, unknown>): ProductComparisonResearchResult {
+  return {
+    usedWebSearch: parsed.usedWebSearch === true,
+    facts: Array.isArray(parsed.facts)
+      ? (parsed.facts as Array<ProductComparisonResearchFact & { sourceUrl?: string | null; sourceTitle?: string | null }>).map((fact) => ({
+          ...fact,
+          sourceUrl: typeof fact.sourceUrl === 'string' ? fact.sourceUrl : undefined,
+          sourceTitle: typeof fact.sourceTitle === 'string' ? fact.sourceTitle : undefined
+        }))
+      : [],
+    conflicts: Array.isArray(parsed.conflicts)
+      ? (parsed.conflicts as Array<ProductComparisonResearchConflict & { catalogValue?: string | null }>).map((conflict) => ({
+          ...conflict,
+          catalogValue: typeof conflict.catalogValue === 'string' ? conflict.catalogValue : undefined
+        }))
+      : [],
+    summaryForAnswer: typeof parsed.summaryForAnswer === 'string' ? parsed.summaryForAnswer : '',
+    warnings: Array.isArray(parsed.warnings) ? parsed.warnings.filter((item): item is string => typeof item === 'string') : []
+  };
 }
 
 export async function researchProductComparisonFacts(input: {
@@ -170,23 +248,57 @@ export async function researchProductComparisonFacts(input: {
     stage: 'product_comparison_research',
     signal: input.signal
   });
+  const primaryResult = normalizeResearchParsed(parsed);
 
-  return {
-    usedWebSearch: parsed.usedWebSearch === true,
-    facts: Array.isArray(parsed.facts)
-      ? (parsed.facts as Array<ProductComparisonResearchFact & { sourceUrl?: string | null; sourceTitle?: string | null }>).map((fact) => ({
-          ...fact,
-          sourceUrl: typeof fact.sourceUrl === 'string' ? fact.sourceUrl : undefined,
-          sourceTitle: typeof fact.sourceTitle === 'string' ? fact.sourceTitle : undefined
-        }))
-      : [],
-    conflicts: Array.isArray(parsed.conflicts)
-      ? (parsed.conflicts as Array<ProductComparisonResearchConflict & { catalogValue?: string | null }>).map((conflict) => ({
-          ...conflict,
-          catalogValue: typeof conflict.catalogValue === 'string' ? conflict.catalogValue : undefined
-        }))
-      : [],
-    summaryForAnswer: typeof parsed.summaryForAnswer === 'string' ? parsed.summaryForAnswer : '',
-    warnings: Array.isArray(parsed.warnings) ? parsed.warnings.filter((item): item is string => typeof item === 'string') : []
-  };
+  if (targetProductNames.length && !hasConfirmedExactTargetFacts(primaryResult, targetProductNames)) {
+    const retryRequest: Record<string, unknown> = {
+      ...request,
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are a second-pass exact-model web research module for a sales assistant.',
+            'The first pass did not find a confirmed exact-target fact. Search again without catalog product context.',
+            'Use exactTargetSearchQueries and search public web pages, official manufacturer pages, distributor pages, PDFs, manuals, and specification sheets that mention the exact model/code.',
+            'Accept a fact only when sourceUrl, sourceTitle, or evidence names the exact target model/code.',
+            'For key vs push-button questions, ignition keys in the kit or ignition-key wording supports key start; absence of push-button wording means push-button is not confirmed.',
+            'Do not use nearby model pages as facts for the target. Return no fact if the exact target still cannot be verified.',
+            'Return only JSON.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            buyerQuestion: input.userMessage,
+            targetProductNames,
+            comparisonAttributes,
+            exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes)
+          })
+        }
+      ],
+      tools: [{ type: 'web_search_preview', search_context_size: 'high' }],
+      tool_choice: { type: 'web_search_preview' }
+    };
+    const retry = await createStructuredJsonResponse({
+      request: retryRequest,
+      stage: 'product_comparison_research_exact_retry',
+      signal: input.signal
+    });
+    const retryResult = normalizeResearchParsed(retry.parsed);
+    if (hasConfirmedExactTargetFacts(retryResult, targetProductNames)) {
+      return {
+        usedWebSearch: primaryResult.usedWebSearch || retryResult.usedWebSearch,
+        facts: retryResult.facts,
+        conflicts: retryResult.conflicts.length ? retryResult.conflicts : primaryResult.conflicts,
+        summaryForAnswer: retryResult.summaryForAnswer || primaryResult.summaryForAnswer,
+        warnings: uniqueStrings([
+          ...primaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
+          ...retryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
+          'exact_target_external_retry_used'
+        ])
+      };
+    }
+  }
+
+  return primaryResult;
 }
