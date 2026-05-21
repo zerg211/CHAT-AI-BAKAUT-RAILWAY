@@ -1,0 +1,57 @@
+{
+  "taskId": "2026-05-21-product-trait-coercion-extraction",
+  "date": "2026-05-21",
+  "verdict": "PASS",
+  "changes": [
+    "Added src/ai/productTraitCoercion.ts.",
+    "Moved product intent/fuel/start/role/enclosure coercion, list coercion, nullable value coercion, and required product trait helpers out of src/ai/assistant.ts.",
+    "Updated src/ai/assistant.ts to import the extracted helpers and types.",
+    "Added focused product trait coercion tests.",
+    "Preserved the legacy behavior that coerceProductIntentList does not trim strings before enum coercion.",
+    "Did not change prompts, models, OpenAI request shape, product ranking, card rendering, recovery logic, or business policy.",
+    "Added no regex constructs."
+  ],
+  "lineCounts": {
+    "src/ai/assistant.ts": 12205,
+    "src/ai/productTraitCoercion.ts": 154
+  },
+  "validation": [
+    {
+      "command": "npm test -- tests/productTraitCoercion.test.ts tests/semanticMemoryCoercion.test.ts tests/recommendationRanking.test.ts tests/assistantTurnPlanSchemas.test.ts",
+      "status": "PASS",
+      "summary": "4 files, 215 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1828."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "72 files, 590 tests"
+    },
+    {
+      "command": "git diff --check -- src/ai/assistant.ts src/ai/productTraitCoercion.ts tests/productTraitCoercion.test.ts",
+      "status": "PASS",
+      "summary": "Line-ending warnings only"
+    }
+  ],
+  "scopeNote": {
+    "unrelatedUnstagedFile": "src/ai/productComparisonResearch.ts",
+    "includedInCommit": false
+  },
+  "productionGate": {
+    "promptfooOrWidgetRerun": false,
+    "reason": "Deterministic coercion extraction only; no prompts, model selection, OpenAI request semantics, tools, product/card behavior, or user-facing answer logic changed.",
+    "railwayMarkerRequiredAfterPush": true
+  }
+}
