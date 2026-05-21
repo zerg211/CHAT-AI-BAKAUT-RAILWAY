@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-21-bounded-preliminary-load-estimates",
-  "status": "pending_push_and_production_rerun",
+  "status": "pass",
   "localChecks": [
     {
       "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
@@ -15,11 +15,27 @@
       "tests": 28
     },
     {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts tests/openaiStructured.test.ts",
+      "status": "pass",
+      "testFiles": 2,
+      "tests": 28
+    },
+    {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts tests/openaiStructured.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "status": "pass",
+      "testFiles": 3,
+      "tests": 37
+    },
+    {
       "command": "npm run typecheck",
       "status": "pass"
     },
     {
       "command": "git diff --check",
+      "status": "pass"
+    },
+    {
+      "command": "node --check evals/promptfoo/chat-app-provider.cjs",
       "status": "pass"
     }
   ],
@@ -44,9 +60,52 @@
     "protocolPath": "local-live-tests/2026-05-21-bakautprof-production-agent-cycle.production.md"
   },
   "localFixAfterFailure": "Use a balanced structured JSON object extractor so AgentManager can parse valid JSON contracts with trailing model text. No user-text regex or keyword matching was added.",
+  "productionPromptfooAfterD91ef7d": {
+    "run": true,
+    "status": "pass",
+    "passed": 6,
+    "total": 6,
+    "rawArtifact": ".agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-d91ef7d.json"
+  },
+  "productionLiveAfterD91ef7d": {
+    "run": true,
+    "status": "fail",
+    "failure": "Generic unknown pump produced generator cards before pump type or power was known.",
+    "sessionId": "54930025-e14e-4d70-bf6b-229290d1b8e3",
+    "rawArtifact": "local-live-tests/production-agent-cycle-failure.json"
+  },
+  "localFixAfterLiveFailure": "Add structured per-load basisKind so LLM classifies exact_power, checked_fact, specific_type_or_function, generic_load_name, or unknown; runtime blocks preliminary generator cards for estimated motor loads that remain generic_load_name. No regex, keyword matching, canned phrase, or scenario-specific buyer text rule was added.",
+  "deploymentAfterBasisKindFix": {
+    "commit": "5c4502b41097519246a6a789780a5962b5c33df3",
+    "branch": "main",
+    "healthEndpoint": "https://chat-ai-production-3057.up.railway.app/api/health"
+  },
+  "productionPromptfooAfter5c4502b": {
+    "run": true,
+    "status": "pass",
+    "passed": 6,
+    "total": 6,
+    "command": "PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/ npm run evals -- -o .agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-5c4502b.json",
+    "rawArtifact": ".agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-5c4502b.json"
+  },
+  "deploymentFinal": {
+    "commit": "bcf920e20f7e0870bf3f0e9c04e380b475a8b5a4",
+    "branch": "main",
+    "healthEndpoint": "https://chat-ai-production-3057.up.railway.app/api/health"
+  },
+  "productionPromptfooAfterBcf920e": {
+    "run": true,
+    "status": "pass",
+    "passed": 6,
+    "total": 6,
+    "command": "PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/ npm run evals -- -o .agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-bcf920e.json",
+    "rawArtifact": ".agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-bcf920e.json"
+  },
   "productionLive": {
-    "run": false,
-    "reason": "Local fix requires commit/push and Railway deployment before rerun"
+    "run": true,
+    "status": "pass",
+    "command": "ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 ALLOW_FIXED_PRODUCTION_REPLAY=1 npm run test:live:production",
+    "protocolPath": "local-live-tests/2026-05-21-bakautprof-production-agent-cycle.production.md"
   },
   "acceptanceCriteria": {
     "AC1": "pass",
@@ -54,6 +113,6 @@
     "AC3": "pass",
     "AC4": "pass",
     "AC5": "pass",
-    "AC6": "pending"
+    "AC6": "pass"
   }
 }
