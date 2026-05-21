@@ -39,6 +39,8 @@
     "followUpObservation": "Key/ignition-lock overclaim was removed, but present exact target still received nearby alternatives; fixed locally pending redeploy.",
     "secondFollowUpConversation": 1323,
     "secondFollowUpObservation": "Planner reused RD2910E start-control context for newly named RD3910E and skipped same-turn tools; fixed locally pending redeploy.",
+    "thirdFollowUpConversation": 1324,
+    "thirdFollowUpObservation": "Hard overclaim checks passed, but buyer-visible text surfaced only button non-confirmation while key/switch ambiguity stayed in metadata; fixed locally pending redeploy.",
     "required": [
       "production Promptfoo after Railway deploy",
       "production live widget check through https://bakautprof.ru/"
@@ -51,6 +53,7 @@
     "AC4": "pass_local",
     "AC4b": "pass_local",
     "AC4c": "pass_local",
+    "AC4d": "pass_local",
     "AC5": "pass",
     "AC6": "pass",
     "AC7": "pending_production_gate"

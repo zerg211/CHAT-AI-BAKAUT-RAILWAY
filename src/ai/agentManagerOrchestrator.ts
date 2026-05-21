@@ -622,6 +622,47 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
   return clauses;
 }
 
+function startControlCoverageLabels(attribute: unknown, value: unknown) {
+  const text = normalizeModelText([attribute, value].filter(Boolean).join(' '));
+  const labels: string[] = [];
+  if (
+    text.includes('key') ||
+    text.includes('ignition') ||
+    text.includes('switch') ||
+    text.includes('ключ') ||
+    text.includes('зажиган') ||
+    text.includes('выключател')
+  ) {
+    labels.push('ключу/выключателю');
+  }
+  if (
+    text.includes('button') ||
+    text.includes('pushbutton') ||
+    text.includes('кноп')
+  ) {
+    labels.push('кнопке');
+  }
+  return labels;
+}
+
+function startControlCoverageUncertaintyLine(coverage: unknown[]) {
+  const statements: string[] = [];
+  const seen = new Set<string>();
+  for (const item of coverage) {
+    if (!item || typeof item !== 'object') continue;
+    const coverageItem = item as { attribute?: unknown; status?: unknown; value?: unknown };
+    const status = coverageItem.status;
+    if (status !== 'not_confirmed' && status !== 'ambiguous' && status !== 'not_found') continue;
+    for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
+      if (seen.has(label)) continue;
+      seen.add(label);
+      const suffix = status === 'ambiguous' ? 'точного подтверждения нет' : 'не подтверждено';
+      statements.push(`по ${label} ${suffix}`);
+    }
+  }
+  return statements.length ? `По деталям запуска: ${statements.join('; ')}.` : '';
+}
+
 function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
   const lines: string[] = [];
   for (const result of toolResults) {
@@ -653,6 +694,8 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
     });
     if (!hasUncertainCoverage) continue;
     lines.push(directAnswer);
+    const uncertaintyLine = startControlCoverageUncertaintyLine(coverage);
+    if (uncertaintyLine) lines.push(uncertaintyLine);
     let hasAbsentTarget = false;
     for (const presence of payload.catalogPresence ?? []) {
       if (!presence.productName) continue;

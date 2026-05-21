@@ -546,16 +546,26 @@ describe('AgentManager comparison research flow', () => {
       }],
       conflicts: [],
       answerGuidance: {
-        directAnswer: 'У RD3910E подтвержден ручной стартер / электростартер; ключ/выключатель и кнопка по точным источникам не подтверждены.',
+        directAnswer: 'У RD3910E подтвержден ручной стартер / электростартер; кнопка по точным источникам не подтверждена.',
         completeness: 'partially_answered',
-        coverage: [{
-          attribute: 'ignition control',
-          status: 'not_confirmed',
-          value: 'key/button control not confirmed',
-          evidence: 'current exact target sources do not name key, switch, or push-button control',
-          sourceUrl: 'https://example.test/firman-rd3910e',
-          sourceTitle: 'FIRMAN RD3910E specification'
-        }]
+        coverage: [
+          {
+            attribute: 'key start',
+            status: 'ambiguous',
+            value: 'key/switch control not fully confirmed',
+            evidence: 'current exact target sources confirm electric starter but do not fully prove key/switch control',
+            sourceUrl: 'https://example.test/firman-rd3910e',
+            sourceTitle: 'FIRMAN RD3910E specification'
+          },
+          {
+            attribute: 'button start',
+            status: 'not_confirmed',
+            value: 'push-button control not confirmed',
+            evidence: 'current exact target sources do not name push-button control',
+            sourceUrl: 'https://example.test/firman-rd3910e',
+            sourceTitle: 'FIRMAN RD3910E specification'
+          }
+        ]
       },
       summaryForAnswer: 'RD3910E starter type is confirmed; key/button control is not confirmed.',
       warnings: []
@@ -625,7 +635,8 @@ describe('AgentManager comparison research flow', () => {
     expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
       targetProductNames: ['RD3910E']
     }));
-    expect(payload.answer).toContain('ключ/выключатель и кнопка по точным источникам не подтверждены');
+    expect(payload.answer).toContain('по ключу/выключателю точного подтверждения нет');
+    expect(payload.answer).toContain('по кнопке не подтверждено');
     expect(payload.answer).not.toContain('тоже запускается с ключа');
     expect(payload.answer).toContain('В каталоге БАКАУТ RD3910E есть.');
     expect(payload.metadata?.intentContract).toMatchObject({
