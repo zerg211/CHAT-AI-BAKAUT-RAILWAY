@@ -35,6 +35,7 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('When productClass is generator and cards are blocked, answerText must remain self-contained');
     expect(orchestrator).toContain('explicitly mention the generator selection and the missing load/power/model fact');
     expect(orchestrator).toContain('does not explicitly mention generator selection plus the missing load/power/model fact');
+    expect(orchestrator).toContain('A load with null kW is only a missing fact and will not be counted by the calculator');
   });
 
   it('orders catalog search by the selected retrieval score alias', () => {

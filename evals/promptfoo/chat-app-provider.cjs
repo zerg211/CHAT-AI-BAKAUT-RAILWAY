@@ -164,6 +164,38 @@ function turnResultFromResponse(input) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function recoverTurnWithRetries(input) {
+  let lastResult = null;
+  const attempts = input.attempts ?? 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (attempt > 1) await sleep(input.delayMs ?? 5000);
+    const recoveryResponse = await fetchWithTimeout(`${input.baseUrl}/api/chat/sessions/${input.sessionId}/messages/${input.turnId}/recover`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({})
+    }, input.timeoutMs);
+    const recoveryRawSse = await readSseResponseText(recoveryResponse);
+    const recoveryEvents = parseSseEvents(recoveryRawSse.text);
+    const recoveryResult = turnResultFromResponse({
+      userMessage: input.userMessage,
+      response: recoveryResponse,
+      events: recoveryEvents,
+      turnId: input.turnId,
+      transportError: recoveryRawSse.error,
+      recovered: true
+    });
+    lastResult = recoveryResult;
+    if (recoveryResult.ok) return recoveryResult;
+    const canRetry = recoveryResult.rawError?.recoverable || recoveryResult.rawError?.transport;
+    if (!canRetry) return recoveryResult;
+  }
+  return lastResult;
+}
+
 class BakautChatAppProvider {
   constructor(options = {}) {
     this.config = options.config || {};
@@ -221,22 +253,16 @@ class BakautChatAppProvider {
           transportError: rawSse.error
         });
         if (!turnResult.ok && turnResult.rawError?.recoverable && turnResult.turnId) {
-          const recoveryResponse = await fetchWithTimeout(`${baseUrl}/api/chat/sessions/${sessionId}/messages/${turnResult.turnId}/recover`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({})
-          }, timeoutMs);
-          const recoveryRawSse = await readSseResponseText(recoveryResponse);
-          const recoveryEvents = parseSseEvents(recoveryRawSse.text);
-          const recoveryResult = turnResultFromResponse({
-            userMessage,
-            response: recoveryResponse,
-            events: recoveryEvents,
+          const recoveryResult = await recoverTurnWithRetries({
+            baseUrl,
+            sessionId,
             turnId: turnResult.turnId,
-            transportError: recoveryRawSse.error,
-            recovered: true
+            userMessage,
+            timeoutMs,
+            attempts: 3,
+            delayMs: 5000
           });
-          if (recoveryResult.ok) {
+          if (recoveryResult?.ok) {
             turns.push(recoveryResult);
             continue;
           }
