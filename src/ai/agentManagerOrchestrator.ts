@@ -77,6 +77,7 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
   intent: AgentIntentContract;
   toolResults: ToolResult[];
   products: Product[];
+  requiredResponseClauses?: RequiredResponseClause[];
 }
 
 export interface AgentManagerReviewInput extends AgentManagerAnswerInput {
@@ -125,6 +126,14 @@ type DialogueLedgerRow = {
   source: DialogueLedgerEvent['source'];
   status: DialogueLedgerEvent['status'];
   created_at?: string | Date | null;
+};
+
+type RequiredResponseClause = {
+  code: string;
+  sourceRequestId: string;
+  instruction: string;
+  productName?: string;
+  catalogProductNames?: string[];
 };
 
 function createdAtText(value: unknown) {
@@ -462,6 +471,54 @@ function nearbyCatalogProductsForTargets(targetNames: string[], products: Produc
       product,
       sameBrand ? 'same_brand_same_product_class' : 'same_product_class_comparable'
     ));
+}
+
+function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
+  const clauses: RequiredResponseClause[] = [];
+  for (const result of toolResults) {
+    if (result.tool !== 'web.researchProductFacts') continue;
+    const payload = result.payload as {
+      catalogPresence?: Array<{ productName?: string; status?: string }>;
+      nearbyCatalogProducts?: Array<{ name?: string }>;
+      facts?: Array<{ productName?: string; sourceType?: string; confidence?: string }>;
+    };
+    const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
+      .map((product) => typeof product.name === 'string' ? product.name.trim() : '')
+      .filter(Boolean))
+      .slice(0, 4);
+    for (const presence of payload.catalogPresence ?? []) {
+      if (presence.status !== 'absent' || !presence.productName) continue;
+      const targetFacts = (payload.facts ?? []).filter((fact) =>
+        fact.sourceType === 'web' &&
+        ['high', 'medium'].includes(String(fact.confidence ?? '')) &&
+        compactModelText(fact.productName).includes(compactModelText(presence.productName))
+      );
+      if (targetFacts.length) {
+        clauses.push({
+          code: 'answer_direct_checked_external_fact',
+          sourceRequestId: result.requestId,
+          productName: presence.productName,
+          instruction: `Use checked external web facts to answer the buyer's direct technical question about ${presence.productName}.`
+        });
+      }
+      clauses.push({
+        code: 'state_exact_catalog_absence',
+        sourceRequestId: result.requestId,
+        productName: presence.productName,
+        instruction: `Say plainly that the exact model ${presence.productName} is not in the BAKAUT catalog.`
+      });
+      if (nearbyNames.length) {
+        clauses.push({
+          code: 'mention_nearby_catalog_models',
+          sourceRequestId: result.requestId,
+          productName: presence.productName,
+          catalogProductNames: nearbyNames,
+          instruction: `Mention these nearby BAKAUT catalog models only as catalog orientation, not as proof about ${presence.productName}: ${nearbyNames.join('; ')}.`
+        });
+      }
+    }
+  }
+  return clauses;
 }
 
 const nullableStringJsonSchema = { type: ['string', 'null'] } as const;
@@ -870,6 +927,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
+            'If requiredResponseClauses is non-empty, answerText must satisfy every clause by meaning. Treat these clauses as required semantic content, not optional style advice.',
             'Верни только JSON AnswerContract.'
           ].join('\n')
         },
@@ -881,6 +939,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             ledger: compactLedger(input.ledgerState),
             intent: input.intent,
             toolResults: input.toolResults,
+            requiredResponseClauses: input.requiredResponseClauses ?? [],
             availableEvidenceSources: answerEvidenceSourceHints(input),
             products: input.products.map((product) => ({
               id: product.id,
@@ -918,6 +977,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
+            'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')
         },
@@ -927,6 +987,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             ledger: compactLedger(input.ledgerState),
             intent: input.intent,
             toolResults: input.toolResults,
+            requiredResponseClauses: input.requiredResponseClauses ?? [],
             answer: input.answer
           })
         }
@@ -1103,6 +1164,7 @@ export class AgentManagerOrchestrator {
       statuses: toolResults.map((result) => ({ requestId: result.requestId, tool: result.tool, status: result.status }))
     });
 
+    const requiredResponseClauses = requiredResponseClausesForToolResults(toolResults);
     const rawAnswer = await this.model.composeAnswer({
       session: input.session,
       history,
@@ -1112,6 +1174,7 @@ export class AgentManagerOrchestrator {
       intent,
       toolResults,
       products,
+      requiredResponseClauses,
       signal: input.signal
     });
     const answer = normalizeAnswerEvidenceSources({
@@ -1148,6 +1211,7 @@ export class AgentManagerOrchestrator {
       intent,
       toolResults,
       products,
+      requiredResponseClauses,
       answer,
       signal: input.signal
     });

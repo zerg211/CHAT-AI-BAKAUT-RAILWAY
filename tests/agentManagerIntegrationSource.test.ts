@@ -20,6 +20,11 @@ describe('agent manager integration source guards', () => {
     expect(research).toContain('exactTargetSearchQueries');
     expect(research).toContain('Same brand, same family, or nearby model pages are not proof about the target model.');
     expect(research).toContain('exact_target_external_fact_not_found');
+    const orchestrator = readFileSync('src/ai/agentManagerOrchestrator.ts', 'utf8');
+    expect(orchestrator).toContain('answerText must include all three parts in this order');
+    expect(orchestrator).toContain('omits non-empty nearbyCatalogProducts');
+    expect(orchestrator).toContain('requiredResponseClausesForToolResults');
+    expect(orchestrator).toContain('answerText must satisfy every clause by meaning');
   });
 
   it('orders catalog search by the selected retrieval score alias', () => {
