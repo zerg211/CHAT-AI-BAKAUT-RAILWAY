@@ -73,11 +73,8 @@ function uniqueStrings(values: string[]) {
 }
 
 function exactTargetAliases(target: string) {
-  const tokens = target
-    .split(/[^0-9a-zа-яё]+/iu)
-    .map((token) => token.trim())
-    .filter(Boolean);
-  const modelTokens = tokens.filter((token) => /[0-9]/u.test(token) && /[a-zа-яё]/iu.test(token));
+  const tokens = exactTargetTokens(target);
+  const modelTokens = tokens.filter((token) => tokenHasDigit(token) && tokenHasLetter(token));
   return uniqueStrings([
     `"${target}"`,
     target,
@@ -86,8 +83,75 @@ function exactTargetAliases(target: string) {
   ]);
 }
 
+function charCode(char: string) {
+  return char.codePointAt(0) ?? 0;
+}
+
+function isAsciiDigit(char: string) {
+  const code = charCode(char);
+  return code >= 48 && code <= 57;
+}
+
+function isAsciiLetter(char: string) {
+  const code = charCode(char);
+  return code >= 97 && code <= 122;
+}
+
+function isCyrillicLetter(char: string) {
+  const code = charCode(char);
+  return (code >= 0x0430 && code <= 0x044f) || code === 0x0451;
+}
+
+function isExactTargetTokenChar(char: string) {
+  return isAsciiDigit(char) || isAsciiLetter(char) || isCyrillicLetter(char);
+}
+
+function tokenHasDigit(token: string) {
+  for (const char of token) {
+    if (isAsciiDigit(char)) return true;
+  }
+  return false;
+}
+
+function tokenHasLetter(token: string) {
+  for (const char of token) {
+    if (isAsciiLetter(char) || isCyrillicLetter(char)) return true;
+  }
+  return false;
+}
+
+function exactTargetTokens(value: unknown) {
+  const tokens: string[] = [];
+  let current = '';
+  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
+    if (isExactTargetTokenChar(char)) {
+      current += char;
+    } else if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
 function compactExactTargetText(value: unknown) {
-  return String(value ?? '').toLocaleLowerCase('ru-RU').replace(/[^0-9a-zа-яё]+/giu, '');
+  let compact = '';
+  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
+    if (isExactTargetTokenChar(char)) compact += char;
+  }
+  return compact;
+}
+
+function factValueIsNegative(value: string) {
+  const normalized = value.toLocaleLowerCase('ru-RU');
+  return [
+    'not confirmed',
+    'not found',
+    'не найден',
+    'не подтвержден',
+    'не подтвержд'
+  ].some((phrase) => normalized.includes(phrase));
 }
 
 function factMatchesTarget(fact: ProductComparisonResearchFact, targetName: string) {
@@ -95,7 +159,7 @@ function factMatchesTarget(fact: ProductComparisonResearchFact, targetName: stri
   const targetText = compactExactTargetText(targetName);
   const targetTokens = exactTargetAliases(targetName)
     .map(compactExactTargetText)
-    .filter((token) => token.length >= 4 && /[0-9]/u.test(token));
+    .filter((token) => token.length >= 4 && tokenHasDigit(token));
   if (targetTokens.length) return targetTokens.some((token) => factText.includes(token));
   return targetText.length >= 5 && factText.includes(targetText);
 }
@@ -105,7 +169,7 @@ function hasConfirmedExactTargetFacts(result: ProductComparisonResearchResult, t
     fact.sourceType === 'web' &&
     ['high', 'medium'].includes(fact.confidence) &&
     targetProductNames.some((targetName) => factMatchesTarget(fact, targetName)) &&
-    !/not confirmed|not found|не найден|не подтвержден|не подтвержд/iu.test(fact.value)
+    !factValueIsNegative(fact.value)
   );
 }
 
