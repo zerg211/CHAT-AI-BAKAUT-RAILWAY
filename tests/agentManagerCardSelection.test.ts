@@ -31,9 +31,9 @@ function cardSelection(intent: 'plate' | 'generator', products: Product[]) {
   };
 }
 
-function needStateWithBudget(budgetMax?: number): CustomerNeedState {
+function needStateWithBudget(budgetMax?: number, budgetKey = 'budget.max'): CustomerNeedState {
   const budgetConstraint = budgetMax ? [{
-    value: `budget.max: ${budgetMax}`,
+    value: `${budgetKey}: ${budgetMax}`,
     evidence: 'userMessage',
     confidence: 1,
     updatedAt: '2026-05-21T00:00:00.000Z'
@@ -99,7 +99,7 @@ function needStateWithBudget(budgetMax?: number): CustomerNeedState {
       confidence: 0,
       updatedAt: '2026-05-21T00:00:00.000Z'
     },
-    lastSummary: budgetMax ? `budget.max: ${budgetMax}` : ''
+    lastSummary: budgetMax ? `${budgetKey}: ${budgetMax}` : ''
   };
 }
 
@@ -241,5 +241,34 @@ describe('AgentManager visible card readiness', () => {
 
     expect(selection.products).toEqual([overBudgetPlate]);
     expect(selection.warnings).not.toContain('product_cards_filtered_by_budget:1');
+  });
+
+  it('accepts budget facts stored with the budget ledger key', () => {
+    const selection = selectProductsForVisibleCards({
+      products: [overBudgetPlate, plate],
+      userMessage: 'Р‘СЋРґР¶РµС‚ 70 000, РЅСѓР¶РЅР° РЅРµ СЃР»РёС€РєРѕРј С‚СЏР¶РµР»Р°СЏ.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer narrows plate budget',
+        dialogueUnderstanding: 'budget limit for plate',
+        nextStepRationale: 'show catalog plates',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'РІРёР±СЂРѕРїР»РёС‚Р° РґРѕ 70000' },
+          rationale: 'find plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'РџРѕРґРѕР№РґСѓС‚ Р’РёР±СЂРѕРїР»РёС‚Р° TSS-WP60TH 72 РєРі Рё Р’РёР±СЂРѕРїР»РёС‚Р° TSS-WP60L 60 РєРі.',
+      needState: needStateWithBudget(70000, 'budget')
+    });
+
+    expect(selection.products).toEqual([plate]);
+    expect(selection.droppedProductIds).toContain('plate-over-budget');
+    expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
   });
 });

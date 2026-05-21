@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const DEFAULT_BASE_URL = 'https://chat-ai-production-3057.up.railway.app';
 const DEFAULT_TIMEOUT_MS = 180000;
-const DEFAULT_ATTEMPTS = 3;
+const DEFAULT_ATTEMPTS = 5;
 const DEFAULT_RETRY_DELAY_MS = 4000;
 
 function stripTrailingSlashes(value) {

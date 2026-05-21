@@ -1,0 +1,34 @@
+{
+  "taskId": "2026-05-21-agentic-generator-budget-gate",
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts tests/promptfooProvider.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "PASS",
+      "testFiles": 3,
+      "tests": 34
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "detail": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "testFiles": 65,
+      "tests": 557
+    }
+  ],
+  "productionChecks": {
+    "status": "PENDING",
+    "reason": "Requires commit, push, Railway deployment marker, and production Promptfoo rerun."
+  }
+}
