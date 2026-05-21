@@ -133,6 +133,16 @@ function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string):
     };
     if (load.runningKw !== undefined || load.startingKw !== undefined) {
       loads.push(load);
+      continue;
+    }
+    const loadKind = canonicalElectricalLoadKind(load.kind);
+    if (
+      load.basisKind === 'generic_load_name' ||
+      load.basisKind === 'unknown' ||
+      (loadKind !== undefined && motorLikeLoadKinds.has(loadKind))
+    ) {
+      warnings.add('generator_load_bounded_basis_incomplete');
+      warnings.add('generator_load_unbounded_guess');
     }
   }
 

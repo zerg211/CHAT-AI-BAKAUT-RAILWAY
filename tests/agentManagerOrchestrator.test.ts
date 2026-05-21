@@ -860,6 +860,116 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
 
+  it('blocks catalog cards when a generic pump is omitted from calculation because kW is unknown', async () => {
+    const conversations = new FakeConversations();
+    const genericPumpWithSearchModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer has 220 V house, fridge, LED light, 1.2 kW grinder and unknown pump',
+          dialogueUnderstanding: 'the pump may start with the refrigerator but pump type and power are unknown',
+          nextStepRationale: 'the model tries to calculate the known tool and search products anyway',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'fridge', name: 'one refrigerator', count: 1, runningKw: null, startingKw: null, source: 'explicit_user', evidence: 'fridge named but no power', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
+                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: null, startingKw: null, source: 'explicit_user', evidence: 'LED lighting named but no count', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known'] },
+                { kind: 'tool', name: 'angle grinder', count: 1, runningKw: 1.2, startingKw: null, source: 'explicit_user', evidence: '1.2 kW grinder', basisKind: 'exact_power', basisSignals: ['explicit_power', 'usage_scope_known'] },
+                { kind: 'pump', name: 'unknown household pump', count: 1, runningKw: null, startingKw: null, source: 'explicit_user', evidence: 'pump exists but type/model/power is unknown', basisKind: 'generic_load_name', basisSignals: ['consumer_type_known', 'simultaneous_operation_known'] }
+              ],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump', 'refrigerator'],
+              estimateBasis: 'bounded_assumption',
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'calculate known loads and unknown pump context',
+              notes: 'Pump is generic and must not be turned into cards.'
+            },
+            rationale: 'attempt partial generator load',
+            required: true
+          }, {
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator 2-3 kW',
+              semanticQuery: 'preliminary generator for fridge LED grinder and unknown pump',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              estimateBasis: null,
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'find preliminary generators',
+              notes: null
+            },
+            rationale: 'try products too early',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['unknown_pump_power']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'I should not show generator cards yet because the pump type/model or power is missing.',
+          factsUsed: [],
+          questionsAsked: [{
+            questionId: 'q.generator.pump_identity_or_power',
+            text: 'What pump type/model or nameplate power can you provide?',
+            reason: 'Pump startup load controls generator selection.'
+          }],
+          toolResultIds: ['generator-load', 'catalog-search'],
+          leadAction: 'none',
+          riskFlags: ['unknown_pump_power'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            missingFacts: ['pump_type_or_power'],
+            rationale: 'The model incorrectly thinks the partial calculation is enough for cards.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, genericPumpWithSearchModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'House is 220 V. Pump unknown, fridge, LED lights, sometimes 1.2 kW grinder. Pump and fridge can start together.'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ status?: string; warnings?: string[]; payload?: { loads?: Array<{ kind?: string }> } }>;
+      selectionReadiness?: { status?: string };
+      cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
+    };
+    expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).not.toContain('pump');
+    expect(metadata.toolResults?.[0]?.warnings).toEqual(expect.arrayContaining([
+      'generator_load_bounded_basis_incomplete',
+      'generator_load_unbounded_guess'
+    ]));
+    expect(metadata.toolResults?.[1]?.status).toBe('denied');
+    expect(metadata.toolResults?.[1]?.warnings).toContain('catalog_search_skipped:generator_load_unconfirmed_basis');
+    expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
+    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
+    expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:generator_load_unconfirmed_basis');
+    expect(payload.productCards).toEqual([]);
+  });
+
   it('drops product-class generator pseudo-loads and suppresses premature cards', async () => {
     const conversations = new FakeConversations();
     const estimateOnlyModel = model({

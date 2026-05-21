@@ -1,0 +1,60 @@
+{
+  "taskId": "2026-05-21-generic-pump-live-card-gate",
+  "status": "pass_local_pending_production_gate",
+  "failureEvidence": {
+    "command": "ALLOW_PRODUCTION_LIVE_TESTS=1 FINAL_RELEASE_LIVE_GATE=1 ALLOW_FIXED_PRODUCTION_REPLAY=1 npm run test:live:production",
+    "error": "Generic unknown pump produced generator cards before pump type or power was known.",
+    "rawArtifact": "local-live-tests/production-agent-cycle-failure.json",
+    "sessionId": "f29acbe6-d964-4836-bb5d-6768d2b84433"
+  },
+  "changedFiles": [
+    "src/ai/agentManagerGeneratorLoad.ts",
+    "tests/agentManagerOrchestrator.test.ts"
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "testFiles": 1,
+      "tests": 25
+    },
+    {
+      "command": "npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "testFiles": 3,
+      "tests": 38
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "summary": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass_with_line_ending_warnings"
+    }
+  ],
+  "productionGate": {
+    "status": "pending",
+    "required": [
+      "production Promptfoo after Railway deploy",
+      "production live widget check through https://bakautprof.ru/"
+    ]
+  },
+  "acceptanceCriteria": {
+    "AC1": "pass_local",
+    "AC2": "pass_local",
+    "AC3": "pass_local",
+    "AC4": "pass",
+    "AC5": "pass_local_promptfoo_pending",
+    "AC6": "pending_production_live"
+  }
+}
