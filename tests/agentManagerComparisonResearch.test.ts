@@ -531,6 +531,109 @@ describe('AgentManager comparison research flow', () => {
     });
   });
 
+  it('repairs follow-up plans that reuse facts from a different exact model', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'RD3910E',
+        attribute: 'starting method',
+        value: 'manual starter / electric starter; key/button control not confirmed',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'exact current-target catalog/research context confirms starter type only',
+        sourceUrl: 'https://example.test/firman-rd3910e',
+        sourceTitle: 'FIRMAN RD3910E specification'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'У RD3910E подтвержден ручной стартер / электростартер; ключ/выключатель и кнопка по точным источникам не подтверждены.',
+        completeness: 'partially_answered',
+        coverage: [{
+          attribute: 'ignition control',
+          status: 'not_confirmed',
+          value: 'key/button control not confirmed',
+          evidence: 'current exact target sources do not name key, switch, or push-button control',
+          sourceUrl: 'https://example.test/firman-rd3910e',
+          sourceTitle: 'FIRMAN RD3910E specification'
+        }]
+      },
+      summaryForAnswer: 'RD3910E starter type is confirmed; key/button control is not confirmed.',
+      warnings: []
+    });
+
+    class PresentCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('rd3910e', 'FIRMAN RD3910E generator 2.5 kW', { starter: 'manual / electric' })
+        ];
+      }
+    }
+
+    const badFollowUpPlanner: AgentManagerModel = {
+      ...model(),
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'follow-up model question',
+          events: []
+        };
+      },
+      async planTurn() {
+        return {
+          turnId: 'q2',
+          userMessageSummary: 'buyer asks if RD3910E starts the same way as the previous model',
+          dialogueUnderstanding: 'incorrectly assumes previous model fact applies',
+          nextStepRationale: 'answer from context',
+          requiresTools: false,
+          toolRequests: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.toolResults).toEqual(expect.arrayContaining([
+          expect.objectContaining({ tool: 'web.researchProductFacts' })
+        ]));
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('answer_checked_research_guidance');
+        return {
+          answerText: 'Да, RD3910E тоже запускается с ключа/выключателя, не кнопкой.',
+          factsUsed: [{
+            factKey: 'rd3910e.start_control',
+            sourceEventIds: ['auto:exact-model:rd3910e'],
+            value: 'key start'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['auto:exact-model:rd3910e'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [
+      message('RD2910E с ключа или кнопки?'),
+      message('RD2910E с ключа, в каталоге нет. Из близких есть RD3910E.', 'assistant'),
+      message('А Firman RD3910E у вас есть? Там запуск так же через ключ/выключатель, а не кнопкой?')
+    ];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, badFollowUpPlanner);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'А Firman RD3910E у вас есть? Там запуск так же через ключ/выключатель, а не кнопкой?'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      targetProductNames: ['RD3910E']
+    }));
+    expect(payload.answer).toContain('ключ/выключатель и кнопка по точным источникам не подтверждены');
+    expect(payload.answer).not.toContain('тоже запускается с ключа');
+    expect(payload.answer).toContain('В каталоге БАКАУТ RD3910E есть.');
+    expect(payload.metadata?.intentContract).toMatchObject({
+      requiresTools: true,
+      riskFlags: expect.arrayContaining(['planner_repaired_exact_model_evidence'])
+    });
+  });
+
   it('binds visible comparison targets to products, runs web research, and records conflicts', async () => {
     researchProductComparisonFacts.mockResolvedValue({
       usedWebSearch: true,

@@ -11,7 +11,7 @@
       "command": "npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/agentManagerOrchestrator.test.ts",
       "status": "pass",
       "testFiles": 3,
-      "tests": 38
+      "tests": 39
     },
     {
       "command": "npm run lint:no-regex",
@@ -37,6 +37,8 @@
     "previousFailure": "RD3910E answer claimed key/ignition-lock start while answerGuidance.coverage marked ignition control ambiguous.",
     "followUpConversation": 1318,
     "followUpObservation": "Key/ignition-lock overclaim was removed, but present exact target still received nearby alternatives; fixed locally pending redeploy.",
+    "secondFollowUpConversation": 1323,
+    "secondFollowUpObservation": "Planner reused RD2910E start-control context for newly named RD3910E and skipped same-turn tools; fixed locally pending redeploy.",
     "required": [
       "production Promptfoo after Railway deploy",
       "production live widget check through https://bakautprof.ru/"
@@ -48,6 +50,7 @@
     "AC3": "pass_local",
     "AC4": "pass_local",
     "AC4b": "pass_local",
+    "AC4c": "pass_local",
     "AC5": "pass",
     "AC6": "pass",
     "AC7": "pending_production_gate"

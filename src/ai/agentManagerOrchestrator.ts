@@ -366,6 +366,30 @@ function modelIdentifierTokens(value: unknown) {
   );
 }
 
+function modelIdentifierDisplayTokens(value: unknown) {
+  const tokens: string[] = [];
+  let current = '';
+  for (const rawChar of String(value ?? '').normalize('NFKD')) {
+    const normalizedChar = normalizeModelText(rawChar);
+    if (normalizedChar.length === 1 && isModelTokenChar(normalizedChar)) {
+      current += rawChar;
+    } else if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  }
+  if (current) tokens.push(current);
+  const seen = new Set<string>();
+  const displayTokens: string[] = [];
+  for (const token of tokens) {
+    const canonical = compactModelText(token);
+    if (canonical.length < 4 || !tokenHasLetter(canonical) || !tokenHasDigit(canonical) || seen.has(canonical)) continue;
+    seen.add(canonical);
+    displayTokens.push(token);
+  }
+  return displayTokens;
+}
+
 function requestStringArray(value: unknown) {
   return Array.isArray(value)
     ? value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
@@ -405,6 +429,63 @@ function textMatchesTargetName(value: unknown, targetName: string) {
 
 function productMatchesTargetName(product: Product, targetName: string) {
   return textMatchesTargetName(productLookupText(product), targetName);
+}
+
+function toolRequestEvidenceText(request: ToolRequest) {
+  return [
+    request.args.query,
+    request.args.semanticQuery,
+    request.args.reason,
+    request.args.notes,
+    ...requestStringArray(request.args.productNames)
+  ].filter(Boolean).join(' ');
+}
+
+function exactModelEvidenceToolCoversToken(request: ToolRequest, token: string) {
+  if (!['catalog.search', 'catalog.getProductDetails', 'web.researchProductFacts'].includes(request.tool)) return false;
+  return modelIdentifierTokens(toolRequestEvidenceText(request)).includes(token);
+}
+
+function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
+  const targetTokens = modelIdentifierTokens(userMessage);
+  if (!targetTokens.length) return intent;
+  const uncoveredTokens = targetTokens.filter((token) =>
+    !intent.toolRequests.some((request) => exactModelEvidenceToolCoversToken(request, token))
+  );
+  if (!uncoveredTokens.length) return intent;
+  const displayTargets = modelIdentifierDisplayTokens(userMessage)
+    .filter((token) => uncoveredTokens.includes(compactModelText(token)));
+  const idBase = `auto:exact-model:${uncoveredTokens.map(compactModelText).join('-')}`;
+  const existingIds = new Set(intent.toolRequests.map((request) => request.id));
+  const requestId = existingIds.has(idBase) ? `${idBase}:${intent.toolRequests.length + 1}` : idBase;
+  const repairRequest: ToolRequest = {
+    id: requestId,
+    tool: 'web.researchProductFacts',
+    args: {
+      query: userMessage,
+      semanticQuery: `Current turn exact-model evidence check. Verify only the named model identifiers in this buyer message: ${userMessage}`,
+      productIntent: inferProductIntent(userMessage),
+      limit: 4,
+      productIds: [],
+      productNames: displayTargets.length ? displayTargets : uncoveredTokens,
+      comparisonAttributes: ['current buyer question'],
+      loads: [],
+      simultaneousStarting: null,
+      simultaneousStartingKinds: [],
+      estimateBasis: null,
+      contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+      reason: 'Current turn names an exact model but the planner did not request same-turn evidence for that model.',
+      notes: 'Do not reuse technical or catalog facts from a different model identifier. Verify the current exact model before answering.'
+    },
+    rationale: 'Exact model facts are scoped by model identifier; previous model facts are not evidence for a newly named model.',
+    required: true
+  };
+  return {
+    ...intent,
+    requiresTools: true,
+    toolRequests: [...intent.toolRequests, repairRequest],
+    riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_exact_model_evidence'])
+  };
 }
 
 function targetBrandCandidates(targetNames: string[]) {
@@ -948,6 +1029,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для подбора товара планируй catalog.search.',
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
             'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
+            'When the buyer names a different exact model in the current turn, do not reuse technical facts from a previous model even if the buyer says "same". Plan current-turn evidence for the newly named model unless ledger/tool evidence is already scoped to that exact same model identifier.',
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
             'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit, checked, or bounded estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
             'For calculator.generatorLoad, set args.estimateBasis: "exact_or_user_provided" for explicit powers, "catalog_or_web_fact" for checked facts, "bounded_assumption" when the buyer wants an approximate selection and the unknown load is bounded by type/function/scenario, or "unbounded_guess" when only vague load names are known.',
@@ -1206,7 +1288,8 @@ export class AgentManagerOrchestrator {
 
     const ledgerState = reduceDialogueLedger([...ledgerEvents, ...newEvents]);
     const needStateSnapshot = deriveNeedStateSnapshotFromLedger(ledgerState, input.session.needState ?? emptyNeedState());
-    const intent = await this.model.planTurn({ session: input.session, history, userMessage, ledgerEvents: [...ledgerEvents, ...newEvents], ledgerState, signal: input.signal });
+    const plannedIntent = await this.model.planTurn({ session: input.session, history, userMessage, ledgerEvents: [...ledgerEvents, ...newEvents], ledgerState, signal: input.signal });
+    const intent = repairIntentForExactModelEvidence(plannedIntent, userMessage);
     await this.conversations.updateTurn({
       sessionId: input.sessionId,
       turnId: input.turnId,
