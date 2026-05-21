@@ -20,11 +20,21 @@ describe('agent manager integration source guards', () => {
     expect(research).toContain('exactTargetSearchQueries');
     expect(research).toContain('Same brand, same family, or nearby model pages are not proof about the target model.');
     expect(research).toContain('exact_target_external_fact_not_found');
+    expect(research).toContain('Do not stop at a broad fact like "electric starter"');
+    expect(research).toContain("search_context_size: targetProductNames.length ? 'high' : 'medium'");
     const orchestrator = readFileSync('src/ai/agentManagerOrchestrator.ts', 'utf8');
     expect(orchestrator).toContain('answerText must include all three parts in this order');
     expect(orchestrator).toContain('omits non-empty nearbyCatalogProducts');
     expect(orchestrator).toContain('requiredResponseClausesForToolResults');
     expect(orchestrator).toContain('answerText must satisfy every clause by meaning');
+  });
+
+  it('keeps blocked generator clarifications self-contained', () => {
+    const orchestrator = readFileSync('src/ai/agentManagerOrchestrator.ts', 'utf8');
+
+    expect(orchestrator).toContain('When productClass is generator and cards are blocked, answerText must remain self-contained');
+    expect(orchestrator).toContain('explicitly mention the generator selection and the missing load/power/model fact');
+    expect(orchestrator).toContain('does not explicitly mention generator selection plus the missing load/power/model fact');
   });
 
   it('orders catalog search by the selected retrieval score alias', () => {
