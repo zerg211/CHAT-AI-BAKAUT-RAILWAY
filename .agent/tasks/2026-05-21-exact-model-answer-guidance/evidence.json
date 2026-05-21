@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-21-exact-model-answer-guidance",
-  "status": "pass_local_after_production_defect_pending_gate",
+  "status": "pass_local_and_production_widget",
   "changedFiles": [
     "src/ai/productComparisonResearch.ts",
     "src/ai/agentManagerOrchestrator.ts",
@@ -32,7 +32,7 @@
     }
   ],
   "productionGate": {
-    "status": "pending",
+    "status": "pass",
     "previousFailedConversation": 1298,
     "previousFailure": "RD3910E answer claimed key/ignition-lock start while answerGuidance.coverage marked ignition control ambiguous.",
     "followUpConversation": 1318,
@@ -41,10 +41,9 @@
     "secondFollowUpObservation": "Planner reused RD2910E start-control context for newly named RD3910E and skipped same-turn tools; fixed locally pending redeploy.",
     "thirdFollowUpConversation": 1324,
     "thirdFollowUpObservation": "Hard overclaim checks passed, but buyer-visible text surfaced only button non-confirmation while key/switch ambiguity stayed in metadata; fixed locally pending redeploy.",
-    "required": [
-      "production Promptfoo after Railway deploy",
-      "production live widget check through https://bakautprof.ru/"
-    ]
+    "finalConversation": 1333,
+    "deployedCommit": "9dfcb0adbefa473ba5391f1a3e2687c6b335034d",
+    "protocolPath": "local-live-tests/2026-05-21-exact-start-control-2026-05-21T18-04-57-135Z.production.md"
   },
   "acceptanceCriteria": {
     "AC1": "pass_local",
@@ -56,6 +55,6 @@
     "AC4d": "pass_local",
     "AC5": "pass",
     "AC6": "pass",
-    "AC7": "pending_production_gate"
+    "AC7": "pass_production_widget"
   }
 }

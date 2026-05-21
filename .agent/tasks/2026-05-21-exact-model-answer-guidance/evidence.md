@@ -2,7 +2,7 @@
 
 ## Summary
 
-Status: PASS locally after verifier-reported production defect, production gate pending until commit/push/Railway deploy.
+Status: PASS locally and PASS in production widget.
 
 This pass strengthens exact-model web research and answer handoff without adding regex. It keeps the semantic answer in the LLM/web research contract, while deterministic code enforces exact model identity, required semantic clauses, and a safe rewrite when structured research coverage is uncertain.
 
@@ -13,6 +13,8 @@ The next production widget check, conversation #1318, verified that the key/igni
 Conversation #1323 exposed the deeper follow-up bug: the planner reused a fact from `RD2910E` for the newly named `RD3910E` and skipped current-turn tools. Runtime now repairs such plans by injecting `web.researchProductFacts` whenever the current buyer message names an exact model identifier that is not covered by a same-turn catalog/research tool request.
 
 Conversation #1324 passed the hard overclaim checks, but the answer only surfaced "button not confirmed" while metadata also had ambiguous key/switch coverage. The safe rewrite now renders start-control uncertainty from structured coverage, so buyer-visible text includes both key/switch ambiguity and button non-confirmation when those fields are present.
+
+Final production widget check #1333 passed after deploy: the follow-up `RD3910E` turn got same-turn exact-model research, did not reuse `RD2910E` facts, answered the start-control question from current evidence, stated catalog presence, and showed the exact RD3910E card.
 
 ## Changed Files
 
@@ -43,10 +45,11 @@ Public APIs and database schema stay stable. Buyer-visible behavior can improve 
 
 ## Production Gate
 
-Pending after follow-up commit/push and Railway auto-deploy:
+Completed:
 
-- production Promptfoo against `https://chat-ai-production-3057.up.railway.app` and `https://bakautprof.ru/`;
-- required production live widget check through `https://bakautprof.ru/`.
+- Railway health marker reached commit `9dfcb0adbefa473ba5391f1a3e2687c6b335034d`.
+- Production live widget check through `https://bakautprof.ru/` passed in conversation #1333.
+- Protocol: `local-live-tests/2026-05-21-exact-start-control-2026-05-21T18-04-57-135Z.production.md`.
 
 ## Acceptance Criteria
 
@@ -59,4 +62,4 @@ Pending after follow-up commit/push and Railway auto-deploy:
 - AC4d PASS locally: safe rewrite surfaces key/switch and button uncertainty from structured coverage.
 - AC5 PASS: no new regex constructs.
 - AC6 PASS: focused tests, typecheck, and build pass.
-- AC7 PENDING: production Promptfoo/widget validation required after deploy.
+- AC7 PASS: production widget validation passed after deploy.
