@@ -1,5 +1,6 @@
 import type { CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
-import type { AgentIntentContract, AnswerContract, AnswerSelectionReadiness, ToolRequest } from './agentManagerContracts.js';
+import type { AgentIntentContract, AnswerContract, AnswerSelectionReadiness, ToolRequest, ToolResult } from './agentManagerContracts.js';
+import { hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
 import {
   compactModelText,
   displayProductBrand,
@@ -359,7 +360,7 @@ export function selectProductsForVisibleCards(input: {
 type VisibleCardSelection = ReturnType<typeof selectProductsForVisibleCards>;
 
 export type VisibleCardReadiness = {
-  status: 'ready_for_cards' | 'blocked_by_answer_contract';
+  status: 'ready_for_cards' | 'blocked_by_answer_contract' | 'blocked_by_tool_safety';
   productClass: ProductSelectionClass;
   missingFacts: string[];
   rationale: string;
@@ -370,8 +371,19 @@ export type VisibleCardReadiness = {
 export function assessVisibleCardReadiness(input: {
   cardSelection: VisibleCardSelection;
   answer: AnswerContract;
+  toolResults?: ToolResult[];
 }): VisibleCardReadiness {
   const productClass = input.cardSelection.intent;
+  if (isGeneratorProductClass(productClass) && hasUnconfirmedGeneratorLoadBasisResult(input.toolResults ?? [])) {
+    return {
+      status: 'blocked_by_tool_safety',
+      productClass,
+      missingFacts: ['explicit_generator_load_basis'],
+      rationale: 'Generator load calculation did not have a confirmed load basis, so product cards remain premature.',
+      warnings: ['product_cards_suppressed:generator_load_unconfirmed_basis'],
+      decision: input.answer.selectionReadiness
+    };
+  }
   const decision = input.answer.selectionReadiness;
   if (!decision) {
     return {

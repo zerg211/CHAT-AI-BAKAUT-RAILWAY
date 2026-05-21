@@ -860,6 +860,114 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
 
+  it('drops product-class generator pseudo-loads and suppresses premature cards', async () => {
+    const conversations = new FakeConversations();
+    const estimateOnlyModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer wants a generator but exact pump and tool loads are unknown',
+          dialogueUnderstanding: 'the buyer has only vague household loads, so product cards are premature',
+          nextStepRationale: 'the calculator request incorrectly uses product-class load kinds and estimates missing values',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'generator', name: 'refrigerator', count: 1, runningKw: 0.15, startingKw: 0.9, source: 'estimated_average', evidence: 'typical refrigerator estimate' },
+                { kind: 'generator', name: 'pump', count: 1, runningKw: 0.75, startingKw: 2.2, source: 'estimated_average', evidence: 'generic pump estimate' },
+                { kind: 'generator', name: 'lighting', count: 1, runningKw: 0.12, startingKw: 0.12, source: 'estimated_average', evidence: 'small lighting estimate' },
+                { kind: 'generator', name: 'handheld tool', count: 1, runningKw: 1.2, startingKw: 2.4, source: 'estimated_average', evidence: 'generic tool estimate' }
+              ],
+              simultaneousStarting: false,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'estimate generator load',
+              notes: null
+            },
+            rationale: 'estimate generator load from vague request',
+            required: true
+          }, {
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator for dacha',
+              semanticQuery: 'generator for dacha with refrigerator, pump, light and occasional tool, exact numbers unknown',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'find generator products',
+              notes: null
+            },
+            rationale: 'find generator products',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['load_estimation_required']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'I would show generator cards from the catalog.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['generator-load', 'catalog-search'],
+          leadAction: 'none',
+          riskFlags: ['load_estimation_required'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'The model incorrectly thinks an estimated profile is enough.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, estimateOnlyModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Need a dacha generator. I do not know exact numbers: refrigerator, pump, light and sometimes a tool.'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ status?: string; payload?: { loads?: Array<unknown> }; warnings?: string[] }>;
+      selectionReadiness?: { status?: string; warnings?: string[] };
+      cardSelection?: { selectedProductIds?: string[]; suppressedProductIds?: string[]; warnings?: string[] };
+      answerContract?: { riskFlags?: string[] };
+    };
+    expect(metadata.toolResults?.[0]?.payload?.loads).toEqual([]);
+    expect(metadata.toolResults?.[0]?.warnings).toEqual(expect.arrayContaining([
+      'generator_load_invalid_load_kind',
+      'generator_load_structured_args_without_usable_kw'
+    ]));
+    expect(metadata.toolResults?.[1]?.status).toBe('denied');
+    expect(metadata.toolResults?.[1]?.warnings).toContain('catalog_search_skipped:generator_load_unconfirmed_basis');
+    expect(payload.productCards).toEqual([]);
+    expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
+    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
+    expect(metadata.cardSelection?.warnings).toEqual(expect.arrayContaining([
+      'product_cards_suppressed:generator_load_unconfirmed_basis'
+    ]));
+    expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
+  });
+
   it('allows generator cards after a generator load profile is available', async () => {
     const conversations = new FakeConversations();
     const readyModel = model({

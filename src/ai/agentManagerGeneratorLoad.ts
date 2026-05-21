@@ -1,6 +1,14 @@
-import type { ProductElectricalLoadItem } from '../shared/types.js';
-import type { ToolRequest } from './agentManagerContracts.js';
+import type { ProductElectricalLoadItem, ProductSelectionClass } from '../shared/types.js';
+import type { ToolRequest, ToolResult } from './agentManagerContracts.js';
 import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
+
+const loadProductClassAliases = new Set(['generator', 'weldinggenerator', 'welding_generator', 'platecompactor', 'plate_compactor']);
+
+function compactLoadToken(value: unknown) {
+  return typeof value === 'string'
+    ? value.trim().toLowerCase().replaceAll(' ', '_').replaceAll('-', '_')
+    : '';
+}
 
 function positiveNumberFromToolArg(value: unknown) {
   if (value === null || value === undefined || value === '') return undefined;
@@ -17,7 +25,14 @@ function countFromToolArg(value: unknown) {
 
 function canonicalToolLoadKind(kind: unknown, name: unknown) {
   const canonicalKind = canonicalElectricalLoadKind(typeof kind === 'string' ? kind : undefined);
-  if (!['unknown', 'unknown_load', 'load', 'consumer'].includes(canonicalKind)) return canonicalKind;
+  if (
+    canonicalKind &&
+    !loadProductClassAliases.has(compactLoadToken(kind)) &&
+    !loadProductClassAliases.has(canonicalKind) &&
+    !['unknown', 'unknown_load', 'load', 'consumer'].includes(canonicalKind)
+  ) {
+    return canonicalKind;
+  }
   return canonicalElectricalLoadKind(typeof name === 'string' ? name : undefined);
 }
 
@@ -40,15 +55,29 @@ function generatorLoadEvidenceForToolRequest(request: ToolRequest, userMessage: 
   ].filter(Boolean).join('\n');
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function isProductClassLoadKind(value: unknown) {
+  return loadProductClassAliases.has(compactLoadToken(value));
+}
+
 function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string): {
   loads: ProductElectricalLoadItem[];
   warnings: string[];
 } {
   const rawLoads = Array.isArray(args.loads) ? args.loads : [];
   const warnings = new Set<string>();
-  const loads: ProductElectricalLoadItem[] = rawLoads
-    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object' && !Array.isArray(item)))
-    .map<ProductElectricalLoadItem>((item) => ({
+  const loads: ProductElectricalLoadItem[] = [];
+
+  for (const item of rawLoads) {
+    if (!isObjectRecord(item)) continue;
+    if (isProductClassLoadKind(item.kind)) {
+      warnings.add('generator_load_invalid_load_kind');
+      continue;
+    }
+    const load: ProductElectricalLoadItem = {
       kind: canonicalToolLoadKind(item.kind, item.name),
       name: typeof item.name === 'string' && item.name.trim() ? item.name : undefined,
       count: countFromToolArg(item.count),
@@ -56,11 +85,47 @@ function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string):
       startingKw: positiveNumberFromToolArg(item.startingKw),
       source: sourceFromToolArg(item.source),
       evidence: typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence
-    }))
-    .filter((item) => item.runningKw !== undefined || item.startingKw !== undefined);
+    };
+    if (load.runningKw !== undefined || load.startingKw !== undefined) {
+      loads.push(load);
+    }
+  }
 
   if (rawLoads.length && !loads.length) warnings.add('generator_load_structured_args_without_usable_kw');
   return { loads, warnings: [...warnings] };
+}
+
+export function isGeneratorProductClass(value: ProductSelectionClass) {
+  return value === 'generator' || value === 'weldingGenerator';
+}
+
+export function isEstimateOnlyGeneratorLoadPayload(payload: unknown) {
+  if (!isObjectRecord(payload) || !Array.isArray(payload.loads) || !payload.loads.length) return false;
+  return payload.loads.every((load) =>
+    isObjectRecord(load) && load.source === 'estimated_average'
+  );
+}
+
+export function isEstimateOnlyGeneratorLoadResult(result: ToolResult) {
+  return result.tool === 'calculator.generatorLoad' &&
+    result.status === 'ok' &&
+    isEstimateOnlyGeneratorLoadPayload(result.payload);
+}
+
+export function hasEstimateOnlyGeneratorLoadResult(results: ToolResult[]) {
+  return results.some(isEstimateOnlyGeneratorLoadResult);
+}
+
+function hasUnconfirmedGeneratorLoadBasisWarning(result: ToolResult) {
+  return result.warnings.includes('generator_load_estimate_only') ||
+    result.warnings.includes('generator_load_invalid_load_kind');
+}
+
+export function hasUnconfirmedGeneratorLoadBasisResult(results: ToolResult[]) {
+  return results.some((result) =>
+    result.tool === 'calculator.generatorLoad' &&
+    (isEstimateOnlyGeneratorLoadResult(result) || hasUnconfirmedGeneratorLoadBasisWarning(result))
+  );
 }
 
 export function buildGeneratorLoadToolPayload(input: {
@@ -75,5 +140,8 @@ export function buildGeneratorLoadToolPayload(input: {
       ? input.request.args.simultaneousStartingKinds.filter((item): item is string => typeof item === 'string')
       : undefined
   });
+  if (profile && isEstimateOnlyGeneratorLoadPayload({ loads })) {
+    warnings.push('generator_load_estimate_only');
+  }
   return { loads, profile, warnings };
 }

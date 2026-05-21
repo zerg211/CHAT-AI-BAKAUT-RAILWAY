@@ -1,0 +1,37 @@
+{
+  "taskId": "2026-05-21-generator-estimate-only-card-gate",
+  "status": "pending_production_live",
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "summary": "1 test file passed, 22 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass",
+      "summary": "tsc --noEmit passed for client and server configs"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "summary": "no whitespace errors"
+    }
+  ],
+  "localOpenAiChecks": {
+    "run": false,
+    "reason": "Local OpenAI-dependent checks are invalid here: 403 Country, region, or territory not supported"
+  },
+  "productionLive": {
+    "run": false,
+    "reason": "Must run after commit/push and Railway deployment of the pushed commit"
+  },
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pending"
+  }
+}

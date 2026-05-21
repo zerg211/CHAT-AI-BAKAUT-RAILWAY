@@ -35,7 +35,11 @@ import {
   toolRequestScopedQuery,
   uniqueStrings
 } from './agentManagerCardSelection.js';
-import { buildGeneratorLoadToolPayload } from './agentManagerGeneratorLoad.js';
+import {
+  buildGeneratorLoadToolPayload,
+  hasUnconfirmedGeneratorLoadBasisResult,
+  isGeneratorProductClass
+} from './agentManagerGeneratorLoad.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -597,6 +601,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
             'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit or estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
+            'For generator selection, do not plan catalog.search when the only available load basis is estimated_average loads. Ask for explicit load, nameplate, model, or catalog/web-grounded load facts first.',
             'If the buyer asks for preliminary minimum/reserve variants after enough load context exists for an estimate, plan both calculator.generatorLoad and catalog.search; if the load context is too vague for any useful selection, plan clarification instead of catalog.search.',
             'Не задавай вопрос, ответ на который уже есть в ledger.'
           ].join('\n')
@@ -633,6 +638,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Не задавай лишних вопросов. Если вопрос нужен, он должен быть реально нужен для следующего шага.',
             'If toolResults contains calculator.generatorLoad with status ok, treat payload.profile.requiredNominalKw and requiredStartingKw as the authoritative calculated minimum. Do not replace that number with a broader or higher default class. A higher class may be described only as comfort/reserve, not as the calculated minimum.',
             'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
+            'If calculator.generatorLoad warnings include generator_load_estimate_only or generator_load_invalid_load_kind, do not name catalog products or prices. Set selectionReadiness.canShowProductCards=false and ask for explicit load, nameplate, model, or catalog/web-grounded load facts.',
             'You must set selectionReadiness for the current answer. It is your semantic decision about whether buyer-visible product cards are useful and honest now.',
             'When selectionReadiness.canShowProductCards is false, answerText must itself explain what is missing or what the next useful question is. The code will not append a canned clarification.',
             'Use selectionReadiness.status="needs_more_info" when product cards would be premature. Use "ready_for_preliminary_cards" only when the buyer asked for a preliminary selection and the executed tools give a usable estimated basis. Use "ready_for_exact_cards" when the facts are strong enough for exact cards.',
@@ -684,6 +690,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Проверь только по фактам ledger/toolResults/products.',
             'Блокируй или требуй rewrite, если ответ спрашивает уже известное, обещает непроверенное наличие/доставку/скидку/срок, противоречит текущему диалогу или просит повторить контакт, который уже есть.',
             'For calculator.generatorLoad, block or rewrite any answer that states a calculated minimum inconsistent with payload.profile.requiredNominalKw/requiredStartingKw.',
+            'For generator answers, require rewrite if the answer names catalog products, prices, or product cards when tool results include generator_load_estimate_only, generator_load_invalid_load_kind, or catalog_search_skipped:generator_load_unconfirmed_basis.',
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
@@ -956,7 +963,8 @@ export class AgentManagerOrchestrator {
     });
     const selectionReadiness = assessVisibleCardReadiness({
       cardSelection: initialCardSelection,
-      answer: initialAnswerContract
+      answer: initialAnswerContract,
+      toolResults
     });
     const cardSelection = suppressVisibleCardsForReadiness({
       cardSelection: initialCardSelection,
@@ -1058,36 +1066,50 @@ export class AgentManagerOrchestrator {
           const { query, semanticQuery } = toolRequestScopedQuery(request, input.userMessage);
           const limit = Math.max(1, Math.min(12, Number(request.args.limit ?? 8)));
           const productIntent = toolRequestProductIntent(request, [input.userMessage, semanticQuery, request.rationale].join('\n'));
-          const search = await this.searchCatalogProducts({
-            query,
-            limit,
-            signal: input.signal,
-            userMessage: input.userMessage,
-            semanticContext: [semanticQuery, input.userMessage, request.rationale].join('\n'),
-            productIntent,
-            embeddingQuery: semanticQuery
-          });
-          const products = search.products;
-          products.forEach((product) => productsById.set(product.id, product));
-          result = ToolResultSchema.parse({
-            requestId: request.id,
-            tool: request.tool,
-            status: products.length ? 'ok' : 'not_found',
-            payload: {
+          if (isGeneratorProductClass(productIntent) && hasUnconfirmedGeneratorLoadBasisResult(toolResults)) {
+            result = ToolResultSchema.parse({
+              requestId: request.id,
+              tool: request.tool,
+              status: 'denied',
+              payload: {
+                query,
+                productIntent,
+                reason: 'generator_load_unconfirmed_basis'
+              },
+              warnings: ['catalog_search_skipped:generator_load_unconfirmed_basis']
+            });
+          } else {
+            const search = await this.searchCatalogProducts({
               query,
-              productIds: products.map((product) => product.id),
-              products,
-              retrieval: {
-                intent: search.productIntent,
-                query: search.query,
-                embeddingQuery: search.embeddingQuery,
-                textCount: search.textCount,
-                vectorCount: search.vectorCount,
-                usedEmbeddings: search.vectorCount > 0
-              }
-            },
-            warnings: products.length ? search.warnings : [...search.warnings, 'catalog_search_no_matches']
-          });
+              limit,
+              signal: input.signal,
+              userMessage: input.userMessage,
+              semanticContext: [semanticQuery, input.userMessage, request.rationale].join('\n'),
+              productIntent,
+              embeddingQuery: semanticQuery
+            });
+            const products = search.products;
+            products.forEach((product) => productsById.set(product.id, product));
+            result = ToolResultSchema.parse({
+              requestId: request.id,
+              tool: request.tool,
+              status: products.length ? 'ok' : 'not_found',
+              payload: {
+                query,
+                productIds: products.map((product) => product.id),
+                products,
+                retrieval: {
+                  intent: search.productIntent,
+                  query: search.query,
+                  embeddingQuery: search.embeddingQuery,
+                  textCount: search.textCount,
+                  vectorCount: search.vectorCount,
+                  usedEmbeddings: search.vectorCount > 0
+                }
+              },
+              warnings: products.length ? search.warnings : [...search.warnings, 'catalog_search_no_matches']
+            });
+          }
         } else if (request.tool === 'catalog.getProductDetails') {
           const names = Array.isArray(request.args.productNames)
             ? request.args.productNames.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
@@ -1097,25 +1119,38 @@ export class AgentManagerOrchestrator {
             : [typeof request.args.query === 'string' && request.args.query.trim() ? request.args.query : input.userMessage];
           const productIntent = toolRequestProductIntent(request, input.userMessage);
           const semanticQuery = toolRequestScopedQuery(request, input.userMessage).semanticQuery;
-          for (const query of queries.slice(0, 4)) {
-            const found = await this.searchCatalogProducts({
-              query,
-              limit: 4,
-              signal: input.signal,
-              userMessage: input.userMessage,
-              semanticContext: [semanticQuery, query, input.userMessage, request.rationale].join('\n'),
-              productIntent,
-              embeddingQuery: semanticQuery
+          if (isGeneratorProductClass(productIntent) && hasUnconfirmedGeneratorLoadBasisResult(toolResults)) {
+            result = ToolResultSchema.parse({
+              requestId: request.id,
+              tool: request.tool,
+              status: 'denied',
+              payload: {
+                productIntent,
+                reason: 'generator_load_unconfirmed_basis'
+              },
+              warnings: ['product_details_skipped:generator_load_unconfirmed_basis']
             });
-            found.products.forEach((product) => productsById.set(product.id, product));
+          } else {
+            for (const query of queries.slice(0, 4)) {
+              const found = await this.searchCatalogProducts({
+                query,
+                limit: 4,
+                signal: input.signal,
+                userMessage: input.userMessage,
+                semanticContext: [semanticQuery, query, input.userMessage, request.rationale].join('\n'),
+                productIntent,
+                embeddingQuery: semanticQuery
+              });
+              found.products.forEach((product) => productsById.set(product.id, product));
+            }
+            result = ToolResultSchema.parse({
+              requestId: request.id,
+              tool: request.tool,
+              status: productsById.size ? 'ok' : 'not_found',
+              payload: { productIds: [...productsById.keys()], products: [...productsById.values()] },
+              warnings: productsById.size ? [] : ['product_details_no_matches']
+            });
           }
-          result = ToolResultSchema.parse({
-            requestId: request.id,
-            tool: request.tool,
-            status: productsById.size ? 'ok' : 'not_found',
-            payload: { productIds: [...productsById.keys()], products: [...productsById.values()] },
-            warnings: productsById.size ? [] : ['product_details_no_matches']
-          });
         } else if (request.tool === 'calculator.generatorLoad') {
           const { loads, profile, warnings } = buildGeneratorLoadToolPayload({
             request,
