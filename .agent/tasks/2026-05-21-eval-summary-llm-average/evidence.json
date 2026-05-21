@@ -1,0 +1,73 @@
+{
+  "taskId": "2026-05-21-eval-summary-llm-average",
+  "status": "pass",
+  "changedFiles": [
+    "evals/promptfoo/summarize-results.cjs",
+    "evals/promptfoo/run-promptfoo.cjs",
+    "tests/promptfooSummary.test.ts",
+    "package.json",
+    "docs/PROMPTFOO_EVALS.md"
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/promptfooSummary.test.ts",
+      "status": "pass",
+      "testFiles": 1,
+      "tests": 3
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "summary": "No new regex constructs. Legacy baseline: 1832."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "node --check evals/promptfoo/summarize-results.cjs",
+      "status": "pass"
+    },
+    {
+      "command": "node --check evals/promptfoo/run-promptfoo.cjs",
+      "status": "pass"
+    },
+    {
+      "command": "npm run evals:summarize -- .agent/tasks/2026-05-21-refactor-completion/raw/llm-grader-smoke.json",
+      "status": "pass",
+      "summary": "llmAverageStatus=blocked"
+    },
+    {
+      "command": "npm run evals:summarize -- .agent/tasks/2026-05-21-bounded-preliminary-load-estimates/production-evals-after-16196c3.json",
+      "status": "pass",
+      "summary": "deterministic average=1, assertion pass rate=1, llmAverageStatus=not_configured"
+    }
+  ],
+  "scores": {
+    "productionAfter16196c3": {
+      "deterministicAverage": 1,
+      "assertionPassRate": 1,
+      "llmAverage": null,
+      "llmAverageStatus": "not_configured"
+    },
+    "llmGraderSmoke": {
+      "llmAverage": null,
+      "llmAverageStatus": "blocked",
+      "llmComponentCount": 1,
+      "llmBlockedCount": 1
+    }
+  },
+  "behaviorParity": {
+    "runtimeChanged": false,
+    "publicApiChanged": false,
+    "productionWidgetGateRequired": false,
+    "reason": "Promptfoo result summarization tooling only."
+  },
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass"
+  }
+}

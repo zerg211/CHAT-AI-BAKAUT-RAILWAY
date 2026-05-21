@@ -17,6 +17,8 @@ npm run dev:server
 npm run evals
 ```
 
+When `npm run evals` is run with `-o path/to/result.json` or `--output path/to/result.json`, the wrapper also writes `path/to/result.summary.json`. The summary reports deterministic average score, assertion pass rate, and `llmAverage` status (`ready`, `blocked`, or `not_configured`).
+
 Required environment for a real AI baseline:
 
 - `DATABASE_URL`
