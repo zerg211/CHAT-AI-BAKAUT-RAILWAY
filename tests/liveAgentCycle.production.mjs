@@ -117,7 +117,7 @@ function assertPhase(phase, answer, pageText) {
   const combined = `${answer}\n${pageText}`;
 
   if (phase === 'unclear_generator_need') {
-    if (hasGeneratorCardText(combined)) {
+    if (hasGeneratorCardText(answer)) {
       throw new Error('Unclear generator need produced product cards before load profile was known.');
     }
     if (!/(насос|нагруз|мощност|пуск|шильдик|модель)/iu.test(answer)) {
@@ -126,7 +126,7 @@ function assertPhase(phase, answer, pageText) {
   }
 
   if (phase === 'generic_pump_unknown') {
-    if (hasGeneratorCardText(combined)) {
+    if (hasGeneratorCardText(answer)) {
       throw new Error('Generic unknown pump produced generator cards before pump type or power was known.');
     }
     if (!/(тип|какой).{0,80}насос|насос.{0,80}(мощност|модель|шильдик|тип)/iu.test(answer)) {
