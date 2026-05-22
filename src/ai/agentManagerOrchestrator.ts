@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
-import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass, VerifiedProductFact } from '../shared/types.js';
+import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
 import {
   AgentIntentContractSchema,
   AnswerContractSchema,
@@ -51,6 +51,23 @@ import {
   isGeneratorProductClass
 } from './agentManagerGeneratorLoad.js';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
+import {
+  compactModelText,
+  isModelTokenChar,
+  modelIdentifierDisplayTokens,
+  modelIdentifierTokens,
+  modelTextTokens,
+  normalizeModelText,
+  textMatchesTargetName,
+  tokenHasDigit,
+  tokenHasLetter
+} from './modelTextMatching.js';
+import {
+  matchingVerifiedFactsForRequest,
+  researchFactConfidenceNumber,
+  verifiedFactsCoverRequest,
+  verifiedFactsResearchResult
+} from './verifiedFactMemory.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -246,117 +263,6 @@ function normalizeAnswerEvidenceSources(input: {
   };
 }
 
-const modelTextConfusables: Record<string, string> = {
-  а: 'a',
-  в: 'b',
-  е: 'e',
-  к: 'k',
-  м: 'm',
-  н: 'h',
-  о: 'o',
-  р: 'p',
-  с: 'c',
-  т: 't',
-  у: 'y',
-  х: 'x'
-};
-
-function normalizeModelText(value: unknown) {
-  const chars: string[] = [];
-  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
-    chars.push(modelTextConfusables[char] ?? char);
-  }
-  return chars.join('');
-}
-
-function compactModelText(value: unknown) {
-  return modelTextTokens(value).join('');
-}
-
-function charCode(char: string) {
-  return char.codePointAt(0) ?? 0;
-}
-
-function isAsciiDigit(char: string) {
-  const code = charCode(char);
-  return code >= 48 && code <= 57;
-}
-
-function isAsciiLetter(char: string) {
-  const code = charCode(char);
-  return code >= 97 && code <= 122;
-}
-
-function isCyrillicLetter(char: string) {
-  const code = charCode(char);
-  return (code >= 0x0430 && code <= 0x044f) || code === 0x0451;
-}
-
-function isModelTokenChar(char: string) {
-  return isAsciiDigit(char) || isAsciiLetter(char) || isCyrillicLetter(char);
-}
-
-function tokenHasLetter(token: string) {
-  for (const char of token) {
-    if (isAsciiLetter(char) || isCyrillicLetter(char)) return true;
-  }
-  return false;
-}
-
-function tokenHasDigit(token: string) {
-  for (const char of token) {
-    if (isAsciiDigit(char)) return true;
-  }
-  return false;
-}
-
-function modelTextTokens(value: unknown) {
-  const tokens: string[] = [];
-  let current = '';
-  for (const char of normalizeModelText(value)) {
-    if (isModelTokenChar(char)) {
-      current += char;
-    } else if (current) {
-      tokens.push(current);
-      current = '';
-    }
-  }
-  if (current) tokens.push(current);
-  return tokens;
-}
-
-function modelIdentifierTokens(value: unknown) {
-  return uniqueStrings(
-    modelTextTokens(value)
-      .map(compactModelText)
-      .filter((token) => token.length >= 4 && tokenHasLetter(token) && tokenHasDigit(token))
-  );
-}
-
-function modelIdentifierDisplayTokens(value: unknown) {
-  const tokens: string[] = [];
-  let current = '';
-  for (const rawChar of String(value ?? '').normalize('NFKD')) {
-    const normalizedChar = normalizeModelText(rawChar);
-    if (normalizedChar.length === 1 && isModelTokenChar(normalizedChar)) {
-      current += rawChar;
-    } else if (current) {
-      tokens.push(current);
-      current = '';
-    }
-  }
-  if (current) tokens.push(current);
-  const seen = new Set<string>();
-  const displayTokens: string[] = [];
-  for (const token of tokens) {
-    const canonical = compactModelText(token);
-    if (canonical.length < 4 || !tokenHasLetter(canonical) || !tokenHasDigit(canonical) || seen.has(canonical)) continue;
-    seen.add(canonical);
-    displayTokens.push(token);
-  }
-  return displayTokens;
-}
-
 function requestStringArray(value: unknown) {
   return Array.isArray(value)
     ? value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
@@ -401,17 +307,6 @@ function answerProductContext(product: Product) {
     description: compactProductDescription(product.description),
     sourceUrl: product.sourceUrl
   };
-}
-
-function textMatchesTargetName(value: unknown, targetName: string) {
-  const targetTokens = modelIdentifierTokens(targetName);
-  if (targetTokens.length) {
-    const valueIdentifierTokens = new Set(modelIdentifierTokens(value));
-    return targetTokens.every((token) => valueIdentifierTokens.has(token));
-  }
-  const productText = compactModelText(value);
-  const targetText = compactModelText(targetName);
-  return targetText.length >= 5 && productText.includes(targetText);
 }
 
 function productMatchesTargetName(product: Product, targetName: string) {
@@ -603,112 +498,6 @@ function nearbyCatalogProductsForTargets(targetNames: string[], products: Produc
       product,
       sameBrand ? 'same_brand_same_product_class' : 'same_product_class_comparable'
     ));
-}
-
-const genericAttributeTokens = new Set([
-  'current',
-  'buyer',
-  'question',
-  'requested',
-  'attribute',
-  'technical',
-  'fact',
-  'facts',
-  'model',
-  'product'
-]);
-
-function attributeTokens(value: unknown) {
-  return uniqueStrings(modelTextTokens(value)
-    .map(compactModelText)
-    .filter((token) => token.length >= 3 && !genericAttributeTokens.has(token)));
-}
-
-function tokensOverlap(left: string[], right: string[]) {
-  return left.some((leftToken) =>
-    right.some((rightToken) => {
-      if (leftToken === rightToken) return true;
-      const smaller = leftToken.length <= rightToken.length ? leftToken : rightToken;
-      const larger = leftToken.length <= rightToken.length ? rightToken : leftToken;
-      return smaller.length >= 4 && larger.startsWith(smaller);
-    })
-  );
-}
-
-function verifiedFactMatchesAttribute(fact: VerifiedProductFact, attribute: string) {
-  const requestedTokens = attributeTokens(attribute);
-  if (!requestedTokens.length) return true;
-  const factTokens = attributeTokens([fact.attribute, fact.value].join(' '));
-  return factTokens.length > 0 && tokensOverlap(factTokens, requestedTokens);
-}
-
-function matchingVerifiedFactsForRequest(input: {
-  facts: VerifiedProductFact[];
-  targetProductNames: string[];
-  comparisonAttributes: string[];
-}) {
-  const targetScopedFacts = input.targetProductNames.length
-    ? input.facts.filter((fact) =>
-        input.targetProductNames.some((targetName) => textMatchesTargetName(fact.productName, targetName))
-      )
-    : input.facts;
-  const meaningfulAttributes = input.comparisonAttributes
-    .filter((attribute) => attributeTokens(attribute).length > 0);
-  if (!meaningfulAttributes.length) return targetScopedFacts;
-  return targetScopedFacts.filter((fact) =>
-    meaningfulAttributes.some((attribute) => verifiedFactMatchesAttribute(fact, attribute))
-  );
-}
-
-function verifiedFactsCoverRequest(input: {
-  facts: VerifiedProductFact[];
-  comparisonAttributes: string[];
-}) {
-  if (!input.facts.length) return false;
-  const meaningfulAttributes = input.comparisonAttributes
-    .filter((attribute) => attributeTokens(attribute).length > 0);
-  if (!meaningfulAttributes.length) return true;
-  return meaningfulAttributes.every((attribute) =>
-    input.facts.some((fact) => verifiedFactMatchesAttribute(fact, attribute))
-  );
-}
-
-function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductComparisonResearchResult {
-  const researchFacts: ProductComparisonResearchFact[] = facts.map((fact) => ({
-    productName: fact.productName,
-    attribute: fact.attribute,
-    value: fact.value,
-    sourceType: 'web',
-    confidence: fact.confidence,
-    evidence: fact.evidence ?? [fact.sourceTitle, fact.sourceUrl].filter(Boolean).join(' '),
-    sourceUrl: fact.sourceUrl ?? undefined,
-    sourceTitle: fact.sourceTitle ?? undefined
-  }));
-  return {
-    usedWebSearch: false,
-    facts: researchFacts,
-    conflicts: [],
-    answerGuidance: {
-      directAnswer: '',
-      completeness: 'answered',
-      coverage: facts.map((fact) => ({
-        attribute: fact.attribute,
-        status: 'confirmed',
-        value: fact.value,
-        evidence: fact.evidence ?? [fact.sourceTitle, fact.sourceUrl].filter(Boolean).join(' '),
-        sourceUrl: fact.sourceUrl ?? undefined,
-        sourceTitle: fact.sourceTitle ?? undefined
-      }))
-    },
-    summaryForAnswer: 'Verified local product fact memory found source-backed exact-model facts. Use payload.facts and answer in simple buyer-facing words without copying raw attribute labels.',
-    warnings: ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory']
-  };
-}
-
-function researchFactConfidenceNumber(confidence: ProductComparisonResearchFact['confidence']) {
-  if (confidence === 'high') return 0.9;
-  if (confidence === 'medium') return 0.8;
-  return 0.55;
 }
 
 function productForResearchFact(input: {

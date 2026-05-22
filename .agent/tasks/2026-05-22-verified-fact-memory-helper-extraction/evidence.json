@@ -1,0 +1,44 @@
+{
+  "taskId": "2026-05-22-verified-fact-memory-helper-extraction",
+  "timestamp": "2026-05-22T18:52:01.8297206+03:00",
+  "changeSummary": [
+    "Extracted model/product text matching helpers into src/ai/modelTextMatching.ts.",
+    "Extracted verified product fact memory matching, coverage, research-result conversion, and confidence mapping into src/ai/verifiedFactMemory.ts.",
+    "Kept public APIs, DB contracts, and response contracts unchanged.",
+    "Added no new regex constructs."
+  ],
+  "checks": [
+    {
+      "command": "npx vitest run tests/agentManagerComparisonResearch.test.ts",
+      "status": "pass",
+      "details": "1 test file passed, 13 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1687."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pass"
+  },
+  "productionPromptfoo": {
+    "requiredBeforeCommit": false,
+    "status": "not_run_pre_push",
+    "reason": "Behavior-preserving extraction; production Promptfoo can only run after commit, push, and Railway marker, not localhost."
+  }
+}
