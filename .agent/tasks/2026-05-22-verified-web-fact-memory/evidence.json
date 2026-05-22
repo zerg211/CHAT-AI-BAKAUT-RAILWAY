@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-22-verified-web-fact-memory",
-  "status": "pending_live",
+  "status": "pass",
   "checks": [
     {
       "command": "npx vitest run tests/agentManagerComparisonResearch.test.ts",
@@ -28,6 +28,76 @@
     {
       "command": "npm run build",
       "status": "pass"
+    },
+    {
+      "command": "npx vitest run tests/agentManagerComparisonResearch.test.ts",
+      "status": "pass",
+      "tests": 13,
+      "note": "Follow-up after removing cached start-control shortcut."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass",
+      "note": "Follow-up after cached verified fact memory evidence repair."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "note": "Follow-up after cached verified fact memory evidence repair. Legacy baseline: 1687."
+    },
+    {
+      "command": "npm run build",
+      "status": "pass",
+      "note": "Follow-up after cached verified fact memory evidence repair."
+    },
+    {
+      "command": "npx vitest run tests/agentManagerComparisonResearch.test.ts",
+      "status": "pass",
+      "tests": 13,
+      "note": "Final after removing the temporary start-family matcher."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass",
+      "note": "Final after removing the temporary start-family matcher."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "note": "Final after removing the temporary start-family matcher. Legacy baseline: 1687."
+    },
+    {
+      "command": "npm run build",
+      "status": "pass",
+      "note": "Final after removing the temporary start-family matcher."
+    },
+    {
+      "command": "production marker health check",
+      "status": "pass",
+      "commitSha": "a9af56c9df99796ccd32c80ed8b95e85507da647",
+      "note": "Final behavior runtime marker for the code-bearing commit after removing the temporary start-family matcher. The later evidence commit is documentation-only."
+    },
+    {
+      "command": "production widget save/reuse live check on bakautprof.ru",
+      "status": "pass",
+      "protocolPath": "local-live-tests/2026-05-22-verified-web-fact-memory-2026-05-22T14-11-46-469Z.production.md",
+      "firstSession": "45fdb86a-25d4-47ca-a21a-71c6031c3f21",
+      "secondSession": "7ef5b032-19f7-414d-8b44-36c243b9976b",
+      "note": "First widget dialogue saved verified memory; second widget dialogue reused it."
+    },
+    {
+      "command": "production widget reuse/style live check on bakautprof.ru",
+      "status": "pass",
+      "protocolPath": "local-live-tests/2026-05-22-verified-web-fact-memory-reuse-2026-05-22T15-21-48-479Z.production.md",
+      "session": "fe325b5b-3fef-4bca-80f9-7ff3c05d7fa5",
+      "note": "Final widget answer reused cached facts and did not copy raw attribute labels."
+    },
+    {
+      "command": "production widget no-starter-matcher live check on bakautprof.ru",
+      "status": "pass",
+      "protocolPath": "local-live-tests/2026-05-22-verified-fact-no-starter-matcher-a9af56c.production.md",
+      "session": "a1f800d9-1161-43ba-b83c-be097f1d3f1f",
+      "note": "Final widget answer stayed buyer-facing and did not rely on a start-family dictionary in code."
     }
   ],
   "acceptanceCriteria": {
@@ -38,6 +108,6 @@
     "AC5": "pass",
     "AC6": "pass",
     "AC7": "pass",
-    "AC8": "pending"
+    "AC8": "pass"
   }
 }
