@@ -16,6 +16,11 @@
 - `npm test` - PASS, 76 files / 614 tests.
 - `npm run build` - PASS.
 
+## Production Verification
+
+- `b1cc743` reached Railway marker.
+- `production-evals-after-b1cc743.json`: 6/6, deterministic average 0.993388888888889, LLM average 0.965. Both gates are above 90%.
+
 ## Acceptance Criteria Status
 
 - AC1: PASS.

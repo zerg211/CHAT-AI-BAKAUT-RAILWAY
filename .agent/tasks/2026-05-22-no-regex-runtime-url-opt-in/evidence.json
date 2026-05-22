@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-22-no-regex-runtime-url-opt-in",
-  "status": "local_verified",
+  "status": "production_verified",
   "baseHead": "ec0b005",
   "implementation": [
     "Replaced regex fallback URL opt-in detection with structured URL parsing.",
@@ -38,6 +38,19 @@
       "status": "PASS"
     }
   ],
+  "production": {
+    "afterFixPromptfoo": {
+      "source": ".agent/tasks/2026-05-22-no-regex-runtime-url-opt-in/production-evals-after-b1cc743.summary.json",
+      "successes": 6,
+      "failures": 0,
+      "deterministicAverage": 0.993388888888889,
+      "llmAverage": 0.965,
+      "gates": {
+        "deterministicAbove90": true,
+        "llmAverageAbove90": true
+      }
+    }
+  },
   "acceptanceCriteria": {
     "AC1": "PASS",
     "AC2": "PASS",
