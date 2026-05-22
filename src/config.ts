@@ -116,7 +116,7 @@ const primaryModel = parsedConfig.OPENAI_ANSWER_MODEL
 const deepReasoningModel = parsedConfig.OPENAI_DEEP_REASONING_MODEL || 'gpt-5.5';
 const plannerModel = parsedConfig.OPENAI_PLANNER_MODEL || primaryModel;
 const factModel = parsedConfig.OPENAI_FACT_MODEL || plannerModel;
-const visionModel = parsedConfig.OPENAI_VISION_MODEL || 'gpt-4.1-mini';
+const visionModel = parsedConfig.OPENAI_VISION_MODEL || 'gpt-4o-mini';
 const normalizeReasoningEffort = (value: z.infer<typeof reasoningEffort>) =>
   value === 'minimal' ? 'none' : value;
 

@@ -522,6 +522,7 @@ describe('product comparison research', () => {
           summaryForAnswer: 'Text confirms electric/manual start only.'
         })
       })
+      .mockRejectedValueOnce(Object.assign(new Error('invalid image input'), { code: 'invalid_value' }))
       .mockResolvedValueOnce({
         parsed: {
           confirmedControls: [{
@@ -544,18 +545,22 @@ describe('product comparison research', () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(3);
     expect(createStructuredJsonResponse.mock.calls[1][0].stage).toBe('source_visual_start_control_validation');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('input_image');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('data:image/jpeg;base64');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('"detail":"auto"');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('rd4910e-key-panel.jpg');
+    expect(createStructuredJsonResponse.mock.calls[2][0].stage).toBe('source_visual_start_control_validation');
+    expect(createStructuredJsonResponse.mock.calls[1][0].request.model).toBe('gpt-4o-mini');
+    expect(createStructuredJsonResponse.mock.calls[2][0].request.model).toBe('gpt-4.1-mini');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('input_image');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('data:image/jpeg;base64');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('"detail":"auto"');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('rd4910e-key-panel.jpg');
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
     ]));
     expect(actual.answerGuidance.directAnswer).toContain('ключ');
     expect(actual.answerGuidance.directAnswer).not.toContain('не подтвердили');
     expect(actual.warnings).toEqual(expect.arrayContaining([
+      'source_visual_start_control_validation_failed:gpt-4o-mini:invalid_value',
       'source_visual_start_control_evidence_used',
       'answer_guidance_rewritten_after_source_validation'
     ]));

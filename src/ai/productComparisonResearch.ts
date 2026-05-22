@@ -1172,6 +1172,21 @@ function normalizeVisualStartControlValidation(
   };
 }
 
+function visualModelCandidates() {
+  return uniqueStrings([
+    config.OPENAI_VISION_MODEL,
+    'gpt-4o-mini',
+    'gpt-4.1-mini',
+    config.OPENAI_FACT_MODEL
+  ]);
+}
+
+function visualValidationErrorWarning(model: string, error: unknown) {
+  const details = safeError(error);
+  const reason = details.code ?? details.status ?? details.message ?? 'unknown';
+  return `source_visual_start_control_validation_failed:${model}:${reason}`;
+}
+
 async function validateVisualStartControlEvidence(input: {
   result: ProductComparisonResearchResult;
   products: Product[];
@@ -1219,10 +1234,12 @@ async function validateVisualStartControlEvidence(input: {
       { type: 'input_image', image_url: candidate.openAiImageUrl, detail: 'auto' }
     ])
   ];
-  try {
-    const { parsed } = await createStructuredJsonResponse({
+  const modelErrors: string[] = [];
+  for (const model of visualModelCandidates()) {
+    try {
+      const { parsed } = await createStructuredJsonResponse({
       request: {
-        model: config.OPENAI_VISION_MODEL,
+        model,
         input: [
           {
             role: 'system',
@@ -1241,42 +1258,43 @@ async function validateVisualStartControlEvidence(input: {
       stage: 'source_visual_start_control_validation',
       signal: input.signal
     });
-    const normalized = normalizeVisualStartControlValidation(parsed, candidates);
-    const facts = normalized.controls.map((control): ProductComparisonResearchFact => ({
-      productName: input.targetProductNames[0] ?? control.sourceTitle ?? 'exact target product',
-      attribute: visualStartControlAttribute(control.kind),
-      value: visualStartControlValue(control.kind),
-      sourceType: 'web',
-      confidence: control.confidence,
-      evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
-      sourceUrl: control.sourceUrl,
-      sourceTitle: control.sourceTitle
-    }));
-    const coverage = normalized.controls.map((control): ResearchCoverageItem => ({
-      attribute: visualStartControlAttribute(control.kind),
-      status: 'confirmed',
-      value: visualStartControlValue(control.kind),
-      evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
-      sourceUrl: control.sourceUrl,
-      sourceTitle: control.sourceTitle
-    }));
-    return {
-      facts,
-      coverage,
-      warnings: uniqueStrings([
-        ...normalized.warnings,
-        normalized.controls.length ? 'source_visual_start_control_evidence_used' : 'source_visual_start_control_not_confirmed'
-      ])
-    };
-  } catch (error) {
-    const details = safeError(error);
-    const reason = details.code ?? details.status ?? details.message ?? 'unknown';
-    return {
-      facts: [],
-      coverage: [],
-      warnings: uniqueStrings(['source_visual_start_control_validation_failed', `source_visual_start_control_validation_failed:${reason}`])
-    };
+      const normalized = normalizeVisualStartControlValidation(parsed, candidates);
+      const facts = normalized.controls.map((control): ProductComparisonResearchFact => ({
+        productName: input.targetProductNames[0] ?? control.sourceTitle ?? 'exact target product',
+        attribute: visualStartControlAttribute(control.kind),
+        value: visualStartControlValue(control.kind),
+        sourceType: 'web',
+        confidence: control.confidence,
+        evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
+        sourceUrl: control.sourceUrl,
+        sourceTitle: control.sourceTitle
+      }));
+      const coverage = normalized.controls.map((control): ResearchCoverageItem => ({
+        attribute: visualStartControlAttribute(control.kind),
+        status: 'confirmed',
+        value: visualStartControlValue(control.kind),
+        evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
+        sourceUrl: control.sourceUrl,
+        sourceTitle: control.sourceTitle
+      }));
+      return {
+        facts,
+        coverage,
+        warnings: uniqueStrings([
+          ...modelErrors,
+          ...normalized.warnings,
+          normalized.controls.length ? 'source_visual_start_control_evidence_used' : 'source_visual_start_control_not_confirmed'
+        ])
+      };
+    } catch (error) {
+      modelErrors.push(visualValidationErrorWarning(model, error));
+    }
   }
+  return {
+    facts: [],
+    coverage: [],
+    warnings: uniqueStrings(['source_visual_start_control_validation_failed', ...modelErrors])
+  };
 }
 
 function confirmedStartKinds(result: ProductComparisonResearchResult) {
