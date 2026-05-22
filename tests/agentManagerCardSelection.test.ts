@@ -317,6 +317,35 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
   });
 
+  it('accepts budget facts stored with the budget_max ledger key', () => {
+    const selection = selectProductsForVisibleCards({
+      products: [overBudgetPlate, plate],
+      userMessage: 'Budget max 70000.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer narrows plate budget',
+        dialogueUnderstanding: 'budget limit for plate',
+        nextStepRationale: 'show catalog plates',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'plate budget max 70000' },
+          rationale: 'find plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Ближайшие варианты — TSS-WP60TH и TSS-WP60L.',
+      needState: needStateWithBudget(70000, 'budget_max')
+    });
+
+    expect(selection.products).toEqual([plate]);
+    expect(selection.droppedProductIds).toContain('plate-over-budget');
+    expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
+  });
+
   it('keeps generator card ranking for explicit power ranges without regex parsing', () => {
     const fourKw = generatorWithPower('four-kw', '4.0');
     const fiveKw = generatorWithPower('five-kw', '5.0');

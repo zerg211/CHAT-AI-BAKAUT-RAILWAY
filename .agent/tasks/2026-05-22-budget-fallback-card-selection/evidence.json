@@ -1,7 +1,12 @@
 {
   "taskId": "2026-05-22-budget-fallback-card-selection",
-  "status": "local_verified_pre_push",
-  "baseHead": "28e806c",
+  "status": "local_verified_budget_max_fix_pre_push",
+  "baseHead": "bedbfc6",
+  "implementation": [
+    "Enforce explicit budget constraints against same-intent catalog candidates when possible.",
+    "Preserve nearest over-budget orientation cards when no in-budget same-intent candidate exists.",
+    "Accept the existing structured ledger key budget_max without regex or buyer-text keyword parsing."
+  ],
   "checks": [
     {
       "command": "npm test -- tests/agentManagerCardSelection.test.ts tests/agentManagerIntegrationSource.test.ts",
@@ -20,7 +25,7 @@
     {
       "command": "npm test",
       "status": "PASS",
-      "summary": "76 files / 606 tests passed"
+      "summary": "76 files / 607 tests passed"
     },
     {
       "command": "git diff --check",
@@ -30,6 +35,11 @@
     {
       "command": "npm run build",
       "status": "PASS"
+    },
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts",
+      "status": "PASS",
+      "summary": "9 tests passed"
     }
   ],
   "acceptanceCriteria": {
@@ -40,13 +50,37 @@
     "AC5": "PENDING_PRODUCTION_CHECK"
   },
   "production": {
-    "preFixPromptfoo": {
+    "preBudgetCardFallbackPromptfoo": {
       "source": ".agent/tasks/2026-05-22-bounded-generator-null-load-defaults/production-evals-after-28e806c.summary.json",
       "successes": 5,
       "failures": 1,
       "deterministicAverage": 0.9736666666666668,
       "llmAverage": 0.8450000000000001,
       "failingCase": "generator_load_selection"
+    },
+    "afterBudgetCardFallbackPromptfoo": {
+      "source": ".agent/tasks/2026-05-22-budget-fallback-card-selection/production-evals-after-bedbfc6.summary.json",
+      "successes": 4,
+      "failures": 2,
+      "deterministicAverage": 0.9612222222222222,
+      "llmAverage": 0.8016666666666666,
+      "failingCases": [
+        "vague_generator_no_cards_before_load_profile",
+        "context_shift_agent_completion"
+      ]
+    },
+    "afterBudgetCardFallbackRerunPromptfoo": {
+      "source": ".agent/tasks/2026-05-22-budget-fallback-card-selection/production-evals-after-bedbfc6-rerun2.summary.json",
+      "successes": 5,
+      "failures": 1,
+      "deterministicAverage": 0.9865,
+      "llmAverage": 0.9283333333333333,
+      "gates": {
+        "deterministicAbove90": true,
+        "llmAverageAbove90": true
+      },
+      "failingCase": "context_shift_agent_completion",
+      "diagnosis": "Production state used budget_max: 70000; previous budget parser only accepted budget.max and budget."
     }
   }
 }

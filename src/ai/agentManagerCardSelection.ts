@@ -59,7 +59,7 @@ function positiveFiniteNumber(value: unknown) {
 
 function numberFromStructuredBudgetText(value: string) {
   const trimmed = value.trim().toLowerCase();
-  const prefix = ['budget.max:', 'budget:'].find((candidate) => trimmed.startsWith(candidate));
+  const prefix = ['budget.max:', 'budget_max:', 'budgetmax:', 'budget:'].find((candidate) => trimmed.startsWith(candidate));
   if (!prefix) return undefined;
   let numeric = '';
   let hasDecimal = false;
