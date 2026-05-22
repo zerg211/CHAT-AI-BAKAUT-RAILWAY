@@ -1,0 +1,62 @@
+{
+  "taskId": "2026-05-22-agent-manager-risk-review-guards-no-regex",
+  "status": "PASS",
+  "change": {
+    "summary": "Extracted deterministic risk/adjudication review guards from AgentManagerOrchestrator into riskReviewGuards without regex.",
+    "files": [
+      "src/ai/agentManagerOrchestrator.ts",
+      "src/ai/riskReviewGuards.ts",
+      "tests/riskReviewGuards.test.ts",
+      "scripts/no-regex-baseline.json"
+    ],
+    "publicApiChanged": false,
+    "productionBehaviorChanged": false
+  },
+  "noRegex": {
+    "previousBaseline": 1751,
+    "currentBaseline": 1745,
+    "removedFindings": 6,
+    "command": "npm run lint:no-regex",
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "command": "npx vitest run tests/riskReviewGuards.test.ts",
+      "result": "PASS",
+      "testFiles": 1,
+      "tests": 4
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "PASS"
+    },
+    {
+      "command": "npm test",
+      "result": "PASS",
+      "testFiles": 81,
+      "tests": 662
+    },
+    {
+      "command": "npm run build",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "Git reported CRLF normalization warnings only."
+    }
+  ],
+  "productionEval": {
+    "required": false,
+    "reason": "Private deterministic guard extraction with focused parity tests; no product selection, generated answer policy, or widget UX behavior changed."
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS"
+  }
+}

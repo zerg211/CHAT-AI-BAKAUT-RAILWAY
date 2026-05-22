@@ -32,6 +32,7 @@ import {
   leadCaptureRepairText,
   stripContactRequestSentence
 } from './leadReviewGuards.js';
+import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import {
   assessVisibleCardReadiness,
   filterGeneratorProductsByLoadProfile,
@@ -2360,9 +2361,7 @@ export class AgentManagerOrchestrator {
         });
       }
     }
-    const requiresAdjudication = input.answer.riskFlags.some((flag) => /high[_-]?risk[_-]?disagreement|needs?[_-]?adjudication|requires?[_-]?adjudication|source[_-]?conflict[_-]?unresolved/iu.test(flag))
-      || input.toolResults.some((result) => result.warnings.some((warning) => /high[_-]?risk[_-]?disagreement|unresolved[_-]?conflict|needs?[_-]?adjudication|requires?[_-]?adjudication/iu.test(warning)));
-    if (requiresAdjudication) {
+    if (hasAdjudicationRisk({ answerRiskFlags: input.answer.riskFlags, toolResults: input.toolResults })) {
       mechanicalIssues.push({
         code: 'requires_adjudication',
         severity: 'high',
@@ -2370,8 +2369,7 @@ export class AgentManagerOrchestrator {
         evidence: JSON.stringify({ answerRiskFlags: input.answer.riskFlags, toolWarnings: input.toolResults.flatMap((result) => result.warnings) })
       });
     }
-    const unsupportedClaimRisk = input.answer.riskFlags.some((flag) => /unsupported|unverified|no[_-]?evidence|hallucination/iu.test(flag));
-    if (unsupportedClaimRisk) {
+    if (hasUnsupportedClaimRisk(input.answer.riskFlags)) {
       mechanicalIssues.push({
         code: 'unsupported_claim_risk_flag',
         severity: 'high',

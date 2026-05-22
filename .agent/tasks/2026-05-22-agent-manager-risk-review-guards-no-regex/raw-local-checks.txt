@@ -1,0 +1,27 @@
+npx vitest run tests/riskReviewGuards.test.ts
+PASS
+Test Files: 1 passed (1)
+Tests: 4 passed (4)
+
+npm run lint:no-regex
+PASS
+No new regex constructs. Legacy baseline: 1745.
+
+npm run typecheck
+PASS
+tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json
+
+npm test
+PASS
+Test Files: 81 passed (81)
+Tests: 662 passed (662)
+
+npm run build
+PASS
+vite build && tsc -p tsconfig.server.json
+
+git diff --check
+PASS
+Warnings only:
+warning: in the working copy of 'scripts/no-regex-baseline.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/ai/agentManagerOrchestrator.ts', LF will be replaced by CRLF the next time Git touches it
