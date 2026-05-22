@@ -34,8 +34,12 @@ This keeps the semantic decision in the LLM output and leaves code responsible f
   - `npm test`: 73 files, 593 tests passed.
   - `git diff --check`: passed with CRLF warnings only.
 - AC7 production behavior validation: PENDING until the latest no-keyword cleanup commit is pushed and Railway serves it.
+  - Railway `/api/health` served commit `1aeae873b1feba3492da26dd2c580f60866515b0`.
+  - Production Promptfoo through Railway API + `bakautprof.ru` page URL passed: `6/6`, deterministic average `0.9889444444444445`, LLM average `0.94`, assertion pass rate `1`.
+  - Targeted production embedded-widget check on `https://bakautprof.ru/` passed. Protocol: `local-live-tests/2026-05-22-exact-catalog-description-widget.production.md`.
+  - The widget answer to `Firman RD3910E - заводится с ключа или с кнопки?` was: `Заводится с ключа, через электростартер; также указан ручной стартер. В каталоге БАКАУТ Firman RD3910E есть.`
   - Local Promptfoo/OpenAI eval was not run by project rule because this environment returns `403 Country, region, or territory not supported`.
 
 ## Verification Notes
 
-The change is behavior-impacting, so production widget/API validation remains required before claiming production behavior complete. The local proof only covers deterministic harness behavior and mocked LLM outputs.
+The behavior-impacting pass has both production Promptfoo and targeted embedded-widget evidence for the exact catalog description path. The broader refactor goal is still active because other structural passes remain to audit and complete.
