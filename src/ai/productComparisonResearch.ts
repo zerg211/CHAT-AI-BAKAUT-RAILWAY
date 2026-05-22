@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 import { fetch } from 'undici';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
+import { safeError } from './responseUtils.js';
 
 export interface ProductComparisonResearchFact {
   productName: string;
@@ -555,6 +556,7 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
 
 const sourceTextLimit = 250000;
 const sourceVisualCandidateLimit = 8;
+const sourceVisualImageByteLimit = 5_000_000;
 
 type SourceVisualCandidate = {
   imageUrl: string;
@@ -574,6 +576,10 @@ type SourceDocument = {
 
 type SourceTextCache = Map<string, Promise<SourceDocument>>;
 type SourceCheerioElement = ReturnType<cheerio.CheerioAPI>;
+
+type SourceVisualInputCandidate = SourceVisualCandidate & {
+  openAiImageUrl: string;
+};
 
 function isWhitespaceChar(char: string) {
   return char.trim() === '';
@@ -729,6 +735,59 @@ function collectSourceVisualCandidates($: cheerio.CheerioAPI, sourceUrl: string,
   return candidates
     .sort((left, right) => right.score - left.score)
     .slice(0, sourceVisualCandidateLimit);
+}
+
+function imageMimeTypeFromUrl(value: string) {
+  try {
+    const pathname = new URL(value).pathname.toLocaleLowerCase('en-US');
+    if (pathname.endsWith('.png')) return 'image/png';
+    if (pathname.endsWith('.webp')) return 'image/webp';
+    if (pathname.endsWith('.gif')) return 'image/gif';
+    if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
+  } catch {
+    // Fall through to the default.
+  }
+  return 'image/jpeg';
+}
+
+function supportedImageMimeType(value: unknown, imageUrl: string) {
+  const contentType = typeof value === 'string'
+    ? value.split(';')[0]?.trim().toLocaleLowerCase('en-US') ?? ''
+    : '';
+  if (['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'].includes(contentType)) {
+    return contentType === 'image/jpg' ? 'image/jpeg' : contentType;
+  }
+  return imageMimeTypeFromUrl(imageUrl);
+}
+
+async function sourceVisualInputCandidate(candidate: SourceVisualCandidate, signal?: AbortSignal): Promise<SourceVisualInputCandidate | null> {
+  try {
+    const response = await fetch(candidate.imageUrl, {
+      signal,
+      headers: {
+        'user-agent': 'Mozilla/5.0 BAKAUT source visual evidence verifier'
+      }
+    });
+    if (!response.ok) return null;
+    const mimeType = supportedImageMimeType(response.headers.get('content-type'), candidate.imageUrl);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > sourceVisualImageByteLimit) return null;
+    return {
+      ...candidate,
+      openAiImageUrl: `data:${mimeType};base64,${bytes.toString('base64')}`
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function sourceVisualInputCandidates(candidates: SourceVisualCandidate[], signal?: AbortSignal) {
+  const output: SourceVisualInputCandidate[] = [];
+  for (const candidate of candidates) {
+    const inputCandidate = await sourceVisualInputCandidate(candidate, signal);
+    if (inputCandidate) output.push(inputCandidate);
+  }
+  return output;
 }
 
 function htmlToSourceDocument(html: string, sourceUrl: string): SourceDocument {
@@ -1129,6 +1188,8 @@ async function validateVisualStartControlEvidence(input: {
   if (!needsElectricStarterControlSearch(input)) return { facts: [], coverage: [], warnings: [] };
   const candidates = await collectVisualStartControlCandidates(input);
   if (!candidates.length) return { facts: [], coverage: [], warnings: [] };
+  const imageCandidates = await sourceVisualInputCandidates(candidates, input.signal);
+  if (!imageCandidates.length) return { facts: [], coverage: [], warnings: ['source_visual_start_control_image_fetch_failed'] };
   const content: Array<Record<string, unknown>> = [
     {
       type: 'input_text',
@@ -1144,7 +1205,7 @@ async function validateVisualStartControlEvidence(input: {
           'Electric starter, battery, starter text, or a generic feature icon alone is not key/button/switch proof.',
           'If the image is unclear, generic, or not tied to the exact model source page, return no confirmedControls.'
         ],
-        candidates: candidates.map((candidate, index) => ({
+        candidates: imageCandidates.map((candidate, index) => ({
           index: index + 1,
           imageUrl: candidate.imageUrl,
           sourceUrl: candidate.sourceUrl,
@@ -1153,9 +1214,9 @@ async function validateVisualStartControlEvidence(input: {
         }))
       })
     },
-    ...candidates.flatMap((candidate, index) => [
+    ...imageCandidates.flatMap((candidate, index) => [
       { type: 'input_text', text: `Image ${index + 1}: ${candidate.imageUrl}` },
-      { type: 'input_image', image_url: candidate.imageUrl, detail: 'high' }
+      { type: 'input_image', image_url: candidate.openAiImageUrl }
     ])
   ];
   try {
@@ -1207,8 +1268,14 @@ async function validateVisualStartControlEvidence(input: {
         normalized.controls.length ? 'source_visual_start_control_evidence_used' : 'source_visual_start_control_not_confirmed'
       ])
     };
-  } catch {
-    return { facts: [], coverage: [], warnings: ['source_visual_start_control_validation_failed'] };
+  } catch (error) {
+    const details = safeError(error);
+    const reason = details.code ?? details.status ?? details.message ?? 'unknown';
+    return {
+      facts: [],
+      coverage: [],
+      warnings: uniqueStrings(['source_visual_start_control_validation_failed', `source_visual_start_control_validation_failed:${reason}`])
+    };
   }
 }
 

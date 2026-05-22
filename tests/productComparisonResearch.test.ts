@@ -460,19 +460,21 @@ describe('product comparison research', () => {
   });
 
   it('uses exact-source product images as visual evidence for key start when text only confirms electric start', async () => {
-    fetchMock.mockResolvedValueOnce(sourceResponse(`
-      <html>
-        <head><title>FIRMAN RD4910E generator</title></head>
-        <body>
-          <h1>FIRMAN RD4910E</h1>
-          <p>Starting system: manual starter, electric starter.</p>
-          <figure>
-            <img src="/images/rd4910e-key-panel.jpg" alt="Electric starter and battery included">
-            <figcaption>Electric starter / battery included</figcaption>
-          </figure>
-        </body>
-      </html>
-    `));
+    fetchMock
+      .mockResolvedValueOnce(sourceResponse(`
+        <html>
+          <head><title>FIRMAN RD4910E generator</title></head>
+          <body>
+            <h1>FIRMAN RD4910E</h1>
+            <p>Starting system: manual starter, electric starter.</p>
+            <figure>
+              <img src="/images/rd4910e-key-panel.jpg" alt="Electric starter and battery included">
+              <figcaption>Electric starter / battery included</figcaption>
+            </figure>
+          </body>
+        </html>
+      `))
+      .mockResolvedValueOnce(sourceResponse('fake image bytes', 'image/jpeg'));
     createStructuredJsonResponse
       .mockResolvedValueOnce({
         parsed: result({
@@ -541,10 +543,11 @@ describe('product comparison research', () => {
       comparisonAttributes: ['key start', 'push-button start']
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
     expect(createStructuredJsonResponse.mock.calls[1][0].stage).toBe('source_visual_start_control_validation');
     expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('input_image');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('data:image/jpeg;base64');
     expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('rd4910e-key-panel.jpg');
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
@@ -558,19 +561,21 @@ describe('product comparison research', () => {
   });
 
   it('does not convert generic electric-starter images into key or button evidence', async () => {
-    fetchMock.mockResolvedValueOnce(sourceResponse(`
-      <html>
-        <head><title>FIRMAN RD4910E generator</title></head>
-        <body>
-          <h1>FIRMAN RD4910E</h1>
-          <p>Starting system: manual starter, electric starter.</p>
-          <figure>
-            <img src="/images/rd4910e-electric-starter-icon.jpg" alt="Electric starter">
-            <figcaption>Electric starter</figcaption>
-          </figure>
-        </body>
-      </html>
-    `));
+    fetchMock
+      .mockResolvedValueOnce(sourceResponse(`
+        <html>
+          <head><title>FIRMAN RD4910E generator</title></head>
+          <body>
+            <h1>FIRMAN RD4910E</h1>
+            <p>Starting system: manual starter, electric starter.</p>
+            <figure>
+              <img src="/images/rd4910e-electric-starter-icon.jpg" alt="Electric starter">
+              <figcaption>Electric starter</figcaption>
+            </figure>
+          </body>
+        </html>
+      `))
+      .mockResolvedValueOnce(sourceResponse('fake image bytes', 'image/jpeg'));
     createStructuredJsonResponse
       .mockResolvedValueOnce({
         parsed: result({
