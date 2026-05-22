@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-visible-card-continuity\\production-evals-after-e94fd24.json",
+  "generatedAt": "2026-05-22T09:06:17.563Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 5,
+    "failures": 1,
+    "errors": 0,
+    "averageScore": 0.9076666666666666,
+    "assertionPassRate": 0.9090909090909091,
+    "assertionPassCount": 30,
+    "assertionFailCount": 3,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.9500000000000001,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

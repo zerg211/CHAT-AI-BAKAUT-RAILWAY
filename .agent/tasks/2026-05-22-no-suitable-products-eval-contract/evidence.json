@@ -1,0 +1,66 @@
+{
+  "taskId": "2026-05-22-no-suitable-products-eval-contract",
+  "preFixProductionEval": {
+    "artifact": ".agent/tasks/2026-05-22-visible-card-continuity/production-evals-after-e94fd24.json",
+    "summaryArtifact": ".agent/tasks/2026-05-22-visible-card-continuity/production-evals-after-e94fd24.summary.json",
+    "successes": 5,
+    "failures": 1,
+    "deterministicAverage": 0.9076666666666666,
+    "llmAverage": 0.9500000000000001,
+    "failingCase": "generator_load_selection",
+    "failingCaseLlmScore": 0.96,
+    "diagnosis": "Valid no-suitable-products answer was marked failed because deterministic assertions always required a visible card and literal final completion text."
+  },
+  "change": {
+    "behavior": "Promptfoo JavaScript assertions now accept an opt-in no-suitable-products product-selection outcome when structured metadata proves product class, catalog/search attempt, blocked visible cards, and explanatory final answer.",
+    "productionBehaviorChanged": false,
+    "regex": "No new regex added."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/promptfooAssertions.test.ts",
+      "status": "PASS",
+      "details": "6 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "details": "No new regex constructs. Legacy baseline: 1794."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    },
+    {
+      "command": "offline deterministic regrade of generator_load_selection from production-evals-after-e94fd24.json",
+      "status": "PASS",
+      "details": "assertNoRuntimeFailure, assertSupportAnswerQuality, assertRetrievalGrounding, assertToolCallCorrectness, and assertAgentTaskCompletion all pass"
+    },
+    {
+      "command": "negative unit coverage for assertRetrievalGrounding without allowNoSuitableProductOutcome",
+      "status": "PASS",
+      "details": "Missing visible cards still fail when the scenario does not opt in."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "details": "76 files passed, 626 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PENDING production Promptfoo after push/Railway deployment"
+  }
+}

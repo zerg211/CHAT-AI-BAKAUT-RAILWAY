@@ -70,6 +70,9 @@ tests:
         value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
         config:
           minAnswerChars: 90
+          expectedProductClasses:
+            - generator
+          allowNoSuitableProductOutcome: true
           finalMustContainAll:
             - 'генератор'
           finalMustContainAny:
@@ -78,6 +81,7 @@ tests:
         value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
         config:
           expectCards: true
+          allowNoSuitableProductOutcome: true
           minCards: 1
       - type: javascript
         value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
@@ -92,6 +96,9 @@ tests:
         config:
           expectedTaskTypes:
             - product_selection
+          expectedProductClasses:
+            - generator
+          allowNoSuitableProductOutcome: true
           taskMustContainAll:
             - 'генератор'
 

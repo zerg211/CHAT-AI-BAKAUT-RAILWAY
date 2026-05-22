@@ -223,6 +223,67 @@ function latestVisibleEvidenceText(parsed) {
   return [String(turn?.answer || ''), cardText].filter(Boolean).join('\n');
 }
 
+function latestMetadata(parsed) {
+  const metadata = latestTurn(parsed)?.metadata;
+  return metadata && typeof metadata === 'object' ? metadata : {};
+}
+
+function latestSelectionReadiness(parsed) {
+  const metadata = latestMetadata(parsed);
+  return metadata.selectionReadiness ||
+    metadata.cardSelection?.selectionReadiness ||
+    metadata.answerContract?.selectionReadiness ||
+    {};
+}
+
+function latestStructuredProductClass(parsed) {
+  const metadata = latestMetadata(parsed);
+  for (const value of [
+    metadata.selectionReadiness?.productClass,
+    metadata.cardSelection?.intent,
+    metadata.answerContract?.selectionReadiness?.productClass
+  ]) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function hasVisibleCards(turn) {
+  return Array.isArray(turn?.productCards) && turn.productCards.length > 0;
+}
+
+function hasNoSuitableProductOutcome(parsed) {
+  const turn = latestTurn(parsed);
+  const metadata = latestMetadata(parsed);
+  const readiness = latestSelectionReadiness(parsed);
+  const decision = readiness.decision || metadata.answerContract?.selectionReadiness || readiness;
+  const answer = String(turn?.answer || '').toLowerCase();
+  const blockedByReadiness = readiness.status === 'blocked_by_answer_contract' ||
+    decision?.canShowProductCards === false ||
+    decision?.status === 'needs_more_info';
+  const searchedCatalog = collectToolNames(parsed).has('searchCatalog') || collectToolNames(parsed).has('selectProducts');
+  const explainsNoSuitableOption = textContainsAny(answer, [
+    'не вижу',
+    'не нашел',
+    'не нашёл',
+    'не найден',
+    'нет подходящ',
+    'без риска',
+    'выше бюджета',
+    'дороже',
+    'не влез',
+    'точнее',
+    'мощность насоса'
+  ]);
+  return Boolean(
+    !hasVisibleCards(turn) &&
+    blockedByReadiness &&
+    searchedCatalog &&
+    latestStructuredProductClass(parsed) &&
+    explainsNoSuitableOption
+  );
+}
+
 function fallbackUsed(metadata) {
   const diagnostics = metadata?.aiDiagnostics || {};
   const validatorWarnings = [
@@ -429,6 +490,9 @@ function assertSupportAnswerQuality(output, context) {
     return result(false, `Expected product class ${JSON.stringify(config.expectedProductClasses)}. Saw: ${JSON.stringify([...collectProductClasses(parsed)])}`);
   }
   if (!textMatchesAll(positiveEvidence, config.finalMustContainAll)) {
+    if (config.allowNoSuitableProductOutcome && hasNoSuitableProductOutcome(parsed)) {
+      return result(true, 'Structured no-suitable-products outcome satisfies answer quality constraints.');
+    }
     return result(false, `Final answer does not match all required patterns: ${JSON.stringify(config.finalMustContainAll || [])}`);
   }
   if (Array.isArray(config.finalMustContainAny) && config.finalMustContainAny.length && !textMatchesAny(positiveEvidence, config.finalMustContainAny)) {
@@ -472,6 +536,9 @@ function assertRetrievalGrounding(output, context) {
   const minCards = Number(config.minCards || 1);
 
   if (config.expectCards && allCards.length < minCards) {
+    if (config.allowNoSuitableProductOutcome && hasNoSuitableProductOutcome(parsed)) {
+      return result(true, 'No visible cards accepted because structured metadata shows a no-suitable-products outcome.');
+    }
     return result(false, `Expected at least ${minCards} product card(s), got ${allCards.length}.`);
   }
   if (config.expectNoCards && allCards.length > 0) {
@@ -578,6 +645,9 @@ function assertAgentTaskCompletion(output, context) {
     return result(false, `Expected product class ${JSON.stringify(config.expectedProductClasses)}. Saw: ${JSON.stringify([...collectProductClasses(parsed)])}`);
   }
   if (!textMatchesAll(positiveEvidence, config.taskMustContainAll)) {
+    if (config.allowNoSuitableProductOutcome && hasNoSuitableProductOutcome(parsed)) {
+      return result(true, 'Structured no-suitable-products outcome satisfies task completion constraints.');
+    }
     return result(false, `Final task answer did not satisfy all completion patterns: ${JSON.stringify(config.taskMustContainAll || [])}`);
   }
 

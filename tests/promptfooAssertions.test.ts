@@ -5,10 +5,12 @@ const require = createRequire(import.meta.url);
 const {
   assertAgentTaskCompletion,
   assertBusinessRules,
+  assertRetrievalGrounding,
   assertSupportAnswerQuality
 } = require('../evals/promptfoo/assertions.cjs') as {
   assertAgentTaskCompletion: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
   assertBusinessRules: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
+  assertRetrievalGrounding: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
   assertSupportAnswerQuality: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
 };
 
@@ -89,5 +91,102 @@ describe('promptfoo structured completion assertions', () => {
 
     expect(support.pass).toBe(true);
     expect(completion.pass).toBe(true);
+  });
+
+  it('accepts an opt-in no-suitable-products outcome without visible cards', () => {
+    const output = outputWithTurns([{
+      ok: true,
+      answer: 'Подходящих бензиновых вариантов до 90 тысяч не вижу: безопасные модели выше бюджета. Пришлите мощность насоса, и я проверю точнее.',
+      productCards: [],
+      metadata: {
+        selectionReadiness: {
+          status: 'blocked_by_answer_contract',
+          productClass: 'generator',
+          decision: {
+            status: 'needs_more_info',
+            productClass: 'generator',
+            canShowProductCards: false
+          }
+        },
+        cardSelection: {
+          intent: 'generator',
+          products: []
+        },
+        toolResults: [{
+          tool: 'catalog.search',
+          status: 'ok',
+          payload: {
+            productIds: ['too-expensive-generator'],
+            products: [{ id: 'too-expensive-generator', name: 'Generator 5.6 kW', specs: {} }]
+          },
+          warnings: []
+        }]
+      }
+    }]);
+
+    const support = assertSupportAnswerQuality(output, {
+      config: {
+        minAnswerChars: 50,
+        expectedProductClasses: ['generator'],
+        allowNoSuitableProductOutcome: true,
+        finalMustContainAll: ['генератор']
+      }
+    });
+    const grounding = assertRetrievalGrounding(output, {
+      config: {
+        expectCards: true,
+        allowNoSuitableProductOutcome: true
+      }
+    });
+    const completion = assertAgentTaskCompletion(output, {
+      config: {
+        expectedTaskTypes: ['product_selection'],
+        expectedProductClasses: ['generator'],
+        allowNoSuitableProductOutcome: true,
+        taskMustContainAll: ['генератор']
+      }
+    });
+
+    expect(support.pass).toBe(true);
+    expect(grounding.pass).toBe(true);
+    expect(completion.pass).toBe(true);
+  });
+
+  it('still rejects missing visible cards when no-suitable-products outcome is not opted in', () => {
+    const output = outputWithTurns([{
+      ok: true,
+      answer: 'Подходящих бензиновых вариантов до 90 тысяч не вижу: безопасные модели выше бюджета.',
+      productCards: [],
+      metadata: {
+        selectionReadiness: {
+          status: 'blocked_by_answer_contract',
+          productClass: 'generator',
+          decision: {
+            status: 'needs_more_info',
+            productClass: 'generator',
+            canShowProductCards: false
+          }
+        },
+        cardSelection: {
+          intent: 'generator',
+          products: []
+        },
+        toolResults: [{
+          tool: 'catalog.search',
+          status: 'ok',
+          payload: { productIds: ['too-expensive-generator'] },
+          warnings: []
+        }]
+      }
+    }]);
+
+    const grounding = assertRetrievalGrounding(output, {
+      config: {
+        expectCards: true
+      }
+    });
+
+    expect(grounding.pass).toBe(false);
+    expect(grounding.reason).toContain('Expected at least 1 product card');
   });
 });
