@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-start-type-semantic-requirement\\production-promptfoo-32e60bc.json",
+  "generatedAt": "2026-05-22T17:56:29.260Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 5,
+    "failures": 1,
+    "errors": 0,
+    "averageScore": 0.9102777777777779,
+    "assertionPassRate": 0.9090909090909091,
+    "assertionPassCount": 30,
+    "assertionFailCount": 3,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.965,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

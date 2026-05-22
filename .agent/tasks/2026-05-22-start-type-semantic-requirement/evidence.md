@@ -168,3 +168,64 @@ PASS: 86 test files, 701 tests
 ```
 
 AC9 remains pending until this grounding repair is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.
+
+## Production eval after grounding repair
+
+Run after commit `4107581`:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-4107581.json
+FAIL: 5/6 tests passed
+Deterministic average: 96.98%
+LLM average: 84.50%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-4107581.json`
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-4107581.summary.json`
+
+Problems recorded:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/problems.md`
+
+## Fix pass after 4107581 production eval
+
+Timestamp: `2026-05-23T00:23:00+03:00`
+
+Changes:
+- Added an AgentManager pre-answer product evidence gate for structured budgets.
+- If the current need has a budget and same-class in-budget catalog candidates exist, same-class over-budget products are removed from `composeAnswer` product context before the LLM writes text.
+- If no same-class in-budget product exists, over-budget products remain available so the answer can truthfully explain no fit.
+- Added `answerProductEvidence` metadata and `answer_products_filtered_by_budget:N` warning for audit.
+- Added a focused test proving an over-budget vibroplate is not passed to the answer model when in-budget vibroplates exist.
+
+Behavior boundary:
+
+Where LLM decides:
+- Which in-budget catalog candidates best answer the buyer's selection request.
+
+Where deterministic code decides:
+- Budget is a hard catalog/business constraint once extracted into need state.
+- Same-class products above the structured budget are not allowed as answer evidence while in-budget same-class candidates exist.
+
+No regex or phrase-specific dialogue workaround was added.
+
+Local checks:
+
+```text
+npx vitest run tests/agentManagerOrchestrator.test.ts tests/agentManagerCardSelection.test.ts
+PASS: 2 test files, 47 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36.
+
+npm test
+PASS: 86 test files, 702 tests
+
+npm run build
+PASS
+```
+
+AC9 remains pending until this evidence-gate fix is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.

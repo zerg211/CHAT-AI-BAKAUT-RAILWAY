@@ -1469,6 +1469,123 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.cardSelection?.warnings).toContain('product_cards_reused_from_previous_turn');
   });
 
+  it('keeps over-budget products out of answer evidence when in-budget catalog candidates exist', async () => {
+    class BudgetPlateProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          {
+            ...product('under-light', 'Виброплита бензиновая Masalta MS50-2 (54 кг)', 'Виброплиты'),
+            price: 55000,
+            specs: { 'рабочая масса, кг': '54' }
+          },
+          {
+            ...product('over-budget', 'Виброплита прямоходная ТСС TSS-WP60TH (60 кг)', 'Виброплиты'),
+            price: 79592,
+            specs: { 'рабочая масса, кг': '60' }
+          },
+          {
+            ...product('under-tss', 'Виброплита прямоходная ТСС TSS-WP60TL (72 кг)', 'Виброплиты'),
+            price: 53360,
+            specs: { 'рабочая масса, кг': '72' }
+          }
+        ];
+      }
+    }
+
+    const productIdsSeenByAnswer: string[][] = [];
+    const conversations = new FakeConversations();
+    const budgetModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'buyer constrained vibroplate budget',
+          events: [{
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'product.type', value: 'vibroplate' },
+            evidence: 'needs a vibroplate',
+            source: 'llm_state_delta',
+            status: 'active'
+          }, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'budget.max', value: 70000 },
+            evidence: 'budget up to 70 thousand',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer needs a light vibroplate under 70000',
+          dialogueUnderstanding: 'catalog answer should be grounded only in products satisfying the budget when such products exist',
+          nextStepRationale: 'search catalog and answer from in-budget plate candidates',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'виброплита до 70000 легкая',
+              semanticQuery: 'light plate compactor under 70000',
+              productIntent: 'plate',
+              limit: 6,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: ['price', 'weight'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'select in-budget vibroplate candidates',
+              notes: null
+            },
+            rationale: 'buyer needs catalog products within budget',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        productIdsSeenByAnswer.push(input.products.map((item) => item.id));
+        return {
+          answerText: input.products.map((item) => item.name).join('; '),
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'plate',
+            status: 'ready_for_exact_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'Budget and product class are known.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BudgetPlateProducts() as never, new FakeLeads() as never, budgetModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Бюджет до 70 тысяч, нужна не слишком тяжелая виброплита.'
+    });
+
+    const metadata = payload.metadata as {
+      answerProductEvidence?: { droppedProductIds?: string[] };
+      warnings?: string[];
+    };
+    expect(productIdsSeenByAnswer[0]).toEqual(['under-light', 'under-tss']);
+    expect(productIdsSeenByAnswer[0]).not.toContain('over-budget');
+    expect(payload.answer).not.toContain('TSS-WP60TH');
+    expect(payload.productCards.map((card) => card.id)).toEqual(['under-light', 'under-tss']);
+    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(['over-budget']);
+    expect(metadata.warnings).toContain('answer_products_filtered_by_budget:1');
+  });
+
   it('blocks generator catalog cards below the calculated load profile requirement', async () => {
     class WeakGeneratorProducts extends FakeProducts {
       async searchProducts() {

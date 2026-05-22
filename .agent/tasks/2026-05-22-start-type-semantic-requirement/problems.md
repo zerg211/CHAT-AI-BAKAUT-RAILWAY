@@ -74,3 +74,41 @@ Validation:
 - Add a focused AgentManager test where the mocked LLM returns `grounding.sourcePolicy="web_required"` but omits the tool, and prove runtime repairs it into `auto:web-grounding`.
 - Rerun typecheck, no-regex guard, build, and full test suite.
 - Commit, push, wait for Railway marker, and rerun production Promptfoo.
+
+# Problems after production eval 4107581
+
+Source artifact: `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-4107581.json`
+
+Summary:
+
+- Production Promptfoo still exited non-zero: `5/6` tests passed.
+- Deterministic average: `96.98%`
+- LLM average: `84.50%`
+
+## P3: LLM answer can mention over-budget products before card filtering hides them
+
+Scenario: `context_shift_agent_completion`
+
+Observed behavior:
+
+- Turn 2 buyer constrained the vibroplate selection to `до 70 тысяч` and one-person transport.
+- The answer named `ТСС TSS-WP60TH` at `79 592 ₽` and explicitly said it was above budget.
+- Visible cards correctly hid that product and showed only in-budget models.
+- The judge penalized answer/card inconsistency and weak grounding because a product not shown as a card appeared inside the recommendation shortlist.
+
+Cause:
+
+- `composeAnswer` received all catalog products before `selectProductsForVisibleCards` applied the structured budget filter.
+- This let the LLM name products that deterministic card logic later removed.
+
+Fix direction:
+
+- Before composing the answer, apply a deterministic evidence gate to the product context: if a structured budget is known and same-class in-budget catalog products exist, remove same-class over-budget products from the products passed to the LLM.
+- Keep over-budget products visible to the LLM only when no in-budget same-class candidates exist, so it can honestly explain no fit instead of hiding the situation.
+- Add metadata `answerProductEvidence` and warning `answer_products_filtered_by_budget:N` for auditability.
+
+Validation:
+
+- Add a focused AgentManager test proving the answer LLM receives only in-budget plate products when an in-budget set exists.
+- Rerun focused tests, typecheck, no-regex guard, build, and full test suite.
+- Commit, push, wait for Railway marker, and rerun production Promptfoo.

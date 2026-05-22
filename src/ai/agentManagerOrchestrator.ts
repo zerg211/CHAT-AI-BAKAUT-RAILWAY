@@ -625,6 +625,56 @@ function turnContractMetadataFromIntent(intent: AgentIntentContract): AgentTurnC
   };
 }
 
+function priceWithinBudget(product: Product, budgetMax: number) {
+  return typeof product.price === 'number' &&
+    Number.isFinite(product.price) &&
+    product.price <= budgetMax;
+}
+
+function filterAnswerProductsForBudget(input: {
+  products: Product[];
+  needState: CustomerNeedState;
+  productClass: ProductSelectionClass;
+}) {
+  const budgetMax = budgetMaxFromNeedState(input.needState);
+  if (budgetMax === undefined || !input.products.length || input.productClass === 'unknown') {
+    return {
+      products: input.products,
+      droppedProductIds: [] as string[],
+      warnings: [] as string[]
+    };
+  }
+
+  const sameClassProducts = input.products.filter((product) =>
+    productMatchesIntent(product, input.productClass)
+  );
+  const sameClassWithinBudget = sameClassProducts.filter((product) =>
+    priceWithinBudget(product, budgetMax)
+  );
+  if (!sameClassWithinBudget.length) {
+    return {
+      products: input.products,
+      droppedProductIds: [] as string[],
+      warnings: [] as string[]
+    };
+  }
+
+  const allowedSameClassIds = new Set(sameClassWithinBudget.map((product) => product.id));
+  const filteredProducts = input.products.filter((product) =>
+    !productMatchesIntent(product, input.productClass) || allowedSameClassIds.has(product.id)
+  );
+  const filteredIds = new Set(filteredProducts.map((product) => product.id));
+  const droppedProductIds = input.products
+    .filter((product) => !filteredIds.has(product.id))
+    .map((product) => product.id);
+
+  return {
+    products: filteredProducts,
+    droppedProductIds,
+    warnings: droppedProductIds.length ? [`answer_products_filtered_by_budget:${droppedProductIds.length}`] : []
+  };
+}
+
 function targetBrandCandidates(targetNames: string[]) {
   const genericProductWords = new Set([
     'generator',
@@ -2126,7 +2176,13 @@ export class AgentManagerOrchestrator {
     const historicalProducts = products.length
       ? []
       : previousVisibleCardProducts({ history, intent: continuityIntent });
-    const answerProducts = products.length ? products : historicalProducts;
+    const rawAnswerProducts = products.length ? products : historicalProducts;
+    const answerProductEvidence = filterAnswerProductsForBudget({
+      products: rawAnswerProducts,
+      needState: needStateSnapshot,
+      productClass: continuityIntent
+    });
+    const answerProducts = answerProductEvidence.products;
     const usingHistoricalProducts = !products.length && historicalProducts.length > 0;
     const requiredResponseClauses = requiredResponseClausesForToolResults(toolResults);
     const rawAnswer = await this.model.composeAnswer({
@@ -2296,11 +2352,13 @@ export class AgentManagerOrchestrator {
       toolResults,
       cardSelection,
       selectionReadiness,
+      answerProductEvidence,
       productCards: cards,
       needStateSnapshot,
       warnings: [
         ...ledgerState.warnings,
         ...toolResults.flatMap((result) => result.warnings),
+        ...answerProductEvidence.warnings,
         ...cardSelection.warnings,
         ...selectionReadiness.warnings
       ]
