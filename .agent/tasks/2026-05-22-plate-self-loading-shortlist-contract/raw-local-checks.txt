@@ -1,0 +1,24 @@
+npx vitest run tests/agentManagerIntegrationSource.test.ts
+PASS: 1 file, 10 tests
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1767.
+
+npm run typecheck
+PASS
+
+npm test
+PASS: 78 files, 650 tests
+
+npm run build
+PASS
+
+git diff --check
+PASS: only CRLF conversion warnings from Git
+
+Production eval baseline before this pass:
+Commit: f395d36
+Result: FAIL, 5/6 passed
+Deterministic average: 0.9756111111111112
+LLM average: 0.8733333333333334
+Failing case: context_shift_agent_completion

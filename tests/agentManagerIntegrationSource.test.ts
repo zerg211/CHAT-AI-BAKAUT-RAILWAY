@@ -47,6 +47,8 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('Re-run calculator.generatorLoad in the current turn before catalog.search');
     expect(orchestrator).toContain('Treat every named product as a visible recommendation candidate');
     expect(orchestrator).toContain('Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context');
+    expect(orchestrator).toContain('rank the shortlist by fit to both constraints');
+    expect(orchestrator).toContain('two or more clearly lighter in-budget candidates');
     expect(orchestrator).toContain('hasConfirmedStartControlCoverage');
     expect(orchestrator).toContain('description: compactProductDescription(product.description)');
     expect(orchestrator).toContain('Пиши как знакомый знакомому');

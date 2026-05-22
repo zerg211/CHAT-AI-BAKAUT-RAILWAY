@@ -1,0 +1,61 @@
+{
+  "taskId": "2026-05-22-plate-self-loading-shortlist-contract",
+  "status": "local_pass_pending_production",
+  "baselineProductionEval": {
+    "commit": "f395d36",
+    "status": "FAIL",
+    "passed": 5,
+    "failed": 1,
+    "deterministicAverage": 0.9756111111111112,
+    "llmAverage": 0.8733333333333334,
+    "failingCase": "context_shift_agent_completion",
+    "bottleneck": "Plate shortlist after context shift treated a heavier in-budget product too much like an equal primary recommendation despite lighter one-person transport candidates."
+  },
+  "changes": [
+    "Answer model contract ranks plate shortlist by budget plus light/self-loading transport fit.",
+    "Reviewer contract requires rewrite when a heavier in-budget plate is an equal primary recommendation while lighter in-budget products are available.",
+    "No regex or phrase-specific code path was added."
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PENDING"
+  },
+  "localChecks": [
+    {
+      "command": "npx vitest run tests/agentManagerIntegrationSource.test.ts",
+      "status": "pass",
+      "tests": 10
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1767."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "tests": 650
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "details": "Only CRLF conversion warnings from Git."
+    }
+  ],
+  "productionVerification": {
+    "status": "pending_commit_push_marker_eval"
+  }
+}
