@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1687,
+  "count": 1677,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -6888,76 +6888,6 @@
       "kind": "regular_expression_literal",
       "hash": "6c866a2b194802cc",
       "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|match_regex_argument|8c4f795b969dc8bd|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "match_regex_argument",
-      "hash": "8c4f795b969dc8bd",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|regular_expression_literal|f074eb31a9556a7d|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "regular_expression_literal",
-      "hash": "f074eb31a9556a7d",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|split_regex_argument|299f46613319b806|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "split_regex_argument",
-      "hash": "299f46613319b806",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|regular_expression_literal|ff307ce6740cc2df|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "regular_expression_literal",
-      "hash": "ff307ce6740cc2df",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|regex_test_call|baae89fb8cdcb74d|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "regex_test_call",
-      "hash": "baae89fb8cdcb74d",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|regular_expression_literal|92560a65da58f828|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "regular_expression_literal",
-      "hash": "92560a65da58f828",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|replace_regex_argument|c80704ee7cf1c98e|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "replace_regex_argument",
-      "hash": "c80704ee7cf1c98e",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|regular_expression_literal|7c9b5c6b0cd5bfa7|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "regular_expression_literal",
-      "hash": "7c9b5c6b0cd5bfa7",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|replace_regex_argument|4e404cbf48ff1c56|1",
-      "file": "src/catalog/crawler.ts",
-      "kind": "replace_regex_argument",
-      "hash": "4e404cbf48ff1c56",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/crawler.ts|regular_expression_literal|7c9b5c6b0cd5bfa7|2",
-      "file": "src/catalog/crawler.ts",
-      "kind": "regular_expression_literal",
-      "hash": "7c9b5c6b0cd5bfa7",
-      "occurrence": 2
     },
     {
       "id": "src/catalog/normalize.ts|replace_regex_argument|1524936f4ee3c887|1",

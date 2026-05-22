@@ -7,13 +7,56 @@ import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
 import type { CatalogProductInput } from '../shared/types.js';
 import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
 
+const skippedCatalogSuffixes = [
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.gif',
+  '.webp',
+  '.pdf',
+  '.zip',
+  '.doc',
+  '.docx',
+  '.xls',
+  '.xlsx'
+];
+
+function hasSkippedCatalogSuffix(pathname: string) {
+  const normalizedPath = pathname.toLocaleLowerCase('en-US');
+  return skippedCatalogSuffixes.some((suffix) => normalizedPath.endsWith(suffix));
+}
+
+function splitSpecText(text: string) {
+  const parts: string[] = [];
+  let current = '';
+  for (const char of text) {
+    if (char === ':' || char === '—' || char === '-') {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts;
+}
+
+function hasProductSignalText(html: string) {
+  const normalized = html.toLocaleLowerCase('ru-RU');
+  return ['купить', 'артикул', 'характерист'].some((signal) => normalized.includes(signal));
+}
+
+function stripOneTrailingSlash(value: string) {
+  return value.endsWith('/') ? value.slice(0, -1) : value;
+}
+
 function shouldVisit(url: string, baseUrl: string) {
   try {
     const parsed = new URL(url);
     const base = new URL(baseUrl);
     if (parsed.hostname !== base.hostname) return false;
     if (!parsed.pathname.startsWith('/catalog/')) return false;
-    if (parsed.pathname.match(/\.(jpg|jpeg|png|gif|webp|pdf|zip|doc|docx|xls|xlsx)$/i)) return false;
+    if (hasSkippedCatalogSuffix(parsed.pathname)) return false;
     if (parsed.pathname.includes('/clear/')) return false;
     if (parsed.pathname.includes('-is-') || parsed.pathname.includes('-from-') || parsed.pathname.includes('-to-')) return false;
     return true;
@@ -74,7 +117,7 @@ function extractSpecs($: cheerio.CheerioAPI) {
 
   $('[class*="character"], [class*="param"], [class*="spec"], [class*="props"]').find('li, div').each((_, node) => {
     const text = cleanText($(node).text());
-    const split = text.split(/[:—-]/);
+    const split = splitSpecText(text);
     if (split.length >= 2) {
       const key = normalizeSpecKey(split[0]);
       const value = cleanText(split.slice(1).join(' '));
@@ -115,7 +158,7 @@ function extractProduct(html: string, pageUrl: string, baseUrl: string): Catalog
     baseUrl
   );
   const category = cleanText($('.breadcrumbs a, [class*="breadcrumb"] a').last().text());
-  const hasProductSignals = Object.keys(specs).length >= 2 || Boolean(priceText) || /купить|артикул|характерист/i.test(html);
+  const hasProductSignals = Object.keys(specs).length >= 2 || Boolean(priceText) || hasProductSignalText(html);
   if (!hasProductSignals) return null;
 
   return {
@@ -193,9 +236,9 @@ function normalizeInventoryUrl(value: string) {
     const url = new URL(value);
     url.hash = '';
     url.search = '';
-    return url.toString().replace(/\/$/, '');
+    return stripOneTrailingSlash(url.toString());
   } catch {
-    return value.replace(/\/$/, '');
+    return stripOneTrailingSlash(value);
   }
 }
 
