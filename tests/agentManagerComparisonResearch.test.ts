@@ -1443,6 +1443,9 @@ describe('AgentManager comparison research flow', () => {
         };
       },
       async composeAnswer(input) {
+        const memoryResult = input.toolResults.find((result) => result.requestId === 'web:g7000is');
+        expect((memoryResult?.payload as { answerGuidance?: { directAnswer?: string } }).answerGuidance?.directAnswer)
+          .toBe('Кнопочный запуск есть. Ручной запуск тоже есть.');
         expect(input.toolResults).toEqual(expect.arrayContaining([
           expect.objectContaining({
             requestId: 'web:g7000is',

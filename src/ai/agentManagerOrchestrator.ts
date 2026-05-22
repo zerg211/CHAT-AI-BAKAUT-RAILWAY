@@ -673,13 +673,41 @@ function verifiedFactsCoverRequest(input: {
   );
 }
 
+function verifiedFactText(fact: VerifiedProductFact) {
+  return [fact.attribute, fact.value].join(' ');
+}
+
+function verifiedFactHasAnyToken(fact: VerifiedProductFact, tokens: string[]) {
+  return tokensOverlap(attributeTokens(verifiedFactText(fact)), tokens);
+}
+
+function verifiedFactLooksNegative(fact: VerifiedProductFact) {
+  const text = verifiedFactText(fact).toLocaleLowerCase('ru-RU');
+  return text.includes('not ') ||
+    text.includes(' no ') ||
+    text.includes('without') ||
+    text.includes('absent') ||
+    text.includes('missing');
+}
+
+function verifiedStartFactsDirectAnswer(facts: VerifiedProductFact[]) {
+  const positiveFacts = facts.filter((fact) => !verifiedFactLooksNegative(fact));
+  const hasButton = positiveFacts.some((fact) => verifiedFactHasAnyToken(fact, ['button', 'push']));
+  const hasManual = positiveFacts.some((fact) => verifiedFactHasAnyToken(fact, ['manual', 'recoil']));
+  const hasElectric = positiveFacts.some((fact) => verifiedFactHasAnyToken(fact, ['electric', 'electrostarter']));
+  if (!hasButton && !hasManual && !hasElectric) return '';
+  const parts: string[] = [];
+  if (hasButton) {
+    parts.push('Кнопочный запуск есть');
+  } else if (hasElectric) {
+    parts.push('Электростартер есть');
+  }
+  if (hasManual) parts.push('Ручной запуск тоже есть');
+  return parts.length ? `${parts.join('. ')}.` : '';
+}
+
 function verifiedFactsDirectAnswer(facts: VerifiedProductFact[]) {
-  const productName = facts[0]?.productName?.trim();
-  const details = facts
-    .slice(0, 5)
-    .map((fact) => `${fact.attribute}: ${fact.value}`)
-    .join('; ');
-  return details ? `${productName ? `${productName}: ` : ''}${details}.` : '';
+  return verifiedStartFactsDirectAnswer(facts);
 }
 
 function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductComparisonResearchResult {
