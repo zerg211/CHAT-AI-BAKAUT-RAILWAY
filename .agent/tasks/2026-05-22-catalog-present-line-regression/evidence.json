@@ -1,0 +1,45 @@
+{
+  "taskId": "2026-05-22-catalog-present-line-regression",
+  "date": "2026-05-22",
+  "change": {
+    "files": [
+      "src/ai/agentManagerOrchestrator.ts"
+    ],
+    "summary": "Aligned catalogPresence.status=present prompt text with existing riskFlag-gated safe rewrite behavior."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerComparisonResearch.test.ts",
+      "status": "PASS",
+      "summary": "1 test file, 9 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs; baseline 1767"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "78 test files, 648 tests"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --cached --check",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS"
+  }
+}

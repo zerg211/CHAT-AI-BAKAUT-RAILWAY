@@ -1,0 +1,18 @@
+Task: 2026-05-22-catalog-present-line-regression
+Date: 2026-05-22
+
+Focused local checks:
+- npm test -- tests/agentManagerComparisonResearch.test.ts
+- Result: PASS, 1 test file, 9 tests.
+
+Clean-index full local gates:
+- npm run lint:no-regex
+- Result: PASS, no new regex constructs, legacy baseline 1767.
+- npm run typecheck
+- Result: PASS.
+- npm test
+- Result: PASS, 78 test files, 648 tests.
+- npm run build
+- Result: PASS.
+- git diff --cached --check
+- Result: PASS.

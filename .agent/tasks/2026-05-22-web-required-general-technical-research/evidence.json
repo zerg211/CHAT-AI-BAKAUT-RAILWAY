@@ -50,10 +50,19 @@
     "AC1": "PASS",
     "AC2": "PASS",
     "AC3": "PASS",
-    "AC4": "PENDING",
-    "AC5": "PENDING"
+    "AC4": "PASS",
+    "AC5": "FOLLOW_UP_REQUIRED"
   },
   "productionEval": {
-    "status": "PENDING"
+    "status": "FAIL",
+    "commit": "c778af4",
+    "output": ".agent/tasks/2026-05-22-web-required-general-technical-research/production-evals-after-c778af4.json",
+    "summary": ".agent/tasks/2026-05-22-web-required-general-technical-research/production-evals-after-c778af4.summary.json",
+    "passed": 5,
+    "failed": 1,
+    "deterministicAverage": 0.9878333333333332,
+    "llmAverage": 0.9316666666666666,
+    "webRequiredCasePassed": true,
+    "followUpTask": "2026-05-22-visible-card-grounded-catalog-answer"
   }
 }

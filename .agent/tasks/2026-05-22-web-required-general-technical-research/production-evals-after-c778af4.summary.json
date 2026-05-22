@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-web-required-general-technical-research\\production-evals-after-c778af4.json",
+  "generatedAt": "2026-05-22T11:54:01.094Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 5,
+    "failures": 1,
+    "errors": 0,
+    "averageScore": 0.9878333333333332,
+    "assertionPassRate": 0.9696969696969697,
+    "assertionPassCount": 32,
+    "assertionFailCount": 1,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.9316666666666666,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

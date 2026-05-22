@@ -43,6 +43,8 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('answer_checked_research_guidance');
     expect(orchestrator).toContain('When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding');
     expect(orchestrator).toContain('plan web.researchProductFacts even without a named model');
+    expect(orchestrator).toContain('Treat every named product as a visible recommendation candidate');
+    expect(orchestrator).toContain('Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context');
     expect(orchestrator).toContain('hasConfirmedStartControlCoverage');
     expect(orchestrator).toContain('description: compactProductDescription(product.description)');
     expect(orchestrator).toContain('Пиши как знакомый знакомому');

@@ -1,0 +1,64 @@
+{
+  "taskId": "2026-05-22-visible-card-grounded-catalog-answer",
+  "date": "2026-05-22",
+  "change": {
+    "files": [
+      "src/ai/agentManagerOrchestrator.ts",
+      "tests/agentManagerIntegrationSource.test.ts"
+    ],
+    "summary": "Updated answer/reviewer instructions so catalog selection answers name only strongly grounded visible recommendation candidates."
+  },
+  "triggeringEval": {
+    "commit": "c778af4",
+    "status": "FAIL",
+    "passed": 5,
+    "failed": 1,
+    "deterministicAverage": 0.9878333333333332,
+    "llmAverage": 0.9316666666666666,
+    "failedCase": "plate_retrieval_grounding"
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerIntegrationSource.test.ts",
+      "status": "PASS",
+      "summary": "1 test file, 10 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs; baseline 1767"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "78 test files, 648 tests on clean-index state after temporarily stashing unrelated unstaged changes"
+    },
+    {
+      "command": "npm test -- tests/agentManagerComparisonResearch.test.ts",
+      "status": "PASS",
+      "summary": "1 test file, 9 tests"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PENDING",
+    "AC5": "PENDING"
+  },
+  "productionEval": {
+    "status": "PENDING"
+  }
+}

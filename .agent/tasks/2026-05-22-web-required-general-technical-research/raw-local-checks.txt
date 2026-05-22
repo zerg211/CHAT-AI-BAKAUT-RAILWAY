@@ -26,4 +26,11 @@ Full local non-OpenAI gates:
 - Result: PASS. Only CRLF conversion warnings from Git; no whitespace errors.
 
 Production eval after this pass:
-- Pending until commit, push, and Railway deployment marker.
+- Commit: c778af4
+- Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-web-required-general-technical-research/production-evals-after-c778af4.json
+- Result: FAIL, 5/6 passed.
+- Deterministic average: 0.9878333333333332.
+- LLM average: 0.9316666666666666.
+- Web-required case passed and used web.researchProductFacts.
+- Remaining failed case: plate_retrieval_grounding, LLM rubric scored 0.83 because the answer listed too many product-specific details beyond the strongest visible-card candidates.
+- Follow-up task: .agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/

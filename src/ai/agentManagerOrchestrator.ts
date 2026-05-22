@@ -945,9 +945,17 @@ function presentCatalogPresenceLine(productName: string, directAnswer: string) {
   return `У нас ${productName} есть в каталоге.`;
 }
 
-function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
+function presentCatalogPresenceRelevant(intent: AgentIntentContract) {
+  return intent.riskFlags.includes('answer_policy_catalog_presence_relevant');
+}
+
+function researchGuidanceSafeRewrite(input: {
+  toolResults: ToolResult[];
+  intent: AgentIntentContract;
+}) {
   const lines: string[] = [];
-  for (const result of toolResults) {
+  const mentionPresentCatalogPresence = presentCatalogPresenceRelevant(input.intent);
+  for (const result of input.toolResults) {
     if (result.tool !== 'web.researchProductFacts' || result.status !== 'ok') continue;
     const payload = result.payload as {
       targetProductNames?: unknown;
@@ -986,7 +994,7 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
       if (presence.status === 'absent') {
         hasAbsentTarget = true;
         lines.push(`У нас точной модели ${presence.productName} в каталоге нет.`);
-      } else if (presence.status === 'present') {
+      } else if (presence.status === 'present' && mentionPresentCatalogPresence) {
         lines.push(presentCatalogPresenceLine(presence.productName, directAnswer));
       }
     }
@@ -1356,6 +1364,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для подбора товара планируй catalog.search.',
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
             'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
+            'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
             'For a general technical question, answer from engineering knowledge only when the buyer did not ask for verification. When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding, plan web.researchProductFacts even without a named model: keep args.productNames empty, put the buyer question in query and semanticQuery, and put the requested technical attributes in comparisonAttributes.',
             'When the buyer names a different exact model in the current turn, do not reuse technical facts from a previous model even if the buyer says "same". Plan current-turn evidence for the newly named model unless ledger/tool evidence is already scoped to that exact same model identifier.',
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
@@ -1416,11 +1425,13 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'When productClass is generator and cards are blocked, answerText must remain self-contained: explicitly mention the generator selection and the missing load/power/model fact that blocks the next step. Do not return only a bare question.',
             'Use selectionReadiness.status="needs_more_info" when product cards would be premature. Use "ready_for_preliminary_cards" only when the buyer asked for a preliminary selection and the executed tools give a usable estimated basis. Use "ready_for_exact_cards" when the facts are strong enough for exact cards.',
             'For a named model that is absent from the BAKAUT catalog but has checked external facts in web.researchProductFacts: answerText must include all three parts in this order: first answer the buyer direct technical question in simple words, then state that the exact model is not in our catalog, then mention genuinely nearby catalog models from payload.nearbyCatalogProducts when that list is non-empty. Do not omit catalog absence or nearby catalog orientation just because the direct technical fact was answered. Do not say "not found" when catalogPresence.status is "absent"; say the model is not in the catalog.',
+            'For catalogPresence.status="present", do not mention "у нас есть в каталоге" in a pure technical answer unless intent.riskFlags contains "answer_policy_catalog_presence_relevant".',
             'Nearby means same brand plus same product class/model family first. If none are present, mention comparable same-class catalog products only as an orientation. Do not present nearby products as proof about the absent target model.',
             'Do not add availability, delivery, discount, lead form, callback, or price discussion for a pure technical fact question unless the buyer asked for those commercial terms.',
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
             'When the buyer gives a budget, never present products above that budget as satisfying it. If in-budget catalog candidates exist but are weaker or compromise options, say that plainly and treat higher-priced models only as above-budget reference points.',
+            'For catalog selection answers, do not enumerate the full returned catalog. Name only the strongest 1-3 products you can justify from the provided product context. Treat every named product as a visible recommendation candidate; avoid naming borderline or dropped alternatives as filler. Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context.',
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
@@ -1469,6 +1480,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For a generator clarification answer with selectionReadiness.canShowProductCards=false, require rewrite if the answer is only a short question or does not explicitly mention generator selection plus the missing load/power/model fact.',
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
+            'For catalog selection answers, require rewrite if the answer enumerates too many product names, uses named products as filler beyond the strongest 1-3 recommendations, or states concrete dimensions/specs not present in products. A named product should be treated as a visible recommendation candidate.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
@@ -2324,7 +2336,10 @@ export class AgentManagerOrchestrator {
         evidence: input.answer.riskFlags.join(', ')
       });
     }
-    const safeResearchRewrite = researchGuidanceSafeRewrite(input.toolResults);
+    const safeResearchRewrite = researchGuidanceSafeRewrite({
+      toolResults: input.toolResults,
+      intent: input.intent
+    });
     if (safeResearchRewrite && safeResearchRewrite !== input.answer.answerText.trim()) {
       mechanicalIssues.push({
         code: 'research_guidance_uncertainty_safe_rewrite',

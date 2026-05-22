@@ -1,0 +1,27 @@
+Task: 2026-05-22-visible-card-grounded-catalog-answer
+Date: 2026-05-22
+
+Triggering production eval:
+- Commit: c778af4
+- Output: .agent/tasks/2026-05-22-web-required-general-technical-research/production-evals-after-c778af4.json
+- Result: FAIL, 5/6 passed.
+- Deterministic average: 0.9878333333333332.
+- LLM average: 0.9316666666666666.
+- Failed case: plate_retrieval_grounding, LLM rubric 0.83.
+
+Focused local checks:
+- npm test -- tests/agentManagerIntegrationSource.test.ts
+- Result: PASS, 1 test file, 10 tests.
+- npm run lint:no-regex
+- Result: PASS, no new regex constructs, legacy baseline 1767.
+
+Local gate notes:
+- npm run typecheck: PASS.
+- npm run build: PASS.
+- git diff --check: PASS.
+- npm test initially failed in unrelated unstaged local files: src/ai/productComparisonResearch.ts, src/ai/answerStyleExamples.ts, tests/agentManagerComparisonResearch.test.ts. Those files were not part of this pass.
+- After staging this pass and temporarily stashing unrelated unstaged changes with `git stash --keep-index`, npm test passed: 78 test files, 648 tests.
+- tests/agentManagerComparisonResearch.test.ts: PASS, 9 tests, after restoring the catalog-present line behavior already required by current tests.
+
+Production eval after this pass:
+- Pending until commit, push, and Railway deployment marker.
