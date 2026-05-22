@@ -1,0 +1,64 @@
+{
+  "taskId": "2026-05-22-agent-manager-contact-extraction-no-regex",
+  "status": "pass",
+  "changes": [
+    "Extracted deterministic contact parsing from AgentManagerOrchestrator into src/ai/contactExtraction.ts.",
+    "Replaced regex-based contact parsing with explicit character scanners.",
+    "Added focused parser tests without regex assertions, including sentence punctuation around email.",
+    "Updated no-regex baseline downward after reviewing removed legacy findings."
+  ],
+  "noRegexBaseline": {
+    "before": 1767,
+    "after": 1755,
+    "removed": 12,
+    "newRegexConstructs": 0
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS"
+  },
+  "localChecks": [
+    {
+      "command": "npx vitest run tests/contactExtraction.test.ts",
+      "status": "pass",
+      "tests": 4
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex -- --update-baseline",
+      "status": "pass",
+      "details": "Updated scripts/no-regex-baseline.json with 1755 legacy findings."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1755."
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "tests": 654
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "details": "Only CRLF conversion warnings from Git."
+    }
+  ],
+  "productionEval": {
+    "required": false,
+    "reason": "Deterministic private parser extraction with local parity coverage; no product or answer-policy behavior change."
+  }
+}

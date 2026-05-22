@@ -24,6 +24,7 @@ import { inferProductIntent, productMatchesIntent } from './productClassifier.js
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
+import { extractContact, hasLeadContact } from './contactExtraction.js';
 import {
   assessVisibleCardReadiness,
   filterGeneratorProductsByLoadProfile,
@@ -160,29 +161,6 @@ function mapLedgerRows(rows: DialogueLedgerRow[]): DialogueLedgerEvent[] {
     status: row.status,
     createdAt: createdAtText(row.created_at)
   }));
-}
-
-function extractContact(text: string) {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  const email = normalized.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu)?.[0];
-  const phone = normalized.match(/(?:\+?\d[\d\s().-]{8,}\d)/u)?.[0]?.replace(/\s+/g, ' ').trim();
-  const explicitName = normalized.match(/(?:меня\s+зовут|зовут|имя|я)\s+([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]{1,30}(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]{1,30})?)/iu)?.[1];
-  const contactIndex = [phone ? normalized.indexOf(phone) : -1, email ? normalized.indexOf(email) : -1]
-    .filter((index) => index >= 0)
-    .sort((a, b) => a - b)[0];
-  const prefixName = contactIndex !== undefined
-    ? normalized.slice(0, contactIndex).match(/([А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]{1,30}(?:\s+[А-ЯЁA-Z][А-ЯЁA-Zа-яёa-z-]{1,30})?)\s*(?:[,;:-])?\s*$/u)?.[1]
-    : undefined;
-  const name = (explicitName ?? prefixName)?.trim();
-  return {
-    name: name && name.length >= 2 ? name : undefined,
-    phone,
-    email
-  };
-}
-
-function hasLeadContact(contact: ReturnType<typeof extractContact>) {
-  return Boolean(contact.phone || contact.email);
 }
 
 function leadCaptureMissingContact(toolResults: ToolResult[]) {

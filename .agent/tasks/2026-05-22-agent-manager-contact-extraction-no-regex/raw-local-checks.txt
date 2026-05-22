@@ -1,0 +1,26 @@
+npx vitest run tests/contactExtraction.test.ts
+PASS: 1 file, 4 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS with removal notice: No new regex constructs. Legacy baseline: 1767. Legacy findings removed since baseline: 12.
+
+npm run lint:no-regex -- --update-baseline
+PASS: Updated scripts/no-regex-baseline.json with 1755 legacy findings.
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1755.
+
+npm test
+PASS: 79 files, 654 tests
+
+npm run build
+PASS
+
+git diff --check
+PASS: only CRLF conversion warnings from Git
+
+Production eval
+Not required for this pass: deterministic private parser extraction with focused local parity coverage and no product/answer-policy behavior change.
