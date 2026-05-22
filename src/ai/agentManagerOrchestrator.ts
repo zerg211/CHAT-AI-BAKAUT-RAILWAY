@@ -26,6 +26,7 @@ import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import {
   assessVisibleCardReadiness,
+  filterGeneratorProductsByLoadProfile,
   productSelectionClasses,
   productCards,
   rankCatalogProductsByNumericFit,
@@ -580,6 +581,17 @@ function nearbyCatalogProductsForTargets(targetNames: string[], products: Produc
       product,
       sameBrand ? 'same_brand_same_product_class' : 'same_product_class_comparable'
     ));
+}
+
+function generatorLoadRequirementKw(toolResults: ToolResult[]) {
+  for (let index = toolResults.length - 1; index >= 0; index -= 1) {
+    const result = toolResults[index];
+    if (result?.tool !== 'calculator.generatorLoad' || result.status !== 'ok') continue;
+    const profile = (result.payload as { profile?: { requiredNominalKw?: unknown } }).profile;
+    const required = Number(profile?.requiredNominalKw);
+    if (Number.isFinite(required) && required > 0) return required;
+  }
+  return undefined;
 }
 
 function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
@@ -1732,7 +1744,12 @@ export class AgentManagerOrchestrator {
               productIntent,
               embeddingQuery: semanticQuery
             });
-            const products = search.products;
+            const loadRequirementKw = isGeneratorProductClass(productIntent)
+              ? generatorLoadRequirementKw(toolResults)
+              : undefined;
+            const loadFit = filterGeneratorProductsByLoadProfile(search.products, loadRequirementKw);
+            const products = loadFit.products;
+            const warnings = [...search.warnings, ...loadFit.warnings];
             products.forEach((product) => productsById.set(product.id, product));
             result = ToolResultSchema.parse({
               requestId: request.id,
@@ -1742,6 +1759,12 @@ export class AgentManagerOrchestrator {
                 query,
                 productIds: products.map((product) => product.id),
                 products,
+                ...(loadRequirementKw === undefined ? {} : {
+                  generatorLoadFit: {
+                    requiredNominalKw: loadRequirementKw,
+                    droppedProductIds: loadFit.droppedProductIds
+                  }
+                }),
                 retrieval: {
                   intent: search.productIntent,
                   query: search.query,
@@ -1751,7 +1774,7 @@ export class AgentManagerOrchestrator {
                   usedEmbeddings: search.vectorCount > 0
                 }
               },
-              warnings: products.length ? search.warnings : [...search.warnings, 'catalog_search_no_matches']
+              warnings: products.length ? warnings : [...warnings, 'catalog_search_no_matches']
             });
           }
         } else if (request.tool === 'catalog.getProductDetails') {

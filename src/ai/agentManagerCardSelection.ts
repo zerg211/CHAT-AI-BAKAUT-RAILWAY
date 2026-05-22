@@ -329,6 +329,49 @@ function generatorPowerFitScore(product: Product, range: { min: number; max: num
   return score;
 }
 
+export function generatorMeetsRequiredLoad(product: Product, requiredNominalKw: number) {
+  if (!Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) return true;
+  const power = extractGeneratorPowerForHardSelection(product);
+  if (power.nominalKw === undefined && power.maxKw === undefined) return false;
+  if (power.nominalKw !== undefined && power.nominalKw >= requiredNominalKw - 0.2) return true;
+  return Boolean(
+    power.nominalKw !== undefined &&
+    power.maxKw !== undefined &&
+    power.nominalKw >= requiredNominalKw - 0.7 &&
+    power.maxKw >= requiredNominalKw + 0.5
+  );
+}
+
+export function filterGeneratorProductsByLoadProfile(products: Product[], requiredNominalKw?: number) {
+  if (requiredNominalKw === undefined || !Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) {
+    return {
+      products,
+      droppedProductIds: [],
+      warnings: [] as string[]
+    };
+  }
+  const kept: Product[] = [];
+  const droppedProductIds: string[] = [];
+  for (const product of products) {
+    if (generatorMeetsRequiredLoad(product, requiredNominalKw)) {
+      kept.push(product);
+    } else {
+      droppedProductIds.push(product.id);
+    }
+  }
+  const warnings = droppedProductIds.length
+    ? [`catalog_products_filtered_by_generator_load:${droppedProductIds.length}`]
+    : [];
+  if (!kept.length && droppedProductIds.length) {
+    warnings.push('catalog_search_no_generator_load_fit');
+  }
+  return {
+    products: kept,
+    droppedProductIds,
+    warnings
+  };
+}
+
 const selfLoadingPlateFragments = [
   'self-loading',
   'self loading',

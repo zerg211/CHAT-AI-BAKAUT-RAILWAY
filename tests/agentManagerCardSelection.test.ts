@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assessVisibleCardReadiness,
+  filterGeneratorProductsByLoadProfile,
   rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
   suppressVisibleCardsForReadiness
@@ -374,6 +375,33 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(ranked.map((product) => product.id)).toEqual(['five-kw', 'four-kw', 'eight-kw']);
+  });
+
+  it('filters generator cards below the structured load profile requirement', () => {
+    const twoKw = generatorWithPower('two-kw', '2.0');
+    const threeKw = generatorWithPower('three-kw', '3.4');
+    const sevenKw = generatorWithPower('seven-kw', '7.2');
+
+    const filtered = filterGeneratorProductsByLoadProfile([twoKw, sevenKw, threeKw], 7);
+
+    expect(filtered.products.map((product) => product.id)).toEqual(['seven-kw']);
+    expect(filtered.droppedProductIds).toEqual(['two-kw', 'three-kw']);
+    expect(filtered.warnings).toContain('catalog_products_filtered_by_generator_load:2');
+    expect(filtered.warnings).not.toContain('catalog_search_no_generator_load_fit');
+  });
+
+  it('marks generator catalog search as empty when no product fits the structured load profile', () => {
+    const twoKw = generatorWithPower('two-kw', '2.0');
+    const threeKw = generatorWithPower('three-kw', '3.4');
+
+    const filtered = filterGeneratorProductsByLoadProfile([twoKw, threeKw], 7);
+
+    expect(filtered.products).toEqual([]);
+    expect(filtered.droppedProductIds).toEqual(['two-kw', 'three-kw']);
+    expect(filtered.warnings).toEqual(expect.arrayContaining([
+      'catalog_products_filtered_by_generator_load:2',
+      'catalog_search_no_generator_load_fit'
+    ]));
   });
 
   it('keeps generator card ranking for exact decimal power requests without regex parsing', () => {

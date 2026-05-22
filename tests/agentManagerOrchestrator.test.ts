@@ -71,6 +71,19 @@ function product(id: string, name: string, category = 'Generators'): Product {
   };
 }
 
+function generatorProductWithPower(id: string, name: string, nominalKw: number): Product {
+  return {
+    id,
+    name,
+    brand: 'TEST',
+    category: 'Generators',
+    price: 1000,
+    currency: 'RUB',
+    sourceUrl: `https://example.test/${id}`,
+    specs: { 'Nominal power': `${nominalKw} kW` }
+  };
+}
+
 class FakeConversations {
   messages: Message[] = [message('Coffee machine 3.2 kW, grinder 400 W, is 5 kW enough?')];
   turn: ConversationTurn = turn();
@@ -1286,7 +1299,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.selectionReadiness?.decision?.status).toBe('ready_for_preliminary_cards');
     expect(metadata.selectionReadiness?.decision?.missingFacts).toContain('exact_pump_power_or_model');
     expect(metadata.cardSelection?.warnings ?? []).not.toContain('product_cards_suppressed:generator_load_unconfirmed_basis');
-    expect(payload.productCards.map((card) => card.id)).toEqual(['p1', 'p2']);
+    expect(payload.productCards.map((card) => card.id)).toEqual(['p2']);
   });
 
   it('allows generator cards after a generator load profile is available', async () => {
@@ -1377,6 +1390,129 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.selectionReadiness?.status).toBe('ready_for_cards');
     expect(metadata.selectionReadiness?.decision?.status).toBe('ready_for_preliminary_cards');
     expect(payload.productCards.length).toBeGreaterThan(0);
+  });
+
+  it('blocks generator catalog cards below the calculated load profile requirement', async () => {
+    class WeakGeneratorProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          generatorProductWithPower('weak-2kw', 'Generator 2 kW', 2),
+          generatorProductWithPower('weak-34kw', 'Generator 3.4 kW', 3.4)
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const loadFitModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer provided several loads and wants generator cards under budget',
+          dialogueUnderstanding: 'the calculated load requirement controls which generator cards can be shown',
+          nextStepRationale: 'calculate load first, then search catalog products',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'generator-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: null,
+              semanticQuery: null,
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [
+                { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.2, startingKw: 0.8, source: 'explicit_user', evidence: 'refrigerator 0.2 kW run and 0.8 kW start' },
+                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: 0.1, startingKw: 0.1, source: 'explicit_user', evidence: 'LED lighting 0.1 kW' },
+                { kind: 'handheld_tool', name: 'angle grinder', count: 1, runningKw: 1.2, startingKw: 2, source: 'explicit_user', evidence: 'angle grinder 1.2 kW run and 2 kW start' },
+                { kind: 'pump', name: 'pump', count: 1, runningKw: 1.5, startingKw: 4.5, source: 'explicit_user', evidence: 'pump 1.5 kW run and 4.5 kW start' }
+              ],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump', 'handheld_tool'],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'calculate generator load before card selection',
+              notes: null
+            },
+            rationale: 'calculate generator load profile',
+            required: true
+          }, {
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator under 90000',
+              semanticQuery: 'generator under 90000 after calculated 7 kW load requirement',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'find catalog generator options after the load calculation',
+              notes: null
+            },
+            rationale: 'search generator products after load calculation',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'The calculated requirement is about 7 kW nominal, so weak catalog options should not be shown as viable cards.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['generator-load', 'catalog-search'],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'The load profile is available.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new WeakGeneratorProducts() as never, new FakeLeads() as never, loadFitModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Need a generator for fridge, lights, 1.2 kW grinder and 1.5 kW pump. Pump and grinder can start together. Show options under 90k.'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{
+        status?: string;
+        payload?: {
+          profile?: { requiredNominalKw?: number };
+          productIds?: string[];
+          generatorLoadFit?: { requiredNominalKw?: number; droppedProductIds?: string[] };
+        };
+        warnings?: string[];
+      }>;
+      cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
+    };
+    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(7);
+    expect(metadata.toolResults?.[1]?.status).toBe('not_found');
+    expect(metadata.toolResults?.[1]?.payload?.productIds).toEqual([]);
+    expect(metadata.toolResults?.[1]?.payload?.generatorLoadFit?.requiredNominalKw).toBe(7);
+    expect(metadata.toolResults?.[1]?.payload?.generatorLoadFit?.droppedProductIds).toEqual(
+      expect.arrayContaining(['weak-2kw', 'weak-34kw'])
+    );
+    expect(metadata.toolResults?.[1]?.warnings).toEqual(expect.arrayContaining([
+      'catalog_products_filtered_by_generator_load:2',
+      'catalog_search_no_generator_load_fit',
+      'catalog_search_no_matches'
+    ]));
+    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
+    expect(payload.productCards).toEqual([]);
   });
 
   it('prefers exact answer-mentioned product models over broad same-brand card expansion', async () => {

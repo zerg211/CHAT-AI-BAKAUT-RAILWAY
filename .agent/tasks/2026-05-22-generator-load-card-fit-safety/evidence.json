@@ -1,0 +1,55 @@
+{
+  "taskId": "2026-05-22-generator-load-card-fit-safety",
+  "preFixProductionEval": {
+    "artifact": ".agent/tasks/2026-05-22-no-regex-promptfoo-sse-parser/production-evals-after-22d1cb8.json",
+    "summaryArtifact": ".agent/tasks/2026-05-22-no-regex-promptfoo-sse-parser/production-evals-after-22d1cb8.summary.json",
+    "successes": 5,
+    "failures": 1,
+    "deterministicAverage": 0.9761111111111113,
+    "llmAverage": 0.86,
+    "failingCase": "generator_load_selection",
+    "diagnosis": "Structured generator load required 7 kW nominal, but catalog cards included weak 1.8-3.4 kW generators."
+  },
+  "change": {
+    "behavior": "Generator catalog searches after a successful generator load calculation filter products against calculator.generatorLoad.payload.profile.requiredNominalKw before exposing products as visible card candidates.",
+    "boundary": "LLM/tool output owns the semantic load profile. Deterministic code enforces catalog/card factual consistency.",
+    "regex": "No new regex added."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "PASS",
+      "details": "40 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "details": "No new regex constructs. Legacy baseline: 1794."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "details": "76 files passed, 621 tests passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PENDING production Promptfoo after push/Railway deployment"
+  }
+}
