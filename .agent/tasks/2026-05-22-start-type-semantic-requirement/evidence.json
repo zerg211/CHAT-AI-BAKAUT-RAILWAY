@@ -1,0 +1,52 @@
+{
+  "taskId": "2026-05-22-start-type-semantic-requirement",
+  "timestamp": "2026-05-22T20:31:52.6914463+03:00",
+  "changeSummary": [
+    "Added startType to semantic requirement kinds, need-extraction schema, prompt documentation, and semantic memory coercion.",
+    "Product selection now accepts startType for generator and welding-generator intent and copies explicit semantic requirements into hard constraints with provenance.",
+    "Ungrounded electric-start cleanup preserves explicit-user and previous-selection provenance.",
+    "Card manifest enforces activeConstraints.startType against product cards.",
+    "Added focused tests for semantic coercion, selection/ranking preservation, and card manifest enforcement."
+  ],
+  "checks": [
+    {
+      "command": "npx vitest run tests/semanticMemoryCoercion.test.ts tests/cardManifest.test.ts tests/recommendationRanking.test.ts",
+      "status": "pass",
+      "details": "3 test files passed, 218 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36."
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "86 test files passed, 699 tests passed"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pass",
+    "AC8": "pass_local",
+    "AC9": "pending",
+    "AC10": "pass"
+  },
+  "productionPromptfoo": {
+    "status": "pending_after_push",
+    "required": true
+  }
+}

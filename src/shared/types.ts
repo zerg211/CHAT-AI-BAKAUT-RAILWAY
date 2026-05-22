@@ -228,6 +228,7 @@ export type SemanticRequirementKind =
   | 'diameterMm'
   | 'brand'
   | 'fuel'
+  | 'startType'
   | 'phase';
 export type SemanticRequirementStatus = 'active' | 'superseded' | 'rejected' | 'paused';
 export type SemanticRequirementStrictness = 'strictOnly' | 'targetRange' | 'fallbackAllowed';

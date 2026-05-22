@@ -77,6 +77,34 @@ const plateCard: ProductCard = {
   caveats: []
 };
 
+const manualStartGeneratorCard: ProductCard = {
+  id: 'manual-start-generator',
+  name: 'SUMEC SU7700 gasoline generator 5 kW',
+  brand: 'SUMEC',
+  category: 'Generators',
+  price: 42490,
+  currency: 'RUB',
+  specs: {
+    start: 'manual recoil starter'
+  },
+  reasons: [],
+  caveats: []
+};
+
+const electricStartGeneratorCard: ProductCard = {
+  id: 'electric-start-generator',
+  name: 'DAEWOO GDA 6500E gasoline generator 5.5 kW',
+  brand: 'DAEWOO',
+  category: 'Generators',
+  price: 67990,
+  currency: 'RUB',
+  specs: {
+    start: 'manual / electric starter'
+  },
+  reasons: [],
+  caveats: []
+};
+
 function executionContract(overrides: Partial<ExecutionContract> = {}): ExecutionContract {
   const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
     hardConstraints: {
@@ -215,5 +243,34 @@ describe('card manifest', () => {
     });
 
     expect(manifest.items[0].violations).toContain('productIntent:generator');
+  });
+
+  it('suppresses visible manual-start cards when electric start is an active hard constraint', () => {
+    const baseConstraints = executionContract().activeConstraints;
+    if (!baseConstraints) throw new Error('Expected active constraints in test fixture');
+    const contract = executionContract({
+      activeConstraints: {
+        ...baseConstraints,
+        brandConstraint: undefined,
+        singlePhase220: undefined,
+        startType: 'electric'
+      }
+    });
+    const manifest = buildCardManifest({
+      executionContract: contract,
+      cards: [manualStartGeneratorCard, electricStartGeneratorCard],
+      visibleProductIds: ['manual-start-generator', 'electric-start-generator'],
+      hiddenProductIds: []
+    });
+
+    expect(manifest.items.find((item) => item.productId === 'manual-start-generator')?.violations).toContain('startType:electric');
+    expect(manifest.items.find((item) => item.productId === 'electric-start-generator')?.violations).toEqual([]);
+
+    const enforced = enforceVisibleCardConstraints({
+      manifest,
+      cards: [manualStartGeneratorCard, electricStartGeneratorCard]
+    });
+
+    expect(enforced.cards.map((card) => card.id)).toEqual(['electric-start-generator']);
   });
 });

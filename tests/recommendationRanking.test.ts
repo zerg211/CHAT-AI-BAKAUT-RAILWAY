@@ -1860,6 +1860,112 @@ describe('recommendation ranking', () => {
     expect(result.trace?.totalMatched).toBe(2);
   });
 
+  it('does not relax electric start when semantic memory marks it as an explicit buyer requirement', async () => {
+    const manualGenerator = productWithSpecs(
+      'manual-generator',
+      'Generator gasoline SUMEC SU7700 5.0 kW',
+      42_490,
+      'https://example.test/manual-generator/',
+      {
+        start: 'manual recoil starter',
+        nominalPower: '5.0 kW'
+      }
+    );
+    const electricGenerator = productWithSpecs(
+      'electric-generator',
+      'Generator gasoline DAEWOO GDA 6500E 5.5 kW',
+      67_990,
+      'https://example.test/electric-generator/',
+      {
+        start: 'manual / electric starter',
+        nominalPower: '5.5 kW'
+      }
+    );
+    const assistant = new AssistantService(undefined as never, new FakeProducts([
+      manualGenerator,
+      electricGenerator
+    ] as any) as never);
+    const baseSelection = mergeProductSelectionState(emptyNeedState().selectionState, {
+      currentProductClass: 'generator',
+      targetProductClass: 'generator',
+      confidence: 0.9,
+      hardConstraints: {
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        exactModelTokens: [],
+        exactModelTokenRoles: [],
+        mustHaveTraits: [],
+        excludedClasses: [],
+        fuel: 'gasoline',
+        nominalPowerKwMin: 5,
+        nominalPowerKwMax: 6,
+        provenance: {
+          fuel: 'planner',
+          nominalPowerKwMin: 'explicit_user',
+          nominalPowerKwMax: 'explicit_user'
+        }
+      } as any
+    });
+    const state = withSemanticMemory({
+      ...emptyNeedState(),
+      selectionState: baseSelection
+    }, {
+      activeRequirementIds: ['req-start-electric'],
+      requirements: [semanticRequirement({
+        id: 'req-start-electric',
+        kind: 'startType',
+        value: { text: 'electric' },
+        strictness: 'strictOnly',
+        source: 'explicit_user',
+        evidence: 'buyer needs key/button start without pulling a cord'
+      })],
+      selectionPolicy: {
+        primaryRequirementIds: ['req-start-electric'],
+        alternativeMode: 'none',
+        explanationRequired: true
+      }
+    });
+    const plan = baseTurnPlan({
+      catalogSearchQuery: 'gasoline generator 5-6 kW electric start',
+      requiredProductTraits: {
+        ...baseTurnPlan().requiredProductTraits,
+        productIntent: 'generator',
+        productRole: 'coreProduct',
+        fuel: 'gasoline',
+        startType: 'electric',
+        nominalPowerKwMin: 5,
+        nominalPowerKwMax: 6
+      },
+      selectionState: {
+        ...baseTurnPlan().selectionState,
+        currentProductClass: 'generator',
+        targetProductClass: 'generator',
+        selectionConfidence: 0.9,
+        shouldShowCards: true,
+        cardDisplayMode: 'structured_selection'
+      },
+      agentDecision: productSelectionAgentDecision()
+    });
+
+    const result = await assistant.selectProductsForTurn(
+      'Need a generator around 5-6 kW. It must be easy for my wife to start, no cord pulling.',
+      state,
+      plan,
+      [manualGenerator, electricGenerator] as any
+    );
+
+    expect(result.visibleProducts.map((item) => item.id)).toEqual(['electric-generator']);
+    expect(result.matchedProducts.map((item) => item.id)).not.toContain('manual-generator');
+    expect(result.state.hardConstraints.startType).toBe('electric');
+    expect(result.state.hardConstraints.provenance?.startType).toBe('explicit_user');
+    expect(result.trace?.diagnosticRejectedProducts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        productId: 'manual-generator',
+        reason: 'product lacks required electric start'
+      })
+    ]));
+  });
+
   it('uses previousSelection as an anchor, not a cage, when the buyer asks to broaden alternatives', async () => {
     const currentMain = productWithSpecs('current-main', ru('Генератор бензиновый SUMEC SU4500i 4.5 kW'), 82000, 'https://example.test/current-main/', {
       'Номинальная мощность': '4.5 кВт',

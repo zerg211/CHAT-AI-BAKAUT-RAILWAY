@@ -208,7 +208,7 @@ export function semanticMemorySchema() {
           additionalProperties: false,
           properties: {
             id: { type: 'string' },
-            kind: { type: 'string', enum: ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand', 'fuel', 'phase'] },
+            kind: { type: 'string', enum: ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand', 'fuel', 'startType', 'phase'] },
             value: semanticValueSchema,
             status: { type: 'string', enum: ['active', 'superseded', 'rejected', 'paused'] },
             strictness: { type: 'string', enum: ['strictOnly', 'targetRange', 'fallbackAllowed'] },

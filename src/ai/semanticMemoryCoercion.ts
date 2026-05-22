@@ -21,7 +21,7 @@ function stringList(value: unknown, limit = 12) {
 }
 
 export function coerceSemanticRequirementKind(value: unknown): SemanticRequirementKind | undefined {
-  const allowed: SemanticRequirementKind[] = ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand', 'fuel', 'phase'];
+  const allowed: SemanticRequirementKind[] = ['productClass', 'task', 'weightKg', 'budgetRub', 'powerKw', 'diameterMm', 'brand', 'fuel', 'startType', 'phase'];
   return allowed.includes(value as SemanticRequirementKind) ? value as SemanticRequirementKind : undefined;
 }
 

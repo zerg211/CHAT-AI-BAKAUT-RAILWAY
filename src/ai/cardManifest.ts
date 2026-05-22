@@ -7,6 +7,7 @@ import type {
   ProductSelectionClass,
   ProductSelectionCriteria
 } from '../shared/types.js';
+import { hasElectricStartSignal } from './productClassifier.js';
 
 function isWhitespace(char: string) {
   return char === ' ' || char === '\n' || char === '\r' || char === '\t';
@@ -82,6 +83,20 @@ function hasSinglePhase220(card: ProductCard, singlePhase220: boolean | null | u
   return singlePhase220 ? has220 && !has380 : has380;
 }
 
+function hasStartType(card: ProductCard, startType: ProductSelectionCriteria['startType']) {
+  if (!startType || startType === 'any' || startType === 'unknown') return true;
+  const text = cardText(card);
+  if (startType === 'electric') return hasElectricStartSignal(text);
+  if (startType === 'manual') {
+    return containsAny(text, [
+      '\u0440\u0443\u0447\u043d',
+      'manual',
+      'recoil'
+    ]);
+  }
+  return true;
+}
+
 function hardConstraintViolations(card: ProductCard, constraints?: ProductSelectionCriteria) {
   if (!constraints) return [];
   const violations: string[] = [];
@@ -106,6 +121,7 @@ function hardConstraintViolations(card: ProductCard, constraints?: ProductSelect
     if (token && !text.includes(normalized(token))) violations.push(`exactModelToken:${token}`);
   }
   if (!hasFuel(card, constraints.fuel)) violations.push(`fuel:${constraints.fuel}`);
+  if (!hasStartType(card, constraints.startType)) violations.push(`startType:${constraints.startType}`);
   if (!hasSinglePhase220(card, constraints.singlePhase220)) {
     violations.push(`singlePhase220:${constraints.singlePhase220}`);
   }

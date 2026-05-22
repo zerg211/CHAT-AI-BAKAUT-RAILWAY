@@ -61,6 +61,28 @@ describe('semantic memory coercion', () => {
     }]);
   });
 
+  it('accepts explicit start type as a semantic requirement kind', () => {
+    const requirements = coerceSemanticRequirements([{
+      id: 'start-electric',
+      kind: 'startType',
+      value: { text: 'electric' },
+      status: 'active',
+      strictness: 'strictOnly',
+      source: 'explicit_user',
+      replacesRequirementIds: [],
+      evidence: 'buyer needs key or button start'
+    }]);
+
+    expect(requirements[0]).toMatchObject({
+      id: 'start-electric',
+      kind: 'startType',
+      value: { text: 'electric' },
+      status: 'active',
+      strictness: 'strictOnly',
+      source: 'explicit_user'
+    });
+  });
+
   it('coerces mentioned products with compact normalized tokens', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-05-21T10:11:12.000Z'));

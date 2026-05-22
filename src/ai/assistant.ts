@@ -586,6 +586,10 @@ function semanticText(value: Record<string, unknown>, key: 'text' | 'productClas
   return typeof value[key] === 'string' ? String(value[key]).trim() : '';
 }
 
+function semanticRequirementSelectionSource(requirement: SemanticRequirement) {
+  return requirement.source === 'explicit_user' ? 'explicit_user' as const : 'planner' as const;
+}
+
 function nonRestrictiveConstraintText(value?: string | null) {
   const compact = compactModelText(String(value ?? ''));
   if (!compact) return true;
@@ -716,7 +720,7 @@ function exactLookupRelaxedTraits(traits: RequiredProductTraits): RequiredProduc
 }
 
 function intentAcceptsRequirementKind(intent: ProductIntent, kind: SemanticRequirementKind) {
-  if (kind === 'powerKw' || kind === 'phase') return intent === 'generator' || intent === 'weldingGenerator';
+  if (kind === 'powerKw' || kind === 'phase' || kind === 'startType') return intent === 'generator' || intent === 'weldingGenerator';
   if (kind === 'weightKg') return ['plate', 'rammer', 'roller', 'trowel'].includes(intent);
   if (kind === 'diameterMm') return ['diamondBlade', 'diamondCore', 'cutter', 'trowel'].includes(intent);
   return true;
@@ -1178,7 +1182,15 @@ function applySemanticMemoryToSelectionState(
       const fuelText = semanticText(value, 'text').toLowerCase();
       if (fuelText === 'gasoline' || fuelText === 'diesel' || fuelText === 'any') {
         hardConstraints.fuel = fuelText;
-        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), fuel: 'planner' };
+        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), fuel: semanticRequirementSelectionSource(requirement) };
+      }
+    }
+    if (requirement.kind === 'startType') {
+      if (!intentAcceptsRequirementKind(targetProductClass, requirement.kind)) continue;
+      const startText = semanticText(value, 'text').toLowerCase();
+      if (startText === 'electric' || startText === 'manual' || startText === 'any') {
+        hardConstraints.startType = startText;
+        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), startType: semanticRequirementSelectionSource(requirement) };
       }
     }
     if (requirement.kind === 'phase') {
@@ -1186,7 +1198,7 @@ function applySemanticMemoryToSelectionState(
       const phaseText = semanticText(value, 'text').toLowerCase();
       if (phaseText === 'single_phase_220' || phaseText === '220' || phaseText === '220v') {
         hardConstraints.singlePhase220 = true;
-        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), singlePhase220: 'planner' };
+        hardConstraints.provenance = { ...(hardConstraints.provenance ?? {}), singlePhase220: semanticRequirementSelectionSource(requirement) };
       }
     }
   }
@@ -1898,7 +1910,13 @@ function needEvidenceText(state: CustomerNeedState) {
     ...state.constraints,
     ...state.importantCriteria,
     ...state.confirmedFacts,
-    ...state.uncertainInferences
+    ...state.uncertainInferences,
+    ...(state.semanticMemory?.requirements ?? []).map((requirement) => ({
+      evidence: [
+        requirement.evidence,
+        semanticText(requirement.value ?? {}, 'text')
+      ].filter(Boolean).join(' ')
+    }))
   ].map((item) => item.evidence).filter(Boolean).join(' ');
 }
 
@@ -1906,6 +1924,7 @@ function clearUngroundedGeneratorElectricStart(state: ProductSelectionState, evi
   const hard = state.hardConstraints;
   const target = state.targetProductClass !== 'unknown' ? state.targetProductClass : hard.productIntent;
   if (target !== 'generator' || hard.startType !== 'electric') return state;
+  if (hard.provenance?.startType === 'explicit_user' || hard.provenance?.startType === 'previous_selection') return state;
   if (hasExplicitGeneratorElectricStartNeed(evidenceText)) return state;
 
   const provenance = { ...(hard.provenance ?? {}) };
