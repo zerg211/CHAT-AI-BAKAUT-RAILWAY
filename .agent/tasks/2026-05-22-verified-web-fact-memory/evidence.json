@@ -54,28 +54,28 @@
       "command": "npx vitest run tests/agentManagerComparisonResearch.test.ts",
       "status": "pass",
       "tests": 13,
-      "note": "Final after removing the temporary start-family matcher."
+      "note": "Final after restoring full verified fact coverage."
     },
     {
       "command": "npm run typecheck",
       "status": "pass",
-      "note": "Final after removing the temporary start-family matcher."
+      "note": "Final after restoring full verified fact coverage."
     },
     {
       "command": "npm run lint:no-regex",
       "status": "pass",
-      "note": "Final after removing the temporary start-family matcher. Legacy baseline: 1687."
+      "note": "Final after restoring full verified fact coverage. Legacy baseline: 1687."
     },
     {
       "command": "npm run build",
       "status": "pass",
-      "note": "Final after removing the temporary start-family matcher."
+      "note": "Final after restoring full verified fact coverage."
     },
     {
       "command": "production marker health check",
       "status": "pass",
-      "commitSha": "a9af56c9df99796ccd32c80ed8b95e85507da647",
-      "note": "Final behavior runtime marker for the code-bearing commit after removing the temporary start-family matcher. The later evidence commit is documentation-only."
+      "commitSha": "db81c9c346f8945a11b54ff8cc35727a511fbee9",
+      "note": "Final behavior runtime marker for the code-bearing commit. The later evidence commit is documentation-only."
     },
     {
       "command": "production widget save/reuse live check on bakautprof.ru",
@@ -93,11 +93,10 @@
       "note": "Final widget answer reused cached facts and did not copy raw attribute labels."
     },
     {
-      "command": "production widget no-starter-matcher live check on bakautprof.ru",
+      "command": "production widget full-coverage live check on bakautprof.ru",
       "status": "pass",
-      "protocolPath": "local-live-tests/2026-05-22-verified-fact-no-starter-matcher-a9af56c.production.md",
-      "session": "a1f800d9-1161-43ba-b83c-be097f1d3f1f",
-      "note": "Final widget answer stayed buyer-facing and did not rely on a start-family dictionary in code."
+      "protocolPath": "local-live-tests/2026-05-22-verified-fact-full-coverage-db81c9c.production.md",
+      "note": "Final widget answer stayed buyer-facing and preserved business boundaries after restoring full coverage."
     }
   ],
   "acceptanceCriteria": {
