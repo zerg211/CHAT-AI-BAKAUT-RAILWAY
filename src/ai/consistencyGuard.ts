@@ -8,6 +8,80 @@ interface StatedFact {
   turn: number;
 }
 
+function isAsciiDigit(char: string | undefined) {
+  return Boolean(char && char >= '0' && char <= '9');
+}
+
+function isAsciiWordChar(char: string | undefined) {
+  return Boolean(char && (
+    (char >= '0' && char <= '9') ||
+    (char >= 'a' && char <= 'z') ||
+    (char >= 'A' && char <= 'Z') ||
+    char === '_'
+  ));
+}
+
+function isWhitespace(char: string | undefined) {
+  return char === ' ' || char === '\n' || char === '\r' || char === '\t';
+}
+
+function containsStandaloneText(text: string, value: string) {
+  let index = text.indexOf(value);
+  while (index >= 0) {
+    const before = text[index - 1];
+    const after = text[index + value.length];
+    if (!isAsciiWordChar(before) && !isAsciiWordChar(after)) return true;
+    index = text.indexOf(value, index + 1);
+  }
+  return false;
+}
+
+function currencySuffixEnd(text: string, start: number) {
+  if (text[start] === '₽') return start + 1;
+  if (text.startsWith('руб', start)) return start + 3;
+  if (text[start] === 'р' && text[start + 1] === '.') return start + 2;
+  return -1;
+}
+
+function extractRubPriceMentions(text: string) {
+  const prices: number[] = [];
+  const lower = text.toLocaleLowerCase('ru-RU');
+  let index = 0;
+  while (index < lower.length) {
+    if (!isAsciiDigit(lower[index])) {
+      index += 1;
+      continue;
+    }
+
+    let cursor = index;
+    let digits = '';
+    while (cursor < lower.length) {
+      const char = lower[cursor];
+      if (isAsciiDigit(char)) {
+        digits += char;
+        cursor += 1;
+        continue;
+      }
+      if (isWhitespace(char)) {
+        cursor += 1;
+        continue;
+      }
+      break;
+    }
+
+    const suffixEnd = digits.length >= 2 ? currencySuffixEnd(lower, cursor) : -1;
+    if (suffixEnd >= 0) {
+      const price = Number(digits);
+      if (!isNaN(price)) prices.push(price);
+      index = suffixEnd;
+      continue;
+    }
+
+    index += 1;
+  }
+  return prices;
+}
+
 export class ConsistencyGuard {
   private facts: StatedFact[] = [];
   private turnCounter = 0;
@@ -74,14 +148,10 @@ export class ConsistencyGuard {
       if (!lower.includes(nameFragment)) continue;
 
       if (fact.attribute === 'price' && fact.value) {
-        const pricePattern = new RegExp(`\\b${fact.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-        const hasSamePrice = pricePattern.test(answerText);
+        const hasSamePrice = containsStandaloneText(answerText, fact.value);
         const priceNum = Number(fact.value);
         if (!isNaN(priceNum)) {
-          const otherPricePattern = /(\d[\d\s]*\d)\s*(?:₽|руб|р\.)/gi;
-          let match: RegExpExecArray | null;
-          while ((match = otherPricePattern.exec(answerText)) !== null) {
-            const foundPrice = Number(match[1].replace(/\s/g, ''));
+          for (const foundPrice of extractRubPriceMentions(answerText)) {
             if (!isNaN(foundPrice) && foundPrice !== priceNum && Math.abs(foundPrice - priceNum) / priceNum > 0.01) {
               if (lower.includes(nameFragment)) {
                 warnings.push(`Price inconsistency for "${fact.productName}": previously ${fact.value}, now ${foundPrice}`);

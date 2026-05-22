@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1697,
+  "count": 1691,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -3800,48 +3800,6 @@
       "file": "src/ai/assistant.ts",
       "kind": "regular_expression_literal",
       "hash": "33b22cf9bf80be6c",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/consistencyGuard.ts|regexp_constructor_new|61d74e1b0289d783|1",
-      "file": "src/ai/consistencyGuard.ts",
-      "kind": "regexp_constructor_new",
-      "hash": "61d74e1b0289d783",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/consistencyGuard.ts|replace_regex_argument|501bf90af79fda0e|1",
-      "file": "src/ai/consistencyGuard.ts",
-      "kind": "replace_regex_argument",
-      "hash": "501bf90af79fda0e",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/consistencyGuard.ts|regular_expression_literal|4a95a2df197ca025|1",
-      "file": "src/ai/consistencyGuard.ts",
-      "kind": "regular_expression_literal",
-      "hash": "4a95a2df197ca025",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/consistencyGuard.ts|regular_expression_literal|7e44e8d5adb7fbed|1",
-      "file": "src/ai/consistencyGuard.ts",
-      "kind": "regular_expression_literal",
-      "hash": "7e44e8d5adb7fbed",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/consistencyGuard.ts|replace_regex_argument|ccff51058ab594ea|1",
-      "file": "src/ai/consistencyGuard.ts",
-      "kind": "replace_regex_argument",
-      "hash": "ccff51058ab594ea",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/consistencyGuard.ts|regular_expression_literal|db5bec066aec56f0|1",
-      "file": "src/ai/consistencyGuard.ts",
-      "kind": "regular_expression_literal",
-      "hash": "db5bec066aec56f0",
       "occurrence": 1
     },
     {
