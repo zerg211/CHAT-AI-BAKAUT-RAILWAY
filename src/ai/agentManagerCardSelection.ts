@@ -451,6 +451,9 @@ export function selectProductsForVisibleCards(input: {
   const budgetMax = budgetMaxFromNeedState(input.needState);
   let budgetFilteredCount = 0;
   if (budgetMax !== undefined && selected.length) {
+    const sameIntentBudgetPool = cardIntent === 'unknown'
+      ? unique.filter((product) => isCoreEquipment(product))
+      : unique.filter((product) => productMatchesIntent(product, cardIntent));
     const withinBudget = selected.filter((product) =>
       typeof product.price === 'number' &&
       Number.isFinite(product.price) &&
@@ -459,6 +462,16 @@ export function selectProductsForVisibleCards(input: {
     if (withinBudget.length) {
       budgetFilteredCount = selected.length - withinBudget.length;
       selected = withinBudget;
+    } else {
+      const fallbackWithinBudget = sameIntentBudgetPool.filter((product) =>
+        typeof product.price === 'number' &&
+        Number.isFinite(product.price) &&
+        product.price <= budgetMax
+      );
+      if (fallbackWithinBudget.length) {
+        budgetFilteredCount = selected.length;
+        selected = fallbackWithinBudget;
+      }
     }
   }
 

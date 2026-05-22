@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-22-bounded-generator-null-load-defaults",
-  "status": "local_verified_pre_push",
+  "status": "production_checked_followup_required",
   "baseHead": "da0f939",
   "checks": [
     {
@@ -38,7 +38,7 @@
     "AC3": "PASS",
     "AC4": "PASS",
     "AC5": "PASS",
-    "AC6": "PENDING_PRODUCTION_CHECK"
+    "AC6": "PENDING_FOLLOWUP_BUDGET_CARD_SELECTION"
   },
   "production": {
     "preFixPromptfoo": {
@@ -48,6 +48,16 @@
       "deterministicAverage": 0.9629444444444443,
       "llmAverage": 0.9499999999999998,
       "failingCase": "generator_load_selection"
+    },
+    "postFixPromptfoo": {
+      "source": ".agent/tasks/2026-05-22-bounded-generator-null-load-defaults/production-evals-after-28e806c.summary.json",
+      "commit": "28e806ccfab4d9860cab11cedaeb977df0fb7213",
+      "successes": 5,
+      "failures": 1,
+      "deterministicAverage": 0.9736666666666668,
+      "llmAverage": 0.8450000000000001,
+      "remainingFailure": "generator_load_selection",
+      "remainingBottleneck": "over-budget generator cards after bounded load/catalog path succeeded"
     }
   }
 }

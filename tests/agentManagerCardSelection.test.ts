@@ -230,6 +230,36 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
   });
 
+  it('falls back to in-budget cards when the answer only mentions over-budget products', () => {
+    const selection = selectProductsForVisibleCards({
+      products: [overBudgetPlate, plate],
+      userMessage: 'Бюджет до 70 000, покажите подходящие варианты.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer asks for catalog options within budget',
+        dialogueUnderstanding: 'budget limit is a hard visible-card constraint',
+        nextStepRationale: 'show catalog products under budget when possible',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'plate compactors under 70000' },
+          rationale: 'find plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Ближайший вариант — Виброплита TSS-WP60TH 72 кг.',
+      needState: needStateWithBudget(70000)
+    });
+
+    expect(selection.products).toEqual([plate]);
+    expect(selection.answerMentionedProductIds).toEqual(['plate-over-budget']);
+    expect(selection.droppedProductIds).toContain('plate-over-budget');
+    expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
+  });
+
   it('keeps selected cards above budget when no in-budget options exist', () => {
     const selection = selectProductsForVisibleCards({
       products: [overBudgetPlate],
