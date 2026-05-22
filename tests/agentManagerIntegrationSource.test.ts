@@ -23,8 +23,9 @@ describe('agent manager integration source guards', () => {
     expect(research).toContain('Do not stop at a broad fact like "electric starter"');
     expect(research).toContain('answerGuidance.directAnswer');
     expect(research).toContain('switch turned/held in START');
-    expect(research).toContain('dedicated text search');
-    expect(research).toContain('заводится от ключа');
+    expect(research).toContain('missing-fact slot');
+    expect(research).toContain('Do not reduce the task to a fixed phrase list');
+    expect(research).toContain('source_evidence_semantic_validation');
     expect(research).toContain('A non-official listing, cached listing, marketplace page, or forum/classified page can be used as medium-confidence evidence');
     expect(research).not.toContain('source_visual_start_control_validation');
     expect(research).not.toContain('input_image');

@@ -66,54 +66,21 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
   const usefulAttributes = attributes.length
     ? attributes
     : ['specification', 'manual', 'starter', 'start method'];
-  const controlAttributes = [
-    'starts with key',
-    'starts with a key',
-    'key ignition start',
-    'ignition key start',
-    'key switch start',
-    'ignition switch start',
-    'starter switch start',
-    'START switch',
-    'push button start',
-    'electric starter key',
-    'заводится от ключа',
-    'заводится с ключа',
-    'запускается от ключа',
-    'запускается с ключа',
-    'запуск от ключа',
-    'запуск с ключа',
-    'запуск ключом',
-    'ключ электростартера',
-    'замок зажигания',
-    'поворот ключа',
-    'поворотом ключа',
-    'кнопка запуска',
-    'кнопочный запуск'
-  ];
-  const defaultAttributes = [
+  const semanticResearchIntents = [
     'specification',
     'manual pdf',
     'instruction',
-    'ignition key',
-    'key start',
-    'push button start',
-    'starts with key',
-    'key ignition',
-    'key switch',
-    'engine switch START',
-    'ignition switch START',
-    'starter switch START',
+    'start system',
+    'starter control mechanism',
+    'electric starter actuation',
+    'operator controls',
+    'buyer requested attribute in source language',
     'electric starter',
-    'recoil starter',
-    'ключ зажигания',
-    'кнопка запуска',
-    'электростартер',
-    'ручной стартер'
+    'manual starter'
   ];
   return targetProductNames.flatMap((target) => {
     const aliases = exactTargetAliases(target);
-    const queryAttributes = uniqueStrings([...usefulAttributes, ...controlAttributes, ...defaultAttributes]).slice(0, 24);
+    const queryAttributes = uniqueStrings([...usefulAttributes, ...semanticResearchIntents]).slice(0, 18);
     return aliases.flatMap((alias) => queryAttributes.map((attribute) => `${alias} ${attribute}`));
   });
 }
@@ -216,14 +183,6 @@ const keyStartClaimNeedles = [
   'starts with a key',
   'starts with key',
   'start by key',
-  'с ключа',
-  'от ключа',
-  'заводится от ключа',
-  'заводится с ключа',
-  'запускается от ключа',
-  'запускается с ключа',
-  'запуск от ключа',
-  'запуск с ключа',
   'ключ зажигания',
   'ключ электростартера',
   'ключом электростартера',
@@ -232,40 +191,6 @@ const keyStartClaimNeedles = [
   'поверните ключ',
   'запуск ключом',
   'замок зажигания'
-];
-
-const keyStartSourceNeedles = [
-  'ignition key',
-  'key switch',
-  'turn the key',
-  'turned by key',
-  'starts with a key',
-  'starts with key',
-  'start by key',
-  'с ключа',
-  'от ключа',
-  'заводится от ключа',
-  'заводится с ключа',
-  'запускается от ключа',
-  'запускается с ключа',
-  'запуск от ключа',
-  'запуск с ключа',
-  'ключ зажигания',
-  'ключ электростартера',
-  'ключом электростартера',
-  'поворот ключ',
-  'поворотом ключ',
-  'поверните ключ',
-  'запуск ключом',
-  'замок зажигания'
-];
-
-const sparkPlugWrenchNeedles = [
-  'spark plug wrench',
-  'plug wrench',
-  'свечной ключ',
-  'свечного ключа',
-  'свечным ключом'
 ];
 
 const buttonStartNeedles = [
@@ -588,6 +513,7 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
 }
 
 const sourceTextLimit = 250000;
+const semanticSourceTextLimit = 18000;
 
 type SourceDocument = {
   ok: boolean;
@@ -622,6 +548,11 @@ function collapseWhitespace(value: unknown) {
 function limitSourceText(value: unknown) {
   const text = collapseWhitespace(value);
   return text.length > sourceTextLimit ? text.slice(0, sourceTextLimit) : text;
+}
+
+function limitSemanticSourceText(value: unknown) {
+  const text = collapseWhitespace(value);
+  return text.length > semanticSourceTextLimit ? text.slice(0, semanticSourceTextLimit) : text;
 }
 
 function sourceUrlIsHttp(value: unknown): value is string {
@@ -809,18 +740,6 @@ function startClaimKindsFromText(value: unknown): SourceBackedStartKind[] {
   return sourceBackedStartKinds.filter((kind) => kinds.includes(kind));
 }
 
-function sourceSupportsStartKind(sourceText: string, kind: SourceBackedStartKind) {
-  if (kind === 'key_start') {
-    const hasIgnitionKeyEvidence = textIncludesAny(sourceText, keyStartSourceNeedles);
-    if (textIncludesAny(sourceText, sparkPlugWrenchNeedles) && !hasIgnitionKeyEvidence) return false;
-    return hasIgnitionKeyEvidence;
-  }
-  if (kind === 'button_start') return textIncludesAny(sourceText, buttonStartNeedles);
-  if (kind === 'switch_start') return textIncludesAny(sourceText, switchStartNeedles);
-  if (kind === 'electric_start') return textIncludesAny(sourceText, electricStarterNeedles);
-  return textIncludesAny(sourceText, manualStarterNeedles);
-}
-
 function sourceTextMatchesTarget(input: {
   sourceText: string;
   item: SourceEvidenceItem;
@@ -842,24 +761,127 @@ function sourceTextMatchesTarget(input: {
   });
 }
 
-async function validateStartEvidenceItem(input: {
+function sourceEvidenceValidationJsonFormat() {
+  return {
+    format: {
+      type: 'json_schema',
+      name: 'source_evidence_semantic_validation',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          claimSupported: { type: 'boolean' },
+          claimStartKinds: {
+            type: 'array',
+            items: { type: 'string', enum: [...sourceBackedStartKinds] }
+          },
+          supportedStartKinds: {
+            type: 'array',
+            items: { type: 'string', enum: [...sourceBackedStartKinds] }
+          },
+          evidence: { type: 'string' },
+          warnings: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['claimSupported', 'claimStartKinds', 'supportedStartKinds', 'evidence', 'warnings']
+      }
+    }
+  } as const;
+}
+
+function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
+  const claimStartKinds = Array.isArray(parsed.claimStartKinds)
+    ? parsed.claimStartKinds.filter((kind): kind is SourceBackedStartKind =>
+        sourceBackedStartKinds.includes(kind as SourceBackedStartKind)
+      )
+    : [];
+  const supportedStartKinds = Array.isArray(parsed.supportedStartKinds)
+    ? parsed.supportedStartKinds.filter((kind): kind is SourceBackedStartKind =>
+        sourceBackedStartKinds.includes(kind as SourceBackedStartKind)
+      )
+    : [];
+  return {
+    claimSupported: parsed.claimSupported === true,
+    claimStartKinds: sourceBackedStartKinds.filter((kind) => claimStartKinds.includes(kind)),
+    supportedStartKinds: sourceBackedStartKinds.filter((kind) => supportedStartKinds.includes(kind)),
+    evidence: typeof parsed.evidence === 'string' ? compactEvidence(parsed.evidence, 320) : '',
+    warnings: Array.isArray(parsed.warnings)
+      ? parsed.warnings.filter((item): item is string => typeof item === 'string')
+      : []
+  };
+}
+
+async function validateSourceEvidenceSemantically(input: {
+  item: SourceEvidenceItem;
+  sourceText: string;
+  targetProductNames: string[];
+  signal?: AbortSignal;
+}) {
+  const { parsed } = await createStructuredJsonResponse({
+    request: {
+      model: config.OPENAI_FACT_MODEL,
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are a strict semantic source validator for equipment/product facts.',
+            'Use only the provided sourceText. Do not search the web and do not answer the buyer.',
+            'Your first job is to decide whether the sourceText supports the exact claim: same product/model, same attribute, same value/meaning.',
+            'Do not require exact wording. Interpret source text semantically across languages, tables, descriptions, manuals, listings, and specs.',
+            'If the source mentions related but broader information, mark claimSupported=false. Example: electric starter exists does not by itself support key start or push-button start.',
+            'If the claim is about a start/control mechanism, also classify canonical start kinds claimed and supported:',
+            '- key_start: the electric starter is actuated by a physical ignition key, keyed switch, or turning a key.',
+            '- button_start: the electric starter is actuated by a push button.',
+            '- switch_start: the electric starter is actuated by a non-key switch, starter switch, engine switch, or START position.',
+            '- electric_start: the source confirms an electric starter/electric start exists, without necessarily naming the control.',
+            '- manual_starter: the source confirms manual/recoil/hand starter exists.',
+            'Do not count a tool or accessory key, such as a spark-plug wrench or kit wrench, as key_start.',
+            'For non-start claims, claimStartKinds and supportedStartKinds should be empty arrays.',
+            'Return JSON only.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            targetProductNames: input.targetProductNames,
+            claim: {
+              productName: input.item.productName ?? null,
+              attribute: input.item.attribute,
+              value: input.item.value,
+              evidence: input.item.evidence,
+              sourceUrl: input.item.sourceUrl ?? null,
+              sourceTitle: input.item.sourceTitle ?? null
+            },
+            sourceText: limitSemanticSourceText(input.sourceText)
+          })
+        }
+      ],
+      max_output_tokens: Math.min(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, 900),
+      text: sourceEvidenceValidationJsonFormat()
+    },
+    stage: 'source_evidence_semantic_validation',
+    signal: input.signal
+  });
+  return normalizeSourceEvidenceValidation(parsed);
+}
+
+async function validateEvidenceItem(input: {
   item: SourceEvidenceItem;
   products: Product[];
   targetProductNames: string[];
   cache: SourceTextCache;
+  semanticValidation: boolean;
   signal?: AbortSignal;
 }) {
-  const claimKinds = startClaimKindsFromText([
-    input.item.attribute,
-    input.item.value,
-    input.item.evidence
-  ].join(' '));
-  if (!claimKinds.length) return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings: [] as string[] };
-
   const source = await evidenceItemSourceText(input);
   const warnings: string[] = [];
   if (source.warning) warnings.push(source.warning);
   if (!source.ok) {
+    const claimKinds = startClaimKindsFromText([
+      input.item.attribute,
+      input.item.value,
+      input.item.evidence
+    ].join(' '));
+    if (!claimKinds.length) return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings };
     return {
       valid: false,
       invalidKinds: claimKinds,
@@ -870,7 +892,17 @@ async function validateStartEvidenceItem(input: {
     };
   }
 
+  if (!input.semanticValidation || input.item.sourceType === 'catalog') {
+    return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings };
+  }
+
   if (!sourceTextMatchesTarget({ sourceText: source.text, item: input.item, targetProductNames: input.targetProductNames })) {
+    const claimKinds = startClaimKindsFromText([
+      input.item.attribute,
+      input.item.value,
+      input.item.evidence
+    ].join(' '));
+    if (!claimKinds.length) return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings };
     return {
       valid: false,
       invalidKinds: claimKinds,
@@ -882,13 +914,37 @@ async function validateStartEvidenceItem(input: {
     };
   }
 
-  const invalidKinds = claimKinds.filter((kind) => !sourceSupportsStartKind(source.text, kind));
+  const semanticValidation = await validateSourceEvidenceSemantically({
+    item: input.item,
+    sourceText: source.text,
+    targetProductNames: input.targetProductNames,
+    signal: input.signal
+  });
+  const claimKinds = semanticValidation.claimStartKinds.length
+    ? semanticValidation.claimStartKinds
+    : startClaimKindsFromText([
+        input.item.attribute,
+        input.item.value,
+        input.item.evidence
+      ].join(' '));
+  if (semanticValidation.claimSupported && !claimKinds.length) {
+    return {
+      valid: true,
+      invalidKinds: [] as SourceBackedStartKind[],
+      warnings: uniqueStrings([...warnings, ...semanticValidation.warnings])
+    };
+  }
+
+  const invalidKinds = claimKinds.filter((kind) => !semanticValidation.supportedStartKinds.includes(kind));
+  const valid = semanticValidation.claimSupported && invalidKinds.length === 0;
   return {
-    valid: invalidKinds.length === 0,
+    valid,
     invalidKinds,
     warnings: uniqueStrings([
       ...warnings,
-      ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
+      ...semanticValidation.warnings,
+      ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`),
+      !valid && !invalidKinds.length ? 'source_evidence_validation_failed:semantic' : ''
     ])
   };
 }
@@ -958,17 +1014,19 @@ async function validateSourceBackedResult(input: {
   const warnings = [...input.result.warnings];
   const invalidKinds = new Set<SourceBackedStartKind>();
   const facts: ProductComparisonResearchFact[] = [];
+  const semanticValidation = input.result.usedWebSearch || input.result.facts.some((fact) => fact.sourceType === 'web');
 
   for (const fact of input.result.facts) {
     if (fact.sourceType === 'conflict' || fact.confidence === 'low') {
       facts.push(fact);
       continue;
     }
-    const validation = await validateStartEvidenceItem({
+    const validation = await validateEvidenceItem({
       item: fact,
       products: input.products,
       targetProductNames: input.targetProductNames,
       cache,
+      semanticValidation,
       signal: input.signal
     });
     warnings.push(...validation.warnings);
@@ -985,11 +1043,12 @@ async function validateSourceBackedResult(input: {
       coverage.push(item);
       continue;
     }
-    const validation = await validateStartEvidenceItem({
+    const validation = await validateEvidenceItem({
       item,
       products: input.products,
       targetProductNames: input.targetProductNames,
       cache,
+      semanticValidation,
       signal: input.signal
     });
     warnings.push(...validation.warnings);
@@ -999,7 +1058,9 @@ async function validateSourceBackedResult(input: {
         ...item,
         status: 'not_confirmed',
         value: '',
-        evidence: `source validation did not confirm ${validation.invalidKinds.join(', ')}`
+        evidence: validation.invalidKinds.length
+          ? `source validation did not confirm ${validation.invalidKinds.join(', ')}`
+          : 'source validation did not confirm this claim'
       });
       continue;
     }
@@ -1210,6 +1271,20 @@ function catalogExtractionAnswersQuestion(result: ProductComparisonResearchResul
 function resultHasUsableGuidance(result: ProductComparisonResearchResult) {
   return result.answerGuidance.completeness !== 'not_answered' &&
     Boolean(result.answerGuidance.directAnswer.trim());
+}
+
+function needsDeepMissingFactSearch(input: {
+  result: ProductComparisonResearchResult;
+  userMessage: string;
+  comparisonAttributes: string[];
+}) {
+  if (needsElectricStarterControlSearch(input)) return true;
+  if (input.result.answerGuidance.completeness !== 'answered') return true;
+  if (!input.result.answerGuidance.directAnswer.trim()) return true;
+  return input.result.warnings.some((warning) =>
+    warning === 'exact_target_external_fact_not_found' ||
+    warning.startsWith('source_evidence_validation_failed:')
+  );
 }
 
 function mergeCatalogAndWebResearch(
@@ -1504,6 +1579,11 @@ export async function researchProductComparisonFacts(input: {
     signal: input.signal
   });
   const combinedPrimaryResult = mergeCatalogAndWebResearch(catalogResult, primaryResult);
+  const deepMissingFactRetryRequired = needsDeepMissingFactSearch({
+    result: combinedPrimaryResult,
+    userMessage: input.userMessage,
+    comparisonAttributes
+  });
   const electricControlRetryRequired = needsElectricStarterControlSearch({
     result: combinedPrimaryResult,
     userMessage: input.userMessage,
@@ -1514,8 +1594,7 @@ export async function researchProductComparisonFacts(input: {
     targetProductNames.length &&
     (
       !hasConfirmedExactTargetFacts(combinedPrimaryResult, targetProductNames, ['catalog', 'web']) ||
-      combinedPrimaryResult.answerGuidance.completeness !== 'answered' ||
-      electricControlRetryRequired
+      deepMissingFactRetryRequired
     )
   ) {
     const retryRequest: Record<string, unknown> = {
@@ -1525,15 +1604,15 @@ export async function researchProductComparisonFacts(input: {
           role: 'system',
           content: [
             'You are a second-pass exact-model web research module for a sales assistant.',
-            'The first pass did not fully answer the exact-target question. Search again without nearby catalog product context, but keep catalogExtraction as first-party evidence if it exists.',
-            'Use exactTargetSearchQueries and search public web pages, official manufacturer pages, distributor pages, PDFs, manuals, and specification sheets that mention the exact model/code.',
-            'Also search text-only marketplace listings, cached listings, forums, and classified/product-description pages. Use them as medium-confidence evidence only when they name the exact model/code and contain the exact wording that answers the buyer question.',
+            'The first pass did not fully answer the exact-target question. Treat every missing, not_confirmed, ambiguous, or contradicted coverage item as a semantic missing-fact slot.',
+            'For each missing-fact slot, reason about what information would make the buyer answer useful, then search deeper exact-model sources for that information. Do not reduce the task to a fixed phrase list.',
+            'Search public web pages, official manufacturer pages, distributor pages, PDFs, manuals, specification sheets, text-only marketplace listings, cached listings, forums, and classified/product-description pages that mention the exact model/code.',
+            'Use exactTargetSearchQueries only as starting hints. Generate additional source-language search wording from the buyer question, the missing-fact slot, and what the current sources failed to answer.',
+            'Extract useful facts from the deeper sources, then decide which facts are needed in answerGuidance.directAnswer and which are only supporting context for summaryForAnswer.',
+            'Use non-official pages as medium-confidence evidence only when they name the exact model/code and semantically answer the missing-fact slot.',
             'Accept a fact only when sourceUrl, sourceTitle, or evidence names the exact target model/code.',
             'If catalogExtraction confirms one option and web does not refute it with stronger exact-target evidence, preserve the catalog fact instead of downgrading it to unknown.',
-            'For key vs push-button questions, only explicit ignition/start key wording supports key start. A spark plug wrench or a generic kit wrench is not ignition-key evidence.',
-            'If exact-target instructions show an ignition switch, engine switch, starter switch, or a switch turned/held in START, return that practical mechanism in answerGuidance.directAnswer. Do not collapse it to only "electric starter".',
-            'If the first pass found an electric starter but did not confirm how it is actuated, perform a dedicated text search: official pages, manuals, PDFs, distributor listings, cached listings, descriptions, ignition key, ignition switch, starter switch, push button, START switch, and Russian equivalents like "заводится от ключа", "запуск с ключа", "замок зажигания", "кнопка запуска".',
-            'If exact-target text clearly says the model starts with/from a key, uses an ignition switch, push button, or START switch, return that control as confirmed with the source. If the sources only say electric starter without the control, say the electric starter is confirmed but the control type is still not confirmed after exact-target text checks.',
+            'If a source only answers a broader fact, keep that broader fact but do not use it as proof of the narrower missing slot.',
             'Do not use nearby model pages as facts for the target. Return no fact if the exact target still cannot be verified.',
             'Return only JSON.'
           ].join('\n')
@@ -1571,6 +1650,11 @@ export async function researchProductComparisonFacts(input: {
       userMessage: input.userMessage,
       comparisonAttributes
     });
+    const deepMissingFactStillUnresolved = deepMissingFactRetryRequired && needsDeepMissingFactSearch({
+      result: combinedRetryResult,
+      userMessage: input.userMessage,
+      comparisonAttributes
+    });
     if (
       hasConfirmedExactTargetFacts(combinedRetryResult, targetProductNames, ['catalog', 'web']) ||
       combinedRetryResult.answerGuidance.completeness === 'answered'
@@ -1587,8 +1671,10 @@ export async function researchProductComparisonFacts(input: {
           ...combinedPrimaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
           ...combinedRetryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
           'exact_target_external_retry_used',
+          deepMissingFactRetryRequired ? 'missing_fact_deep_search_retry_used' : '',
           electricControlRetryRequired ? 'electric_start_control_retry_used' : '',
-          electricControlStillUnresolved ? 'electric_start_control_not_confirmed_after_retry' : ''
+          electricControlStillUnresolved ? 'electric_start_control_not_confirmed_after_retry' : '',
+          deepMissingFactStillUnresolved ? 'missing_fact_deep_search_still_unresolved' : ''
         ])
       };
     }
@@ -1599,8 +1685,10 @@ export async function researchProductComparisonFacts(input: {
         ...combinedPrimaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
         ...combinedRetryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
         'exact_target_external_retry_used',
+        deepMissingFactRetryRequired ? 'missing_fact_deep_search_retry_used' : '',
         electricControlRetryRequired ? 'electric_start_control_retry_used' : '',
-        electricControlRetryRequired ? 'electric_start_control_not_confirmed_after_retry' : ''
+        electricControlRetryRequired ? 'electric_start_control_not_confirmed_after_retry' : '',
+        deepMissingFactRetryRequired ? 'missing_fact_deep_search_still_unresolved' : ''
       ])
     };
   }
