@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
-import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
+import type { AgentSourcePolicyV2, AgentTaskType, AgentTurnContract, ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
 import {
   AgentIntentContractSchema,
   AnswerContractSchema,
@@ -9,6 +9,7 @@ import {
   ToolResultSchema,
   normalizeLedgerStateDeltaEvents,
   type AgentIntentContract,
+  type AgentIntentGrounding,
   type AnswerContract,
   type DialogueLedgerEvent,
   type LedgerStateDelta,
@@ -290,6 +291,14 @@ const exactTargetProductMentionRoles = new Set<ProductMentionRole>([
   'comparison_subject'
 ]);
 
+const agentManagerToolNames = [
+  'catalog.search',
+  'catalog.getProductDetails',
+  'calculator.generatorLoad',
+  'web.researchProductFacts',
+  'lead.capture'
+] as const;
+
 function productMentionMatchesName(mentionName: string, targetName: string) {
   if (textMatchesTargetName(mentionName, targetName) || textMatchesTargetName(targetName, mentionName)) return true;
   const mentionTokens = new Set(modelIdentifierTokens(mentionName));
@@ -429,6 +438,190 @@ function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMess
     requiresTools: true,
     toolRequests: [...intent.toolRequests, repairRequest],
     riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_exact_model_evidence'])
+  };
+}
+
+function groundingRequiresWebSearch(grounding: AgentIntentGrounding | undefined) {
+  return grounding?.sourcePolicy === 'web_required' ||
+    grounding?.requiredToolKinds.includes('web.researchProductFacts') === true;
+}
+
+function intentHasWebResearchRequest(intent: AgentIntentContract) {
+  return intent.toolRequests.some((request) => request.tool === 'web.researchProductFacts');
+}
+
+function productClassFromIntentMention(intent: AgentIntentContract) {
+  const mention = (intent.productMentions ?? []).find((item) =>
+    exactTargetProductMentionRoles.has(item.role) &&
+    typeof item.productClass === 'string' &&
+    productSelectionClasses.includes(item.productClass as ProductSelectionClass)
+  );
+  return mention?.productClass as ProductSelectionClass | undefined;
+}
+
+function exactProductNamesFromIntent(intent: AgentIntentContract, userMessage: string) {
+  const userTokens = new Set(modelIdentifierTokens(userMessage));
+  return uniqueStrings((intent.productMentions ?? [])
+    .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+    .filter((mention) => modelIdentifierTokens(mention.name).some((token) => userTokens.has(token)))
+    .map((mention) => mention.name));
+}
+
+function uniqueToolRequestId(intent: AgentIntentContract, idBase: string) {
+  const existingIds = new Set(intent.toolRequests.map((request) => request.id));
+  return existingIds.has(idBase) ? `${idBase}:${intent.toolRequests.length + 1}` : idBase;
+}
+
+function repairIntentForGroundingPolicy(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
+  if (!groundingRequiresWebSearch(intent.grounding)) return intent;
+  if (intentHasWebResearchRequest(intent)) {
+    return {
+      ...intent,
+      requiresTools: true,
+      riskFlags: uniqueStrings([...intent.riskFlags, 'grounding_policy_web_required'])
+    };
+  }
+  const grounding = intent.grounding;
+  const targetProductNames = exactProductNamesFromIntent(intent, userMessage);
+  const productIntent = productClassFromIntentMention(intent) ?? toolRequestProductIntent({
+    id: 'grounding-policy',
+    tool: 'web.researchProductFacts',
+    args: {
+      query: userMessage,
+      semanticQuery: intent.userMessageSummary,
+      productIntent: null,
+      limit: 4,
+      productIds: [],
+      productNames: targetProductNames,
+      comparisonAttributes: grounding?.technicalAttributes ?? [],
+      loads: [],
+      simultaneousStarting: null,
+      simultaneousStartingKinds: [],
+      estimateBasis: null,
+      contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+      reason: grounding?.rationale ?? 'The semantic grounding policy requires web verification.',
+      notes: 'Synthetic request for semantic grounding repair.'
+    },
+    rationale: grounding?.rationale ?? 'The semantic grounding policy requires web verification.',
+    required: true
+  }, userMessage);
+  const repairRequest: ToolRequest = {
+    id: uniqueToolRequestId(intent, 'auto:web-grounding'),
+    tool: 'web.researchProductFacts',
+    args: {
+      query: userMessage,
+      semanticQuery: [
+        intent.userMessageSummary,
+        intent.dialogueUnderstanding,
+        intent.nextStepRationale
+      ].filter(Boolean).join('\n'),
+      productIntent,
+      limit: 4,
+      productIds: [],
+      productNames: targetProductNames,
+      comparisonAttributes: grounding?.technicalAttributes.length
+        ? grounding.technicalAttributes
+        : ['current buyer technical question'],
+      loads: [],
+      simultaneousStarting: null,
+      simultaneousStartingKinds: [],
+      estimateBasis: null,
+      contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+      reason: grounding?.rationale ?? 'The semantic grounding policy requires external technical verification.',
+      notes: 'The planner grounding policy requires web evidence; productNames may be empty for a general technical fact question.'
+    },
+    rationale: grounding?.rationale ?? 'The semantic grounding policy requires web evidence before answering.',
+    required: true
+  };
+  return {
+    ...intent,
+    requiresTools: true,
+    toolRequests: [...intent.toolRequests, repairRequest],
+    riskFlags: uniqueStrings([
+      ...intent.riskFlags,
+      'grounding_policy_web_required',
+      'planner_repaired_grounding_web_tool'
+    ])
+  };
+}
+
+function sourcePolicyMetadataFromIntent(intent: AgentIntentContract): AgentSourcePolicyV2 {
+  const grounding = intent.grounding;
+  if (grounding?.sourcePolicy === 'web_required') {
+    return {
+      allowed: ['conversation_memory', 'catalog', 'web'],
+      required: ['web'],
+      forbidden: ['specialist'],
+      webPurpose: grounding.webPurpose === 'none' ? 'technical_specs' : grounding.webPurpose
+    };
+  }
+  if (grounding?.sourcePolicy === 'specialist_required') {
+    return {
+      allowed: ['conversation_memory', 'catalog', 'specialist'],
+      required: ['specialist'],
+      forbidden: ['web'],
+      webPurpose: 'none'
+    };
+  }
+  if (grounding?.sourcePolicy === 'catalog_required') {
+    return {
+      allowed: ['conversation_memory', 'catalog'],
+      required: ['catalog'],
+      forbidden: ['specialist'],
+      webPurpose: 'none'
+    };
+  }
+  return {
+    allowed: ['conversation_memory'],
+    required: [],
+    forbidden: ['specialist'],
+    webPurpose: 'none'
+  };
+}
+
+function agentManagerTaskTypeFromGrounding(intent: AgentIntentContract): AgentTaskType | undefined {
+  const groundingTaskType = intent.grounding?.taskType;
+  if (groundingTaskType === 'availability_or_delivery') return 'pure_delivery';
+  if (
+    groundingTaskType === 'technical_answer' ||
+    groundingTaskType === 'product_selection' ||
+    groundingTaskType === 'comparison'
+  ) {
+    return groundingTaskType;
+  }
+  if (intentHasWebResearchRequest(intent)) return 'technical_answer';
+  return undefined;
+}
+
+function turnContractMetadataFromIntent(intent: AgentIntentContract): AgentTurnContract {
+  const taskType = agentManagerTaskTypeFromGrounding(intent);
+  const answerTask = taskType === 'product_selection'
+    ? 'product_selection'
+    : taskType === 'comparison'
+      ? 'comparison'
+      : taskType === 'pure_delivery'
+        ? 'lead_handoff'
+        : 'technical_explanation';
+  return {
+    answerTask,
+    taskType,
+    catalogAction: intent.toolRequests.some((request) => request.tool === 'catalog.search')
+      ? 'find_matching_products'
+      : 'none',
+    commercialAction: intent.toolRequests.some((request) => request.tool === 'lead.capture')
+      ? 'explain_manager_required'
+      : 'none',
+    productCardsPolicy: taskType === 'product_selection' ? 'show_matching_products' : 'none',
+    mustAnswerNow: [intent.userMessageSummary],
+    activeNeeds: [],
+    currentFocus: intent.grounding?.taskType ?? 'agent_manager_turn',
+    cardsRole: taskType === 'product_selection' ? 'primary' : 'none',
+    leadAllowed: intent.toolRequests.some((request) => request.tool === 'lead.capture'),
+    leadAllowedReason: intent.toolRequests.some((request) => request.tool === 'lead.capture')
+      ? 'Agent manager intent planned lead capture.'
+      : 'No lead capture planned for this turn.',
+    errorRecoveryPriority: intent.nextStepRationale,
+    validatorWarnings: ['agent_manager_grounding_contract']
   };
 }
 
@@ -1250,6 +1443,56 @@ const productMentionJsonSchema = {
   required: ['name', 'role', 'productClass', 'evidence']
 } as const;
 
+const groundingJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    taskType: {
+      type: 'string',
+      enum: [
+        'technical_answer',
+        'product_selection',
+        'comparison',
+        'availability_or_delivery',
+        'lead_handoff',
+        'offtopic'
+      ]
+    },
+    sourcePolicy: {
+      type: 'string',
+      enum: [
+        'conversation_only',
+        'catalog_required',
+        'web_required',
+        'specialist_required'
+      ]
+    },
+    webPurpose: {
+      type: 'string',
+      enum: [
+        'technical_specs',
+        'manual_or_service',
+        'current_lineup',
+        'none'
+      ]
+    },
+    requiredToolKinds: {
+      type: 'array',
+      items: { type: 'string', enum: agentManagerToolNames }
+    },
+    technicalAttributes: stringArrayJsonSchema,
+    rationale: { type: 'string' }
+  },
+  required: [
+    'taskType',
+    'sourcePolicy',
+    'webPurpose',
+    'requiredToolKinds',
+    'technicalAttributes',
+    'rationale'
+  ]
+} as const;
+
 const intentContractFormat = {
   format: {
     type: 'json_schema',
@@ -1265,10 +1508,11 @@ const intentContractFormat = {
         requiresTools: { type: 'boolean' },
         toolRequests: { type: 'array', items: toolRequestJsonSchema },
         productMentions: { type: 'array', items: productMentionJsonSchema },
+        grounding: groundingJsonSchema,
         mustNotAskQuestionIds: { type: 'array', items: { type: 'string' } },
         riskFlags: { type: 'array', items: { type: 'string' } }
       },
-      required: ['turnId', 'userMessageSummary', 'dialogueUnderstanding', 'nextStepRationale', 'requiresTools', 'toolRequests', 'productMentions', 'mustNotAskQuestionIds', 'riskFlags']
+      required: ['turnId', 'userMessageSummary', 'dialogueUnderstanding', 'nextStepRationale', 'requiresTools', 'toolRequests', 'productMentions', 'grounding', 'mustNotAskQuestionIds', 'riskFlags']
     }
   }
 } as const;
@@ -1412,6 +1656,8 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Ты планировщик AI менеджера БАКАУТ.',
             'LLM решает смысл хода без фиксированного списка сценариев.',
             'Код только исполнит typed tools, но не будет подменять твой смысл.',
+            'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, requiredToolKinds, technicalAttributes и rationale. Затем toolRequests должны исполнять эту grounding-политику.',
+            'Если grounding.sourcePolicy="web_required" или requiredToolKinds содержит web.researchProductFacts, toolRequests обязан содержать web.researchProductFacts. Если named model нет, это все равно общий technical web grounding: productNames=[], query/semanticQuery = смысл вопроса, comparisonAttributes = запрошенные технические факты.',
             'Для доставки, наличия, скидок, сроков и индивидуальных условий не обещай точный результат: планируй lead.capture/offer form, если нужен контакт.',
             'Для сравнения товаров и нехватки важных фактов планируй web.researchProductFacts.',
             'Для подбора товара планируй catalog.search.',
@@ -1421,7 +1667,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Fill productMentions for every named product, model, brand-model, or equipment item in the current buyer turn. Classify its semantic role: target_product when the buyer wants to buy/check that exact product; catalog_candidate for a product alternative being considered; comparison_subject for products being compared; context_load_device when it is only a consumer/load/device used to size or apply another product; compatibility_context when it is only equipment that the target product must work with; mentioned_only when no action is needed.',
             'Do not put context_load_device or compatibility_context names into web.researchProductFacts args.productNames. Example: in "нужен генератор для котла Baxi 24 и насоса 1,1 кВт", Baxi 24 is context_load_device, not a BAKAUT catalog target, so do not report that Baxi 24 is absent from our catalog. The target product class is the generator.',
             'Only target_product, catalog_candidate, and comparison_subject roles should drive exact target catalog presence, exact model web research, or nearby catalog alternatives.',
-            'For a general technical question, answer from engineering knowledge only when the buyer did not ask for verification. When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding, plan web.researchProductFacts even without a named model: keep args.productNames empty, put the buyer question in query and semanticQuery, and put the requested technical attributes in comparisonAttributes.',
+            'For a general technical question, answer from engineering knowledge only when the buyer did not ask for verification. When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding, set grounding.sourcePolicy="web_required", grounding.taskType="technical_answer", grounding.webPurpose="technical_specs", add "web.researchProductFacts" to grounding.requiredToolKinds, and plan web.researchProductFacts even without a named model: keep args.productNames empty, put the buyer question in query and semanticQuery, and put the requested technical attributes in comparisonAttributes.',
             'When the buyer names a different exact model in the current turn, do not reuse technical facts from a previous model even if the buyer says "same". Plan current-turn evidence for the newly named model unless ledger/tool evidence is already scoped to that exact same model identifier.',
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
             'For multi-turn generator selection, do not run catalog.search alone when history contains a previous load estimate, a prior generator sizing answer, or enough load facts to calculate. Re-run calculator.generatorLoad in the current turn before catalog.search so the current tool results carry payload.profile.requiredNominalKw and weak products can be filtered.',
@@ -1825,7 +2071,10 @@ export class AgentManagerOrchestrator {
     const ledgerState = reduceDialogueLedger([...ledgerEvents, ...newEvents]);
     const needStateSnapshot = deriveNeedStateSnapshotFromLedger(ledgerState, input.session.needState ?? emptyNeedState());
     const plannedIntent = await this.model.planTurn({ session: input.session, history, userMessage, ledgerEvents: [...ledgerEvents, ...newEvents], ledgerState, signal: input.signal });
-    const intent = repairIntentForExactModelEvidence(plannedIntent, userMessage);
+    const intent = repairIntentForExactModelEvidence(
+      repairIntentForGroundingPolicy(plannedIntent, userMessage),
+      userMessage
+    );
     await this.conversations.updateTurn({
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -2040,6 +2289,8 @@ export class AgentManagerOrchestrator {
       ledgerState,
       ledgerEventIds: newEvents.map((event) => event.eventId),
       intentContract: intent,
+      turnContract: turnContractMetadataFromIntent(intent),
+      sourcePolicy: sourcePolicyMetadataFromIntent(intent),
       answerContract: finalAnswerContract,
       preSendReview: review,
       toolResults,

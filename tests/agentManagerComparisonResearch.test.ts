@@ -288,6 +288,113 @@ describe('AgentManager comparison research flow', () => {
     });
   });
 
+  it('repairs web-required grounding into an executable web research tool', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'general inverter generator',
+        attribute: 'THD',
+        value: 'lower THD means a cleaner waveform for sensitive electronics',
+        sourceType: 'web',
+        confidence: 'medium',
+        evidence: 'engineering reference for harmonic distortion'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Lower THD reduces waveform distortion for boiler boards and sensitive electronics.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'THD practical effect',
+          status: 'confirmed',
+          value: 'lower distortion is better for sensitive electronics',
+          evidence: 'web grounding'
+        }]
+      },
+      summaryForAnswer: 'THD is a waveform distortion metric; lower values are preferable for sensitive electronics.',
+      warnings: []
+    });
+
+    const toolResultIdsSeen: string[] = [];
+    const groundingRepairModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks why THD matters and asks to check facts if catalog data is missing',
+          dialogueUnderstanding: 'technical answer needs external grounding, but the planner omitted the tool request',
+          nextStepRationale: 'answer after web grounding',
+          requiresTools: false,
+          toolRequests: [],
+          grounding: {
+            taskType: 'technical_answer',
+            sourcePolicy: 'web_required',
+            webPurpose: 'technical_specs',
+            requiredToolKinds: ['web.researchProductFacts'],
+            technicalAttributes: ['THD', 'waveform distortion', 'boiler electronics'],
+            rationale: 'buyer requested technical fact verification'
+          },
+          productMentions: [{
+            name: 'inverter generator',
+            role: 'target_product',
+            productClass: 'generator',
+            evidence: 'buyer asks about THD of an inverter generator'
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        toolResultIdsSeen.push(...input.toolResults.map((result) => result.requestId));
+        return {
+          answerText: 'THD показывает, насколько форма напряжения отличается от чистой синусоиды. Для котла и электроники ниже THD обычно лучше: меньше риск сбоев платы, перегрева блоков питания и помех.',
+          factsUsed: [{
+            factKey: 'thd.practical_effect',
+            sourceEventIds: [input.toolResults[0]?.requestId ?? 'auto:web-grounding'],
+            value: 'lower THD is safer for sensitive electronics'
+          }],
+          questionsAsked: [],
+          toolResultIds: input.toolResults.map((result) => result.requestId),
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Explain why THD matters for an inverter generator and check facts if catalog data is missing.')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      { async createLead() { return null; } } as never,
+      groundingRepairModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Explain why THD matters for an inverter generator and check facts if catalog data is missing.'
+    });
+
+    const metadata = payload.metadata as {
+      intentContract?: { toolRequests?: Array<{ id?: string; tool?: string }>; riskFlags?: string[] };
+      sourcePolicy?: { required?: string[] };
+      turnContract?: { taskType?: string };
+      toolResults?: Array<{ requestId?: string; tool?: string; status?: string }>;
+    };
+    expect(metadata.intentContract?.toolRequests).toContainEqual(expect.objectContaining({
+      id: 'auto:web-grounding',
+      tool: 'web.researchProductFacts'
+    }));
+    expect(metadata.intentContract?.riskFlags).toContain('planner_repaired_grounding_web_tool');
+    expect(metadata.sourcePolicy?.required).toContain('web');
+    expect(metadata.turnContract?.taskType).toBe('technical_answer');
+    expect(metadata.toolResults?.[0]).toMatchObject({
+      requestId: 'auto:web-grounding',
+      tool: 'web.researchProductFacts',
+      status: 'ok'
+    });
+    expect(toolResultIdsSeen).toEqual(['auto:web-grounding']);
+  });
+
   it('rewrites exact-model claims that cite failed web research as fact evidence', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
       new Error('product_comparison_research did not return a JSON object')

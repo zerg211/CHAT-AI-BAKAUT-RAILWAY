@@ -91,6 +91,13 @@ describe('agent manager contracts', () => {
     });
 
     expect(result.productMentions).toEqual([]);
+    expect(result.grounding).toMatchObject({
+      taskType: 'technical_answer',
+      sourcePolicy: 'conversation_only',
+      webPurpose: 'none',
+      requiredToolKinds: [],
+      technicalAttributes: []
+    });
   });
 
   it('parses strict product mention roles from planner output', () => {
@@ -101,6 +108,14 @@ describe('agent manager contracts', () => {
       nextStepRationale: 'verify exact product facts and keep load context separate',
       requiresTools: true,
       toolRequests: [],
+      grounding: {
+        taskType: 'technical_answer',
+        sourcePolicy: 'web_required',
+        webPurpose: 'technical_specs',
+        requiredToolKinds: ['web.researchProductFacts'],
+        technicalAttributes: ['start method'],
+        rationale: 'exact generator facts need evidence'
+      },
       productMentions: [
         {
           name: 'TSS SGG 10000EHA',
@@ -123,6 +138,7 @@ describe('agent manager contracts', () => {
       'target_product',
       'context_load_device'
     ]);
+    expect(result.grounding.sourcePolicy).toBe('web_required');
   });
 
   it('rejects unknown product mention roles and extra fields', () => {

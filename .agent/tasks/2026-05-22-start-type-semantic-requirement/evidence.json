@@ -7,7 +7,8 @@
     "Ungrounded electric-start cleanup preserves explicit-user and previous-selection provenance.",
     "Card manifest enforces activeConstraints.startType against product cards.",
     "Added focused tests for semantic coercion, selection/ranking preservation, and card manifest enforcement.",
-    "After failed production eval 3d878fd, improved short brand-model mention matching so answer text and visible cards stay aligned."
+    "After failed production eval 3d878fd, improved short brand-model mention matching so answer text and visible cards stay aligned.",
+    "After failed production eval 32e60bc, added AgentManager grounding policy and runtime repair for web-required technical answers with omitted web tool requests."
   ],
   "checks": [
     {
@@ -55,6 +56,29 @@
       "command": "npm test",
       "status": "pass",
       "details": "86 test files passed, 700 tests passed"
+    },
+    {
+      "command": "npx vitest run tests/agentManagerContracts.test.ts tests/agentManagerComparisonResearch.test.ts",
+      "status": "pass",
+      "details": "2 test files passed, 25 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36."
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "86 test files passed, 701 tests passed"
     }
   ],
   "acceptanceCriteria": {
@@ -81,9 +105,18 @@
         "total": 6,
         "deterministicAverage": 0.9812222222222222,
         "llmAverage": 0.9016666666666667
+      },
+      {
+        "artifact": ".agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-32e60bc.json",
+        "summaryArtifact": ".agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-32e60bc.summary.json",
+        "commit": "32e60bc",
+        "passed": 5,
+        "total": 6,
+        "deterministicAverage": 0.9102777777777779,
+        "llmAverage": 0.965
       }
     ],
-    "nextStep": "Commit and push short model mention matching fix, wait for Railway marker, rerun production Promptfoo."
+    "nextStep": "Commit and push AgentManager grounding repair, wait for Railway marker, rerun production Promptfoo."
   },
-  "fixPassTimestamp": "2026-05-22T20:47:24.4406323+03:00"
+  "fixPassTimestamp": "2026-05-22T21:09:00+03:00"
 }

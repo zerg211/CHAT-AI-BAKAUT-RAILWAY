@@ -105,3 +105,66 @@ PASS: 86 test files, 700 tests
 ```
 
 AC9 remains pending until this fix pass is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.
+
+## Production eval after short-model fix
+
+Run after commit `32e60bc`:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-32e60bc.json
+FAIL: 5/6 tests passed
+Deterministic average: 91.03%
+LLM average: 96.50%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-32e60bc.json`
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-32e60bc.summary.json`
+
+Problems recorded:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/problems.md`
+
+## Fix pass after 32e60bc production eval
+
+Timestamp: `2026-05-22T21:09:00+03:00`
+
+Changes:
+- Added a typed `grounding` block to AgentManager intent contracts, so the LLM planner explicitly states task type, source policy, required tool kinds, technical attributes, and rationale.
+- Updated the AgentManager planner prompt to fill grounding first and require `web.researchProductFacts` for web-required technical grounding even when no exact model is named.
+- Added a runtime consistency repair that only uses the LLM's structured grounding policy: if `web_required` is present but the web tool is missing, it adds `auto:web-grounding`.
+- Exposed AgentManager `sourcePolicy` and `turnContract.taskType` in metadata for production eval observability.
+- Added focused contract and AgentManager tests for omitted-tool grounding repair.
+
+Behavior boundary:
+
+Where LLM decides:
+- Whether the current turn is a technical answer.
+- Whether external web grounding is required.
+- Which technical attributes need verification.
+
+Where deterministic code decides:
+- Whether the LLM's typed grounding policy and typed tool list are internally inconsistent.
+- Adds the missing web tool only when `grounding.sourcePolicy="web_required"` or `requiredToolKinds` already names `web.researchProductFacts`.
+
+No regex or raw buyer-phrase keyword rule was added.
+
+Local checks:
+
+```text
+npx vitest run tests/agentManagerContracts.test.ts tests/agentManagerComparisonResearch.test.ts
+PASS: 2 test files, 25 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36.
+
+npm run build
+PASS
+
+npm test
+PASS: 86 test files, 701 tests
+```
+
+AC9 remains pending until this grounding repair is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.

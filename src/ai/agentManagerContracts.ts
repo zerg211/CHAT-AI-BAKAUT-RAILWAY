@@ -90,6 +90,41 @@ export const ProductMentionSchema = z.object({
   evidence: nonEmptyString
 }).strict();
 
+export const AgentIntentGroundingSchema = z.object({
+  taskType: z.enum([
+    'technical_answer',
+    'product_selection',
+    'comparison',
+    'availability_or_delivery',
+    'lead_handoff',
+    'offtopic'
+  ]),
+  sourcePolicy: z.enum([
+    'conversation_only',
+    'catalog_required',
+    'web_required',
+    'specialist_required'
+  ]),
+  webPurpose: z.enum([
+    'technical_specs',
+    'manual_or_service',
+    'current_lineup',
+    'none'
+  ]),
+  requiredToolKinds: z.array(ToolRequestSchema.shape.tool).default([]),
+  technicalAttributes: z.array(nonEmptyString).default([]),
+  rationale: nonEmptyString
+}).strict();
+
+const defaultAgentIntentGrounding: z.infer<typeof AgentIntentGroundingSchema> = {
+  taskType: 'technical_answer',
+  sourcePolicy: 'conversation_only',
+  webPurpose: 'none',
+  requiredToolKinds: [],
+  technicalAttributes: [],
+  rationale: 'Planner did not provide an explicit grounding policy; preserve legacy toolRequests behavior.'
+};
+
 export const AgentIntentContractSchema = z.object({
   turnId: z.string().nullable().optional(),
   userMessageSummary: nonEmptyString,
@@ -97,6 +132,7 @@ export const AgentIntentContractSchema = z.object({
   nextStepRationale: nonEmptyString,
   requiresTools: z.boolean(),
   toolRequests: z.array(ToolRequestSchema).default([]),
+  grounding: AgentIntentGroundingSchema.default(defaultAgentIntentGrounding),
   productMentions: z.array(ProductMentionSchema).default([]),
   mustNotAskQuestionIds: z.array(z.string()).default([]),
   riskFlags: z.array(z.string()).default([])
@@ -150,9 +186,11 @@ export type ToolRequest = z.infer<typeof ToolRequestSchema>;
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 export type ProductMentionRole = z.infer<typeof ProductMentionRoleSchema>;
 export type ProductMention = z.infer<typeof ProductMentionSchema>;
+export type AgentIntentGrounding = z.infer<typeof AgentIntentGroundingSchema>;
 type ParsedAgentIntentContract = z.infer<typeof AgentIntentContractSchema>;
-export type AgentIntentContract = Omit<ParsedAgentIntentContract, 'productMentions'> & {
+export type AgentIntentContract = Omit<ParsedAgentIntentContract, 'productMentions' | 'grounding'> & {
   productMentions?: ProductMention[];
+  grounding?: AgentIntentGrounding;
 };
 export type AnswerContract = z.infer<typeof AnswerContractSchema>;
 export type AnswerSelectionReadiness = z.infer<typeof AnswerSelectionReadinessSchema>;
