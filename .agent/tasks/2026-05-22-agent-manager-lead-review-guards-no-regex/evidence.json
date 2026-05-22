@@ -1,0 +1,65 @@
+{
+  "taskId": "2026-05-22-agent-manager-lead-review-guards-no-regex",
+  "status": "pass",
+  "changes": [
+    "Extracted deterministic lead review helpers from AgentManagerOrchestrator into src/ai/leadReviewGuards.ts.",
+    "Replaced repeated contact request detection regex with explicit text scanning.",
+    "Replaced contact request sentence stripping regex with explicit text scanning.",
+    "Added focused guard tests without regex assertions.",
+    "Updated no-regex baseline downward after reviewing removed legacy findings."
+  ],
+  "noRegexBaseline": {
+    "before": 1755,
+    "after": 1751,
+    "removed": 4,
+    "newRegexConstructs": 0
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS"
+  },
+  "localChecks": [
+    {
+      "command": "npx vitest run tests/leadReviewGuards.test.ts",
+      "status": "pass",
+      "tests": 4
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex -- --update-baseline",
+      "status": "pass",
+      "details": "Updated scripts/no-regex-baseline.json with 1751 legacy findings."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1751."
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "tests": 658
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "details": "Only CRLF conversion warnings from Git."
+    }
+  ],
+  "productionEval": {
+    "required": false,
+    "reason": "Deterministic private guard extraction with local parity coverage; no product or answer-policy behavior change."
+  }
+}

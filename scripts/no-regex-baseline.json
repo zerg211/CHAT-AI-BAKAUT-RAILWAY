@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1755,
+  "count": 1751,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -86,20 +86,6 @@
       "occurrence": 1
     },
     {
-      "id": "src/ai/agentManagerOrchestrator.ts|regex_test_call|b5417206ae7ebbc2|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
-      "kind": "regex_test_call",
-      "hash": "b5417206ae7ebbc2",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|2ecc4ffc1eedd534|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
-      "kind": "regular_expression_literal",
-      "hash": "2ecc4ffc1eedd534",
-      "occurrence": 1
-    },
-    {
       "id": "src/ai/agentManagerOrchestrator.ts|regex_test_call|71b82d4c95fab1de|1",
       "file": "src/ai/agentManagerOrchestrator.ts",
       "kind": "regex_test_call",
@@ -139,20 +125,6 @@
       "file": "src/ai/agentManagerOrchestrator.ts",
       "kind": "regular_expression_literal",
       "hash": "ef69f9f8f0e377a3",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/agentManagerOrchestrator.ts|replace_regex_argument|88826c491d0d4b72|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
-      "kind": "replace_regex_argument",
-      "hash": "88826c491d0d4b72",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|2fc971a9c6bd57d8|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
-      "kind": "regular_expression_literal",
-      "hash": "2fc971a9c6bd57d8",
       "occurrence": 1
     },
     {

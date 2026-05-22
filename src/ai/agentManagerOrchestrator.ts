@@ -26,6 +26,13 @@ import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import { extractContact, hasLeadContact } from './contactExtraction.js';
 import {
+  answerRequestsContactData,
+  leadCaptureMissingContact,
+  leadCaptureMissingName,
+  leadCaptureRepairText,
+  stripContactRequestSentence
+} from './leadReviewGuards.js';
+import {
   assessVisibleCardReadiness,
   filterGeneratorProductsByLoadProfile,
   productSelectionClasses,
@@ -161,32 +168,6 @@ function mapLedgerRows(rows: DialogueLedgerRow[]): DialogueLedgerEvent[] {
     status: row.status,
     createdAt: createdAtText(row.created_at)
   }));
-}
-
-function leadCaptureMissingContact(toolResults: ToolResult[]) {
-  return toolResults.some((result) =>
-    result.tool === 'lead.capture' &&
-    result.status !== 'ok' &&
-    result.warnings.some((warning) => warning === 'lead_contact_missing' || warning === 'lead_name_missing')
-  );
-}
-
-function leadCaptureMissingName(toolResults: ToolResult[]) {
-  return toolResults.some((result) =>
-    result.tool === 'lead.capture' &&
-    result.status !== 'ok' &&
-    result.warnings.includes('lead_name_missing')
-  );
-}
-
-function leadCaptureRepairText(input: {
-  contact: ReturnType<typeof extractContact>;
-  toolResults: ToolResult[];
-}) {
-  if (hasLeadContact(input.contact) && leadCaptureMissingName(input.toolResults)) {
-    return 'Телефон получил. Напишите, пожалуйста, имя, и я передам выбранные позиции на проверку наличия, доставки и условий. После проверки с вами свяжутся с точным ответом.';
-  }
-  return 'Наличие, доставку, сроки и индивидуальные условия нужно проверить по складу и логистике. Оставьте имя и телефон в форме, и я передам выбранные позиции на проверку; после проверки с вами свяжутся с точным ответом.';
 }
 
 function answerEvidenceSourceHints(input: {
@@ -2298,7 +2279,7 @@ export class AgentManagerOrchestrator {
   private async review(input: AgentManagerReviewInput): Promise<PreSendReview> {
     const mechanicalIssues: PreSendReview['issues'] = [];
     const contactInTurn = extractContact(input.userMessage);
-    if ((contactInTurn.phone || contactInTurn.email) && /остав(ь|ьте).{0,40}(телефон|номер|контакт|имя)/iu.test(input.answer.answerText)) {
+    if (hasLeadContact(contactInTurn) && answerRequestsContactData(input.answer.answerText)) {
       mechanicalIssues.push({
         code: 'asks_contact_already_provided',
         severity: 'high',
@@ -2458,7 +2439,7 @@ export class AgentManagerOrchestrator {
       return {
         verdict: 'rewrite_required',
         issues: mechanicalIssues,
-        revisedAnswerText: input.answer.answerText.replace(/(?:оставьте|оставь)[^.!?\n]*(?:телефон|номер|контакт|имя)[^.!?\n]*[.!?]?/giu, '').trim()
+        revisedAnswerText: stripContactRequestSentence(input.answer.answerText)
       };
     }
     if (!config.AGENT_MANAGER_PRE_SEND_REVIEW_ENABLED) {
