@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1782,
+  "count": 1778,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -5893,34 +5893,6 @@
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "628510d27c721510",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regex_test_call|3c3ebff225d569fb|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regex_test_call",
-      "hash": "3c3ebff225d569fb",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regexp_constructor_new|59e28c21d95b85f8|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regexp_constructor_new",
-      "hash": "59e28c21d95b85f8",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regex_test_call|6989c797e63913bb|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regex_test_call",
-      "hash": "6989c797e63913bb",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|8d74eac26e1c4150|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regular_expression_literal",
-      "hash": "8d74eac26e1c4150",
       "occurrence": 1
     },
     {

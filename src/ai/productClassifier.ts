@@ -180,8 +180,34 @@ function hasAccessoryCategorySignal(category: string) {
 }
 
 function startsWithAnyWord(text: string, words: string[]) {
-  const source = text.trim().toLowerCase();
-  return words.some((word) => new RegExp(`^${word}(?:\\b|\\s|$)`, 'iu').test(source));
+  const source = text.trim().toLocaleLowerCase('ru-RU');
+  return words.some((word) => startsWithKnownWord(source, word));
+}
+
+function isPrefixBoundaryChar(char: string | undefined) {
+  if (char === undefined) return true;
+  if (char.trim() === '') return true;
+  if (char >= '0' && char <= '9') return true;
+  return char === '-' ||
+    char === '_' ||
+    char === '/' ||
+    char === '\\' ||
+    char === '.' ||
+    char === ',' ||
+    char === ':' ||
+    char === ';' ||
+    char === '(' ||
+    char === ')' ||
+    char === '[' ||
+    char === ']' ||
+    char === '"' ||
+    char === "'";
+}
+
+function startsWithKnownWord(source: string, word: string) {
+  const normalizedWord = word.trim().toLocaleLowerCase('ru-RU');
+  if (!normalizedWord) return false;
+  return source.startsWith(normalizedWord) && isPrefixBoundaryChar(source[normalizedWord.length]);
 }
 
 function hasCoreMachineTitleSignal(title: string) {
@@ -198,7 +224,14 @@ function hasCoreMachineTitleSignal(title: string) {
     'каток',
     'затирочная',
     'затирочная машина'
-  ]) || /^(?:vibroplita|generator|cutter|rammer|roller|trowel)\b/i.test(title.trim());
+  ]) || startsWithAnyWord(title, [
+    'vibroplita',
+    'generator',
+    'cutter',
+    'rammer',
+    'roller',
+    'trowel'
+  ]);
 }
 
 function hasAccessoryTitleForm(title: string) {

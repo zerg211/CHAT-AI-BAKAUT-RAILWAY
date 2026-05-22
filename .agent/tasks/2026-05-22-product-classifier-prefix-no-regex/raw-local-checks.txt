@@ -1,0 +1,23 @@
+2026-05-22 product classifier prefix no-regex local checks
+
+Command: npm test -- tests/productClassifier.test.ts
+Result: PASS
+Summary: 1 file passed, 2 tests passed
+
+Command: npm test -- tests/productComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/productClassifier.test.ts
+Result: PASS
+Summary: 3 files passed, 19 tests passed
+
+Command: npm run lint:no-regex
+Result: PASS
+Summary: No new regex constructs. Legacy baseline: 1778.
+
+Command: npm run typecheck
+Result: PASS
+
+Command: npm test
+Result: PASS
+Summary: 78 files passed, 639 tests passed
+
+Command: npm run build
+Result: PASS
