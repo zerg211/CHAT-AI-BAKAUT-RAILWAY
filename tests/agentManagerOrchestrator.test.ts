@@ -935,7 +935,10 @@ describe('AgentManagerOrchestrator', () => {
           riskFlags: ['unknown_pump_power']
         };
       },
-      async composeAnswer() {
+      async composeAnswer(input) {
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_unconfirmed_load_no_numeric_selection');
+        expect(input.requiredResponseClauses?.[0]?.sourceRequestId).toBe('generator-load');
+        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('Do not present payload.profile.requiredNominalKw');
         return {
           answerText: 'I should not show generator cards yet because the pump type/model or power is missing.',
           factsUsed: [],
@@ -955,6 +958,10 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'The model incorrectly thinks the partial calculation is enough for cards.'
           }
         };
+      },
+      async reviewAnswer(input) {
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_unconfirmed_load_no_numeric_selection');
+        return { verdict: 'pass', issues: [] };
       }
     });
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, genericPumpWithSearchModel);

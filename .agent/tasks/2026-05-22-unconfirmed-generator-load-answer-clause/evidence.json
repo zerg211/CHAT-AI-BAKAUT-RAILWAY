@@ -1,0 +1,57 @@
+{
+  "taskId": "2026-05-22-unconfirmed-generator-load-answer-clause",
+  "baseline": {
+    "source": ".agent/tasks/2026-05-22-no-suitable-products-eval-contract/production-evals-after-03e9fcc.json",
+    "successes": 5,
+    "resultCount": 6,
+    "deterministicAverage": 0.9828333333333333,
+    "llmAverage": 0.9083333333333333,
+    "failingCase": "vague_generator_no_cards_before_load_profile",
+    "diagnosis": "Answer used numeric kW recommendation/range despite unconfirmed generator load warnings."
+  },
+  "change": {
+    "files": [
+      "src/ai/agentManagerOrchestrator.ts",
+      "tests/agentManagerOrchestrator.test.ts"
+    ],
+    "summary": "Create and enforce a required response clause for unconfirmed generator load calculations so the LLM asks for missing load facts instead of presenting numeric selection recommendations."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "details": "1 file, 27 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1794."
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "details": "Only line-ending warnings."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "76 files, 628 tests"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pending_production_promptfoo"
+  }
+}
