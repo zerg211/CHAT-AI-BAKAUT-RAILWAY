@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1824,
+  "count": 1812,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -69,90 +69,6 @@
       "file": "evals/promptfoo/assertions.cjs",
       "kind": "regular_expression_literal",
       "hash": "4ad9e67e1b99761f",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|534eb39446c87daf|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "534eb39446c87daf",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|4feefc48b6d24bc6|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "4feefc48b6d24bc6",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|f84f32861051d496|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "f84f32861051d496",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|b595e3345826bdf9|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "b595e3345826bdf9",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|c5d8ea0ac1251a77|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "c5d8ea0ac1251a77",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|0e8939b012046175|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "0e8939b012046175",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|802a11683e54d1b9|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "802a11683e54d1b9",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|3116b574ddda5ba2|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "3116b574ddda5ba2",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|split_regex_argument|f11e6ad9ee6726ec|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "split_regex_argument",
-      "hash": "f11e6ad9ee6726ec",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|d2d7409d3240bb7e|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "d2d7409d3240bb7e",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regex_test_call|42973ad45668c54f|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regex_test_call",
-      "hash": "42973ad45668c54f",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/assertions.cjs|regular_expression_literal|2687aeb1d6a5c2a2|1",
-      "file": "evals/promptfoo/assertions.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "2687aeb1d6a5c2a2",
       "occurrence": 1
     },
     {

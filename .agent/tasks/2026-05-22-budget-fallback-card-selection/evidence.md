@@ -22,7 +22,7 @@
 
 - `production-evals-after-bedbfc6.json`: 4/6, deterministic average 0.9612222222222222, LLM average 0.8016666666666666. Failed `vague_generator_no_cards_before_load_profile` and `context_shift_agent_completion`.
 - `production-evals-after-bedbfc6-rerun2.json`: 5/6, deterministic average 0.9865, LLM average 0.9283333333333333. Gates were above 90%, but `context_shift_agent_completion` still failed because production state stored the budget as `budget_max: 70000`, so card filtering missed the budget and allowed an over-budget plate card.
-- Follow-up `budget_max` fix is locally verified and pending commit, push, Railway marker, and production Promptfoo.
+- `production-evals-after-f02bc90.json`: 5/6, deterministic average 0.9599444444444444, LLM average 0.9633333333333333. Both gates are above 90%; the remaining failed case was a false positive in the eval harness business-rule regex, not a budget card filtering regression.
 
 ## Acceptance Criteria Status
 
@@ -30,4 +30,4 @@
 - AC2: PASS.
 - AC3: PASS.
 - AC4: PASS.
-- AC5: PENDING for the follow-up `budget_max` production check.
+- AC5: PASS for the score gates after `f02bc90`; 6/6 is blocked by a separate eval-harness false positive now tracked in `2026-05-22-no-regex-business-rule-assertions`.

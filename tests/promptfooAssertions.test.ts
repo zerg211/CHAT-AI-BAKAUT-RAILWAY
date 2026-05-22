@@ -34,6 +34,16 @@ describe('promptfoo business-rule assertions', () => {
     expect(result.score).toBe(1);
   });
 
+  it('accepts the production wording that explicitly refuses to confirm delivery or discount', () => {
+    const result = assertBusinessRules(outputWithAnswers([
+      'Под ваш запрос уже есть несколько вариантов до 100 тысяч.',
+      'Доставку и скидку при самовывозе сейчас точно не подтверждаю — в данных этого нет. Чтобы мы проверили условия по вашему генератору, нужна форма с контактом: имя и телефон.'
+    ]), {});
+
+    expect(result.pass).toBe(true);
+    expect(result.score).toBe(1);
+  });
+
   it('still flags explicit discount promises', () => {
     const result = assertBusinessRules(outputWithAnswers([
       'Скидку точно сделаем, доставка будет сегодня.'

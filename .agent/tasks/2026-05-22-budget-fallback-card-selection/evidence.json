@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-22-budget-fallback-card-selection",
-  "status": "local_verified_budget_max_fix_pre_push",
+  "status": "production_score_gates_passed",
   "baseHead": "bedbfc6",
   "implementation": [
     "Enforce explicit budget constraints against same-intent catalog candidates when possible.",
@@ -47,7 +47,7 @@
     "AC2": "PASS",
     "AC3": "PASS",
     "AC4": "PASS",
-    "AC5": "PENDING_PRODUCTION_CHECK"
+    "AC5": "PASS"
   },
   "production": {
     "preBudgetCardFallbackPromptfoo": {
@@ -81,6 +81,19 @@
       },
       "failingCase": "context_shift_agent_completion",
       "diagnosis": "Production state used budget_max: 70000; previous budget parser only accepted budget.max and budget."
+    },
+    "afterBudgetMaxFixPromptfoo": {
+      "source": ".agent/tasks/2026-05-22-budget-fallback-card-selection/production-evals-after-f02bc90.summary.json",
+      "successes": 5,
+      "failures": 1,
+      "deterministicAverage": 0.9599444444444444,
+      "llmAverage": 0.9633333333333333,
+      "gates": {
+        "deterministicAbove90": true,
+        "llmAverageAbove90": true
+      },
+      "failingCase": "commercial_delivery_discount_rules",
+      "diagnosis": "Score gates passed after budget_max fix. Remaining failure was a separate false positive in the eval harness business-rule regex against a safe non-confirmation answer."
     }
   }
 }

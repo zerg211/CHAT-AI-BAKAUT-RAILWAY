@@ -1,0 +1,60 @@
+{
+  "taskId": "2026-05-22-no-regex-business-rule-assertions",
+  "status": "local_verified_pre_push",
+  "baseHead": "f02bc90",
+  "implementation": [
+    "Replaced commercial overpromise regex checks with normalized deterministic fragment checks.",
+    "Accepted safe negative commercial statements such as exactly not confirming delivery or discount.",
+    "Replaced specialist handoff regex with fragment checks.",
+    "Updated no-regex baseline after removing 12 legacy regex findings."
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/promptfooAssertions.test.ts",
+      "status": "PASS",
+      "summary": "4 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1812."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "CRLF warnings only"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "76 files / 608 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "production": {
+    "preFixPromptfoo": {
+      "source": ".agent/tasks/2026-05-22-budget-fallback-card-selection/production-evals-after-f02bc90.summary.json",
+      "successes": 5,
+      "failures": 1,
+      "deterministicAverage": 0.9599444444444444,
+      "llmAverage": 0.9633333333333333,
+      "failingCase": "commercial_delivery_discount_rules",
+      "diagnosis": "False positive in regex-based assertBusinessRules against safe non-confirmation wording."
+    }
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PENDING_PRODUCTION_CHECK"
+  }
+}

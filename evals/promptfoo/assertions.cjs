@@ -246,64 +246,143 @@ const criticalAnswerPatterns = [
   /\bundefined\b|\bnull\b/iu
 ];
 
-const overconfidentCommercialPatterns = [
-  /точн\w*\s+есть\s+в\s+налич/iu,
-  /наличие\s+(?:гарантир|подтверждено|точно)/iu,
-  /достав\w*.{0,30}(?:точно|гарантир|завтра|сегодня|за\s+\d+\s*(?:час|дн|руб))/iu,
-  /скидк\w*.{0,30}(?:точно|гарантир|будет|сделаем|\d+\s*%)/iu,
-  /итогов\w*\s+стоимость\s+доставк\w*.{0,40}\d/iu
+const deliveryTopicFragments = ['достав'];
+const discountTopicFragments = ['скид'];
+const stockTopicFragments = ['налич'];
+const commercialTopicFragments = [
+  ...deliveryTopicFragments,
+  ...discountTopicFragments,
+  ...stockTopicFragments,
+  'самовывоз',
+  'услов'
+];
+const specialistHandoffFragments = ['логист', 'менеджер', 'специалист', 'уточн', 'контакт', 'телефон', 'номер', 'форма'];
+
+const safeCommercialNonConfirmationFragments = [
+  'точно не подтверж',
+  'не подтверждаю',
+  'не подтвержу',
+  'не подтверждаем',
+  'не подтвержден',
+  'не подтверждено',
+  'не могу подтверд',
+  'не можем подтверд',
+  'не могу сказать',
+  'не можем сказать',
+  'не обещаю',
+  'не обещаем',
+  'не гарантирую',
+  'не гарантируем',
+  'нельзя подтверд',
+  'нельзя обещ',
+  'нет точных условий',
+  'нет точных данных',
+  'нет данных',
+  'в данных этого нет',
+  'нужно уточнить',
+  'надо уточнить',
+  'требует уточнения',
+  'лучше оставить контакт',
+  'оставить контакт',
+  'форма с контактом',
+  'менеджер проверит',
+  'логистика проверит',
+  'проверим условия',
+  'проверить условия'
 ];
 
-const negatedCommercialConfirmationPatterns = [
-  /(?:точн\w*.{0,30})?(?:подтверд\w*|сказать|обещ\w*|гарантир\w*).{0,50}не\s+(?:могу|можем|получится|получилось|готов(?:ы)?)/iu,
-  /не\s+(?:могу|можем|получится|получилось|готов(?:ы)?).{0,80}(?:точн\w*|подтверд\w*|сказать|обещ\w*|гарантир\w*)/iu,
-  /нельзя\s+.{0,50}(?:точн\w*|гарантир\w*|обещ\w*|подтверд\w*)/iu
-];
+const stockPromiseFragments = ['точно', 'гарантир', 'подтверждено', 'подтверждаем'];
+const deliveryPromiseFragments = ['точно', 'гарантир', 'завтра', 'сегодня', 'будет сегодня', 'будет завтра'];
+const discountPromiseFragments = ['точно', 'гарантир', 'будет', 'сделаем', 'дадим', 'предоставим', '%'];
+
+function isWhitespaceChar(char) {
+  return char === ' ' || char === '\t' || char === '\r' || char === '\n' || char === '\f' || char === '\v' || char === '\u00a0';
+}
+
+function normalizeText(text) {
+  const source = String(text || '').toLocaleLowerCase('ru-RU').split('ё').join('е');
+  let resultText = '';
+  let previousWasSpace = false;
+  for (const char of source) {
+    if (isWhitespaceChar(char)) {
+      if (!previousWasSpace) resultText += ' ';
+      previousWasSpace = true;
+      continue;
+    }
+    resultText += char;
+    previousWasSpace = false;
+  }
+  return resultText.trim();
+}
 
 function splitSentences(text) {
-  return String(text || '')
-    .split(/(?<=[.!?…])\s+|[\r\n]+/u)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
+  const sentences = [];
+  let sentence = '';
+  const pushSentence = () => {
+    const trimmed = sentence.trim();
+    if (trimmed) sentences.push(trimmed);
+    sentence = '';
+  };
+  for (const char of String(text || '')) {
+    if (char === '.' || char === '!' || char === '?' || char === '…' || char === '\r' || char === '\n') {
+      pushSentence();
+      continue;
+    }
+    sentence += char;
+  }
+  pushSentence();
+  return sentences;
 }
 
 function hasNegatedCommercialConfirmation(text) {
-  return negatedCommercialConfirmationPatterns.some((pattern) => pattern.test(text));
+  return textContainsAny(text, safeCommercialNonConfirmationFragments);
 }
 
 function textContainsAny(text, fragments) {
-  const lower = String(text || '').toLocaleLowerCase('ru-RU');
-  return fragments.some((fragment) => lower.includes(String(fragment).toLocaleLowerCase('ru-RU')));
+  const normalized = normalizeText(text);
+  return fragments.some((fragment) => normalized.includes(normalizeText(fragment)));
 }
 
 function hasSafeCommercialNonConfirmation(text) {
-  return textContainsAny(text, ['достав', 'скид', 'налич', 'самовывоз', 'услов']) &&
-    textContainsAny(text, [
-      'не подтвержу',
-      'не могу подтверд',
-      'не можем подтверд',
-      'нет точных условий',
-      'нет точных данных',
-      'нужно уточнить',
-      'надо уточнить',
-      'лучше оставить контакт',
-      'менеджер проверит'
-    ]);
+  return textContainsAny(text, commercialTopicFragments) && hasNegatedCommercialConfirmation(text);
+}
+
+function hasDigit(text) {
+  for (const char of String(text || '')) {
+    const code = char.charCodeAt(0);
+    if (code >= 48 && code <= 57) return true;
+  }
+  return false;
+}
+
+function hasTopicPromise(text, topicFragments, promiseFragments) {
+  return textContainsAny(text, topicFragments) && textContainsAny(text, promiseFragments);
+}
+
+function hasDeliveryPriceOrTimingPromise(text) {
+  if (!textContainsAny(text, deliveryTopicFragments)) return false;
+  if (!hasDigit(text)) return false;
+  return textContainsAny(text, ['за ', 'руб', 'час', 'дн', 'стоимость', 'итогов']);
+}
+
+function findOverconfidentCommercialPatternInSegment(segment) {
+  if (hasSafeCommercialNonConfirmation(segment)) return null;
+  if (hasTopicPromise(segment, stockTopicFragments, stockPromiseFragments)) return 'stock_overpromise';
+  if (hasTopicPromise(segment, deliveryTopicFragments, deliveryPromiseFragments)) return 'delivery_overpromise';
+  if (hasDeliveryPriceOrTimingPromise(segment)) return 'delivery_cost_or_timing_overpromise';
+  if (hasTopicPromise(segment, discountTopicFragments, discountPromiseFragments)) return 'discount_overpromise';
+  if (textContainsAny(segment, ['итогов', 'стоимость']) && textContainsAny(segment, deliveryTopicFragments) && hasDigit(segment)) {
+    return 'delivery_final_cost_overpromise';
+  }
+  return null;
 }
 
 function findOverconfidentCommercialPattern(answer) {
   const sentences = splitSentences(answer);
   const segments = sentences.length ? sentences : [String(answer || '')];
-  for (const pattern of overconfidentCommercialPatterns) {
-    for (const segment of segments) {
-      if (
-        pattern.test(segment) &&
-        !hasNegatedCommercialConfirmation(segment) &&
-        !hasSafeCommercialNonConfirmation(segment)
-      ) {
-        return pattern;
-      }
-    }
+  for (const segment of segments) {
+    const finding = findOverconfidentCommercialPatternInSegment(segment);
+    if (finding) return finding;
   }
   return null;
 }
@@ -377,7 +456,7 @@ function assertBusinessRules(output, context) {
 
   if (config.requireSpecialistHandoff) {
     const combined = answers.join('\n');
-    if (!/(логист|менеджер|специалист|уточн|контакт|телефон|номер|форма)/iu.test(combined)) {
+    if (!textContainsAny(combined, specialistHandoffFragments)) {
       return result(false, 'Commercial scenario did not route delivery/discount/stock terms to a specialist/contact handoff.');
     }
   }
