@@ -553,6 +553,63 @@ function compactCatalogProduct(product: Product, relation: string) {
   };
 }
 
+function productFromVisibleCard(card: ProductCard): Product {
+  return {
+    id: card.id,
+    name: card.name,
+    brand: card.brand,
+    category: card.category,
+    price: card.price,
+    currency: card.currency,
+    imageUrl: card.imageUrl,
+    sourceUrl: card.sourceUrl,
+    specs: card.specs ?? {},
+    retrievalSource: 'unknown'
+  };
+}
+
+function coerceVisibleCardIntent(value: unknown): ProductSelectionClass {
+  if (typeof value !== 'string' || !value.trim()) return 'unknown';
+  const trimmed = value.trim();
+  if (trimmed === 'vibroplate') return 'plate';
+  if (productSelectionClasses.includes(trimmed as ProductSelectionClass)) return trimmed as ProductSelectionClass;
+  return inferProductIntent(trimmed);
+}
+
+function previousVisibleCardProducts(input: {
+  history: Message[];
+  intent: ProductSelectionClass;
+}) {
+  if (isGeneratorProductClass(input.intent)) return [];
+  for (let index = input.history.length - 1; index >= 0; index -= 1) {
+    const metadata = input.history[index]?.metadata as { productCards?: unknown } | undefined;
+    const cards = Array.isArray(metadata?.productCards)
+      ? metadata.productCards.filter((card): card is ProductCard =>
+          Boolean(
+            card &&
+            typeof card === 'object' &&
+            typeof (card as { id?: unknown }).id === 'string' &&
+            typeof (card as { name?: unknown }).name === 'string'
+          )
+        )
+      : [];
+    const products = cards
+      .map(productFromVisibleCard)
+      .filter((product) => productMatchesIntent(product, input.intent))
+      .slice(0, 4);
+    if (products.length) return products;
+  }
+  return [];
+}
+
+function continuityCardIntent(input: {
+  fallback: ProductSelectionClass;
+  decisionProductClass?: string;
+}) {
+  const decisionIntent = coerceVisibleCardIntent(input.decisionProductClass);
+  return decisionIntent === 'unknown' ? input.fallback : decisionIntent;
+}
+
 function catalogPresenceForTargets(targetNames: string[], products: Product[]) {
   return targetNames.map((productName) => {
     const exactMatches = products.filter((product) => productMatchesTargetName(product, productName));
@@ -1618,10 +1675,31 @@ export class AgentManagerOrchestrator {
       answer: initialAnswerContract,
       toolResults
     });
-    const cardSelection = suppressVisibleCardsForReadiness({
+    let cardSelection = suppressVisibleCardsForReadiness({
       cardSelection: initialCardSelection,
       readiness: selectionReadiness
     });
+    if (selectionReadiness.status === 'ready_for_cards' && !cardSelection.products.length) {
+      const previousProducts = previousVisibleCardProducts({
+        history,
+        intent: continuityCardIntent({
+          fallback: initialCardSelection.intent,
+          decisionProductClass: selectionReadiness.decision?.productClass
+        })
+      });
+      if (previousProducts.length) {
+        cardSelection = {
+          ...cardSelection,
+          products: previousProducts,
+          selectedProductIds: previousProducts.map((product) => product.id),
+          answerMentionedProductIds: previousProducts.map((product) => product.id),
+          warnings: uniqueStrings([
+            ...cardSelection.warnings,
+            'product_cards_reused_from_previous_turn'
+          ])
+        };
+      }
+    }
     const finalAnswerContract: AnswerContract = {
       ...answer,
       answerText: finalText,

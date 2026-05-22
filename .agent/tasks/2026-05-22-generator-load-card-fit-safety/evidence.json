@@ -44,12 +44,22 @@
       "status": "PASS"
     }
   ],
+  "productionChecks": [
+    {
+      "command": "PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/?agentHarness=1 npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-generator-load-card-fit-safety/production-evals-after-e2b9731.json",
+      "commit": "e2b9731",
+      "status": "SCORE_GATE_PASS_FORMAL_5_OF_6",
+      "deterministicAverage": 0.9362222222222222,
+      "llmAverage": 0.9549999999999997,
+      "remainingFailure": "plate_retrieval_grounding deterministic completion pattern/card continuity"
+    }
+  ],
   "acceptanceCriteria": {
     "AC1": "PASS",
     "AC2": "PASS",
     "AC3": "PASS",
     "AC4": "PASS",
     "AC5": "PASS",
-    "AC6": "PENDING production Promptfoo after push/Railway deployment"
+    "AC6": "PASS score gate; formal 6/6 tracked in visible-card-continuity task"
   }
 }

@@ -24,6 +24,7 @@ This is not regex or keyword intent matching. The LLM/tool layer decides the loa
 - `npm test`: PASS, 76 files, 621 tests.
 - `git diff --check`: PASS.
 - `npm run build`: PASS.
+- Production Promptfoo after `e2b9731`: score gate PASS, `5/6`, deterministic average `0.9362222222222222`, LLM average `0.9549999999999997`.
 
 ## Acceptance criteria
 
@@ -32,4 +33,4 @@ This is not regex or keyword intent matching. The LLM/tool layer decides the loa
 - AC3: PASS. Orchestrator test proves all-below-load catalog results become `not_found` with `catalog_search_no_generator_load_fit`.
 - AC4: PASS. `npm run lint:no-regex` reports no new regex constructs.
 - AC5: PASS. Local non-OpenAI gates passed.
-- AC6: PENDING. Requires commit, push, Railway deployment, then production Promptfoo/widget check.
+- AC6: PASS for score gate. Production Promptfoo after Railway deploy had deterministic and LLM averages above 90%. Remaining formal `5/6` failure was unrelated plate card continuity and is tracked in `.agent/tasks/2026-05-22-visible-card-continuity/`.

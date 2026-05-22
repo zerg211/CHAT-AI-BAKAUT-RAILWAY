@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AgentManagerOrchestrator, type AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import { emptyNeedState } from '../src/ai/needState.js';
-import type { ConversationSession, ConversationTurn, Message, Product } from '../src/shared/types.js';
+import type { ConversationSession, ConversationTurn, Message, Product, ProductCard } from '../src/shared/types.js';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const turnId = '22222222-2222-4222-8222-222222222222';
@@ -1390,6 +1390,73 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.selectionReadiness?.status).toBe('ready_for_cards');
     expect(metadata.selectionReadiness?.decision?.status).toBe('ready_for_preliminary_cards');
     expect(payload.productCards.length).toBeGreaterThan(0);
+  });
+
+  it('reuses previous visible cards for a ready follow-up without a new catalog search', async () => {
+    const previousCards: ProductCard[] = [{
+      id: 'plate-62',
+      name: 'Виброплита FIRMAN FPC60H 62 кг',
+      brand: 'FIRMAN',
+      category: 'Виброплиты',
+      price: 98800,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/plate-62',
+      specs: { 'рабочая масса, кг': '62' },
+      reasons: ['Найдено в каталоге под текущий запрос.'],
+      caveats: []
+    }];
+    const previousAssistant = message('Подойдут FIRMAN FPC60H и Masalta MS50-2.', 'assistant');
+    previousAssistant.metadata = { productCards: previousCards };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [
+      message('Нужна виброплита для дорожек, таскать буду сам.'),
+      previousAssistant,
+      message('Объясните, что важнее для моей задачи: вес, глубина или подошва, и покажите варианты.')
+    ];
+    const followUpModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks a follow-up about already selected plate options',
+          dialogueUnderstanding: 'previous visible plate cards still match this follow-up',
+          nextStepRationale: 'answer from context without repeating catalog search',
+          requiresTools: false,
+          toolRequests: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Для виброплиты под дорожки важнее вес и удобство переноски, затем размер подошвы и глубина уплотнения. Из уже подходивших вариантов оставляю FIRMAN FPC60H.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: [],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'plate',
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'The previous plate cards still match the current follow-up.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, followUpModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Объясните, что важнее для моей задачи: вес, глубина или подошва, и покажите варианты.'
+    });
+
+    const metadata = payload.metadata as { cardSelection?: { warnings?: string[]; selectedProductIds?: string[] } };
+    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-62']);
+    expect(metadata.cardSelection?.selectedProductIds).toEqual(['plate-62']);
+    expect(metadata.cardSelection?.warnings).toContain('product_cards_reused_from_previous_turn');
   });
 
   it('blocks generator catalog cards below the calculated load profile requirement', async () => {

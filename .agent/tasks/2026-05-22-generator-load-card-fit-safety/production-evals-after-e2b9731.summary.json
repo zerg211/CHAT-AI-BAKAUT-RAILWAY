@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-generator-load-card-fit-safety\\production-evals-after-e2b9731.json",
+  "generatedAt": "2026-05-22T08:44:17.183Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 5,
+    "failures": 1,
+    "errors": 0,
+    "averageScore": 0.9362222222222222,
+    "assertionPassRate": 0.9393939393939394,
+    "assertionPassCount": 31,
+    "assertionFailCount": 2,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.9549999999999997,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

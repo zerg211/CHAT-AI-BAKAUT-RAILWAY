@@ -1,0 +1,56 @@
+{
+  "taskId": "2026-05-22-visible-card-continuity",
+  "preFixProductionEval": {
+    "artifact": ".agent/tasks/2026-05-22-generator-load-card-fit-safety/production-evals-after-e2b9731.json",
+    "summaryArtifact": ".agent/tasks/2026-05-22-generator-load-card-fit-safety/production-evals-after-e2b9731.summary.json",
+    "successes": 5,
+    "failures": 1,
+    "deterministicAverage": 0.9362222222222222,
+    "llmAverage": 0.9549999999999997,
+    "failingCase": "plate_retrieval_grounding",
+    "diagnosis": "The final plate follow-up referenced prior suitable models but had no current visible cards because no new catalog search ran."
+  },
+  "change": {
+    "behavior": "When card readiness is ready and current products are empty, reuse recent visible cards from assistant history if they match the structured product class.",
+    "boundary": "LLM answer contract owns semantic readiness; deterministic code reuses prior card metadata for UI continuity.",
+    "generatorSafety": "Generator continuity is disabled so load-profile filtering is not bypassed.",
+    "regex": "No new regex added."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts tests/agentManagerCardSelection.test.ts",
+      "status": "PASS",
+      "details": "41 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "details": "No new regex constructs. Legacy baseline: 1794."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "details": "76 files passed, 623 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PENDING production Promptfoo after push/Railway deployment"
+  }
+}
