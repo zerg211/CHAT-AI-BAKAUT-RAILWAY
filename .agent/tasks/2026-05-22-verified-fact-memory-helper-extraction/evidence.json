@@ -38,7 +38,23 @@
   },
   "productionPromptfoo": {
     "requiredBeforeCommit": false,
-    "status": "not_run_pre_push",
-    "reason": "Behavior-preserving extraction; production Promptfoo can only run after commit, push, and Railway marker, not localhost."
+    "status": "pass",
+    "baseUrl": "https://chat-ai-production-3057.up.railway.app",
+    "commit": "9d39977886c5a267ba6f4d3298138aeace178daf",
+    "railwayMarker": "pass",
+    "resultCount": 6,
+    "successes": 6,
+    "failures": 0,
+    "errors": 0,
+    "deterministicAverage": 0.9902222222222221,
+    "llmAverage": 0.945,
+    "gates": {
+      "deterministicAbove90": true,
+      "llmAverageAbove90": true,
+      "llmAverageUsable": true
+    },
+    "summaryArtifact": ".agent/tasks/2026-05-22-verified-fact-memory-helper-extraction/production-promptfoo-9d39977.summary.json",
+    "rawArtifactLocal": ".agent/tasks/2026-05-22-verified-fact-memory-helper-extraction/production-promptfoo-9d39977.json",
+    "rawArtifactBytes": 4174052
   }
 }

@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-verified-fact-memory-helper-extraction\\production-promptfoo-9d39977.json",
+  "generatedAt": "2026-05-22T15:58:07.509Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 6,
+    "failures": 0,
+    "errors": 0,
+    "averageScore": 0.9902222222222221,
+    "assertionPassRate": 1,
+    "assertionPassCount": 33,
+    "assertionFailCount": 0,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.945,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

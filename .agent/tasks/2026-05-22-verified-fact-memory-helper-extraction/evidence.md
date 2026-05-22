@@ -56,4 +56,31 @@ PASS
 
 ## Production eval
 
-Production Promptfoo is not a pre-commit local gate for this behavior-preserving extraction. If run, it must use the Railway production base URL after commit, push, and Railway marker, not localhost.
+Production Promptfoo was run after commit, push, and Railway marker against:
+
+`https://chat-ai-production-3057.up.railway.app`
+
+Railway marker:
+
+```text
+18:54:03 commit=9d39977886c5a267ba6f4d3298138aeace178daf branch=main
+MARKER_OK
+```
+
+Production Promptfoo:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-verified-fact-memory-helper-extraction/production-promptfoo-9d39977.json
+PASS: 6/6
+Deterministic average: 0.9902222222222221
+LLM average: 0.945
+```
+
+Committed summary artifact:
+
+- `.agent/tasks/2026-05-22-verified-fact-memory-helper-extraction/production-promptfoo-9d39977.summary.json`
+
+Local raw artifact:
+
+- `.agent/tasks/2026-05-22-verified-fact-memory-helper-extraction/production-promptfoo-9d39977.json`
+- Size: `4174052` bytes
