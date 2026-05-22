@@ -1216,7 +1216,7 @@ async function validateVisualStartControlEvidence(input: {
     },
     ...imageCandidates.flatMap((candidate, index) => [
       { type: 'input_text', text: `Image ${index + 1}: ${candidate.imageUrl}` },
-      { type: 'input_image', image_url: candidate.openAiImageUrl }
+      { type: 'input_image', image_url: candidate.openAiImageUrl, detail: 'auto' }
     ])
   ];
   try {

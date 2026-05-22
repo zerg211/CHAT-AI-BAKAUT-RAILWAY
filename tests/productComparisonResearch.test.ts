@@ -548,6 +548,7 @@ describe('product comparison research', () => {
     expect(createStructuredJsonResponse.mock.calls[1][0].stage).toBe('source_visual_start_control_validation');
     expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('input_image');
     expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('data:image/jpeg;base64');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('"detail":"auto"');
     expect(JSON.stringify(createStructuredJsonResponse.mock.calls[1][0].request.input)).toContain('rd4910e-key-panel.jpg');
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
