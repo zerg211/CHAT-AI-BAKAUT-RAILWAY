@@ -148,6 +148,20 @@ function generatorWithPower(id: string, powerKw: string): Product {
   };
 }
 
+function plateWithWeight(id: string, weightKg: number): Product {
+  return {
+    id,
+    name: `Виброплита ${weightKg} кг`,
+    brand: 'ТСС',
+    category: 'Виброплиты',
+    price: 60000 + weightKg,
+    currency: 'RUB',
+    specs: {
+      'рабочая масса, кг': String(weightKg)
+    }
+  };
+}
+
 describe('AgentManager visible card readiness', () => {
   it('keeps non-generator catalog cards when answer selection readiness is not applicable', () => {
     const readiness = assessVisibleCardReadiness({
@@ -376,5 +390,52 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(ranked.map((product) => product.id)).toEqual(['five-half-kw', 'five-kw', 'seven-kw']);
+  });
+
+  it('keeps self-loading plate card ranking without regex parsing', () => {
+    const light = plateWithWeight('light-60', 60);
+    const heavy = plateWithWeight('heavy-110', 110);
+
+    const ranked = rankCatalogProductsByNumericFit({
+      products: [heavy, light],
+      intent: 'plate',
+      query: 'сам буду грузить в машину',
+      semanticContext: '',
+      userMessage: ''
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['light-60', 'heavy-110']);
+  });
+
+  it('keeps small-site plate card ranking without regex parsing', () => {
+    const light = plateWithWeight('light-50', 50);
+    const mid = plateWithWeight('mid-83', 83);
+    const heavy = plateWithWeight('heavy-160', 160);
+
+    const ranked = rankCatalogProductsByNumericFit({
+      products: [heavy, light, mid],
+      intent: 'plate',
+      query: 'въезд на участке, плитка и песок',
+      semanticContext: '',
+      userMessage: ''
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['mid-83', 'light-50', 'heavy-160']);
+  });
+
+  it('keeps heavy-site signals from applying the small-site plate range', () => {
+    const light = plateWithWeight('light-50', 50);
+    const mid = plateWithWeight('mid-83', 83);
+    const heavy = plateWithWeight('heavy-160', 160);
+
+    const ranked = rankCatalogProductsByNumericFit({
+      products: [heavy, light, mid],
+      intent: 'plate',
+      query: 'въезд и плитка, но объект тяжелый, нужна реверсивная плита',
+      semanticContext: '',
+      userMessage: ''
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['heavy-160', 'light-50', 'mid-83']);
   });
 });

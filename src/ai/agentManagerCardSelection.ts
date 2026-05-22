@@ -329,16 +329,99 @@ function generatorPowerFitScore(product: Product, range: { min: number; max: num
   return score;
 }
 
+const selfLoadingPlateFragments = [
+  'self-loading',
+  'self loading',
+  'selfloading',
+  'load it myself',
+  'loading it myself',
+  'load myself',
+  'loading myself',
+  'one-person',
+  'one person',
+  'oneperson',
+  'в одного',
+  'одному'
+];
+
+const smallPlateSiteFragments = [
+  'small site',
+  'small area',
+  'small driveway',
+  'driveway',
+  'paving',
+  'slab',
+  'sand',
+  'crushed stone',
+  'garden',
+  'yard',
+  'въезд',
+  'плитк',
+  'песок',
+  'щеб',
+  'двор',
+  'дорож'
+];
+
+const heavyPlateSiteFragments = [
+  'reversible',
+  'heavy-duty',
+  'heavy duty',
+  'industrial',
+  'road base',
+  'parking',
+  'crew',
+  'реверсив',
+  'тяж',
+  'дорог',
+  'парков',
+  'каток',
+  'бригад',
+  'объект'
+];
+
+function isHintWhitespace(char: string) {
+  return char === ' ' || char === '\t' || char === '\r' || char === '\n' || char === '\f' || char === '\v' || char === '\u00a0';
+}
+
+function normalizedHintText(text: string) {
+  const source = text.toLocaleLowerCase('ru-RU').split('ё').join('е');
+  let normalized = '';
+  let previousWasSpace = false;
+  for (const char of source) {
+    if (isHintWhitespace(char)) {
+      if (!previousWasSpace) normalized += ' ';
+      previousWasSpace = true;
+      continue;
+    }
+    normalized += char;
+    previousWasSpace = false;
+  }
+  return normalized.trim();
+}
+
+function hintTextContainsAny(normalizedText: string, fragments: string[]) {
+  return fragments.some((fragment) => normalizedText.includes(normalizedHintText(fragment)));
+}
+
+function hintTextContainsAll(normalizedText: string, fragments: string[]) {
+  return fragments.every((fragment) => normalizedText.includes(normalizedHintText(fragment)));
+}
+
 function isSelfLoadingPlateText(text: string) {
-  return /(?:self[-\s]?loading|load(?:ing)?\s+(?:it\s+)?myself|one[-\s]?person|\u0433\u0440\u0443\u0437\w{0,16}[^.!?\n]{0,35}\u0441\u0430\u043c|\u0441\u0430\u043c[^.!?\n]{0,35}\u0433\u0440\u0443\u0437|\u0432\s+\u043e\u0434\u043d\u043e\u0433\u043e|\u043e\u0434\u043d\u043e\u043c\u0443)/iu.test(text);
+  const normalized = normalizedHintText(text);
+  return hintTextContainsAny(normalized, selfLoadingPlateFragments) ||
+    hintTextContainsAll(normalized, ['груз', 'сам']);
 }
 
 function isSmallPlateSiteText(text: string) {
-  return /(?:small\s+(?:site|area|driveway)|driveway|paving|slabs?|sand|crushed\s+stone|garden|yard|\u043d\u0435\u0431\u043e\u043b\u044c\u0448\w{0,12}\s+\u043f\u043b\u043e\u0449\u0430\u0434|\u0432\u044a\u0435\u0437\u0434|\u043f\u043b\u0438\u0442\u043a|\u043f\u0435\u0441\u043e\u043a|\u0449\u0435\u0431|\u0434\u0432\u043e\u0440|\u0434\u043e\u0440\u043e\u0436)/iu.test(text);
+  const normalized = normalizedHintText(text);
+  return hintTextContainsAny(normalized, smallPlateSiteFragments) ||
+    hintTextContainsAll(normalized, ['небольш', 'площад']);
 }
 
 function isHeavyPlateSiteText(text: string) {
-  return /(?:reversible|heavy[-\s]?duty|industrial|road\s+base|parking|crew|\u0440\u0435\u0432\u0435\u0440\u0441\u0438\u0432|\u0442\u044f\u0436[^\s,.!?]*|\u0434\u043e\u0440\u043e\u0433|\u043f\u0430\u0440\u043a\u043e\u0432|\u043a\u0430\u0442\u043e\u043a|\u0431\u0440\u0438\u0433\u0430\u0434|\u043e\u0431\u044a\u0435\u043a\u0442)/iu.test(text);
+  return hintTextContainsAny(normalizedHintText(text), heavyPlateSiteFragments);
 }
 
 function requestedPlateWeightRangeKg(input: {

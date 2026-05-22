@@ -1,0 +1,53 @@
+{
+  "taskId": "2026-05-22-no-regex-card-selection-plate-hints",
+  "status": "local_verified",
+  "baseHead": "f33a6fd",
+  "implementation": [
+    "Replaced regex plate hint checks in agentManagerCardSelection with normalized deterministic fragment checks.",
+    "Kept public APIs stable.",
+    "Added self-loading, small-site, and heavy-site ranking regression tests.",
+    "Updated no-regex baseline after removing six legacy findings from agentManagerCardSelection."
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts",
+      "status": "PASS",
+      "summary": "12 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1806."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "CRLF warnings only"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "76 files / 612 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS"
+  },
+  "notes": [
+    "src/ai/productComparisonResearch.ts and tests/productComparisonResearch.test.ts had separate uncommitted changes and were not staged for this pass.",
+    "Production Promptfoo was not rerun for this local-only refactor pass because public behavior was preserved through deterministic ranking tests."
+  ]
+}
