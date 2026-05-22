@@ -1,0 +1,57 @@
+{
+  "taskId": "2026-05-22-product-classifier-oil-liter-parser-no-regex",
+  "date": "2026-05-22",
+  "change": {
+    "files": [
+      "src/ai/productClassifier.ts",
+      "tests/productClassifier.test.ts",
+      "scripts/no-regex-baseline.json"
+    ],
+    "summary": "Replaced oil viscosity and liter extraction regexes with deterministic scanners while keeping public exports stable."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/productClassifier.test.ts",
+      "status": "PASS",
+      "summary": "1 test file, 10 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs; baseline 1767 after update"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "78 test files, 647 tests"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "noRegexBaseline": {
+    "before": 1771,
+    "after": 1767,
+    "removedFindings": 4
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PENDING"
+  },
+  "productionEval": {
+    "status": "PENDING"
+  }
+}

@@ -257,8 +257,15 @@ function hasCoreMachineCategorySignal(category: string) {
 }
 
 export function oilViscosities(text: string) {
-  return [...text.toLowerCase().matchAll(/\b\d{1,2}w-?\d{2}\b/g)]
-    .map((match) => match[0].replace('-', ''));
+  const values: string[] = [];
+  const source = text.toLocaleLowerCase('ru-RU');
+  for (let index = 0; index < source.length; index += 1) {
+    const parsed = viscosityAt(source, index);
+    if (!parsed) continue;
+    values.push(parsed.value);
+    index = parsed.end - 1;
+  }
+  return values;
 }
 
 export function hasOilProductSignal(text: string) {
@@ -266,10 +273,14 @@ export function hasOilProductSignal(text: string) {
 }
 
 export function requestedLiters(text: string) {
-  const match = text.toLowerCase().match(/(\d+(?:[,.]\d+)?)\s*(?:л|l|литр)/i);
-  if (!match) return undefined;
-  const liters = Number(match[1].replace(',', '.'));
-  return Number.isFinite(liters) && liters > 0 ? liters : undefined;
+  const source = text.toLocaleLowerCase('ru-RU');
+  for (let index = 0; index < source.length; index += 1) {
+    const parsed = loosePositiveNumberAt(source, index);
+    if (!parsed) continue;
+    if (literUnitAt(source, skipUnitWhitespace(source, parsed.end))) return parsed.value;
+    index = parsed.end;
+  }
+  return undefined;
 }
 
 export function productLiters(product: Product) {
@@ -295,6 +306,35 @@ function firstLoosePositiveNumber(value: string) {
 
 function isDigit(char: string | undefined) {
   return char !== undefined && char >= '0' && char <= '9';
+}
+
+function isAsciiWordChar(char: string | undefined) {
+  if (char === undefined) return false;
+  const lower = char.toLowerCase();
+  return isDigit(char) || lower === '_' || (lower >= 'a' && lower <= 'z');
+}
+
+function hasAsciiWordBoundary(value: string, start: number, end: number) {
+  return !isAsciiWordChar(value[start - 1]) && !isAsciiWordChar(value[end]);
+}
+
+function viscosityAt(value: string, index: number) {
+  if (!isDigit(value[index])) return undefined;
+  let cursor = index;
+  let lead = '';
+  while (cursor < value.length && isDigit(value[cursor]) && lead.length <= 2) {
+    lead += value[cursor];
+    cursor += 1;
+  }
+  if (lead.length < 1 || lead.length > 2) return undefined;
+  if (value[cursor] !== 'w') return undefined;
+  cursor += 1;
+  if (value[cursor] === '-') cursor += 1;
+  if (!isDigit(value[cursor]) || !isDigit(value[cursor + 1])) return undefined;
+  const suffix = `${value[cursor]}${value[cursor + 1]}`;
+  cursor += 2;
+  if (!hasAsciiWordBoundary(value, index, cursor)) return undefined;
+  return { value: `${lead}w${suffix}`, end: cursor };
 }
 
 function loosePositiveNumberAt(value: string, index: number) {
@@ -334,6 +374,11 @@ function skipUnitWhitespace(value: string, index: number) {
   let cursor = index;
   while (cursor < value.length && value[cursor]?.trim() === '') cursor += 1;
   return cursor;
+}
+
+function literUnitAt(value: string, index: number) {
+  const tail = value.slice(index).toLocaleLowerCase('ru-RU');
+  return tail.startsWith('l') || tail.startsWith(fromEscaped('\\u043b'));
 }
 
 function weightUnitAt(value: string, index: number) {

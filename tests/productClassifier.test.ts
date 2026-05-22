@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractWeightKg, parseLoosePositiveNumber, productMatchesIntent } from '../src/ai/productClassifier.js';
+import {
+  extractWeightKg,
+  oilViscosities,
+  parseLoosePositiveNumber,
+  productLiters,
+  productMatchesIntent,
+  requestedLiters
+} from '../src/ai/productClassifier.js';
 import type { Product } from '../src/shared/types.js';
 
 function product(name: string, overrides: Partial<Product> = {}): Product {
@@ -54,5 +61,25 @@ describe('productClassifier weight parsing without regex', () => {
 
   it('ignores model digits not followed by a weight unit', () => {
     expect(extractWeightKg(product('Vibroplita WP60L compact model'))).toBeUndefined();
+  });
+});
+
+describe('productClassifier oil and liter parsing without regex', () => {
+  it('extracts and normalizes explicit oil viscosity tokens', () => {
+    expect(oilViscosities('SAE 10W-40 для генератора, можно 5w30')).toEqual(['10w40', '5w30']);
+  });
+
+  it('keeps model-like embedded text from being treated as viscosity', () => {
+    expect(oilViscosities('model x10w40y')).toEqual([]);
+  });
+
+  it('extracts requested oil package volume from Russian and English units', () => {
+    expect(requestedLiters('нужно масло 1,5 л')).toBe(1.5);
+    expect(requestedLiters('take 2l oil')).toBe(2);
+    expect(requestedLiters('масло 4 литра')).toBe(4);
+  });
+
+  it('reads product volume through the stable productLiters API', () => {
+    expect(productLiters(product('Масло SAE 10W-40 1 л'))).toBe(1);
   });
 });

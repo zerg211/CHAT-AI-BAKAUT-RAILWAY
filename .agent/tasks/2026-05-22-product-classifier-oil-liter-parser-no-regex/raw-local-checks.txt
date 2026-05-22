@@ -1,0 +1,29 @@
+Task: 2026-05-22-product-classifier-oil-liter-parser-no-regex
+Date: 2026-05-22
+
+Focused check:
+- npm test -- tests/productClassifier.test.ts
+- Result: PASS, 1 test file, 10 tests.
+
+No-regex guard before baseline update:
+- npm run lint:no-regex
+- Result: PASS. No new regex constructs. Legacy baseline 1771. Legacy findings removed since baseline: 4.
+
+Baseline update:
+- npm run lint:no-regex -- --update-baseline
+- Result: PASS. Updated scripts/no-regex-baseline.json with 1767 legacy findings.
+
+Local non-OpenAI gates:
+- npm run lint:no-regex
+- Result: PASS. No new regex constructs. Legacy baseline: 1767.
+- npm run typecheck
+- Result: PASS.
+- npm test
+- Result: PASS. 78 test files, 647 tests.
+- npm run build
+- Result: PASS. Vite client build and server TypeScript build completed.
+- git diff --check
+- Result: PASS. Only CRLF conversion warnings from Git; no whitespace errors.
+
+Production eval:
+- Pending until commit, push, and Railway deployment marker.
