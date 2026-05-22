@@ -151,12 +151,17 @@ describe('product comparison research', () => {
 
     expect(actual.usedWebSearch).toBe(true);
     expect(actual.facts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceType: 'web', productName: 'FIRMAN RD3910E' })
+      expect.objectContaining({ sourceType: 'web', productName: 'FIRMAN RD3910E' }),
+      expect.objectContaining({ sourceType: 'catalog', attribute: 'manual starter', value: 'есть' })
+    ]));
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'manual starter', status: 'confirmed', value: 'есть' })
     ]));
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'catalog_fact_missing_needs_web_research',
       'catalog_fact_extraction_used',
-      'catalog_fact_extraction_needed_web_research'
+      'catalog_fact_extraction_needed_web_research',
+      'catalog_starter_specs_extracted'
     ]));
     expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
     const webCall = createStructuredJsonResponse.mock.calls[1][0];

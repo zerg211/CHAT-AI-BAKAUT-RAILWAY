@@ -44,6 +44,8 @@ export interface ProductComparisonResearchResult {
   warnings: string[];
 }
 
+type ResearchCoverageItem = ProductComparisonResearchAnswerGuidance['coverage'][number];
+
 function productResearchContext(products: Product[]) {
   return products.map((product) => ({
     id: product.id,
@@ -88,6 +90,134 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function normalizedText(value: unknown) {
+  return String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU');
+}
+
+function textIncludesAny(value: unknown, fragments: string[]) {
+  const text = normalizedText(value);
+  return fragments.some((fragment) => {
+    const normalizedFragment = normalizedText(fragment);
+    return normalizedFragment.length > 0 && text.includes(normalizedFragment);
+  });
+}
+
+const startControlNeedles = [
+  'starter',
+  'start',
+  'ignition',
+  'key',
+  'button',
+  'manual',
+  'recoil',
+  'стартер',
+  'запуск',
+  'пуск',
+  'ключ',
+  'кноп',
+  'ручн',
+  'электростартер'
+];
+
+const manualStarterNeedles = ['manual starter', 'recoil starter', 'manual recoil', 'ручной стартер', 'ручной запуск', 'ручн'];
+const starterFieldNeedles = ['starter', 'start', 'пуск', 'запуск', 'стартер'];
+
+function startControlQuestionRelevant(userMessage: string, comparisonAttributes: string[]) {
+  return textIncludesAny([userMessage, ...comparisonAttributes].join(' '), startControlNeedles);
+}
+
+function compactEvidence(value: unknown, limit = 220) {
+  const text = String(value ?? '').trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function scalarCatalogEntries(value: unknown, prefix: string): Array<{ path: string; value: string }> {
+  if (value === null || value === undefined) return [];
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return [{ path: prefix, value: String(value) }];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => scalarCatalogEntries(item, `${prefix}[${index}]`));
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).flatMap(([key, item]) =>
+      scalarCatalogEntries(item, prefix ? `${prefix}.${key}` : key)
+    );
+  }
+  return [];
+}
+
+function manualStarterEvidenceFromProduct(product: Product) {
+  const evidence: string[] = [];
+  for (const entry of scalarCatalogEntries(product.specs, 'specs')) {
+    const combined = `${entry.path} ${entry.value}`;
+    if (textIncludesAny(combined, starterFieldNeedles) && textIncludesAny(combined, manualStarterNeedles)) {
+      evidence.push(`${entry.path}: ${compactEvidence(entry.value)}`);
+    }
+  }
+  if (
+    typeof product.description === 'string' &&
+    textIncludesAny(product.description, starterFieldNeedles) &&
+    textIncludesAny(product.description, manualStarterNeedles)
+  ) {
+    evidence.push(`description: ${compactEvidence(product.description)}`);
+  }
+  return uniqueStrings(evidence);
+}
+
+function resultAlreadyHasSeparateManualStarterFact(result: ProductComparisonResearchResult) {
+  const factTexts = result.facts.map((fact) => [fact.attribute, fact.value].join(' '));
+  const coverageTexts = result.answerGuidance.coverage
+    .filter((item) => item.status === 'confirmed')
+    .map((item) => [item.attribute, item.value].join(' '));
+  return [...factTexts, ...coverageTexts].some((text) => textIncludesAny(text, manualStarterNeedles));
+}
+
+function factKey(fact: ProductComparisonResearchFact) {
+  return [
+    fact.productName,
+    fact.attribute,
+    fact.value,
+    fact.sourceType,
+    fact.evidence,
+    fact.sourceUrl ?? ''
+  ].join('|');
+}
+
+function coverageKey(item: ResearchCoverageItem) {
+  return [
+    item.attribute,
+    item.status,
+    item.value,
+    item.evidence,
+    item.sourceUrl ?? ''
+  ].join('|');
+}
+
+function uniqueFacts(facts: ProductComparisonResearchFact[]) {
+  const seen = new Set<string>();
+  const output: ProductComparisonResearchFact[] = [];
+  for (const fact of facts) {
+    const key = factKey(fact);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(fact);
+  }
+  return output;
+}
+
+function uniqueCoverage(items: ResearchCoverageItem[]) {
+  const seen = new Set<string>();
+  const output: ResearchCoverageItem[] = [];
+  for (const item of items) {
+    const key = coverageKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(item);
+  }
+  return output;
 }
 
 function exactTargetAliases(target: string) {
@@ -250,6 +380,53 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
   };
 }
 
+function augmentCatalogStarterFacts(input: {
+  result: ProductComparisonResearchResult;
+  products: Product[];
+  userMessage: string;
+  comparisonAttributes: string[];
+}) {
+  if (!startControlQuestionRelevant(input.userMessage, input.comparisonAttributes)) return input.result;
+  if (resultAlreadyHasSeparateManualStarterFact(input.result)) return input.result;
+
+  const additions = input.products.flatMap((product) =>
+    manualStarterEvidenceFromProduct(product).map((evidence) => ({
+      product,
+      evidence
+    }))
+  );
+  if (!additions.length) return input.result;
+
+  const facts = additions.map(({ product, evidence }): ProductComparisonResearchFact => ({
+    productName: product.name,
+    attribute: 'manual starter',
+    value: 'есть',
+    sourceType: 'catalog',
+    confidence: 'high',
+    evidence,
+    sourceUrl: product.sourceUrl ?? undefined,
+    sourceTitle: product.name
+  }));
+  const coverage = additions.map(({ product, evidence }): ResearchCoverageItem => ({
+    attribute: 'manual starter',
+    status: 'confirmed',
+    value: 'есть',
+    evidence,
+    sourceUrl: product.sourceUrl ?? undefined,
+    sourceTitle: product.name
+  }));
+
+  return {
+    ...input.result,
+    facts: uniqueFacts([...input.result.facts, ...facts]),
+    answerGuidance: {
+      ...input.result.answerGuidance,
+      coverage: uniqueCoverage([...input.result.answerGuidance.coverage, ...coverage])
+    },
+    warnings: uniqueStrings([...input.result.warnings, 'catalog_starter_specs_extracted'])
+  };
+}
+
 function productComparisonResearchJsonFormat(name: string) {
   return {
     format: {
@@ -375,12 +552,19 @@ function mergeCatalogAndWebResearch(
   webResult: ProductComparisonResearchResult
 ): ProductComparisonResearchResult {
   if (!catalogResult) return webResult;
-  const answerGuidance = resultHasUsableGuidance(webResult)
+  const primaryAnswerGuidance = resultHasUsableGuidance(webResult)
     ? webResult.answerGuidance
     : catalogResult.answerGuidance;
+  const answerGuidance = {
+    ...primaryAnswerGuidance,
+    coverage: uniqueCoverage([
+      ...catalogResult.answerGuidance.coverage,
+      ...primaryAnswerGuidance.coverage
+    ])
+  };
   return {
     usedWebSearch: webResult.usedWebSearch,
-    facts: [...catalogResult.facts, ...webResult.facts],
+    facts: uniqueFacts([...catalogResult.facts, ...webResult.facts]),
     conflicts: [...catalogResult.conflicts, ...webResult.conflicts],
     answerGuidance,
     summaryForAnswer: uniqueStrings([
@@ -453,10 +637,15 @@ async function extractExactCatalogProductFacts(input: {
     stage: 'catalog_product_fact_extraction',
     signal: input.signal
   });
-  return {
-    ...normalizeResearchParsed(parsed),
-    usedWebSearch: false
-  };
+  return augmentCatalogStarterFacts({
+    result: {
+      ...normalizeResearchParsed(parsed),
+      usedWebSearch: false
+    },
+    products: input.products,
+    userMessage: input.userMessage,
+    comparisonAttributes: input.comparisonAttributes
+  });
 }
 
 export async function researchProductComparisonFacts(input: {
