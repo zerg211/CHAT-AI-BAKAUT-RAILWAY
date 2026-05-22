@@ -50,5 +50,10 @@
   "productionPromptfoo": {
     "required": false,
     "reason": "Deterministic catalog sitemap ingest refactor outside the chat answer runtime."
+  },
+  "railwayMarker": {
+    "status": "pass",
+    "commit": "04b205b9615727bcfb10d608c566a653bce6006f",
+    "branch": "main"
   }
 }
