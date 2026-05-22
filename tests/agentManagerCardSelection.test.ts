@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assessVisibleCardReadiness,
+  rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
   suppressVisibleCardsForReadiness
 } from '../src/ai/agentManagerCardSelection.js';
@@ -132,6 +133,20 @@ const generator: Product = {
   currency: 'RUB',
   specs: {}
 };
+
+function generatorWithPower(id: string, powerKw: string): Product {
+  return {
+    id,
+    name: `Generator gasoline ${powerKw} kW`,
+    brand: 'TSS',
+    category: 'Generators',
+    price: 90000,
+    currency: 'RUB',
+    specs: {
+      'Nominal power': `${powerKw} kW`
+    }
+  };
+}
 
 describe('AgentManager visible card readiness', () => {
   it('keeps non-generator catalog cards when answer selection readiness is not applicable', () => {
@@ -270,5 +285,37 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.products).toEqual([plate]);
     expect(selection.droppedProductIds).toContain('plate-over-budget');
     expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
+  });
+
+  it('keeps generator card ranking for explicit power ranges without regex parsing', () => {
+    const fourKw = generatorWithPower('four-kw', '4.0');
+    const fiveKw = generatorWithPower('five-kw', '5.0');
+    const eightKw = generatorWithPower('eight-kw', '8.0');
+
+    const ranked = rankCatalogProductsByNumericFit({
+      products: [eightKw, fourKw, fiveKw],
+      intent: 'generator',
+      query: 'show gasoline generator 4-6 kw',
+      semanticContext: '',
+      userMessage: ''
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['five-kw', 'four-kw', 'eight-kw']);
+  });
+
+  it('keeps generator card ranking for exact decimal power requests without regex parsing', () => {
+    const fiveKw = generatorWithPower('five-kw', '5.0');
+    const fiveHalfKw = generatorWithPower('five-half-kw', '5.5');
+    const sevenKw = generatorWithPower('seven-kw', '7.0');
+
+    const ranked = rankCatalogProductsByNumericFit({
+      products: [sevenKw, fiveKw, fiveHalfKw],
+      intent: 'generator',
+      query: 'need generator 5,5 kw',
+      semanticContext: '',
+      userMessage: ''
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['five-half-kw', 'five-kw', 'seven-kw']);
   });
 });

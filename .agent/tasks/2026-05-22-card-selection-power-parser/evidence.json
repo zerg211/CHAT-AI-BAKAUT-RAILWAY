@@ -1,0 +1,51 @@
+{
+  "taskId": "2026-05-22-card-selection-power-parser",
+  "recordedAt": "2026-05-22T09:15:23+03:00",
+  "baseHead": "dde22b8",
+  "status": "pass",
+  "changes": [
+    "Replaced requestedPowerRangeKw regex matching with deterministic decimal/range/unit scanning.",
+    "Added focused card-selection tests for explicit range and exact decimal generator power ranking.",
+    "Updated no-regex baseline after reviewing four removed legacy regex findings."
+  ],
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts",
+      "status": "pass",
+      "summary": "1 test file passed, 7 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex -- --update-baseline && npm run lint:no-regex",
+      "status": "pass",
+      "summary": "Baseline updated to 1824 legacy findings; no new regex constructs"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass",
+      "summary": "tsc --noEmit passed for app and server configs"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "summary": "73 test files passed, 596 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass",
+      "summary": "vite build and server TypeScript build passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "summary": "No whitespace errors; CRLF warnings only"
+    }
+  ],
+  "productionChecks": [
+    {
+      "command": "not run",
+      "status": "not_required",
+      "summary": "No prompt/API/widget behavior changed; focused deterministic parity tests cover the parser replacement"
+    }
+  ],
+  "verdict": "pass"
+}

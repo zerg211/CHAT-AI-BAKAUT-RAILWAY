@@ -231,21 +231,83 @@ function parseKw(value: string) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function isWhitespaceChar(char: string | undefined) {
+  return char !== undefined && char.trim() === '';
+}
+
+function skipWhitespace(value: string, index: number) {
+  let cursor = index;
+  while (cursor < value.length && isWhitespaceChar(value[cursor])) cursor += 1;
+  return cursor;
+}
+
+function decimalNumberAt(value: string, index: number) {
+  let cursor = index;
+  let raw = '';
+  let hasDigit = false;
+  let hasDecimal = false;
+  while (cursor < value.length) {
+    const char = value[cursor];
+    if (char >= '0' && char <= '9') {
+      raw += char;
+      hasDigit = true;
+      cursor += 1;
+      continue;
+    }
+    if ((char === '.' || char === ',') && !hasDecimal) {
+      raw += '.';
+      hasDecimal = true;
+      cursor += 1;
+      continue;
+    }
+    break;
+  }
+  if (!hasDigit) return null;
+  const parsed = parseKw(raw);
+  return parsed === undefined ? null : { value: parsed, end: cursor };
+}
+
+function rangeSeparatorEnd(value: string, index: number) {
+  const char = value[index];
+  if (char === '-' || char === '–' || char === '—') return index + 1;
+  return value.slice(index, index + 2).toLocaleLowerCase('ru-RU') === 'до'
+    ? index + 2
+    : undefined;
+}
+
+function hasPowerUnitAt(value: string, index: number) {
+  const tail = value.slice(index).toLocaleLowerCase('ru-RU');
+  return ['квт', 'kw', 'kva', 'ква'].some((unit) => tail.startsWith(unit));
+}
+
 function requestedPowerRangeKw(text: string) {
-  const range = text.match(/(\d+(?:[,.]\d+)?)\s*(?:-|–|—|до)\s*(\d+(?:[,.]\d+)?)\s*(?:кВт|kw|kva|ква)/iu);
-  if (range) {
-    const left = parseKw(range[1]);
-    const right = parseKw(range[2]);
-    if (left !== undefined && right !== undefined) {
+  for (let index = 0; index < text.length; index += 1) {
+    const left = decimalNumberAt(text, index);
+    if (!left) continue;
+    const separatorEnd = rangeSeparatorEnd(text, skipWhitespace(text, left.end));
+    if (separatorEnd === undefined) {
+      index = left.end;
+      continue;
+    }
+    const right = decimalNumberAt(text, skipWhitespace(text, separatorEnd));
+    if (right && hasPowerUnitAt(text, skipWhitespace(text, right.end))) {
       return {
-        min: Math.min(left, right),
-        max: Math.max(left, right)
+        min: Math.min(left.value, right.value),
+        max: Math.max(left.value, right.value)
       };
     }
+    index = left.end;
   }
-  const exact = text.match(/(\d+(?:[,.]\d+)?)\s*(?:кВт|kw|kva|ква)/iu);
-  const kw = exact ? parseKw(exact[1]) : undefined;
-  return kw !== undefined ? { min: Math.max(0.1, kw - 0.75), max: kw + 0.75 } : undefined;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const exact = decimalNumberAt(text, index);
+    if (!exact) continue;
+    if (hasPowerUnitAt(text, skipWhitespace(text, exact.end))) {
+      return { min: Math.max(0.1, exact.value - 0.75), max: exact.value + 0.75 };
+    }
+    index = exact.end;
+  }
+  return undefined;
 }
 
 function generatorPowerFitScore(product: Product, range: { min: number; max: number }) {

@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1828,
+  "count": 1824,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -237,34 +237,6 @@
       "file": "evals/promptfoo/chat-app-provider.cjs",
       "kind": "regular_expression_literal",
       "hash": "8b03296837880062",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/agentManagerCardSelection.ts|match_regex_argument|467a401c5d16c3e4|1",
-      "file": "src/ai/agentManagerCardSelection.ts",
-      "kind": "match_regex_argument",
-      "hash": "467a401c5d16c3e4",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/agentManagerCardSelection.ts|regular_expression_literal|438c0d999daa7bd0|1",
-      "file": "src/ai/agentManagerCardSelection.ts",
-      "kind": "regular_expression_literal",
-      "hash": "438c0d999daa7bd0",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/agentManagerCardSelection.ts|match_regex_argument|51e3edc1372ac664|1",
-      "file": "src/ai/agentManagerCardSelection.ts",
-      "kind": "match_regex_argument",
-      "hash": "51e3edc1372ac664",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/agentManagerCardSelection.ts|regular_expression_literal|7dc0ccf18de9dc1d|1",
-      "file": "src/ai/agentManagerCardSelection.ts",
-      "kind": "regular_expression_literal",
-      "hash": "7dc0ccf18de9dc1d",
       "occurrence": 1
     },
     {
