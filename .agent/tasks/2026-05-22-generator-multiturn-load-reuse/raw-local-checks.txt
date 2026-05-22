@@ -26,4 +26,9 @@ Full local non-OpenAI gates:
 - Result: PASS. Only CRLF conversion warnings from Git; no whitespace errors.
 
 Production eval after this pass:
-- Pending until commit, push, and Railway deployment marker.
+- Commit: a7760a8
+- Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-generator-multiturn-load-reuse/production-evals-after-a7760a8.json
+- Result: PASS, 6/6 passed.
+- Deterministic average: 0.9904444444444445.
+- LLM average: 0.9466666666666667.
+- Gates: deterministic > 90% PASS, LLM average > 90% PASS.

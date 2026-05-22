@@ -6,3 +6,12 @@ PASS
 
 npm run lint:no-regex
 PASS: No new regex constructs. Legacy baseline: 1767.
+
+npm test
+PASS: 78 files, 649 tests
+
+npm run build
+PASS
+
+git diff --check
+PASS: only CRLF conversion warnings from Git

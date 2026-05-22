@@ -328,8 +328,9 @@ describe('AgentManager comparison research flow', () => {
       userMessage: 'SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?'
     });
 
-    expect(payload.answer).toContain('Не буду утверждать по SUNREKA G7000iS');
-    expect(payload.answer).toContain('проверка внешних источников не завершилась');
+    expect(payload.answer).toContain('точный факт по SUNREKA G7000iS');
+    expect(payload.answer).toContain('внешняя проверка не завершилась');
+    expect(payload.answer).not.toContain('запускается ручным стартером');
     expect(payload.answer).not.toContain('Кнопочного запуска для этой модели в данных не вижу');
     expect(payload.answer).not.toContain('есть в каталоге');
     const metadata = payload.metadata as {

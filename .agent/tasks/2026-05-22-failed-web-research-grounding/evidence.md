@@ -5,6 +5,8 @@
 - `npx vitest run tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/productComparisonResearch.test.ts` - PASS, 28 tests.
 - `npm run typecheck` - PASS.
 - `npm run lint:no-regex` - PASS, no new regex constructs.
+- `npm test` - PASS, 78 files, 649 tests.
+- `npm run build` - PASS.
 
 ## Pre-fix production finding
 
@@ -19,6 +21,7 @@
 - `normalizeAnswerEvidenceSources` now trusts only ledger facts and `ok` tool results for `factsUsed`.
 - Pre-send review now detects `failed_tool_result_used_as_fact_source`.
 - If the failed source is exact web research, the final answer is rewritten to avoid a categorical exact technical claim from failed evidence.
+- The rewrite is driven by structured tool status and cited source ids, not by regex or buyer-message keyword matching.
 - Final answer metadata removes facts that cited failed tool results.
 - Exact-target product comparison research now receives a scoped higher output budget to reduce JSON truncation/parse failures.
 

@@ -50,10 +50,19 @@
     "AC1": "PASS",
     "AC2": "PASS",
     "AC3": "PASS",
-    "AC4": "PENDING",
-    "AC5": "PENDING"
+    "AC4": "PASS",
+    "AC5": "PASS"
   },
   "productionEval": {
-    "status": "PENDING"
+    "status": "PASS",
+    "commit": "a7760a8",
+    "output": ".agent/tasks/2026-05-22-generator-multiturn-load-reuse/production-evals-after-a7760a8.json",
+    "summary": ".agent/tasks/2026-05-22-generator-multiturn-load-reuse/production-evals-after-a7760a8.summary.json",
+    "passed": 6,
+    "failed": 0,
+    "deterministicAverage": 0.9904444444444445,
+    "llmAverage": 0.9466666666666667,
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true
   }
 }

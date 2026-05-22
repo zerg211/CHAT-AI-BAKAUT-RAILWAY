@@ -15,7 +15,21 @@
       "command": "npm run lint:no-regex",
       "status": "pass",
       "details": "No new regex constructs. Legacy baseline: 1767."
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "tests": 649
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
     }
+  ],
+  "implementationNotes": [
+    "Failed tool results are not exposed as fact source ids.",
+    "Facts that cite non-ok tool request ids are removed from final answer metadata.",
+    "Safe repair is based on structured tool status/source ids, not regex or buyer-message keyword matching."
   ],
   "preFixProductionFinding": {
     "commit": "a81477de79833586faa54e9e1c47850be00f2314",

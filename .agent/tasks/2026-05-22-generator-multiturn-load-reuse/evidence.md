@@ -23,5 +23,14 @@ No regex was added.
 - AC1: PASS. No new regex constructs.
 - AC2: PASS. Source guard test asserts the multi-turn generator load instruction.
 - AC3: PASS. Clean-index local gates passed.
-- AC4: PENDING. Needs commit, push, and Railway marker.
-- AC5: PENDING. Needs production Promptfoo/widget harness after deploy.
+- AC4: PASS. Commit `a7760a8` reached Railway.
+- AC5: PASS. Production Promptfoo/widget harness passed.
+
+## Production Eval After `a7760a8`
+
+- `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-generator-multiturn-load-reuse/production-evals-after-a7760a8.json`: PASS.
+- Pass/fail: 6/6.
+- Deterministic average: 0.9904444444444445.
+- LLM average: 0.9466666666666667.
+- Assertion pass rate: 33/33.
+- `generator_load_selection`: PASS, LLM score 0.96, current turn used both `calculator.generatorLoad` and `catalog.search`.

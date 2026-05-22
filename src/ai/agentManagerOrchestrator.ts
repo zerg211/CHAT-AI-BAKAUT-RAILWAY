@@ -981,7 +981,6 @@ function factSourceIdsFromNonOkTools(input: {
 function failedWebResearchSafeRewrite(input: {
   intent: AgentIntentContract;
   toolResults: ToolResult[];
-  userMessage: string;
 }) {
   const failedWebResult = input.toolResults.find((result) =>
     result.tool === 'web.researchProductFacts' && result.status !== 'ok'
@@ -989,18 +988,8 @@ function failedWebResearchSafeRewrite(input: {
   if (!failedWebResult) return null;
   const request = input.intent.toolRequests.find((item) => item.id === failedWebResult.requestId);
   const productName = productNamesFromToolRequest(request)[0];
-  const lowerUserMessage = input.userMessage.toLocaleLowerCase('ru-RU');
-  const asksStartControl = lowerUserMessage.includes('кноп') ||
-    lowerUserMessage.includes('шнур') ||
-    lowerUserMessage.includes('стартер') ||
-    lowerUserMessage.includes('электростарт') ||
-    lowerUserMessage.includes('start') ||
-    lowerUserMessage.includes('button');
-  if (productName && asksStartControl) {
-    return `Не буду утверждать по ${productName}, что кнопочного запуска нет: проверка внешних источников не завершилась. По текущим данным вижу ручной запуск, но это не закрывает вопрос про кнопку или электростарт. Нужна проверка по точной модели либо вариант, где электростарт указан явно.`;
-  }
   if (productName) {
-    return `Не буду сейчас уверенно утверждать точный факт по ${productName}: внешняя проверка не завершилась. Могу опираться только на уже найденные данные, а спорный параметр нужно добрать по источникам.`;
+    return `Не буду сейчас уверенно утверждать точный факт по ${productName}: внешняя проверка не завершилась. Могу опираться только на уже подтвержденные данные, а спорный параметр нужно добрать по источникам.`;
   }
   return 'Внешняя проверка не завершилась, поэтому точный факт сейчас не подтверждаю. Могу ответить только на общем уровне, а спорный параметр нужно добрать по источникам.';
 }
@@ -2463,8 +2452,7 @@ export class AgentManagerOrchestrator {
     const failedFactSourceRepairIssue = mechanicalIssues.find((issue) => issue.code === 'failed_tool_result_used_as_fact_source');
     const failedWebResearchRewrite = failedWebResearchSafeRewrite({
       intent: input.intent,
-      toolResults: input.toolResults,
-      userMessage: input.userMessage
+      toolResults: input.toolResults
     });
     if (failedFactSourceRepairIssue && failedWebResearchRewrite) {
       return {
