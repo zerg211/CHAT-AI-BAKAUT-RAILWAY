@@ -40,6 +40,7 @@ import {
   hasUnconfirmedGeneratorLoadBasisResult,
   isGeneratorProductClass
 } from './agentManagerGeneratorLoad.js';
+import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -1135,6 +1136,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
   }
 
   async composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract> {
+    const styleExamples = approvedAnswerStyleExamplesPromptBlock();
     const request = {
       model: config.OPENAI_ANSWER_MODEL,
       max_output_tokens: config.OPENAI_MAX_OUTPUT_TOKENS,
@@ -1168,6 +1170,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
             'If requiredResponseClauses is non-empty, answerText must satisfy every clause by meaning. Treat these clauses as required semantic content, not optional style advice.',
             'If web.researchProductFacts payload.answerGuidance.directAnswer is present, use that practical direct answer before broader catalog context. Do not convert answerGuidance.coverage status "not_confirmed" into "no" or "does not have".',
+            styleExamples,
             'Верни только JSON AnswerContract.'
           ].join('\n')
         },

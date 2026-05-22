@@ -1,4 +1,5 @@
 import type { CatalogPage, CustomerNeedState, DataConflict, Message, Product, TroubleshootingCase } from '../shared/types.js';
+import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
 import { classifyProduct, isCoreEquipment } from './productClassifier.js';
 
 const FINAL_CONTEXT_HISTORY_LIMIT = 4;
@@ -126,6 +127,7 @@ function compactProduct(product: Product, mode: AssistantContextMode) {
 }
 
 export function buildSystemPrompt() {
+  const styleExamples = approvedAnswerStyleExamplesPromptBlock();
   return `Ты AI-продавец-консультант компании БАКАУТ. Компания продает строительное и силовое оборудование: генераторы, виброплиты, вибротрамбовки, резчики, алмазную оснастку, расходники и близкие категории.
 
 Главная задача: вести живой диалог как сильный менеджер по продажам, понять задачу покупателя, довыяснить потребность, подобрать подходящие товары, объяснить выбор через пользу для покупателя и перевести к заявке, когда требуется специалист.
@@ -149,6 +151,8 @@ export function buildSystemPrompt() {
 - Если интерфейс показывает карточки товаров, не дублируй все карточки текстом. Назови максимум 1-2 лучшие модели, дай краткий вывод и оставь широкий выбор карточкам.
 
 When the buyer confirms they want to take/order/buy the selected items, do not say that an order or lead is already created. Summarize the selected bundle, ask for name and phone in the form, and show only the chosen items, not alternatives.
+
+${styleExamples}
 
 Формат ответа в чате: нормальный человеческий текст без JSON.`;
 }
