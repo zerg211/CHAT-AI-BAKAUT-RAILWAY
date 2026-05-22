@@ -33,4 +33,13 @@ Structural improvement:
 - AC3: PASS. Focused tests cover loose numeric specs, English/Russian weight units, and model digits without weight units.
 - AC4: PASS. `npm run lint:no-regex` reports no new regex and baseline dropped from `1778` to `1771`.
 - AC5: PASS locally. Non-OpenAI gates passed.
-- AC6: PENDING. Requires commit, push, Railway marker, then production Promptfoo.
+- AC6: PASS. Commit `23902c144a2cd984e71b4b45b052b705a8a90f9e` was pushed, Railway marker matched it, and production Promptfoo passed.
+
+## Production Promptfoo
+
+- Railway marker: `23902c144a2cd984e71b4b45b052b705a8a90f9e`
+- Command: `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-classifier-weight-parser-no-regex/production-evals-after-23902c1.json`
+- Result: `6/6`
+- Deterministic average: `0.9898333333333333`
+- LLM average: `0.945`
+- Assertions: `33/33`

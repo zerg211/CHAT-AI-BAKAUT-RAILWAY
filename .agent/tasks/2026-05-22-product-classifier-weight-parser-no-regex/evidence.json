@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-22-product-classifier-weight-parser-no-regex",
-  "verdict": "PASS_LOCAL",
+  "verdict": "PASS",
   "baseline": {
     "noRegexLegacyBefore": 1778,
     "noRegexLegacyAfter": 1771,
@@ -57,6 +57,17 @@
       "command": "npm test",
       "status": "PASS_AFTER_RETRY",
       "summary": "First run timed out in productComparisonResearch; isolated file then passed, fresh full suite passed 78 files / 643 tests."
+    },
+    {
+      "command": "npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-classifier-weight-parser-no-regex/production-evals-after-23902c1.json",
+      "status": "PASS",
+      "summary": "Production Promptfoo passed 6/6; deterministic average 0.9898333333333333; LLM average 0.945.",
+      "commit": "23902c144a2cd984e71b4b45b052b705a8a90f9e",
+      "railwayMarker": "23902c144a2cd984e71b4b45b052b705a8a90f9e",
+      "rawArtifacts": [
+        "production-evals-after-23902c1.json",
+        "production-evals-after-23902c1.summary.json"
+      ]
     }
   ],
   "acceptanceCriteria": {
@@ -65,6 +76,6 @@
     "AC3": "PASS",
     "AC4": "PASS",
     "AC5": "PASS_LOCAL",
-    "AC6": "PENDING_PRODUCTION_PROMPTFOO"
+    "AC6": "PASS_PRODUCTION_PROMPTFOO"
   }
 }
