@@ -1,0 +1,29 @@
+Task: 2026-05-22-web-required-general-technical-research
+Date: 2026-05-22
+
+Triggering production eval:
+- Commit: 9d04038
+- Output: .agent/tasks/2026-05-22-latest-main-production-eval/production-evals-after-9d04038.json
+- Result: FAIL, 5/6 passed.
+- Deterministic average: 0.9092777777777776.
+- LLM average: 0.96.
+- Failed case: web_required_technical_grounding, no web.researchProductFacts/web evidence.
+
+Focused local checks:
+- npm test -- tests/agentManagerIntegrationSource.test.ts
+- Result: PASS, 1 test file, 10 tests.
+- npm run lint:no-regex
+- Result: PASS, no new regex constructs, legacy baseline 1767.
+
+Full local non-OpenAI gates:
+- npm run typecheck
+- Result: PASS.
+- npm test
+- Result: PASS, 78 test files, 648 tests.
+- npm run build
+- Result: PASS.
+- git diff --check
+- Result: PASS. Only CRLF conversion warnings from Git; no whitespace errors.
+
+Production eval after this pass:
+- Pending until commit, push, and Railway deployment marker.

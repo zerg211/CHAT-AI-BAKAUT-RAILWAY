@@ -41,6 +41,8 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('requiredResponseClausesForToolResults');
     expect(orchestrator).toContain('answerText must satisfy every clause by meaning');
     expect(orchestrator).toContain('answer_checked_research_guidance');
+    expect(orchestrator).toContain('When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding');
+    expect(orchestrator).toContain('plan web.researchProductFacts even without a named model');
     expect(orchestrator).toContain('hasConfirmedStartControlCoverage');
     expect(orchestrator).toContain('description: compactProductDescription(product.description)');
     expect(orchestrator).toContain('Пиши как знакомый знакомому');

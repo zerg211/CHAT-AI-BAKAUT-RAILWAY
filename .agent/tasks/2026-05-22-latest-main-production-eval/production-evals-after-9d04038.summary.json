@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-latest-main-production-eval\\production-evals-after-9d04038.json",
+  "generatedAt": "2026-05-22T11:44:43.309Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 5,
+    "failures": 1,
+    "errors": 0,
+    "averageScore": 0.9092777777777776,
+    "assertionPassRate": 0.9090909090909091,
+    "assertionPassCount": 30,
+    "assertionFailCount": 3,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.96,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

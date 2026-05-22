@@ -1,0 +1,21 @@
+{
+  "taskId": "2026-05-22-latest-main-production-eval",
+  "date": "2026-05-22",
+  "commit": "9d04038912ff356a714de0ab66cc6bc796541385",
+  "productionEval": {
+    "status": "FAIL",
+    "output": ".agent/tasks/2026-05-22-latest-main-production-eval/production-evals-after-9d04038.json",
+    "summary": ".agent/tasks/2026-05-22-latest-main-production-eval/production-evals-after-9d04038.summary.json",
+    "passed": 5,
+    "failed": 1,
+    "deterministicAverage": 0.9092777777777776,
+    "llmAverage": 0.96,
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true
+  },
+  "failedScenario": {
+    "caseId": "web_required_technical_grounding",
+    "reason": "No web.researchProductFacts/web evidence was present for an explicit fact-checking technical question."
+  },
+  "followUpTask": "2026-05-22-web-required-general-technical-research"
+}
