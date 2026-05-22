@@ -1,6 +1,6 @@
 {
   "taskId": "2026-05-22-plate-self-loading-shortlist-contract",
-  "status": "local_pass_pending_production",
+  "status": "pass",
   "baselineProductionEval": {
     "commit": "f395d36",
     "status": "FAIL",
@@ -23,7 +23,7 @@
     "AC4": "PASS",
     "AC5": "PASS",
     "AC6": "PASS",
-    "AC7": "PENDING"
+    "AC7": "PASS"
   },
   "localChecks": [
     {
@@ -56,6 +56,18 @@
     }
   ],
   "productionVerification": {
-    "status": "pending_commit_push_marker_eval"
+    "status": "pass",
+    "commit": "37c33a0",
+    "railwayMarker": "37c33a037110d2c33635b598133184a747215693",
+    "output": ".agent/tasks/2026-05-22-plate-self-loading-shortlist-contract/production-evals-after-37c33a0.json",
+    "summary": ".agent/tasks/2026-05-22-plate-self-loading-shortlist-contract/production-evals-after-37c33a0.summary.json",
+    "passed": 6,
+    "failed": 0,
+    "deterministicAverage": 0.9918888888888889,
+    "llmAverage": 0.955,
+    "assertionPassRate": 1,
+    "contextShiftLlmScore": 0.96,
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true
   }
 }

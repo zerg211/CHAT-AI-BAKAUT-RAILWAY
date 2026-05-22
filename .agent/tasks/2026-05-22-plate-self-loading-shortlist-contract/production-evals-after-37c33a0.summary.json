@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-plate-self-loading-shortlist-contract\\production-evals-after-37c33a0.json",
+  "generatedAt": "2026-05-22T12:52:18.172Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 6,
+    "failures": 0,
+    "errors": 0,
+    "averageScore": 0.9918888888888889,
+    "assertionPassRate": 1,
+    "assertionPassCount": 33,
+    "assertionFailCount": 0,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.955,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}

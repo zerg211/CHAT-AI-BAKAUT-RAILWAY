@@ -22,3 +22,13 @@ Result: FAIL, 5/6 passed
 Deterministic average: 0.9756111111111112
 LLM average: 0.8733333333333334
 Failing case: context_shift_agent_completion
+
+Production eval after this pass:
+Commit: 37c33a0
+Railway marker: 37c33a037110d2c33635b598133184a747215693
+Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-plate-self-loading-shortlist-contract/production-evals-after-37c33a0.json
+Result: PASS, 6/6 passed
+Deterministic average: 0.9918888888888889
+LLM average: 0.955
+Assertion pass rate: 33/33
+context_shift_agent_completion LLM score: 0.96

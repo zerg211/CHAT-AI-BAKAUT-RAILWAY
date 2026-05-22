@@ -32,4 +32,13 @@
 - AC4: PASS. Reviewer contract requires rewrite for that mismatch.
 - AC5: PASS. Source guard asserts the new contract text.
 - AC6: PASS. Local gates passed.
-- AC7: PENDING. Needs commit, push, Railway marker, then production Promptfoo/widget harness.
+- AC7: PASS. Commit `37c33a0` reached Railway and production Promptfoo/widget harness passed.
+
+## Production Eval After `37c33a0`
+
+- `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-plate-self-loading-shortlist-contract/production-evals-after-37c33a0.json`: PASS.
+- Pass/fail: 6/6.
+- Deterministic average: 0.9918888888888889.
+- LLM average: 0.955.
+- Assertion pass rate: 33/33.
+- `context_shift_agent_completion`: PASS, LLM score 0.96.
