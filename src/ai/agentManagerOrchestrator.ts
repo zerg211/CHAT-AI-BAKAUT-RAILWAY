@@ -13,6 +13,7 @@ import {
   type DialogueLedgerEvent,
   type LedgerStateDelta,
   type PreSendReview,
+  type ProductMentionRole,
   type ToolRequest,
   type ToolResult
 } from './agentManagerContracts.js';
@@ -54,7 +55,6 @@ import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js
 import {
   compactModelText,
   isModelTokenChar,
-  modelIdentifierDisplayTokens,
   modelIdentifierTokens,
   modelTextTokens,
   normalizeModelText,
@@ -269,8 +269,48 @@ function requestStringArray(value: unknown) {
     : [];
 }
 
-function targetProductNamesForRequest(request: ToolRequest) {
-  return uniqueStrings(requestStringArray(request.args.productNames));
+const exactTargetProductMentionRoles = new Set<ProductMentionRole>([
+  'target_product',
+  'catalog_candidate',
+  'comparison_subject'
+]);
+
+function productMentionMatchesName(mentionName: string, targetName: string) {
+  if (textMatchesTargetName(mentionName, targetName) || textMatchesTargetName(targetName, mentionName)) return true;
+  const mentionTokens = new Set(modelIdentifierTokens(mentionName));
+  return modelIdentifierTokens(targetName).some((token) => mentionTokens.has(token));
+}
+
+function productMentionRoleForTargetName(intent: AgentIntentContract | undefined, targetName: string) {
+  const mentions = intent?.productMentions ?? [];
+  const matching = mentions.filter((mention) => productMentionMatchesName(mention.name, targetName));
+  if (!matching.length) return undefined;
+  const targetLike = matching.find((mention) => exactTargetProductMentionRoles.has(mention.role));
+  return targetLike?.role ?? matching[0]?.role;
+}
+
+function productNameAllowedAsExactTarget(input: {
+  intent?: AgentIntentContract;
+  productName: string;
+}) {
+  const role = productMentionRoleForTargetName(input.intent, input.productName);
+  return role === undefined || exactTargetProductMentionRoles.has(role);
+}
+
+function targetProductNamesForRequest(request: ToolRequest, intent?: AgentIntentContract) {
+  return uniqueStrings(
+    requestStringArray(request.args.productNames).filter((productName) =>
+      productNameAllowedAsExactTarget({ intent, productName })
+    )
+  );
+}
+
+function suppressedContextTargetProductNamesForRequest(request: ToolRequest, intent?: AgentIntentContract) {
+  const targetNames = requestStringArray(request.args.productNames);
+  if (!targetNames.length || !(intent?.productMentions?.length)) return [];
+  return uniqueStrings(targetNames.filter((productName) =>
+    !productNameAllowedAsExactTarget({ intent, productName })
+  ));
 }
 
 function comparisonAttributesForRequest(request: ToolRequest) {
@@ -329,14 +369,21 @@ function exactModelEvidenceToolCoversToken(request: ToolRequest, token: string) 
 }
 
 function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
+  const targetMentionNames = (intent.productMentions ?? [])
+    .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+    .map((mention) => mention.name)
+    .filter((name) => modelIdentifierTokens(name).some((token) => modelIdentifierTokens(userMessage).includes(token)));
+  if (!targetMentionNames.length) return intent;
   const targetTokens = modelIdentifierTokens(userMessage);
   if (!targetTokens.length) return intent;
+  const eligibleTokens = new Set(targetMentionNames.flatMap((name) => modelIdentifierTokens(name)));
   const uncoveredTokens = targetTokens.filter((token) =>
+    eligibleTokens.has(token) &&
     !intent.toolRequests.some((request) => exactModelEvidenceToolCoversToken(request, token))
   );
   if (!uncoveredTokens.length) return intent;
-  const displayTargets = modelIdentifierDisplayTokens(userMessage)
-    .filter((token) => uncoveredTokens.includes(compactModelText(token)));
+  const displayTargets = targetMentionNames
+    .filter((name) => modelIdentifierTokens(name).some((token) => uncoveredTokens.includes(token)));
   const idBase = `auto:exact-model:${uncoveredTokens.map(compactModelText).join('-')}`;
   const existingIds = new Set(intent.toolRequests.map((request) => request.id));
   const requestId = existingIds.has(idBase) ? `${idBase}:${intent.toolRequests.length + 1}` : idBase;
@@ -1141,6 +1188,28 @@ const toolRequestJsonSchema = {
   required: ['id', 'tool', 'args', 'rationale', 'required']
 } as const;
 
+const productMentionJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string' },
+    role: {
+      type: 'string',
+      enum: [
+        'target_product',
+        'catalog_candidate',
+        'comparison_subject',
+        'context_load_device',
+        'compatibility_context',
+        'mentioned_only'
+      ]
+    },
+    productClass: nullableStringJsonSchema,
+    evidence: { type: 'string' }
+  },
+  required: ['name', 'role', 'productClass', 'evidence']
+} as const;
+
 const intentContractFormat = {
   format: {
     type: 'json_schema',
@@ -1155,10 +1224,11 @@ const intentContractFormat = {
         nextStepRationale: { type: 'string' },
         requiresTools: { type: 'boolean' },
         toolRequests: { type: 'array', items: toolRequestJsonSchema },
+        productMentions: { type: 'array', items: productMentionJsonSchema },
         mustNotAskQuestionIds: { type: 'array', items: { type: 'string' } },
         riskFlags: { type: 'array', items: { type: 'string' } }
       },
-      required: ['turnId', 'userMessageSummary', 'dialogueUnderstanding', 'nextStepRationale', 'requiresTools', 'toolRequests', 'mustNotAskQuestionIds', 'riskFlags']
+      required: ['turnId', 'userMessageSummary', 'dialogueUnderstanding', 'nextStepRationale', 'requiresTools', 'toolRequests', 'productMentions', 'mustNotAskQuestionIds', 'riskFlags']
     }
   }
 } as const;
@@ -1308,6 +1378,9 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
             'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
             'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
+            'Fill productMentions for every named product, model, brand-model, or equipment item in the current buyer turn. Classify its semantic role: target_product when the buyer wants to buy/check that exact product; catalog_candidate for a product alternative being considered; comparison_subject for products being compared; context_load_device when it is only a consumer/load/device used to size or apply another product; compatibility_context when it is only equipment that the target product must work with; mentioned_only when no action is needed.',
+            'Do not put context_load_device or compatibility_context names into web.researchProductFacts args.productNames. Example: in "нужен генератор для котла Baxi 24 и насоса 1,1 кВт", Baxi 24 is context_load_device, not a BAKAUT catalog target, so do not report that Baxi 24 is absent from our catalog. The target product class is the generator.',
+            'Only target_product, catalog_candidate, and comparison_subject roles should drive exact target catalog presence, exact model web research, or nearby catalog alternatives.',
             'For a general technical question, answer from engineering knowledge only when the buyer did not ask for verification. When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding, plan web.researchProductFacts even without a named model: keep args.productNames empty, put the buyer question in query and semanticQuery, and put the requested technical attributes in comparisonAttributes.',
             'When the buyer names a different exact model in the current turn, do not reuse technical facts from a previous model even if the buyer says "same". Plan current-turn evidence for the newly named model unless ledger/tool evidence is already scoped to that exact same model identifier.',
             'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search only when exact cards or clearly preliminary cards are appropriate for the current buyer request.',
@@ -1720,7 +1793,8 @@ export class AgentManagerOrchestrator {
     });
     await this.trace(input.sessionId, input.turnId, 'intent', 'contract_created', {
       requiresTools: intent.requiresTools,
-      toolRequests: intent.toolRequests.map((tool) => ({ id: tool.id, tool: tool.tool, required: tool.required }))
+      toolRequests: intent.toolRequests.map((tool) => ({ id: tool.id, tool: tool.tool, required: tool.required })),
+      productMentions: intent.productMentions ?? []
     });
 
     const { toolResults, products } = await this.executeTools({
@@ -1728,6 +1802,7 @@ export class AgentManagerOrchestrator {
       turnId: input.turnId,
       userMessage,
       history,
+      intent,
       toolRequests: intent.toolRequests,
       signal: input.signal
     });
@@ -1956,6 +2031,7 @@ export class AgentManagerOrchestrator {
     turnId: string;
     userMessage: string;
     history: Message[];
+    intent: AgentIntentContract;
     toolRequests: ToolRequest[];
     signal?: AbortSignal;
   }) {
@@ -2079,7 +2155,8 @@ export class AgentManagerOrchestrator {
             warnings: profile ? warnings : [...warnings, 'no_usable_loads_for_generator_calculation']
           });
         } else if (request.tool === 'web.researchProductFacts') {
-          const targetProductNames = targetProductNamesForRequest(request);
+          const targetProductNames = targetProductNamesForRequest(request, input.intent);
+          const suppressedTargetProductNames = suppressedContextTargetProductNamesForRequest(request, input.intent);
           const comparisonAttributes = comparisonAttributesForRequest(request);
           if (productsById.size < 2 || targetProductNames.length) {
             const scopedQuery = toolRequestScopedQuery(request, input.userMessage);
@@ -2142,10 +2219,12 @@ export class AgentManagerOrchestrator {
               targetProductNames,
               comparisonAttributes,
               catalogPresence,
-              nearbyCatalogProducts
+              nearbyCatalogProducts,
+              suppressedTargetProductNames
             },
             warnings: [
               ...research.warnings,
+              ...suppressedTargetProductNames.map((productName) => `exact_target_suppressed_by_product_role:${productName}`),
               ...catalogPresence
                 .filter((item) => item.status === 'absent')
                 .map((item) => `exact_catalog_product_absent:${item.productName}`)

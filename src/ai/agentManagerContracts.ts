@@ -74,6 +74,22 @@ export const ToolResultSchema = z.object({
   errorCode: z.string().optional()
 }).strict();
 
+export const ProductMentionRoleSchema = z.enum([
+  'target_product',
+  'catalog_candidate',
+  'comparison_subject',
+  'context_load_device',
+  'compatibility_context',
+  'mentioned_only'
+]);
+
+export const ProductMentionSchema = z.object({
+  name: nonEmptyString,
+  role: ProductMentionRoleSchema,
+  productClass: z.string().trim().min(1).nullable().optional(),
+  evidence: nonEmptyString
+}).strict();
+
 export const AgentIntentContractSchema = z.object({
   turnId: z.string().nullable().optional(),
   userMessageSummary: nonEmptyString,
@@ -81,6 +97,7 @@ export const AgentIntentContractSchema = z.object({
   nextStepRationale: nonEmptyString,
   requiresTools: z.boolean(),
   toolRequests: z.array(ToolRequestSchema).default([]),
+  productMentions: z.array(ProductMentionSchema).default([]),
   mustNotAskQuestionIds: z.array(z.string()).default([]),
   riskFlags: z.array(z.string()).default([])
 }).strict();
@@ -131,7 +148,12 @@ export type DialogueLedgerEvent = z.infer<typeof DialogueLedgerEventSchema>;
 export type LedgerStateDelta = z.infer<typeof LedgerStateDeltaSchema>;
 export type ToolRequest = z.infer<typeof ToolRequestSchema>;
 export type ToolResult = z.infer<typeof ToolResultSchema>;
-export type AgentIntentContract = z.infer<typeof AgentIntentContractSchema>;
+export type ProductMentionRole = z.infer<typeof ProductMentionRoleSchema>;
+export type ProductMention = z.infer<typeof ProductMentionSchema>;
+type ParsedAgentIntentContract = z.infer<typeof AgentIntentContractSchema>;
+export type AgentIntentContract = Omit<ParsedAgentIntentContract, 'productMentions'> & {
+  productMentions?: ProductMention[];
+};
 export type AnswerContract = z.infer<typeof AnswerContractSchema>;
 export type AnswerSelectionReadiness = z.infer<typeof AnswerSelectionReadinessSchema>;
 export type PreSendReview = z.infer<typeof PreSendReviewSchema>;

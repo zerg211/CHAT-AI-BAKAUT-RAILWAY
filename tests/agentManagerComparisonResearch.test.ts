@@ -511,6 +511,203 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.productCards).toEqual([]);
   });
 
+  it('does not auto-promote context load devices into exact catalog targets', async () => {
+    researchProductComparisonFacts.mockClear();
+
+    const baxiContextModel: AgentManagerModel = {
+      ...model(),
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'generator load request with context device',
+          events: [{
+            eventType: 'fact.observed',
+            scope: 'dialogue',
+            payload: { factKey: 'load.boiler_model', value: 'Baxi 24' },
+            evidence: 'котел Baxi 24 is a load device for generator sizing',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer sizes a generator for Baxi 24 boiler and pump',
+          dialogueUnderstanding: 'Baxi 24 is a powered load, not the product being bought',
+          nextStepRationale: 'calculate generator load and do not check Baxi catalog presence',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'calc:baxi-load',
+            tool: 'calculator.generatorLoad',
+            args: {
+              query: 'generator for Baxi 24 boiler and 1.1 kW pump',
+              semanticQuery: 'size generator for boiler, deep well pump, refrigerator and lights',
+              productIntent: 'generator',
+              limit: null,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: [],
+              loads: [{
+                kind: 'boiler',
+                name: 'Baxi 24 boiler',
+                count: 1,
+                runningKw: 0.15,
+                startingKw: 0.2,
+                source: 'estimated_average',
+                evidence: 'газовый котел Baxi 24',
+                basisKind: 'specific_type_or_function',
+                basisSignals: ['consumer_type_known', 'consumer_function_known', 'voltage_or_phase_known']
+              }, {
+                kind: 'pump',
+                name: 'deep well pump',
+                count: 1,
+                runningKw: 1.1,
+                startingKw: 3.3,
+                source: 'explicit_user',
+                evidence: 'насос 1,1 кВт',
+                basisKind: 'exact_power',
+                basisSignals: ['explicit_power', 'voltage_or_phase_known']
+              }],
+              simultaneousStarting: true,
+              simultaneousStartingKinds: ['pump'],
+              estimateBasis: 'bounded_assumption',
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'calculate generator size',
+              notes: 'Baxi 24 is only a load device'
+            },
+            rationale: 'load sizing for generator',
+            required: true
+          }],
+          productMentions: [{
+            name: 'Baxi 24',
+            role: 'context_load_device',
+            productClass: 'boiler',
+            evidence: 'котел Baxi 24 is one of the loads connected to the generator'
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.intent.toolRequests.map((request) => request.tool)).toEqual(['calculator.generatorLoad']);
+        expect(input.toolResults.map((result) => result.tool)).toEqual(['calculator.generatorLoad']);
+        return {
+          answerText: 'Для такой нагрузки я бы смотрел генератор примерно от 5 кВт. Baxi 24 тут просто нагрузка, по каталогу котел проверять не нужно.',
+          factsUsed: [{
+            factKey: 'calc.requiredNominalKw',
+            sourceEventIds: ['calc:baxi-load'],
+            value: 4
+          }],
+          questionsAsked: [],
+          toolResultIds: ['calc:baxi-load'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Нужен генератор для котла Baxi 24, насоса 1,1 кВт, холодильника и света.')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, baxiContextModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Нужен генератор для котла Baxi 24, насоса 1,1 кВт, холодильника и света.'
+    });
+
+    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+    const metadata = payload.metadata as { toolResults?: Array<{ warnings?: string[] }> };
+    expect(metadata.toolResults?.flatMap((result) => result.warnings ?? [])).not.toContain('exact_catalog_product_absent:Baxi 24');
+  });
+
+  it('suppresses context load devices accidentally placed into exact web target names', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false,
+      facts: [],
+      conflicts: [],
+      summaryForAnswer: 'No exact target research was needed for the context boiler.',
+      warnings: []
+    });
+
+    const baxiSanitizingModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks generator sizing for Baxi 24',
+          dialogueUnderstanding: 'Baxi 24 is a context load device, but a bad tool request included it as productNames',
+          nextStepRationale: 'runtime should suppress Baxi 24 as an exact target',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:baxi-context',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'Baxi 24 electrical consumption for generator sizing',
+              semanticQuery: 'boiler consumption context for generator sizing, not catalog availability',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['Baxi 24'],
+              comparisonAttributes: ['electrical consumption'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'verify load context',
+              notes: 'Baxi 24 is not the product target'
+            },
+            rationale: 'badly scoped context research request',
+            required: true
+          }],
+          productMentions: [{
+            name: 'Baxi 24',
+            role: 'context_load_device',
+            productClass: 'boiler',
+            evidence: 'Baxi 24 is the boiler powered by the generator'
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        const result = input.toolResults[0]?.payload as {
+          targetProductNames?: string[];
+          catalogPresence?: unknown[];
+          suppressedTargetProductNames?: string[];
+        };
+        expect(result.targetProductNames).toEqual([]);
+        expect(result.catalogPresence).toEqual([]);
+        expect(result.suppressedTargetProductNames).toEqual(['Baxi 24']);
+        return {
+          answerText: 'Baxi 24 учитываю как нагрузку для генератора, а не как товар для проверки в каталоге.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:baxi-context'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Подберите генератор для Baxi 24 и насоса 1,1 кВт.')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, baxiSanitizingModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Подберите генератор для Baxi 24 и насоса 1,1 кВт.'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      targetProductNames: [],
+      comparisonAttributes: ['electrical consumption']
+    }));
+    const metadata = payload.metadata as { toolResults?: Array<{ warnings?: string[] }> };
+    const warnings = metadata.toolResults?.flatMap((result) => result.warnings ?? []) ?? [];
+    expect(warnings).toContain('exact_target_suppressed_by_product_role:Baxi 24');
+    expect(warnings).not.toContain('exact_catalog_product_absent:Baxi 24');
+  });
+
   it('does not mark a suffix model as exact and passes practical start-control guidance to the answer', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
@@ -1544,6 +1741,12 @@ describe('AgentManager comparison research flow', () => {
           nextStepRationale: 'answer from context',
           requiresTools: false,
           toolRequests: [],
+          productMentions: [{
+            name: 'FIRMAN RD3910E',
+            role: 'target_product',
+            productClass: 'generator',
+            evidence: 'buyer asks about this exact current model'
+          }],
           mustNotAskQuestionIds: [],
           riskFlags: ['answer_policy_catalog_presence_relevant']
         };
@@ -1582,7 +1785,7 @@ describe('AgentManager comparison research flow', () => {
     });
 
     expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
-      targetProductNames: ['RD3910E']
+      targetProductNames: ['FIRMAN RD3910E']
     }));
     expect(payload.answer).toContain('Запуск с ключа/через выключатель точно подтвердить не могу');
     expect(payload.answer).toContain('кнопка по точным источникам не подтверждена');

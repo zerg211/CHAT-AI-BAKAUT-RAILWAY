@@ -1,0 +1,43 @@
+{
+  "taskId": "2026-05-22-product-mentions-contract-schema",
+  "timestamp": "2026-05-22T19:38:36.1320057+03:00",
+  "changeSummary": [
+    "Added strict product mention role and mention schemas.",
+    "Added productMentions to AgentIntentContractSchema with parsed default [].",
+    "Kept public AgentIntentContract TypeScript compatibility for existing test doubles.",
+    "Added focused contract tests."
+  ],
+  "checks": [
+    {
+      "command": "npx vitest run tests/agentManagerContracts.test.ts tests/agentManagerComparisonResearch.test.ts",
+      "status": "pass",
+      "details": "2 test files passed, 24 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1623."
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pass"
+  },
+  "productionPromptfoo": {
+    "requiredHere": false,
+    "pairedTask": "2026-05-22-product-mention-target-gating"
+  }
+}

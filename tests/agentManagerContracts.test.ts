@@ -78,6 +78,74 @@ describe('agent manager contracts', () => {
     expect(result.success).toBe(true);
   });
 
+  it('defaults omitted product mentions to an empty list', () => {
+    const result = AgentIntentContractSchema.parse({
+      turnId: 'planner-local-turn-id',
+      userMessageSummary: 'buyer asks about generator sizing',
+      dialogueUnderstanding: 'the planner did not return product mentions',
+      nextStepRationale: 'continue with existing tool decision',
+      requiresTools: false,
+      toolRequests: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    });
+
+    expect(result.productMentions).toEqual([]);
+  });
+
+  it('parses strict product mention roles from planner output', () => {
+    const result = AgentIntentContractSchema.parse({
+      turnId: 'planner-local-turn-id',
+      userMessageSummary: 'buyer compares exact generator and a pump load',
+      dialogueUnderstanding: 'the named generator is the target, and the pump is only load context',
+      nextStepRationale: 'verify exact product facts and keep load context separate',
+      requiresTools: true,
+      toolRequests: [],
+      productMentions: [
+        {
+          name: 'TSS SGG 10000EHA',
+          role: 'target_product',
+          productClass: 'generator',
+          evidence: 'buyer asked about TSS SGG 10000EHA'
+        },
+        {
+          name: 'pump',
+          role: 'context_load_device',
+          productClass: null,
+          evidence: 'buyer mentioned a pump as load context'
+        }
+      ],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    });
+
+    expect(result.productMentions.map((mention) => mention.role)).toEqual([
+      'target_product',
+      'context_load_device'
+    ]);
+  });
+
+  it('rejects unknown product mention roles and extra fields', () => {
+    const result = AgentIntentContractSchema.safeParse({
+      turnId: 'planner-local-turn-id',
+      userMessageSummary: 'buyer mentions products',
+      dialogueUnderstanding: 'planner returned an invalid mention role',
+      nextStepRationale: 'reject invalid structured data',
+      requiresTools: false,
+      toolRequests: [],
+      productMentions: [{
+        name: 'TSS SGG 10000EHA',
+        role: 'primary_target',
+        evidence: 'buyer mentioned it',
+        extra: true
+      }],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('creates stable event ids from sorted semantic content', () => {
     const left = createStableLedgerEventId({
       sessionId,
