@@ -1302,7 +1302,7 @@ describe('AgentManager comparison research flow', () => {
               query: 'SUNREKA G7000iS button start recoil start',
               semanticQuery: 'SUNREKA G7000iS START button and recoil starter',
               productNames: ['SUNREKA G7000iS'],
-              comparisonAttributes: ['starter type', 'electric start', 'recoil start', 'push button start', 'pull cord']
+              comparisonAttributes: ['button start', 'recoil start']
             },
             rationale: 'exact model fact must be grounded',
             required: true
@@ -1400,25 +1400,6 @@ describe('AgentManager comparison research flow', () => {
             sourceUrl: 'https://sunreka.example/g7000is',
             sourceTitle: 'SUNREKA G7000iS specification',
             evidence: 'official source lists manual starter',
-            confidence: 'high',
-            status: 'active',
-            firstSeenAt: now,
-            lastVerifiedAt: now,
-            hitCount: 0,
-            createdAt: now,
-            updatedAt: now
-          },
-          {
-            id: 'fact-electric',
-            productId: 'g7000is',
-            productKey: 'sunreka g7000is',
-            productName: 'SUNREKA G7000iS',
-            attribute: 'electric start',
-            value: 'electric starter is available',
-            sourceType: 'web',
-            sourceUrl: 'https://sunreka.example/g7000is',
-            sourceTitle: 'SUNREKA G7000iS specification',
-            evidence: 'official source lists electric starter',
             confidence: 'high',
             status: 'active',
             firstSeenAt: now,

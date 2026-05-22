@@ -630,43 +630,15 @@ function tokensOverlap(left: string[], right: string[]) {
       if (leftToken === rightToken) return true;
       const smaller = leftToken.length <= rightToken.length ? leftToken : rightToken;
       const larger = leftToken.length <= rightToken.length ? rightToken : leftToken;
-      return (smaller.length >= 4 && larger.startsWith(smaller)) || commonPrefixLength(leftToken, rightToken) >= 4;
+      return smaller.length >= 4 && larger.startsWith(smaller);
     })
   );
-}
-
-function commonPrefixLength(left: string, right: string) {
-  const max = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < max && left[index] === right[index]) index += 1;
-  return index;
-}
-
-const startAttributeFamilies = {
-  electric: ['electric', 'electrostarter'],
-  button: ['button', 'push'],
-  manual: ['manual', 'recoil', 'pull', 'cord']
-} as const;
-
-type StartAttributeFamily = keyof typeof startAttributeFamilies;
-
-function tokensHaveFamily(tokens: string[], family: StartAttributeFamily) {
-  return tokensOverlap(tokens, [...startAttributeFamilies[family]]);
-}
-
-function requestedStartFamilies(tokens: string[]) {
-  return (Object.keys(startAttributeFamilies) as StartAttributeFamily[])
-    .filter((family) => tokensHaveFamily(tokens, family));
 }
 
 function verifiedFactMatchesAttribute(fact: VerifiedProductFact, attribute: string) {
   const requestedTokens = attributeTokens(attribute);
   if (!requestedTokens.length) return true;
   const factTokens = attributeTokens([fact.attribute, fact.value].join(' '));
-  const requestedFamilies = requestedStartFamilies(requestedTokens);
-  if (requestedFamilies.length) {
-    return factTokens.length > 0 && requestedFamilies.every((family) => tokensHaveFamily(factTokens, family));
-  }
   return factTokens.length > 0 && tokensOverlap(factTokens, requestedTokens);
 }
 
