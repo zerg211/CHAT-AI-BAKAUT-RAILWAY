@@ -16,6 +16,18 @@ describe('troubleshooting memory normalization', () => {
     expect(extractFaultCodes('Нужен генератор АД 30С-Т400-1РКМ1')).toEqual([]);
   });
 
+  it('extracts fault codes before diagnostic terms', () => {
+    expect(extractFaultCodes('АД 30С-Т400-1РКМ1 высветил A25, ошибка на табло.')).toEqual(['A25']);
+  });
+
+  it('normalizes spaced and hyphenated fault codes', () => {
+    expect(extractFaultCodes('На дисплее ошибка A - 25, двигатель остановился.')).toEqual(['A25']);
+  });
+
+  it('does not extract catalog-like codes without diagnostic context', () => {
+    expect(extractFaultCodes('Нужен фильтр A-25 для генератора и масло B12.')).toEqual([]);
+  });
+
   it('builds a verified case draft from a sourced troubleshooting answer', () => {
     const draft = buildTroubleshootingCaseDraft({
       userMessage: question,

@@ -19,6 +19,131 @@ function unique(values: string[]) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function isWhitespace(char: string) {
+  return char === ' ' || char === '\n' || char === '\r' || char === '\t';
+}
+
+function compactWhitespace(value: string) {
+  let result = '';
+  let pendingSpace = false;
+  for (const char of value.trim()) {
+    if (isWhitespace(char)) {
+      pendingSpace = result.length > 0;
+      continue;
+    }
+    if (pendingSpace) {
+      result += ' ';
+      pendingSpace = false;
+    }
+    result += char;
+  }
+  return result;
+}
+
+function isAsciiDigit(char: string) {
+  return char >= '0' && char <= '9';
+}
+
+function isLetter(char: string) {
+  return char.toLocaleLowerCase('ru-RU') !== char.toLocaleUpperCase('ru-RU');
+}
+
+function isAlphaNumeric(char: string | undefined) {
+  return Boolean(char && (isAsciiDigit(char) || isLetter(char)));
+}
+
+function isFaultCodeLetter(char: string | undefined) {
+  if (!char) return false;
+  const upper = char.toLocaleUpperCase('ru-RU');
+  return (upper >= 'A' && upper <= 'Z') || (upper >= 'А' && upper <= 'Я');
+}
+
+function textTokens(value: string) {
+  const tokens: string[] = [];
+  let current = '';
+  for (const char of value.toLocaleLowerCase('ru-RU')) {
+    if (isAlphaNumeric(char)) {
+      current += char;
+      continue;
+    }
+    if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  }
+  if (current) tokens.push(current);
+  return tokens;
+}
+
+const diagnosticCodeTerms = [
+  'ошибк',
+  'код',
+  'табло',
+  'диспле',
+  'авари',
+  'alarm',
+  'error',
+  'fault',
+  'code'
+];
+
+function containsDiagnosticCodeTerm(value: string) {
+  const normalized = value.toLocaleLowerCase('ru-RU');
+  return diagnosticCodeTerms.some((term) => normalized.includes(term));
+}
+
+function trimToCurrentSentenceBefore(value: string) {
+  let start = 0;
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    const char = value[index];
+    if (char === '.' || char === '?' || char === '!' || char === '\n') {
+      start = index + 1;
+      break;
+    }
+  }
+  return value.slice(start);
+}
+
+function trimToCurrentSentenceAfter(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === '.' || char === '?' || char === '!' || char === '\n') {
+      return value.slice(0, index);
+    }
+  }
+  return value;
+}
+
+function readFaultCodeCandidate(text: string, start: number) {
+  if (isAlphaNumeric(text[start - 1]) || !isFaultCodeLetter(text[start])) return null;
+
+  let index = start;
+  let letters = '';
+  while (isFaultCodeLetter(text[index])) {
+    letters += text[index];
+    index += 1;
+  }
+  if (letters.length < 1 || letters.length > 2) return null;
+
+  while (isWhitespace(text[index])) index += 1;
+  if (text[index] === '-') {
+    index += 1;
+    while (isWhitespace(text[index])) index += 1;
+  }
+
+  let digits = '';
+  while (isAsciiDigit(text[index])) {
+    digits += text[index];
+    index += 1;
+  }
+  if (digits.length < 1 || digits.length > 4 || isAlphaNumeric(text[index])) return null;
+
+  return {
+    code: `${letters}${digits}`.toLocaleUpperCase('ru-RU'),
+    end: index
+  };
+}
+
 export function normalizeTroubleshootingModelKey(value: string) {
   return compactModelText(value);
 }
@@ -26,7 +151,7 @@ export function normalizeTroubleshootingModelKey(value: string) {
 export function extractTroubleshootingModelTokens(text: string) {
   return unique(expandModelTokenAliases(extractModelTokens(text)))
     .map((token) => ({
-      value: token.trim().replace(/\s+/g, ' '),
+      value: compactWhitespace(token),
       key: normalizeTroubleshootingModelKey(token)
     }))
     .filter((item) => item.key.length >= 4);
@@ -34,14 +159,15 @@ export function extractTroubleshootingModelTokens(text: string) {
 
 export function extractFaultCodes(text: string) {
   const codes: string[] = [];
-  const patterns = [
-    /(?:ошибк[аиу]?|код|табло|диспле[йя]|авари[яи]|alarm|error|fault|code)[^.?!\n]{0,50}\b([A-ZА-Я]{1,2}\s*-?\s*\d{1,4})\b/giu,
-    /\b([A-ZА-Я]{1,2}\s*-?\s*\d{1,4})\b[^.?!\n]{0,24}(?:ошибк[аиу]?|код|табло|диспле[йя]|авари[яи]|alarm|error|fault|code)/giu
-  ];
-  for (const pattern of patterns) {
-    for (const match of text.matchAll(pattern)) {
-      const code = match[1]?.replace(/\s+/g, '').replace(/-/g, '').toUpperCase();
-      if (code && /^[A-ZА-Я]{1,2}\d{1,4}$/u.test(code)) codes.push(code);
+  for (let index = 0; index < text.length; index += 1) {
+    const candidate = readFaultCodeCandidate(text, index);
+    if (!candidate) continue;
+
+    const beforeStart = Math.max(0, index - 50);
+    const before = trimToCurrentSentenceBefore(text.slice(beforeStart, index));
+    const after = trimToCurrentSentenceAfter(text.slice(candidate.end, candidate.end + 24));
+    if (containsDiagnosticCodeTerm(before) || containsDiagnosticCodeTerm(after)) {
+      codes.push(candidate.code);
     }
   }
   return unique(codes).slice(0, 8);
@@ -57,11 +183,7 @@ function problemTokens(text: string, modelKeys: string[], faultCodes: string[]) 
   const compactModels = new Set(modelKeys);
   const compactFaults = new Set(faultCodes.map((code) => compactModelText(code)));
   return unique(
-    text
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}]+/gu, ' ')
-      .split(/\s+/)
-      .map((token) => token.trim())
+    textTokens(text)
       .filter((token) => token.length >= 3)
       .filter((token) => !stopWords.has(token))
       .filter((token) => !compactModels.has(compactModelText(token)))
@@ -90,7 +212,7 @@ export function buildTroubleshootingCaseDraft(input: {
   const model = extractTroubleshootingModelTokens(input.userMessage)[0];
   if (!model) return null;
   const faultCodes = extractFaultCodes(input.userMessage);
-  const problemSummary = input.userMessage.trim().replace(/\s+/g, ' ').slice(0, 500);
+  const problemSummary = compactWhitespace(input.userMessage).slice(0, 500);
   return {
     model: model.value,
     modelKey: model.key,

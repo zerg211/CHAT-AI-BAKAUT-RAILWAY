@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1745,
+  "count": 1729,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -7182,118 +7182,6 @@
       "kind": "regular_expression_literal",
       "hash": "6c866a2b194802cc",
       "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|replace_regex_argument|ba6f252dc4b3c6eb|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "replace_regex_argument",
-      "hash": "ba6f252dc4b3c6eb",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|c2be8b4410f8e831|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|da784e060df74d0f|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "da784e060df74d0f",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|5111c940f1dd4bf7|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "5111c940f1dd4bf7",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|replace_regex_argument|9dafc0801d7e2783|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "replace_regex_argument",
-      "hash": "9dafc0801d7e2783",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|replace_regex_argument|5177e52f19d395c7|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "replace_regex_argument",
-      "hash": "5177e52f19d395c7",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|c2be8b4410f8e831|2",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 2
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|12a766abd83f4e04|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "12a766abd83f4e04",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regex_test_call|97f9a1539539d772|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regex_test_call",
-      "hash": "97f9a1539539d772",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|7874f114f21fc136|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "7874f114f21fc136",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|split_regex_argument|9251e2f0715fc02e|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "split_regex_argument",
-      "hash": "9251e2f0715fc02e",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|replace_regex_argument|c92365e1fca98ebb|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "replace_regex_argument",
-      "hash": "c92365e1fca98ebb",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|84c59f746b322099|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "84c59f746b322099",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|b6e739e7c08a388d|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "b6e739e7c08a388d",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|replace_regex_argument|167a1122eb761b45|1",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "replace_regex_argument",
-      "hash": "167a1122eb761b45",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/troubleshootingMemory.ts|regular_expression_literal|c2be8b4410f8e831|3",
-      "file": "src/ai/troubleshootingMemory.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 3
     },
     {
       "id": "src/catalog/crawler.ts|match_regex_argument|8c4f795b969dc8bd|1",
