@@ -3,7 +3,6 @@ import type { Product, ProductSelectionClass, ProductSelectionState, CustomerNee
 export type ProductIntent = ProductSelectionClass;
 
 export const fromEscaped = (value: string) => JSON.parse(`"${value}"`) as string;
-export const weightRegex = new RegExp(String.raw`(\d{2,4})\s*(?:\u043a\u0433|kg)`, 'i');
 export const powerRegex = new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430)`, 'i');
 export const powerRangeRegex = new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:-|–|—|\u0434\u043e)\s*(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430)`, 'i');
 export const budgetMaxRegex = new RegExp(String.raw`(?:\u0434\u043e|\u0437\u0430|\u0432\s+\u043f\u0440\u0435\u0434\u0435\u043b\u0430\u0445|\u0432\s+\u0440\u0430\u043c\u043a\u0430\u0445|\u043d\u0435\s+\u0434\u043e\u0440\u043e\u0436\u0435|budget\s*(?:up\s*to)?|max|maximum|<=?)\s*(\d+(?:[,.]\d+)?)\s*(?:\u0442\u044b\u0441(?:\u044f\u0447)?|\u0442\.?\s*\u0440\.?|\u0440\u0443\u0431|rub|₽)?`, 'i');
@@ -279,15 +278,89 @@ export function productLiters(product: Product) {
 
 export function parseLoosePositiveNumber(value: unknown) {
   if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : undefined;
-  const match = String(value ?? '').replace(/\s+/g, ' ').match(/(\d+(?:[,.]\d+)?)/);
-  if (!match) return undefined;
-  const parsed = Number(match[1].replace(',', '.'));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  const parsed = firstLoosePositiveNumber(String(value ?? ''));
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function firstLoosePositiveNumber(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    const parsed = loosePositiveNumberAt(value, index);
+    if (parsed) return parsed.value;
+    if (isDigit(value[index])) {
+      while (index + 1 < value.length && isDigit(value[index + 1])) index += 1;
+    }
+  }
+  return undefined;
+}
+
+function isDigit(char: string | undefined) {
+  return char !== undefined && char >= '0' && char <= '9';
+}
+
+function loosePositiveNumberAt(value: string, index: number) {
+  if (!isDigit(value[index])) return undefined;
+  let cursor = index;
+  let raw = '';
+  let hasDecimal = false;
+  while (cursor < value.length) {
+    const char = value[cursor];
+    if (isDigit(char)) {
+      raw += char;
+      cursor += 1;
+      continue;
+    }
+    if ((char === '.' || char === ',') && !hasDecimal && isDigit(value[cursor + 1])) {
+      raw += '.';
+      hasDecimal = true;
+      cursor += 1;
+      continue;
+    }
+    break;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? { value: parsed, end: cursor } : undefined;
+}
+
+function hasWeightSpecKeySignal(key: string) {
+  const lower = key.toLocaleLowerCase('ru-RU');
+  return [
+    fromEscaped('\\u043c\\u0430\\u0441\\u0441'),
+    fromEscaped('\\u0432\\u0435\\u0441'),
+    'weight'
+  ].some((fragment) => lower.includes(fragment));
+}
+
+function skipUnitWhitespace(value: string, index: number) {
+  let cursor = index;
+  while (cursor < value.length && value[cursor]?.trim() === '') cursor += 1;
+  return cursor;
+}
+
+function weightUnitAt(value: string, index: number) {
+  const tail = value.slice(index).toLocaleLowerCase('ru-RU');
+  return tail.startsWith('kg') || tail.startsWith(fromEscaped('\\u043a\\u0433'));
+}
+
+function textWeightKg(value: string) {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!isDigit(value[index])) continue;
+    let cursor = index;
+    let raw = '';
+    while (cursor < value.length && isDigit(value[cursor])) {
+      raw += value[cursor];
+      cursor += 1;
+    }
+    if (raw.length >= 2 && raw.length <= 4 && weightUnitAt(value, skipUnitWhitespace(value, cursor))) {
+      return Number(raw);
+    }
+    index = cursor;
+  }
+  return undefined;
 }
 
 export function extractWeightKg(product: Product) {
   for (const [key, value] of Object.entries(product.specs ?? {})) {
-    if (!/(?:\u043c\u0430\u0441\u0441|\u0432\u0435\u0441|weight)/iu.test(key)) continue;
+    if (!hasWeightSpecKeySignal(key)) continue;
     const parsed = parseLoosePositiveNumber(value);
     if (parsed !== undefined) return parsed;
   }
@@ -296,8 +369,7 @@ export function extractWeightKg(product: Product) {
     product.description,
     JSON.stringify(product.specs ?? {})
   ].join(' ');
-  const match = text.match(weightRegex);
-  return match ? Number(match[1]) : undefined;
+  return textWeightKg(text);
 }
 
 export function extractDimensionMm(product: Product) {

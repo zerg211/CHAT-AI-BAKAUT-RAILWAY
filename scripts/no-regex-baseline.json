@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1778,
+  "count": 1771,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -5854,13 +5854,6 @@
       "occurrence": 1
     },
     {
-      "id": "src/ai/productClassifier.ts|regexp_constructor_new|064f6867c067f101|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regexp_constructor_new",
-      "hash": "064f6867c067f101",
-      "occurrence": 1
-    },
-    {
       "id": "src/ai/productClassifier.ts|regexp_constructor_new|ad91d56cb2f2e826|1",
       "file": "src/ai/productClassifier.ts",
       "kind": "regexp_constructor_new",
@@ -5977,48 +5970,6 @@
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "576811c5634f28a8",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|match_regex_argument|b1dc75f4be437240|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "match_regex_argument",
-      "hash": "b1dc75f4be437240",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|replace_regex_argument|53c186ffbbb0de6f|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "replace_regex_argument",
-      "hash": "53c186ffbbb0de6f",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|6f3be9570c50654a|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regular_expression_literal",
-      "hash": "6f3be9570c50654a",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regex_test_call|5028d0df452857cc|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regex_test_call",
-      "hash": "5028d0df452857cc",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|4c8e921c9e9d1c14|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regular_expression_literal",
-      "hash": "4c8e921c9e9d1c14",
       "occurrence": 1
     },
     {
@@ -6141,11 +6092,11 @@
       "occurrence": 1
     },
     {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|2",
+      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|1",
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "c2be8b4410f8e831",
-      "occurrence": 2
+      "occurrence": 1
     },
     {
       "id": "src/ai/productClassifier.ts|regex_test_call|cf8898286be5582d|1",
@@ -6477,11 +6428,11 @@
       "occurrence": 1
     },
     {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|3",
+      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|2",
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "c2be8b4410f8e831",
-      "occurrence": 3
+      "occurrence": 2
     },
     {
       "id": "src/ai/productClassifier.ts|regex_test_call|e485f3c840f13f9c|1",
@@ -6547,11 +6498,11 @@
       "occurrence": 2
     },
     {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|4",
+      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|3",
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "c2be8b4410f8e831",
-      "occurrence": 4
+      "occurrence": 3
     },
     {
       "id": "src/ai/productClassifier.ts|match_regex_argument|6bdef34f1a7845b7|1",
@@ -6617,11 +6568,11 @@
       "occurrence": 3
     },
     {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|5",
+      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|4",
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "c2be8b4410f8e831",
-      "occurrence": 5
+      "occurrence": 4
     },
     {
       "id": "src/ai/productClassifier.ts|match_regex_argument|2cbded93396a1eff|1",
@@ -7016,11 +6967,11 @@
       "occurrence": 1
     },
     {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|6",
+      "id": "src/ai/productClassifier.ts|regular_expression_literal|c2be8b4410f8e831|5",
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "c2be8b4410f8e831",
-      "occurrence": 6
+      "occurrence": 5
     },
     {
       "id": "src/ai/productClassifier.ts|regex_test_call|352aa8845a31c131|1",

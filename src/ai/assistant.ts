@@ -9,7 +9,7 @@ import { sendLeadEmail } from '../email/httpEmail.js';
 import { emptyNeedState, emptyProductSelectionState, emptySemanticMemory, mergeNeedState, mergeProductSelectionState, summarizeNeedState } from './needState.js';
 import { calculateGeneratorLoadProfile as calculateStructuredGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
 import {
-  fromEscaped, weightRegex, powerRegex, powerRangeRegex, budgetMaxRegex,
+  fromEscaped, powerRegex, powerRangeRegex, budgetMaxRegex,
   plateTerms, generatorTerms, rammerTerms, cutterTerms, diamondBladeTerms,
   weightTerms, wheelTransportTerms, homeTerms, inverterTerms, dieselTerms,
   gasolineTerms, professionalTerms, coldStartTerms, quietTerms,

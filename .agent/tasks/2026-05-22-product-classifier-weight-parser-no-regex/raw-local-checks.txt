@@ -1,0 +1,35 @@
+2026-05-22 product classifier weight parser no-regex local checks
+
+Command: npm test -- tests/productClassifier.test.ts tests/agentManagerCardSelection.test.ts
+Result: PASS
+Summary: 2 files passed, 22 tests passed
+
+Command: npm run typecheck
+Result: PASS
+
+Command: npm run lint:no-regex -- --update-baseline
+Result: PASS
+Summary: Updated scripts/no-regex-baseline.json with 1771 legacy findings.
+
+Command: npm run lint:no-regex
+Result: PASS
+Summary: No new regex constructs. Legacy baseline: 1771.
+
+Command: npm run build
+Result: PASS
+
+Command: git diff --check
+Result: PASS
+Summary: no whitespace errors; LF-to-CRLF normalization warnings only.
+
+Command: npm test
+Result: INITIAL TIMEOUT
+Summary: productComparisonResearch test timed out in the first full-suite run.
+
+Command: npm test -- tests/productComparisonResearch.test.ts
+Result: PASS
+Summary: 1 file passed, 7 tests passed.
+
+Command: npm test
+Result: PASS
+Summary: 78 files passed, 643 tests passed.

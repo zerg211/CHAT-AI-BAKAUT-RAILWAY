@@ -1,0 +1,70 @@
+{
+  "taskId": "2026-05-22-product-classifier-weight-parser-no-regex",
+  "verdict": "PASS_LOCAL",
+  "baseline": {
+    "noRegexLegacyBefore": 1778,
+    "noRegexLegacyAfter": 1771,
+    "removedLegacyFindings": 7
+  },
+  "changes": [
+    {
+      "file": "src/ai/productClassifier.ts",
+      "summary": "Replaced parseLoosePositiveNumber and extractWeightKg regex usage with explicit scanner helpers."
+    },
+    {
+      "file": "src/ai/assistant.ts",
+      "summary": "Removed unused weightRegex import after deleting the export."
+    },
+    {
+      "file": "tests/productClassifier.test.ts",
+      "summary": "Added focused regression coverage for loose number and weight parsing behavior."
+    },
+    {
+      "file": "scripts/no-regex-baseline.json",
+      "summary": "Updated legacy regex baseline from 1778 to 1771."
+    }
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/productClassifier.test.ts tests/agentManagerCardSelection.test.ts",
+      "status": "PASS",
+      "summary": "2 files passed, 22 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm run lint:no-regex -- --update-baseline",
+      "status": "PASS",
+      "summary": "Updated scripts/no-regex-baseline.json with 1771 legacy findings."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1771."
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "No whitespace errors; LF-to-CRLF warnings only."
+    },
+    {
+      "command": "npm test",
+      "status": "PASS_AFTER_RETRY",
+      "summary": "First run timed out in productComparisonResearch; isolated file then passed, fresh full suite passed 78 files / 643 tests."
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS_LOCAL",
+    "AC6": "PENDING_PRODUCTION_PROMPTFOO"
+  }
+}
