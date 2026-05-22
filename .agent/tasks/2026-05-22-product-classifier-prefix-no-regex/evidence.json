@@ -1,12 +1,12 @@
 {
   "taskId": "2026-05-22-product-classifier-prefix-no-regex",
-  "verdict": "PASS_LOCAL",
+  "verdict": "PASS",
   "acceptanceCriteria": {
     "AC1": "PASS",
     "AC2": "PASS",
     "AC3": "PASS",
     "AC4": "PASS",
-    "AC5": "PENDING_PUSH"
+    "AC5": "PASS_PUSHED_AND_PRODUCTION_VERIFIED"
   },
   "changes": [
     {
@@ -50,6 +50,17 @@
     {
       "command": "npm run build",
       "status": "PASS"
+    },
+    {
+      "command": "npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-classifier-prefix-no-regex/production-evals-after-4c2e023.json",
+      "status": "PASS",
+      "summary": "Production Promptfoo passed 6/6; deterministic average 0.9909444444444445; LLM average 0.9499999999999998.",
+      "commit": "4c2e02355cc8df8725c4c05b41facb60087cd0bb",
+      "railwayMarker": "4c2e02355cc8df8725c4c05b41facb60087cd0bb",
+      "rawArtifacts": [
+        "production-evals-after-4c2e023.json",
+        "production-evals-after-4c2e023.summary.json"
+      ]
     }
   ]
 }

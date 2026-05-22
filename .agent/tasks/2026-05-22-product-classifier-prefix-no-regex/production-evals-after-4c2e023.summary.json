@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-product-classifier-prefix-no-regex\\production-evals-after-4c2e023.json",
+  "generatedAt": "2026-05-22T10:52:33.235Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 6,
+    "failures": 0,
+    "errors": 0,
+    "averageScore": 0.9909444444444445,
+    "assertionPassRate": 1,
+    "assertionPassCount": 33,
+    "assertionFailCount": 0,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.9499999999999998,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true,
+    "llmAverageUsable": true
+  }
+}
