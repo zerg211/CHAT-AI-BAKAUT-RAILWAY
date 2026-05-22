@@ -668,7 +668,7 @@ function verifiedFactsCoverRequest(input: {
   const meaningfulAttributes = input.comparisonAttributes
     .filter((attribute) => attributeTokens(attribute).length > 0);
   if (!meaningfulAttributes.length) return true;
-  return meaningfulAttributes.some((attribute) =>
+  return meaningfulAttributes.every((attribute) =>
     input.facts.some((fact) => verifiedFactMatchesAttribute(fact, attribute))
   );
 }

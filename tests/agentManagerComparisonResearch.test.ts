@@ -1302,7 +1302,7 @@ describe('AgentManager comparison research flow', () => {
               query: 'SUNREKA G7000iS button start recoil start',
               semanticQuery: 'SUNREKA G7000iS START button and recoil starter',
               productNames: ['SUNREKA G7000iS'],
-              comparisonAttributes: ['starting method', 'starter type', 'electric start', 'recoil start', 'push button start', 'pull cord']
+              comparisonAttributes: ['button start', 'recoil start']
             },
             rationale: 'exact model fact must be grounded',
             required: true
