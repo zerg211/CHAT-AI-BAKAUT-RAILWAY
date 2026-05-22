@@ -464,7 +464,7 @@ function toolRequestEvidenceText(request: ToolRequest) {
 }
 
 function exactModelEvidenceToolCoversToken(request: ToolRequest, token: string) {
-  if (!['catalog.search', 'catalog.getProductDetails', 'web.researchProductFacts'].includes(request.tool)) return false;
+  if (request.tool !== 'web.researchProductFacts') return false;
   return modelIdentifierTokens(toolRequestEvidenceText(request)).includes(token);
 }
 
