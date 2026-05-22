@@ -67,12 +67,34 @@
       "summary": "Vite client build and server TypeScript build passed"
     }
   ],
+  "productionChecks": [
+    {
+      "commit": "64f0ac0fd8ecc9f33d162c63b4ef798e343829f2",
+      "railwayMarker": "64f0ac0fd8ecc9f33d162c63b4ef798e343829f2",
+      "command": "npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-visible-card-constraint-consistency/production-evals-after-64f0ac0.json",
+      "environment": {
+        "PROMPTFOO_CHAT_BASE_URL": "https://chat-ai-production-3057.up.railway.app",
+        "PROMPTFOO_CHAT_PAGE_URL": "https://bakautprof.ru/?agentHarness=1"
+      },
+      "status": "PASS",
+      "passed": 6,
+      "total": 6,
+      "deterministicAverage": 0.9925555555555556,
+      "llmAverage": 0.96,
+      "assertionPassCount": 33,
+      "assertionFailCount": 0,
+      "rawArtifacts": [
+        "production-evals-after-64f0ac0.json",
+        "production-evals-after-64f0ac0.summary.json"
+      ]
+    }
+  ],
   "acceptanceCriteria": {
     "AC1": "PASS_LOCAL",
     "AC2": "PASS_LOCAL",
     "AC3": "PASS_LOCAL",
     "AC4": "PASS_LOCAL",
     "AC5": "PASS_LOCAL",
-    "AC6": "PENDING_PRODUCTION_PROMPTFOO"
+    "AC6": "PASS_PRODUCTION_PROMPTFOO"
   }
 }
