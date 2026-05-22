@@ -2034,6 +2034,54 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(1);
   });
 
+  it('keeps leadRequested true when the answer offers the form after missing contact', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const formOfferModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks for commercial terms without contact',
+          dialogueUnderstanding: 'delivery, discount, and pickup terms require specialist verification',
+          nextStepRationale: 'offer contact form because no contact is present',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:missing',
+            tool: 'lead.capture',
+            args: {},
+            rationale: 'buyer has not provided contact yet',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Доставка есть, но стоимость, условия и скидку нужно уточнить у логистики и менеджера. Оставьте имя и телефон в форме, и мы проверим это предметно.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:missing'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, formOfferModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Доставка есть? И можно ли получить скидку, если сразу забрать генератор?'
+    });
+
+    const metadata = payload.metadata as { answerContract?: { leadAction?: string } };
+    expect(payload.answer).toContain('Оставьте имя и телефон');
+    expect(payload.leadRequested).toBe(true);
+    expect(payload.leadCreated).toBe(false);
+    expect(metadata.answerContract?.leadAction).toBe('offer_form');
+    expect(leads.created).toHaveLength(0);
+  });
+
   it('routes high-risk source disagreements to adjudication instead of sending a final answer', async () => {
     const conversations = new FakeConversations();
     const conflictModel = model({

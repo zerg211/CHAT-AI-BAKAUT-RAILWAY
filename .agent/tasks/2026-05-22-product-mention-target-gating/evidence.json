@@ -5,7 +5,9 @@
     "Added productMentions to planner structured format and prompt instructions.",
     "Filtered exact web/catalog targets by LLM product mention role.",
     "Added observability for suppressed context-only target names.",
-    "Added focused tests for context load devices and preserved target exact-model handling."
+    "Added focused tests for context load devices and preserved target exact-model handling.",
+    "After failed production eval 5d88c46, added final leadAction consistency repair for form-offer answers after missing-contact lead.capture.",
+    "After failed production eval 5d88c46, strengthened general LLM/reviewer grounding for visible catalog recommendations and one-person plate-compactor weight compromises."
   ],
   "checks": [
     {
@@ -25,6 +27,21 @@
       "command": "npm run lint:no-regex",
       "status": "pass",
       "details": "No new regex constructs. Legacy baseline: 1623."
+    },
+    {
+      "command": "npx vitest run tests/agentManagerOrchestrator.test.ts",
+      "status": "pass",
+      "details": "1 test file passed, 28 tests passed"
+    },
+    {
+      "command": "npx vitest run tests/agentManagerOrchestrator.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerContracts.test.ts",
+      "status": "pass",
+      "details": "3 test files passed, 52 tests passed"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "86 test files passed, 695 tests passed"
     }
   ],
   "acceptanceCriteria": {
@@ -39,7 +56,14 @@
     "AC9": "pass"
   },
   "productionPromptfoo": {
-    "status": "pending_after_push",
-    "required": true
-  }
+    "status": "failed_before_fix_pass",
+    "required": true,
+    "artifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.json",
+    "summaryArtifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.summary.json",
+    "commit": "5d88c46",
+    "deterministicAverage": 0.9262222222222224,
+    "llmAverage": 0.7716666666666666,
+    "nextStep": "Commit and push fix pass, wait for Railway marker, rerun production Promptfoo."
+  },
+  "fixPassTimestamp": "2026-05-22T19:54:48.5358054+03:00"
 }

@@ -54,4 +54,52 @@ PASS: No new regex constructs. Legacy baseline: 1623.
 
 ## Production eval
 
-Pending until the code commit is pushed and the Railway marker reaches it.
+Initial production run after commit `5d88c46`:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.json
+FAIL: 3/6 tests passed
+Deterministic average: 92.62%
+LLM average: 77.17%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.json`
+- `.agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.summary.json`
+
+Problems recorded:
+- `.agent/tasks/2026-05-22-product-mention-target-gating/problems.md`
+
+## Fix pass after failed production eval
+
+Timestamp: `2026-05-22T19:54:48.5358054+03:00`
+
+Changes:
+- Added deterministic final-contract consistency repair: when `lead.capture` reports missing contact/name and the final answer already asks for contact data, final `leadAction` becomes `offer_form`.
+- Added a focused unit test proving `leadRequested` stays true for that form-offer case.
+- Strengthened general LLM/reviewer instructions so catalog recommendation names must come from `products[].name` and must be true visible recommendation candidates, not filler.
+- Strengthened plate-compactor guidance so a heavier in-budget product under one-person transport is labeled as a compromise if no clearly light in-budget candidate is available.
+
+Local checks:
+
+```text
+npx vitest run tests/agentManagerOrchestrator.test.ts
+PASS: 1 test file, 28 tests
+
+npx vitest run tests/agentManagerOrchestrator.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerContracts.test.ts
+PASS: 3 test files, 52 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1623.
+
+npm run build
+PASS
+
+npm test
+PASS: 86 test files, 695 tests
+```
+
+AC8 remains pending until this fix pass is committed, pushed, Railway marker reaches the new commit, and production Promptfoo is rerun against Railway.

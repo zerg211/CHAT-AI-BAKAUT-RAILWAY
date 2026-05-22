@@ -263,6 +263,20 @@ function normalizeAnswerEvidenceSources(input: {
   };
 }
 
+function leadActionAfterReview(input: {
+  answer: AnswerContract;
+  finalText: string;
+  review: PreSendReview;
+  toolResults: ToolResult[];
+}): AnswerContract['leadAction'] {
+  const reviewRequiresOfferForm = input.review.issues.some((issue) =>
+    issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
+  );
+  if (reviewRequiresOfferForm) return 'offer_form';
+  if (leadCaptureMissingContact(input.toolResults) && answerRequestsContactData(input.finalText)) return 'offer_form';
+  return input.answer.leadAction;
+}
+
 function requestStringArray(value: unknown) {
   return Array.isArray(value)
     ? value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
@@ -1448,8 +1462,10 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, rank the shortlist by fit to both constraints: first show the lightest in-budget candidates that still match the job. If two or more clearly lighter in-budget candidates are present in products, do not put a heavier in-budget product in the primary bullet list as an equal recommendation; mention it only after the shortlist as a heavier compromise if that tradeoff is useful.',
+            'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, if no clearly light in-budget candidate is available, do not call a heavier in-budget candidate light or clearly best. Present it as a budget/availability compromise, state the weight tradeoff, and ask whether that weight is acceptable before final selection.',
             'When the buyer gives a budget, never present products above that budget as satisfying it. If in-budget catalog candidates exist but are weaker or compromise options, say that plainly and treat higher-priced models only as above-budget reference points.',
             'For catalog selection answers, do not enumerate the full returned catalog. Name only the strongest 1-3 products you can justify from the provided product context. Treat every named product as a visible recommendation candidate; avoid naming borderline or dropped alternatives as filler. Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context.',
+            'For catalog selection answers, every catalog model or brand-model named in answerText must be copied from products[].name, and every named catalog recommendation must be strong enough to be shown as a visible card. Do not introduce product names that are absent from products, and do not mention a returned product as narrative filler if it is not a real recommendation candidate.',
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
@@ -1499,7 +1515,9 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, require rewrite if the primary shortlist presents a heavier in-budget product as an equal recommendation while two or more lighter in-budget products are available in products. The heavier product may appear only as a clearly labeled compromise after the lighter shortlist.',
+            'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, require rewrite if no clearly light in-budget candidate is available and the answer presents a heavier in-budget product as clearly best or light without stating the weight compromise and asking whether that tradeoff is acceptable.',
             'For catalog selection answers, require rewrite if the answer enumerates too many product names, uses named products as filler beyond the strongest 1-3 recommendations, or states concrete dimensions/specs not present in products. A named product should be treated as a visible recommendation candidate.',
+            'For catalog selection answers, require rewrite if answerText names a catalog recommendation or brand-model that is absent from products[].name, or if it names a returned product that is not strong enough to be a visible recommendation candidate.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
@@ -1872,11 +1890,7 @@ export class AgentManagerOrchestrator {
     let finalText = review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()
       ? review.revisedAnswerText.trim()
       : answer.answerText.trim();
-    const finalLeadAction = review.issues.some((issue) =>
-      issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
-    )
-      ? 'offer_form'
-      : answer.leadAction;
+    const finalLeadAction = leadActionAfterReview({ answer, finalText, review, toolResults });
     if (review.verdict === 'block') {
       throw new Error(`Agent manager answer blocked: ${review.issues.map((issue) => issue.code).join(', ')}`);
     }
