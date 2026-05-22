@@ -32,7 +32,12 @@
     }
   ],
   "prodLiveCheck": {
-    "status": "NOT_RUN",
-    "reason": "Code is not committed/pushed/deployed yet"
+    "status": "PASS",
+    "productionCommit": "9d04038912ff356a714de0ab66cc6bc796541385",
+    "siteUrl": "https://bakautprof.ru/?agentHarness=1&codexLive=g7000is-source-adjudication-9d04038",
+    "sessionId": "0ce9eeb5-6999-4896-a334-a1f5b34c67fe",
+    "protocolPath": "local-live-tests/2026-05-22-g7000is-source-adjudication-9d04038.production.md",
+    "visibleAnswer": "Кнопочный запуск подтвержден. Ручной запуск тоже есть. У нас SUNREKA G7000iS есть в каталоге.",
+    "adminMetadata": "NOT_AVAILABLE_NO_ADMIN_TOKEN"
   }
 }

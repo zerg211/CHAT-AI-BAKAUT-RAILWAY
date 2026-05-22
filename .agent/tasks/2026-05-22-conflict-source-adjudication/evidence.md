@@ -34,6 +34,28 @@ npm run lint:no-regex
 
 Result: PASS, no new regex constructs.
 
-## Notes
+## Production
 
-Production live readiness still requires commit, push, Railway deploy pickup, and a real widget check on `https://bakautprof.ru/`.
+```powershell
+git push origin main
+```
+
+Result: PASS, commit `9d04038912ff356a714de0ab66cc6bc796541385` reached `origin/main`.
+
+```powershell
+Invoke-RestMethod https://chat-ai-production-3057.up.railway.app/api/health
+```
+
+Result: PASS, Railway marker showed runtime commit `9d04038912ff356a714de0ab66cc6bc796541385` on branch `main`.
+
+## Live Widget
+
+Protocol: `local-live-tests/2026-05-22-g7000is-source-adjudication-9d04038.production.md`
+
+Buyer asked whether `SUNREKA G7000iS` needs the pull cord every time or starts by button.
+
+Visible production widget answer:
+
+> Кнопочный запуск подтвержден. Ручной запуск тоже есть. У нас SUNREKA G7000iS есть в каталоге.
+
+Result: PASS for the repaired conflict path. Admin metadata was not available because no admin token was present in this shell.
