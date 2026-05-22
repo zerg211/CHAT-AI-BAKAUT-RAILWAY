@@ -46,6 +46,9 @@ const defaultContentRoots = new Set([
   'brands'
 ]);
 
+const documentSuffixes = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar'];
+const brandSpecKeys = ['производитель', 'бренд', 'марка'];
+
 function replaceAllText(value: string, target: string, replacement: string) {
   return value.split(target).join(replacement);
 }
@@ -199,6 +202,61 @@ function contentPageType(url: string, baseUrl: string) {
   return defaultContentRoots.has(parts[0]) ? parts[0] : undefined;
 }
 
+function withoutQueryOrHash(value: string) {
+  const queryIndex = value.indexOf('?');
+  const hashIndex = value.indexOf('#');
+  const indexes = [queryIndex, hashIndex].filter((index) => index >= 0);
+  const cutIndex = indexes.length ? Math.min(...indexes) : -1;
+  return cutIndex >= 0 ? value.slice(0, cutIndex) : value;
+}
+
+function hasDocumentSuffix(value: string) {
+  const path = withoutQueryOrHash(value).toLocaleLowerCase('en-US');
+  return documentSuffixes.some((suffix) => path.endsWith(suffix));
+}
+
+function extractCssUrl(value: string) {
+  const lower = value.toLocaleLowerCase('en-US');
+  const marker = 'url(';
+  const start = lower.indexOf(marker);
+  if (start < 0) return undefined;
+  const contentStart = start + marker.length;
+  const end = value.indexOf(')', contentStart);
+  if (end < 0) return undefined;
+  let content = value.slice(contentStart, end).trim();
+  const first = content[0];
+  const last = content[content.length - 1];
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    content = content.slice(1, -1).trim();
+  }
+  return content || undefined;
+}
+
+function articleValueFromCaption(value: string) {
+  const marker = 'артикул';
+  const lower = value.toLocaleLowerCase('ru-RU');
+  const markerIndex = lower.indexOf(marker);
+  if (markerIndex < 0) return undefined;
+  const afterMarker = value.slice(markerIndex + marker.length);
+  if (afterMarker && afterMarker[0].trim().length > 0) return undefined;
+  const trimmed = afterMarker.trimStart();
+  return trimmed.length ? trimmed : undefined;
+}
+
+function isBrandSpecKey(value: string) {
+  const lower = value.toLocaleLowerCase('ru-RU');
+  return brandSpecKeys.some((key) => lower.includes(key));
+}
+
+function isAsciiAlnumOrHyphen(char: string) {
+  const code = char.codePointAt(0) ?? 0;
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || char === '-';
+}
+
+function isBrandLikeToken(value: string) {
+  return value.length >= 3 && [...value].every(isAsciiAlnumOrHyphen);
+}
+
 async function fetchText(url: string): Promise<FetchResult> {
   const response = await fetch(url, {
     headers: { 'user-agent': 'Bakaut AI catalog sync (+local development; respects sitemap)' },
@@ -302,7 +360,7 @@ function extractDocuments($: cheerio.CheerioAPI, pageUrl: string) {
   const docs: Array<{ title: string; url: string }> = [];
   $('a[href]').each((_, node) => {
     const href = $(node).attr('href');
-    if (!href || !/\.(pdf|doc|docx|xls|xlsx|zip|rar)(?:[?#].*)?$/i.test(href)) return;
+    if (!href || !hasDocumentSuffix(href)) return;
     const url = absoluteUrl(href, pageUrl);
     if (url) docs.push({ title: cleanText($(node).text()) || url.split('/').pop() || url, url });
   });
@@ -319,23 +377,22 @@ function extractImages($: cheerio.CheerioAPI, pageUrl: string) {
   $('[itemprop="image"], .card__main-slider img, .card__thumbs-slider-item').each((_, node) => {
     add($(node).attr('src'));
     const style = $(node).attr('style') ?? '';
-    const match = style.match(/url\(['"]?([^'")]+)['"]?\)/i);
-    if (match) add(match[1]);
+    add(extractCssUrl(style));
   });
   return [...urls];
 }
 
 function extractArticle($: cheerio.CheerioAPI, specs: Record<string, string>) {
-  const fromCaption = $('.product-caption__item')
+  const captionValue = $('.product-caption__item')
     .toArray()
     .map((node) => cleanText($(node).text()))
-    .find((text) => /артикул/i.test(text));
-  const captionMatch = fromCaption?.match(/артикул\s+(.+)/i)?.[1]?.trim();
-  return specs['артикул'] || captionMatch;
+    .map(articleValueFromCaption)
+    .find((value): value is string => Boolean(value));
+  return specs['артикул'] || captionValue;
 }
 
 function extractBrand(specs: Record<string, string>, name: string, jsonProduct: any | undefined) {
-  const specBrand = Object.entries(specs).find(([key]) => /производитель|бренд|марка/i.test(key))?.[1];
+  const specBrand = Object.entries(specs).find(([key]) => isBrandSpecKey(key))?.[1];
   const jsonBrand = typeof jsonProduct?.brand === 'string'
     ? jsonProduct.brand
     : typeof jsonProduct?.brand?.name === 'string'
@@ -343,7 +400,7 @@ function extractBrand(specs: Record<string, string>, name: string, jsonProduct: 
       : undefined;
   if (specBrand) return specBrand;
   if (jsonBrand) return jsonBrand;
-  const firstToken = name.split(/\s+/).find((token) => /^[A-Z0-9-]{3,}$/i.test(token));
+  const firstToken = cleanText(name).split(' ').find(isBrandLikeToken);
   return firstToken;
 }
 
@@ -357,7 +414,7 @@ function extractAvailability($: cheerio.CheerioAPI) {
 
 function isNotFoundPage($: cheerio.CheerioAPI, status: number) {
   const h1 = cleanText($('h1').first().text()).toLowerCase();
-  return status === 404 || h1.includes('страница не найдена') || /(^|\s)404($|\s)/.test(h1);
+  return status === 404 || h1.includes('страница не найдена') || h1.split(' ').includes('404');
 }
 
 function extractProduct(response: FetchResult, baseUrl: string, sitemapLastmod?: string): CatalogProductInput | null {
@@ -427,7 +484,7 @@ function readablePageText($: cheerio.CheerioAPI) {
   $('script, style, noscript, svg, form, header, footer, nav, .breadcrumbs, .header, .footer').remove();
   const preferred = $('article, main, .page, .content, .section').first();
   const text = cleanText((preferred.length ? preferred : $('body')).text());
-  return text.replace(/\s{2,}/g, ' ').slice(0, 40_000);
+  return text.slice(0, 40_000);
 }
 
 function extractCatalogPage(response: FetchResult, baseUrl: string, pageType: string, sitemapLastmod?: string): CatalogPageInput | null {

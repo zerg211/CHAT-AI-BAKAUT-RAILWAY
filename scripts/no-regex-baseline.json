@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1641,
+  "count": 1623,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -6887,132 +6887,6 @@
       "file": "src/ai/shownProductChoice.ts",
       "kind": "regular_expression_literal",
       "hash": "6c866a2b194802cc",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regex_test_call|867a5fca13abcdeb|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regex_test_call",
-      "hash": "867a5fca13abcdeb",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|76e23c6b9c875d64|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "76e23c6b9c875d64",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|match_regex_argument|9b4f925004ab3804|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "match_regex_argument",
-      "hash": "9b4f925004ab3804",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|2e042c58566d7dc3|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "2e042c58566d7dc3",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regex_test_call|759bf6e59033cd41|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regex_test_call",
-      "hash": "759bf6e59033cd41",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|36714ae135aa3cbb|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "36714ae135aa3cbb",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|match_regex_argument|9dc6d6c482b422d8|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "match_regex_argument",
-      "hash": "9dc6d6c482b422d8",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|0b072722229c252b|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "0b072722229c252b",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regex_test_call|53e9696289be10fa|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regex_test_call",
-      "hash": "53e9696289be10fa",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|a1e6319f8c174d7c|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "a1e6319f8c174d7c",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|split_regex_argument|38228c2c31fc177f|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "split_regex_argument",
-      "hash": "38228c2c31fc177f",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|b6e739e7c08a388d|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "b6e739e7c08a388d",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regex_test_call|ac8145239147cc3a|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regex_test_call",
-      "hash": "ac8145239147cc3a",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|c6798b4d055b4761|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c6798b4d055b4761",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regex_test_call|e63dac29e0c976d9|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regex_test_call",
-      "hash": "e63dac29e0c976d9",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|1a3f96fb6a7ec9e0|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "1a3f96fb6a7ec9e0",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|replace_regex_argument|a78ea69ccc36acf9|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "replace_regex_argument",
-      "hash": "a78ea69ccc36acf9",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/sitemapSync.ts|regular_expression_literal|4a77a68cfb5c30fc|1",
-      "file": "src/catalog/sitemapSync.ts",
-      "kind": "regular_expression_literal",
-      "hash": "4a77a68cfb5c30fc",
       "occurrence": 1
     },
     {

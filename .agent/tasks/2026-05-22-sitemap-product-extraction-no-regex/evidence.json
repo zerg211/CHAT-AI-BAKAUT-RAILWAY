@@ -1,0 +1,55 @@
+{
+  "taskId": "2026-05-22-sitemap-product-extraction-no-regex",
+  "timestamp": "2026-05-22T19:29:27.7155520+03:00",
+  "changeSummary": [
+    "Replaced targeted sitemap product/page extraction regex usage with explicit deterministic scanners.",
+    "Extended focused syncCatalogFromSitemap tests for documents, CSS images, article, brand, 404 skip, and content page import.",
+    "Updated no-regex baseline from 1641 to 1623 after review."
+  ],
+  "checks": [
+    {
+      "command": "npx vitest run tests/sitemapSyncNoRegex.test.ts",
+      "status": "pass",
+      "details": "1 test file passed, 3 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass_before_baseline_update",
+      "details": "No new regex constructs. Legacy findings removed since baseline: 18."
+    },
+    {
+      "command": "npm run lint:no-regex -- --update-baseline",
+      "status": "pass",
+      "details": "Updated scripts/no-regex-baseline.json with 1623 legacy findings."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1623."
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pass",
+    "AC8": "pass",
+    "AC9": "pass",
+    "AC10": "pass"
+  },
+  "productionPromptfoo": {
+    "required": false,
+    "reason": "Deterministic catalog sitemap ingest refactor outside the chat answer runtime."
+  }
+}
