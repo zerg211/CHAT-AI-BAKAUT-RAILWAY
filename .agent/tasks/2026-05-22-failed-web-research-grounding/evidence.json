@@ -38,13 +38,22 @@
     "issue": "web.researchProductFacts returned status=error, but answer factsUsed cited the failed request id as evidence."
   },
   "productionVerification": {
-    "status": "post_first_commit_live_found_followup_issue",
+    "status": "pass",
     "firstCommit": "5a8c28ce091e747c91688946931e3356ee901f0d",
     "firstLiveConversationNumber": 1567,
-    "followupIssue": "confirmed button-start guidance was combined with stale not_found button-start coverage from catalog extraction"
+    "followupIssue": "confirmed button-start guidance was combined with stale not_found button-start coverage from catalog extraction",
+    "finalCommit": "8fbabd850e2ad3cf9500a937d6ccbf4bb63e4a29",
+    "finalLiveConversationNumber": 1574,
+    "finalLiveSessionId": "9e9d90ee-9695-4cf2-852d-ede0c02d6b37",
+    "protocol": "local-live-tests/2026-05-22-catalog-presence-relevance-2026-05-22T12-41-59-154Z.production.md",
+    "assertions": {
+      "noUnsolicitedCatalogPresence": true,
+      "noFailedWebEvidenceAsFact": true,
+      "noStaleButtonStartUncertainty": true
+    }
   },
   "followupFix": {
-    "status": "local_pass_pending_commit_push_marker_live",
+    "status": "pass",
     "details": "confirmed start-control labels suppress stale uncertainty for the same label"
   }
 }

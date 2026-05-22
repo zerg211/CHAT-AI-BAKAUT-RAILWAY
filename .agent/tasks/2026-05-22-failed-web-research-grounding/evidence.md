@@ -25,13 +25,20 @@
 - Final answer metadata removes facts that cited failed tool results.
 - Exact-target product comparison research now receives a scoped higher output budget to reduce JSON truncation/parse failures.
 
-## Pending production verification
-
-- Commit/push and Railway marker check are required before the post-fix live widget test.
-
 ## Post-commit production finding before follow-up fix
 
 - Production marker `5a8c28ce091e747c91688946931e3356ee901f0d` reached Railway.
 - Live widget conversation `#1567`, session `5a95c3cf-6927-4090-9a8b-35bd34408f6c`.
 - The web tool succeeded and confirmed button start, but final text combined confirmed guidance with stale catalog uncertainty: "Кнопочный запуск подтвержден... Кнопочный запуск в данных не вижу."
 - Follow-up code fix added label-level coverage collapse: a confirmed start-control label suppresses older `not_found/not_confirmed/ambiguous` coverage for the same label.
+
+## Final production verification
+
+- Pushed commit: `8fbabd850e2ad3cf9500a937d6ccbf4bb63e4a29`.
+- Railway marker reached `8fbabd850e2ad3cf9500a937d6ccbf4bb63e4a29`.
+- Live widget conversation `#1574`, session `9e9d90ee-9695-4cf2-852d-ede0c02d6b37`.
+- Protocol: `local-live-tests/2026-05-22-catalog-presence-relevance-2026-05-22T12-41-59-154Z.production.md`.
+- Buyer-visible answer: "Да, кнопкой запускается: у SUNREKA G7000iS есть электростартер и запуск с кнопки START. При этом ручной запуск шнурком тоже предусмотрен, так что это не только шнурок."
+- PASS: no unsolicited catalog-presence line.
+- PASS: no failed web evidence was used as a fact source.
+- PASS: no stale "кнопочный запуск в данных не вижу" uncertainty after confirmed button-start coverage.
