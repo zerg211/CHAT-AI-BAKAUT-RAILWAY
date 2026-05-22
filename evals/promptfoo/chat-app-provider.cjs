@@ -21,26 +21,57 @@ function readNumberConfigValue(configValue, envName, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function parseSseEvents(text) {
-  return String(text)
-    .split(/\r?\n\r?\n/u)
-    .map((block) => block.trim())
-    .filter(Boolean)
-    .map((block) => {
-      const lines = block.split(/\r?\n/u);
-      const event = lines.find((line) => line.startsWith('event:'))?.replace(/^event:\s*/u, '').trim() || 'message';
-      const dataText = lines
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.replace(/^data:\s*/u, ''))
-        .join('\n');
-      let data = dataText;
-      try {
-        data = JSON.parse(dataText);
-      } catch {
-        // Keep raw SSE data for diagnostics.
+function normalizeSseNewlines(text) {
+  let normalized = '';
+  for (const char of String(text)) {
+    if (char !== '\r') normalized += char;
+  }
+  return normalized;
+}
+
+function sseBlocks(text) {
+  const blocks = [];
+  let current = [];
+  for (const line of normalizeSseNewlines(text).split('\n')) {
+    if (!line.trim()) {
+      if (current.length) {
+        blocks.push(current);
+        current = [];
       }
-      return { event, data };
-    });
+      continue;
+    }
+    current.push(line);
+  }
+  if (current.length) blocks.push(current);
+  return blocks;
+}
+
+function sseFieldValue(line, prefix) {
+  if (!line.startsWith(prefix)) return null;
+  let value = line.slice(prefix.length);
+  while (value.startsWith(' ') || value.startsWith('\t')) {
+    value = value.slice(1);
+  }
+  return value;
+}
+
+function parseSseEvents(text) {
+  return sseBlocks(text).map((lines) => {
+    const eventLine = lines.find((line) => line.startsWith('event:'));
+    const rawEvent = eventLine ? sseFieldValue(eventLine, 'event:') : null;
+    const event = rawEvent?.trim() || 'message';
+    const dataText = lines
+      .map((line) => sseFieldValue(line, 'data:'))
+      .filter((value) => value !== null)
+      .join('\n');
+    let data = dataText;
+    try {
+      data = JSON.parse(dataText);
+    } catch {
+      // Keep raw SSE data for diagnostics.
+    }
+    return { event, data };
+  });
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
@@ -186,6 +217,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function trimTrailingSlashes(value) {
+  let end = String(value).length;
+  while (end > 0 && String(value)[end - 1] === '/') {
+    end -= 1;
+  }
+  return String(value).slice(0, end);
+}
+
 async function recoverTurnWithRetries(input) {
   let lastResult = null;
   const attempts = input.attempts ?? 3;
@@ -259,7 +298,7 @@ class BakautChatAppProvider {
 
   async callApi(prompt, context = {}) {
     const vars = context.vars || {};
-    const baseUrl = readConfigValue(this.config.baseUrl, 'PROMPTFOO_CHAT_BASE_URL', DEFAULT_BASE_URL, { preferEnv: true }).replace(/\/+$/u, '');
+    const baseUrl = trimTrailingSlashes(readConfigValue(this.config.baseUrl, 'PROMPTFOO_CHAT_BASE_URL', DEFAULT_BASE_URL, { preferEnv: true }));
     const timeoutMs = readNumberConfigValue(this.config.timeoutMs, 'PROMPTFOO_CHAT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
     const sessionAttempts = readNumberConfigValue(this.config.sessionAttempts, 'PROMPTFOO_CHAT_SESSION_ATTEMPTS', DEFAULT_SESSION_ATTEMPTS);
     const messageAttempts = readNumberConfigValue(this.config.messageAttempts, 'PROMPTFOO_CHAT_MESSAGE_ATTEMPTS', DEFAULT_MESSAGE_ATTEMPTS);
@@ -366,3 +405,4 @@ class BakautChatAppProvider {
 }
 
 module.exports = BakautChatAppProvider;
+module.exports.parseSseEvents = parseSseEvents;

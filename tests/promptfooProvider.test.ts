@@ -2,10 +2,12 @@ import { createRequire } from 'node:module';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const require = createRequire(import.meta.url);
-const BakautChatAppProvider = require('../evals/promptfoo/chat-app-provider.cjs') as new (options?: {
+const BakautChatAppProvider = require('../evals/promptfoo/chat-app-provider.cjs') as (new (options?: {
   config?: Record<string, unknown>;
 }) => {
   callApi: (prompt: string, context?: { vars?: Record<string, unknown> }) => Promise<{ output: string }>;
+}) & {
+  parseSseEvents: (text: string) => Array<{ event: string; data: unknown }>;
 };
 const BakautProductionLlmGraderProvider = require('../evals/promptfoo/production-llm-grader-provider.cjs') as new (options?: {
   config?: Record<string, unknown>;
@@ -45,6 +47,44 @@ afterEach(() => {
 });
 
 describe('Promptfoo chat app provider', () => {
+  it('parses SSE done JSON payloads without regex parsing', () => {
+    const events = BakautChatAppProvider.parseSseEvents([
+      'event: done',
+      'data: {"turnId":"turn-1","answer":"Готово"}',
+      ''
+    ].join('\n'));
+
+    expect(events).toEqual([{
+      event: 'done',
+      data: {
+        turnId: 'turn-1',
+        answer: 'Готово'
+      }
+    }]);
+  });
+
+  it('parses CRLF and multi-line SSE data without regex parsing', () => {
+    const events = BakautChatAppProvider.parseSseEvents([
+      'event: note',
+      'data: first',
+      'data: second',
+      '',
+      'data: raw message',
+      ''
+    ].join('\r\n'));
+
+    expect(events).toEqual([
+      {
+        event: 'note',
+        data: 'first\nsecond'
+      },
+      {
+        event: 'message',
+        data: 'raw message'
+      }
+    ]);
+  });
+
   it('retries chat session creation before running the dialogue', async () => {
     let sessionAttempts = 0;
     let messageAttempts = 0;

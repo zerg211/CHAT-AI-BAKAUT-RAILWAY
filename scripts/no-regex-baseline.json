@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1804,
+  "count": 1794,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -83,76 +83,6 @@
       "file": "evals/promptfoo/assertions.cjs",
       "kind": "regular_expression_literal",
       "hash": "c10ac4b07d20d318",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|split_regex_argument|2c19ca12cffe7801|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "split_regex_argument",
-      "hash": "2c19ca12cffe7801",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|regular_expression_literal|bfe6bc8bbcd9b1e1|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "bfe6bc8bbcd9b1e1",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|split_regex_argument|fc5804a24d1ca526|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "split_regex_argument",
-      "hash": "fc5804a24d1ca526",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|regular_expression_literal|2a4280fd3b29b5cd|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "2a4280fd3b29b5cd",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|replace_regex_argument|5d65a2612dafaf57|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "replace_regex_argument",
-      "hash": "5d65a2612dafaf57",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|regular_expression_literal|fd6d50c1783ca196|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "fd6d50c1783ca196",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|replace_regex_argument|70d14d008f253dcf|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "replace_regex_argument",
-      "hash": "70d14d008f253dcf",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|regular_expression_literal|145013c100d7525f|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "145013c100d7525f",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|replace_regex_argument|5f8f1a1a22430cac|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "replace_regex_argument",
-      "hash": "5f8f1a1a22430cac",
-      "occurrence": 1
-    },
-    {
-      "id": "evals/promptfoo/chat-app-provider.cjs|regular_expression_literal|8b03296837880062|1",
-      "file": "evals/promptfoo/chat-app-provider.cjs",
-      "kind": "regular_expression_literal",
-      "hash": "8b03296837880062",
       "occurrence": 1
     },
     {

@@ -1,0 +1,48 @@
+{
+  "taskId": "2026-05-22-no-regex-promptfoo-sse-parser",
+  "status": "local_verified_pre_production_promptfoo",
+  "baseHead": "e0870b9",
+  "implementation": [
+    "Replaced regex SSE parsing in evals/promptfoo/chat-app-provider.cjs with deterministic string helpers.",
+    "Replaced Promptfoo baseUrl trailing slash regex cleanup with a string scan helper.",
+    "Preserved the default provider class export and exposed parseSseEvents for unit tests.",
+    "Updated no-regex baseline after removing ten legacy findings."
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/promptfooProvider.test.ts",
+      "status": "PASS",
+      "summary": "7 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1794."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "CRLF warnings only"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "76 files / 616 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PENDING_PRODUCTION_PROMPTFOO"
+  }
+}
