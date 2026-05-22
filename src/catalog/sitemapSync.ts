@@ -46,31 +46,120 @@ const defaultContentRoots = new Set([
   'brands'
 ]);
 
+function replaceAllText(value: string, target: string, replacement: string) {
+  return value.split(target).join(replacement);
+}
+
 function decodeXml(value: string) {
-  return value
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'");
+  let decoded = value;
+  for (const [entity, replacement] of [
+    ['&amp;', '&'],
+    ['&lt;', '<'],
+    ['&gt;', '>'],
+    ['&quot;', '"'],
+    ['&#039;', "'"]
+  ]) {
+    decoded = replaceAllText(decoded, entity, replacement);
+  }
+  return decoded;
+}
+
+function isXmlTagBoundary(char: string | undefined) {
+  return char === undefined || char === '>' || char === '/' || char.trim().length === 0;
+}
+
+function findXmlBlocks(xml: string, tagName: string) {
+  const lowerXml = xml.toLocaleLowerCase('en-US');
+  const lowerTag = tagName.toLocaleLowerCase('en-US');
+  const openPrefix = `<${lowerTag}`;
+  const closeTag = `</${lowerTag}>`;
+  const blocks: string[] = [];
+  let searchFrom = 0;
+
+  while (searchFrom < lowerXml.length) {
+    const openStart = lowerXml.indexOf(openPrefix, searchFrom);
+    if (openStart < 0) break;
+    if (!isXmlTagBoundary(lowerXml[openStart + openPrefix.length])) {
+      searchFrom = openStart + openPrefix.length;
+      continue;
+    }
+    const openEnd = lowerXml.indexOf('>', openStart);
+    if (openEnd < 0) break;
+    const closeStart = lowerXml.indexOf(closeTag, openEnd + 1);
+    if (closeStart < 0) break;
+    blocks.push(xml.slice(openStart, closeStart + closeTag.length));
+    searchFrom = closeStart + closeTag.length;
+  }
+
+  return blocks;
+}
+
+function extractXmlTagText(xml: string, tagName: string) {
+  const lowerXml = xml.toLocaleLowerCase('en-US');
+  const lowerTag = tagName.toLocaleLowerCase('en-US');
+  const openPrefix = `<${lowerTag}`;
+  const closeTag = `</${lowerTag}>`;
+  let searchFrom = 0;
+
+  while (searchFrom < lowerXml.length) {
+    const openStart = lowerXml.indexOf(openPrefix, searchFrom);
+    if (openStart < 0) return undefined;
+    if (!isXmlTagBoundary(lowerXml[openStart + openPrefix.length])) {
+      searchFrom = openStart + openPrefix.length;
+      continue;
+    }
+    const openEnd = lowerXml.indexOf('>', openStart);
+    if (openEnd < 0) return undefined;
+    const closeStart = lowerXml.indexOf(closeTag, openEnd + 1);
+    if (closeStart < 0) return undefined;
+    return xml.slice(openEnd + 1, closeStart);
+  }
+
+  return undefined;
+}
+
+function extractAllXmlTagText(xml: string, tagName: string) {
+  const values: string[] = [];
+  const lowerXml = xml.toLocaleLowerCase('en-US');
+  const lowerTag = tagName.toLocaleLowerCase('en-US');
+  const openPrefix = `<${lowerTag}`;
+  const closeTag = `</${lowerTag}>`;
+  let searchFrom = 0;
+
+  while (searchFrom < lowerXml.length) {
+    const openStart = lowerXml.indexOf(openPrefix, searchFrom);
+    if (openStart < 0) break;
+    if (!isXmlTagBoundary(lowerXml[openStart + openPrefix.length])) {
+      searchFrom = openStart + openPrefix.length;
+      continue;
+    }
+    const openEnd = lowerXml.indexOf('>', openStart);
+    if (openEnd < 0) break;
+    const closeStart = lowerXml.indexOf(closeTag, openEnd + 1);
+    if (closeStart < 0) break;
+    values.push(xml.slice(openEnd + 1, closeStart));
+    searchFrom = closeStart + closeTag.length;
+  }
+
+  return values;
 }
 
 function parseSitemapIndex(xml: string) {
-  return [...xml.matchAll(/<sitemap\b[\s\S]*?<\/sitemap>/gi)]
-    .map((match) => match[0].match(/<loc>([\s\S]*?)<\/loc>/i)?.[1])
+  return findXmlBlocks(xml, 'sitemap')
+    .map((block) => extractXmlTagText(block, 'loc'))
     .filter((value): value is string => Boolean(value))
     .map((value) => decodeXml(value.trim()));
 }
 
 function parseSitemapEntries(xml: string): SitemapEntry[] {
-  const blocks = [...xml.matchAll(/<url\b[\s\S]*?<\/url>/gi)];
+  const blocks = findXmlBlocks(xml, 'url');
   if (!blocks.length) {
-    return [...xml.matchAll(/<loc>([\s\S]*?)<\/loc>/gi)].map((match) => ({ loc: decodeXml(match[1].trim()) }));
+    return extractAllXmlTagText(xml, 'loc').map((value) => ({ loc: decodeXml(value.trim()) }));
   }
   return blocks
     .map((block) => ({
-      loc: decodeXml(block[0].match(/<loc>([\s\S]*?)<\/loc>/i)?.[1]?.trim() ?? ''),
-      lastmod: block[0].match(/<lastmod>([\s\S]*?)<\/lastmod>/i)?.[1]?.trim()
+      loc: decodeXml(extractXmlTagText(block, 'loc')?.trim() ?? ''),
+      lastmod: extractXmlTagText(block, 'lastmod')?.trim()
     }))
     .filter((entry) => entry.loc);
 }

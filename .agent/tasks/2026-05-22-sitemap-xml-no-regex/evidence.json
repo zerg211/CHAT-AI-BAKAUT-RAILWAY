@@ -1,0 +1,54 @@
+{
+  "taskId": "2026-05-22-sitemap-xml-no-regex",
+  "timestamp": "2026-05-22T19:21:24.3765373+03:00",
+  "changeSummary": [
+    "Replaced sitemap XML regex parsing with explicit deterministic string scanners.",
+    "Added focused syncCatalogFromSitemap tests for sitemap index, URL set, decoded loc values, and plain loc fallback.",
+    "Updated no-regex baseline from 1663 to 1641 after review."
+  ],
+  "checks": [
+    {
+      "command": "npx vitest run tests/sitemapSyncNoRegex.test.ts",
+      "status": "pass",
+      "details": "1 test file passed, 2 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass_before_baseline_update",
+      "details": "No new regex constructs. Legacy findings removed since baseline: 22."
+    },
+    {
+      "command": "npm run lint:no-regex -- --update-baseline",
+      "status": "pass",
+      "details": "Updated scripts/no-regex-baseline.json with 1641 legacy findings."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1641."
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pass",
+    "AC8": "pass",
+    "AC9": "pass"
+  },
+  "productionPromptfoo": {
+    "required": false,
+    "reason": "Deterministic catalog sitemap ingest refactor outside the chat answer runtime."
+  }
+}
