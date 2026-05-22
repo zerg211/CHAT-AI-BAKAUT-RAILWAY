@@ -50,5 +50,10 @@
   "productionPromptfoo": {
     "required": false,
     "reason": "Deterministic catalog normalization refactor outside the chat answer runtime."
+  },
+  "railwayMarker": {
+    "status": "pass",
+    "commit": "2fb25edfd85360a15f75f9b9f68d30409b5a6ce6",
+    "branch": "main"
   }
 }
