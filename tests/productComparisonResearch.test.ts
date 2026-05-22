@@ -149,7 +149,8 @@ describe('product comparison research', () => {
     fetchMock.mockReset();
   });
 
-  it('answers from exact catalog description before opening web search', async () => {
+  it('checks exact catalog description with external exact-target research', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse('<html><body>FIRMAN RD3910E ignition key electric starter manual starter.</body></html>'));
     createStructuredJsonResponse.mockResolvedValueOnce({
       parsed: result({
         facts: [{
@@ -176,6 +177,33 @@ describe('product comparison research', () => {
         },
         summaryForAnswer: 'Catalog description confirms key electric start and manual start.'
       })
+    }).mockResolvedValueOnce({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'key start',
+          value: 'ignition key electric starter and manual starter',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'official exact model page says FIRMAN RD3910E has ignition key electric starter and manual starter',
+          sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
+          sourceTitle: 'FIRMAN RD3910E'
+        }],
+        answerGuidance: {
+          directAnswer: 'RD3910E Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ СЃ РєР»СЋС‡Р° СЌР»РµРєС‚СЂРѕСЃС‚Р°СЂС‚РµСЂР°, РїР»СЋСЃ РµСЃС‚СЊ СЂСѓС‡РЅРѕР№ Р·Р°РїСѓСЃРє. РљРЅРѕРїРѕС‡РЅС‹Р№ Р·Р°РїСѓСЃРє РЅРµ РїРѕРґС‚РІРµСЂР¶РґРµРЅ.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'key start',
+            status: 'confirmed',
+            value: 'ignition key electric starter',
+            evidence: 'official exact model page says FIRMAN RD3910E has ignition key electric starter',
+            sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
+            sourceTitle: 'FIRMAN RD3910E'
+          }]
+        },
+        summaryForAnswer: 'Catalog description and external exact-target source both confirm key electric start.'
+      })
     });
 
     const actual = await researchProductComparisonFacts({
@@ -185,18 +213,176 @@ describe('product comparison research', () => {
       comparisonAttributes: ['key start', 'push-button start']
     });
 
-    expect(actual.usedWebSearch).toBe(false);
+    expect(actual.usedWebSearch).toBe(true);
     expect(actual.answerGuidance.directAnswer).toContain('ключ');
     expect(actual.answerGuidance.directAnswer).toContain('электростартер');
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'catalog_fact_extraction_used',
-      'exact_catalog_description_extracted'
+      'exact_catalog_description_extracted',
+      'exact_catalog_description_requires_external_adjudication',
+      'catalog_fact_extraction_needed_web_research'
     ]));
-    expect(researchCalls()).toHaveLength(1);
+    expect(researchCalls()).toHaveLength(2);
     const catalogCall = researchCalls()[0];
     expect(catalogCall.stage).toBe('catalog_product_fact_extraction');
     expect(catalogCall.request.tools).toBeUndefined();
+    const webCall = researchCalls()[1];
+    expect(webCall.stage).toBe('product_comparison_research');
+    expect(webCall.request.tools).toEqual([{ type: 'web_search_preview', search_context_size: 'high' }]);
+    expect(JSON.stringify(webCall.request.input)).toContain('catalogExtraction');
+    expect(webCall.request.input[0].content).toContain('still run exact-target external research');
     expect(JSON.stringify(catalogCall.request.input)).toContain('поворотом ключа электростартера');
+  });
+
+  it('adjudicates catalog conflicts with corroborated exact-target external sources', async () => {
+    fetchMock
+      .mockResolvedValueOnce(sourceResponse('<html><body>SUNREKA G7000iS. Starting system: manual starter, electric starter. Start with START push button.</body></html>'))
+      .mockResolvedValueOnce(sourceResponse('<html><body>SUNREKA G7000iS inverter generator. Manual starter and electric starter, START push button.</body></html>'))
+      .mockResolvedValueOnce(sourceResponse('<html><body>SUNREKA G7000iS. Electric start by START push button, manual recoil starter also available.</body></html>'));
+    createStructuredJsonResponse.mockResolvedValueOnce({
+      parsed: result({
+        facts: [{
+          productName: 'SUNREKA G7000iS',
+          attribute: 'starting method',
+          value: 'manual starter only',
+          sourceType: 'catalog',
+          confidence: 'high',
+          evidence: 'catalog specs list manual starter',
+          sourceUrl: 'https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g7000is_6_0_kvt/',
+          sourceTitle: 'SUNREKA G7000iS'
+        }],
+        answerGuidance: {
+          directAnswer: 'G7000iS has manual starter. Electric start is not confirmed.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'manual starter',
+            status: 'confirmed',
+            value: 'manual starter only',
+            evidence: 'catalog specs list manual starter',
+            sourceUrl: 'https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g7000is_6_0_kvt/',
+            sourceTitle: 'SUNREKA G7000iS'
+          }]
+        },
+        summaryForAnswer: 'Catalog extraction says manual starter only.'
+      })
+    }).mockResolvedValueOnce({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'SUNREKA G7000iS',
+          attribute: 'button electric start',
+          value: 'manual starter, electric starter, START push button',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'manufacturer page says SUNREKA G7000iS has manual starter, electric starter, and START push button',
+          sourceUrl: 'https://sunreka.group/market/invertornye-generatory/invertornyj-benzinovyj-generator-7-kvt-sunreko-g7000is/',
+          sourceTitle: 'SUNREKA G7000iS manufacturer'
+        }],
+        conflicts: [{
+          productName: 'SUNREKA G7000iS',
+          attribute: 'starting method',
+          catalogValue: 'manual starter only',
+          webValues: ['manual starter, electric starter, START push button'],
+          resolution: 'manufacturer exact-target source conflicts with catalog, needs independent corroboration'
+        }],
+        answerGuidance: {
+          directAnswer: 'G7000iS starts from the START button; manual starter is also available.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'button electric start',
+            status: 'confirmed',
+            value: 'START push button plus manual starter',
+            evidence: 'manufacturer page says SUNREKA G7000iS has START push button and manual starter',
+            sourceUrl: 'https://sunreka.group/market/invertornye-generatory/invertornyj-benzinovyj-generator-7-kvt-sunreko-g7000is/',
+            sourceTitle: 'SUNREKA G7000iS manufacturer'
+          }]
+        },
+        summaryForAnswer: 'Manufacturer conflicts with catalog and confirms button electric start.'
+      })
+    }).mockResolvedValueOnce({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [
+          {
+            productName: 'SUNREKA G7000iS',
+            attribute: 'button electric start',
+            value: 'manual starter, electric starter, START push button',
+            sourceType: 'web',
+            confidence: 'medium',
+            evidence: 'independent exact model listing says SUNREKA G7000iS has manual starter, electric starter, START push button',
+            sourceUrl: 'https://masterts.ru/products/683477/',
+            sourceTitle: 'SUNREKA G7000iS listing'
+          },
+          {
+            productName: 'SUNREKA G7000iS',
+            attribute: 'button electric start',
+            value: 'electric start by START push button and manual recoil starter',
+            sourceType: 'web',
+            confidence: 'medium',
+            evidence: 'second exact model listing says SUNREKA G7000iS has electric start by START push button and manual recoil starter',
+            sourceUrl: 'https://sunreka-tools.ru/product/sunreka-g7000is',
+            sourceTitle: 'SUNREKA G7000iS tools listing'
+          }
+        ],
+        conflicts: [{
+          productName: 'SUNREKA G7000iS',
+          attribute: 'starting method',
+          catalogValue: 'manual starter only',
+          webValues: [
+            'manufacturer: manual starter, electric starter, START push button',
+            'listing: manual starter, electric starter, START push button',
+            'listing: electric start by START push button and manual recoil starter'
+          ],
+          resolution: 'external exact-target sources corroborate electric/button start, so catalog manual-only value is incomplete'
+        }],
+        answerGuidance: {
+          directAnswer: 'G7000iS запускается кнопкой START, ручной стартер тоже есть.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'button electric start',
+            status: 'confirmed',
+            value: 'START push button plus manual starter',
+            evidence: 'two independent exact model listings corroborate START push button and manual starter',
+            sourceUrl: 'https://masterts.ru/products/683477/',
+            sourceTitle: 'SUNREKA G7000iS listing'
+          }]
+        },
+        summaryForAnswer: 'External exact-target corroboration resolves the catalog conflict toward START button electric start plus manual starter.',
+        warnings: ['source_conflict_adjudicated']
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'G7000iS нужно каждый раз дергать шнуром или он с кнопки заводится?',
+      products: [product({
+        id: 'sunreka-g7000is',
+        name: 'SUNREKA G7000iS inverter generator',
+        brand: 'SUNREKA',
+        category: 'Inverter generators',
+        sourceUrl: 'https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g7000is_6_0_kvt/',
+        specs: { starter: 'manual starter' },
+        description: 'Starter: manual starter. Autostart: no autostart. Battery: not included.'
+      })],
+      targetProductNames: ['SUNREKA G7000iS'],
+      comparisonAttributes: ['start method', 'button start', 'manual starter']
+    });
+
+    expect(researchCalls()).toHaveLength(3);
+    expect(researchCalls()[2].stage).toBe('product_comparison_research_exact_retry');
+    expect(researchCalls()[2].request.input[0].content).toContain('source adjudication');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(actual.usedWebSearch).toBe(true);
+    expect(actual.answerGuidance.directAnswer).toContain('Кнопочный');
+    expect(actual.answerGuidance.directAnswer).toContain('Ручной');
+    expect(actual.conflicts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'SUNREKA G7000iS', attribute: 'starting method' })
+    ]));
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'missing_fact_deep_search_retry_used',
+      'exact_target_external_retry_used',
+      'source_conflict_adjudicated'
+    ]));
+    expect(actual.warnings).not.toContain('missing_fact_deep_search_still_unresolved');
   });
 
   it('broadens to web only when exact catalog extraction is incomplete', async () => {
@@ -278,7 +464,7 @@ describe('product comparison research', () => {
       'catalog_fact_extraction_needed_web_research',
       'catalog_starter_specs_extracted'
     ]));
-    expect(researchCalls()).toHaveLength(3);
+    expect(researchCalls()).toHaveLength(2);
     const webCall = researchCalls()[1];
     expect(webCall.stage).toBe('product_comparison_research');
     expect(webCall.request.tools).toEqual([{ type: 'web_search_preview', search_context_size: 'high' }]);

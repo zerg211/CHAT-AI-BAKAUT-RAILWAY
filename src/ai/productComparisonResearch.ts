@@ -718,7 +718,10 @@ async function evidenceItemSourceText(input: {
     sourceUrl: input.item.sourceUrl,
     sourceTitle: input.item.sourceTitle
   });
-  if (input.item.sourceType === 'catalog' || (catalogProduct && !input.item.sourceType)) {
+  const sourceUrl = normalizedUrlForCompare(input.item.sourceUrl);
+  const sourceUrlMatchesCatalog = Boolean(catalogProduct && sourceUrl &&
+    normalizedUrlForCompare(catalogProduct.sourceUrl) === sourceUrl);
+  if (input.item.sourceType === 'catalog' || (catalogProduct && sourceUrlMatchesCatalog && !input.item.sourceType)) {
     if (!catalogProduct) return { ok: false, text: '', warning: 'source_evidence_catalog_source_missing' };
     return { ok: true, text: productSourceText(catalogProduct) };
   }
@@ -1261,6 +1264,10 @@ function resultHasUnresolvedCatalogConflict(result: ProductComparisonResearchRes
     result.answerGuidance.coverage.some((item) => item.status === 'ambiguous' || item.status === 'contradicted');
 }
 
+function resultHasUnresolvedCoverage(result: ProductComparisonResearchResult) {
+  return result.answerGuidance.coverage.some((item) => item.status === 'ambiguous' || item.status === 'contradicted');
+}
+
 function catalogExtractionAnswersQuestion(result: ProductComparisonResearchResult, targetProductNames: string[]) {
   return result.answerGuidance.completeness === 'answered' &&
     Boolean(result.answerGuidance.directAnswer.trim()) &&
@@ -1279,6 +1286,8 @@ function needsDeepMissingFactSearch(input: {
   comparisonAttributes: string[];
 }) {
   if (needsElectricStarterControlSearch(input)) return true;
+  if (input.result.conflicts.length > 0 && !input.result.warnings.includes('source_conflict_adjudicated')) return true;
+  if (resultHasUnresolvedCoverage(input.result)) return true;
   if (input.result.answerGuidance.completeness !== 'answered') return true;
   if (!input.result.answerGuidance.directAnswer.trim()) return true;
   return input.result.warnings.some((warning) =>
@@ -1431,16 +1440,17 @@ export async function researchProductComparisonFacts(input: {
         signal: input.signal
       })
     : null;
-  if (catalogResult && catalogExtractionAnswersQuestion(catalogResult, targetProductNames)) {
-    return {
-      ...catalogResult,
-      warnings: uniqueStrings([
-        ...catalogResult.warnings,
-        'catalog_fact_extraction_used',
-        'exact_catalog_description_extracted'
-      ])
-    };
-  }
+  const catalogResultForResearch = catalogResult && catalogExtractionAnswersQuestion(catalogResult, targetProductNames)
+    ? {
+        ...catalogResult,
+        warnings: uniqueStrings([
+          ...catalogResult.warnings,
+          'catalog_fact_extraction_used',
+          'exact_catalog_description_extracted',
+          'exact_catalog_description_requires_external_adjudication'
+        ])
+      }
+    : catalogResult;
 
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
@@ -1455,8 +1465,12 @@ export async function researchProductComparisonFacts(input: {
           'Если web и каталог конфликтуют по важному параметру, укажи конфликт и выбери значение только при подтверждении логикой источников.',
           'Не пиши ответ покупателю. Верни только JSON.',
           'If buyerQuestion asks about targetProductNames and the exact model is absent from products, search the web for that exact target model. Do not infer exact target facts from nearby models.',
+          'If buyerQuestion asks about targetProductNames and catalogExtraction already answered, still run exact-target external research. The catalog answer is evidence to verify/adjudicate, not a terminal answer for this tool.',
           'When targetProductNames is present, search exact quoted target names on the public web with the requested attributes before using nearby catalog products.',
           'A web fact for a target model is valid only when sourceUrl, sourceTitle, or evidence names the same exact model identifier. Same brand, same family, or nearby model pages are not proof about the target model.',
+          'When catalog evidence and public exact-target evidence disagree on a decision-blocking attribute, adjudicate sources instead of defaulting to catalog or saying only that it must be checked later.',
+          'For a source conflict, keep searching until at least two additional independent exact-target public sources confirm or refute the disputed value, or until deeper search is exhausted. Manufacturer/manual evidence is strongest, but independent exact-target corroboration should close the buyer need when sources agree.',
+          'When a conflict is resolved by this corroboration, keep the conflict object for audit and add warning source_conflict_adjudicated.',
           'Do not cite bakautprof.ru or provided product.sourceUrl pages as web facts for an absent exact target unless that page is specifically about the exact target model.',
           'If exact external sources state key start, ignition key, electric starter, push button, manual recoil, battery, power, engine, or other requested attributes for the target, return those facts with high or medium confidence.',
           'A non-official listing, cached listing, marketplace page, or forum/classified page can be used as medium-confidence evidence when it names the exact target model and the exact text answers the buyer question. Do not upgrade it to high confidence unless the source is official/manufacturer/manual/distributor.',
@@ -1477,7 +1491,7 @@ export async function researchProductComparisonFacts(input: {
           buyerQuestion: input.userMessage,
           targetProductNames,
           comparisonAttributes,
-          catalogExtraction: catalogResult,
+          catalogExtraction: catalogResultForResearch,
           exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes),
           products: productResearchContext(input.products)
         })
@@ -1578,7 +1592,7 @@ export async function researchProductComparisonFacts(input: {
     comparisonAttributes,
     signal: input.signal
   });
-  const combinedPrimaryResult = mergeCatalogAndWebResearch(catalogResult, primaryResult);
+  const combinedPrimaryResult = mergeCatalogAndWebResearch(catalogResultForResearch, primaryResult);
   const deepMissingFactRetryRequired = needsDeepMissingFactSearch({
     result: combinedPrimaryResult,
     userMessage: input.userMessage,
@@ -1611,7 +1625,9 @@ export async function researchProductComparisonFacts(input: {
             'Extract useful facts from the deeper sources, then decide which facts are needed in answerGuidance.directAnswer and which are only supporting context for summaryForAnswer.',
             'Use non-official pages as medium-confidence evidence only when they name the exact model/code and semantically answer the missing-fact slot.',
             'Accept a fact only when sourceUrl, sourceTitle, or evidence names the exact target model/code.',
-            'If catalogExtraction confirms one option and web does not refute it with stronger exact-target evidence, preserve the catalog fact instead of downgrading it to unknown.',
+            'If catalogExtraction conflicts with exact-target public evidence, do not preserve catalog by default. Run source adjudication: seek at least two additional independent exact-target public sources and resolve toward the value supported by manufacturer/manual evidence plus independent corroboration, or by the strongest corroborated source set.',
+            'Only leave a conflict unresolved when deeper exact-target sources remain split or insufficient after that corroboration attempt.',
+            'When the conflict is resolved by corroboration, keep the conflict object for audit and add warning source_conflict_adjudicated.',
             'If a source only answers a broader fact, keep that broader fact but do not use it as proof of the narrower missing slot.',
             'Do not use nearby model pages as facts for the target. Return no fact if the exact target still cannot be verified.',
             'Return only JSON.'
@@ -1623,7 +1639,7 @@ export async function researchProductComparisonFacts(input: {
             buyerQuestion: input.userMessage,
             targetProductNames,
             comparisonAttributes,
-            catalogExtraction: catalogResult,
+            catalogExtraction: catalogResultForResearch,
             exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes)
           })
         }
@@ -1644,7 +1660,7 @@ export async function researchProductComparisonFacts(input: {
       comparisonAttributes,
       signal: input.signal
     });
-    const combinedRetryResult = mergeCatalogAndWebResearch(catalogResult, retryResult);
+    const combinedRetryResult = mergeCatalogAndWebResearch(catalogResultForResearch, retryResult);
     const electricControlStillUnresolved = electricControlRetryRequired && needsElectricStarterControlSearch({
       result: combinedRetryResult,
       userMessage: input.userMessage,
