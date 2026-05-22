@@ -64,6 +64,7 @@ const schema = z.object({
   OPENAI_ANSWER_MODEL: z.string().optional(),
   OPENAI_PLANNER_MODEL: z.string().optional(),
   OPENAI_FACT_MODEL: z.string().optional(),
+  OPENAI_VISION_MODEL: z.string().optional(),
   OPENAI_DEEP_REASONING_MODEL: z.string().optional(),
   OPENAI_REASONING_EFFORT: reasoningEffort.default('low'),
   OPENAI_ANSWER_REASONING_EFFORT: reasoningEffort.optional(),
@@ -115,6 +116,7 @@ const primaryModel = parsedConfig.OPENAI_ANSWER_MODEL
 const deepReasoningModel = parsedConfig.OPENAI_DEEP_REASONING_MODEL || 'gpt-5.5';
 const plannerModel = parsedConfig.OPENAI_PLANNER_MODEL || primaryModel;
 const factModel = parsedConfig.OPENAI_FACT_MODEL || plannerModel;
+const visionModel = parsedConfig.OPENAI_VISION_MODEL || 'gpt-4.1-mini';
 const normalizeReasoningEffort = (value: z.infer<typeof reasoningEffort>) =>
   value === 'minimal' ? 'none' : value;
 
@@ -129,6 +131,7 @@ export const config = {
   OPENAI_ANSWER_MODEL: primaryModel,
   OPENAI_PLANNER_MODEL: plannerModel,
   OPENAI_FACT_MODEL: factModel,
+  OPENAI_VISION_MODEL: visionModel,
   OPENAI_DEEP_REASONING_MODEL: deepReasoningModel,
   OPENAI_ANSWER_REASONING_EFFORT: normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
   OPENAI_PLANNER_REASONING_EFFORT: normalizeReasoningEffort(parsedConfig.OPENAI_PLANNER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),

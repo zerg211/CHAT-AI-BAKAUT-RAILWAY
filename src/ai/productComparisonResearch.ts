@@ -1222,7 +1222,7 @@ async function validateVisualStartControlEvidence(input: {
   try {
     const { parsed } = await createStructuredJsonResponse({
       request: {
-        model: config.OPENAI_FACT_MODEL,
+        model: config.OPENAI_VISION_MODEL,
         input: [
           {
             role: 'system',
