@@ -1076,6 +1076,133 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
   });
 
+  it('does not append uncertainty for a start-control label that later coverage confirms', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'SUNREKA G7000iS',
+        attribute: 'button start',
+        value: 'есть',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'exact source says start by START button',
+        sourceUrl: 'https://example.test/sunreka-g7000is',
+        sourceTitle: 'SUNREKA G7000iS specification'
+      }],
+      conflicts: [{
+        productName: 'SUNREKA G7000iS',
+        attribute: 'starting method',
+        catalogValue: 'ручной стартер',
+        webValues: ['ручной стартер + электростартер, кнопка START'],
+        resolution: 'catalog is incomplete; exact external source confirms button start and manual start'
+      }],
+      answerGuidance: {
+        directAnswer: 'Кнопочный запуск подтвержден. Ручной запуск тоже есть.',
+        completeness: 'answered',
+        coverage: [
+          {
+            attribute: 'button start',
+            status: 'not_found',
+            value: '',
+            evidence: 'catalog specs do not mention a button',
+            sourceUrl: 'https://example.test/catalog-g7000is',
+            sourceTitle: 'Catalog card'
+          },
+          {
+            attribute: 'button start',
+            status: 'confirmed',
+            value: 'есть',
+            evidence: 'exact external source confirms START button',
+            sourceUrl: 'https://example.test/sunreka-g7000is',
+            sourceTitle: 'SUNREKA G7000iS specification'
+          },
+          {
+            attribute: 'recoil start',
+            status: 'confirmed',
+            value: 'есть',
+            evidence: 'exact external source confirms manual starter',
+            sourceUrl: 'https://example.test/sunreka-g7000is',
+            sourceTitle: 'SUNREKA G7000iS specification'
+          }
+        ]
+      },
+      summaryForAnswer: 'Button start and manual start are confirmed; catalog had only manual starter.',
+      warnings: ['source_conflict_adjudicated']
+    });
+
+    class PresentCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('g7000is', 'SUNREKA G7000iS generator 6 kW', { starter: 'с ручным стартером' })
+        ];
+      }
+    }
+
+    const badModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks whether SUNREKA G7000iS starts by cord or button',
+          dialogueUnderstanding: 'single exact technical fact for a named catalog model',
+          nextStepRationale: 'verify exact start-control mechanism',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:g7000is',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'SUNREKA G7000iS button start recoil start',
+              semanticQuery: 'SUNREKA G7000iS START button and manual starter',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['SUNREKA G7000iS'],
+              comparisonAttributes: ['button start', 'recoil start', 'starting method'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model start-control fact',
+              notes: 'answer button vs cord directly'
+            },
+            rationale: 'exact model fact must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'По карточке вижу только ручной стартер.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:g7000is'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, badModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?'
+    });
+
+    expect(payload.answer).toContain('Кнопочный запуск подтвержден. Ручной запуск тоже есть.');
+    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
+    expect(payload.answer).not.toContain('есть в каталоге');
+    expect(payload.metadata?.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
+      ])
+    });
+  });
+
   it('repairs follow-up plans that reuse facts from a different exact model', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,

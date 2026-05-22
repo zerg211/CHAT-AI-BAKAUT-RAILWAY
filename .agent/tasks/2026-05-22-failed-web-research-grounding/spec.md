@@ -21,3 +21,5 @@ AC5. Add focused tests for failed web research being incorrectly used as fact ev
 AC6. Run focused tests, typecheck, and no-regex guard.
 
 AC7. After commit/push/Railway marker, run one production widget check through `https://bakautprof.ru/`.
+
+AC8. If a later coverage item confirms the same start-control label that an earlier catalog/extraction item marked `not_found`, the final answer must use the confirmed result and must not append stale uncertainty.

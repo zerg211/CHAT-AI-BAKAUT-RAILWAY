@@ -5,7 +5,7 @@
     {
       "command": "npx vitest run tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/productComparisonResearch.test.ts",
       "status": "pass",
-      "tests": 28
+      "tests": 29
     },
     {
       "command": "npm run typecheck",
@@ -38,6 +38,13 @@
     "issue": "web.researchProductFacts returned status=error, but answer factsUsed cited the failed request id as evidence."
   },
   "productionVerification": {
-    "status": "pending_commit_push_marker_live"
+    "status": "post_first_commit_live_found_followup_issue",
+    "firstCommit": "5a8c28ce091e747c91688946931e3356ee901f0d",
+    "firstLiveConversationNumber": 1567,
+    "followupIssue": "confirmed button-start guidance was combined with stale not_found button-start coverage from catalog extraction"
+  },
+  "followupFix": {
+    "status": "local_pass_pending_commit_push_marker_live",
+    "details": "confirmed start-control labels suppress stale uncertainty for the same label"
   }
 }

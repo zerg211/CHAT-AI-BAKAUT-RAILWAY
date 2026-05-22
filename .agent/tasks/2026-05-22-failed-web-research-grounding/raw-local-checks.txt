@@ -1,5 +1,5 @@
 npx vitest run tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/productComparisonResearch.test.ts
-PASS: 3 files, 28 tests
+PASS: 3 files, 29 tests
 
 npm run typecheck
 PASS

@@ -2,7 +2,7 @@
 
 ## Local checks
 
-- `npx vitest run tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/productComparisonResearch.test.ts` - PASS, 28 tests.
+- `npx vitest run tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/productComparisonResearch.test.ts` - PASS, 29 tests.
 - `npm run typecheck` - PASS.
 - `npm run lint:no-regex` - PASS, no new regex constructs.
 - `npm test` - PASS, 78 files, 649 tests.
@@ -28,3 +28,10 @@
 ## Pending production verification
 
 - Commit/push and Railway marker check are required before the post-fix live widget test.
+
+## Post-commit production finding before follow-up fix
+
+- Production marker `5a8c28ce091e747c91688946931e3356ee901f0d` reached Railway.
+- Live widget conversation `#1567`, session `5a95c3cf-6927-4090-9a8b-35bd34408f6c`.
+- The web tool succeeded and confirmed button start, but final text combined confirmed guidance with stale catalog uncertainty: "Кнопочный запуск подтвержден... Кнопочный запуск в данных не вижу."
+- Follow-up code fix added label-level coverage collapse: a confirmed start-control label suppresses older `not_found/not_confirmed/ambiguous` coverage for the same label.

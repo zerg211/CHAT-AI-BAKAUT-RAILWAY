@@ -898,6 +898,17 @@ function startControlConfirmedSupplementLines(coverage: unknown[], answerText: s
   return lines;
 }
 
+function confirmedStartControlLabels(coverageItems: StartControlCoverageItem[]) {
+  const labels = new Set<string>();
+  for (const coverageItem of coverageItems) {
+    if (coverageItem.status !== 'confirmed') continue;
+    for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
+      labels.add(label);
+    }
+  }
+  return labels;
+}
+
 function startControlUncertaintyStatement(input: {
   label: string;
   status: string;
@@ -916,11 +927,13 @@ function startControlCoverageUncertaintyLine(coverage: unknown[], answerText = '
   const coverageItems = coverage
     .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
   if (answerAlreadyCoversGeneralStartControlUncertainty(answerText)) return '';
+  const confirmedLabels = confirmedStartControlLabels(coverageItems);
   const hasConfirmedElectricStarter = coverageItems.some(coverageItemConfirmsElectricStarter);
   for (const coverageItem of coverageItems) {
     const status = coverageItem.status;
     if (typeof status !== 'string' || !startControlUncertaintyStatuses.has(status)) continue;
     for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
+      if (confirmedLabels.has(label)) continue;
       if (seen.has(label)) continue;
       seen.add(label);
       if (answerAlreadyCoversStartControlUncertainty(answerText, label)) continue;
