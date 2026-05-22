@@ -2,12 +2,28 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Product } from '../src/shared/types.js';
 
 const createStructuredJsonResponse = vi.hoisted(() => vi.fn());
+const fetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../src/ai/openaiStructured.js', () => ({
   createStructuredJsonResponse
 }));
 
+vi.mock('undici', () => ({
+  fetch: fetchMock
+}));
+
 const { researchProductComparisonFacts } = await import('../src/ai/productComparisonResearch.js');
+
+function sourceResponse(body: string, contentType = 'text/html; charset=utf-8') {
+  return {
+    ok: true,
+    headers: {
+      get: (name: string) => name.toLocaleLowerCase('en-US') === 'content-type' ? contentType : null
+    },
+    text: async () => body,
+    arrayBuffer: async () => new TextEncoder().encode(body).buffer
+  };
+}
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -43,6 +59,7 @@ function result(overrides: Record<string, unknown>) {
 describe('product comparison research', () => {
   beforeEach(() => {
     createStructuredJsonResponse.mockReset();
+    fetchMock.mockReset();
   });
 
   it('answers from exact catalog description before opening web search', async () => {
@@ -95,6 +112,7 @@ describe('product comparison research', () => {
   });
 
   it('broadens to web only when exact catalog extraction is incomplete', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse('FIRMAN RD3910E ignition key electric starter manual starter.'));
     createStructuredJsonResponse
       .mockResolvedValueOnce({
         parsed: result({
@@ -171,6 +189,9 @@ describe('product comparison research', () => {
   });
 
   it('does a dedicated control search when electric starter is found but key/button control is unresolved', async () => {
+    fetchMock
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E manual starter electric starter.'))
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E control panel: ignition key START switch, electric starter, manual starter.'));
     createStructuredJsonResponse
       .mockResolvedValueOnce({
         parsed: result({
@@ -277,5 +298,164 @@ describe('product comparison research', () => {
       'electric_start_control_retry_used'
     ]));
     expect(actual.warnings).not.toContain('electric_start_control_not_confirmed_after_retry');
+  });
+
+  it('rejects invented key-start evidence when the cited source only proves electric starter', async () => {
+    fetchMock
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E. Starting system: manual starter, electric starter. Kit: spark plug wrench.'))
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E PDF. Starting system: manual starter, electric starter. Kit: spark plug wrench.'));
+    createStructuredJsonResponse
+      .mockResolvedValueOnce({
+        parsed: result({
+          usedWebSearch: true,
+          facts: [
+            {
+              productName: 'FIRMAN RD4910E',
+              attribute: 'starting method',
+              value: 'manual starter / electric starter',
+              sourceType: 'web',
+              confidence: 'high',
+              evidence: 'official exact model page lists manual starter and electric starter',
+              sourceUrl: 'https://example.test/firman-rd4910e',
+              sourceTitle: 'FIRMAN RD4910E'
+            },
+            {
+              productName: 'FIRMAN RD4910E',
+              attribute: 'key start',
+              value: 'starts with an ignition key',
+              sourceType: 'web',
+              confidence: 'high',
+              evidence: 'research result claimed the source says to turn the key',
+              sourceUrl: 'https://example.test/firman-rd4910e',
+              sourceTitle: 'FIRMAN RD4910E'
+            }
+          ],
+          answerGuidance: {
+            directAnswer: 'RD4910E starts with a key and also has manual start.',
+            completeness: 'answered',
+            coverage: [
+              {
+                attribute: 'electric start',
+                status: 'confirmed',
+                value: 'electric starter',
+                evidence: 'official exact model page',
+                sourceUrl: 'https://example.test/firman-rd4910e',
+                sourceTitle: 'FIRMAN RD4910E'
+              },
+              {
+                attribute: 'manual starter',
+                status: 'confirmed',
+                value: 'manual starter',
+                evidence: 'official exact model page',
+                sourceUrl: 'https://example.test/firman-rd4910e',
+                sourceTitle: 'FIRMAN RD4910E'
+              },
+              {
+                attribute: 'key start',
+                status: 'confirmed',
+                value: 'ignition key',
+                evidence: 'research result claimed the source says to turn the key',
+                sourceUrl: 'https://example.test/firman-rd4910e',
+                sourceTitle: 'FIRMAN RD4910E'
+              }
+            ]
+          },
+          summaryForAnswer: 'Electric and manual starter are real; key start was overclaimed.'
+        })
+      })
+      .mockResolvedValueOnce({
+        parsed: result({
+          usedWebSearch: true,
+          facts: [{
+            productName: 'FIRMAN RD4910E',
+            attribute: 'key start',
+            value: 'starts with an ignition key',
+            sourceType: 'web',
+            confidence: 'high',
+            evidence: 'retry claimed key start from the PDF',
+            sourceUrl: 'https://example.test/firman-rd4910e.pdf',
+            sourceTitle: 'FIRMAN RD4910E PDF'
+          }],
+          answerGuidance: {
+            directAnswer: 'RD4910E starts with a key.',
+            completeness: 'answered',
+            coverage: [{
+              attribute: 'key start',
+              status: 'confirmed',
+              value: 'ignition key',
+              evidence: 'retry claimed key start from the PDF',
+              sourceUrl: 'https://example.test/firman-rd4910e.pdf',
+              sourceTitle: 'FIRMAN RD4910E PDF'
+            }]
+          },
+          summaryForAnswer: 'Retry still overclaimed key start.'
+        })
+      });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Does Firman RD4910E start with a key or a button?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['key start', 'push-button start']
+    });
+
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(actual.answerGuidance.coverage.some((item) =>
+      item.attribute === 'key start' && item.status === 'confirmed'
+    )).toBe(false);
+    expect(actual.answerGuidance.directAnswer).not.toContain('starts with a key');
+    expect(actual.answerGuidance.directAnswer).toContain('источники');
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'source_evidence_validation_failed:key_start',
+      'answer_guidance_rewritten_after_source_validation',
+      'electric_start_control_not_confirmed_after_retry'
+    ]));
+  });
+
+  it('keeps key-start evidence when the cited source text actually supports it', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E. Start procedure: turn the key to START. Electric starter and manual starter are available.'));
+    createStructuredJsonResponse.mockResolvedValueOnce({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD4910E',
+          attribute: 'key start',
+          value: 'turn the key to START',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'source says turn the key to START',
+          sourceUrl: 'https://example.test/firman-rd4910e-manual',
+          sourceTitle: 'FIRMAN RD4910E manual'
+        }],
+        answerGuidance: {
+          directAnswer: 'RD4910E starts with a key; manual start is also available.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'key start',
+            status: 'confirmed',
+            value: 'turn the key to START',
+            evidence: 'source says turn the key to START',
+            sourceUrl: 'https://example.test/firman-rd4910e-manual',
+            sourceTitle: 'FIRMAN RD4910E manual'
+          }]
+        },
+        summaryForAnswer: 'Source-backed key start.'
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Does Firman RD4910E start with a key or a button?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['key start', 'push-button start']
+    });
+
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(1);
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
+    ]));
+    expect(actual.answerGuidance.directAnswer).toContain('starts with a key');
+    expect(actual.warnings).not.toContain('source_evidence_validation_failed:key_start');
   });
 });

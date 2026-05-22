@@ -1,5 +1,7 @@
 import { config } from '../config.js';
 import type { Product } from '../shared/types.js';
+import * as cheerio from 'cheerio';
+import { fetch } from 'undici';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 
@@ -171,6 +173,80 @@ const controlSearchQuestionNeedles = [
   'зажиган',
   'замок',
   'выключател',
+  'тумблер'
+];
+
+const sourceBackedStartKinds = ['key_start', 'button_start', 'switch_start', 'electric_start', 'manual_starter'] as const;
+type SourceBackedStartKind = typeof sourceBackedStartKinds[number];
+
+const keyStartClaimNeedles = [
+  'key start',
+  'ignition key',
+  'key switch',
+  'turn the key',
+  'turned by key',
+  'starts with a key',
+  'с ключа',
+  'ключ зажигания',
+  'ключ электростартера',
+  'ключом электростартера',
+  'поворот ключ',
+  'поворотом ключ',
+  'поверните ключ',
+  'запуск ключом',
+  'замок зажигания'
+];
+
+const keyStartSourceNeedles = [
+  'ignition key',
+  'key switch',
+  'turn the key',
+  'turned by key',
+  'starts with a key',
+  'ключ зажигания',
+  'ключ электростартера',
+  'ключом электростартера',
+  'поворот ключ',
+  'поворотом ключ',
+  'поверните ключ',
+  'запуск ключом',
+  'замок зажигания'
+];
+
+const sparkPlugWrenchNeedles = [
+  'spark plug wrench',
+  'plug wrench',
+  'свечной ключ',
+  'свечного ключа',
+  'свечным ключом'
+];
+
+const buttonStartNeedles = [
+  'push button',
+  'button start',
+  'start button',
+  'electric start button',
+  'кнопка запуска',
+  'кнопочный запуск',
+  'запуск кнопкой',
+  'кнопкой запуска',
+  'нажатием кнопки'
+];
+
+const switchStartNeedles = [
+  'engine switch',
+  'ignition switch',
+  'starter switch',
+  'start switch',
+  'switch to start',
+  'switch turned',
+  'switch held in start',
+  'выключатель зажигания',
+  'выключатель двигателя',
+  'переключатель start',
+  'положение start',
+  'положение старт',
+  'тумблер запуска',
   'тумблер'
 ];
 
@@ -464,6 +540,437 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
   };
 }
 
+const sourceTextLimit = 250000;
+type SourceTextCache = Map<string, Promise<{ ok: boolean; text: string; warning?: string }>>;
+
+function isWhitespaceChar(char: string) {
+  return char.trim() === '';
+}
+
+function collapseWhitespace(value: unknown) {
+  let output = '';
+  let pendingSpace = false;
+  for (const char of String(value ?? '')) {
+    if (isWhitespaceChar(char)) {
+      pendingSpace = output.length > 0;
+      continue;
+    }
+    if (pendingSpace) {
+      output += ' ';
+      pendingSpace = false;
+    }
+    output += char;
+  }
+  return output.trim();
+}
+
+function limitSourceText(value: unknown) {
+  const text = collapseWhitespace(value);
+  return text.length > sourceTextLimit ? text.slice(0, sourceTextLimit) : text;
+}
+
+function sourceUrlIsHttp(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.trim()) return false;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function sourceLooksLikePdf(sourceUrl: string, contentType: string) {
+  if (normalizedText(contentType).includes('pdf')) return true;
+  try {
+    return new URL(sourceUrl).pathname.toLocaleLowerCase('en-US').endsWith('.pdf');
+  } catch {
+    return sourceUrl.toLocaleLowerCase('en-US').includes('.pdf');
+  }
+}
+
+function htmlToSourceText(html: string) {
+  const $ = cheerio.load(html);
+  $('script, style, noscript, svg').remove();
+  return limitSourceText($('body').text() || $.root().text());
+}
+
+async function pdfToSourceText(data: ArrayBuffer) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const loadingTask = getDocument({
+    data: new Uint8Array(data),
+    disableFontFace: true,
+    isEvalSupported: false,
+    useWorkerFetch: false
+  });
+  const pdf = await loadingTask.promise;
+  const parts: string[] = [];
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      for (const item of content.items) {
+        if (typeof item.str === 'string' && item.str.trim()) parts.push(item.str);
+      }
+      if (parts.join(' ').length > sourceTextLimit) break;
+    }
+  } finally {
+    await pdf.destroy?.();
+  }
+  return limitSourceText(parts.join(' '));
+}
+
+async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal?: AbortSignal) {
+  const cached = cache.get(sourceUrl);
+  if (cached) return cached;
+  const promise = (async () => {
+    try {
+      const response = await fetch(sourceUrl, {
+        signal,
+        headers: {
+          'user-agent': 'Mozilla/5.0 BAKAUT source evidence verifier'
+        }
+      });
+      if (!response.ok) return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
+      const contentType = response.headers.get('content-type') ?? '';
+      const text = sourceLooksLikePdf(sourceUrl, contentType)
+        ? await pdfToSourceText(await response.arrayBuffer())
+        : htmlToSourceText(await response.text());
+      return text
+        ? { ok: true, text }
+        : { ok: false, text: '', warning: 'source_evidence_empty' };
+    } catch {
+      return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
+    }
+  })();
+  cache.set(sourceUrl, promise);
+  return promise;
+}
+
+function normalizedUrlForCompare(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  try {
+    return new URL(value).href.toLocaleLowerCase('en-US');
+  } catch {
+    return normalizedText(value);
+  }
+}
+
+function productSourceText(product: Product) {
+  const specLines = scalarCatalogEntries(product.specs, 'specs')
+    .map((entry) => `${entry.path}: ${entry.value}`);
+  return limitSourceText([
+    product.name,
+    product.brand,
+    product.category,
+    product.sourceUrl,
+    ...specLines,
+    product.description
+  ].filter(Boolean).join('\n'));
+}
+
+function catalogProductForEvidenceItem(input: {
+  products: Product[];
+  targetProductNames: string[];
+  productName?: string;
+  sourceUrl?: string;
+  sourceTitle?: string;
+}) {
+  const sourceUrl = normalizedUrlForCompare(input.sourceUrl);
+  if (sourceUrl) {
+    const byUrl = input.products.find((product) =>
+      normalizedUrlForCompare(product.sourceUrl) === sourceUrl
+    );
+    if (byUrl) return byUrl;
+  }
+
+  const sourceNames = [input.productName, input.sourceTitle].filter((value): value is string =>
+    typeof value === 'string' && Boolean(value.trim())
+  );
+  for (const name of sourceNames) {
+    const byName = input.products.find((product) => productMatchesExactTarget(product, name));
+    if (byName) return byName;
+  }
+
+  if (input.products.length === 1 && input.targetProductNames.some((target) =>
+    productMatchesExactTarget(input.products[0], target)
+  )) {
+    return input.products[0];
+  }
+  return null;
+}
+
+type SourceEvidenceItem = {
+  productName?: string;
+  attribute: string;
+  value: string;
+  evidence: string;
+  sourceType?: ProductComparisonResearchFact['sourceType'];
+  sourceUrl?: string;
+  sourceTitle?: string;
+};
+
+async function evidenceItemSourceText(input: {
+  item: SourceEvidenceItem;
+  products: Product[];
+  targetProductNames: string[];
+  cache: SourceTextCache;
+  signal?: AbortSignal;
+}) {
+  const catalogProduct = catalogProductForEvidenceItem({
+    products: input.products,
+    targetProductNames: input.targetProductNames,
+    productName: input.item.productName,
+    sourceUrl: input.item.sourceUrl,
+    sourceTitle: input.item.sourceTitle
+  });
+  if (input.item.sourceType === 'catalog' || (catalogProduct && !input.item.sourceType)) {
+    if (!catalogProduct) return { ok: false, text: '', warning: 'source_evidence_catalog_source_missing' };
+    return { ok: true, text: productSourceText(catalogProduct) };
+  }
+  if (sourceUrlIsHttp(input.item.sourceUrl)) {
+    return fetchSourceText(input.item.sourceUrl, input.cache, input.signal);
+  }
+  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct) };
+  return { ok: false, text: '', warning: 'source_evidence_source_url_missing' };
+}
+
+function startClaimKindsFromText(value: unknown): SourceBackedStartKind[] {
+  const text = String(value ?? '');
+  const kinds: SourceBackedStartKind[] = [];
+  if (textIncludesAny(text, keyStartClaimNeedles)) kinds.push('key_start');
+  if (textIncludesAny(text, buttonStartNeedles)) kinds.push('button_start');
+  if (textIncludesAny(text, switchStartNeedles)) kinds.push('switch_start');
+  if (textIncludesAny(text, electricStarterNeedles)) kinds.push('electric_start');
+  if (textIncludesAny(text, manualStarterNeedles)) kinds.push('manual_starter');
+  return sourceBackedStartKinds.filter((kind) => kinds.includes(kind));
+}
+
+function sourceSupportsStartKind(sourceText: string, kind: SourceBackedStartKind) {
+  if (kind === 'key_start') {
+    const hasIgnitionKeyEvidence = textIncludesAny(sourceText, keyStartSourceNeedles);
+    if (textIncludesAny(sourceText, sparkPlugWrenchNeedles) && !hasIgnitionKeyEvidence) return false;
+    return hasIgnitionKeyEvidence;
+  }
+  if (kind === 'button_start') return textIncludesAny(sourceText, buttonStartNeedles);
+  if (kind === 'switch_start') return textIncludesAny(sourceText, switchStartNeedles);
+  if (kind === 'electric_start') return textIncludesAny(sourceText, electricStarterNeedles);
+  return textIncludesAny(sourceText, manualStarterNeedles);
+}
+
+function sourceTextMatchesTarget(input: {
+  sourceText: string;
+  item: SourceEvidenceItem;
+  targetProductNames: string[];
+}) {
+  if (!input.targetProductNames.length) return true;
+  const haystack = compactExactTargetText([
+    input.item.sourceUrl,
+    input.item.sourceTitle,
+    input.sourceText
+  ].filter(Boolean).join(' '));
+  return input.targetProductNames.some((targetName) => {
+    const targetTokens = exactTargetAliases(targetName)
+      .map(compactExactTargetText)
+      .filter((token) => token.length >= 4 && tokenHasDigit(token));
+    return targetTokens.length
+      ? targetTokens.some((token) => haystack.includes(token))
+      : haystack.includes(compactExactTargetText(targetName));
+  });
+}
+
+async function validateStartEvidenceItem(input: {
+  item: SourceEvidenceItem;
+  products: Product[];
+  targetProductNames: string[];
+  cache: SourceTextCache;
+  signal?: AbortSignal;
+}) {
+  const claimKinds = startClaimKindsFromText([
+    input.item.attribute,
+    input.item.value,
+    input.item.evidence
+  ].join(' '));
+  if (!claimKinds.length) return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings: [] as string[] };
+
+  const source = await evidenceItemSourceText(input);
+  const warnings: string[] = [];
+  if (source.warning) warnings.push(source.warning);
+  if (!source.ok) {
+    return {
+      valid: false,
+      invalidKinds: claimKinds,
+      warnings: uniqueStrings([
+        ...warnings,
+        ...claimKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
+      ])
+    };
+  }
+
+  if (!sourceTextMatchesTarget({ sourceText: source.text, item: input.item, targetProductNames: input.targetProductNames })) {
+    return {
+      valid: false,
+      invalidKinds: claimKinds,
+      warnings: uniqueStrings([
+        ...warnings,
+        'source_evidence_exact_target_not_found',
+        ...claimKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
+      ])
+    };
+  }
+
+  const invalidKinds = claimKinds.filter((kind) => !sourceSupportsStartKind(source.text, kind));
+  return {
+    valid: invalidKinds.length === 0,
+    invalidKinds,
+    warnings: uniqueStrings([
+      ...warnings,
+      ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
+    ])
+  };
+}
+
+function confirmedStartKinds(result: ProductComparisonResearchResult) {
+  const kinds: SourceBackedStartKind[] = [];
+  for (const item of result.answerGuidance.coverage) {
+    if (item.status === 'confirmed') kinds.push(...startClaimKindsFromText(coverageItemText(item)));
+  }
+  for (const fact of result.facts) {
+    if (['high', 'medium'].includes(fact.confidence)) {
+      kinds.push(...startClaimKindsFromText([fact.attribute, fact.value, fact.evidence].join(' ')));
+    }
+  }
+  return new Set(sourceBackedStartKinds.filter((kind) => kinds.includes(kind)));
+}
+
+function sourceBackedStartDirectAnswer(result: ProductComparisonResearchResult) {
+  const kinds = confirmedStartKinds(result);
+  const hasElectric = kinds.has('electric_start');
+  const hasManual = kinds.has('manual_starter');
+  if (kinds.has('key_start')) {
+    return hasManual
+      ? 'Запускается с ключа, через электростартер. Ручной запуск тоже есть.'
+      : 'Запускается с ключа, через электростартер.';
+  }
+  if (kinds.has('button_start')) {
+    return hasManual
+      ? 'Кнопочный запуск подтвержден. Ручной запуск тоже есть.'
+      : 'Кнопочный запуск подтвержден.';
+  }
+  if (kinds.has('switch_start')) {
+    return hasManual
+      ? 'Электростартер включается через переключатель/выключатель START. Ручной запуск тоже есть.'
+      : 'Электростартер включается через переключатель/выключатель START.';
+  }
+  if (hasElectric && hasManual) {
+    return 'Электростартер есть, ручной запуск тоже есть. А вот чем включается электростартер — ключом, кнопкой или переключателем — источники не подтвердили.';
+  }
+  if (hasElectric) {
+    return 'Электростартер есть. А вот чем он включается — ключом, кнопкой или переключателем — источники не подтвердили.';
+  }
+  if (hasManual) {
+    return 'Ручной запуск есть. Электрозапуск и его управление источники не подтвердили.';
+  }
+  return 'По точному способу запуска источники не дали подтверждения.';
+}
+
+function sourceBackedStartCompleteness(result: ProductComparisonResearchResult) {
+  const kinds = confirmedStartKinds(result);
+  if (kinds.has('key_start') || kinds.has('button_start') || kinds.has('switch_start')) return 'answered';
+  if (kinds.has('electric_start') || kinds.has('manual_starter')) return 'partially_answered';
+  return 'not_answered';
+}
+
+async function validateSourceBackedResult(input: {
+  result: ProductComparisonResearchResult;
+  products: Product[];
+  targetProductNames: string[];
+  userMessage: string;
+  comparisonAttributes: string[];
+  signal?: AbortSignal;
+}) {
+  if (!startControlQuestionRelevant(input.userMessage, input.comparisonAttributes)) return input.result;
+
+  const cache: SourceTextCache = new Map();
+  const warnings = [...input.result.warnings];
+  const invalidKinds = new Set<SourceBackedStartKind>();
+  const facts: ProductComparisonResearchFact[] = [];
+
+  for (const fact of input.result.facts) {
+    if (fact.sourceType === 'conflict' || fact.confidence === 'low') {
+      facts.push(fact);
+      continue;
+    }
+    const validation = await validateStartEvidenceItem({
+      item: fact,
+      products: input.products,
+      targetProductNames: input.targetProductNames,
+      cache,
+      signal: input.signal
+    });
+    warnings.push(...validation.warnings);
+    if (!validation.valid) {
+      for (const kind of validation.invalidKinds) invalidKinds.add(kind);
+      continue;
+    }
+    facts.push(fact);
+  }
+
+  const coverage: ResearchCoverageItem[] = [];
+  for (const item of input.result.answerGuidance.coverage) {
+    if (item.status !== 'confirmed') {
+      coverage.push(item);
+      continue;
+    }
+    const validation = await validateStartEvidenceItem({
+      item,
+      products: input.products,
+      targetProductNames: input.targetProductNames,
+      cache,
+      signal: input.signal
+    });
+    warnings.push(...validation.warnings);
+    if (!validation.valid) {
+      for (const kind of validation.invalidKinds) invalidKinds.add(kind);
+      coverage.push({
+        ...item,
+        status: 'not_confirmed',
+        value: '',
+        evidence: `source validation did not confirm ${validation.invalidKinds.join(', ')}`
+      });
+      continue;
+    }
+    coverage.push(item);
+  }
+
+  const adjusted: ProductComparisonResearchResult = {
+    ...input.result,
+    facts: uniqueFacts(facts),
+    answerGuidance: {
+      ...input.result.answerGuidance,
+      coverage: uniqueCoverage(coverage)
+    },
+    warnings: uniqueStrings(warnings)
+  };
+
+  if (invalidKinds.size > 0 && startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes)) {
+    const directAnswerKinds = startClaimKindsFromText(adjusted.answerGuidance.directAnswer);
+    const directAnswerClaimsInvalidFact = [...invalidKinds].some((kind) => directAnswerKinds.includes(kind));
+    if (directAnswerClaimsInvalidFact || !resultConfirmsPracticalStartControl(adjusted)) {
+      adjusted.answerGuidance = {
+        ...adjusted.answerGuidance,
+        directAnswer: sourceBackedStartDirectAnswer(adjusted),
+        completeness: sourceBackedStartCompleteness(adjusted)
+      };
+      adjusted.warnings = uniqueStrings([
+        ...adjusted.warnings,
+        'answer_guidance_rewritten_after_source_validation'
+      ]);
+    }
+  }
+
+  return adjusted;
+}
+
 function augmentCatalogStarterFacts(input: {
   result: ProductComparisonResearchResult;
   products: Product[];
@@ -721,7 +1228,7 @@ async function extractExactCatalogProductFacts(input: {
     stage: 'catalog_product_fact_extraction',
     signal: input.signal
   });
-  return augmentCatalogStarterFacts({
+  const extracted = augmentCatalogStarterFacts({
     result: {
       ...normalizeResearchParsed(parsed),
       usedWebSearch: false
@@ -729,6 +1236,14 @@ async function extractExactCatalogProductFacts(input: {
     products: input.products,
     userMessage: input.userMessage,
     comparisonAttributes: input.comparisonAttributes
+  });
+  return validateSourceBackedResult({
+    result: extracted,
+    products: input.products,
+    targetProductNames: input.targetProductNames,
+    userMessage: input.userMessage,
+    comparisonAttributes: input.comparisonAttributes,
+    signal: input.signal
   });
 }
 
@@ -905,7 +1420,14 @@ export async function researchProductComparisonFacts(input: {
     stage: 'product_comparison_research',
     signal: input.signal
   });
-  const primaryResult = normalizeResearchParsed(parsed);
+  const primaryResult = await validateSourceBackedResult({
+    result: normalizeResearchParsed(parsed),
+    products: exactCatalogProducts,
+    targetProductNames,
+    userMessage: input.userMessage,
+    comparisonAttributes,
+    signal: input.signal
+  });
   const combinedPrimaryResult = mergeCatalogAndWebResearch(catalogResult, primaryResult);
   const electricControlRetryRequired = needsElectricStarterControlSearch({
     result: combinedPrimaryResult,
@@ -932,7 +1454,7 @@ export async function researchProductComparisonFacts(input: {
             'Use exactTargetSearchQueries and search public web pages, official manufacturer pages, distributor pages, PDFs, manuals, and specification sheets that mention the exact model/code.',
             'Accept a fact only when sourceUrl, sourceTitle, or evidence names the exact target model/code.',
             'If catalogExtraction confirms one option and web does not refute it with stronger exact-target evidence, preserve the catalog fact instead of downgrading it to unknown.',
-            'For key vs push-button questions, ignition keys in the kit or ignition-key wording supports key start; absence of push-button wording means push-button is not confirmed.',
+            'For key vs push-button questions, only explicit ignition/start key wording supports key start. A spark plug wrench or a generic kit wrench is not ignition-key evidence.',
             'If exact-target instructions show an ignition switch, engine switch, starter switch, or a switch turned/held in START, return that practical mechanism in answerGuidance.directAnswer. Do not collapse it to only "electric starter".',
             'If the first pass found an electric starter but did not confirm how it is actuated, perform a dedicated control search: product photos, control-panel photos/images, official image galleries, manuals, PDF diagrams, ignition key, ignition switch, starter switch, push button, START switch, and Russian equivalents.',
             'If photos or manuals clearly show/label a key, ignition switch, push button, or START switch for the exact model, return that control as confirmed with the source. If they only show electric starter without the control, say the electric starter is confirmed but the control type is still not confirmed after exact-target source checks.',
@@ -959,7 +1481,14 @@ export async function researchProductComparisonFacts(input: {
       stage: 'product_comparison_research_exact_retry',
       signal: input.signal
     });
-    const retryResult = normalizeResearchParsed(retry.parsed);
+    const retryResult = await validateSourceBackedResult({
+      result: normalizeResearchParsed(retry.parsed),
+      products: exactCatalogProducts,
+      targetProductNames,
+      userMessage: input.userMessage,
+      comparisonAttributes,
+      signal: input.signal
+    });
     const combinedRetryResult = mergeCatalogAndWebResearch(catalogResult, retryResult);
     const electricControlStillUnresolved = electricControlRetryRequired && needsElectricStarterControlSearch({
       result: combinedRetryResult,
@@ -987,6 +1516,17 @@ export async function researchProductComparisonFacts(input: {
         ])
       };
     }
+    return {
+      ...combinedPrimaryResult,
+      usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
+      warnings: uniqueStrings([
+        ...combinedPrimaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
+        ...combinedRetryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
+        'exact_target_external_retry_used',
+        electricControlRetryRequired ? 'electric_start_control_retry_used' : '',
+        electricControlRetryRequired ? 'electric_start_control_not_confirmed_after_retry' : ''
+      ])
+    };
   }
 
   return combinedPrimaryResult;
