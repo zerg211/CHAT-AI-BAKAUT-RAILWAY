@@ -1,0 +1,52 @@
+{
+  "taskId": "2026-05-22-web-research-failure-grounding",
+  "status": "local_verified_pre_push",
+  "baseHead": "0b896df",
+  "checks": [
+    {
+      "command": "npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "status": "PASS",
+      "summary": "17 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1824."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "75 files / 602 tests passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "CRLF warnings only"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PENDING_PRODUCTION_CHECK"
+  },
+  "production": {
+    "preFixPromptfoo": {
+      "source": ".agent/tasks/2026-05-22-approved-answer-style-examples/production-evals-after-0b896df.summary.json",
+      "successes": 5,
+      "failures": 1,
+      "deterministicAverage": 0.9811666666666666,
+      "llmAverage": 0.8933333333333332,
+      "failingCase": "web_required_technical_grounding"
+    }
+  }
+}

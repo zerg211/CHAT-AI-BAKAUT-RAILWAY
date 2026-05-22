@@ -167,6 +167,87 @@ function model(): AgentManagerModel {
 }
 
 describe('AgentManager comparison research flow', () => {
+  it('requires explicit grounding when web research fails before the answer is composed', async () => {
+    researchProductComparisonFacts.mockRejectedValueOnce(
+      new Error('product_comparison_research did not return a JSON object')
+    );
+
+    const clausesSeen: Array<{ code?: string; sourceRequestId?: string; instruction?: string }> = [];
+    const groundingModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks why THD matters for boiler electronics',
+          dialogueUnderstanding: 'technical fact explanation needs web verification when exact catalog data is missing',
+          nextStepRationale: 'try web research, then answer only at the grounded level if the research fails',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:thd',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'THD inverter generator boiler electronics',
+              semanticQuery: 'practical THD importance for boiler and sensitive electronics',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: ['THD'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'verify technical facts',
+              notes: 'technical explanation only'
+            },
+            rationale: 'the buyer explicitly asked to check facts',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['web_required']
+        };
+      },
+      async composeAnswer(input) {
+        clausesSeen.push(...(input.requiredResponseClauses ?? []));
+        return {
+          answerText: 'THD matters because lower distortion is generally safer for boiler controls and sensitive electronics. Exact verification did not complete in this turn, so I would check the passport for the chosen model before treating a THD number as confirmed.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: [],
+          leadAction: 'none',
+          riskFlags: ['web_research_unavailable']
+        };
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Explain why THD matters for an inverter generator and check facts if catalog data is missing.')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      { async createLead() { return null; } } as never,
+      groundingModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Explain why THD matters for an inverter generator and check facts if catalog data is missing.'
+    });
+
+    expect(clausesSeen).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'web_research_unavailable_grounding',
+        sourceRequestId: 'web:thd'
+      })
+    ]));
+    expect(clausesSeen[0]?.instruction).toContain('did not complete successfully');
+    const metadata = payload.metadata as { toolResults?: Array<{ status?: string; warnings?: string[] }> };
+    expect(metadata.toolResults?.[0]).toMatchObject({
+      status: 'error',
+      warnings: ['tool_execution_error']
+    });
+  });
+
   it('answers exact external facts for a named model absent from catalog and exposes nearby catalog models', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,

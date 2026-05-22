@@ -586,6 +586,14 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
   const clauses: RequiredResponseClause[] = [];
   for (const result of toolResults) {
     if (result.tool !== 'web.researchProductFacts') continue;
+    if (result.status !== 'ok') {
+      clauses.push({
+        code: 'web_research_unavailable_grounding',
+        sourceRequestId: result.requestId,
+        instruction: 'The requested web fact check did not complete successfully. Answer only at the truthful general engineering level from the current dialogue and already available facts; explicitly separate that from exact/current verification, and do not claim that web facts were checked or verified by this failed tool result.'
+      });
+      continue;
+    }
     const payload = result.payload as {
       catalogPresence?: Array<{ productName?: string; status?: string }>;
       nearbyCatalogProducts?: Array<{ name?: string }>;
@@ -1170,6 +1178,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
             'If requiredResponseClauses is non-empty, answerText must satisfy every clause by meaning. Treat these clauses as required semantic content, not optional style advice.',
             'If web.researchProductFacts payload.answerGuidance.directAnswer is present, use that practical direct answer before broader catalog context. Do not convert answerGuidance.coverage status "not_confirmed" into "no" or "does not have".',
+            'If web.researchProductFacts has status error, timeout, denied, or not_found, do not write that facts were checked, verified, or confirmed by that research step. Give the best general answer only at the current truthful level and state that exact verification is unavailable in this turn when the buyer asked for verification.',
             styleExamples,
             'Верни только JSON AnswerContract.'
           ].join('\n')
