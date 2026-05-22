@@ -69,5 +69,16 @@
     "llmAverage": 0.9583333333333331,
     "deterministicAbove90": true,
     "llmAverageAbove90": true
+  },
+  "latestMainRecheck": {
+    "status": "FAIL",
+    "commit": "0eb3b03",
+    "output": ".agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-0eb3b03.json",
+    "summary": ".agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-0eb3b03.summary.json",
+    "passed": 5,
+    "failed": 1,
+    "deterministicAverage": 0.9830555555555556,
+    "llmAverage": 0.9016666666666667,
+    "followUpTask": "2026-05-22-generator-multiturn-load-reuse"
   }
 }

@@ -30,3 +30,12 @@ Production eval after this pass:
 - Deterministic average: 0.9923333333333333.
 - LLM average: 0.9583333333333331.
 - Gates: deterministic > 90% PASS, LLM average > 90% PASS.
+
+Latest-main recheck after evidence and parallel catalog-presence commits:
+- Commit: 0eb3b03
+- Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-0eb3b03.json
+- Result: FAIL, 5/6 passed.
+- Deterministic average: 0.9830555555555556.
+- LLM average: 0.9016666666666667.
+- Remaining failed case: generator_load_selection, because the follow-up turn searched catalog without re-running calculator.generatorLoad and weak generator products were mentioned.
+- Follow-up task: .agent/tasks/2026-05-22-generator-multiturn-load-reuse/

@@ -40,3 +40,14 @@ Additional regression guard:
 - Assertion pass rate: 33/33.
 - `plate_retrieval_grounding`: PASS, LLM score 0.96, 2 cards.
 - `web_required_technical_grounding`: PASS, `web.researchProductFacts` present.
+
+## Latest-Main Recheck After `0eb3b03`
+
+- `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-0eb3b03.json`: FAIL.
+- Pass/fail: 5/6.
+- Deterministic average: 0.9830555555555556.
+- LLM average: 0.9016666666666667.
+- Remaining failed case: `generator_load_selection`.
+- Root cause: the follow-up turn searched catalog without a same-turn `calculator.generatorLoad`, so weak generator products could be mentioned without current load-fit filtering.
+
+Follow-up task: `.agent/tasks/2026-05-22-generator-multiturn-load-reuse/`.
