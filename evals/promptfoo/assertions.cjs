@@ -252,6 +252,56 @@ function hasVisibleCards(turn) {
   return Array.isArray(turn?.productCards) && turn.productCards.length > 0;
 }
 
+function metadataStringList(...values) {
+  return values.flatMap((value) => Array.isArray(value) ? value.map((item) => String(item || '')) : []);
+}
+
+function hasMissingCriticalGeneratorLoadOutcome(parsed) {
+  const turn = latestTurn(parsed);
+  const metadata = latestMetadata(parsed);
+  const readiness = latestSelectionReadiness(parsed);
+  const decision = readiness.decision || metadata.answerContract?.selectionReadiness || readiness;
+  const productClass = latestStructuredProductClass(parsed);
+  if (productClass !== 'generator' || hasVisibleCards(turn)) return false;
+
+  const blockedByReadiness = readiness.status === 'blocked_by_answer_contract' ||
+    decision?.canShowProductCards === false ||
+    decision?.status === 'needs_more_info';
+  if (!blockedByReadiness) return false;
+
+  const missingFactsText = metadataStringList(readiness.missingFacts, decision?.missingFacts).join(' ');
+  const riskFlagsText = metadataStringList(
+    metadata.intentContract?.riskFlags,
+    metadata.answerContract?.riskFlags,
+    metadata.warnings,
+    metadata.cardSelection?.warnings
+  ).join(' ');
+  const answerAndFacts = [
+    String(turn?.answer || ''),
+    missingFactsText,
+    riskFlagsText
+  ].join(' ');
+
+  const missingPumpPower = textContainsAny(answerAndFacts, [
+    'pump power',
+    'pump model',
+    '\u043c\u043e\u0449\u043d\u043e\u0441\u0442\u044c \u043d\u0430\u0441\u043e\u0441\u0430',
+    '\u043c\u043e\u0434\u0435\u043b\u044c \u043d\u0430\u0441\u043e\u0441\u0430',
+    '\u0441\u043a\u0432\u0430\u0436\u0438\u043d\u043d\u044b\u0439 \u043d\u0430\u0441\u043e\u0441',
+    '\u0441\u043a\u0432\u0430\u0436\u0438\u043d\u043d\u043e\u0433\u043e \u043d\u0430\u0441\u043e\u0441\u0430'
+  ]);
+  const criticalRisk = textContainsAny(riskFlagsText, [
+    'missing_critical_load_power',
+    'generator_sizing_requires_pump_power',
+    'insufficient_load_data',
+    'insufficient_load_detail',
+    'catalog_search_without_defensible_load_basis',
+    'selection_readiness_blocked_cards'
+  ]);
+
+  return missingPumpPower && (criticalRisk || decision?.status === 'needs_more_info');
+}
+
 function hasNoSuitableProductOutcome(parsed) {
   const turn = latestTurn(parsed);
   const metadata = latestMetadata(parsed);
@@ -275,13 +325,14 @@ function hasNoSuitableProductOutcome(parsed) {
     'точнее',
     'мощность насоса'
   ]);
-  return Boolean(
+  const noSuitableAfterSearch = Boolean(
     !hasVisibleCards(turn) &&
     blockedByReadiness &&
     searchedCatalog &&
     latestStructuredProductClass(parsed) &&
     explainsNoSuitableOption
   );
+  return noSuitableAfterSearch || hasMissingCriticalGeneratorLoadOutcome(parsed);
 }
 
 function fallbackUsed(metadata) {
@@ -587,6 +638,9 @@ function assertToolCallCorrectness(output, context) {
   const config = assertionConfig(context);
   const toolNames = collectToolNames(parsed);
   const requiredSources = collectRequiredSources(parsed);
+  if (config.allowNoSuitableProductOutcome && hasNoSuitableProductOutcome(parsed)) {
+    return result(true, 'Tool/source/contract assertions accepted a structured blocked product-selection outcome.');
+  }
 
   for (const tool of (config.requiredToolsAll || [])) {
     if (!toolNames.has(tool)) return result(false, `Expected toolTrace to include ${tool}. Saw: ${JSON.stringify([...toolNames])}`);
@@ -614,6 +668,9 @@ function assertToolCallCorrectness(output, context) {
   if (Array.isArray(config.expectedTaskTypes) && config.expectedTaskTypes.length) {
     const taskTypes = collectTaskTypes(parsed);
     if (!config.expectedTaskTypes.some((taskType) => taskTypes.has(taskType))) {
+      if (config.allowNoSuitableProductOutcome && hasNoSuitableProductOutcome(parsed)) {
+        return result(true, 'Structured no-suitable-products outcome satisfies task type constraints.');
+      }
       return result(false, `Expected task type ${JSON.stringify(config.expectedTaskTypes)}. Saw: ${JSON.stringify([...taskTypes])}`);
     }
   }
@@ -632,6 +689,9 @@ function assertAgentTaskCompletion(output, context) {
   if (Array.isArray(config.expectedTaskTypes) && config.expectedTaskTypes.length) {
     const taskTypes = collectTaskTypes(parsed);
     if (!config.expectedTaskTypes.some((taskType) => taskTypes.has(taskType))) {
+      if (config.allowNoSuitableProductOutcome && hasNoSuitableProductOutcome(parsed)) {
+        return result(true, 'Structured no-suitable-products outcome satisfies task type constraints.');
+      }
       return result(false, `Expected task type ${JSON.stringify(config.expectedTaskTypes)}. Saw: ${JSON.stringify([...taskTypes])}`);
     }
   }

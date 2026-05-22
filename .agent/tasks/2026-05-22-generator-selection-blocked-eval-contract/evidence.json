@@ -1,0 +1,65 @@
+{
+  "taskId": "2026-05-22-generator-selection-blocked-eval-contract",
+  "baseline": {
+    "source": ".agent/tasks/2026-05-22-widget-embed-no-regex/production-evals-after-c6a4472.json",
+    "commit": "c6a4472",
+    "successes": 5,
+    "resultCount": 6,
+    "deterministicAverage": 0.9074444444444444,
+    "llmAverage": 0.9483333333333333,
+    "failingCase": "generator_load_selection",
+    "diagnosis": "The answer safely blocked generator cards because pump power/model was missing; deterministic assertions required catalog/search and cards despite the opt-in no-suitable outcome."
+  },
+  "change": {
+    "files": [
+      "evals/promptfoo/assertions.cjs",
+      "promptfooconfig.yaml",
+      "tests/promptfooAssertions.test.ts"
+    ],
+    "summary": "Extended opt-in no-suitable-product eval handling to structured generator needs-more-info outcomes caused by missing pump power/model."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/promptfooAssertions.test.ts",
+      "status": "pass",
+      "details": "1 file, 7 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1782."
+    },
+    {
+      "command": "saved production raw replay for generator_load_selection",
+      "status": "pass",
+      "details": "support, grounding, tool correctness, and completion assertions all pass with the updated opt-in contract"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "details": "Only line-ending warnings."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "77 files, 636 tests"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pending_production_promptfoo"
+  }
+}

@@ -6,12 +6,14 @@ const {
   assertAgentTaskCompletion,
   assertBusinessRules,
   assertRetrievalGrounding,
-  assertSupportAnswerQuality
+  assertSupportAnswerQuality,
+  assertToolCallCorrectness
 } = require('../evals/promptfoo/assertions.cjs') as {
   assertAgentTaskCompletion: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
   assertBusinessRules: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
   assertRetrievalGrounding: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
   assertSupportAnswerQuality: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
+  assertToolCallCorrectness: (output: unknown, context?: unknown) => { pass: boolean; reason: string; score: number };
 };
 
 function outputWithTurns(turns: Array<Record<string, unknown>>) {
@@ -188,5 +190,72 @@ describe('promptfoo structured completion assertions', () => {
 
     expect(grounding.pass).toBe(false);
     expect(grounding.reason).toContain('Expected at least 1 product card');
+  });
+
+  it('accepts a blocked generator selection when pump power is the missing critical fact', () => {
+    const output = outputWithTurns([{
+      ok: true,
+      answer: 'I cannot show generator catalog options yet because pump power is missing. Send the pump power or pump model and I will select safe options.',
+      productCards: [],
+      metadata: {
+        intentContract: {
+          requiresTools: false,
+          toolRequests: [],
+          riskFlags: ['missing_critical_load_power', 'catalog_search_without_defensible_load_basis']
+        },
+        answerContract: {
+          riskFlags: ['selection_readiness_blocked_cards'],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            missingFacts: ['pump power or pump model']
+          }
+        },
+        selectionReadiness: {
+          status: 'blocked_by_answer_contract',
+          productClass: 'generator',
+          missingFacts: ['pump power or pump model'],
+          decision: {
+            productClass: 'generator',
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            missingFacts: ['pump power or pump model']
+          }
+        },
+        cardSelection: {
+          intent: 'generator',
+          selectedProductIds: [],
+          warnings: ['product_cards_suppressed:selection_readiness_contract']
+        },
+        toolResults: []
+      }
+    }]);
+
+    const grounding = assertRetrievalGrounding(output, {
+      config: {
+        expectCards: true,
+        allowNoSuitableProductOutcome: true
+      }
+    });
+    const tools = assertToolCallCorrectness(output, {
+      config: {
+        requiredToolsAny: ['searchCatalog', 'selectProducts'],
+        expectedTaskTypes: ['product_selection'],
+        allowNoSuitableProductOutcome: true
+      }
+    });
+    const completion = assertAgentTaskCompletion(output, {
+      config: {
+        expectedTaskTypes: ['product_selection'],
+        expectedProductClasses: ['generator'],
+        allowNoSuitableProductOutcome: true,
+        taskMustContainAll: ['generator']
+      }
+    });
+
+    expect(grounding.pass).toBe(true);
+    expect(tools.pass).toBe(true);
+    expect(completion.pass).toBe(true);
   });
 });

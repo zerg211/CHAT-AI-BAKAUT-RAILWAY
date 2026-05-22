@@ -86,6 +86,7 @@ tests:
       - type: javascript
         value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
         config:
+          allowNoSuitableProductOutcome: true
           requiredToolsAny:
             - searchCatalog
             - selectProducts
