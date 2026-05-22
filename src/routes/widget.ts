@@ -37,25 +37,54 @@ function embedScript(baseUrl: string) {
   if (existing) return;
   var script = document.currentScript;
   var data = script && script.dataset ? script.dataset : {};
-  var baseUrl = (data.chatSrc || ${JSON.stringify(baseUrl)}).replace(/\\/+$/, '');
+  function trimTrailingSlashes(value) {
+    var text = String(value || '');
+    while (text.endsWith('/')) text = text.slice(0, -1);
+    return text;
+  }
+  var baseUrl = trimTrailingSlashes(data.chatSrc || ${JSON.stringify(baseUrl)});
   var title = data.title || 'БАКАУТ — ЧАТ ПОДДЕРЖКИ';
   var subtitle = data.subtitle || 'Строительное и силовое оборудование';
   var managerName = data.managerName || 'Алексей';
   var managerRole = data.managerRole || 'Менеджер';
   var managerPhoto = data.managerPhoto || '';
   var position = data.position === 'left' ? 'left' : 'right';
+  function pixelNumber(value) {
+    var raw = String(value || '').trim().toLowerCase();
+    if (!raw.endsWith('px')) return null;
+    var numberText = raw.slice(0, -2).trim();
+    if (!numberText) return null;
+    var dotSeen = false;
+    for (var i = 0; i < numberText.length; i += 1) {
+      var code = numberText.charCodeAt(i);
+      var digit = code >= 48 && code <= 57;
+      if (digit) continue;
+      if (code === 46 && !dotSeen) {
+        dotSeen = true;
+        continue;
+      }
+      return null;
+    }
+    var number = Number(numberText);
+    return Number.isFinite(number) ? number : null;
+  }
   function sizeAtLeast(value, fallback, minPx) {
     var raw = String(value || fallback).trim();
-    var px = raw.match(/^(\\d+(?:\\.\\d+)?)px$/i);
-    if (px && Number(px[1]) < minPx) return minPx + 'px';
+    var px = pixelNumber(raw);
+    if (px !== null && px < minPx) return minPx + 'px';
     return raw || fallback;
   }
   var width = sizeAtLeast(data.width, '640px', 640);
   var height = sizeAtLeast(data.height, '820px', 820);
   function esc(value) {
-    return String(value).replace(/[&<>"']/g, function(ch) {
-      return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
-    });
+    var text = String(value);
+    var output = '';
+    var replacements = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+    for (var i = 0; i < text.length; i += 1) {
+      var ch = text.charAt(i);
+      output += replacements[ch] || ch;
+    }
+    return output;
   }
 
   var root = document.createElement('div');

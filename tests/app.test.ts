@@ -54,8 +54,12 @@ describe('app', () => {
     expect(response.body).toContain('margin:0 18px calc(58px + env(safe-area-inset-bottom,0px)) auto');
     expect(response.body).toContain('min-width:72px;width:72px;height:72px');
     expect(response.body).toContain('calc(58px + env(safe-area-inset-bottom,0px))');
+    expect(response.body).toContain('trimTrailingSlashes(data.chatSrc');
+    expect(response.body).toContain('while (text.endsWith');
+    expect(response.body).toContain('function pixelNumber');
     expect(response.body).toContain("sizeAtLeast(data.width, '640px', 640)");
     expect(response.body).toContain("sizeAtLeast(data.height, '820px', 820)");
-    expect(response.body).toContain("Number(px[1]) < minPx");
+    expect(response.body).toContain('px !== null && px < minPx');
+    expect(response.body).toContain('var replacements =');
   }, 15_000);
 });
