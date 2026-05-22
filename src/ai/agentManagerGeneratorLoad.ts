@@ -22,6 +22,15 @@ const generatorLoadBasisKinds = new Set([
   'unknown'
 ]);
 const motorLikeLoadKinds = new Set(['pump', 'compressor', 'pressure_washer', 'vacuum', 'concrete_mixer']);
+const boundedEstimatedLoadDefaults: Record<string, { runningKw: number; startingKw: number }> = {
+  pump: { runningKw: 1.1, startingKw: 3.5 },
+  refrigerator: { runningKw: 0.25, startingKw: 1.2 },
+  lighting: { runningKw: 0.3, startingKw: 0.3 },
+  boiler: { runningKw: 0.2, startingKw: 0.4 },
+  router: { runningKw: 0.05, startingKw: 0.05 },
+  television: { runningKw: 0.15, startingKw: 0.15 },
+  laptop: { runningKw: 0.1, startingKw: 0.1 }
+};
 
 type GeneratorLoadToolItem = ProductElectricalLoadItem & {
   basisSignals?: string[];
@@ -135,6 +144,17 @@ function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string):
       loads.push(load);
       continue;
     }
+    const boundedDefault = boundedDefaultEstimateForLoad(load);
+    if (boundedDefault) {
+      warnings.add(`generator_load_default_bounded_estimate:${boundedDefault.kind}`);
+      loads.push({
+        ...load,
+        runningKw: boundedDefault.runningKw,
+        startingKw: boundedDefault.startingKw,
+        evidence: `${load.evidence} Preliminary bounded average was used; exact nameplate power is still missing.`
+      });
+      continue;
+    }
     const loadKind = canonicalElectricalLoadKind(load.kind);
     if (
       load.basisKind === 'generic_load_name' ||
@@ -170,6 +190,14 @@ function hasBoundedEstimatedLoadBasis(load: GeneratorLoadToolItem) {
       hasAnyBasisSignal(load, ['usage_scope_known', 'simultaneous_operation_known']);
   }
   return hasAnyBasisSignal(load, ['consumer_type_known', 'consumer_function_known', 'usage_scope_known']);
+}
+
+function boundedDefaultEstimateForLoad(load: GeneratorLoadToolItem) {
+  if (load.source !== 'estimated_average') return null;
+  const kind = canonicalElectricalLoadKind(load.kind);
+  const defaults = boundedEstimatedLoadDefaults[kind];
+  if (!defaults || !hasBoundedEstimatedLoadBasis(load)) return null;
+  return { kind, ...defaults };
 }
 
 function hasBoundedAssumptionBasis(loads: GeneratorLoadToolItem[]) {

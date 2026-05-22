@@ -1,12 +1,12 @@
 {
-  "taskId": "2026-05-22-web-research-failure-grounding",
-  "status": "production_gates_passed",
-  "baseHead": "0b896df",
+  "taskId": "2026-05-22-bounded-generator-null-load-defaults",
+  "status": "local_verified_pre_push",
+  "baseHead": "da0f939",
   "checks": [
     {
-      "command": "npm test -- tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "command": "npm test -- tests/agentManagerGeneratorLoad.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerCardSelection.test.ts",
       "status": "PASS",
-      "summary": "17 tests passed"
+      "summary": "34 tests passed"
     },
     {
       "command": "npm run lint:no-regex",
@@ -20,7 +20,7 @@
     {
       "command": "npm test",
       "status": "PASS",
-      "summary": "75 files / 602 tests passed"
+      "summary": "76 files / 605 tests passed"
     },
     {
       "command": "git diff --check",
@@ -37,27 +37,17 @@
     "AC2": "PASS",
     "AC3": "PASS",
     "AC4": "PASS",
-    "AC5": "PASS"
+    "AC5": "PASS",
+    "AC6": "PENDING_PRODUCTION_CHECK"
   },
   "production": {
     "preFixPromptfoo": {
-      "source": ".agent/tasks/2026-05-22-approved-answer-style-examples/production-evals-after-0b896df.summary.json",
-      "successes": 5,
-      "failures": 1,
-      "deterministicAverage": 0.9811666666666666,
-      "llmAverage": 0.8933333333333332,
-      "failingCase": "web_required_technical_grounding"
-    },
-    "postFixPromptfoo": {
       "source": ".agent/tasks/2026-05-22-web-research-failure-grounding/production-evals-after-da0f939.summary.json",
-      "commit": "da0f9393095d3a031450114477822333d5678abb",
       "successes": 5,
       "failures": 1,
       "deterministicAverage": 0.9629444444444443,
       "llmAverage": 0.9499999999999998,
-      "deterministicAbove90": true,
-      "llmAverageAbove90": true,
-      "remainingFailure": "generator_load_selection"
+      "failingCase": "generator_load_selection"
     }
   }
 }

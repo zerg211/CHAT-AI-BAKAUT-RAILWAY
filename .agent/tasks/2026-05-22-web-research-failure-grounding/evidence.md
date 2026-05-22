@@ -17,7 +17,11 @@
 
 ## Production Verification
 
-- Pending commit, push, Railway marker, and production Promptfoo.
+- Commit `da0f939` was pushed to `main`.
+- Railway `/api/health` reported deployed commit `da0f9393095d3a031450114477822333d5678abb`.
+- Production Promptfoo against Railway/widget wrote `.agent/tasks/2026-05-22-web-research-failure-grounding/production-evals-after-da0f939.json`.
+- Result: 5/6 passed, deterministic average `0.9629444444444443`, LLM average `0.9499999999999998`.
+- Gates `deterministicAbove90` and `llmAverageAbove90` were both PASS. Remaining deterministic failure moved to `generator_load_selection` card visibility and is handled by task `2026-05-22-bounded-generator-null-load-defaults`.
 
 ## Acceptance Criteria Status
 
@@ -25,4 +29,4 @@
 - AC2: PASS.
 - AC3: PASS.
 - AC4: PASS.
-- AC5: PENDING.
+- AC5: PASS.
