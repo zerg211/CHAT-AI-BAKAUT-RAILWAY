@@ -604,7 +604,7 @@ describe('AgentManager comparison research flow', () => {
 
     expect(payload.answer).toContain('ключ/замок и кнопка в источниках не подтверждены');
     expect(payload.answer).not.toContain('запускается ключом/замком');
-    expect(payload.answer).toContain('У нас FIRMAN RD3910E есть в каталоге.');
+    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
     expect(payload.answer).not.toContain('В каталоге БАКАУТ');
     expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.answer).not.toContain('Из близких вариантов');
@@ -720,7 +720,7 @@ describe('AgentManager comparison research flow', () => {
 
     expect(payload.answer).toContain('ключа электростартера');
     expect(payload.answer).not.toContain('По ключу или кнопке точной строки нет');
-    expect(payload.answer).toContain('У нас FIRMAN RD3910E есть в каталоге.');
+    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
     expect(payload.answer).not.toContain('В каталоге БАКАУТ');
     expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.metadata?.preSendReview).toMatchObject({
@@ -729,6 +729,132 @@ describe('AgentManager comparison research flow', () => {
         expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
       ])
     });
+  });
+
+  it('keeps confirmed manual starter facts and avoids duplicate start-control uncertainty', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false,
+      facts: [{
+        productName: 'FIRMAN RD3910E',
+        attribute: 'start method',
+        value: 'электростартер, запуск поворотом ключа',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'Запуск генератора осуществляется простым поворотом ключа электростартера.',
+        sourceUrl: 'https://example.test/rd3910e',
+        sourceTitle: 'FIRMAN RD3910E catalog card'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'RD3910E заводится с ключа, через электростартер. Кнопочного запуска тут не вижу.',
+        completeness: 'answered',
+        coverage: [
+          {
+            attribute: 'start method',
+            status: 'confirmed',
+            value: 'электростартер, запуск поворотом ключа',
+            evidence: 'Запуск генератора осуществляется простым поворотом ключа электростартера.',
+            sourceUrl: 'https://example.test/rd3910e',
+            sourceTitle: 'FIRMAN RD3910E catalog card'
+          },
+          {
+            attribute: 'electric start',
+            status: 'confirmed',
+            value: 'есть',
+            evidence: 'стартер: ручной стартер / электростартер',
+            sourceUrl: 'https://example.test/rd3910e',
+            sourceTitle: 'FIRMAN RD3910E catalog card'
+          },
+          {
+            attribute: 'starter button',
+            status: 'not_found',
+            value: '',
+            evidence: 'В specs и description нет упоминания кнопки запуска.'
+          }
+        ]
+      },
+      summaryForAnswer: 'Catalog card confirms key electric start and manual starter; button start is not found.',
+      warnings: ['catalog_fact_extraction_used', 'exact_catalog_description_extracted']
+    });
+
+    class PresentCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product(
+            'rd3910e',
+            'FIRMAN RD3910E generator 2.5 kW',
+            { starter: 'manual / electric' },
+            'Запуск двигателя осуществляется поворотом ключа электростартера. Также предусмотрен ручной стартер.'
+          )
+        ];
+      }
+    }
+
+    const modelThatDropsCoverageFacts: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks whether FIRMAN RD3910E is key or button start',
+          dialogueUnderstanding: 'single exact technical fact for a named catalog model',
+          nextStepRationale: 'verify exact model start-control mechanism',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:rd3910e-catalog',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'FIRMAN RD3910E key or button start',
+              semanticQuery: 'FIRMAN RD3910E ignition key or push-button start control',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['FIRMAN RD3910E'],
+              comparisonAttributes: ['start method', 'electric start', 'key start', 'starter button'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model start-control fact',
+              notes: 'answer key/button mechanism directly'
+            },
+            rationale: 'exact model fact must be grounded in catalog description when present',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'RD3910E есть в каталоге, стартер ручной/электро. По ключу или кнопке точной строки нет.',
+          factsUsed: [{
+            factKey: 'firman_rd3910e.start_control',
+            sourceEventIds: ['web:rd3910e-catalog'],
+            value: 'manual / electric'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['web:rd3910e-catalog'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, modelThatDropsCoverageFacts);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Firman RD3910E - заводится с ключа или с кнопки?'
+    });
+
+    expect(payload.answer).toContain('RD3910E заводится с ключа, через электростартер');
+    expect(payload.answer).toContain('Ручной стартер тоже есть');
+    expect(payload.answer).toContain('Кнопочного запуска тут не вижу');
+    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
+    expect(payload.answer.split('Кнопоч').length - 1).toBe(1);
+    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
+    expect(payload.answer).not.toContain('У нас Firman RD3910E есть в каталоге');
   });
 
   it('repairs follow-up plans that reuse facts from a different exact model', async () => {
@@ -836,9 +962,10 @@ describe('AgentManager comparison research flow', () => {
       targetProductNames: ['RD3910E']
     }));
     expect(payload.answer).toContain('Запуск с ключа/через выключатель точно подтвердить не могу');
-    expect(payload.answer).toContain('Кнопочный запуск в данных не вижу');
+    expect(payload.answer).toContain('кнопка по точным источникам не подтверждена');
+    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
     expect(payload.answer).not.toContain('тоже запускается с ключа');
-    expect(payload.answer).toContain('У нас RD3910E есть в каталоге.');
+    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
     expect(payload.answer).not.toContain('В каталоге БАКАУТ');
     expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.metadata?.intentContract).toMatchObject({

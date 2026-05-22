@@ -651,40 +651,112 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
   return clauses;
 }
 
+type StartControlCoverageItem = {
+  attribute?: unknown;
+  status?: unknown;
+  value?: unknown;
+  evidence?: unknown;
+};
+
+const startControlUncertaintyStatuses = new Set(['not_confirmed', 'ambiguous', 'not_found']);
+
+function normalizedTextIncludesAny(normalizedText: string, fragments: string[]) {
+  return fragments.some((fragment) => {
+    const normalizedFragment = normalizeModelText(fragment);
+    return normalizedFragment.length > 0 && normalizedText.includes(normalizedFragment);
+  });
+}
+
+function startControlCoverageText(coverageItem: StartControlCoverageItem) {
+  return normalizeModelText([
+    coverageItem.attribute,
+    coverageItem.value,
+    coverageItem.evidence
+  ].filter(Boolean).join(' '));
+}
+
 function startControlCoverageLabels(attribute: unknown, value: unknown) {
   const text = normalizeModelText([attribute, value].filter(Boolean).join(' '));
   const labels: string[] = [];
   if (
-    text.includes('key') ||
-    text.includes('ignition') ||
-    text.includes('switch') ||
-    text.includes('ключ') ||
-    text.includes('зажиган') ||
-    text.includes('выключател')
+    normalizedTextIncludesAny(text, ['key', 'ignition', 'switch', 'ключ', 'зажиган', 'выключател'])
   ) {
     labels.push('Запуск с ключа/через выключатель');
   }
   if (
-    text.includes('button') ||
-    text.includes('pushbutton') ||
-    text.includes('кноп')
+    normalizedTextIncludesAny(text, ['button', 'pushbutton', 'кноп'])
   ) {
     labels.push('Кнопочный запуск');
   }
   return labels;
 }
 
-function startControlCoverageUncertaintyLine(coverage: unknown[]) {
+function normalizedAnswerMentionsStartControlLabel(normalizedAnswer: string, label: string) {
+  if (label === 'Кнопочный запуск') {
+    return normalizedTextIncludesAny(normalizedAnswer, ['button', 'pushbutton', 'кноп']);
+  }
+  if (label === 'Запуск с ключа/через выключатель') {
+    return normalizedTextIncludesAny(normalizedAnswer, ['key', 'ignition', 'switch', 'ключ', 'зажиган', 'выключател']);
+  }
+  return normalizedTextIncludesAny(normalizedAnswer, [label]);
+}
+
+function answerAlreadyCoversStartControlUncertainty(answerText: string, label: string) {
+  const normalizedAnswer = normalizeModelText(answerText);
+  if (!normalizedAnswerMentionsStartControlLabel(normalizedAnswer, label)) return false;
+  return normalizedTextIncludesAny(normalizedAnswer, [
+    'не виж',
+    'не видно',
+    'не указан',
+    'не указано',
+    'не найден',
+    'не нашел',
+    'не нашли',
+    'не подтверж',
+    'не могу подтвердить',
+    'нет подтверждения',
+    'точно подтвердить не могу',
+    'not confirmed',
+    'not found',
+    'not specified',
+    'unknown',
+    'unclear'
+  ]);
+}
+
+function coverageItemConfirmsManualStarter(coverageItem: StartControlCoverageItem) {
+  if (coverageItem.status !== 'confirmed') return false;
+  const text = startControlCoverageText(coverageItem);
+  return normalizedTextIncludesAny(text, ['manual', 'recoil', 'ручной стартер', 'ручной запуск', 'ручн']);
+}
+
+function answerMentionsManualStarter(answerText: string) {
+  const text = normalizeModelText(answerText);
+  return normalizedTextIncludesAny(text, ['manual', 'recoil', 'ручной стартер', 'ручной запуск', 'ручн']);
+}
+
+function startControlConfirmedSupplementLines(coverage: unknown[], answerText: string) {
+  const lines: string[] = [];
+  const coverageItems = coverage
+    .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
+  if (!answerMentionsManualStarter(answerText) && coverageItems.some(coverageItemConfirmsManualStarter)) {
+    lines.push('Ручной стартер тоже есть.');
+  }
+  return lines;
+}
+
+function startControlCoverageUncertaintyLine(coverage: unknown[], answerText = '') {
   const statements: string[] = [];
   const seen = new Set<string>();
   for (const item of coverage) {
     if (!item || typeof item !== 'object') continue;
-    const coverageItem = item as { attribute?: unknown; status?: unknown; value?: unknown };
+    const coverageItem = item as StartControlCoverageItem;
     const status = coverageItem.status;
-    if (status !== 'not_confirmed' && status !== 'ambiguous' && status !== 'not_found') continue;
+    if (typeof status !== 'string' || !startControlUncertaintyStatuses.has(status)) continue;
     for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
       if (seen.has(label)) continue;
       seen.add(label);
+      if (answerAlreadyCoversStartControlUncertainty(answerText, label)) continue;
       const suffix = status === 'ambiguous' ? 'точно подтвердить не могу' : 'в данных не вижу';
       statements.push(`${label} ${suffix}`);
     }
@@ -695,10 +767,20 @@ function startControlCoverageUncertaintyLine(coverage: unknown[]) {
 function hasConfirmedStartControlCoverage(coverage: unknown[]) {
   return coverage.some((item) => {
     if (!item || typeof item !== 'object') return false;
-    const coverageItem = item as { attribute?: unknown; status?: unknown; value?: unknown };
+    const coverageItem = item as StartControlCoverageItem;
     return coverageItem.status === 'confirmed' &&
-      startControlCoverageLabels(coverageItem.attribute, coverageItem.value).length > 0;
+      (
+        startControlCoverageLabels(coverageItem.attribute, coverageItem.value).length > 0 ||
+        coverageItemConfirmsManualStarter(coverageItem)
+      );
   });
+}
+
+function presentCatalogPresenceLine(productName: string, directAnswer: string) {
+  if (textMatchesTargetName(directAnswer, productName)) {
+    return 'У нас эта модель есть в каталоге.';
+  }
+  return `У нас ${productName} есть в каталоге.`;
 }
 
 function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
@@ -733,7 +815,8 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
     const hasConfirmedStartControl = hasConfirmedStartControlCoverage(coverage);
     if (!hasUncertainCoverage && !hasConfirmedStartControl) continue;
     lines.push(directAnswer);
-    const uncertaintyLine = startControlCoverageUncertaintyLine(coverage);
+    lines.push(...startControlConfirmedSupplementLines(coverage, directAnswer));
+    const uncertaintyLine = startControlCoverageUncertaintyLine(coverage, directAnswer);
     if (uncertaintyLine) lines.push(uncertaintyLine);
     let hasAbsentTarget = false;
     for (const presence of payload.catalogPresence ?? []) {
@@ -742,7 +825,7 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
         hasAbsentTarget = true;
         lines.push(`У нас точной модели ${presence.productName} в каталоге нет.`);
       } else if (presence.status === 'present') {
-        lines.push(`У нас ${presence.productName} есть в каталоге.`);
+        lines.push(presentCatalogPresenceLine(presence.productName, directAnswer));
       }
     }
     const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
