@@ -63,6 +63,14 @@
     "deterministicAverage": 0.9878333333333332,
     "llmAverage": 0.9316666666666666,
     "webRequiredCasePassed": true,
-    "followUpTask": "2026-05-22-visible-card-grounded-catalog-answer"
+    "followUpTask": "2026-05-22-visible-card-grounded-catalog-answer",
+    "followUpProductionEval": {
+      "status": "PASS",
+      "commit": "aa20662",
+      "deterministicAverage": 0.9923333333333333,
+      "llmAverage": 0.9583333333333331,
+      "passed": 6,
+      "failed": 0
+    }
   }
 }

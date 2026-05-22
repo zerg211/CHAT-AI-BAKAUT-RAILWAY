@@ -36,3 +36,5 @@ This is not a regex or keyword-routing fix. It keeps the semantic decision in th
 - Remaining failure: `plate_retrieval_grounding` LLM rubric, due product-answer/card grounding weakness.
 
 Follow-up task: `.agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/`.
+
+The follow-up task passed production eval after commit `aa20662`: 6/6, deterministic average 0.9923333333333333, LLM average 0.9583333333333331.

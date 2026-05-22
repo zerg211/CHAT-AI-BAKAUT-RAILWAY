@@ -55,10 +55,19 @@
     "AC1": "PASS",
     "AC2": "PASS",
     "AC3": "PASS",
-    "AC4": "PENDING",
-    "AC5": "PENDING"
+    "AC4": "PASS",
+    "AC5": "PASS"
   },
   "productionEval": {
-    "status": "PENDING"
+    "status": "PASS",
+    "commit": "aa20662",
+    "output": ".agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-aa20662.json",
+    "summary": ".agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-aa20662.summary.json",
+    "passed": 6,
+    "failed": 0,
+    "deterministicAverage": 0.9923333333333333,
+    "llmAverage": 0.9583333333333331,
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true
   }
 }

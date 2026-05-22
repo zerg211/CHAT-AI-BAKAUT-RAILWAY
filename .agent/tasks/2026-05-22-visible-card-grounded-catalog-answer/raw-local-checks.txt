@@ -24,4 +24,9 @@ Local gate notes:
 - tests/agentManagerComparisonResearch.test.ts: PASS, 9 tests, after restoring the catalog-present line behavior already required by current tests.
 
 Production eval after this pass:
-- Pending until commit, push, and Railway deployment marker.
+- Commit: aa20662
+- Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-aa20662.json
+- Result: PASS, 6/6 passed.
+- Deterministic average: 0.9923333333333333.
+- LLM average: 0.9583333333333331.
+- Gates: deterministic > 90% PASS, LLM average > 90% PASS.

@@ -28,5 +28,15 @@ Additional regression guard:
 - AC1: PASS. No new regex constructs.
 - AC2: PASS. Source guard test asserts the catalog-answer grounding instruction.
 - AC3: PASS. Focused/source/no-regex/typecheck/build checks passed, and clean-index full test passed.
-- AC4: PENDING. Needs commit, push, and Railway marker.
-- AC5: PENDING. Needs production Promptfoo/widget harness after deploy.
+- AC4: PASS. Commit `aa20662` reached Railway.
+- AC5: PASS. Production Promptfoo/widget harness passed.
+
+## Production Eval After `aa20662`
+
+- `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-visible-card-grounded-catalog-answer/production-evals-after-aa20662.json`: PASS.
+- Pass/fail: 6/6.
+- Deterministic average: 0.9923333333333333.
+- LLM average: 0.9583333333333331.
+- Assertion pass rate: 33/33.
+- `plate_retrieval_grounding`: PASS, LLM score 0.96, 2 cards.
+- `web_required_technical_grounding`: PASS, `web.researchProductFacts` present.
