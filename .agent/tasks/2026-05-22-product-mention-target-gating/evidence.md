@@ -158,4 +158,27 @@ npm test
 PASS: 86 test files, 696 tests
 ```
 
-AC8 remains pending until this second fix pass is committed, pushed, Railway marker reaches the new commit, and production Promptfoo is rerun against Railway.
+## Final production eval after `af355d4`
+
+Railway marker:
+
+```text
+https://chat-ai-production-3057.up.railway.app/api/health
+MARKER_OK: af355d4 on branch main
+```
+
+Production Promptfoo:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-af355d4.json
+PASS: 6/6 tests passed
+Deterministic average: 99.03%
+LLM average: 94.50%
+Assertion pass rate: 100%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-af355d4.json`
+- `.agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-af355d4.summary.json`
+
+Final AC8 status: PASS. Both deterministic and LLM averages are above 90%.

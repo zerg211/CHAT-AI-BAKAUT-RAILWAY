@@ -70,11 +70,11 @@
     "AC5": "pass",
     "AC6": "pass",
     "AC7": "pass",
-    "AC8": "pending",
+    "AC8": "pass",
     "AC9": "pass"
   },
   "productionPromptfoo": {
-    "status": "failed_before_second_fix_pass",
+    "status": "pass",
     "required": true,
     "runs": [
       {
@@ -94,9 +94,24 @@
         "total": 6,
         "deterministicAverage": 0.9770555555555555,
         "llmAverage": 0.87
+      },
+      {
+        "artifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-af355d4.json",
+        "summaryArtifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-af355d4.summary.json",
+        "commit": "af355d4",
+        "passed": 6,
+        "total": 6,
+        "deterministicAverage": 0.9902777777777779,
+        "llmAverage": 0.9450000000000002
       }
     ],
-    "nextStep": "Commit and push second fix pass, wait for Railway marker, rerun production Promptfoo."
+    "finalGate": {
+      "deterministicAbove90": true,
+      "llmAverageAbove90": true,
+      "assertionPassRate": 1,
+      "railwayMarker": "af355d4",
+      "validatedAt": "2026-05-22T20:26:38.5224865+03:00"
+    }
   },
   "fixPassTimestamp": "2026-05-22T19:54:48.5358054+03:00",
   "secondFixPassTimestamp": "2026-05-22T20:11:55.0297780+03:00"
