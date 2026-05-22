@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1677,
+  "count": 1663,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -6888,104 +6888,6 @@
       "kind": "regular_expression_literal",
       "hash": "6c866a2b194802cc",
       "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|replace_regex_argument|1524936f4ee3c887|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "replace_regex_argument",
-      "hash": "1524936f4ee3c887",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|regular_expression_literal|13ba9a21dc86a0e1|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "regular_expression_literal",
-      "hash": "13ba9a21dc86a0e1",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|replace_regex_argument|a49f9d5f315976a6|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "replace_regex_argument",
-      "hash": "a49f9d5f315976a6",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|regular_expression_literal|c2be8b4410f8e831|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|match_regex_argument|e2f3def656fc5f7c|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "match_regex_argument",
-      "hash": "e2f3def656fc5f7c",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|regular_expression_literal|a71c4f00c6ee6636|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "regular_expression_literal",
-      "hash": "a71c4f00c6ee6636",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|replace_regex_argument|e3537de4e1e88e12|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "replace_regex_argument",
-      "hash": "e3537de4e1e88e12",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|replace_regex_argument|9e2b3642fab9961c|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "replace_regex_argument",
-      "hash": "9e2b3642fab9961c",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|regular_expression_literal|c2be8b4410f8e831|2",
-      "file": "src/catalog/normalize.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 2
-    },
-    {
-      "id": "src/catalog/normalize.ts|regular_expression_literal|2cd96e9f99ea60e1|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "regular_expression_literal",
-      "hash": "2cd96e9f99ea60e1",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|replace_regex_argument|084dc1482dcfbed0|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "replace_regex_argument",
-      "hash": "084dc1482dcfbed0",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|regular_expression_literal|c2be8b4410f8e831|3",
-      "file": "src/catalog/normalize.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 3
-    },
-    {
-      "id": "src/catalog/normalize.ts|replace_regex_argument|c7d6ffa28317ff25|1",
-      "file": "src/catalog/normalize.ts",
-      "kind": "replace_regex_argument",
-      "hash": "c7d6ffa28317ff25",
-      "occurrence": 1
-    },
-    {
-      "id": "src/catalog/normalize.ts|regular_expression_literal|c2be8b4410f8e831|4",
-      "file": "src/catalog/normalize.ts",
-      "kind": "regular_expression_literal",
-      "hash": "c2be8b4410f8e831",
-      "occurrence": 4
     },
     {
       "id": "src/catalog/sitemapSync.ts|replace_regex_argument|4a7a60fc816d61f0|1",

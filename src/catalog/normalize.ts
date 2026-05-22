@@ -13,30 +13,95 @@ export function slugFromUrl(url: string | undefined) {
   if (!url) return undefined;
   try {
     const parsed = new URL(url);
-    return parsed.pathname.replace(/^\/|\/$/g, '').split('/').filter(Boolean).join('/');
+    return parsed.pathname.split('/').filter(Boolean).join('/');
   } catch {
     return undefined;
   }
 }
 
+function isWhitespace(char: string) {
+  return char.trim().length === 0;
+}
+
+function removeWhitespace(value: string) {
+  let output = '';
+  for (const char of value) {
+    if (!isWhitespace(char)) output += char;
+  }
+  return output;
+}
+
+function collapseWhitespace(value: string, separator: string) {
+  let output = '';
+  let pendingSeparator = false;
+  for (const char of value.trim()) {
+    if (isWhitespace(char)) {
+      pendingSeparator = output.length > 0;
+      continue;
+    }
+    if (pendingSeparator) {
+      output += separator;
+      pendingSeparator = false;
+    }
+    output += char;
+  }
+  return output;
+}
+
+function replaceFirstComma(value: string) {
+  let output = '';
+  let replaced = false;
+  for (const char of value) {
+    if (char === ',' && !replaced) {
+      output += '.';
+      replaced = true;
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
+function isDigit(char: string) {
+  return char >= '0' && char <= '9';
+}
+
+function firstPriceNumber(value: string) {
+  let index = 0;
+  while (index < value.length && !isDigit(value[index])) index += 1;
+  if (index >= value.length) return undefined;
+
+  let numberText = '';
+  while (index < value.length && isDigit(value[index])) {
+    numberText += value[index];
+    index += 1;
+  }
+
+  if (value[index] === '.' && isDigit(value[index + 1])) {
+    numberText += '.';
+    index += 1;
+    while (index < value.length && isDigit(value[index])) {
+      numberText += value[index];
+      index += 1;
+    }
+  }
+
+  return Number(numberText);
+}
+
 export function parsePrice(value: string | undefined) {
   if (!value) return undefined;
-  const normalized = value.replace(/\s+/g, '').replace(',', '.');
-  const match = normalized.match(/(\d+(?:\.\d+)?)/);
-  if (!match) return undefined;
-  return Number(match[1]);
+  return firstPriceNumber(replaceFirstComma(removeWhitespace(value)));
 }
 
 export function normalizeSpecKey(value: string) {
-  return value
-    .trim()
-    .replace(/\s+/g, ' ')
-    .replace(/:$/, '')
-    .toLowerCase();
+  const collapsed = collapseWhitespace(value, ' ');
+  const withoutTrailingColon = collapsed.endsWith(':') ? collapsed.slice(0, -1) : collapsed;
+  return withoutTrailingColon.toLowerCase();
 }
 
 export function cleanText(value: string | undefined | null) {
-  return (value ?? '').replace(/\s+/g, ' ').trim();
+  return collapseWhitespace(value ?? '', ' ');
 }
 
 export function productToEmbeddingText(product: CatalogProductInput | Product) {
@@ -54,5 +119,5 @@ export function productToEmbeddingText(product: CatalogProductInput | Product) {
 }
 
 export function normalizeCsvHeader(header: string) {
-  return header.trim().toLowerCase().replace(/\s+/g, '_');
+  return collapseWhitespace(header, '_').toLowerCase();
 }

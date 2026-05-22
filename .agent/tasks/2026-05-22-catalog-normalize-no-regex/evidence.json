@@ -1,0 +1,54 @@
+{
+  "taskId": "2026-05-22-catalog-normalize-no-regex",
+  "timestamp": "2026-05-22T19:13:18.7089802+03:00",
+  "changeSummary": [
+    "Replaced catalog normalize regex usage with explicit deterministic string scanners/helpers.",
+    "Extended normalize tests for decimal prices and whitespace normalization.",
+    "Re-ran crawler no-regex test because crawler imports normalize helpers.",
+    "Updated no-regex baseline from 1677 to 1663 after review."
+  ],
+  "checks": [
+    {
+      "command": "npx vitest run tests/normalize.test.ts tests/catalogCrawlerNoRegex.test.ts",
+      "status": "pass",
+      "details": "2 test files passed, 4 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass_before_baseline_update",
+      "details": "No new regex constructs. Legacy findings removed since baseline: 14."
+    },
+    {
+      "command": "npm run lint:no-regex -- --update-baseline",
+      "status": "pass",
+      "details": "Updated scripts/no-regex-baseline.json with 1663 legacy findings."
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1663."
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass",
+    "AC6": "pass",
+    "AC7": "pass",
+    "AC8": "pass"
+  },
+  "productionPromptfoo": {
+    "required": false,
+    "reason": "Deterministic catalog normalization refactor outside the chat answer runtime."
+  }
+}
