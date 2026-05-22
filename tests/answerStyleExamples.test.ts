@@ -12,6 +12,9 @@ describe('approved answer style examples', () => {
     );
 
     expect(example).toBeTruthy();
+    expect(example?.approvedByUser).toBe(true);
+    expect(example?.approvalNote).toContain('явного подтверждения пользователя');
+    expect(example?.approvalNote).toContain('только после отдельного вопроса');
     expect(example?.buyerQuestion).toContain('с ключа или с кнопки');
     expect(example?.approvedStyleAnswer).toContain('RD3910E заводится с ключа');
     expect(example?.copyStyleSignals.join('\n')).toContain('без лишнего "да"');
@@ -24,6 +27,9 @@ describe('approved answer style examples', () => {
     const block = approvedAnswerStyleExamplesPromptBlock();
 
     expect(block).toContain('Пул одобренных примеров стиля');
+    expect(block).toContain('только после отдельного вопроса пользователю');
+    expect(block).toContain('явного согласия');
+    expect(block).toContain('Нельзя добавлять сюда примеры по инициативе агента');
     expect(block).toContain('не являются шаблонами');
     expect(block).toContain('не являются источником фактов');
     expect(block).toContain('Используй только тон');
@@ -34,6 +40,7 @@ describe('approved answer style examples', () => {
     const prompt = buildSystemPrompt();
 
     expect(prompt).toContain('Пул одобренных примеров стиля');
+    expect(prompt).toContain('явного согласия');
     expect(prompt).toContain('Ответ в нужном стиле');
     expect(prompt).toContain('Что нельзя копировать');
   });
