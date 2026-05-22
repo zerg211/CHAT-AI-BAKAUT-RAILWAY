@@ -32,4 +32,14 @@
 - AC3: PASS. Existing generator card safety assertions still pass in the same test.
 - AC4: PASS. `lint:no-regex` reports no new regex constructs.
 - AC5: PASS. Local non-OpenAI gates passed.
-- AC6: PENDING. Requires commit, push, Railway marker, and production Promptfoo/widget-path validation.
+- AC6: PASS. Production Railway marker reached commit `8093c8a`, then production Promptfoo passed.
+
+## Production Check
+
+- Command: `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-unconfirmed-generator-load-answer-clause/production-evals-after-8093c8a.json`
+- Base URL: `https://chat-ai-production-3057.up.railway.app`
+- Page URL: `https://bakautprof.ru/?agentHarness=1`
+- Result: `6/6`
+- Deterministic average: `0.9921666666666665`
+- LLM average: `0.9566666666666666`
+- Summary: `.agent/tasks/2026-05-22-unconfirmed-generator-load-answer-clause/production-evals-after-8093c8a.summary.json`
