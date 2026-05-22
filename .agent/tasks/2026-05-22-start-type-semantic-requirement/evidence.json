@@ -6,7 +6,8 @@
     "Product selection now accepts startType for generator and welding-generator intent and copies explicit semantic requirements into hard constraints with provenance.",
     "Ungrounded electric-start cleanup preserves explicit-user and previous-selection provenance.",
     "Card manifest enforces activeConstraints.startType against product cards.",
-    "Added focused tests for semantic coercion, selection/ranking preservation, and card manifest enforcement."
+    "Added focused tests for semantic coercion, selection/ranking preservation, and card manifest enforcement.",
+    "After failed production eval 3d878fd, improved short brand-model mention matching so answer text and visible cards stay aligned."
   ],
   "checks": [
     {
@@ -31,6 +32,29 @@
       "command": "npm test",
       "status": "pass",
       "details": "86 test files passed, 699 tests passed"
+    },
+    {
+      "command": "npx vitest run tests/agentManagerCardSelection.test.ts tests/semanticMemoryCoercion.test.ts tests/cardManifest.test.ts tests/recommendationRanking.test.ts",
+      "status": "pass",
+      "details": "4 test files passed, 236 tests passed"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36."
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "86 test files passed, 700 tests passed"
     }
   ],
   "acceptanceCriteria": {
@@ -46,7 +70,20 @@
     "AC10": "pass"
   },
   "productionPromptfoo": {
-    "status": "pending_after_push",
-    "required": true
-  }
+    "status": "failed_before_fix_pass",
+    "required": true,
+    "runs": [
+      {
+        "artifact": ".agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-3d878fd.json",
+        "summaryArtifact": ".agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-3d878fd.summary.json",
+        "commit": "3d878fd",
+        "passed": 5,
+        "total": 6,
+        "deterministicAverage": 0.9812222222222222,
+        "llmAverage": 0.9016666666666667
+      }
+    ],
+    "nextStep": "Commit and push short model mention matching fix, wait for Railway marker, rerun production Promptfoo."
+  },
+  "fixPassTimestamp": "2026-05-22T20:47:24.4406323+03:00"
 }

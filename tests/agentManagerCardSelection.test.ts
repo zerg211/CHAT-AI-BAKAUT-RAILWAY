@@ -505,6 +505,39 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_numeric_fit:1');
   });
 
+  it('matches short brand-model plate names so answer text and cards stay aligned', () => {
+    const husqvarna = plateWithNameAndWeight('lf-50-lat', 'Виброплита прямоходная бензиновая Husqvarna LF 50 LAT (56 кг)', 56);
+    const tss = plateWithNameAndWeight('tss-wp60tl', 'Виброплита прямоходная бензиновая ТСС TSS-WP60TL (72 кг)', 72);
+    const unrelated = plateWithNameAndWeight('masalta-ms50', 'Виброплита бензиновая Masalta MS50-2 (54 кг)', 54);
+
+    const selection = selectProductsForVisibleCards({
+      products: [husqvarna, tss, unrelated],
+      userMessage: 'Нужна виброплита для подготовки основания под плитку.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer switched to plate compactor selection',
+        dialogueUnderstanding: 'catalog plate candidates are available',
+        nextStepRationale: 'show plate compactors named in the answer',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'виброплита под плитку' },
+          rationale: 'find plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Я бы смотрел Husqvarna LF 50 LAT и ТСС TSS-WP60TL.',
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.answerMentionedProductIds).toEqual(['lf-50-lat', 'tss-wp60tl']);
+    expect(selection.selectedProductIds).toEqual(['lf-50-lat', 'tss-wp60tl']);
+    expect(selection.droppedProductIds).toContain('masalta-ms50');
+  });
+
   it('keeps generator card ranking for explicit power ranges without regex parsing', () => {
     const fourKw = generatorWithPower('four-kw', '4.0');
     const fiveKw = generatorWithPower('five-kw', '5.0');

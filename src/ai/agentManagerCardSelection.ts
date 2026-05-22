@@ -13,6 +13,11 @@ import {
   productMatchesIntent,
   productMentionedInText
 } from './productClassifier.js';
+import {
+  modelTextTokens as matchingModelTextTokens,
+  tokenHasDigit,
+  tokenHasLetter
+} from './modelTextMatching.js';
 
 export function productCards(products: Product[], reasons: string[] = []): ProductCard[] {
   return products.map((product) => ({
@@ -218,8 +223,80 @@ function productBrandMentionedInText(product: Product, text: string) {
   return [...aliases].some((alias) => alias.length >= 3 && compactText.includes(alias));
 }
 
+const shortModelIgnoredTokens = new Set([
+  'kg',
+  'кг',
+  'kw',
+  'квт',
+  'kva',
+  'ква',
+  'mm',
+  'мм',
+  'cm',
+  'см',
+  'v',
+  'в',
+  'vibroplita',
+  'vibroplate',
+  'plate',
+  'generator',
+  'виброплита',
+  'виброплиты',
+  'генератор',
+  'бензиновая',
+  'бензиновый',
+  'прямоходная'
+]);
+
+function modelSequenceTokens(value: string) {
+  return matchingModelTextTokens(value)
+    .map((token) => compactModelText(token))
+    .filter((token) => token.length > 0 && !shortModelIgnoredTokens.has(token));
+}
+
+function containsTokenSequence(haystack: string[], sequence: string[]) {
+  if (!sequence.length || sequence.length > haystack.length) return false;
+  for (let start = 0; start <= haystack.length - sequence.length; start += 1) {
+    let matches = true;
+    for (let offset = 0; offset < sequence.length; offset += 1) {
+      if (haystack[start + offset] !== sequence[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
+function shortModelSequenceCandidates(productName: string) {
+  const tokens = modelSequenceTokens(productName);
+  const candidates: string[][] = [];
+  for (let start = 0; start < tokens.length; start += 1) {
+    for (const size of [4, 3, 2]) {
+      const sequence = tokens.slice(start, start + size);
+      if (sequence.length !== size) continue;
+      if (!tokenHasLetter(sequence[0])) continue;
+      if (!sequence.some(tokenHasDigit) || !sequence.some(tokenHasLetter)) continue;
+      candidates.push(sequence);
+    }
+  }
+  return candidates;
+}
+
+function productShortModelSequenceMentionedInText(product: Product, text: string) {
+  if (!productBrandMentionedInText(product, text)) return false;
+  const answerTokens = modelSequenceTokens(text);
+  return shortModelSequenceCandidates(product.name).some((sequence) =>
+    containsTokenSequence(answerTokens, sequence)
+  );
+}
+
 function answerMentionedProducts(products: Product[], answerText: string) {
-  const exactModelMatches = products.filter((product) => productModelMentionedInText(product, answerText));
+  const exactModelMatches = products.filter((product) =>
+    productModelMentionedInText(product, answerText) ||
+    productShortModelSequenceMentionedInText(product, answerText)
+  );
   const exactWithBrand = exactModelMatches.filter((product) => productBrandMentionedInText(product, answerText));
   if (exactWithBrand.length) return exactWithBrand;
   if (exactModelMatches.length) return exactModelMatches;

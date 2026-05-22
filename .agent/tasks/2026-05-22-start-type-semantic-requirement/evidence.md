@@ -60,4 +60,48 @@ PASS: 86 test files, 699 tests
 
 ## Production eval
 
-Pending until commit/push and Railway marker.
+Initial production run after commit `3d878fd`:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-3d878fd.json
+FAIL: 5/6 tests passed
+Deterministic average: 98.12%
+LLM average: 90.17%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-3d878fd.json`
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-3d878fd.summary.json`
+
+Problems recorded:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/problems.md`
+
+## Fix pass after failed production eval
+
+Timestamp: `2026-05-22T20:47:24.4406323+03:00`
+
+Changes:
+- Improved `answerMentionedProducts` so brand plus short model token sequences such as `Husqvarna LF 50 LAT` are recognized as named product candidates.
+- Kept the matcher constrained so it does not match a different model from a partial numeric suffix such as only `60 LAT`.
+- Added a focused card-selection test proving short model names keep answer text and visible cards aligned.
+
+Local checks:
+
+```text
+npx vitest run tests/agentManagerCardSelection.test.ts tests/semanticMemoryCoercion.test.ts tests/cardManifest.test.ts tests/recommendationRanking.test.ts
+PASS: 4 test files, 236 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36.
+
+npm run build
+PASS
+
+npm test
+PASS: 86 test files, 700 tests
+```
+
+AC9 remains pending until this fix pass is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.
