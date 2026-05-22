@@ -64,6 +64,20 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
   const usefulAttributes = attributes.length
     ? attributes
     : ['specification', 'manual', 'starter', 'start method'];
+  const controlAttributes = [
+    'control panel photo',
+    'control panel image',
+    'starter switch photo',
+    'ignition switch photo',
+    'ignition key photo',
+    'push button photo',
+    'front panel',
+    'operator panel',
+    'панель управления фото',
+    'фото панели',
+    'ключ зажигания фото',
+    'кнопка запуска фото'
+  ];
   const defaultAttributes = [
     'specification',
     'manual pdf',
@@ -83,7 +97,7 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
   ];
   return targetProductNames.flatMap((target) => {
     const aliases = exactTargetAliases(target);
-    const queryAttributes = uniqueStrings([...usefulAttributes, ...defaultAttributes]).slice(0, 14);
+    const queryAttributes = uniqueStrings([...usefulAttributes, ...controlAttributes, ...defaultAttributes]).slice(0, 24);
     return aliases.flatMap((alias) => queryAttributes.map((attribute) => `${alias} ${attribute}`));
   });
 }
@@ -126,6 +140,76 @@ const starterFieldNeedles = ['starter', 'start', 'пуск', 'запуск', 'с
 
 function startControlQuestionRelevant(userMessage: string, comparisonAttributes: string[]) {
   return textIncludesAny([userMessage, ...comparisonAttributes].join(' '), startControlNeedles);
+}
+
+const electricStarterNeedles = ['electric starter', 'electric start', 'electrostarter', 'электростартер', 'электро стартер', 'электропуск'];
+const practicalStartControlNeedles = [
+  'key start',
+  'ignition key',
+  'ignition switch',
+  'engine switch',
+  'starter switch',
+  'start switch',
+  'push button',
+  'button start',
+  'ключ',
+  'зажиган',
+  'замок',
+  'выключател',
+  'тумблер',
+  'кноп'
+];
+const controlSearchQuestionNeedles = [
+  'key',
+  'button',
+  'push button',
+  'ignition',
+  'switch',
+  'control',
+  'ключ',
+  'кноп',
+  'зажиган',
+  'замок',
+  'выключател',
+  'тумблер'
+];
+
+function startControlMechanismQuestionRelevant(userMessage: string, comparisonAttributes: string[]) {
+  return textIncludesAny([userMessage, ...comparisonAttributes].join(' '), controlSearchQuestionNeedles);
+}
+
+function coverageItemText(item: ResearchCoverageItem) {
+  return [item.attribute, item.value, item.evidence].join(' ');
+}
+
+function resultConfirmsElectricStarter(result: ProductComparisonResearchResult) {
+  return result.answerGuidance.coverage.some((item) =>
+    item.status === 'confirmed' &&
+    textIncludesAny(coverageItemText(item), electricStarterNeedles)
+  ) || result.facts.some((fact) =>
+    ['high', 'medium'].includes(fact.confidence) &&
+    textIncludesAny([fact.attribute, fact.value, fact.evidence].join(' '), electricStarterNeedles)
+  );
+}
+
+function resultConfirmsPracticalStartControl(result: ProductComparisonResearchResult) {
+  return result.answerGuidance.coverage.some((item) =>
+    item.status === 'confirmed' &&
+    textIncludesAny(coverageItemText(item), practicalStartControlNeedles)
+  ) || result.facts.some((fact) =>
+    ['high', 'medium'].includes(fact.confidence) &&
+    textIncludesAny([fact.attribute, fact.value, fact.evidence].join(' '), practicalStartControlNeedles)
+  );
+}
+
+function needsElectricStarterControlSearch(input: {
+  result: ProductComparisonResearchResult;
+  userMessage: string;
+  comparisonAttributes: string[];
+}) {
+  return startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes) &&
+    resultConfirmsElectricStarter(input.result) &&
+    !resultConfirmsPracticalStartControl(input.result);
 }
 
 function compactEvidence(value: unknown, limit = 220) {
@@ -713,6 +797,7 @@ export async function researchProductComparisonFacts(input: {
           'If exact external sources state key start, ignition key, electric starter, push button, manual recoil, battery, power, engine, or other requested attributes for the target, return those facts with high or medium confidence.',
           'For binary buyer choices such as key vs push-button, manual vs electric, gasoline vs diesel, continue exact-target web search until each choice is confirmed, contradicted, or explicitly not found in exact-target sources. Do not stop at a broad fact like "electric starter" when the buyer asked about the more specific mechanism.',
           'For key vs push-button generator questions, inspect the practical start-control mechanism. If exact-target sources show an ignition key, ignition switch, engine switch, starter switch, or a switch turned/held in START, return that as the practical control evidence. If only broad electric starter is found, mark key/button control as not_confirmed instead of saying it is not key or not button.',
+          'When electric starter is confirmed, actively look for how that electric starter is actuated: official product photos, control-panel images, manuals, image captions, ignition key/switch, starter switch, push button, or START switch. Electric starter alone is not a complete answer to key vs button.',
           'Fill answerGuidance.directAnswer with the shortest practical buyer-facing answer supported by exact-target evidence. Keep it to the requested technical/specification fact only: do not include catalog presence, price, availability, delivery, lead handoff, or nearby model alternatives because the orchestrator adds catalog context from structured data.',
           'The directAnswer must sound like one familiar person answering another in simple Russian: no third-person catalog/report wording, no "В каталоге БАКАУТ", no "по деталям запуска"; say uncertainty plainly, e.g. "кнопочный запуск в данных не вижу".',
           styleExamples,
@@ -822,12 +907,18 @@ export async function researchProductComparisonFacts(input: {
   });
   const primaryResult = normalizeResearchParsed(parsed);
   const combinedPrimaryResult = mergeCatalogAndWebResearch(catalogResult, primaryResult);
+  const electricControlRetryRequired = needsElectricStarterControlSearch({
+    result: combinedPrimaryResult,
+    userMessage: input.userMessage,
+    comparisonAttributes
+  });
 
   if (
     targetProductNames.length &&
     (
       !hasConfirmedExactTargetFacts(combinedPrimaryResult, targetProductNames, ['catalog', 'web']) ||
-      combinedPrimaryResult.answerGuidance.completeness !== 'answered'
+      combinedPrimaryResult.answerGuidance.completeness !== 'answered' ||
+      electricControlRetryRequired
     )
   ) {
     const retryRequest: Record<string, unknown> = {
@@ -843,6 +934,8 @@ export async function researchProductComparisonFacts(input: {
             'If catalogExtraction confirms one option and web does not refute it with stronger exact-target evidence, preserve the catalog fact instead of downgrading it to unknown.',
             'For key vs push-button questions, ignition keys in the kit or ignition-key wording supports key start; absence of push-button wording means push-button is not confirmed.',
             'If exact-target instructions show an ignition switch, engine switch, starter switch, or a switch turned/held in START, return that practical mechanism in answerGuidance.directAnswer. Do not collapse it to only "electric starter".',
+            'If the first pass found an electric starter but did not confirm how it is actuated, perform a dedicated control search: product photos, control-panel photos/images, official image galleries, manuals, PDF diagrams, ignition key, ignition switch, starter switch, push button, START switch, and Russian equivalents.',
+            'If photos or manuals clearly show/label a key, ignition switch, push button, or START switch for the exact model, return that control as confirmed with the source. If they only show electric starter without the control, say the electric starter is confirmed but the control type is still not confirmed after exact-target source checks.',
             'Do not use nearby model pages as facts for the target. Return no fact if the exact target still cannot be verified.',
             'Return only JSON.'
           ].join('\n')
@@ -868,6 +961,11 @@ export async function researchProductComparisonFacts(input: {
     });
     const retryResult = normalizeResearchParsed(retry.parsed);
     const combinedRetryResult = mergeCatalogAndWebResearch(catalogResult, retryResult);
+    const electricControlStillUnresolved = electricControlRetryRequired && needsElectricStarterControlSearch({
+      result: combinedRetryResult,
+      userMessage: input.userMessage,
+      comparisonAttributes
+    });
     if (
       hasConfirmedExactTargetFacts(combinedRetryResult, targetProductNames, ['catalog', 'web']) ||
       combinedRetryResult.answerGuidance.completeness === 'answered'
@@ -883,7 +981,9 @@ export async function researchProductComparisonFacts(input: {
         warnings: uniqueStrings([
           ...combinedPrimaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
           ...combinedRetryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
-          'exact_target_external_retry_used'
+          'exact_target_external_retry_used',
+          electricControlRetryRequired ? 'electric_start_control_retry_used' : '',
+          electricControlStillUnresolved ? 'electric_start_control_not_confirmed_after_retry' : ''
         ])
       };
     }

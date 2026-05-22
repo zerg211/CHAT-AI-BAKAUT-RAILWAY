@@ -735,6 +735,12 @@ function answerMentionsManualStarter(answerText: string) {
   return normalizedTextIncludesAny(text, ['manual', 'recoil', 'ручной стартер', 'ручной запуск', 'ручн']);
 }
 
+function coverageItemConfirmsElectricStarter(coverageItem: StartControlCoverageItem) {
+  if (coverageItem.status !== 'confirmed') return false;
+  const text = startControlCoverageText(coverageItem);
+  return normalizedTextIncludesAny(text, ['electric starter', 'electric start', 'electrostarter', 'электростартер', 'электро стартер', 'электропуск']);
+}
+
 function startControlConfirmedSupplementLines(coverage: unknown[], answerText: string) {
   const lines: string[] = [];
   const coverageItems = coverage
@@ -745,20 +751,32 @@ function startControlConfirmedSupplementLines(coverage: unknown[], answerText: s
   return lines;
 }
 
+function startControlUncertaintyStatement(input: {
+  label: string;
+  status: string;
+  hasConfirmedElectricStarter: boolean;
+}) {
+  const suffix = input.status === 'ambiguous' ? 'точно подтвердить не могу' : 'в данных не вижу';
+  if (input.hasConfirmedElectricStarter && input.label === 'Запуск с ключа/через выключатель') {
+    return `Чем именно включается электростартер - ключом или переключателем - ${suffix}`;
+  }
+  return `${input.label} ${suffix}`;
+}
+
 function startControlCoverageUncertaintyLine(coverage: unknown[], answerText = '') {
   const statements: string[] = [];
   const seen = new Set<string>();
-  for (const item of coverage) {
-    if (!item || typeof item !== 'object') continue;
-    const coverageItem = item as StartControlCoverageItem;
+  const coverageItems = coverage
+    .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
+  const hasConfirmedElectricStarter = coverageItems.some(coverageItemConfirmsElectricStarter);
+  for (const coverageItem of coverageItems) {
     const status = coverageItem.status;
     if (typeof status !== 'string' || !startControlUncertaintyStatuses.has(status)) continue;
     for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
       if (seen.has(label)) continue;
       seen.add(label);
       if (answerAlreadyCoversStartControlUncertainty(answerText, label)) continue;
-      const suffix = status === 'ambiguous' ? 'точно подтвердить не могу' : 'в данных не вижу';
-      statements.push(`${label} ${suffix}`);
+      statements.push(startControlUncertaintyStatement({ label, status, hasConfirmedElectricStarter }));
     }
   }
   return statements.length ? `${statements.join('. ')}.` : '';
@@ -771,7 +789,8 @@ function hasConfirmedStartControlCoverage(coverage: unknown[]) {
     return coverageItem.status === 'confirmed' &&
       (
         startControlCoverageLabels(coverageItem.attribute, coverageItem.value).length > 0 ||
-        coverageItemConfirmsManualStarter(coverageItem)
+        coverageItemConfirmsManualStarter(coverageItem) ||
+        coverageItemConfirmsElectricStarter(coverageItem)
       );
   });
 }

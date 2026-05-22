@@ -38,7 +38,8 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('description: compactProductDescription(product.description)');
     expect(orchestrator).toContain('Пиши как знакомый знакомому');
     expect(orchestrator).toContain("labels.push('Кнопочный запуск')");
-    expect(orchestrator).toContain("const suffix = status === 'ambiguous' ? 'точно подтвердить не могу' : 'в данных не вижу'");
+    expect(orchestrator).toContain('startControlUncertaintyStatement');
+    expect(orchestrator).toContain('Чем именно включается электростартер');
     expect(orchestrator).toContain('presentCatalogPresenceLine(presence.productName, directAnswer)');
     expect(orchestrator).toContain('У нас эта модель есть в каталоге.');
     expect(orchestrator).toContain('approvedAnswerStyleExamplesPromptBlock');
