@@ -1,0 +1,62 @@
+{
+  "taskId": "2026-05-22-requirement-ledger-prefix-no-regex",
+  "status": "PASS",
+  "change": {
+    "summary": "Replaced regex-based requirement ledger selection-prefix stripping with an explicit startsWith/slice helper.",
+    "files": [
+      "src/ai/requirementLedger.ts",
+      "tests/requirementLedger.test.ts",
+      "scripts/no-regex-baseline.json"
+    ],
+    "publicApiChanged": false,
+    "productionBehaviorChanged": false
+  },
+  "noRegex": {
+    "previousBaseline": 1691,
+    "currentBaseline": 1689,
+    "removedFindings": 2,
+    "updateCommand": "npm run lint:no-regex -- --update-baseline",
+    "guardCommand": "npm run lint:no-regex",
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "command": "npx vitest run tests/requirementLedger.test.ts",
+      "result": "PASS",
+      "testFiles": 1,
+      "tests": 3
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "PASS"
+    },
+    {
+      "command": "npm test",
+      "result": "PASS",
+      "testFiles": 83,
+      "tests": 678
+    },
+    {
+      "command": "npm run build",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "Git reported CRLF normalization warnings only."
+    }
+  ],
+  "productionEval": {
+    "required": false,
+    "reason": "Private deterministic requirement-ledger metadata refactor with focused tests; no prompts, answer policy, product selection, tool policy, or widget-visible behavior changed."
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS"
+  }
+}

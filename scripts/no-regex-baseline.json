@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1691,
+  "count": 1689,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -6887,20 +6887,6 @@
       "file": "src/ai/productEvidenceRegistry.ts",
       "kind": "regular_expression_literal",
       "hash": "3519e5e8407365b5",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/requirementLedger.ts|replace_regex_argument|e639dadc5548c605|1",
-      "file": "src/ai/requirementLedger.ts",
-      "kind": "replace_regex_argument",
-      "hash": "e639dadc5548c605",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/requirementLedger.ts|regular_expression_literal|7e6d6f6ce97f2fcf|1",
-      "file": "src/ai/requirementLedger.ts",
-      "kind": "regular_expression_literal",
-      "hash": "7e6d6f6ce97f2fcf",
       "occurrence": 1
     },
     {

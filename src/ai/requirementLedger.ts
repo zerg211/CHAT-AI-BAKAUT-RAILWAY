@@ -10,6 +10,7 @@ import type {
 } from '../shared/types.js';
 
 const STRICT: SemanticRequirementStrictness = 'strictOnly';
+const SELECTION_PREFIX = 'selection:';
 
 function hasValue(value: unknown) {
   if (Array.isArray(value)) return value.length > 0;
@@ -114,6 +115,10 @@ function kindFromSelectionKey(key: string): SemanticRequirementKind | undefined 
   return undefined;
 }
 
+function stripSelectionPrefix(id: string) {
+  return id.startsWith(SELECTION_PREFIX) ? id.slice(SELECTION_PREFIX.length) : id;
+}
+
 export function buildRequirementLedger(input: {
   needState: CustomerNeedState;
   selectionState?: ProductSelectionState;
@@ -123,7 +128,7 @@ export function buildRequirementLedger(input: {
   const hardItems = hardConstraintItems(hardConstraints);
   const semanticItems = activeSemanticItems(memory);
   const items = dedupeItems([...semanticItems, ...hardItems]);
-  const hardConstraintKeys = hardItems.map((item) => item.id.replace(/^selection:/u, ''));
+  const hardConstraintKeys = hardItems.map((item) => stripSelectionPrefix(item.id));
   const semanticKinds = new Set(semanticItems.map((item) => item.kind));
   const warnings: string[] = [];
 

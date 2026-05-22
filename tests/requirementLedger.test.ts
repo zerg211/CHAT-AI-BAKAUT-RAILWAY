@@ -65,4 +65,19 @@ describe('requirement ledger', () => {
       'hard_constraint_without_active_semantic_requirement:brandConstraint'
     ]));
   });
+
+  it('emits exact model token hard constraint keys without the internal selection prefix', () => {
+    const base = emptyNeedState();
+    const selectionState = mergeProductSelectionState(base.selectionState, {
+      hardConstraints: {
+        ...base.selectionState.hardConstraints,
+        exactModelTokens: ['SGG 8000EH']
+      }
+    });
+
+    const ledger = buildRequirementLedger({ needState: base, selectionState });
+
+    expect(ledger.hardConstraintKeys).toContain('exactModelTokens');
+    expect(ledger.hardConstraintKeys).not.toContain('selection:exactModelTokens');
+  });
 });
