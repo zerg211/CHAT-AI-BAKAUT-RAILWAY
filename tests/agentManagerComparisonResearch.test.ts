@@ -574,7 +574,7 @@ describe('AgentManager comparison research flow', () => {
             required: true
           }],
           mustNotAskQuestionIds: [],
-          riskFlags: []
+          riskFlags: ['answer_policy_catalog_presence_relevant']
         };
       },
       async composeAnswer() {
@@ -720,7 +720,7 @@ describe('AgentManager comparison research flow', () => {
 
     expect(payload.answer).toContain('ключа электростартера');
     expect(payload.answer).not.toContain('По ключу или кнопке точной строки нет');
-    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
+    expect(payload.answer).not.toContain('У нас эта модель есть в каталоге.');
     expect(payload.answer).not.toContain('В каталоге БАКАУТ');
     expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.metadata?.preSendReview).toMatchObject({
@@ -853,7 +853,7 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.answer).toContain('Кнопочного запуска тут не вижу');
     expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
     expect(payload.answer.split('Кнопоч').length - 1).toBe(1);
-    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
+    expect(payload.answer).not.toContain('У нас эта модель есть в каталоге.');
     expect(payload.answer).not.toContain('У нас Firman RD3910E есть в каталоге');
   });
 
@@ -1038,7 +1038,7 @@ describe('AgentManager comparison research flow', () => {
           requiresTools: false,
           toolRequests: [],
           mustNotAskQuestionIds: [],
-          riskFlags: []
+          riskFlags: ['answer_policy_catalog_presence_relevant']
         };
       },
       async composeAnswer(input) {
