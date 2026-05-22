@@ -72,6 +72,15 @@
       "note": "Final after restoring full verified fact coverage."
     },
     {
+      "command": "PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-verified-web-fact-memory/production-promptfoo-db81c9c.json",
+      "status": "pass",
+      "tests": 6,
+      "deterministicAverage": 0.9928333333333333,
+      "llmAverage": 0.9616666666666666,
+      "summaryPath": ".agent/tasks/2026-05-22-verified-web-fact-memory/production-promptfoo-db81c9c.summary.json",
+      "rawPath": ".agent/tasks/2026-05-22-verified-web-fact-memory/production-promptfoo-db81c9c.json"
+    },
+    {
       "command": "production marker health check",
       "status": "pass",
       "commitSha": "db81c9c346f8945a11b54ff8cc35727a511fbee9",
@@ -108,5 +117,10 @@
     "AC6": "pass",
     "AC7": "pass",
     "AC8": "pass"
+  },
+  "scores": {
+    "deterministicAverage": 0.9928333333333333,
+    "llmAverage": 0.9616666666666666,
+    "promptfooGate": "pass"
   }
 }

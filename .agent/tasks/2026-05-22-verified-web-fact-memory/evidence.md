@@ -26,6 +26,7 @@
 - Final `npm run typecheck` - PASS.
 - Final `npm run lint:no-regex` - PASS, no new regex constructs, legacy baseline 1687.
 - Final `npm run build` - PASS.
+- Production Promptfoo after final deploy: PASS, 6/6 cases, deterministic average 99.28%, LLM average 96.17%, raw `.agent/tasks/2026-05-22-verified-web-fact-memory/production-promptfoo-db81c9c.json`, summary `.agent/tasks/2026-05-22-verified-web-fact-memory/production-promptfoo-db81c9c.summary.json`.
 - Production behavior marker: PASS, `https://chat-ai-production-3057.up.railway.app/api/health` reported final code commit `db81c9c346f8945a11b54ff8cc35727a511fbee9`.
 - Live widget save/reuse check: PASS, protocol `local-live-tests/2026-05-22-verified-web-fact-memory-2026-05-22T14-11-46-469Z.production.md`.
 - Final live widget reuse/style check: PASS, protocol `local-live-tests/2026-05-22-verified-web-fact-memory-reuse-2026-05-22T15-21-48-479Z.production.md`.
@@ -41,3 +42,9 @@
 - AC6: PASS. Tests cover save and reuse paths.
 - AC7: PASS. Focused tests, typecheck, no-regex, migrate, build passed.
 - AC8: PASS. Code commit `db81c9c346f8945a11b54ff8cc35727a511fbee9` was pushed, Railway marker matched it, and live widget checks passed. This evidence update is documentation-only.
+
+## Scores
+
+- Current best deterministic average: 99.28%.
+- Current best LLM average: 96.17%.
+- Promptfoo gate: PASS, both above 90%.
