@@ -1,0 +1,58 @@
+{
+  "taskId": "2026-05-22-generator-bounded-estimate-answer-contract",
+  "date": "2026-05-22",
+  "triggeringEval": {
+    "commit": "081e621",
+    "path": ".agent/tasks/2026-05-22-product-classifier-oil-liter-parser-no-regex/production-evals-after-081e621.summary.json",
+    "deterministicAverage": 0.9615,
+    "llmAverage": 0.7983333333333333,
+    "passed": 4,
+    "failed": 2
+  },
+  "change": {
+    "files": [
+      "src/ai/agentManagerOrchestrator.ts",
+      "tests/agentManagerOrchestrator.test.ts"
+    ],
+    "summary": "Refined generator load required response clauses so the LLM labels bounded estimates as preliminary while keeping final selection and product cards blocked when exact facts are missing."
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerOrchestrator.test.ts",
+      "status": "PASS",
+      "summary": "1 test file, 27 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs; baseline 1767"
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "78 test files, 647 tests"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PENDING"
+  },
+  "productionEval": {
+    "status": "PENDING"
+  }
+}

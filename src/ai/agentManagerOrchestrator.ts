@@ -651,6 +651,24 @@ function generatorLoadRequirementKw(toolResults: ToolResult[]) {
   return undefined;
 }
 
+function generatorLoadProfileNumbers(result: ToolResult) {
+  const profile = (result.payload as {
+    profile?: {
+      requiredNominalKw?: unknown;
+      requiredStartingKw?: unknown;
+      confidence?: unknown;
+    };
+  }).profile;
+  const requiredNominalKw = Number(profile?.requiredNominalKw);
+  const requiredStartingKw = Number(profile?.requiredStartingKw);
+  const confidence = Number(profile?.confidence);
+  return {
+    requiredNominalKw: Number.isFinite(requiredNominalKw) && requiredNominalKw > 0 ? requiredNominalKw : undefined,
+    requiredStartingKw: Number.isFinite(requiredStartingKw) && requiredStartingKw > 0 ? requiredStartingKw : undefined,
+    confidence: Number.isFinite(confidence) && confidence >= 0 ? confidence : undefined
+  };
+}
+
 function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
   const clauses: RequiredResponseClause[] = [];
   for (const result of toolResults) {
@@ -659,10 +677,29 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
       result.status === 'ok' &&
       hasUnconfirmedGeneratorLoadBasisResult([result])
     ) {
+      const profile = generatorLoadProfileNumbers(result);
+      const profileInstruction = profile.requiredNominalKw !== undefined
+        ? `Do not ignore payload.profile.requiredNominalKw=${profile.requiredNominalKw}: either use it as a rough or partial orientation with an explicit caveat about the missing load basis, or explain that it covers only the counted loads and is not enough for final generator selection.`
+        : 'Do not invent a kW number when payload.profile.requiredNominalKw is absent.';
       clauses.push({
         code: 'generator_unconfirmed_load_no_numeric_selection',
         sourceRequestId: result.requestId,
-        instruction: 'This generator load calculation has an unconfirmed or unbounded load basis. Do not present payload.profile.requiredNominalKw or any kW range as a recommended or minimum generator size. Say exact generator selection is blocked by missing load power/model/type, and ask for the smallest missing fact needed to make the selection safe.'
+        instruction: `This generator load calculation has an unconfirmed or incomplete load basis. ${profileInstruction} Do not present the number as a confirmed recommendation, confirmed minimum, or purchase-safe final selection. Keep product cards and prices blocked, name the missing load power/model/type, and ask for the smallest missing fact needed to make exact selection safe.`
+      });
+    }
+    if (
+      result.tool === 'calculator.generatorLoad' &&
+      result.status === 'ok' &&
+      (result.payload as { estimateBasis?: unknown }).estimateBasis === 'bounded_assumption'
+    ) {
+      const profile = generatorLoadProfileNumbers(result);
+      const profileInstruction = profile.requiredNominalKw !== undefined
+        ? `If answerText mentions ${profile.requiredNominalKw} kW, it must label that number as a preliminary calculated orientation under assumptions.`
+        : 'If answerText mentions any kW value, it must be clearly tied to the available tool profile or omitted.';
+      clauses.push({
+        code: 'generator_bounded_assumption_preliminary_orientation',
+        sourceRequestId: result.requestId,
+        instruction: `This generator load calculation used estimateBasis=bounded_assumption. ${profileInstruction} Preserve the missing exact fact such as pump nameplate power/model in the answer. Do not phrase the estimate as confirmed nameplate data, exact sizing, or final purchase-safe selection.`
       });
     }
     if (result.tool !== 'web.researchProductFacts') continue;
@@ -1369,6 +1406,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Если lead.capture вернул not_found/error из-за отсутствия имени или телефона, НЕ подтверждай контакт и НЕ говори, что запрос уже передан; поставь leadAction="offer_form" и попроси оставить недостающий контакт в форме.',
             'Не задавай лишних вопросов. Если вопрос нужен, он должен быть реально нужен для следующего шага.',
             'If toolResults contains calculator.generatorLoad with status ok, treat payload.profile.requiredNominalKw and requiredStartingKw as the authoritative calculated minimum. Do not replace that number with a broader or higher default class. A higher class may be described only as comfort/reserve, not as the calculated minimum.',
+            'For generator load profiles based on assumptions, be useful without overstating certainty: give the preliminary sizing orientation only as "по расчету/допущениям/ориентир", then separately say what exact pump/tool fact is still needed before final product selection or purchase.',
             'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
             'If calculator.generatorLoad warnings include generator_load_estimate_only, generator_load_unbounded_guess, generator_load_bounded_basis_incomplete, or generator_load_invalid_load_kind, do not name catalog products or prices. Set selectionReadiness.canShowProductCards=false and ask the minimum useful question to bound the unknown load source.',
             'If calculator.generatorLoad warnings include generator_load_bounded_assumption, you may show only preliminary product cards when the buyer asked for an approximate selection; keep exact missing facts in selectionReadiness.missingFacts and state the assumptions in answerText.',
@@ -1386,7 +1424,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
             'If requiredResponseClauses is non-empty, answerText must satisfy every clause by meaning. Treat these clauses as required semantic content, not optional style advice.',
-            'If a requiredResponseClause says a generator load basis is unconfirmed, it overrides the calculator profile: do not state a numeric kW recommendation or range as the answer.',
+            'If a requiredResponseClause says a generator load basis is unconfirmed, distinguish rough orientation from exact selection: do not present the number as confirmed or purchase-safe, but do not hide a useful tool-calculated orientation when the clause tells you to include or qualify it.',
             'If web.researchProductFacts payload.answerGuidance.directAnswer is present, use that practical direct answer before broader catalog context. Do not convert answerGuidance.coverage status "not_confirmed" into "no" or "does not have".',
             'If web.researchProductFacts has status error, timeout, denied, or not_found, do not write that facts were checked, verified, or confirmed by that research step. Give the best general answer only at the current truthful level and state that exact verification is unavailable in this turn when the buyer asked for verification.',
             styleExamples,
@@ -1432,7 +1470,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
-            'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW recommendation or range as the selection answer.',
+            'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
             'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
             'Require rewrite if the answer is formally correct but sounds like an internal report: third-person catalog wording, "В каталоге БАКАУТ...", "По деталям запуска...", or similar robotic source labels. Rewrite it as simple conversational Russian from our shop voice.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'

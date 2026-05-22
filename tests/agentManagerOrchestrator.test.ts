@@ -938,7 +938,8 @@ describe('AgentManagerOrchestrator', () => {
       async composeAnswer(input) {
         expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_unconfirmed_load_no_numeric_selection');
         expect(input.requiredResponseClauses?.[0]?.sourceRequestId).toBe('generator-load');
-        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('Do not present payload.profile.requiredNominalKw');
+        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('rough or partial orientation');
+        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('product cards and prices blocked');
         return {
           answerText: 'I should not show generator cards yet because the pump type/model or power is missing.',
           factsUsed: [],
@@ -1267,6 +1268,8 @@ describe('AgentManagerOrchestrator', () => {
         };
       },
       async composeAnswer(input) {
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_bounded_assumption_preliminary_orientation');
+        expect(input.requiredResponseClauses?.map((clause) => clause.instruction).join('\n')).toContain('preliminary calculated orientation');
         const profile = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } })?.profile;
         return {
           answerText: `Preliminary calculation is about ${profile?.requiredNominalKw} kW. Generator 5 kW is the minimum orientation, Generator 6 kW is the safer reserve option. Exact pump nameplate is still needed before purchase.`,

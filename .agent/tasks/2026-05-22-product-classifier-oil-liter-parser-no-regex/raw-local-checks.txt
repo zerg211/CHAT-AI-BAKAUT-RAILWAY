@@ -26,4 +26,10 @@ Local non-OpenAI gates:
 - Result: PASS. Only CRLF conversion warnings from Git; no whitespace errors.
 
 Production eval:
-- Pending until commit, push, and Railway deployment marker.
+- Commit: 081e621
+- Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-classifier-oil-liter-parser-no-regex/production-evals-after-081e621.json
+- Result: FAIL, 4/6 passed.
+- Deterministic average: 0.9615.
+- LLM average: 0.7983333333333333.
+- Interpretation: failure was in generator bounded-estimate answer behavior, not in the oil/liter parser path.
+- Follow-up task: .agent/tasks/2026-05-22-generator-bounded-estimate-answer-contract/

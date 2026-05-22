@@ -25,7 +25,19 @@ The public exports stay unchanged. The pass does not move semantic buyer intent 
 - AC3: PASS. Public exports and call sites are unchanged.
 - AC4: PASS. Focused tests added in `tests/productClassifier.test.ts`.
 - AC5: PASS. Local non-OpenAI gates passed.
-- AC6: PENDING. Production Promptfoo/widget harness must run after push and Railway deployment marker.
+- AC6: FOLLOW-UP REQUIRED. Production Promptfoo ran after push and Railway marker, but failed 4/6 because of generator bounded-estimate answer behavior outside the oil/liter parser path.
+
+## Production Eval After `081e621`
+
+- `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-classifier-oil-liter-parser-no-regex/production-evals-after-081e621.json`: FAIL.
+- Deterministic average: 0.9615.
+- LLM average: 0.7983333333333333.
+- Pass/fail: 4/6.
+- Raw artifacts:
+  - `production-evals-after-081e621.json`
+  - `production-evals-after-081e621.summary.json`
+
+The failed artifacts point to generator answer-contract behavior: the assistant either over-blocked a useful preliminary sizing orientation or stated a bounded estimate too firmly. Follow-up task: `.agent/tasks/2026-05-22-generator-bounded-estimate-answer-contract/`.
 
 ## Notes
 

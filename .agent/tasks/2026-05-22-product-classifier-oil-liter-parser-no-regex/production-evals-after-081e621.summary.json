@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-product-classifier-oil-liter-parser-no-regex\\production-evals-after-081e621.json",
+  "generatedAt": "2026-05-22T11:21:47.471Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 4,
+    "failures": 2,
+    "errors": 0,
+    "averageScore": 0.9615,
+    "assertionPassRate": 0.9393939393939394,
+    "assertionPassCount": 31,
+    "assertionFailCount": 2,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.7983333333333333,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": false,
+    "llmAverageUsable": true
+  }
+}

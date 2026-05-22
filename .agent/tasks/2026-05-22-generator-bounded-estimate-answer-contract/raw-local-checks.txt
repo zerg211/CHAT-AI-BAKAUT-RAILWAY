@@ -1,0 +1,29 @@
+Task: 2026-05-22-generator-bounded-estimate-answer-contract
+Date: 2026-05-22
+
+Production eval that exposed the bottleneck:
+- Commit: 081e621
+- Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-classifier-oil-liter-parser-no-regex/production-evals-after-081e621.json
+- Result: FAIL, 4/6 passed.
+- Deterministic average: 0.9615.
+- LLM average: 0.7983333333333333.
+- Bottleneck: generator answers confused preliminary sizing orientation, exact selection, and product-card readiness.
+
+Focused local checks:
+- npm test -- tests/agentManagerOrchestrator.test.ts
+- Result: PASS, 1 test file, 27 tests.
+- npm run lint:no-regex
+- Result: PASS, no new regex constructs, legacy baseline 1767.
+
+Full local non-OpenAI gates:
+- npm run typecheck
+- Result: PASS.
+- npm test
+- Result: PASS, 78 test files, 647 tests.
+- npm run build
+- Result: PASS.
+- git diff --check
+- Result: PASS. Only CRLF conversion warnings from Git; no whitespace errors.
+
+Production eval after this pass:
+- Pending until commit, push, and Railway deployment marker.

@@ -49,9 +49,17 @@
     "AC3": "PASS",
     "AC4": "PASS",
     "AC5": "PASS",
-    "AC6": "PENDING"
+    "AC6": "FOLLOW_UP_REQUIRED"
   },
   "productionEval": {
-    "status": "PENDING"
+    "status": "FAIL",
+    "commit": "081e621",
+    "output": ".agent/tasks/2026-05-22-product-classifier-oil-liter-parser-no-regex/production-evals-after-081e621.json",
+    "summary": ".agent/tasks/2026-05-22-product-classifier-oil-liter-parser-no-regex/production-evals-after-081e621.summary.json",
+    "deterministicAverage": 0.9615,
+    "llmAverage": 0.7983333333333333,
+    "passed": 4,
+    "failed": 2,
+    "followUpTask": "2026-05-22-generator-bounded-estimate-answer-contract"
   }
 }
