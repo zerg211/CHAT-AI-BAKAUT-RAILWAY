@@ -653,14 +653,14 @@ function startControlCoverageLabels(attribute: unknown, value: unknown) {
     text.includes('зажиган') ||
     text.includes('выключател')
   ) {
-    labels.push('ключу/выключателю');
+    labels.push('Запуск с ключа/через выключатель');
   }
   if (
     text.includes('button') ||
     text.includes('pushbutton') ||
     text.includes('кноп')
   ) {
-    labels.push('кнопке');
+    labels.push('Кнопочный запуск');
   }
   return labels;
 }
@@ -676,11 +676,11 @@ function startControlCoverageUncertaintyLine(coverage: unknown[]) {
     for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
       if (seen.has(label)) continue;
       seen.add(label);
-      const suffix = status === 'ambiguous' ? 'точного подтверждения нет' : 'не подтверждено';
-      statements.push(`по ${label} ${suffix}`);
+      const suffix = status === 'ambiguous' ? 'точно подтвердить не могу' : 'в данных не вижу';
+      statements.push(`${label} ${suffix}`);
     }
   }
-  return statements.length ? `По деталям запуска: ${statements.join('; ')}.` : '';
+  return statements.length ? `${statements.join('. ')}.` : '';
 }
 
 function hasConfirmedStartControlCoverage(coverage: unknown[]) {
@@ -731,9 +731,9 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
       if (!presence.productName) continue;
       if (presence.status === 'absent') {
         hasAbsentTarget = true;
-        lines.push(`В каталоге БАКАУТ точной модели ${presence.productName} нет.`);
+        lines.push(`У нас точной модели ${presence.productName} в каталоге нет.`);
       } else if (presence.status === 'present') {
-        lines.push(`В каталоге БАКАУТ ${presence.productName} есть.`);
+        lines.push(`У нас ${presence.productName} есть в каталоге.`);
       }
     }
     const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
@@ -741,7 +741,7 @@ function researchGuidanceSafeRewrite(toolResults: ToolResult[]) {
       .filter(Boolean))
       .slice(0, 4);
     if (hasAbsentTarget && nearbyNames.length) {
-      lines.push(`Из близких вариантов в каталоге: ${nearbyNames.join('; ')}.`);
+      lines.push(`Рядом по каталогу есть: ${nearbyNames.join('; ')}.`);
     }
   }
   return uniqueStrings(lines).join(' ').trim();
@@ -1144,6 +1144,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
           content: [
             'Ты AI менеджер-консультант БАКАУТ в чате сайта.',
             'Отвечай по-русски, кратко, понятно, как живой менеджер.',
+            'Пиши как знакомый знакомому: просто, легко, без канцелярита и третьего лица. Говори от лица магазина: "у нас есть", "можем уточнить", а не "В каталоге БАКАУТ". Не используй роботизированные связки вроде "по деталям запуска"; скажи проще: "кнопочный запуск в данных не вижу" или "точно не подтверждаю".',
             'Опирайся только на ledger, catalog/tool results, checked research facts и текущий диалог.',
             'Если точного dB, наличия, доставки, скидки или срока нет в фактах, честно скажи, что это нужно уточнить, и при необходимости предложи форму.',
             'Если lead.capture вернул ok, подтверди получение контакта и не проси его повторно.',
@@ -1210,6 +1211,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
+            'Require rewrite if the answer is formally correct but sounds like an internal report: third-person catalog wording, "В каталоге БАКАУТ...", "По деталям запуска...", or similar robotic source labels. Rewrite it as simple conversational Russian from our shop voice.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')
         },

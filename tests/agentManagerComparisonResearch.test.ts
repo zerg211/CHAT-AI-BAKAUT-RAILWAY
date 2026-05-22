@@ -420,7 +420,8 @@ describe('AgentManager comparison research flow', () => {
     }]);
     expect(metadata.toolResults?.[0]?.warnings).toContain('exact_catalog_product_absent:FIRMAN RD2910E');
     expect(payload.answer).toContain('START');
-    expect(payload.answer).toContain('точной модели FIRMAN RD2910E нет');
+    expect(payload.answer).toContain('У нас точной модели FIRMAN RD2910E в каталоге нет');
+    expect(payload.answer).toContain('Рядом по каталогу есть');
     expect(payload.productCards).toEqual([]);
   });
 
@@ -522,7 +523,9 @@ describe('AgentManager comparison research flow', () => {
 
     expect(payload.answer).toContain('ключ/замок и кнопка в источниках не подтверждены');
     expect(payload.answer).not.toContain('запускается ключом/замком');
-    expect(payload.answer).toContain('В каталоге БАКАУТ FIRMAN RD3910E есть.');
+    expect(payload.answer).toContain('У нас FIRMAN RD3910E есть в каталоге.');
+    expect(payload.answer).not.toContain('В каталоге БАКАУТ');
+    expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.answer).not.toContain('Из близких вариантов');
     expect(payload.metadata?.preSendReview).toMatchObject({
       verdict: 'rewrite_required',
@@ -636,7 +639,9 @@ describe('AgentManager comparison research flow', () => {
 
     expect(payload.answer).toContain('ключа электростартера');
     expect(payload.answer).not.toContain('По ключу или кнопке точной строки нет');
-    expect(payload.answer).toContain('В каталоге БАКАУТ FIRMAN RD3910E есть.');
+    expect(payload.answer).toContain('У нас FIRMAN RD3910E есть в каталоге.');
+    expect(payload.answer).not.toContain('В каталоге БАКАУТ');
+    expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.metadata?.preSendReview).toMatchObject({
       verdict: 'rewrite_required',
       issues: expect.arrayContaining([
@@ -749,10 +754,12 @@ describe('AgentManager comparison research flow', () => {
     expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
       targetProductNames: ['RD3910E']
     }));
-    expect(payload.answer).toContain('по ключу/выключателю точного подтверждения нет');
-    expect(payload.answer).toContain('по кнопке не подтверждено');
+    expect(payload.answer).toContain('Запуск с ключа/через выключатель точно подтвердить не могу');
+    expect(payload.answer).toContain('Кнопочный запуск в данных не вижу');
     expect(payload.answer).not.toContain('тоже запускается с ключа');
-    expect(payload.answer).toContain('В каталоге БАКАУТ RD3910E есть.');
+    expect(payload.answer).toContain('У нас RD3910E есть в каталоге.');
+    expect(payload.answer).not.toContain('В каталоге БАКАУТ');
+    expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.metadata?.intentContract).toMatchObject({
       requiresTools: true,
       riskFlags: expect.arrayContaining(['planner_repaired_exact_model_evidence'])

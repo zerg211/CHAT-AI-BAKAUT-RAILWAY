@@ -36,6 +36,20 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('answer_checked_research_guidance');
     expect(orchestrator).toContain('hasConfirmedStartControlCoverage');
     expect(orchestrator).toContain('description: compactProductDescription(product.description)');
+    expect(orchestrator).toContain('Пиши как знакомый знакомому');
+    expect(orchestrator).toContain("labels.push('Кнопочный запуск')");
+    expect(orchestrator).toContain("const suffix = status === 'ambiguous' ? 'точно подтвердить не могу' : 'в данных не вижу'");
+    expect(orchestrator).toContain('У нас ${presence.productName} есть в каталоге.');
+  });
+
+  it('keeps a project-level human answer style rule in the main prompts', () => {
+    const prompts = readFileSync('src/ai/prompts.ts', 'utf8');
+    const research = readFileSync('src/ai/productComparisonResearch.ts', 'utf8');
+
+    expect(prompts).toContain('Пиши как знакомый знакомому');
+    expect(prompts).toContain('не используй внутренние формулировки');
+    expect(research).toContain('как знакомый знакомому');
+    expect(research).toContain('кнопочный запуск в данных не вижу');
   });
 
   it('keeps blocked generator clarifications self-contained', () => {

@@ -428,6 +428,7 @@ async function extractExactCatalogProductFacts(input: {
           'Если specs и description расходятся внутри карточки, добавь conflicts и пометь coverage как ambiguous или contradicted; не делай вывод об отсутствии функции только из молчания.',
           'Если нужного факта нет в карточке, верни not_found/not_confirmed в coverage и warning catalog_fact_missing_needs_web_research.',
           'answerGuidance.directAnswer должен быть коротким техническим ответом для покупателя без фраз "в нашей карточке не указано", без цены, доставки, наличия, формы или внутренних рассуждений.',
+          'Пиши directAnswer простым разговорным русским, как знакомый знакомому: без третьего лица, без "В каталоге БАКАУТ", без "по деталям запуска"; если факт не подтвержден, скажи мягко и просто, например "кнопочный запуск в данных не вижу".',
           'Не используй web. Верни только JSON.'
         ].join('\n')
       },
@@ -520,6 +521,7 @@ export async function researchProductComparisonFacts(input: {
           'For binary buyer choices such as key vs push-button, manual vs electric, gasoline vs diesel, continue exact-target web search until each choice is confirmed, contradicted, or explicitly not found in exact-target sources. Do not stop at a broad fact like "electric starter" when the buyer asked about the more specific mechanism.',
           'For key vs push-button generator questions, inspect the practical start-control mechanism. If exact-target sources show an ignition key, ignition switch, engine switch, starter switch, or a switch turned/held in START, return that as the practical control evidence. If only broad electric starter is found, mark key/button control as not_confirmed instead of saying it is not key or not button.',
           'Fill answerGuidance.directAnswer with the shortest practical buyer-facing answer supported by exact-target evidence. Keep it to the requested technical/specification fact only: do not include catalog presence, price, availability, delivery, lead handoff, or nearby model alternatives because the orchestrator adds catalog context from structured data.',
+          'The directAnswer must sound like one familiar person answering another in simple Russian: no third-person catalog/report wording, no "В каталоге БАКАУТ", no "по деталям запуска"; say uncertainty plainly, e.g. "кнопочный запуск в данных не вижу".',
           'Use nearby catalog products only as catalog alternatives/orientation in summaryForAnswer; never as the technical fact for an absent exact target.',
           'If exact target facts cannot be found externally, return no target fact and add warning exact_target_external_fact_not_found instead of returning nearby-model facts.',
           'For web facts, fill sourceUrl/sourceTitle when the source is available.'
