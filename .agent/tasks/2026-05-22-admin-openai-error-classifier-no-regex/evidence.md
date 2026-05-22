@@ -29,6 +29,7 @@ The classifier still returns the existing public class names:
 - `npm run typecheck`: PASS.
 - `npm test`: PASS, 77 files, 635 tests.
 - `npm run build`: PASS.
+- Production Promptfoo after Railway marker `37f1e57`: PASS, `6/6`, deterministic average `0.9918333333333335`, LLM average `0.9550000000000001`.
 
 ## Acceptance Criteria
 
@@ -40,4 +41,4 @@ The classifier still returns the existing public class names:
 
 ## Notes
 
-- Unrelated unstaged changes exist in `src/ai/productComparisonResearch.ts` and `tests/productComparisonResearch.test.ts`; they were not edited or staged in this pass.
+- The production eval was rerun because commit `57866f8` entered main before this pass and changed visual evidence transport. Latest main still passed the widget-path scorecard.

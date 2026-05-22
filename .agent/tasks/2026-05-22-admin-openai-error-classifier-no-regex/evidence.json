@@ -56,15 +56,27 @@
       "status": "pass"
     }
   ],
+  "productionCheck": {
+    "commit": "37f1e57",
+    "baseUrl": "https://chat-ai-production-3057.up.railway.app",
+    "pageUrl": "https://bakautprof.ru/?agentHarness=1",
+    "command": "npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-admin-openai-error-classifier-no-regex/production-evals-after-37f1e57.json",
+    "summary": ".agent/tasks/2026-05-22-admin-openai-error-classifier-no-regex/production-evals-after-37f1e57.summary.json",
+    "successes": 6,
+    "resultCount": 6,
+    "deterministicAverage": 0.9918333333333335,
+    "llmAverage": 0.9550000000000001,
+    "gates": {
+      "deterministicAbove90": true,
+      "llmAverageAbove90": true,
+      "llmAverageUsable": true
+    }
+  },
   "acceptanceCriteria": {
     "AC1": "pass",
     "AC2": "pass",
     "AC3": "pass",
     "AC4": "pass",
     "AC5": "pass"
-  },
-  "unrelatedUnstagedChanges": [
-    "src/ai/productComparisonResearch.ts",
-    "tests/productComparisonResearch.test.ts"
-  ]
+  }
 }
