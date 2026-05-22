@@ -188,7 +188,7 @@ describe('product comparison research', () => {
     expect(JSON.stringify(webCall.request.input)).toContain('catalogExtraction');
   });
 
-  it('does a dedicated control search when electric starter is found but key/button control is unresolved', async () => {
+  it('does a dedicated text control search when electric starter is found but key/button control is unresolved', async () => {
     fetchMock
       .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E manual starter electric starter.'))
       .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E control panel: ignition key START switch, electric starter, manual starter.'));
@@ -248,9 +248,9 @@ describe('product comparison research', () => {
             value: 'ignition key / START switch',
             sourceType: 'web',
             confidence: 'high',
-            evidence: 'control panel photo and manual label the ignition key switch for exact model RD4910E',
-            sourceUrl: 'https://example.test/firman-rd4910e-control-panel',
-            sourceTitle: 'FIRMAN RD4910E control panel'
+            evidence: 'text listing and manual label the ignition key START switch for exact model RD4910E',
+            sourceUrl: 'https://example.test/firman-rd4910e-listing',
+            sourceTitle: 'FIRMAN RD4910E listing'
           }],
           answerGuidance: {
             directAnswer: 'RD4910E запускается электростартером с ключа. Ручной запуск тоже есть; кнопочный запуск не подтвержден.',
@@ -260,9 +260,9 @@ describe('product comparison research', () => {
                 attribute: 'key start',
                 status: 'confirmed',
                 value: 'ignition key / START switch',
-                evidence: 'control panel photo and manual label the ignition key switch for exact model RD4910E',
-                sourceUrl: 'https://example.test/firman-rd4910e-control-panel',
-                sourceTitle: 'FIRMAN RD4910E control panel'
+                evidence: 'text listing and manual label the ignition key START switch for exact model RD4910E',
+                sourceUrl: 'https://example.test/firman-rd4910e-listing',
+                sourceTitle: 'FIRMAN RD4910E listing'
               },
               {
                 attribute: 'button start',
@@ -287,8 +287,9 @@ describe('product comparison research', () => {
 
     expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
     expect(createStructuredJsonResponse.mock.calls[1][0].stage).toBe('product_comparison_research_exact_retry');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[0][0].request.input)).toContain('control panel photo');
-    expect(createStructuredJsonResponse.mock.calls[1][0].request.input[0].content).toContain('dedicated control search');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[0][0].request.input)).toContain('заводится от ключа');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[0][0].request.input)).not.toContain('control panel photo');
+    expect(createStructuredJsonResponse.mock.calls[1][0].request.input[0].content).toContain('dedicated text search');
     expect(actual.answerGuidance.directAnswer).toContain('с ключа');
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
@@ -459,194 +460,52 @@ describe('product comparison research', () => {
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:key_start');
   });
 
-  it('uses exact-source product images as visual evidence for key start when text only confirms electric start', async () => {
-    fetchMock
-      .mockResolvedValueOnce(sourceResponse(`
-        <html>
-          <head><title>FIRMAN RD4910E generator</title></head>
-          <body>
-            <h1>FIRMAN RD4910E</h1>
-            <p>Starting system: manual starter, electric starter.</p>
-            <figure>
-              <img src="/images/rd4910e-key-panel.jpg" alt="Electric starter and battery included">
-              <figcaption>Electric starter / battery included</figcaption>
-            </figure>
-          </body>
-        </html>
-      `))
-      .mockResolvedValueOnce(sourceResponse('fake image bytes', 'image/jpeg'));
-    createStructuredJsonResponse
-      .mockResolvedValueOnce({
-        parsed: result({
-          usedWebSearch: true,
-          facts: [{
-            productName: 'FIRMAN RD4910E',
-            attribute: 'starting method',
-            value: 'manual starter / electric starter',
-            sourceType: 'web',
-            confidence: 'high',
-            evidence: 'official page lists manual starter and electric starter',
-            sourceUrl: 'https://example.test/firman-rd4910e',
-            sourceTitle: 'FIRMAN RD4910E generator'
-          }],
-          answerGuidance: {
-            directAnswer: 'Electric starter and manual start are confirmed. Key or button control is not confirmed.',
-            completeness: 'partially_answered',
-            coverage: [
-              {
-                attribute: 'electric start',
-                status: 'confirmed',
-                value: 'electric starter',
-                evidence: 'official page lists electric starter',
-                sourceUrl: 'https://example.test/firman-rd4910e',
-                sourceTitle: 'FIRMAN RD4910E generator'
-              },
-              {
-                attribute: 'manual starter',
-                status: 'confirmed',
-                value: 'manual starter',
-                evidence: 'official page lists manual starter',
-                sourceUrl: 'https://example.test/firman-rd4910e',
-                sourceTitle: 'FIRMAN RD4910E generator'
-              },
-              {
-                attribute: 'key start',
-                status: 'not_confirmed',
-                value: '',
-                evidence: 'text source does not name the control',
-                sourceUrl: null,
-                sourceTitle: null
-              }
-            ]
-          },
-          summaryForAnswer: 'Text confirms electric/manual start only.'
-        })
+  it('keeps key-start evidence when Russian exact-source text says the model starts from a key', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse('Продам FIRMAN RD 4910E. ЗАВОДИТСЯ ОТ КЛЮЧА. Есть электростартер и ручной запуск.'));
+    createStructuredJsonResponse.mockResolvedValueOnce({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD4910E',
+          attribute: 'key start',
+          value: 'заводится от ключа',
+          sourceType: 'web',
+          confidence: 'medium',
+          evidence: 'source text says FIRMAN RD 4910E: ЗАВОДИТСЯ ОТ КЛЮЧА',
+          sourceUrl: 'https://example.test/firman-rd4910e-listing',
+          sourceTitle: 'FIRMAN RD 4910E listing'
+        }],
+        answerGuidance: {
+          directAnswer: 'RD4910E заводится от ключа. Ручной запуск тоже есть.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'key start',
+            status: 'confirmed',
+            value: 'заводится от ключа',
+            evidence: 'source text says FIRMAN RD 4910E: ЗАВОДИТСЯ ОТ КЛЮЧА',
+            sourceUrl: 'https://example.test/firman-rd4910e-listing',
+            sourceTitle: 'FIRMAN RD 4910E listing'
+          }]
+        },
+        summaryForAnswer: 'Text listing confirms key start.'
       })
-      .mockRejectedValueOnce(Object.assign(new Error('invalid image input'), { code: 'invalid_value' }))
-      .mockResolvedValueOnce({
-        parsed: {
-          confirmedControls: [{
-            kind: 'key_start',
-            confidence: 'high',
-            evidence: 'The exact source image visibly shows a keyed ignition/key switch on the generator panel.',
-            imageUrl: 'https://example.test/images/rd4910e-key-panel.jpg',
-            sourceUrl: 'https://example.test/firman-rd4910e',
-            sourceTitle: 'FIRMAN RD4910E generator'
-          }],
-          warnings: []
-        }
-      });
+    });
 
     const actual = await researchProductComparisonFacts({
-      userMessage: 'Does Firman RD4910E start with a key or a button?',
+      userMessage: 'Firman RD4910E заводится с ключа или с кнопки?',
       products: [],
       targetProductNames: ['FIRMAN RD4910E'],
       comparisonAttributes: ['key start', 'push-button start']
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(3);
-    expect(createStructuredJsonResponse.mock.calls[1][0].stage).toBe('source_visual_start_control_validation');
-    expect(createStructuredJsonResponse.mock.calls[2][0].stage).toBe('source_visual_start_control_validation');
-    expect(createStructuredJsonResponse.mock.calls[1][0].request.model).toBe('gpt-4o-mini');
-    expect(createStructuredJsonResponse.mock.calls[2][0].request.model).toBe('gpt-4.1-mini');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('input_image');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('data:image/jpeg;base64');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('"detail":"auto"');
-    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[2][0].request.input)).toContain('rd4910e-key-panel.jpg');
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
     ]));
     expect(actual.answerGuidance.directAnswer).toContain('ключ');
-    expect(actual.answerGuidance.directAnswer).not.toContain('не подтвердили');
-    expect(actual.warnings).toEqual(expect.arrayContaining([
-      'source_visual_start_control_validation_failed:gpt-4o-mini:invalid_value',
-      'source_visual_start_control_evidence_used',
-      'answer_guidance_rewritten_after_source_validation'
-    ]));
-  });
-
-  it('does not convert generic electric-starter images into key or button evidence', async () => {
-    fetchMock
-      .mockResolvedValueOnce(sourceResponse(`
-        <html>
-          <head><title>FIRMAN RD4910E generator</title></head>
-          <body>
-            <h1>FIRMAN RD4910E</h1>
-            <p>Starting system: manual starter, electric starter.</p>
-            <figure>
-              <img src="/images/rd4910e-electric-starter-icon.jpg" alt="Electric starter">
-              <figcaption>Electric starter</figcaption>
-            </figure>
-          </body>
-        </html>
-      `))
-      .mockResolvedValueOnce(sourceResponse('fake image bytes', 'image/jpeg'));
-    createStructuredJsonResponse
-      .mockResolvedValueOnce({
-        parsed: result({
-          usedWebSearch: true,
-          facts: [{
-            productName: 'FIRMAN RD4910E',
-            attribute: 'starting method',
-            value: 'manual starter / electric starter',
-            sourceType: 'web',
-            confidence: 'high',
-            evidence: 'official page lists manual starter and electric starter',
-            sourceUrl: 'https://example.test/firman-rd4910e',
-            sourceTitle: 'FIRMAN RD4910E generator'
-          }],
-          answerGuidance: {
-            directAnswer: 'Electric starter and manual start are confirmed. Key or button control is not confirmed.',
-            completeness: 'partially_answered',
-            coverage: [{
-              attribute: 'electric start',
-              status: 'confirmed',
-              value: 'electric starter',
-              evidence: 'official page lists electric starter',
-              sourceUrl: 'https://example.test/firman-rd4910e',
-              sourceTitle: 'FIRMAN RD4910E generator'
-            }]
-          },
-          summaryForAnswer: 'Text confirms electric/manual start only.'
-        })
-      })
-      .mockResolvedValueOnce({
-        parsed: {
-          confirmedControls: [],
-          warnings: ['generic_electric_starter_image_only']
-        }
-      })
-      .mockResolvedValueOnce({
-        parsed: result({
-          usedWebSearch: true,
-          answerGuidance: {
-            directAnswer: '',
-            completeness: 'not_answered',
-            coverage: []
-          },
-          warnings: ['exact_target_external_fact_not_found']
-        })
-      });
-
-    const actual = await researchProductComparisonFacts({
-      userMessage: 'Does Firman RD4910E start with a key or a button?',
-      products: [],
-      targetProductNames: ['FIRMAN RD4910E'],
-      comparisonAttributes: ['key start', 'push-button start']
-    });
-
-    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(3);
-    expect(createStructuredJsonResponse.mock.calls[1][0].stage).toBe('source_visual_start_control_validation');
-    expect(actual.answerGuidance.coverage.some((item) =>
-      item.attribute === 'key start' && item.status === 'confirmed'
-    )).toBe(false);
-    expect(actual.answerGuidance.directAnswer).toContain('не подтвердили');
-    expect(actual.warnings).toEqual(expect.arrayContaining([
-      'source_visual_start_control_not_confirmed',
-      'generic_electric_starter_image_only',
-      'electric_start_control_not_confirmed_after_retry'
-    ]));
+    expect(actual.warnings).not.toContain('source_evidence_validation_failed:key_start');
+    expect(JSON.stringify(createStructuredJsonResponse.mock.calls[0][0].request.input)).not.toContain('input_image');
   });
 
   it('treats manual/electric source wording as electric start evidence without inventing the control', async () => {

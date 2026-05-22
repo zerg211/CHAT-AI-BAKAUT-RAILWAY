@@ -4,7 +4,6 @@ import * as cheerio from 'cheerio';
 import { fetch } from 'undici';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
-import { safeError } from './responseUtils.js';
 
 export interface ProductComparisonResearchFact {
   productName: string;
@@ -68,18 +67,29 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
     ? attributes
     : ['specification', 'manual', 'starter', 'start method'];
   const controlAttributes = [
-    'control panel photo',
-    'control panel image',
-    'starter switch photo',
-    'ignition switch photo',
-    'ignition key photo',
-    'push button photo',
-    'front panel',
-    'operator panel',
-    'панель управления фото',
-    'фото панели',
-    'ключ зажигания фото',
-    'кнопка запуска фото'
+    'starts with key',
+    'starts with a key',
+    'key ignition start',
+    'ignition key start',
+    'key switch start',
+    'ignition switch start',
+    'starter switch start',
+    'START switch',
+    'push button start',
+    'electric starter key',
+    'заводится от ключа',
+    'заводится с ключа',
+    'запускается от ключа',
+    'запускается с ключа',
+    'запуск от ключа',
+    'запуск с ключа',
+    'запуск ключом',
+    'ключ электростартера',
+    'замок зажигания',
+    'поворот ключа',
+    'поворотом ключа',
+    'кнопка запуска',
+    'кнопочный запуск'
   ];
   const defaultAttributes = [
     'specification',
@@ -88,6 +98,9 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
     'ignition key',
     'key start',
     'push button start',
+    'starts with key',
+    'key ignition',
+    'key switch',
     'engine switch START',
     'ignition switch START',
     'starter switch START',
@@ -192,6 +205,7 @@ const controlSearchQuestionNeedles = [
 
 const sourceBackedStartKinds = ['key_start', 'button_start', 'switch_start', 'electric_start', 'manual_starter'] as const;
 type SourceBackedStartKind = typeof sourceBackedStartKinds[number];
+const practicalStartControlKinds: SourceBackedStartKind[] = ['key_start', 'button_start', 'switch_start'];
 
 const keyStartClaimNeedles = [
   'key start',
@@ -200,7 +214,16 @@ const keyStartClaimNeedles = [
   'turn the key',
   'turned by key',
   'starts with a key',
+  'starts with key',
+  'start by key',
   'с ключа',
+  'от ключа',
+  'заводится от ключа',
+  'заводится с ключа',
+  'запускается от ключа',
+  'запускается с ключа',
+  'запуск от ключа',
+  'запуск с ключа',
   'ключ зажигания',
   'ключ электростартера',
   'ключом электростартера',
@@ -217,6 +240,16 @@ const keyStartSourceNeedles = [
   'turn the key',
   'turned by key',
   'starts with a key',
+  'starts with key',
+  'start by key',
+  'с ключа',
+  'от ключа',
+  'заводится от ключа',
+  'заводится с ключа',
+  'запускается от ключа',
+  'запускается с ключа',
+  'запуск от ключа',
+  'запуск с ключа',
   'ключ зажигания',
   'ключ электростартера',
   'ключом электростартера',
@@ -555,31 +588,15 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
 }
 
 const sourceTextLimit = 250000;
-const sourceVisualCandidateLimit = 8;
-const sourceVisualImageByteLimit = 5_000_000;
-
-type SourceVisualCandidate = {
-  imageUrl: string;
-  sourceUrl: string;
-  sourceTitle?: string;
-  context: string;
-  score: number;
-};
 
 type SourceDocument = {
   ok: boolean;
   text: string;
   warning?: string;
-  media: SourceVisualCandidate[];
   sourceTitle?: string;
 };
 
 type SourceTextCache = Map<string, Promise<SourceDocument>>;
-type SourceCheerioElement = ReturnType<cheerio.CheerioAPI>;
-
-type SourceVisualInputCandidate = SourceVisualCandidate & {
-  openAiImageUrl: string;
-};
 
 function isWhitespaceChar(char: string) {
   return char.trim() === '';
@@ -626,179 +643,17 @@ function sourceLooksLikePdf(sourceUrl: string, contentType: string) {
   }
 }
 
-const imageUrlAttributes = [
-  'src',
-  'data-src',
-  'data-original',
-  'data-lazy-src',
-  'data-large_image',
-  'href'
-];
-
-const sourceVisualContextNeedles = [
-  ...practicalStartControlNeedles,
-  ...electricStarterNeedles,
-  ...starterFieldNeedles,
-  'control panel',
-  'front panel',
-  'operator panel',
-  'photo',
-  'image',
-  'picture',
-  'battery',
-  'панель управления',
-  'фото',
-  'изображение',
-  'аккумулятор'
-];
-
 function sourceTitleFromHtml($: cheerio.CheerioAPI) {
   return collapseWhitespace($('title').first().text() || $('h1').first().text());
 }
 
-function resolveHttpUrl(value: unknown, baseUrl: string) {
-  if (typeof value !== 'string' || !value.trim()) return '';
-  const trimmed = value.trim();
-  if (trimmed.startsWith('data:')) return '';
-  try {
-    const url = new URL(trimmed, baseUrl);
-    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
-  } catch {
-    return '';
-  }
-}
-
-function firstSrcsetUrl(value: unknown) {
-  if (typeof value !== 'string') return '';
-  const first = value.split(',').map((item) => item.trim()).filter(Boolean)[0];
-  return first ? first.split(' ').map((item) => item.trim()).filter(Boolean)[0] ?? '' : '';
-}
-
-function imageElementUrls($element: SourceCheerioElement, baseUrl: string) {
-  const values: string[] = [];
-  for (const attribute of imageUrlAttributes) {
-    const value = $element.attr(attribute);
-    if (attribute === 'href' && !$element.is('a')) continue;
-    if (value) values.push(value);
-  }
-  const srcset = firstSrcsetUrl($element.attr('srcset') ?? $element.attr('data-srcset'));
-  if (srcset) values.push(srcset);
-  return uniqueStrings(values.map((value) => resolveHttpUrl(value, baseUrl)).filter(Boolean));
-}
-
-function sourceVisualCandidateScore(context: string) {
-  let score = 0;
-  if (textIncludesAny(context, practicalStartControlNeedles)) score += 6;
-  if (textIncludesAny(context, electricStarterNeedles)) score += 5;
-  if (textIncludesAny(context, starterFieldNeedles)) score += 3;
-  if (textIncludesAny(context, sourceVisualContextNeedles)) score += 2;
-  return score;
-}
-
-function imageContext($element: SourceCheerioElement, imageUrl: string, sourceTitle: string) {
-  const parts = [
-    sourceTitle,
-    imageUrl,
-    $element.attr('alt'),
-    $element.attr('title'),
-    $element.attr('aria-label')
-  ];
-  let parent = $element.parent();
-  for (let depth = 0; depth < 4 && parent.length; depth += 1) {
-    const text = collapseWhitespace(parent.text());
-    if (text) parts.push(text);
-    parent = parent.parent();
-  }
-  return compactEvidence(collapseWhitespace(parts.filter(Boolean).join(' ')), 1200);
-}
-
-function collectSourceVisualCandidates($: cheerio.CheerioAPI, sourceUrl: string, sourceTitle: string) {
-  const seen = new Set<string>();
-  const candidates: SourceVisualCandidate[] = [];
-  $('img, source, a').each((_, element) => {
-    const $element = $(element);
-    const urls = imageElementUrls($element, sourceUrl);
-    for (const imageUrl of urls) {
-      if (seen.has(imageUrl)) continue;
-      const context = imageContext($element, imageUrl, sourceTitle);
-      const score = sourceVisualCandidateScore(context);
-      seen.add(imageUrl);
-      candidates.push({
-        imageUrl,
-        sourceUrl,
-        sourceTitle: sourceTitle || undefined,
-        context,
-        score
-      });
-    }
-  });
-  return candidates
-    .sort((left, right) => right.score - left.score)
-    .slice(0, sourceVisualCandidateLimit);
-}
-
-function imageMimeTypeFromUrl(value: string) {
-  try {
-    const pathname = new URL(value).pathname.toLocaleLowerCase('en-US');
-    if (pathname.endsWith('.png')) return 'image/png';
-    if (pathname.endsWith('.webp')) return 'image/webp';
-    if (pathname.endsWith('.gif')) return 'image/gif';
-    if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
-  } catch {
-    // Fall through to the default.
-  }
-  return 'image/jpeg';
-}
-
-function supportedImageMimeType(value: unknown, imageUrl: string) {
-  const contentType = typeof value === 'string'
-    ? value.split(';')[0]?.trim().toLocaleLowerCase('en-US') ?? ''
-    : '';
-  if (['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif'].includes(contentType)) {
-    return contentType === 'image/jpg' ? 'image/jpeg' : contentType;
-  }
-  return imageMimeTypeFromUrl(imageUrl);
-}
-
-async function sourceVisualInputCandidate(candidate: SourceVisualCandidate, signal?: AbortSignal): Promise<SourceVisualInputCandidate | null> {
-  try {
-    const response = await fetch(candidate.imageUrl, {
-      signal,
-      headers: {
-        'user-agent': 'Mozilla/5.0 BAKAUT source visual evidence verifier'
-      }
-    });
-    if (!response.ok) return null;
-    const mimeType = supportedImageMimeType(response.headers.get('content-type'), candidate.imageUrl);
-    const bytes = Buffer.from(await response.arrayBuffer());
-    if (!bytes.length || bytes.length > sourceVisualImageByteLimit) return null;
-    return {
-      ...candidate,
-      openAiImageUrl: `data:${mimeType};base64,${bytes.toString('base64')}`
-    };
-  } catch {
-    return null;
-  }
-}
-
-async function sourceVisualInputCandidates(candidates: SourceVisualCandidate[], signal?: AbortSignal) {
-  const output: SourceVisualInputCandidate[] = [];
-  for (const candidate of candidates) {
-    const inputCandidate = await sourceVisualInputCandidate(candidate, signal);
-    if (inputCandidate) output.push(inputCandidate);
-  }
-  return output;
-}
-
-function htmlToSourceDocument(html: string, sourceUrl: string): SourceDocument {
+function htmlToSourceDocument(html: string): SourceDocument {
   const $ = cheerio.load(html);
   const sourceTitle = sourceTitleFromHtml($);
-  const media = collectSourceVisualCandidates($, sourceUrl, sourceTitle);
   $('script, style, noscript, svg').remove();
   return {
     ok: true,
     text: limitSourceText($('body').text() || $.root().text() || html),
-    media,
     sourceTitle: sourceTitle || undefined
   };
 }
@@ -839,16 +694,16 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
           'user-agent': 'Mozilla/5.0 BAKAUT source evidence verifier'
         }
       });
-      if (!response.ok) return { ok: false, text: '', media: [], warning: 'source_evidence_fetch_failed' };
+      if (!response.ok) return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
       const contentType = response.headers.get('content-type') ?? '';
       const source = sourceLooksLikePdf(sourceUrl, contentType)
-        ? { ok: true, text: await pdfToSourceText(await response.arrayBuffer()), media: [] }
-        : htmlToSourceDocument(await response.text(), sourceUrl);
+        ? { ok: true, text: await pdfToSourceText(await response.arrayBuffer()) }
+        : htmlToSourceDocument(await response.text());
       return source.text
         ? source
-        : { ok: false, text: '', media: source.media, sourceTitle: source.sourceTitle, warning: 'source_evidence_empty' };
+        : { ok: false, text: '', sourceTitle: source.sourceTitle, warning: 'source_evidence_empty' };
     } catch {
-      return { ok: false, text: '', media: [], warning: 'source_evidence_fetch_failed' };
+      return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
     }
   })();
   cache.set(sourceUrl, promise);
@@ -933,14 +788,14 @@ async function evidenceItemSourceText(input: {
     sourceTitle: input.item.sourceTitle
   });
   if (input.item.sourceType === 'catalog' || (catalogProduct && !input.item.sourceType)) {
-    if (!catalogProduct) return { ok: false, text: '', media: [], warning: 'source_evidence_catalog_source_missing' };
-    return { ok: true, text: productSourceText(catalogProduct), media: [] };
+    if (!catalogProduct) return { ok: false, text: '', warning: 'source_evidence_catalog_source_missing' };
+    return { ok: true, text: productSourceText(catalogProduct) };
   }
   if (sourceUrlIsHttp(input.item.sourceUrl)) {
     return fetchSourceText(input.item.sourceUrl, input.cache, input.signal);
   }
-  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct), media: [] };
-  return { ok: false, text: '', media: [], warning: 'source_evidence_source_url_missing' };
+  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct) };
+  return { ok: false, text: '', warning: 'source_evidence_source_url_missing' };
 }
 
 function startClaimKindsFromText(value: unknown): SourceBackedStartKind[] {
@@ -1035,265 +890,6 @@ async function validateStartEvidenceItem(input: {
       ...warnings,
       ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
     ])
-  };
-}
-
-const visualStartControlKinds = ['key_start', 'button_start', 'switch_start'] as const;
-type VisualStartControlKind = typeof visualStartControlKinds[number];
-
-type VisualStartControlEvidence = {
-  kind: VisualStartControlKind;
-  confidence: 'high' | 'medium';
-  evidence: string;
-  imageUrl: string;
-  sourceUrl: string;
-  sourceTitle?: string;
-};
-
-function visualStartControlJsonFormat() {
-  return {
-    format: {
-      type: 'json_schema',
-      name: 'source_visual_start_control_validation',
-      schema: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          confirmedControls: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                kind: { type: 'string', enum: [...visualStartControlKinds] },
-                confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-                evidence: { type: 'string' },
-                imageUrl: { type: 'string' },
-                sourceUrl: { type: 'string' },
-                sourceTitle: { type: ['string', 'null'] }
-              },
-              required: ['kind', 'confidence', 'evidence', 'imageUrl', 'sourceUrl', 'sourceTitle']
-            }
-          },
-          warnings: { type: 'array', items: { type: 'string' } }
-        },
-        required: ['confirmedControls', 'warnings']
-      }
-    }
-  } as const;
-}
-
-function visualStartControlAttribute(kind: VisualStartControlKind) {
-  if (kind === 'key_start') return 'key start';
-  if (kind === 'button_start') return 'button start';
-  return 'start switch';
-}
-
-function visualStartControlValue(kind: VisualStartControlKind) {
-  if (kind === 'key_start') return 'ignition key / key switch';
-  if (kind === 'button_start') return 'push-button start';
-  return 'START switch';
-}
-
-function sourceEvidenceItemsForVisualCheck(result: ProductComparisonResearchResult): SourceEvidenceItem[] {
-  const items: SourceEvidenceItem[] = [];
-  for (const fact of result.facts) {
-    if (fact.sourceType === 'web' && sourceUrlIsHttp(fact.sourceUrl)) items.push(fact);
-  }
-  return items;
-}
-
-async function collectVisualStartControlCandidates(input: {
-  result: ProductComparisonResearchResult;
-  products: Product[];
-  targetProductNames: string[];
-  cache: SourceTextCache;
-  signal?: AbortSignal;
-}) {
-  const seen = new Set<string>();
-  const candidates: SourceVisualCandidate[] = [];
-  for (const item of sourceEvidenceItemsForVisualCheck(input.result)) {
-    const source = await evidenceItemSourceText({
-      item,
-      products: input.products,
-      targetProductNames: input.targetProductNames,
-      cache: input.cache,
-      signal: input.signal
-    });
-    if (!source.ok || !source.media.length) continue;
-    if (!sourceTextMatchesTarget({ sourceText: source.text, item, targetProductNames: input.targetProductNames })) continue;
-    for (const candidate of source.media) {
-      if (seen.has(candidate.imageUrl)) continue;
-      seen.add(candidate.imageUrl);
-      candidates.push(candidate);
-    }
-  }
-  return candidates
-    .sort((left, right) => right.score - left.score)
-    .slice(0, sourceVisualCandidateLimit);
-}
-
-function normalizeVisualStartControlValidation(
-  parsed: Record<string, unknown>,
-  candidates: SourceVisualCandidate[]
-): { controls: VisualStartControlEvidence[]; warnings: string[] } {
-  const candidatesByImageUrl = new Map(candidates.map((candidate) => [
-    normalizedUrlForCompare(candidate.imageUrl),
-    candidate
-  ]));
-  const controls = Array.isArray(parsed.confirmedControls)
-    ? parsed.confirmedControls
-        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-        .flatMap((item): VisualStartControlEvidence[] => {
-          const kind = visualStartControlKinds.includes(item.kind as VisualStartControlKind)
-            ? item.kind as VisualStartControlKind
-            : null;
-          const confidence = item.confidence === 'high' || item.confidence === 'medium'
-            ? item.confidence
-            : null;
-          const imageUrl = typeof item.imageUrl === 'string' ? item.imageUrl : '';
-          const candidate = candidatesByImageUrl.get(normalizedUrlForCompare(imageUrl));
-          if (!kind || !confidence || !candidate) return [];
-          return [{
-            kind,
-            confidence,
-            evidence: typeof item.evidence === 'string' ? item.evidence : '',
-            imageUrl: candidate.imageUrl,
-            sourceUrl: candidate.sourceUrl,
-            sourceTitle: candidate.sourceTitle
-          }];
-        })
-    : [];
-  return {
-    controls,
-    warnings: Array.isArray(parsed.warnings)
-      ? parsed.warnings.filter((item): item is string => typeof item === 'string')
-      : []
-  };
-}
-
-function visualModelCandidates() {
-  return uniqueStrings([
-    config.OPENAI_VISION_MODEL,
-    'gpt-4o-mini',
-    'gpt-4.1-mini',
-    config.OPENAI_FACT_MODEL
-  ]);
-}
-
-function visualValidationErrorWarning(model: string, error: unknown) {
-  const details = safeError(error);
-  const reason = details.code ?? details.status ?? details.message ?? 'unknown';
-  return `source_visual_start_control_validation_failed:${model}:${reason}`;
-}
-
-async function validateVisualStartControlEvidence(input: {
-  result: ProductComparisonResearchResult;
-  products: Product[];
-  targetProductNames: string[];
-  userMessage: string;
-  comparisonAttributes: string[];
-  cache: SourceTextCache;
-  signal?: AbortSignal;
-}): Promise<{
-  facts: ProductComparisonResearchFact[];
-  coverage: ResearchCoverageItem[];
-  warnings: string[];
-}> {
-  if (!needsElectricStarterControlSearch(input)) return { facts: [], coverage: [], warnings: [] };
-  const candidates = await collectVisualStartControlCandidates(input);
-  if (!candidates.length) return { facts: [], coverage: [], warnings: [] };
-  const imageCandidates = await sourceVisualInputCandidates(candidates, input.signal);
-  if (!imageCandidates.length) return { facts: [], coverage: [], warnings: ['source_visual_start_control_image_fetch_failed'] };
-  const content: Array<Record<string, unknown>> = [
-    {
-      type: 'input_text',
-      text: JSON.stringify({
-        buyerQuestion: input.userMessage,
-        targetProductNames: input.targetProductNames,
-        comparisonAttributes: input.comparisonAttributes,
-        rule: [
-          'Use only the attached images and their exact source-page context.',
-          'Confirm key_start only when the image visibly shows a keyed ignition/key switch, key slot, or keyed START control.',
-          'Confirm button_start only when the image visibly shows a push-button start control.',
-          'Confirm switch_start only when the image visibly shows a non-key START/engine/starter switch.',
-          'Electric starter, battery, starter text, or a generic feature icon alone is not key/button/switch proof.',
-          'If the image is unclear, generic, or not tied to the exact model source page, return no confirmedControls.'
-        ],
-        candidates: imageCandidates.map((candidate, index) => ({
-          index: index + 1,
-          imageUrl: candidate.imageUrl,
-          sourceUrl: candidate.sourceUrl,
-          sourceTitle: candidate.sourceTitle ?? null,
-          context: candidate.context
-        }))
-      })
-    },
-    ...imageCandidates.flatMap((candidate, index) => [
-      { type: 'input_text', text: `Image ${index + 1}: ${candidate.imageUrl}` },
-      { type: 'input_image', image_url: candidate.openAiImageUrl, detail: 'auto' }
-    ])
-  ];
-  const modelErrors: string[] = [];
-  for (const model of visualModelCandidates()) {
-    try {
-      const { parsed } = await createStructuredJsonResponse({
-      request: {
-        model,
-        input: [
-          {
-            role: 'system',
-            content: [
-              'You are a strict multimodal source evidence validator for generator start controls.',
-              'You do not answer the buyer. You only classify visible controls from exact-target source images.',
-              'Never infer key/button/switch from electric starter alone.',
-              'Return JSON only.'
-            ].join('\n')
-          },
-          { role: 'user', content }
-        ],
-        max_output_tokens: Math.min(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, 1200),
-        text: visualStartControlJsonFormat()
-      },
-      stage: 'source_visual_start_control_validation',
-      signal: input.signal
-    });
-      const normalized = normalizeVisualStartControlValidation(parsed, candidates);
-      const facts = normalized.controls.map((control): ProductComparisonResearchFact => ({
-        productName: input.targetProductNames[0] ?? control.sourceTitle ?? 'exact target product',
-        attribute: visualStartControlAttribute(control.kind),
-        value: visualStartControlValue(control.kind),
-        sourceType: 'web',
-        confidence: control.confidence,
-        evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
-        sourceUrl: control.sourceUrl,
-        sourceTitle: control.sourceTitle
-      }));
-      const coverage = normalized.controls.map((control): ResearchCoverageItem => ({
-        attribute: visualStartControlAttribute(control.kind),
-        status: 'confirmed',
-        value: visualStartControlValue(control.kind),
-        evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
-        sourceUrl: control.sourceUrl,
-        sourceTitle: control.sourceTitle
-      }));
-      return {
-        facts,
-        coverage,
-        warnings: uniqueStrings([
-          ...modelErrors,
-          ...normalized.warnings,
-          normalized.controls.length ? 'source_visual_start_control_evidence_used' : 'source_visual_start_control_not_confirmed'
-        ])
-      };
-    } catch (error) {
-      modelErrors.push(visualValidationErrorWarning(model, error));
-    }
-  }
-  return {
-    facts: [],
-    coverage: [],
-    warnings: uniqueStrings(['source_visual_start_control_validation_failed', ...modelErrors])
   };
 }
 
@@ -1421,33 +1017,12 @@ async function validateSourceBackedResult(input: {
   };
 
   if (startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes)) {
-    const visualValidation = await validateVisualStartControlEvidence({
-      result: adjusted,
-      products: input.products,
-      targetProductNames: input.targetProductNames,
-      userMessage: input.userMessage,
-      comparisonAttributes: input.comparisonAttributes,
-      cache,
-      signal: input.signal
-    });
-    if (visualValidation.facts.length || visualValidation.coverage.length || visualValidation.warnings.length) {
-      adjusted = {
-        ...adjusted,
-        facts: uniqueFacts([...adjusted.facts, ...visualValidation.facts]),
-        answerGuidance: {
-          ...adjusted.answerGuidance,
-          coverage: uniqueCoverage([...adjusted.answerGuidance.coverage, ...visualValidation.coverage])
-        },
-        warnings: uniqueStrings([...adjusted.warnings, ...visualValidation.warnings])
-      };
-    }
-
     const directAnswerKinds = startClaimKindsFromText(adjusted.answerGuidance.directAnswer);
     const directAnswerClaimsInvalidFact = [...invalidKinds].some((kind) => directAnswerKinds.includes(kind));
     const confirmedKindsSet = confirmedStartKinds(adjusted);
     const hasConfirmedStarterFact = confirmedKindsSet.has('electric_start') || confirmedKindsSet.has('manual_starter');
     const lacksConfirmedPracticalControl = !resultConfirmsPracticalStartControl(adjusted);
-    const confirmedPracticalKinds = visualStartControlKinds.filter((kind) => confirmedKindsSet.has(kind));
+    const confirmedPracticalKinds = practicalStartControlKinds.filter((kind) => confirmedKindsSet.has(kind));
     const directAnswerMissingConfirmedPractical = confirmedPracticalKinds.length > 0 &&
       !confirmedPracticalKinds.some((kind) => directAnswerKinds.includes(kind));
     if (
@@ -1809,9 +1384,10 @@ export async function researchProductComparisonFacts(input: {
           'A web fact for a target model is valid only when sourceUrl, sourceTitle, or evidence names the same exact model identifier. Same brand, same family, or nearby model pages are not proof about the target model.',
           'Do not cite bakautprof.ru or provided product.sourceUrl pages as web facts for an absent exact target unless that page is specifically about the exact target model.',
           'If exact external sources state key start, ignition key, electric starter, push button, manual recoil, battery, power, engine, or other requested attributes for the target, return those facts with high or medium confidence.',
+          'A non-official listing, cached listing, marketplace page, or forum/classified page can be used as medium-confidence evidence when it names the exact target model and the exact text answers the buyer question. Do not upgrade it to high confidence unless the source is official/manufacturer/manual/distributor.',
           'For binary buyer choices such as key vs push-button, manual vs electric, gasoline vs diesel, continue exact-target web search until each choice is confirmed, contradicted, or explicitly not found in exact-target sources. Do not stop at a broad fact like "electric starter" when the buyer asked about the more specific mechanism.',
           'For key vs push-button generator questions, inspect the practical start-control mechanism. If exact-target sources show an ignition key, ignition switch, engine switch, starter switch, or a switch turned/held in START, return that as the practical control evidence. If only broad electric starter is found, mark key/button control as not_confirmed instead of saying it is not key or not button.',
-          'When electric starter is confirmed, actively look for how that electric starter is actuated: official product photos, control-panel images, manuals, image captions, ignition key/switch, starter switch, push button, or START switch. Electric starter alone is not a complete answer to key vs button.',
+          'When electric starter is confirmed, actively look for text that explains how that electric starter is actuated: official pages, manuals, distributor listings, cached listings, product descriptions, instruction text, ignition key/switch, starter switch, push button, START switch, and Russian equivalents. Electric starter alone is not a complete answer to key vs button.',
           'Fill answerGuidance.directAnswer with the shortest practical buyer-facing answer supported by exact-target evidence. Keep it to the requested technical/specification fact only: do not include catalog presence, price, availability, delivery, lead handoff, or nearby model alternatives because the orchestrator adds catalog context from structured data.',
           'The directAnswer must sound like one familiar person answering another in simple Russian: no third-person catalog/report wording, no "В каталоге БАКАУТ", no "по деталям запуска"; say uncertainty plainly, e.g. "кнопочный запуск в данных не вижу".',
           styleExamples,
@@ -1951,12 +1527,13 @@ export async function researchProductComparisonFacts(input: {
             'You are a second-pass exact-model web research module for a sales assistant.',
             'The first pass did not fully answer the exact-target question. Search again without nearby catalog product context, but keep catalogExtraction as first-party evidence if it exists.',
             'Use exactTargetSearchQueries and search public web pages, official manufacturer pages, distributor pages, PDFs, manuals, and specification sheets that mention the exact model/code.',
+            'Also search text-only marketplace listings, cached listings, forums, and classified/product-description pages. Use them as medium-confidence evidence only when they name the exact model/code and contain the exact wording that answers the buyer question.',
             'Accept a fact only when sourceUrl, sourceTitle, or evidence names the exact target model/code.',
             'If catalogExtraction confirms one option and web does not refute it with stronger exact-target evidence, preserve the catalog fact instead of downgrading it to unknown.',
             'For key vs push-button questions, only explicit ignition/start key wording supports key start. A spark plug wrench or a generic kit wrench is not ignition-key evidence.',
             'If exact-target instructions show an ignition switch, engine switch, starter switch, or a switch turned/held in START, return that practical mechanism in answerGuidance.directAnswer. Do not collapse it to only "electric starter".',
-            'If the first pass found an electric starter but did not confirm how it is actuated, perform a dedicated control search: product photos, control-panel photos/images, official image galleries, manuals, PDF diagrams, ignition key, ignition switch, starter switch, push button, START switch, and Russian equivalents.',
-            'If photos or manuals clearly show/label a key, ignition switch, push button, or START switch for the exact model, return that control as confirmed with the source. If they only show electric starter without the control, say the electric starter is confirmed but the control type is still not confirmed after exact-target source checks.',
+            'If the first pass found an electric starter but did not confirm how it is actuated, perform a dedicated text search: official pages, manuals, PDFs, distributor listings, cached listings, descriptions, ignition key, ignition switch, starter switch, push button, START switch, and Russian equivalents like "заводится от ключа", "запуск с ключа", "замок зажигания", "кнопка запуска".',
+            'If exact-target text clearly says the model starts with/from a key, uses an ignition switch, push button, or START switch, return that control as confirmed with the source. If the sources only say electric starter without the control, say the electric starter is confirmed but the control type is still not confirmed after exact-target text checks.',
             'Do not use nearby model pages as facts for the target. Return no fact if the exact target still cannot be verified.',
             'Return only JSON.'
           ].join('\n')
