@@ -85,6 +85,41 @@ export interface ProductFact {
   confidence: number;
 }
 
+export type VerifiedProductFactConfidence = 'high' | 'medium' | 'low';
+export type VerifiedProductFactSource = 'web' | 'catalog' | 'manual';
+
+export interface VerifiedProductFact {
+  id: string;
+  productId?: string | null;
+  productKey: string;
+  productName: string;
+  attribute: string;
+  value: string;
+  sourceType: VerifiedProductFactSource;
+  sourceUrl?: string | null;
+  sourceTitle?: string | null;
+  evidence?: string | null;
+  confidence: VerifiedProductFactConfidence;
+  status: 'active' | 'superseded' | 'rejected';
+  firstSeenAt: string;
+  lastVerifiedAt: string;
+  hitCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VerifiedProductFactInput {
+  productId?: string | null;
+  productName: string;
+  attribute: string;
+  value: string;
+  sourceType: VerifiedProductFactSource;
+  sourceUrl?: string | null;
+  sourceTitle?: string | null;
+  evidence?: string | null;
+  confidence: VerifiedProductFactConfidence;
+}
+
 export interface TroubleshootingCase {
   id: string;
   model: string;

@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
-import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
+import type { ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass, VerifiedProductFact } from '../shared/types.js';
 import {
   AgentIntentContractSchema,
   AnswerContractSchema,
@@ -19,7 +19,7 @@ import {
 import { deriveNeedStateSnapshotFromLedger, reduceDialogueLedger, type ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
-import { researchProductComparisonFacts } from './productComparisonResearch.js';
+import { researchProductComparisonFacts, type ProductComparisonResearchFact, type ProductComparisonResearchResult } from './productComparisonResearch.js';
 import { inferProductIntent, productMatchesIntent } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
@@ -603,6 +603,144 @@ function nearbyCatalogProductsForTargets(targetNames: string[], products: Produc
       product,
       sameBrand ? 'same_brand_same_product_class' : 'same_product_class_comparable'
     ));
+}
+
+const genericAttributeTokens = new Set([
+  'current',
+  'buyer',
+  'question',
+  'requested',
+  'attribute',
+  'technical',
+  'fact',
+  'facts',
+  'model',
+  'product'
+]);
+
+function attributeTokens(value: unknown) {
+  return uniqueStrings(modelTextTokens(value)
+    .map(compactModelText)
+    .filter((token) => token.length >= 3 && !genericAttributeTokens.has(token)));
+}
+
+function tokensOverlap(left: string[], right: string[]) {
+  return left.some((leftToken) =>
+    right.some((rightToken) => {
+      if (leftToken === rightToken) return true;
+      const smaller = leftToken.length <= rightToken.length ? leftToken : rightToken;
+      const larger = leftToken.length <= rightToken.length ? rightToken : leftToken;
+      return smaller.length >= 4 && larger.startsWith(smaller);
+    })
+  );
+}
+
+function verifiedFactMatchesAttribute(fact: VerifiedProductFact, attribute: string) {
+  const requestedTokens = attributeTokens(attribute);
+  if (!requestedTokens.length) return true;
+  const factTokens = attributeTokens([fact.attribute, fact.value].join(' '));
+  return factTokens.length > 0 && tokensOverlap(factTokens, requestedTokens);
+}
+
+function matchingVerifiedFactsForRequest(input: {
+  facts: VerifiedProductFact[];
+  targetProductNames: string[];
+  comparisonAttributes: string[];
+}) {
+  const targetScopedFacts = input.targetProductNames.length
+    ? input.facts.filter((fact) =>
+        input.targetProductNames.some((targetName) => textMatchesTargetName(fact.productName, targetName))
+      )
+    : input.facts;
+  const meaningfulAttributes = input.comparisonAttributes
+    .filter((attribute) => attributeTokens(attribute).length > 0);
+  if (!meaningfulAttributes.length) return targetScopedFacts;
+  return targetScopedFacts.filter((fact) =>
+    meaningfulAttributes.some((attribute) => verifiedFactMatchesAttribute(fact, attribute))
+  );
+}
+
+function verifiedFactsCoverRequest(input: {
+  facts: VerifiedProductFact[];
+  comparisonAttributes: string[];
+}) {
+  if (!input.facts.length) return false;
+  const meaningfulAttributes = input.comparisonAttributes
+    .filter((attribute) => attributeTokens(attribute).length > 0);
+  if (!meaningfulAttributes.length) return true;
+  return meaningfulAttributes.every((attribute) =>
+    input.facts.some((fact) => verifiedFactMatchesAttribute(fact, attribute))
+  );
+}
+
+function verifiedFactsDirectAnswer(facts: VerifiedProductFact[]) {
+  const productName = facts[0]?.productName?.trim();
+  const details = facts
+    .slice(0, 5)
+    .map((fact) => `${fact.attribute}: ${fact.value}`)
+    .join('; ');
+  return details ? `${productName ? `${productName}: ` : ''}${details}.` : '';
+}
+
+function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductComparisonResearchResult {
+  const researchFacts: ProductComparisonResearchFact[] = facts.map((fact) => ({
+    productName: fact.productName,
+    attribute: fact.attribute,
+    value: fact.value,
+    sourceType: 'web',
+    confidence: fact.confidence,
+    evidence: fact.evidence ?? [fact.sourceTitle, fact.sourceUrl].filter(Boolean).join(' '),
+    sourceUrl: fact.sourceUrl ?? undefined,
+    sourceTitle: fact.sourceTitle ?? undefined
+  }));
+  return {
+    usedWebSearch: false,
+    facts: researchFacts,
+    conflicts: [],
+    answerGuidance: {
+      directAnswer: verifiedFactsDirectAnswer(facts),
+      completeness: 'answered',
+      coverage: facts.map((fact) => ({
+        attribute: fact.attribute,
+        status: 'confirmed',
+        value: fact.value,
+        evidence: fact.evidence ?? [fact.sourceTitle, fact.sourceUrl].filter(Boolean).join(' '),
+        sourceUrl: fact.sourceUrl ?? undefined,
+        sourceTitle: fact.sourceTitle ?? undefined
+      }))
+    },
+    summaryForAnswer: verifiedFactsDirectAnswer(facts),
+    warnings: ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory']
+  };
+}
+
+function researchFactConfidenceNumber(confidence: ProductComparisonResearchFact['confidence']) {
+  if (confidence === 'high') return 0.9;
+  if (confidence === 'medium') return 0.8;
+  return 0.55;
+}
+
+function productForResearchFact(input: {
+  fact: ProductComparisonResearchFact;
+  targetProductNames: string[];
+  products: Product[];
+}) {
+  return input.products.find((product) => textMatchesTargetName(product.name, input.fact.productName))
+    ?? input.products.find((product) =>
+      input.targetProductNames.some((targetName) => productMatchesTargetName(product, targetName))
+    )
+    ?? null;
+}
+
+function researchFactProductName(input: {
+  fact: ProductComparisonResearchFact;
+  targetProductNames: string[];
+  product?: Product | null;
+}) {
+  const factName = input.fact.productName.trim();
+  if (factName) return factName;
+  const targetName = input.targetProductNames.find((name) => name.trim().length > 0);
+  return targetName ?? input.product?.name ?? '';
 }
 
 function generatorLoadRequirementKw(toolResults: ToolResult[]) {
@@ -1563,6 +1701,129 @@ export class AgentManagerOrchestrator {
     });
   }
 
+  private verifiedFactRepository() {
+    const repo = this.products as ProductRepository & {
+      searchVerifiedProductFacts?: ProductRepository['searchVerifiedProductFacts'];
+      markVerifiedProductFactsUsed?: ProductRepository['markVerifiedProductFactsUsed'];
+      upsertVerifiedProductFact?: ProductRepository['upsertVerifiedProductFact'];
+      upsertVerifiedWebFact?: ProductRepository['upsertVerifiedWebFact'];
+    };
+    return repo;
+  }
+
+  private async researchFromVerifiedFactMemory(input: {
+    sessionId: string;
+    turnId: string;
+    targetProductNames: string[];
+    comparisonAttributes: string[];
+    selectedProducts: Product[];
+  }) {
+    const repo = this.verifiedFactRepository();
+    if (typeof repo.searchVerifiedProductFacts !== 'function') return null;
+    const exactProductIds = input.targetProductNames.length
+      ? input.selectedProducts
+          .filter((product) => input.targetProductNames.some((targetName) => productMatchesTargetName(product, targetName)))
+          .map((product) => product.id)
+      : input.selectedProducts.map((product) => product.id);
+    const productNames = input.targetProductNames.length
+      ? input.targetProductNames
+      : input.selectedProducts.map((product) => product.name);
+    const facts = await repo.searchVerifiedProductFacts({
+      productNames,
+      productIds: exactProductIds,
+      sourceTypes: ['web'],
+      limit: 32
+    });
+    const matchingFacts = matchingVerifiedFactsForRequest({
+      facts,
+      targetProductNames: input.targetProductNames,
+      comparisonAttributes: input.comparisonAttributes
+    });
+    const requiredProductNames = input.targetProductNames.length
+      ? input.targetProductNames
+      : input.selectedProducts.length > 1
+        ? input.selectedProducts.map((product) => product.name)
+        : [];
+    const coversRequiredProducts = requiredProductNames.length
+      ? requiredProductNames.every((productName) =>
+          verifiedFactsCoverRequest({
+            facts: matchingFacts.filter((fact) => textMatchesTargetName(fact.productName, productName)),
+            comparisonAttributes: input.comparisonAttributes
+          })
+        )
+      : true;
+    if (!coversRequiredProducts) return null;
+    if (!verifiedFactsCoverRequest({ facts: matchingFacts, comparisonAttributes: input.comparisonAttributes })) return null;
+    if (typeof repo.markVerifiedProductFactsUsed === 'function') {
+      await repo.markVerifiedProductFactsUsed(matchingFacts.map((fact) => fact.id))
+        .catch((error) => console.warn('Verified product fact usage write failed', safeError(error)));
+    }
+    await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_used', {
+      factIds: matchingFacts.map((fact) => fact.id),
+      productNames: uniqueStrings(matchingFacts.map((fact) => fact.productName)),
+      attributes: uniqueStrings(matchingFacts.map((fact) => fact.attribute))
+    });
+    return verifiedFactsResearchResult(matchingFacts);
+  }
+
+  private async persistVerifiedResearchFacts(input: {
+    sessionId: string;
+    turnId: string;
+    research: ProductComparisonResearchResult;
+    targetProductNames: string[];
+    selectedProducts: Product[];
+  }) {
+    const repo = this.verifiedFactRepository();
+    if (typeof repo.upsertVerifiedProductFact !== 'function') return;
+    const targetNames = input.targetProductNames.length
+      ? input.targetProductNames
+      : input.selectedProducts.map((product) => product.name);
+    let savedCount = 0;
+    for (const fact of input.research.facts) {
+      if (fact.sourceType !== 'web') continue;
+      if (fact.confidence !== 'high' && fact.confidence !== 'medium') continue;
+      if (targetNames.length && !targetNames.some((targetName) => textMatchesTargetName(fact.productName, targetName))) continue;
+      const sourceUrl = typeof fact.sourceUrl === 'string' && fact.sourceUrl.trim() ? fact.sourceUrl.trim() : null;
+      const sourceTitle = typeof fact.sourceTitle === 'string' && fact.sourceTitle.trim() ? fact.sourceTitle.trim() : null;
+      const evidence = fact.evidence.trim();
+      if (!evidence || (!sourceUrl && !sourceTitle)) continue;
+      const product = productForResearchFact({
+        fact,
+        targetProductNames: input.targetProductNames,
+        products: input.selectedProducts
+      });
+      const productName = researchFactProductName({ fact, targetProductNames: input.targetProductNames, product });
+      if (!productName) continue;
+      await repo.upsertVerifiedProductFact({
+        productId: product?.id ?? null,
+        productName,
+        attribute: fact.attribute,
+        value: fact.value,
+        sourceType: 'web',
+        sourceUrl,
+        sourceTitle,
+        evidence,
+        confidence: fact.confidence
+      });
+      savedCount += 1;
+      if (product?.id && typeof repo.upsertVerifiedWebFact === 'function') {
+        await repo.upsertVerifiedWebFact({
+          productId: product.id,
+          attribute: fact.attribute,
+          value: fact.value,
+          sourceUrl,
+          confidence: researchFactConfidenceNumber(fact.confidence)
+        }).catch((error) => console.warn('Product web fact mirror write failed', safeError(error)));
+      }
+    }
+    if (savedCount > 0) {
+      await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_saved', {
+        savedCount,
+        targetProductNames: input.targetProductNames
+      });
+    }
+  }
+
   private async executeTurn(input: AgentManagerGenerateInput & {
     session: ConversationSession;
     turnId: string;
@@ -2050,13 +2311,29 @@ export class AgentManagerOrchestrator {
             found.products.forEach((product) => productsById.set(product.id, product));
           }
           const selectedProducts = [...productsById.values()].slice(0, 4);
-          const research = await researchProductComparisonFacts({
-            userMessage: input.userMessage,
-            products: selectedProducts,
+          let research = await this.researchFromVerifiedFactMemory({
+            sessionId: input.session.id,
+            turnId: input.turnId,
             targetProductNames,
             comparisonAttributes,
-            signal: input.signal
+            selectedProducts
           });
+          if (!research) {
+            research = await researchProductComparisonFacts({
+              userMessage: input.userMessage,
+              products: selectedProducts,
+              targetProductNames,
+              comparisonAttributes,
+              signal: input.signal
+            });
+            await this.persistVerifiedResearchFacts({
+              sessionId: input.session.id,
+              turnId: input.turnId,
+              research,
+              targetProductNames,
+              selectedProducts
+            }).catch((error) => console.warn('Verified product fact memory write failed', safeError(error)));
+          }
           const catalogPresence = catalogPresenceForTargets(targetProductNames, selectedProducts);
           const nearbyCatalogProducts = nearbyCatalogProductsForTargets(targetProductNames, selectedProducts);
           for (const conflict of research.conflicts) {

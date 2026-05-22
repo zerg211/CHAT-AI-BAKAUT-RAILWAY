@@ -18,7 +18,10 @@ import type {
   ProductRetrievalSource,
   ProductFact,
   TroubleshootingCase,
-  TroubleshootingCaseInput
+  TroubleshootingCaseInput,
+  VerifiedProductFact,
+  VerifiedProductFactConfidence,
+  VerifiedProductFactInput
 } from '../shared/types.js';
 import { emptyNeedState } from '../ai/needState.js';
 
@@ -51,6 +54,59 @@ export interface EmbeddingBackfillCatalogPage {
 
 function jsonbParam(value: unknown) {
   return value === undefined || value === null ? null : JSON.stringify(value);
+}
+
+function charCode(value: string) {
+  return value.codePointAt(0) ?? 0;
+}
+
+function isAsciiDigit(value: string) {
+  const code = charCode(value);
+  return code >= 48 && code <= 57;
+}
+
+function isAsciiLetter(value: string) {
+  const code = charCode(value);
+  return code >= 97 && code <= 122;
+}
+
+function isCyrillicLetter(value: string) {
+  const code = charCode(value);
+  return (code >= 0x0430 && code <= 0x044f) || code === 0x0451;
+}
+
+function isProductKeyChar(value: string) {
+  return isAsciiDigit(value) || isAsciiLetter(value) || isCyrillicLetter(value);
+}
+
+function tokenHasDigit(value: string) {
+  for (const char of value) {
+    if (isAsciiDigit(char)) return true;
+  }
+  return false;
+}
+
+function tokenHasLetter(value: string) {
+  for (const char of value) {
+    if (isAsciiLetter(char) || isCyrillicLetter(char)) return true;
+  }
+  return false;
+}
+
+function normalizeVerifiedProductKey(value: unknown) {
+  const tokens: string[] = [];
+  let current = '';
+  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
+    if (isProductKeyChar(char)) {
+      current += char;
+    } else if (current) {
+      tokens.push(current);
+      current = '';
+    }
+  }
+  if (current) tokens.push(current);
+  const identifierTokens = tokens.filter((token) => token.length >= 4 && tokenHasDigit(token) && tokenHasLetter(token));
+  return (identifierTokens.length ? identifierTokens : tokens).join(' ').trim();
 }
 
 function mapNeedState(value: unknown): CustomerNeedState {
@@ -228,6 +284,28 @@ function mapCatalogPage(row: QueryResultRow): CatalogPage {
     content: row.content,
     summary: row.summary,
     raw: row.raw ?? {},
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  };
+}
+
+function mapVerifiedProductFact(row: QueryResultRow): VerifiedProductFact {
+  return {
+    id: row.id,
+    productId: row.product_id ?? null,
+    productKey: row.product_key,
+    productName: row.product_name,
+    attribute: row.attribute,
+    value: row.value,
+    sourceType: row.source_type,
+    sourceUrl: row.source_url ?? null,
+    sourceTitle: row.source_title ?? null,
+    evidence: row.evidence ?? null,
+    confidence: row.confidence as VerifiedProductFactConfidence,
+    status: row.status,
+    firstSeenAt: row.first_seen_at.toISOString(),
+    lastVerifiedAt: row.last_verified_at.toISOString(),
+    hitCount: Number(row.hit_count ?? 0),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
@@ -1388,6 +1466,111 @@ export class ProductRepository {
       [vector, limit, config.OPENAI_EMBEDDING_MODEL]
     );
     return result.rows.map(mapCatalogPage);
+  }
+
+  async upsertVerifiedProductFact(input: VerifiedProductFactInput) {
+    const productName = input.productName.trim();
+    const productKey = normalizeVerifiedProductKey(productName);
+    const attribute = input.attribute.trim();
+    const value = input.value.trim();
+    if (!productName || !productKey || !attribute || !value) return null;
+    const result = await this.db.query(
+      `WITH inserted AS (
+         INSERT INTO verified_product_facts(
+           product_id, product_key, product_name, attribute, value, source_type,
+           source_url, source_title, evidence, confidence
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT DO NOTHING
+         RETURNING *
+       ),
+       updated AS (
+         UPDATE verified_product_facts
+         SET
+           product_id = coalesce($1, verified_product_facts.product_id),
+           product_name = $3,
+           source_title = coalesce($8, verified_product_facts.source_title),
+           evidence = coalesce($9, verified_product_facts.evidence),
+           confidence = CASE
+             WHEN verified_product_facts.confidence = 'high' THEN verified_product_facts.confidence
+             WHEN $10 = 'high' THEN 'high'
+             WHEN verified_product_facts.confidence = 'medium' THEN verified_product_facts.confidence
+             WHEN $10 = 'medium' THEN 'medium'
+             ELSE verified_product_facts.confidence
+           END,
+           last_verified_at = now(),
+           updated_at = now()
+         WHERE NOT EXISTS (SELECT 1 FROM inserted)
+           AND product_key = $2
+           AND attribute = $4
+           AND value = $5
+           AND source_type = $6
+           AND coalesce(source_url, '') = coalesce($7, '')
+           AND status = 'active'
+         RETURNING *
+       )
+       SELECT * FROM inserted
+       UNION ALL
+       SELECT * FROM updated
+       LIMIT 1`,
+      [
+        input.productId ?? null,
+        productKey,
+        productName,
+        attribute,
+        value,
+        input.sourceType,
+        input.sourceUrl ?? null,
+        input.sourceTitle ?? null,
+        input.evidence ?? null,
+        input.confidence
+      ]
+    );
+    return result.rows[0] ? mapVerifiedProductFact(result.rows[0]) : null;
+  }
+
+  async searchVerifiedProductFacts(input: {
+    productNames?: string[];
+    productIds?: string[];
+    sourceTypes?: Array<'web' | 'catalog' | 'manual'>;
+    limit?: number;
+  }) {
+    const productKeys = [...new Set((input.productNames ?? [])
+      .map((name) => normalizeVerifiedProductKey(name))
+      .filter(Boolean))];
+    const productIds = [...new Set((input.productIds ?? []).filter(Boolean))];
+    if (!productKeys.length && !productIds.length) return [];
+    const sourceTypes = input.sourceTypes?.length ? input.sourceTypes : ['web'];
+    const result = await this.db.query(
+      `SELECT *
+       FROM verified_product_facts
+       WHERE status = 'active'
+         AND source_type = ANY($3::text[])
+         AND (
+           ($1::text[] <> '{}'::text[] AND product_key = ANY($1::text[]))
+           OR ($2::uuid[] <> '{}'::uuid[] AND product_id = ANY($2::uuid[]))
+         )
+       ORDER BY
+         CASE confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
+         last_verified_at DESC,
+         updated_at DESC
+       LIMIT $4`,
+      [productKeys, productIds, sourceTypes, input.limit ?? 24]
+    );
+    return result.rows.map(mapVerifiedProductFact);
+  }
+
+  async markVerifiedProductFactsUsed(ids: string[]) {
+    const factIds = [...new Set(ids.filter(Boolean))];
+    if (!factIds.length) return 0;
+    const result = await this.db.query(
+      `UPDATE verified_product_facts
+       SET hit_count = hit_count + 1,
+           updated_at = now()
+       WHERE id = ANY($1::uuid[])`,
+      [factIds]
+    );
+    return result.rowCount ?? 0;
   }
 
   async upsertVerifiedWebFact(input: {

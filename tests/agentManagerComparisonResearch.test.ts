@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emptyNeedState } from '../src/ai/needState.js';
 import type { AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
-import type { ConversationSession, ConversationTurn, Message, Product } from '../src/shared/types.js';
+import type { ConversationSession, ConversationTurn, Message, Product, VerifiedProductFact, VerifiedProductFactInput } from '../src/shared/types.js';
 
 const researchProductComparisonFacts = vi.hoisted(() => vi.fn());
 
@@ -100,11 +100,51 @@ class FakeConversations {
 
 class FakeProducts {
   recordedIssues: unknown[] = [];
+  verifiedFacts: VerifiedProductFact[] = [];
+  savedVerifiedFacts: VerifiedProductFactInput[] = [];
+  mirroredWebFacts: unknown[] = [];
+  usedVerifiedFactIds: string[] = [];
   async searchProducts() {
     return [
       product('sumec', 'SUMEC FIRMAN 6 kW', { noiseDb: '74 dB', nominalPowerKw: 5.5 }),
       product('bison', 'BISON 6 kW', { nominalPowerKw: 5.5 })
     ];
+  }
+  async searchVerifiedProductFacts() {
+    return this.verifiedFacts;
+  }
+  async markVerifiedProductFactsUsed(ids: string[]) {
+    this.usedVerifiedFactIds.push(...ids);
+    return ids.length;
+  }
+  async upsertVerifiedProductFact(input: VerifiedProductFactInput) {
+    this.savedVerifiedFacts.push(input);
+    const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
+    const saved: VerifiedProductFact = {
+      id: `verified-${this.savedVerifiedFacts.length}`,
+      productId: input.productId ?? null,
+      productKey: input.productName.toLocaleLowerCase('ru-RU'),
+      productName: input.productName,
+      attribute: input.attribute,
+      value: input.value,
+      sourceType: input.sourceType,
+      sourceUrl: input.sourceUrl ?? null,
+      sourceTitle: input.sourceTitle ?? null,
+      evidence: input.evidence ?? null,
+      confidence: input.confidence,
+      status: 'active',
+      firstSeenAt: now,
+      lastVerifiedAt: now,
+      hitCount: 0,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.verifiedFacts.push(saved);
+    return saved;
+  }
+  async upsertVerifiedWebFact(input: unknown) {
+    this.mirroredWebFacts.push(input);
+    return input;
   }
   async recordDataQualityIssue(input: unknown) {
     this.recordedIssues.push(input);
@@ -1201,6 +1241,238 @@ describe('AgentManager comparison research flow', () => {
         expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
       ])
     });
+  });
+
+  it('saves high-confidence exact web facts into reusable product memory', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [
+        {
+          productName: 'SUNREKA G7000iS',
+          attribute: 'button start',
+          value: 'has START button start',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'official source says the model starts by START button',
+          sourceUrl: 'https://sunreka.example/g7000is',
+          sourceTitle: 'SUNREKA G7000iS specification'
+        },
+        {
+          productName: 'SUNREKA G7000iS',
+          attribute: 'recoil start',
+          value: 'manual recoil starter is also available',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'official source lists manual starter',
+          sourceUrl: 'https://sunreka.example/g7000is',
+          sourceTitle: 'SUNREKA G7000iS specification'
+        }
+      ],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Starts by START button; manual recoil start is also available.',
+        completeness: 'answered',
+        coverage: []
+      },
+      summaryForAnswer: 'Button and recoil start are confirmed.',
+      warnings: []
+    });
+
+    class PresentCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('g7000is', 'SUNREKA G7000iS generator 6 kW', { starter: 'manual starter' })
+        ];
+      }
+    }
+
+    const fakeProducts = new PresentCatalogProducts();
+    const savingModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks if G7000iS starts by button or cord',
+          dialogueUnderstanding: 'exact technical fact for a named model',
+          nextStepRationale: 'verify exact model start controls',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:g7000is',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'SUNREKA G7000iS button start recoil start',
+              semanticQuery: 'SUNREKA G7000iS START button and recoil starter',
+              productNames: ['SUNREKA G7000iS'],
+              comparisonAttributes: ['button start', 'recoil start']
+            },
+            rationale: 'exact model fact must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Starts by START button; manual recoil start is also available.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:g7000is'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('SUNREKA G7000iS starts by cord or button?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, savingModel);
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'SUNREKA G7000iS starts by cord or button?'
+    });
+
+    expect(fakeProducts.savedVerifiedFacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        productId: 'g7000is',
+        productName: 'SUNREKA G7000iS',
+        attribute: 'button start',
+        value: 'has START button start',
+        sourceType: 'web',
+        sourceUrl: 'https://sunreka.example/g7000is',
+        sourceTitle: 'SUNREKA G7000iS specification',
+        evidence: 'official source says the model starts by START button',
+        confidence: 'high'
+      }),
+      expect.objectContaining({
+        productId: 'g7000is',
+        productName: 'SUNREKA G7000iS',
+        attribute: 'recoil start',
+        value: 'manual recoil starter is also available'
+      })
+    ]));
+    expect(fakeProducts.mirroredWebFacts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        productId: 'g7000is',
+        attribute: 'button start',
+        value: 'has START button start',
+        sourceUrl: 'https://sunreka.example/g7000is',
+        confidence: 0.9
+      })
+    ]));
+  });
+
+  it('uses reusable exact web facts before spending another web research call', async () => {
+    researchProductComparisonFacts.mockClear();
+    const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
+    class MemoryProducts extends FakeProducts {
+      constructor() {
+        super();
+        this.verifiedFacts = [
+          {
+            id: 'fact-button',
+            productId: 'g7000is',
+            productKey: 'sunreka g7000is',
+            productName: 'SUNREKA G7000iS',
+            attribute: 'button start',
+            value: 'has START button start',
+            sourceType: 'web',
+            sourceUrl: 'https://sunreka.example/g7000is',
+            sourceTitle: 'SUNREKA G7000iS specification',
+            evidence: 'official source says the model starts by START button',
+            confidence: 'high',
+            status: 'active',
+            firstSeenAt: now,
+            lastVerifiedAt: now,
+            hitCount: 0,
+            createdAt: now,
+            updatedAt: now
+          },
+          {
+            id: 'fact-recoil',
+            productId: 'g7000is',
+            productKey: 'sunreka g7000is',
+            productName: 'SUNREKA G7000iS',
+            attribute: 'recoil start',
+            value: 'manual recoil starter is also available',
+            sourceType: 'web',
+            sourceUrl: 'https://sunreka.example/g7000is',
+            sourceTitle: 'SUNREKA G7000iS specification',
+            evidence: 'official source lists manual starter',
+            confidence: 'high',
+            status: 'active',
+            firstSeenAt: now,
+            lastVerifiedAt: now,
+            hitCount: 0,
+            createdAt: now,
+            updatedAt: now
+          }
+        ];
+      }
+      async searchProducts() {
+        return [
+          product('g7000is', 'SUNREKA G7000iS generator 6 kW', { starter: 'manual starter' })
+        ];
+      }
+    }
+
+    const fakeProducts = new MemoryProducts();
+    const memoryModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks if G7000iS starts by button or cord',
+          dialogueUnderstanding: 'exact technical fact for a named model',
+          nextStepRationale: 'use verified fact memory before external search',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:g7000is',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'SUNREKA G7000iS button start recoil start',
+              semanticQuery: 'SUNREKA G7000iS START button and recoil starter',
+              productNames: ['SUNREKA G7000iS'],
+              comparisonAttributes: ['button start', 'recoil start']
+            },
+            rationale: 'exact model fact must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.toolResults).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            requestId: 'web:g7000is',
+            status: 'ok',
+            warnings: expect.arrayContaining(['verified_product_fact_memory_used'])
+          })
+        ]));
+        return {
+          answerText: 'Starts by START button; manual recoil start is also available.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:g7000is'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('SUNREKA G7000iS starts by cord or button?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, memoryModel);
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'SUNREKA G7000iS starts by cord or button?'
+    });
+
+    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+    expect(fakeProducts.usedVerifiedFactIds).toEqual(expect.arrayContaining(['fact-button', 'fact-recoil']));
   });
 
   it('repairs follow-up plans that reuse facts from a different exact model', async () => {
