@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1689,
+  "count": 1687,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -3884,20 +3884,6 @@
       "file": "src/ai/dialogueLedgerReducer.ts",
       "kind": "regular_expression_literal",
       "hash": "b5d8252f06688eba",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/embeddingUtils.ts|replace_regex_argument|736423a2bf20bfa0|1",
-      "file": "src/ai/embeddingUtils.ts",
-      "kind": "replace_regex_argument",
-      "hash": "736423a2bf20bfa0",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/embeddingUtils.ts|regular_expression_literal|d0f8f9fef60854dc|1",
-      "file": "src/ai/embeddingUtils.ts",
-      "kind": "regular_expression_literal",
-      "hash": "d0f8f9fef60854dc",
       "occurrence": 1
     },
     {
