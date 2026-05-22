@@ -1445,7 +1445,9 @@ describe('AgentManager comparison research flow', () => {
       async composeAnswer(input) {
         const memoryResult = input.toolResults.find((result) => result.requestId === 'web:g7000is');
         expect((memoryResult?.payload as { answerGuidance?: { directAnswer?: string } }).answerGuidance?.directAnswer)
-          .toBe('SUNREKA G7000iS: button start: has START button start; recoil start: manual recoil starter is also available.');
+          .toBe('');
+        expect(input.requiredResponseClauses?.map((clause) => clause.code))
+          .toContain('answer_verified_fact_memory_naturally');
         expect(input.toolResults).toEqual(expect.arrayContaining([
           expect.objectContaining({
             requestId: 'web:g7000is',

@@ -673,15 +673,6 @@ function verifiedFactsCoverRequest(input: {
   );
 }
 
-function verifiedFactsDirectAnswer(facts: VerifiedProductFact[]) {
-  const productName = facts[0]?.productName?.trim();
-  const details = facts
-    .slice(0, 5)
-    .map((fact) => `${fact.attribute}: ${fact.value}`)
-    .join('; ');
-  return details ? `${productName ? `${productName}: ` : ''}${details}.` : '';
-}
-
 function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductComparisonResearchResult {
   const researchFacts: ProductComparisonResearchFact[] = facts.map((fact) => ({
     productName: fact.productName,
@@ -698,7 +689,7 @@ function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductCompa
     facts: researchFacts,
     conflicts: [],
     answerGuidance: {
-      directAnswer: verifiedFactsDirectAnswer(facts),
+      directAnswer: '',
       completeness: 'answered',
       coverage: facts.map((fact) => ({
         attribute: fact.attribute,
@@ -709,7 +700,7 @@ function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductCompa
         sourceTitle: fact.sourceTitle ?? undefined
       }))
     },
-    summaryForAnswer: verifiedFactsDirectAnswer(facts),
+    summaryForAnswer: 'Verified local product fact memory found source-backed exact-model facts. Use payload.facts and answer in simple buyer-facing words without copying raw attribute labels.',
     warnings: ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory']
   };
 }
@@ -828,6 +819,13 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
         code: 'answer_checked_research_guidance',
         sourceRequestId: result.requestId,
         instruction: `Use this checked research guidance to answer the buyer's direct question in simple words, without turning unverified choices into false negatives: ${directAnswer}`
+      });
+    }
+    if (result.warnings.includes('verified_product_fact_memory_used')) {
+      clauses.push({
+        code: 'answer_verified_fact_memory_naturally',
+        sourceRequestId: result.requestId,
+        instruction: 'This tool result came from verified local product fact memory. Use payload.facts and answer the buyer in normal plain language. Do not copy internal attribute/value labels or answer as a raw technical list.'
       });
     }
     const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
