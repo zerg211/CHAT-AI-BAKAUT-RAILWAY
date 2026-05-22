@@ -18,7 +18,8 @@
 
 ## Production Verification
 
-- Pending commit, push, Railway marker, and production Promptfoo rerun.
+- `8aae679` reached Railway marker.
+- `production-evals-after-8aae679.json`: 6/6, deterministic average 0.993, LLM average 0.9616666666666666. Both gates are above 90%.
 
 ## Acceptance Criteria Status
 
@@ -27,4 +28,4 @@
 - AC3: PASS.
 - AC4: PASS.
 - AC5: PASS.
-- AC6: PENDING.
+- AC6: PASS.
