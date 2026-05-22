@@ -144,7 +144,20 @@ function startControlQuestionRelevant(userMessage: string, comparisonAttributes:
   return textIncludesAny([userMessage, ...comparisonAttributes].join(' '), startControlNeedles);
 }
 
-const electricStarterNeedles = ['electric starter', 'electric start', 'electrostarter', 'электростартер', 'электро стартер', 'электропуск'];
+const electricStarterNeedles = [
+  'electric starter',
+  'electric start',
+  'electrostarter',
+  'manual/electric',
+  'manual / electric',
+  'электростартер',
+  'электро стартер',
+  'электропуск',
+  'электрический стартер',
+  'электрический запуск',
+  'ручной/электро',
+  'ручной / электро'
+];
 const practicalStartControlNeedles = [
   'key start',
   'ignition key',
@@ -952,10 +965,13 @@ async function validateSourceBackedResult(input: {
     warnings: uniqueStrings(warnings)
   };
 
-  if (invalidKinds.size > 0 && startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes)) {
+  if (startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes)) {
     const directAnswerKinds = startClaimKindsFromText(adjusted.answerGuidance.directAnswer);
     const directAnswerClaimsInvalidFact = [...invalidKinds].some((kind) => directAnswerKinds.includes(kind));
-    if (directAnswerClaimsInvalidFact || !resultConfirmsPracticalStartControl(adjusted)) {
+    const confirmedKindsSet = confirmedStartKinds(adjusted);
+    const hasConfirmedStarterFact = confirmedKindsSet.has('electric_start') || confirmedKindsSet.has('manual_starter');
+    const lacksConfirmedPracticalControl = !resultConfirmsPracticalStartControl(adjusted);
+    if (directAnswerClaimsInvalidFact || (lacksConfirmedPracticalControl && hasConfirmedStarterFact)) {
       adjusted.answerGuidance = {
         ...adjusted.answerGuidance,
         directAnswer: sourceBackedStartDirectAnswer(adjusted),

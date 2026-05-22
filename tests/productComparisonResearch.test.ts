@@ -458,4 +458,79 @@ describe('product comparison research', () => {
     expect(actual.answerGuidance.directAnswer).toContain('starts with a key');
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:key_start');
   });
+
+  it('treats manual/electric source wording as electric start evidence without inventing the control', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E. Способ запуска: Ручной/электро.'));
+    createStructuredJsonResponse
+      .mockResolvedValueOnce({
+        parsed: result({
+          usedWebSearch: true,
+          facts: [{
+            productName: 'FIRMAN RD4910E',
+            attribute: 'starting method',
+            value: 'ручной / электрический стартер',
+            sourceType: 'web',
+            confidence: 'high',
+            evidence: 'source says Способ запуска: Ручной/электро',
+            sourceUrl: 'https://example.test/firman-rd4910e-manual-electric',
+            sourceTitle: 'FIRMAN RD4910E manual'
+          }],
+          answerGuidance: {
+            directAnswer: 'Ручной запуск есть. Электрозапуск и его управление источники не подтвердили.',
+            completeness: 'partially_answered',
+            coverage: [
+              {
+                attribute: 'starting method',
+                status: 'confirmed',
+                value: 'ручной / электрический стартер',
+                evidence: 'source says Способ запуска: Ручной/электро',
+                sourceUrl: 'https://example.test/firman-rd4910e-manual-electric',
+                sourceTitle: 'FIRMAN RD4910E manual'
+              },
+              {
+                attribute: 'key start',
+                status: 'not_confirmed',
+                value: '',
+                evidence: 'source does not identify key actuation',
+                sourceUrl: null,
+                sourceTitle: null
+              },
+              {
+                attribute: 'button start',
+                status: 'not_confirmed',
+                value: '',
+                evidence: 'source does not identify button actuation',
+                sourceUrl: null,
+                sourceTitle: null
+              }
+            ]
+          },
+          summaryForAnswer: 'Manual/electric start is supported, control is unresolved.'
+        })
+      })
+      .mockResolvedValueOnce({
+        parsed: result({
+          usedWebSearch: true,
+          answerGuidance: {
+            directAnswer: '',
+            completeness: 'not_answered',
+            coverage: []
+          },
+          warnings: ['exact_target_external_fact_not_found']
+        })
+      });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Does Firman RD4910E start with a key or a button?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['key start', 'push-button start']
+    });
+
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
+    expect(actual.answerGuidance.directAnswer).toContain('Электростартер есть');
+    expect(actual.answerGuidance.directAnswer).toContain('ручной запуск тоже есть');
+    expect(actual.answerGuidance.directAnswer).toContain('источники не подтвердили');
+    expect(actual.warnings).not.toContain('source_evidence_validation_failed:electric_start');
+  });
 });
