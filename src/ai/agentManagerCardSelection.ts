@@ -499,6 +499,13 @@ function plateWeightFitScore(product: Product, range: { min: number; max: number
   return score;
 }
 
+function productsWithinPlateWeightRange(products: Product[], range: { min: number; max: number }) {
+  return products.filter((product) => {
+    const weight = extractWeightKg(product);
+    return weight !== undefined && weight >= range.min && weight <= range.max;
+  });
+}
+
 export function rankCatalogProductsByNumericFit(input: {
   products: Product[];
   intent: ProductSelectionClass;
@@ -531,6 +538,11 @@ export function rankCatalogProductsByNumericFit(input: {
     .map((item) => item.product);
 }
 
+function sameIntentProducts(products: Product[], cardIntent: ProductSelectionClass) {
+  if (cardIntent === 'unknown') return products.filter((product) => isCoreEquipment(product));
+  return products.filter((product) => productMatchesIntent(product, cardIntent));
+}
+
 export function selectProductsForVisibleCards(input: {
   products: Product[];
   userMessage: string;
@@ -558,6 +570,7 @@ export function selectProductsForVisibleCards(input: {
   const mentionedMatchingIntent = cardIntent === 'unknown'
     ? mentioned
     : mentioned.filter((product) => productMatchesIntent(product, cardIntent));
+  const sameIntentPool = sameIntentProducts(unique, cardIntent);
 
   let selected: Product[];
   if (mentionedMatchingIntent.length) {
@@ -576,10 +589,8 @@ export function selectProductsForVisibleCards(input: {
 
   const budgetMax = budgetMaxFromNeedState(input.needState);
   let budgetFilteredCount = 0;
+  let budgetNoFit = false;
   if (budgetMax !== undefined && selected.length) {
-    const sameIntentBudgetPool = cardIntent === 'unknown'
-      ? unique.filter((product) => isCoreEquipment(product))
-      : unique.filter((product) => productMatchesIntent(product, cardIntent));
     const withinBudget = selected.filter((product) =>
       typeof product.price === 'number' &&
       Number.isFinite(product.price) &&
@@ -589,7 +600,7 @@ export function selectProductsForVisibleCards(input: {
       budgetFilteredCount = selected.length - withinBudget.length;
       selected = withinBudget;
     } else {
-      const fallbackWithinBudget = sameIntentBudgetPool.filter((product) =>
+      const fallbackWithinBudget = sameIntentPool.filter((product) =>
         typeof product.price === 'number' &&
         Number.isFinite(product.price) &&
         product.price <= budgetMax
@@ -597,6 +608,36 @@ export function selectProductsForVisibleCards(input: {
       if (fallbackWithinBudget.length) {
         budgetFilteredCount = selected.length;
         selected = fallbackWithinBudget;
+      } else if (isGeneratorProductClass(cardIntent)) {
+        budgetFilteredCount = selected.length;
+        budgetNoFit = true;
+        selected = [];
+      }
+    }
+  }
+
+  let numericFitFilteredCount = 0;
+  const plateWeightRange = cardIntent === 'plate'
+    ? requestedPlateWeightRangeKg({
+        userMessage: input.userMessage,
+        query: toolRequestSemanticText(input.intent),
+        semanticContext: [
+          input.intent.userMessageSummary,
+          input.intent.dialogueUnderstanding,
+          input.intent.nextStepRationale
+        ].filter(Boolean).join('\n')
+      })
+    : undefined;
+  if (plateWeightRange && selected.length) {
+    const selectedWithinRange = productsWithinPlateWeightRange(selected, plateWeightRange);
+    if (selectedWithinRange.length) {
+      numericFitFilteredCount = selected.length - selectedWithinRange.length;
+      selected = selectedWithinRange;
+    } else {
+      const fallbackWithinRange = productsWithinPlateWeightRange(sameIntentPool, plateWeightRange);
+      if (fallbackWithinRange.length) {
+        numericFitFilteredCount = selected.length;
+        selected = fallbackWithinRange;
       }
     }
   }
@@ -608,7 +649,9 @@ export function selectProductsForVisibleCards(input: {
     .map((product) => product.id);
   const warnings = [
     ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
-    ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : [])
+    ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : []),
+    ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
+    ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : [])
   ];
 
   return {
@@ -646,6 +689,21 @@ export function assessVisibleCardReadiness(input: {
       rationale: 'Generator load calculation did not have a confirmed load basis, so product cards remain premature.',
       warnings: ['product_cards_suppressed:generator_load_unconfirmed_basis'],
       decision: input.answer.selectionReadiness
+    };
+  }
+  if (
+    isGeneratorProductClass(productClass) &&
+    input.cardSelection.products.length === 0 &&
+    input.cardSelection.warnings.includes('product_cards_suppressed:budget_no_fit')
+  ) {
+    const decision = input.answer.selectionReadiness;
+    return {
+      status: 'blocked_by_answer_contract',
+      productClass,
+      missingFacts: decision?.missingFacts ?? [],
+      rationale: 'No visible generator cards satisfy the structured budget constraint, so over-budget cards stay hidden.',
+      warnings: ['product_cards_suppressed:budget_no_fit'],
+      decision
     };
   }
   const decision = input.answer.selectionReadiness;

@@ -1,0 +1,78 @@
+{
+  "taskId": "2026-05-22-visible-card-constraint-consistency",
+  "baseline": {
+    "commit": "39e07e8",
+    "productionPromptfoo": {
+      "passed": 4,
+      "total": 6,
+      "deterministicAverage": 0.9708888888888888,
+      "llmAverage": 0.8300000000000001,
+      "failures": [
+        {
+          "scenario": "generator_load_selection",
+          "llmScore": 0.58,
+          "diagnosis": "Answer said no suitable generator under 90000, but visible card was over budget."
+        },
+        {
+          "scenario": "plate_retrieval_grounding",
+          "llmScore": 0.68,
+          "diagnosis": "Answer preferred the 56-70 kg range, but visible card was an 88 kg product."
+        }
+      ]
+    }
+  },
+  "changes": [
+    {
+      "file": "src/ai/agentManagerCardSelection.ts",
+      "summary": "Suppress over-budget generator visible cards when no same-intent candidate satisfies the structured budget."
+    },
+    {
+      "file": "src/ai/agentManagerCardSelection.ts",
+      "summary": "Prefer same-intent plate products inside the semantic weight range over out-of-range answer-mentioned caveats."
+    },
+    {
+      "file": "tests/agentManagerCardSelection.test.ts",
+      "summary": "Added regression coverage for generator budget suppression and plate numeric-fit visible-card fallback."
+    }
+  ],
+  "localChecks": [
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts",
+      "status": "PASS",
+      "summary": "1 file passed, 16 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1782."
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "No whitespace errors; LF-to-CRLF warnings only."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS",
+      "summary": "tsc --noEmit for client and server configs passed"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "77 files passed, 637 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS",
+      "summary": "Vite client build and server TypeScript build passed"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS_LOCAL",
+    "AC2": "PASS_LOCAL",
+    "AC3": "PASS_LOCAL",
+    "AC4": "PASS_LOCAL",
+    "AC5": "PASS_LOCAL",
+    "AC6": "PENDING_PRODUCTION_PROMPTFOO"
+  }
+}

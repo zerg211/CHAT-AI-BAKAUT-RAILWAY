@@ -1,0 +1,25 @@
+2026-05-22 local non-OpenAI checks
+
+Command: npm test -- tests/agentManagerCardSelection.test.ts
+Result: PASS
+Summary: Test Files 1 passed (1); Tests 16 passed (16)
+
+Command: npm run lint:no-regex
+Result: PASS
+Summary: No new regex constructs. Legacy baseline: 1782.
+
+Command: git diff --check
+Result: PASS
+Summary: no whitespace errors; LF-to-CRLF normalization warnings only.
+
+Command: npm run typecheck
+Result: PASS
+Summary: tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json
+
+Command: npm test
+Result: PASS
+Summary: Test Files 77 passed (77); Tests 637 passed (637)
+
+Command: npm run build
+Result: PASS
+Summary: vite build and tsc -p tsconfig.server.json passed.

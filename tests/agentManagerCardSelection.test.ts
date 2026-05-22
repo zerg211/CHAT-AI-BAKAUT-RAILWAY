@@ -149,6 +149,20 @@ function generatorWithPower(id: string, powerKw: string): Product {
   };
 }
 
+function generatorWithPrice(id: string, name: string, price: number): Product {
+  return {
+    id,
+    name,
+    brand: name.startsWith('Dinking') ? 'Dinking' : 'TSS',
+    category: 'Generators',
+    price,
+    currency: 'RUB',
+    specs: {
+      'Nominal power': '7 kW'
+    }
+  };
+}
+
 function plateWithWeight(id: string, weightKg: number): Product {
   return {
     id,
@@ -159,6 +173,20 @@ function plateWithWeight(id: string, weightKg: number): Product {
     currency: 'RUB',
     specs: {
       'рабочая масса, кг': String(weightKg)
+    }
+  };
+}
+
+function plateWithNameAndWeight(id: string, name: string, weightKg: number): Product {
+  return {
+    id,
+    name,
+    brand: 'Husqvarna',
+    category: 'vibroplity',
+    price: 120000 + weightKg,
+    currency: 'RUB',
+    specs: {
+      weight: `${weightKg} kg`
     }
   };
 }
@@ -359,6 +387,93 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.products).toEqual([plate]);
     expect(selection.droppedProductIds).toContain('plate-over-budget');
     expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
+  });
+
+  it('suppresses generator cards when every same-intent candidate is over structured budget', () => {
+    const dinking = generatorWithPrice('dinking-8500', 'Dinking DK8500E Generator 7 kW', 170000);
+    const tss = generatorWithPrice('tss-7000', 'TSS SGG 7000E Generator 7 kW', 149000);
+
+    const selection = selectProductsForVisibleCards({
+      products: [dinking, tss],
+      userMessage: 'Budget max 90000. Need a generator for pump load, but pump power is not confirmed yet.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs generator with strict max budget',
+        dialogueUnderstanding: 'all catalog generator candidates exceed the structured budget',
+        nextStepRationale: 'do not show over-budget generator cards',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'generator', query: 'generator within 90000 budget' },
+          rationale: 'find generator candidates',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Dinking DK8500E is above the 90000 budget, so there is no suitable card to show yet.',
+      needState: needStateWithBudget(90000, 'budget_max')
+    });
+
+    expect(selection.products).toEqual([]);
+    expect(selection.selectedProductIds).toEqual([]);
+    expect(selection.answerMentionedProductIds).toEqual(['dinking-8500']);
+    expect(selection.droppedProductIds).toEqual(expect.arrayContaining(['dinking-8500', 'tss-7000']));
+    expect(selection.warnings).toEqual(expect.arrayContaining([
+      'product_cards_filtered_by_budget:1',
+      'product_cards_suppressed:budget_no_fit'
+    ]));
+
+    const readiness = assessVisibleCardReadiness({
+      cardSelection: selection,
+      answer: answerContract({
+        productClass: 'generator',
+        status: 'ready_for_preliminary_cards',
+        canShowProductCards: true,
+        missingFacts: ['pump power'],
+        rationale: 'No generator under the structured budget is available.'
+      }),
+      toolResults: []
+    });
+
+    expect(readiness.status).toBe('blocked_by_answer_contract');
+    expect(readiness.warnings).toContain('product_cards_suppressed:budget_no_fit');
+  });
+
+  it('prefers in-range plate cards over an out-of-range answer-mentioned caveat', () => {
+    const heavy = plateWithNameAndWeight('lfe-88', 'Husqvarna LFe 60 LAT 88 kg', 88);
+    const medium = plateWithNameAndWeight('lf-67', 'Husqvarna LF 60 LAT 67 kg', 67);
+    const light = plateWithNameAndWeight('lf-56', 'Husqvarna LF 50 LAT 56 kg', 56);
+
+    const selection = selectProductsForVisibleCards({
+      products: [heavy, medium, light],
+      userMessage: 'I need to load it myself into a car, show plate options.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs a plate compactor that can be self-loaded',
+        dialogueUnderstanding: 'self-loading makes plate weight a visible-card constraint',
+        nextStepRationale: 'show plate compactors inside the self-loading range',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'vibroplita for self-loading' },
+          rationale: 'find plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Husqvarna LFe 60 LAT 88 kg is not the first choice when one person must load it.',
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.answerMentionedProductIds).toEqual(['lfe-88']);
+    expect(selection.selectedProductIds).toEqual(['lf-67', 'lf-56']);
+    expect(selection.selectedProductIds).not.toContain('lfe-88');
+    expect(selection.droppedProductIds).toContain('lfe-88');
+    expect(selection.warnings).toContain('product_cards_filtered_by_numeric_fit:1');
   });
 
   it('keeps generator card ranking for explicit power ranges without regex parsing', () => {
