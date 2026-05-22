@@ -89,6 +89,11 @@ describe('agent manager integration source guards', () => {
   it('tries same-turn recovery before returning a saved-turn error in the harness path', () => {
     const route = readFileSync('src/routes/chat.ts', 'utf8');
 
+    expect(route).toContain("import { closeSseReply, openSseReply, startStatusTimer } from './sse.js';");
+    expect(route).toContain('const send = openSseReply(reply);');
+    expect(route).toContain('stopStatusTimer = startStatusTimer({');
+    expect(route).toContain('closeSseReply(reply);');
+    expect(route).not.toContain('reply.raw.writeHead(200');
     expect(route).toContain('if (!controller.signal.aborted && agentManagerHarnessEnabled)');
     expect(route).toContain('assistant.recoverTurn({');
     expect(route).toContain('recoverable: agentManagerHarnessEnabled');

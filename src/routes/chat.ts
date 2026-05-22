@@ -6,6 +6,7 @@ import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
 import { ConversationRepository } from '../db/repositories.js';
+import { closeSseReply, openSseReply, startStatusTimer } from './sse.js';
 
 const createSessionSchema = z.object({
   visitorId: z.string().optional(),
@@ -98,20 +99,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
     timeout.unref?.();
 
-    reply.raw.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no'
-    });
+    const send = openSseReply(reply);
 
-    const send = (event: string, data: unknown) => {
-      if (reply.raw.destroyed || reply.raw.writableEnded) return;
-      reply.raw.write(`event: ${event}\n`);
-      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
-    let statusTimer: NodeJS.Timeout | null = null;
+    let stopStatusTimer: (() => void) | null = null;
     try {
       send('start', { ok: true });
       send('turn', {
@@ -120,13 +110,11 @@ export async function registerChatRoutes(app: FastifyInstance) {
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision
       });
-      let statusIndex = 0;
-      send('status', { status: generationStatusMessages[statusIndex] });
-      statusTimer = setInterval(() => {
-        statusIndex = Math.min(statusIndex + 1, generationStatusMessages.length - 1);
-        send('status', { status: generationStatusMessages[statusIndex] });
-      }, 12_000);
-      statusTimer.unref?.();
+      stopStatusTimer = startStatusTimer({
+        send,
+        initialStatus: generationStatusMessages[0],
+        statusMessages: generationStatusMessages
+      });
       const payload = await runWithOpenAIUsageContext({
         sessionId: params.id,
         turnId,
@@ -139,8 +127,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
         onDelta: (delta) => send('delta', { delta }),
         signal: controller.signal
       }));
-      if (statusTimer) clearInterval(statusTimer);
-      statusTimer = null;
+      stopStatusTimer?.();
+      stopStatusTimer = null;
       send('done', payload);
     } catch (error) {
       const agentManagerHarnessEnabled = runtimeDecision.agentManagerHarnessEnabled;
@@ -157,8 +145,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
             onDelta: (delta) => send('delta', { delta }),
             signal: controller.signal
           }));
-          if (statusTimer) clearInterval(statusTimer);
-          statusTimer = null;
+          stopStatusTimer?.();
+          stopStatusTimer = null;
           send('done', recoveredPayload);
           return;
         } catch (recoveryError) {
@@ -197,9 +185,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
         agentManagerRuntime: runtimeDecision
       });
     } finally {
-      if (statusTimer) clearInterval(statusTimer);
+      stopStatusTimer?.();
       clearTimeout(timeout);
-      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+      closeSseReply(reply);
     }
   });
 
@@ -212,20 +200,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
     timeout.unref?.();
 
-    reply.raw.writeHead(200, {
-      'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-cache, no-transform',
-      connection: 'keep-alive',
-      'x-accel-buffering': 'no'
-    });
+    const send = openSseReply(reply);
 
-    const send = (event: string, data: unknown) => {
-      if (reply.raw.destroyed || reply.raw.writableEnded) return;
-      reply.raw.write(`event: ${event}\n`);
-      reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
-
-    let statusTimer: NodeJS.Timeout | null = null;
+    let stopStatusTimer: (() => void) | null = null;
     let sessionForRecovery: Awaited<ReturnType<ConversationRepository['getSession']>> | null = null;
     let runtimeDecision = getAgentManagerRuntimeDecision(null);
     try {
@@ -238,13 +215,11 @@ export async function registerChatRoutes(app: FastifyInstance) {
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision
       });
-      send('status', { status: 'Ответ оборвался, восстанавливаю...' });
-      let statusIndex = 0;
-      statusTimer = setInterval(() => {
-        statusIndex = Math.min(statusIndex + 1, generationStatusMessages.length - 1);
-        send('status', { status: generationStatusMessages[statusIndex] });
-      }, 12_000);
-      statusTimer.unref?.();
+      stopStatusTimer = startStatusTimer({
+        send,
+        initialStatus: 'Ответ оборвался, восстанавливаю...',
+        statusMessages: generationStatusMessages
+      });
       const payload = await runWithOpenAIUsageContext({
         sessionId: params.id,
         turnId: params.turnId,
@@ -287,9 +262,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
           : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
       });
     } finally {
-      if (statusTimer) clearInterval(statusTimer);
+      stopStatusTimer?.();
       clearTimeout(timeout);
-      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
+      closeSseReply(reply);
     }
   });
 }

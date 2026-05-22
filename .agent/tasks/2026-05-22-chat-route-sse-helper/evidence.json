@@ -1,0 +1,51 @@
+{
+  "taskId": "2026-05-22-chat-route-sse-helper",
+  "recordedAt": "2026-05-22T09:23:02+03:00",
+  "baseHead": "86aea7a",
+  "status": "pass",
+  "changes": [
+    "Added src/routes/sse.ts for standard SSE headers, safe sender, safe close, and status timer handling.",
+    "Replaced duplicated generation/recovery SSE plumbing in src/routes/chat.ts with the shared helper.",
+    "Added focused tests for helper behavior and source guard coverage for chat route usage."
+  ],
+  "localChecks": [
+    {
+      "command": "npm test -- tests/chatSse.test.ts tests/agentManagerIntegrationSource.test.ts",
+      "status": "pass",
+      "summary": "2 test files passed, 12 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "summary": "No new regex constructs. Legacy baseline: 1824."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass",
+      "summary": "tsc --noEmit passed for app and server configs"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "summary": "74 test files passed, 598 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass",
+      "summary": "vite build and server TypeScript build passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "summary": "No whitespace errors; CRLF warnings only"
+    }
+  ],
+  "productionChecks": [
+    {
+      "command": "not run",
+      "status": "not_required",
+      "summary": "No AI behavior, prompt, API payload shape, or client contract changed"
+    }
+  ],
+  "verdict": "pass"
+}
