@@ -1,0 +1,29 @@
+{
+  "taskId": "2026-05-22-failed-web-research-grounding",
+  "status": "local_pass_pending_production",
+  "localChecks": [
+    {
+      "command": "npx vitest run tests/agentManagerComparisonResearch.test.ts tests/agentManagerIntegrationSource.test.ts tests/productComparisonResearch.test.ts",
+      "status": "pass",
+      "tests": 28
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1767."
+    }
+  ],
+  "preFixProductionFinding": {
+    "commit": "a81477de79833586faa54e9e1c47850be00f2314",
+    "conversationNumber": 1560,
+    "sessionId": "6ff743d9-1d1f-4258-abf4-59b956d2c5e3",
+    "issue": "web.researchProductFacts returned status=error, but answer factsUsed cited the failed request id as evidence."
+  },
+  "productionVerification": {
+    "status": "pending_commit_push_marker_live"
+  }
+}

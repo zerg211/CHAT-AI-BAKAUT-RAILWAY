@@ -1329,6 +1329,12 @@ function mergeCatalogAndWebResearch(
   };
 }
 
+function productComparisonMaxOutputTokens(targetProductNames: string[]) {
+  return targetProductNames.length
+    ? Math.max(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, 2600)
+    : config.OPENAI_FACT_MAX_OUTPUT_TOKENS;
+}
+
 async function extractExactCatalogProductFacts(input: {
   userMessage: string;
   products: Product[];
@@ -1498,7 +1504,7 @@ export async function researchProductComparisonFacts(input: {
       }
     ],
     tools: [{ type: 'web_search_preview', search_context_size: targetProductNames.length ? 'high' : 'medium' }],
-    max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
+    max_output_tokens: productComparisonMaxOutputTokens(targetProductNames),
     text: {
       format: {
         type: 'json_schema',
@@ -1613,6 +1619,7 @@ export async function researchProductComparisonFacts(input: {
   ) {
     const retryRequest: Record<string, unknown> = {
       ...request,
+      max_output_tokens: productComparisonMaxOutputTokens(targetProductNames),
       input: [
         {
           role: 'system',

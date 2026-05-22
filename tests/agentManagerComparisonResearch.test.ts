@@ -248,6 +248,108 @@ describe('AgentManager comparison research flow', () => {
     });
   });
 
+  it('rewrites exact-model claims that cite failed web research as fact evidence', async () => {
+    researchProductComparisonFacts.mockRejectedValueOnce(
+      new Error('product_comparison_research did not return a JSON object')
+    );
+
+    class ExactCatalogProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          product('g7000is', 'SUNREKA G7000iS generator 6 kW', { starter: 'с ручным стартером' })
+        ];
+      }
+    }
+
+    const badGroundingModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks whether SUNREKA G7000iS starts by cord or button',
+          dialogueUnderstanding: 'exact named-model technical fact needs web verification',
+          nextStepRationale: 'verify exact start control',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:g7000is',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'SUNREKA G7000iS starting method button recoil electric start',
+              semanticQuery: 'Verify whether SUNREKA G7000iS starts by recoil cord or by button/electric starter.',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['SUNREKA G7000iS'],
+              comparisonAttributes: ['starting method', 'button start', 'electric start', 'recoil start'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model start method',
+              notes: 'answer only the direct technical question'
+            },
+            rationale: 'exact start-control fact must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'По данным из карточки, SUNREKA G7000iS запускается ручным стартером, то есть шнурком. Кнопочного запуска для этой модели в данных не вижу.',
+          factsUsed: [{
+            factKey: 'g7000is.start_method',
+            sourceEventIds: ['web:g7000is'],
+            value: 'manual starter only'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['web:g7000is'],
+          leadAction: 'none',
+          riskFlags: ['web_research_failed_for_named_model']
+        };
+      },
+      async reviewAnswer() {
+        throw new Error('mechanical review should catch failed tool fact evidence before LLM review');
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new ExactCatalogProducts() as never,
+      { async createLead() { return null; } } as never,
+      badGroundingModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?'
+    });
+
+    expect(payload.answer).toContain('Не буду утверждать по SUNREKA G7000iS');
+    expect(payload.answer).toContain('проверка внешних источников не завершилась');
+    expect(payload.answer).not.toContain('Кнопочного запуска для этой модели в данных не вижу');
+    expect(payload.answer).not.toContain('есть в каталоге');
+    const metadata = payload.metadata as {
+      answerContract?: { factsUsed?: unknown[] };
+      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
+      toolResults?: Array<{ status?: string; warnings?: string[] }>;
+    };
+    expect(metadata.toolResults?.[0]).toMatchObject({
+      status: 'error',
+      warnings: ['tool_execution_error']
+    });
+    expect(metadata.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'failed_tool_result_used_as_fact_source' })
+      ])
+    });
+    expect(metadata.answerContract?.factsUsed).toEqual([]);
+  });
+
   it('answers exact external facts for a named model absent from catalog and exposes nearby catalog models', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,

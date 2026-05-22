@@ -228,10 +228,13 @@ function answerEvidenceSourceHints(input: {
     status: result.status,
     warnings: result.warnings
   }));
+  const factSourceToolIds = toolResults
+    .filter((result) => result.status === 'ok')
+    .map((result) => result.id);
   return {
     allowedSourceIds: [
       ...ledgerFacts.map((fact) => fact.id),
-      ...toolResults.map((result) => result.id)
+      ...factSourceToolIds
     ],
     ledgerFacts,
     toolResults
@@ -243,9 +246,11 @@ function normalizeAnswerEvidenceSources(input: {
   ledgerState: ReducedDialogueLedgerState;
   toolResults: ToolResult[];
 }): AnswerContract {
-  const trustedSourceIds = new Set<string>([
+  const trustedFactSourceIds = new Set<string>([
     ...input.ledgerState.eventIds,
-    ...input.toolResults.map((result) => result.requestId)
+    ...input.toolResults
+      .filter((result) => result.status === 'ok')
+      .map((result) => result.requestId)
   ]);
   const toolResultIds = new Set(input.toolResults.map((result) => result.requestId));
   const validAnswerToolResultIds = input.answer.toolResultIds.filter((toolResultId) => toolResultIds.has(toolResultId));
@@ -257,17 +262,17 @@ function normalizeAnswerEvidenceSources(input: {
     : okToolResultIds;
 
   const factsUsed = input.answer.factsUsed.map((fact) => {
-    const exactSourceIds = fact.sourceEventIds.filter((sourceId) => trustedSourceIds.has(sourceId));
+    const exactSourceIds = fact.sourceEventIds.filter((sourceId) => trustedFactSourceIds.has(sourceId));
     if (exactSourceIds.length) {
       return { ...fact, sourceEventIds: [...new Set(exactSourceIds)] };
     }
 
-      const ledgerFact = input.ledgerState.factsByKey[fact.factKey];
-      const repairedSourceIds = [
-        ledgerFact?.eventId,
-        ...validAnswerToolResultIds,
+    const ledgerFact = input.ledgerState.factsByKey[fact.factKey];
+    const repairedSourceIds = [
+      ledgerFact?.eventId,
+      ...validAnswerToolResultIds,
       ...fallbackOkToolResultIds
-      ].filter((sourceId): sourceId is string => Boolean(sourceId && trustedSourceIds.has(sourceId)));
+    ].filter((sourceId): sourceId is string => Boolean(sourceId && trustedFactSourceIds.has(sourceId)));
 
     return repairedSourceIds.length
       ? { ...fact, sourceEventIds: [...new Set(repairedSourceIds)] }
@@ -947,6 +952,57 @@ function presentCatalogPresenceLine(productName: string, directAnswer: string) {
 
 function presentCatalogPresenceRelevant(intent: AgentIntentContract) {
   return intent.riskFlags.includes('answer_policy_catalog_presence_relevant');
+}
+
+function productNamesFromToolRequest(request: ToolRequest | undefined) {
+  const productNames = request?.args.productNames;
+  if (!Array.isArray(productNames)) return [];
+  return productNames
+    .map((item) => typeof item === 'string' ? item.trim() : '')
+    .filter(Boolean);
+}
+
+function nonOkToolResultIds(toolResults: ToolResult[]) {
+  return new Set(toolResults
+    .filter((result) => result.status !== 'ok')
+    .map((result) => result.requestId));
+}
+
+function factSourceIdsFromNonOkTools(input: {
+  answer: AnswerContract;
+  toolResults: ToolResult[];
+}) {
+  const failedIds = nonOkToolResultIds(input.toolResults);
+  return uniqueStrings(input.answer.factsUsed.flatMap((fact) =>
+    fact.sourceEventIds.filter((sourceId) => failedIds.has(sourceId))
+  ));
+}
+
+function failedWebResearchSafeRewrite(input: {
+  intent: AgentIntentContract;
+  toolResults: ToolResult[];
+  userMessage: string;
+}) {
+  const failedWebResult = input.toolResults.find((result) =>
+    result.tool === 'web.researchProductFacts' && result.status !== 'ok'
+  );
+  if (!failedWebResult) return null;
+  const request = input.intent.toolRequests.find((item) => item.id === failedWebResult.requestId);
+  const productName = productNamesFromToolRequest(request)[0];
+  const lowerUserMessage = input.userMessage.toLocaleLowerCase('ru-RU');
+  const asksStartControl = lowerUserMessage.includes('кноп') ||
+    lowerUserMessage.includes('шнур') ||
+    lowerUserMessage.includes('стартер') ||
+    lowerUserMessage.includes('электростарт') ||
+    lowerUserMessage.includes('start') ||
+    lowerUserMessage.includes('button');
+  if (productName && asksStartControl) {
+    return `Не буду утверждать по ${productName}, что кнопочного запуска нет: проверка внешних источников не завершилась. По текущим данным вижу ручной запуск, но это не закрывает вопрос про кнопку или электростарт. Нужна проверка по точной модели либо вариант, где электростарт указан явно.`;
+  }
+  if (productName) {
+    return `Не буду сейчас уверенно утверждать точный факт по ${productName}: внешняя проверка не завершилась. Могу опираться только на уже найденные данные, а спорный параметр нужно добрать по источникам.`;
+  }
+  return 'Внешняя проверка не завершилась, поэтому точный факт сейчас не подтверждаю. Могу ответить только на общем уровне, а спорный параметр нужно добрать по источникам.';
 }
 
 function researchGuidanceSafeRewrite(input: {
@@ -1737,6 +1793,15 @@ export class AgentManagerOrchestrator {
     if (review.verdict === 'block') {
       throw new Error(`Agent manager answer blocked: ${review.issues.map((issue) => issue.code).join(', ')}`);
     }
+    const reviewInvalidatedFactSources = review.issues.some((issue) =>
+      issue.code === 'failed_tool_result_used_as_fact_source'
+    );
+    const failedToolSourceIds = reviewInvalidatedFactSources
+      ? nonOkToolResultIds(toolResults)
+      : new Set<string>();
+    const finalFactsUsed = reviewInvalidatedFactSources
+      ? answer.factsUsed.filter((fact) => !fact.sourceEventIds.some((sourceId) => failedToolSourceIds.has(sourceId)))
+      : answer.factsUsed;
     await this.conversations.upsertTurnCheckpoint({
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -1750,6 +1815,7 @@ export class AgentManagerOrchestrator {
     });
     const initialAnswerContract: AnswerContract = {
       ...answer,
+      factsUsed: finalFactsUsed,
       answerText: finalText,
       leadAction: finalLeadAction
     };
@@ -1793,6 +1859,7 @@ export class AgentManagerOrchestrator {
     }
     const finalAnswerContract: AnswerContract = {
       ...answer,
+      factsUsed: finalFactsUsed,
       answerText: finalText,
       leadAction: finalLeadAction,
       riskFlags: selectionReadiness.status !== 'ready_for_cards'
@@ -2283,6 +2350,18 @@ export class AgentManagerOrchestrator {
         });
       }
     }
+    const failedFactSourceIds = factSourceIdsFromNonOkTools({
+      answer: input.answer,
+      toolResults: input.toolResults
+    });
+    if (failedFactSourceIds.length) {
+      mechanicalIssues.push({
+        code: 'failed_tool_result_used_as_fact_source',
+        severity: 'high',
+        message: 'A failed, denied, timed out, or not-found tool result was used as evidence for a factual claim.',
+        evidence: failedFactSourceIds.join(', ')
+      });
+    }
     const unknownToolResultIds = input.answer.toolResultIds.filter((toolResultId) => !trustedSourceIds.has(toolResultId));
     if (unknownToolResultIds.length) {
       mechanicalIssues.push({
@@ -2379,6 +2458,19 @@ export class AgentManagerOrchestrator {
         verdict: 'rewrite_required',
         issues: mechanicalIssues,
         revisedAnswerText: safeResearchRewrite
+      };
+    }
+    const failedFactSourceRepairIssue = mechanicalIssues.find((issue) => issue.code === 'failed_tool_result_used_as_fact_source');
+    const failedWebResearchRewrite = failedWebResearchSafeRewrite({
+      intent: input.intent,
+      toolResults: input.toolResults,
+      userMessage: input.userMessage
+    });
+    if (failedFactSourceRepairIssue && failedWebResearchRewrite) {
+      return {
+        verdict: 'rewrite_required',
+        issues: mechanicalIssues,
+        revisedAnswerText: failedWebResearchRewrite
       };
     }
     if (mechanicalIssues.length) {
