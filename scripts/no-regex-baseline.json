@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1794,
+  "count": 1782,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -8210,90 +8210,6 @@
       "file": "src/db/repositories.ts",
       "kind": "regular_expression_literal",
       "hash": "c2be8b4410f8e831",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regex_test_call|5159ab3da7cba242|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regex_test_call",
-      "hash": "5159ab3da7cba242",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regular_expression_literal|b789609b8c8c59fc|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regular_expression_literal",
-      "hash": "b789609b8c8c59fc",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regex_test_call|a2b83d6d484a345d|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regex_test_call",
-      "hash": "a2b83d6d484a345d",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regular_expression_literal|34c779803dd6b061|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regular_expression_literal",
-      "hash": "34c779803dd6b061",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regex_test_call|b96ee6f2834cbd34|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regex_test_call",
-      "hash": "b96ee6f2834cbd34",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regular_expression_literal|723b98655c9dc181|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regular_expression_literal",
-      "hash": "723b98655c9dc181",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regex_test_call|2e43ad818c8bc41a|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regex_test_call",
-      "hash": "2e43ad818c8bc41a",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regular_expression_literal|3da5746692e42fef|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regular_expression_literal",
-      "hash": "3da5746692e42fef",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regex_test_call|8304b6683ecaa5a0|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regex_test_call",
-      "hash": "8304b6683ecaa5a0",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regular_expression_literal|befa036ebfbba175|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regular_expression_literal",
-      "hash": "befa036ebfbba175",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regex_test_call|a52bec5dc19d42cd|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regex_test_call",
-      "hash": "a52bec5dc19d42cd",
-      "occurrence": 1
-    },
-    {
-      "id": "src/routes/admin.ts|regular_expression_literal|7edebc475103d248|1",
-      "file": "src/routes/admin.ts",
-      "kind": "regular_expression_literal",
-      "hash": "7edebc475103d248",
       "occurrence": 1
     },
     {

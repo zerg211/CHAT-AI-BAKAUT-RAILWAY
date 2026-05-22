@@ -39,14 +39,45 @@ function assertAdmin(request: FastifyRequest) {
   }
 }
 
-function classifyOpenAIRuntimeError(status: unknown, body: unknown) {
-  const text = `${status ?? ''} ${JSON.stringify(body ?? '')}`;
-  if (/insufficient_quota|quota|billing|credits/iu.test(text)) return 'quota_or_billing';
-  if (/invalid_api_key|incorrect api key|401/iu.test(text)) return 'authentication';
-  if (/unsupported_country_region_territory/iu.test(text)) return 'provider_access_region';
-  if (/rate_limit|429/iu.test(text)) return 'rate_limit';
-  if (/model_not_found|permission|403/iu.test(text)) return 'model_project_or_org_access';
-  if (/timeout|aborted|ECONNRESET|fetch failed|connection/iu.test(text)) return 'network_or_timeout';
+export type OpenAIRuntimeErrorClass =
+  | 'quota_or_billing'
+  | 'authentication'
+  | 'provider_access_region'
+  | 'rate_limit'
+  | 'model_project_or_org_access'
+  | 'network_or_timeout'
+  | 'unknown';
+
+function safeJsonText(value: unknown) {
+  try {
+    return JSON.stringify(value ?? '');
+  } catch {
+    return String(value ?? '');
+  }
+}
+
+function classifierText(status: unknown, body: unknown) {
+  return `${status ?? ''} ${safeJsonText(body)}`.toLocaleLowerCase('en');
+}
+
+function containsAnyPhrase(text: string, phrases: string[]) {
+  return phrases.some((phrase) => text.includes(phrase));
+}
+
+function statusCode(value: unknown) {
+  const code = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(code) ? code : null;
+}
+
+export function classifyOpenAIRuntimeError(status: unknown, body: unknown): OpenAIRuntimeErrorClass {
+  const text = classifierText(status, body);
+  const code = statusCode(status);
+  if (containsAnyPhrase(text, ['insufficient_quota', 'quota', 'billing', 'credits'])) return 'quota_or_billing';
+  if (code === 401 || containsAnyPhrase(text, ['invalid_api_key', 'incorrect api key', '401'])) return 'authentication';
+  if (text.includes('unsupported_country_region_territory')) return 'provider_access_region';
+  if (code === 429 || containsAnyPhrase(text, ['rate_limit', '429'])) return 'rate_limit';
+  if (code === 403 || containsAnyPhrase(text, ['model_not_found', 'permission', '403'])) return 'model_project_or_org_access';
+  if (containsAnyPhrase(text, ['timeout', 'aborted', 'econnreset', 'fetch failed', 'connection'])) return 'network_or_timeout';
   return 'unknown';
 }
 

@@ -1,0 +1,70 @@
+{
+  "taskId": "2026-05-22-admin-openai-error-classifier-no-regex",
+  "change": {
+    "files": [
+      "src/routes/admin.ts",
+      "tests/adminOpenaiErrorClassifier.test.ts",
+      "scripts/no-regex-baseline.json"
+    ],
+    "summary": "Replaced admin OpenAI runtime regex classification with deterministic status and phrase checks."
+  },
+  "behaviorPreserved": {
+    "classes": [
+      "quota_or_billing",
+      "authentication",
+      "provider_access_region",
+      "rate_limit",
+      "model_project_or_org_access",
+      "network_or_timeout",
+      "unknown"
+    ],
+    "regionPrecedenceOver403": true
+  },
+  "regexBaseline": {
+    "before": 1794,
+    "after": 1782,
+    "removed": 12,
+    "newRegexConstructs": 0
+  },
+  "localChecks": [
+    {
+      "command": "npm test -- tests/adminOpenaiErrorClassifier.test.ts",
+      "status": "pass",
+      "details": "1 file, 7 tests"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1782."
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "details": "Only line-ending warnings."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "77 files, 635 tests"
+    },
+    {
+      "command": "npm run build",
+      "status": "pass"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "pass",
+    "AC2": "pass",
+    "AC3": "pass",
+    "AC4": "pass",
+    "AC5": "pass"
+  },
+  "unrelatedUnstagedChanges": [
+    "src/ai/productComparisonResearch.ts",
+    "tests/productComparisonResearch.test.ts"
+  ]
+}
