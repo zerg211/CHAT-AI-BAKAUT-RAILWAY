@@ -39,6 +39,8 @@ The public exports stay unchanged. The pass does not move semantic buyer intent 
 
 The failed artifacts point to generator answer-contract behavior: the assistant either over-blocked a useful preliminary sizing orientation or stated a bounded estimate too firmly. Follow-up task: `.agent/tasks/2026-05-22-generator-bounded-estimate-answer-contract/`.
 
+The follow-up task passed production eval after commit `8890cdf`: 6/6, deterministic average 0.9914999999999999, LLM average 0.9516666666666667.
+
 ## Notes
 
 The no-regex legacy baseline now reports 1767 findings. Remaining old regex usage is intentionally left for separate small passes.

@@ -60,6 +60,14 @@
     "llmAverage": 0.7983333333333333,
     "passed": 4,
     "failed": 2,
-    "followUpTask": "2026-05-22-generator-bounded-estimate-answer-contract"
+    "followUpTask": "2026-05-22-generator-bounded-estimate-answer-contract",
+    "followUpProductionEval": {
+      "status": "PASS",
+      "commit": "8890cdf",
+      "deterministicAverage": 0.9914999999999999,
+      "llmAverage": 0.9516666666666667,
+      "passed": 6,
+      "failed": 0
+    }
   }
 }

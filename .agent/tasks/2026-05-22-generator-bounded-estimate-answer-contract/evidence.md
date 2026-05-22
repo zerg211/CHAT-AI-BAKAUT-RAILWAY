@@ -24,7 +24,20 @@ No regex was added.
 - AC2: PASS. Orchestrator tests cover required response clauses for unconfirmed and bounded-assumption generator load profiles.
 - AC3: PASS. Existing tests still assert unconfirmed generator load basis suppresses product cards.
 - AC4: PASS. Local non-OpenAI gates passed.
-- AC5: PENDING. Production Promptfoo/widget harness must run after push and Railway deployment marker.
+- AC5: PASS. Production Promptfoo/widget harness passed after push and Railway deployment marker.
+
+## Production Eval After `8890cdf`
+
+- `npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-generator-bounded-estimate-answer-contract/production-evals-after-8890cdf.json`: PASS.
+- Pass/fail: 6/6.
+- Deterministic average: 0.9914999999999999.
+- LLM average: 0.9516666666666667.
+- Assertion pass rate: 33/33.
+- Gates: deterministic > 90% PASS, LLM average > 90% PASS.
+
+Generator bottleneck result:
+- `vague_generator_no_cards_before_load_profile`: PASS, LLM score 0.98, no cards.
+- `generator_load_selection`: PASS, LLM score 0.93, 2 cards.
 
 ## Bottleneck Addressed
 

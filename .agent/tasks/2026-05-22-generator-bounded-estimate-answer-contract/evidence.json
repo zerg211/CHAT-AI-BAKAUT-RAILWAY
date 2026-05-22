@@ -50,9 +50,18 @@
     "AC2": "PASS",
     "AC3": "PASS",
     "AC4": "PASS",
-    "AC5": "PENDING"
+    "AC5": "PASS"
   },
   "productionEval": {
-    "status": "PENDING"
+    "status": "PASS",
+    "commit": "8890cdf",
+    "output": ".agent/tasks/2026-05-22-generator-bounded-estimate-answer-contract/production-evals-after-8890cdf.json",
+    "summary": ".agent/tasks/2026-05-22-generator-bounded-estimate-answer-contract/production-evals-after-8890cdf.summary.json",
+    "passed": 6,
+    "failed": 0,
+    "deterministicAverage": 0.9914999999999999,
+    "llmAverage": 0.9516666666666667,
+    "deterministicAbove90": true,
+    "llmAverageAbove90": true
   }
 }

@@ -26,4 +26,9 @@ Full local non-OpenAI gates:
 - Result: PASS. Only CRLF conversion warnings from Git; no whitespace errors.
 
 Production eval after this pass:
-- Pending until commit, push, and Railway deployment marker.
+- Commit: 8890cdf
+- Command: npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-generator-bounded-estimate-answer-contract/production-evals-after-8890cdf.json
+- Result: PASS, 6/6 passed.
+- Deterministic average: 0.9914999999999999.
+- LLM average: 0.9516666666666667.
+- Gates: deterministic > 90% PASS, LLM average > 90% PASS.
