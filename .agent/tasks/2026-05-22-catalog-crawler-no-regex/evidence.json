@@ -49,5 +49,10 @@
   "productionPromptfoo": {
     "required": false,
     "reason": "Crawler-only deterministic parsing refactor outside the chat answer runtime."
+  },
+  "railwayMarker": {
+    "status": "pass",
+    "commit": "aaee506cb24ceb394017cc4970cf4f39fdc767ae",
+    "branch": "main"
   }
 }

@@ -69,3 +69,10 @@ PASS
 ## Production eval
 
 Production Promptfoo is not required for this pass: the changed code is the admin/catalog crawler path, not the chat answer runtime. The deployment marker must still be checked after push.
+
+Railway marker after push:
+
+```text
+19:09:04 commit=aaee506cb24ceb394017cc4970cf4f39fdc767ae branch=main
+MARKER_OK
+```
