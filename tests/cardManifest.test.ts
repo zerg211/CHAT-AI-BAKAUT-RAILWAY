@@ -33,6 +33,50 @@ const dieselOtherCard: ProductCard = {
   caveats: []
 };
 
+const petrolCompactVoltageCard: ProductCard = {
+  id: 'petrol-compact-220',
+  name: 'Compact petrol generator 230V 1-ф',
+  brand: 'TSS',
+  category: 'Generators',
+  price: 91000,
+  currency: 'RUB',
+  specs: {
+    fuel: 'petrol',
+    voltage: '230V однофазный'
+  },
+  reasons: [],
+  caveats: []
+};
+
+const threePhaseCard: ProductCard = {
+  id: 'three-phase',
+  name: 'TSS diesel generator 400V 3-ф',
+  brand: 'TSS',
+  category: 'Generators',
+  price: 126000,
+  currency: 'RUB',
+  specs: {
+    fuel: 'diesel',
+    voltage: 'трёхфазный'
+  },
+  reasons: [],
+  caveats: []
+};
+
+const plateCard: ProductCard = {
+  id: 'plate-90',
+  name: 'TSS виброплита 90 кг',
+  brand: 'TSS',
+  category: 'Виброплиты',
+  price: 59000,
+  currency: 'RUB',
+  specs: {
+    weight: '90 кг'
+  },
+  reasons: [],
+  caveats: []
+};
+
 function executionContract(overrides: Partial<ExecutionContract> = {}): ExecutionContract {
   const selectionState = mergeProductSelectionState(emptyNeedState().selectionState, {
     hardConstraints: {
@@ -131,5 +175,45 @@ describe('card manifest', () => {
     expect(enforced.enforced).toBe(true);
     expect(enforced.suppressedProductIds).toEqual(['other-8']);
     expect(enforced.cards.map((card) => card.id)).toEqual(['tss-8']);
+  });
+
+  it('keeps compact gasoline and 220/230 V phase signals compatible without regex', () => {
+    const manifest = buildCardManifest({
+      executionContract: executionContract(),
+      cards: [petrolCompactVoltageCard],
+      visibleProductIds: ['petrol-compact-220'],
+      hiddenProductIds: []
+    });
+
+    expect(manifest.items[0]).toMatchObject({
+      productId: 'petrol-compact-220',
+      constraintStatus: 'satisfies_hard_constraints',
+      violations: []
+    });
+  });
+
+  it('flags three-phase diesel cards against gasoline single-phase constraints without regex', () => {
+    const manifest = buildCardManifest({
+      executionContract: executionContract(),
+      cards: [threePhaseCard],
+      visibleProductIds: ['three-phase'],
+      hiddenProductIds: []
+    });
+
+    expect(manifest.items[0].violations).toEqual(expect.arrayContaining([
+      'fuel:gasoline',
+      'singlePhase220:true'
+    ]));
+  });
+
+  it('flags product-class mismatches without regex classification', () => {
+    const manifest = buildCardManifest({
+      executionContract: executionContract(),
+      cards: [plateCard],
+      visibleProductIds: ['plate-90'],
+      hiddenProductIds: []
+    });
+
+    expect(manifest.items[0].violations).toContain('productIntent:generator');
   });
 });

@@ -1,0 +1,38 @@
+2026-05-22 card manifest no-regex local checks
+
+Command: npx vitest run tests/cardManifest.test.ts
+Result: PASS
+Test Files: 1 passed (1)
+Tests: 7 passed (7)
+
+Command: npm run lint:no-regex
+Result before baseline update: PASS with removal notice
+Summary: No new regex constructs. Legacy baseline: 1723. Legacy findings removed since baseline: 26.
+
+Command: npm run lint:no-regex -- --update-baseline
+Result: PASS
+Summary: Updated scripts/no-regex-baseline.json with 1697 legacy findings.
+
+Command: npm run lint:no-regex
+Result: PASS
+Summary: No new regex constructs. Legacy baseline: 1697.
+
+Command: npm run typecheck
+Result: PASS
+Summary: tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json
+
+Command: npm test
+Result: PASS
+Test Files: 82 passed (82)
+Tests: 672 passed (672)
+
+Command: npm run build
+Result: PASS
+Summary: vite build && tsc -p tsconfig.server.json
+
+Command: git diff --check
+Result: PASS
+Warnings only:
+warning: in the working copy of 'scripts/no-regex-baseline.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/ai/cardManifest.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/cardManifest.test.ts', LF will be replaced by CRLF the next time Git touches it

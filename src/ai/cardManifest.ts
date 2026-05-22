@@ -8,8 +8,29 @@ import type {
   ProductSelectionCriteria
 } from '../shared/types.js';
 
+function isWhitespace(char: string) {
+  return char === ' ' || char === '\n' || char === '\r' || char === '\t';
+}
+
+function compactWhitespace(value: string) {
+  let result = '';
+  let pendingSpace = false;
+  for (const char of value.trim()) {
+    if (isWhitespace(char)) {
+      pendingSpace = result.length > 0;
+      continue;
+    }
+    if (pendingSpace) {
+      result += ' ';
+      pendingSpace = false;
+    }
+    result += char;
+  }
+  return result;
+}
+
 function normalized(value: unknown) {
-  return String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return compactWhitespace(String(value ?? '').toLocaleLowerCase('ru-RU'));
 }
 
 function cardText(card: ProductCard) {
@@ -21,31 +42,43 @@ function cardText(card: ProductCard) {
   ].join(' '));
 }
 
+function containsAny(text: string, signals: string[]) {
+  return signals.some((signal) => text.includes(signal));
+}
+
 function classifyCard(card: ProductCard): ProductSelectionClass {
   const text = cardText(card);
-  if (/(генератор|электростанц|generator)/iu.test(text)) return 'generator';
-  if (/(виброплит|plate compactor)/iu.test(text)) return 'plate';
-  if (/(вибротрамб|трамбов|rammer)/iu.test(text)) return 'rammer';
-  if (/(швонарез|резчик|cutter)/iu.test(text)) return 'cutter';
-  if (/(затироч|trowel)/iu.test(text)) return 'trowel';
-  if (/(сварочн|welding)/iu.test(text)) return 'weldingGenerator';
-  if (/(коронк|diamond core)/iu.test(text)) return 'diamondCore';
+  if (containsAny(text, ['генератор', 'электростанц', 'generator'])) return 'generator';
+  if (containsAny(text, ['виброплит', 'plate compactor'])) return 'plate';
+  if (containsAny(text, ['вибротрамб', 'трамбов', 'rammer'])) return 'rammer';
+  if (containsAny(text, ['швонарез', 'резчик', 'cutter'])) return 'cutter';
+  if (containsAny(text, ['затироч', 'trowel'])) return 'trowel';
+  if (containsAny(text, ['сварочн', 'welding'])) return 'weldingGenerator';
+  if (containsAny(text, ['коронк', 'diamond core'])) return 'diamondCore';
   return 'unknown';
 }
 
 function hasFuel(card: ProductCard, fuel: ProductSelectionCriteria['fuel']) {
   if (!fuel || fuel === 'any' || fuel === 'unknown') return true;
   const text = cardText(card);
-  if (fuel === 'gasoline') return /(бензин|gasoline|petrol)/iu.test(text) && !/(дизел|diesel)/iu.test(text);
-  if (fuel === 'diesel') return /(дизел|diesel)/iu.test(text);
+  if (fuel === 'gasoline') return containsAny(text, ['бензин', 'gasoline', 'petrol']) && !containsAny(text, ['дизел', 'diesel']);
+  if (fuel === 'diesel') return containsAny(text, ['дизел', 'diesel']);
   return true;
+}
+
+function hasAnyVoltageSignal(text: string, numbers: string[], units: string[]) {
+  return numbers.some((number) =>
+    units.some((unit) => text.includes(`${number}${unit}`) || text.includes(`${number} ${unit}`))
+  );
 }
 
 function hasSinglePhase220(card: ProductCard, singlePhase220: boolean | null | undefined) {
   if (singlePhase220 === null || typeof singlePhase220 === 'undefined') return true;
   const text = cardText(card);
-  const has220 = /(?:220\s*в|220\s*v|230\s*в|230\s*v|1[-\s]?ф|однофаз)/iu.test(text);
-  const has380 = /(?:380\s*в|380\s*v|400\s*в|400\s*v|3[-\s]?ф|тр[её]хфаз)/iu.test(text);
+  const has220 = hasAnyVoltageSignal(text, ['220', '230'], ['в', 'v']) ||
+    containsAny(text, ['1ф', '1 ф', '1-ф', 'однофаз']);
+  const has380 = hasAnyVoltageSignal(text, ['380', '400'], ['в', 'v']) ||
+    containsAny(text, ['3ф', '3 ф', '3-ф', 'трехфаз', 'трёхфаз']);
   return singlePhase220 ? has220 && !has380 : has380;
 }
 
