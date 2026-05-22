@@ -857,6 +857,122 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.answer).not.toContain('У нас Firman RD3910E есть в каталоге');
   });
 
+  it('does not duplicate start-control uncertainty when checked guidance already says it', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD4910E',
+        attribute: 'starting method',
+        value: 'manual starter / electric starter',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'exact source confirms manual and electric starter',
+        sourceUrl: 'https://example.test/firman-rd4910e',
+        sourceTitle: 'FIRMAN RD4910E specification'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Электростартер есть, ручной запуск тоже есть. А вот чем включается электростартер — ключом, кнопкой или переключателем — источники не подтвердили.',
+        completeness: 'partially_answered',
+        coverage: [
+          {
+            attribute: 'electric start',
+            status: 'confirmed',
+            value: 'electric starter',
+            evidence: 'exact source confirms electric starter',
+            sourceUrl: 'https://example.test/firman-rd4910e',
+            sourceTitle: 'FIRMAN RD4910E specification'
+          },
+          {
+            attribute: 'manual starter',
+            status: 'confirmed',
+            value: 'manual starter',
+            evidence: 'exact source confirms manual starter',
+            sourceUrl: 'https://example.test/firman-rd4910e',
+            sourceTitle: 'FIRMAN RD4910E specification'
+          },
+          {
+            attribute: 'key start',
+            status: 'not_confirmed',
+            value: '',
+            evidence: 'exact sources do not prove key control',
+            sourceUrl: 'https://example.test/firman-rd4910e',
+            sourceTitle: 'FIRMAN RD4910E specification'
+          },
+          {
+            attribute: 'button start',
+            status: 'not_confirmed',
+            value: '',
+            evidence: 'exact sources do not prove button control',
+            sourceUrl: 'https://example.test/firman-rd4910e',
+            sourceTitle: 'FIRMAN RD4910E specification'
+          }
+        ]
+      },
+      summaryForAnswer: 'Starter type is confirmed; control is not confirmed.',
+      warnings: ['source_evidence_validation_failed:key_start']
+    });
+
+    const badModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks if FIRMAN RD4910E starts with a key or button',
+          dialogueUnderstanding: 'single exact technical fact for a named model',
+          nextStepRationale: 'look up exact model start control',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:rd4910e',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'FIRMAN RD4910E key or button start',
+              semanticQuery: 'FIRMAN RD4910E key button electric starter',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: ['FIRMAN RD4910E'],
+              comparisonAttributes: ['key start', 'push-button start', 'start control'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'exact model start-control fact',
+              notes: 'answer key/button mechanism directly'
+            },
+            rationale: 'exact model fact must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'RD4910E запускается с ключа.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:rd4910e'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Firman RD4910E заводится с ключа или с кнопки?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, badModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Firman RD4910E заводится с ключа или с кнопки?'
+    });
+
+    expect(payload.answer).toContain('Электростартер есть, ручной запуск тоже есть');
+    expect(payload.answer).toContain('источники не подтвердили');
+    expect(payload.answer).not.toContain('Чем именно включается электростартер');
+    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
+  });
+
   it('repairs follow-up plans that reuse facts from a different exact model', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,

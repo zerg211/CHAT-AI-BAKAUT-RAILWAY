@@ -793,6 +793,31 @@ function answerAlreadyCoversStartControlUncertainty(answerText: string, label: s
   ]);
 }
 
+function answerAlreadyCoversGeneralStartControlUncertainty(answerText: string) {
+  const normalizedAnswer = normalizeModelText(answerText);
+  const mentionsElectricControl = normalizedTextIncludesAny(normalizedAnswer, [
+    'чем включается электростартер',
+    'чем включается электрозапуск',
+    'ключом, кнопкой',
+    'ключом кнопкой',
+    'ключом или переключателем',
+    'key or button',
+    'key, button',
+    'start control'
+  ]);
+  if (!mentionsElectricControl) return false;
+  return normalizedTextIncludesAny(normalizedAnswer, [
+    'не подтверд',
+    'не виж',
+    'нет подтверждения',
+    'not confirmed',
+    'not found',
+    'not specified',
+    'unknown',
+    'unclear'
+  ]);
+}
+
 function coverageItemConfirmsManualStarter(coverageItem: StartControlCoverageItem) {
   if (coverageItem.status !== 'confirmed') return false;
   const text = startControlCoverageText(coverageItem);
@@ -837,6 +862,7 @@ function startControlCoverageUncertaintyLine(coverage: unknown[], answerText = '
   const seen = new Set<string>();
   const coverageItems = coverage
     .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
+  if (answerAlreadyCoversGeneralStartControlUncertainty(answerText)) return '';
   const hasConfirmedElectricStarter = coverageItems.some(coverageItemConfirmsElectricStarter);
   for (const coverageItem of coverageItems) {
     const status = coverageItem.status;
