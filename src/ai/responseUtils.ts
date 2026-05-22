@@ -39,12 +39,17 @@ export function logOpenAIUsage(stage: string, model: string, response: unknown) 
   });
 }
 
+function hasTypeSignal(type: string, signals: string[]) {
+  const normalized = type.toLocaleLowerCase('en-US');
+  return signals.some((signal) => normalized.includes(signal));
+}
+
 export function responseUsedWebSearch(value: unknown) {
   if (!value) return false;
   if (extractUrlCitations(value).length > 0) return true;
   return hasResponseNode(value, (object) => {
     const type = typeof object.type === 'string' ? object.type : '';
-    return /web_search|search_result|url_citation/i.test(type);
+    return hasTypeSignal(type, ['web_search', 'search_result', 'url_citation']);
   });
 }
 
@@ -62,7 +67,7 @@ export function extractResponseText(value: unknown, depth = 0): string {
   if (
     typeof object.text === 'string'
     && object.text.trim()
-    && (!objectType || /output_text|message|text/i.test(objectType))
+    && (!objectType || hasTypeSignal(objectType, ['output_text', 'message', 'text']))
   ) {
     return object.text.trim();
   }
@@ -94,7 +99,7 @@ export function extractUrlCitations(value: unknown, depth = 0): WebCitation[] {
   const object = value as Record<string, unknown>;
   const type = typeof object.type === 'string' ? object.type : '';
   const url = typeof object.url === 'string' ? object.url : undefined;
-  const isCitation = Boolean(url && /url_citation|web_search|search_result|citation/i.test(type));
+  const isCitation = Boolean(url && hasTypeSignal(type, ['url_citation', 'web_search', 'search_result', 'citation']));
   const own: WebCitation[] = isCitation && url
     ? [{
         url,

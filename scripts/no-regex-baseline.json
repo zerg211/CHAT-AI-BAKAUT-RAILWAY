@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 1729,
+  "count": 1723,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -7125,48 +7125,6 @@
       "file": "src/ai/requirementLedger.ts",
       "kind": "regular_expression_literal",
       "hash": "7e6d6f6ce97f2fcf",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/responseUtils.ts|regex_test_call|903c617d93b5f735|1",
-      "file": "src/ai/responseUtils.ts",
-      "kind": "regex_test_call",
-      "hash": "903c617d93b5f735",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/responseUtils.ts|regular_expression_literal|ccbfc921b6976a4c|1",
-      "file": "src/ai/responseUtils.ts",
-      "kind": "regular_expression_literal",
-      "hash": "ccbfc921b6976a4c",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/responseUtils.ts|regex_test_call|6510a3d958f606e1|1",
-      "file": "src/ai/responseUtils.ts",
-      "kind": "regex_test_call",
-      "hash": "6510a3d958f606e1",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/responseUtils.ts|regular_expression_literal|685342d87f1d5d0e|1",
-      "file": "src/ai/responseUtils.ts",
-      "kind": "regular_expression_literal",
-      "hash": "685342d87f1d5d0e",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/responseUtils.ts|regex_test_call|898e39a03857032e|1",
-      "file": "src/ai/responseUtils.ts",
-      "kind": "regex_test_call",
-      "hash": "898e39a03857032e",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/responseUtils.ts|regular_expression_literal|a9854a97f91f8565|1",
-      "file": "src/ai/responseUtils.ts",
-      "kind": "regular_expression_literal",
-      "hash": "a9854a97f91f8565",
       "occurrence": 1
     },
     {

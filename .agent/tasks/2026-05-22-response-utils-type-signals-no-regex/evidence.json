@@ -1,0 +1,62 @@
+{
+  "taskId": "2026-05-22-response-utils-type-signals-no-regex",
+  "status": "PASS",
+  "change": {
+    "summary": "Replaced regex-based OpenAI response type classification with explicit lowercase substring checks.",
+    "files": [
+      "src/ai/responseUtils.ts",
+      "tests/responseUtils.test.ts",
+      "scripts/no-regex-baseline.json"
+    ],
+    "publicApiChanged": false,
+    "productionBehaviorChanged": false
+  },
+  "noRegex": {
+    "previousBaseline": 1729,
+    "currentBaseline": 1723,
+    "removedFindings": 6,
+    "updateCommand": "npm run lint:no-regex -- --update-baseline",
+    "guardCommand": "npm run lint:no-regex",
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "command": "npx vitest run tests/responseUtils.test.ts",
+      "result": "PASS",
+      "testFiles": 1,
+      "tests": 4
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "PASS"
+    },
+    {
+      "command": "npm test",
+      "result": "PASS",
+      "testFiles": 82,
+      "tests": 669
+    },
+    {
+      "command": "npm run build",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS",
+      "notes": "Git reported CRLF normalization warnings only."
+    }
+  ],
+  "productionEval": {
+    "required": false,
+    "reason": "Private provider-response type parsing refactor with focused parity tests; no prompts, answer policy, product selection, tool policy, or widget-visible behavior changed."
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS"
+  }
+}
