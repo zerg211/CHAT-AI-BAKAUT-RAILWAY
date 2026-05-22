@@ -273,6 +273,35 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
   });
 
+  it('allows previous visible cards for a narrowing turn without a new catalog tool', () => {
+    const selection = selectProductsForVisibleCards({
+      products: [plate],
+      userMessage: 'Бюджет до 70 тысяч, нужна не слишком тяжелая.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer narrows previous plate options',
+        dialogueUnderstanding: 'previous visible plate cards remain relevant',
+        nextStepRationale: 'continue selection from visible cards',
+        requiresTools: false,
+        toolRequests: [],
+        productMentions: [{
+          name: 'виброплита',
+          role: 'target_product',
+          productClass: 'plate',
+          evidence: 'buyer is narrowing the plate selection'
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Из уже показанных вариантов лучше оставить Виброплита TSS-WP60L 60 кг.',
+      needState: needStateWithBudget(70000),
+      allowHistoricalProducts: true
+    });
+
+    expect(selection.products).toEqual([plate]);
+    expect(selection.warnings).not.toContain('product_cards_suppressed:no_explicit_catalog_card_tool');
+  });
+
   it('falls back to in-budget cards when the answer only mentions over-budget products', () => {
     const selection = selectProductsForVisibleCards({
       products: [overBudgetPlate, plate],

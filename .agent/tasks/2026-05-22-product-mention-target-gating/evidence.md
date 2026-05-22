@@ -103,3 +103,59 @@ PASS: 86 test files, 695 tests
 ```
 
 AC8 remains pending until this fix pass is committed, pushed, Railway marker reaches the new commit, and production Promptfoo is rerun against Railway.
+
+## Production eval after `eeeb714`
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-eeeb714.json
+FAIL: 4/6 tests passed
+Deterministic average: 97.71%
+LLM average: 87.00%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-eeeb714.json`
+- `.agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-eeeb714.summary.json`
+
+Improvement from `5d88c46`:
+- Deterministic average: `92.62%` -> `97.71%`
+- LLM average: `77.17%` -> `87.00%`
+- Passed cases: `3/6` -> `4/6`
+- `commercial_delivery_discount_rules` now passes and has `leadRequested: true`.
+
+Remaining failures:
+- `generator_load_selection`: answer refused useful preliminary cards because retrieval returned only over-budget generator candidates and the load contract omitted the unknown pump.
+- `context_shift_agent_completion`: answer ignored previous visible vibroplate cards and asked for a form instead of narrowing the existing selection.
+
+## Second fix pass after failed production eval
+
+Timestamp: `2026-05-22T20:11:55.0297780+03:00`
+
+Changes:
+- Added budget-aware catalog fallback: when structured budget exists and initial same-intent results have no in-budget product, broaden the deterministic catalog pool and add same-intent products within budget.
+- Strengthened planner instructions so known relevant generator loads are not omitted when exact power is missing; bounded preliminary motor loads should be represented as bounded assumptions.
+- Added previous-visible-card continuity: when no current catalog products exist, relevant prior product cards are passed to the answer model as product context.
+- Added explicit `allowHistoricalProducts` card-selection path so historical cards can be reused only when runtime marks that context.
+- Added a focused test for historical card reuse in a narrowing turn.
+- Replaced a legacy visible-answer sanitizer regex chain in `assistant.ts` with explicit scanners so the staged no-regex gate passes without updating the baseline.
+
+Local checks:
+
+```text
+npx vitest run tests/agentManagerCardSelection.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerContracts.test.ts
+PASS: 4 test files, 69 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36.
+
+npm run build
+PASS
+
+npm test
+PASS: 86 test files, 696 tests
+```
+
+AC8 remains pending until this second fix pass is committed, pushed, Railway marker reaches the new commit, and production Promptfoo is rerun against Railway.

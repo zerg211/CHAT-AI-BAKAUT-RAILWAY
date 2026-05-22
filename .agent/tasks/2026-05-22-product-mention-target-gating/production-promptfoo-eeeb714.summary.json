@@ -1,0 +1,26 @@
+{
+  "source": ".agent\\tasks\\2026-05-22-product-mention-target-gating\\production-promptfoo-eeeb714.json",
+  "generatedAt": "2026-05-22T17:02:24.814Z",
+  "deterministic": {
+    "resultCount": 6,
+    "successes": 4,
+    "failures": 2,
+    "errors": 0,
+    "averageScore": 0.9770555555555555,
+    "assertionPassRate": 0.9393939393939394,
+    "assertionPassCount": 31,
+    "assertionFailCount": 2,
+    "assertionCount": 33
+  },
+  "llm": {
+    "llmAverage": 0.87,
+    "llmAverageStatus": "ready",
+    "llmComponentCount": 6,
+    "llmBlockedCount": 0
+  },
+  "gates": {
+    "deterministicAbove90": true,
+    "llmAverageAbove90": false,
+    "llmAverageUsable": true
+  }
+}

@@ -76,7 +76,7 @@ function numberFromStructuredBudgetText(value: string) {
   return positiveFiniteNumber(numeric);
 }
 
-function budgetMaxFromNeedState(needState: CustomerNeedState) {
+export function budgetMaxFromNeedState(needState: CustomerNeedState) {
   const hardBudget = positiveFiniteNumber(needState.selectionState?.hardConstraints?.budgetMax);
   if (hardBudget !== undefined) return hardBudget;
 
@@ -550,11 +550,12 @@ export function selectProductsForVisibleCards(input: {
   intent: AgentIntentContract;
   answerText: string;
   needState: CustomerNeedState;
+  allowHistoricalProducts?: boolean;
 }) {
   const unique = uniqueProducts(input.products);
   const hasExplicitCardTool = input.intent.toolRequests.some((request) =>
     request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
-  );
+  ) || input.allowHistoricalProducts === true;
   const cardIntent = inferVisibleCardIntent(input);
   if (!hasExplicitCardTool) {
     return {

@@ -36,6 +36,7 @@ import {
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import {
   assessVisibleCardReadiness,
+  budgetMaxFromNeedState,
   filterGeneratorProductsByLoadProfile,
   productSelectionClasses,
   productCards,
@@ -529,6 +530,31 @@ function continuityCardIntent(input: {
 }) {
   const decisionIntent = coerceVisibleCardIntent(input.decisionProductClass);
   return decisionIntent === 'unknown' ? input.fallback : decisionIntent;
+}
+
+function continuityProductClassFromCurrentTurn(input: {
+  intent: AgentIntentContract;
+  needState: CustomerNeedState;
+  userMessage: string;
+}) {
+  const targetMention = (input.intent.productMentions ?? []).find((mention) =>
+    exactTargetProductMentionRoles.has(mention.role)
+  );
+  const mentionIntent = coerceVisibleCardIntent(targetMention?.productClass);
+  if (mentionIntent !== 'unknown') return mentionIntent;
+
+  const activeNeeds = input.needState.activeNeeds ?? [];
+  for (let index = activeNeeds.length - 1; index >= 0; index -= 1) {
+    const needIntent = coerceVisibleCardIntent(activeNeeds[index]?.productClass);
+    if (needIntent !== 'unknown') return needIntent;
+  }
+
+  return inferProductIntent([
+    input.userMessage,
+    input.intent.userMessageSummary,
+    input.intent.dialogueUnderstanding,
+    input.intent.nextStepRationale
+  ].filter(Boolean).join('\n'));
 }
 
 function catalogPresenceForTargets(targetNames: string[], products: Product[]) {
@@ -1401,12 +1427,14 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For multi-turn generator selection, do not run catalog.search alone when history contains a previous load estimate, a prior generator sizing answer, or enough load facts to calculate. Re-run calculator.generatorLoad in the current turn before catalog.search so the current tool results carry payload.profile.requiredNominalKw and weak products can be filtered.',
             'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit, checked, or bounded estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
             'For calculator.generatorLoad, set args.estimateBasis: "exact_or_user_provided" for explicit powers, "catalog_or_web_fact" for checked facts, "bounded_assumption" when the buyer wants an approximate selection and the unknown load is bounded by type/function/scenario, or "unbounded_guess" when only vague load names are known.',
+            'For calculator.generatorLoad, do not omit a known relevant consumer just because its exact power is missing. If the consumer is important and only its broad name is known, include it with null kW and an incomplete basis; if its concrete type/function plus voltage or phase is known and the buyer asks for preliminary variants, include a conservative numeric bounded_assumption instead of pretending the remaining explicit loads are the whole system.',
             'For every calculator.generatorLoad load item, set basisKind: exact_power for explicit nameplate or user kW, checked_fact for catalog or web facts, specific_type_or_function when an estimated load is bounded by a concrete type, function, or scenario, generic_load_name when only a broad name such as pump, compressor, or tool is known, and unknown when the load source itself is unclear.',
             'For every calculator.generatorLoad load item, set basisSignals from dialogue/tool facts only. Do not set basisKind=specific_type_or_function merely because a broad load class is named; "pump" alone is generic_load_name, while a borehole pump, drainage pump, circulation pump, irrigation pump, or a pump function/scenario can be specific_type_or_function.',
             'For a motor load estimate such as a pump/compressor/pressure washer, bounded_assumption requires basisKind=specific_type_or_function plus consumer_type_known or consumer_function_known and voltage_or_phase_known; otherwise use unbounded_guess and ask one minimal question.',
             'For bounded_assumption, every estimated_average load that should affect the generator calculation must include numeric runningKw or startingKw. A load with null kW is only a missing fact and will not be counted by the calculator.',
             'For a bounded unknown load, use source="estimated_average" with numeric runningKw and startingKw; do not use source="explicit_user" for a load whose kW was not explicitly provided.',
             'When the buyer asks for preliminary generator variants and the context identifies a specific motor/function plus voltage or phase, supply conservative numeric estimates for that bounded load and preserve the exact nameplate/model as a missing fact.',
+            'When the buyer asks for preliminary generator variants after naming a borehole/deep-well/circulation/drainage pump plus voltage or phase, treat that pump as a bounded motor load for preliminary sizing. Do not return estimateBasis="exact_or_user_provided" unless every relevant load that affects sizing has exact or checked power.',
             'Use canonical load kinds in args.loads.kind such as pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop, or unknown_load; put descriptive wording in name/evidence, not in kind.',
             'For unknown load sources, ask the minimum useful question before exact selection: identify what the consumer does, its type/class, voltage/phase, and simultaneous operation only as needed for the current calculation.',
             'For generator selection, do not plan catalog.search when the only available load basis is an unbounded guess. Ask for the missing type/function/scenario first.',
@@ -1451,6 +1479,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'If calculator.generatorLoad is not_found, do not invent kW values. Ask for the missing load/nameplate data or clearly say the estimate is not reliable yet.',
             'If calculator.generatorLoad warnings include generator_load_estimate_only, generator_load_unbounded_guess, generator_load_bounded_basis_incomplete, or generator_load_invalid_load_kind, do not name catalog products or prices. Set selectionReadiness.canShowProductCards=false and ask the minimum useful question to bound the unknown load source.',
             'If calculator.generatorLoad warnings include generator_load_bounded_assumption, you may show only preliminary product cards when the buyer asked for an approximate selection; keep exact missing facts in selectionReadiness.missingFacts and state the assumptions in answerText.',
+            'If the buyer explicitly asks for preliminary generator variants and toolResults include calculator.generatorLoad status ok plus catalog.search products, use selectionReadiness.status="ready_for_preliminary_cards" when the catalog products are useful orientation candidates. The answer must say the cards are preliminary and name any missing exact load fact before final purchase-safe selection.',
             'You must set selectionReadiness for the current answer. It is your semantic decision about whether buyer-visible product cards are useful and honest now.',
             'When selectionReadiness.canShowProductCards is false, answerText must itself explain what is missing or what the next useful question is. The code will not append a canned clarification.',
             'When productClass is generator and cards are blocked, answerText must remain self-contained: explicitly mention the generator selection and the missing load/power/model fact that blocks the next step. Do not return only a bare question.',
@@ -1466,6 +1495,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'When the buyer gives a budget, never present products above that budget as satisfying it. If in-budget catalog candidates exist but are weaker or compromise options, say that plainly and treat higher-priced models only as above-budget reference points.',
             'For catalog selection answers, do not enumerate the full returned catalog. Name only the strongest 1-3 products you can justify from the provided product context. Treat every named product as a visible recommendation candidate; avoid naming borderline or dropped alternatives as filler. Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context.',
             'For catalog selection answers, every catalog model or brand-model named in answerText must be copied from products[].name, and every named catalog recommendation must be strong enough to be shown as a visible card. Do not introduce product names that are absent from products, and do not mention a returned product as narrative filler if it is not a real recommendation candidate.',
+            'Products can include current catalog results or buyer-visible cards from previous turns that remain relevant to the current narrowing request. If products are present and fit the current need, use them instead of claiming there is no fresh catalog or asking for a lead form just to continue selection.',
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
@@ -1511,6 +1541,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For calculator.generatorLoad, block or rewrite any answer that states a calculated minimum inconsistent with payload.profile.requiredNominalKw/requiredStartingKw.',
             'For generator answers, require rewrite if the answer names catalog products, prices, or product cards when tool results include generator_load_estimate_only, generator_load_unbounded_guess, generator_load_bounded_basis_incomplete, generator_load_invalid_load_kind, or catalog_search_skipped:generator_load_unconfirmed_basis.',
             'For generator_load_bounded_assumption, allow preliminary product cards only when the answer labels them as approximate, preserves missing exact facts, and does not present assumptions as confirmed nameplate data.',
+            'For generator preliminary selection, require rewrite if catalog.search returned useful products and the buyer asked for preliminary variants, but the answer refuses to show any orientation cards solely because one exact load fact is still missing. The rewrite should keep the missing fact caveat and present the candidates as preliminary, not final.',
             'For a generator clarification answer with selectionReadiness.canShowProductCards=false, require rewrite if the answer is only a short question or does not explicitly mention generator selection plus the missing load/power/model fact.',
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
@@ -1518,6 +1549,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, require rewrite if no clearly light in-budget candidate is available and the answer presents a heavier in-budget product as clearly best or light without stating the weight compromise and asking whether that tradeoff is acceptable.',
             'For catalog selection answers, require rewrite if the answer enumerates too many product names, uses named products as filler beyond the strongest 1-3 recommendations, or states concrete dimensions/specs not present in products. A named product should be treated as a visible recommendation candidate.',
             'For catalog selection answers, require rewrite if answerText names a catalog recommendation or brand-model that is absent from products[].name, or if it names a returned product that is not strong enough to be a visible recommendation candidate.',
+            'For a catalog narrowing continuation where products are available from current or previous visible cards, require rewrite if the answer claims it cannot show concrete models due to missing fresh catalog data or asks for a lead form instead of using those product facts.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
@@ -1821,6 +1853,7 @@ export class AgentManagerOrchestrator {
       userMessage,
       history,
       intent,
+      needState: needStateSnapshot,
       toolRequests: intent.toolRequests,
       signal: input.signal
     });
@@ -1836,6 +1869,16 @@ export class AgentManagerOrchestrator {
       statuses: toolResults.map((result) => ({ requestId: result.requestId, tool: result.tool, status: result.status }))
     });
 
+    const continuityIntent = continuityProductClassFromCurrentTurn({
+      intent,
+      needState: needStateSnapshot,
+      userMessage
+    });
+    const historicalProducts = products.length
+      ? []
+      : previousVisibleCardProducts({ history, intent: continuityIntent });
+    const answerProducts = products.length ? products : historicalProducts;
+    const usingHistoricalProducts = !products.length && historicalProducts.length > 0;
     const requiredResponseClauses = requiredResponseClausesForToolResults(toolResults);
     const rawAnswer = await this.model.composeAnswer({
       session: input.session,
@@ -1845,7 +1888,7 @@ export class AgentManagerOrchestrator {
       ledgerState,
       intent,
       toolResults,
-      products,
+      products: answerProducts,
       requiredResponseClauses,
       signal: input.signal
     });
@@ -1882,7 +1925,7 @@ export class AgentManagerOrchestrator {
       ledgerState,
       intent,
       toolResults,
-      products,
+      products: answerProducts,
       requiredResponseClauses,
       answer,
       signal: input.signal
@@ -1920,14 +1963,24 @@ export class AgentManagerOrchestrator {
       answerText: finalText,
       leadAction: finalLeadAction
     };
-    const initialCardSelection = selectProductsForVisibleCards({
-      products,
+    let initialCardSelection = selectProductsForVisibleCards({
+      products: answerProducts,
       userMessage,
       history,
       intent,
       answerText: finalText,
-      needState: needStateSnapshot
+      needState: needStateSnapshot,
+      allowHistoricalProducts: usingHistoricalProducts
     });
+    if (usingHistoricalProducts && initialCardSelection.products.length) {
+      initialCardSelection = {
+        ...initialCardSelection,
+        warnings: uniqueStrings([
+          ...initialCardSelection.warnings,
+          'product_cards_reused_from_previous_turn'
+        ])
+      };
+    }
     const selectionReadiness = assessVisibleCardReadiness({
       cardSelection: initialCardSelection,
       answer: initialAnswerContract,
@@ -2047,10 +2100,12 @@ export class AgentManagerOrchestrator {
     history: Message[];
     intent: AgentIntentContract;
     toolRequests: ToolRequest[];
+    needState: CustomerNeedState;
     signal?: AbortSignal;
   }) {
     const productsById = new Map<string, Product>();
     const toolResults: ToolResult[] = [];
+    const budgetMax = budgetMaxFromNeedState(input.needState);
 
     for (const request of input.toolRequests) {
       const startedAt = Date.now();
@@ -2080,7 +2135,8 @@ export class AgentManagerOrchestrator {
               userMessage: input.userMessage,
               semanticContext: [semanticQuery, input.userMessage, request.rationale].join('\n'),
               productIntent,
-              embeddingQuery: semanticQuery
+              embeddingQuery: semanticQuery,
+              budgetMax
             });
             const loadRequirementKw = isGeneratorProductClass(productIntent)
               ? generatorLoadRequirementKw(toolResults)
@@ -2144,7 +2200,8 @@ export class AgentManagerOrchestrator {
                 userMessage: input.userMessage,
                 semanticContext: [semanticQuery, query, input.userMessage, request.rationale].join('\n'),
                 productIntent,
-                embeddingQuery: semanticQuery
+                embeddingQuery: semanticQuery,
+                budgetMax
               });
               found.products.forEach((product) => productsById.set(product.id, product));
             }
@@ -2184,7 +2241,8 @@ export class AgentManagerOrchestrator {
               userMessage: input.userMessage,
               semanticContext: [scopedQuery.semanticQuery, lookupQuery, input.userMessage, request.rationale].join('\n'),
               productIntent: toolRequestProductIntent(request, input.userMessage),
-              embeddingQuery: scopedQuery.semanticQuery
+              embeddingQuery: scopedQuery.semanticQuery,
+              budgetMax
             });
             found.products.forEach((product) => productsById.set(product.id, product));
           }
@@ -2370,6 +2428,7 @@ export class AgentManagerOrchestrator {
     semanticContext?: string;
     productIntent?: ProductSelectionClass;
     embeddingQuery?: string;
+    budgetMax?: number;
   }) {
     const query = input.query;
     const limit = input.limit;
@@ -2407,6 +2466,34 @@ export class AgentManagerOrchestrator {
 
     const byId = new Map<string, Product>();
     for (const product of [...textProducts, ...vectorProducts]) byId.set(product.id, product);
+    const shouldBroadenForBudget = input.budgetMax !== undefined &&
+      Number.isFinite(input.budgetMax) &&
+      input.budgetMax > 0 &&
+      productIntent !== 'unknown';
+    if (shouldBroadenForBudget) {
+      const currentMatching = [...byId.values()].filter((product) => productMatchesIntent(product, productIntent));
+      const hasWithinBudget = currentMatching.some((product) =>
+        typeof product.price === 'number' &&
+        Number.isFinite(product.price) &&
+        product.price <= input.budgetMax!
+      );
+      if (!hasWithinBudget) {
+        try {
+          const broadProducts = await this.products.searchProducts('', 500);
+          let added = 0;
+          for (const product of broadProducts) {
+            if (!productMatchesIntent(product, productIntent)) continue;
+            if (typeof product.price !== 'number' || !Number.isFinite(product.price) || product.price > input.budgetMax!) continue;
+            if (!byId.has(product.id)) added += 1;
+            byId.set(product.id, product);
+          }
+          if (added > 0) warnings.push(`catalog_budget_fallback_pool:${added}`);
+        } catch (error) {
+          firstError ??= error;
+          warnings.push(`catalog_budget_fallback_error:${safeError(error).code ?? safeError(error).message}`);
+        }
+      }
+    }
     const mergedProducts = [...byId.values()];
     const matchingProducts = productIntent === 'unknown'
       ? mergedProducts

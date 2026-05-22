@@ -6935,32 +6935,266 @@ function commercialFirstPersonReplacement(match: string) {
   return 'Детали сверю перед оформлением.';
 }
 
+function replaceCaseInsensitiveAll(text: string, search: string, replacement: string) {
+  const needle = search.toLocaleLowerCase('ru');
+  if (!needle) return text;
+  const lower = text.toLocaleLowerCase('ru');
+  let cursor = 0;
+  let output = '';
+  while (cursor < text.length) {
+    const index = lower.indexOf(needle, cursor);
+    if (index < 0) {
+      output += text.slice(cursor);
+      break;
+    }
+    output += text.slice(cursor, index);
+    output += replacement;
+    cursor = index + search.length;
+  }
+  return output;
+}
+
+function isSentenceBoundaryChar(char: string) {
+  return char === '.' || char === '!' || char === '?' || char === '\n';
+}
+
+function managerSentenceNeedsFirstPerson(segment: string) {
+  const lower = segment.toLocaleLowerCase('ru');
+  const mentionsManager = lower.includes('менеджер');
+  if (!mentionsManager) return false;
+  const actionFragments = ['подтверд', 'провер', 'уточн', 'посчит', 'свер'];
+  if (actionFragments.some((fragment) => lower.includes(fragment))) return true;
+  if (lower.includes('должен')) return true;
+  if (lower.includes('передам')) return true;
+  return lower.includes('через менеджер');
+}
+
+function rewriteManagerSentences(text: string) {
+  let output = '';
+  let segment = '';
+  for (const char of text) {
+    segment += char;
+    if (!isSentenceBoundaryChar(char)) continue;
+    output += managerSentenceNeedsFirstPerson(segment)
+      ? commercialFirstPersonReplacement(segment)
+      : segment;
+    segment = '';
+  }
+  if (segment) {
+    output += managerSentenceNeedsFirstPerson(segment)
+      ? commercialFirstPersonReplacement(segment)
+      : segment;
+  }
+  return output;
+}
+
+function trimSpacesBeforePunctuation(text: string) {
+  let output = '';
+  for (const char of text) {
+    if (char === ',' || char === '.' || char === '!' || char === '?') {
+      output = output.trimEnd();
+    }
+    output += char;
+  }
+  return output;
+}
+
+function collapseHorizontalSpaces(text: string) {
+  let output = '';
+  let previousWasSpace = false;
+  for (const char of text) {
+    if (char === ' ' || char === '\t') {
+      if (!previousWasSpace) output += ' ';
+      previousWasSpace = true;
+      continue;
+    }
+    output += char;
+    previousWasSpace = false;
+  }
+  return output;
+}
+
+function stripBetweenMarkers(text: string, startMarker: string, endMarker: string) {
+  let output = '';
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf(startMarker, cursor);
+    if (start < 0) {
+      output += text.slice(cursor);
+      break;
+    }
+    output += text.slice(cursor, start);
+    const end = text.indexOf(endMarker, start + startMarker.length);
+    cursor = end < 0 ? text.length : end + endMarker.length;
+  }
+  return output;
+}
+
+function stripMarkdownHttpLinks(text: string) {
+  let output = '';
+  let cursor = 0;
+  while (cursor < text.length) {
+    if (text[cursor] !== '[') {
+      output += text[cursor];
+      cursor += 1;
+      continue;
+    }
+    const labelEnd = text.indexOf(']', cursor + 1);
+    const urlStart = labelEnd >= 0 && text[labelEnd + 1] === '(' ? labelEnd + 2 : -1;
+    const urlEnd = urlStart >= 0 ? text.indexOf(')', urlStart) : -1;
+    const url = urlStart >= 0 && urlEnd >= 0 ? text.slice(urlStart, urlEnd).toLocaleLowerCase('ru') : '';
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      output += visibleLinkLabel(text.slice(cursor + 1, labelEnd));
+      cursor = urlEnd + 1;
+      continue;
+    }
+    output += text[cursor];
+    cursor += 1;
+  }
+  return output;
+}
+
+function isWhitespaceTextChar(char: string) {
+  return char.trim() === '';
+}
+
+function stripHttpUrls(text: string) {
+  let output = '';
+  let cursor = 0;
+  while (cursor < text.length) {
+    const tail = text.slice(cursor).toLocaleLowerCase('ru');
+    if (tail.startsWith('http://') || tail.startsWith('https://')) {
+      cursor += tail.startsWith('https://') ? 'https://'.length : 'http://'.length;
+      while (cursor < text.length && !isWhitespaceTextChar(text[cursor])) cursor += 1;
+      continue;
+    }
+    output += text[cursor];
+    cursor += 1;
+  }
+  return output;
+}
+
+function trimTokenEdgePunctuation(token: string) {
+  let start = 0;
+  let end = token.length;
+  const edgeChars = new Set(['.', ',', '!', '?', ':', ';', '(', ')', '[', ']', '{', '}', '"', "'"]);
+  while (start < end && edgeChars.has(token[start])) start += 1;
+  while (end > start && edgeChars.has(token[end - 1])) end -= 1;
+  return token.slice(start, end);
+}
+
+function isBareDomainToken(token: string) {
+  const clean = trimTokenEdgePunctuation(token).toLocaleLowerCase('ru');
+  if (!clean.includes('.') || clean.includes('@')) return false;
+  const suffixes = ['.ru', '.com', '.net', '.org', '.рф', '.su', '.io', '.dev', '.shop', '.site'];
+  return suffixes.some((suffix) => clean === suffix.slice(1) || clean.endsWith(suffix) || clean.includes(`${suffix}/`));
+}
+
+function stripBareDomainTokens(text: string) {
+  let output = '';
+  let cursor = 0;
+  while (cursor < text.length) {
+    if (isWhitespaceTextChar(text[cursor])) {
+      output += text[cursor];
+      cursor += 1;
+      continue;
+    }
+    let end = cursor;
+    while (end < text.length && !isWhitespaceTextChar(text[end])) end += 1;
+    const token = text.slice(cursor, end);
+    if (!isBareDomainToken(token)) output += token;
+    cursor = end;
+  }
+  return output;
+}
+
+function rewriteBundleIntroLines(text: string) {
+  return text.split('\n').map((line) => {
+    const trimmed = line.trimStart();
+    const leading = line.slice(0, line.length - trimmed.length);
+    const lower = collapseHorizontalSpaces(trimmed.toLocaleLowerCase('ru'));
+    if (lower.startsWith('отлично, беру комплект')) return `${leading}Ок, комплект понятен:`;
+    if (lower.startsWith('беру комплект')) return `${leading}Комплект понятен:`;
+    return line;
+  }).join('\n');
+}
+
+function stripEmptyParentheses(text: string) {
+  let output = '';
+  let cursor = 0;
+  while (cursor < text.length) {
+    if (text[cursor] !== '(') {
+      output += text[cursor];
+      cursor += 1;
+      continue;
+    }
+    let inner = cursor + 1;
+    while (inner < text.length && (text[inner] === ' ' || text[inner] === '\t')) inner += 1;
+    if (text[inner] === ')') {
+      cursor = inner + 1;
+      continue;
+    }
+    output += text[cursor];
+    cursor += 1;
+  }
+  return output;
+}
+
+function trimSpacesBeforeNewlines(text: string) {
+  let output = '';
+  for (const char of text) {
+    if (char === '\n') output = output.trimEnd();
+    output += char;
+  }
+  return output;
+}
+
+function collapseBlankLines(text: string) {
+  let output = '';
+  let newlineCount = 0;
+  for (const char of text) {
+    if (char === '\n') {
+      newlineCount += 1;
+      if (newlineCount <= 2) output += char;
+      continue;
+    }
+    output += char;
+    newlineCount = 0;
+  }
+  return output;
+}
+
 function sanitizeThirdPersonManagerRole(answer: string) {
-  return answer
-    .replace(/дальше\s+уже\s+оформляем\s+через\s+менеджера/giu, 'дальше оформляем заказ')
-    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}(?:менеджер[^.!?\n]{0,120}(?:подтверд|провер|уточн|посчит|свер)|(?:подтверд|провер|уточн|посчит|свер)[^.!?\n]{0,120}менеджер)[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
-    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}должен[^.!?\n]{0,120}менеджер[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
-    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}передам[^.!?\n]{0,120}менеджер[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
-    .replace(/(?:^|(?<=[.!?])\s+)(?:[^.!?\n]{0,180}через\s+менеджер[а-я]*[^.!?\n]*[.!?]?)/giu, commercialFirstPersonReplacement)
-    .replace(/\s+([,.!?])/g, '$1')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
+  const normalizedOrderText = replaceCaseInsensitiveAll(
+    answer,
+    'дальше уже оформляем через менеджера',
+    'дальше оформляем заказ'
+  );
+  return collapseHorizontalSpaces(
+    trimSpacesBeforePunctuation(rewriteManagerSentences(normalizedOrderText))
+  ).trim();
 }
 
 function sanitizeVisibleAnswer(answer: string, plan?: AssistantTurnPlan) {
-  let cleaned = answer
-    .replace(/[^]*/g, '')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, (_match, label: string) => visibleLinkLabel(label))
-    .replace(/https?:\/\/\S+/gi, '')
-    .replace(/\b(?:[\w-]+\.)+(?:ru|com|net|org|рф|su|io|dev|shop|site)\b(?:\/\S*)?/gi, '')
-    .replace(/из\s+наличия/giu, 'из каталога')
-    .replace(/(?:^|\n)\s*отлично,\s*беру\s+комплект:?/giu, '\nОк, комплект понятен:')
-    .replace(/(?:^|\n)\s*беру\s+комплект:?/giu, '\nКомплект понятен:')
-    .replace(/\s*\(\s*\)/g, '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
+  let cleaned = collapseHorizontalSpaces(
+    collapseBlankLines(
+      trimSpacesBeforeNewlines(
+        stripEmptyParentheses(
+          rewriteBundleIntroLines(
+            replaceCaseInsensitiveAll(
+              stripBareDomainTokens(
+                stripHttpUrls(
+                  stripMarkdownHttpLinks(stripBetweenMarkers(answer, '', ''))
+                )
+              ),
+              'из наличия',
+              'из каталога'
+            )
+          )
+        )
+      )
+    )
+  ).trim();
   if (plan?.followUpPolicy === 'answerNowNoDeferredOffer') {
     cleaned = stripDeferredOfferTail(cleaned);
   }

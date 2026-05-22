@@ -7,7 +7,10 @@
     "Added observability for suppressed context-only target names.",
     "Added focused tests for context load devices and preserved target exact-model handling.",
     "After failed production eval 5d88c46, added final leadAction consistency repair for form-offer answers after missing-contact lead.capture.",
-    "After failed production eval 5d88c46, strengthened general LLM/reviewer grounding for visible catalog recommendations and one-person plate-compactor weight compromises."
+    "After failed production eval 5d88c46, strengthened general LLM/reviewer grounding for visible catalog recommendations and one-person plate-compactor weight compromises.",
+    "After failed production eval eeeb714, added budget-aware catalog fallback for same-intent in-budget products.",
+    "After failed production eval eeeb714, added previous-visible-card continuity for catalog narrowing turns.",
+    "Replaced a legacy visible-answer sanitizer regex chain with explicit scanners so no-regex passes without updating the baseline."
   ],
   "checks": [
     {
@@ -42,6 +45,21 @@
       "command": "npm test",
       "status": "pass",
       "details": "86 test files passed, 695 tests passed"
+    },
+    {
+      "command": "npx vitest run tests/agentManagerCardSelection.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerContracts.test.ts",
+      "status": "pass",
+      "details": "4 test files passed, 69 tests passed"
+    },
+    {
+      "command": "npm test",
+      "status": "pass",
+      "details": "86 test files passed, 696 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "pass",
+      "details": "No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36."
     }
   ],
   "acceptanceCriteria": {
@@ -56,14 +74,30 @@
     "AC9": "pass"
   },
   "productionPromptfoo": {
-    "status": "failed_before_fix_pass",
+    "status": "failed_before_second_fix_pass",
     "required": true,
-    "artifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.json",
-    "summaryArtifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.summary.json",
-    "commit": "5d88c46",
-    "deterministicAverage": 0.9262222222222224,
-    "llmAverage": 0.7716666666666666,
-    "nextStep": "Commit and push fix pass, wait for Railway marker, rerun production Promptfoo."
+    "runs": [
+      {
+        "artifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.json",
+        "summaryArtifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-5d88c46.summary.json",
+        "commit": "5d88c46",
+        "passed": 3,
+        "total": 6,
+        "deterministicAverage": 0.9262222222222224,
+        "llmAverage": 0.7716666666666666
+      },
+      {
+        "artifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-eeeb714.json",
+        "summaryArtifact": ".agent/tasks/2026-05-22-product-mention-target-gating/production-promptfoo-eeeb714.summary.json",
+        "commit": "eeeb714",
+        "passed": 4,
+        "total": 6,
+        "deterministicAverage": 0.9770555555555555,
+        "llmAverage": 0.87
+      }
+    ],
+    "nextStep": "Commit and push second fix pass, wait for Railway marker, rerun production Promptfoo."
   },
-  "fixPassTimestamp": "2026-05-22T19:54:48.5358054+03:00"
+  "fixPassTimestamp": "2026-05-22T19:54:48.5358054+03:00",
+  "secondFixPassTimestamp": "2026-05-22T20:11:55.0297780+03:00"
 }

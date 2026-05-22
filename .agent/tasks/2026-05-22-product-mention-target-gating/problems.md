@@ -76,3 +76,52 @@ Fix direction:
 Validation:
 
 - Rerun production Promptfoo after commit/push/Railway marker.
+
+## P4: preliminary generator selection hides all cards when budget fallback retrieval is needed
+
+Scenario: `generator_load_selection` after commit `eeeb714`
+
+Observed behavior:
+
+- Score improved from the previous run, but the answer still fails the LLM gate.
+- The answer refuses to show catalog options and says all found generators are above 90,000 RUB.
+- Metadata shows initial catalog retrieval returned only over-budget generator candidates, so card selection suppressed every card.
+
+Cause:
+
+- Retrieval can miss in-budget products even when the structured budget is known in the ledger.
+- The planner also used `estimateBasis="exact_or_user_provided"` while omitting the known but not precisely powered pump from the load contract.
+
+Fix direction:
+
+- When a structured budget exists and the initial same-intent catalog pool has no in-budget product, broaden the deterministic catalog pool and filter by same product intent plus price.
+- Strengthen planner instructions so known relevant loads are not omitted just because exact power is missing; bounded preliminary motor loads should be represented as bounded assumptions, not hidden.
+
+Validation:
+
+- Rerun local tests/typecheck/build/no-regex.
+- Commit, push, wait for Railway marker, then rerun production Promptfoo.
+
+## P5: catalog narrowing ignores previous visible cards
+
+Scenario: `context_shift_agent_completion` after commit `eeeb714`
+
+Observed behavior:
+
+- The prior turn showed relevant vibroplate cards.
+- The follow-up turn only narrows budget and weight, but the answer says there is no fresh catalog and asks for a form instead of continuing from those cards.
+
+Cause:
+
+- The answer model only received current tool products. When the planner decided no new tool was needed, previous buyer-visible cards were not passed as product context.
+- Card selection also required a current catalog tool, so historical cards could not be reused for a normal narrowing turn.
+
+Fix direction:
+
+- Provide relevant previous visible cards as answer product context when there are no current catalog products.
+- Allow card selection to show those historical products only when the runtime explicitly marks them as historical product context for this turn.
+
+Validation:
+
+- Add a focused card-selection test for historical products.
+- Rerun production Promptfoo after commit/push/Railway marker.
