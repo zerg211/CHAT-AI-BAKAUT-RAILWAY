@@ -72,3 +72,10 @@ PASS: No new regex constructs. Legacy baseline: 1623.
 ## Production eval
 
 Production Promptfoo is not required for this pass: the changed code is deterministic catalog sitemap ingest, not the chat answer runtime. The deployment marker must still be checked after push.
+
+Railway marker after push:
+
+```text
+19:31:23 commit=f527e4d7e0316a87d70c34736bf1c299dd65ca9b branch=main
+MARKER_OK
+```
