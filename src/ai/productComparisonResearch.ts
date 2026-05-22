@@ -554,7 +554,26 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
 }
 
 const sourceTextLimit = 250000;
-type SourceTextCache = Map<string, Promise<{ ok: boolean; text: string; warning?: string }>>;
+const sourceVisualCandidateLimit = 8;
+
+type SourceVisualCandidate = {
+  imageUrl: string;
+  sourceUrl: string;
+  sourceTitle?: string;
+  context: string;
+  score: number;
+};
+
+type SourceDocument = {
+  ok: boolean;
+  text: string;
+  warning?: string;
+  media: SourceVisualCandidate[];
+  sourceTitle?: string;
+};
+
+type SourceTextCache = Map<string, Promise<SourceDocument>>;
+type SourceCheerioElement = ReturnType<cheerio.CheerioAPI>;
 
 function isWhitespaceChar(char: string) {
   return char.trim() === '';
@@ -601,10 +620,128 @@ function sourceLooksLikePdf(sourceUrl: string, contentType: string) {
   }
 }
 
-function htmlToSourceText(html: string) {
+const imageUrlAttributes = [
+  'src',
+  'data-src',
+  'data-original',
+  'data-lazy-src',
+  'data-large_image',
+  'href'
+];
+
+const sourceVisualContextNeedles = [
+  ...practicalStartControlNeedles,
+  ...electricStarterNeedles,
+  ...starterFieldNeedles,
+  'control panel',
+  'front panel',
+  'operator panel',
+  'photo',
+  'image',
+  'picture',
+  'battery',
+  'панель управления',
+  'фото',
+  'изображение',
+  'аккумулятор'
+];
+
+function sourceTitleFromHtml($: cheerio.CheerioAPI) {
+  return collapseWhitespace($('title').first().text() || $('h1').first().text());
+}
+
+function resolveHttpUrl(value: unknown, baseUrl: string) {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const trimmed = value.trim();
+  if (trimmed.startsWith('data:')) return '';
+  try {
+    const url = new URL(trimmed, baseUrl);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function firstSrcsetUrl(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const first = value.split(',').map((item) => item.trim()).filter(Boolean)[0];
+  return first ? first.split(' ').map((item) => item.trim()).filter(Boolean)[0] ?? '' : '';
+}
+
+function imageElementUrls($element: SourceCheerioElement, baseUrl: string) {
+  const values: string[] = [];
+  for (const attribute of imageUrlAttributes) {
+    const value = $element.attr(attribute);
+    if (attribute === 'href' && !$element.is('a')) continue;
+    if (value) values.push(value);
+  }
+  const srcset = firstSrcsetUrl($element.attr('srcset') ?? $element.attr('data-srcset'));
+  if (srcset) values.push(srcset);
+  return uniqueStrings(values.map((value) => resolveHttpUrl(value, baseUrl)).filter(Boolean));
+}
+
+function sourceVisualCandidateScore(context: string) {
+  let score = 0;
+  if (textIncludesAny(context, practicalStartControlNeedles)) score += 6;
+  if (textIncludesAny(context, electricStarterNeedles)) score += 5;
+  if (textIncludesAny(context, starterFieldNeedles)) score += 3;
+  if (textIncludesAny(context, sourceVisualContextNeedles)) score += 2;
+  return score;
+}
+
+function imageContext($element: SourceCheerioElement, imageUrl: string, sourceTitle: string) {
+  const parts = [
+    sourceTitle,
+    imageUrl,
+    $element.attr('alt'),
+    $element.attr('title'),
+    $element.attr('aria-label')
+  ];
+  let parent = $element.parent();
+  for (let depth = 0; depth < 4 && parent.length; depth += 1) {
+    const text = collapseWhitespace(parent.text());
+    if (text) parts.push(text);
+    parent = parent.parent();
+  }
+  return compactEvidence(collapseWhitespace(parts.filter(Boolean).join(' ')), 1200);
+}
+
+function collectSourceVisualCandidates($: cheerio.CheerioAPI, sourceUrl: string, sourceTitle: string) {
+  const seen = new Set<string>();
+  const candidates: SourceVisualCandidate[] = [];
+  $('img, source, a').each((_, element) => {
+    const $element = $(element);
+    const urls = imageElementUrls($element, sourceUrl);
+    for (const imageUrl of urls) {
+      if (seen.has(imageUrl)) continue;
+      const context = imageContext($element, imageUrl, sourceTitle);
+      const score = sourceVisualCandidateScore(context);
+      seen.add(imageUrl);
+      candidates.push({
+        imageUrl,
+        sourceUrl,
+        sourceTitle: sourceTitle || undefined,
+        context,
+        score
+      });
+    }
+  });
+  return candidates
+    .sort((left, right) => right.score - left.score)
+    .slice(0, sourceVisualCandidateLimit);
+}
+
+function htmlToSourceDocument(html: string, sourceUrl: string): SourceDocument {
   const $ = cheerio.load(html);
+  const sourceTitle = sourceTitleFromHtml($);
+  const media = collectSourceVisualCandidates($, sourceUrl, sourceTitle);
   $('script, style, noscript, svg').remove();
-  return limitSourceText($('body').text() || $.root().text());
+  return {
+    ok: true,
+    text: limitSourceText($('body').text() || $.root().text() || html),
+    media,
+    sourceTitle: sourceTitle || undefined
+  };
 }
 
 async function pdfToSourceText(data: ArrayBuffer) {
@@ -643,16 +780,16 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
           'user-agent': 'Mozilla/5.0 BAKAUT source evidence verifier'
         }
       });
-      if (!response.ok) return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
+      if (!response.ok) return { ok: false, text: '', media: [], warning: 'source_evidence_fetch_failed' };
       const contentType = response.headers.get('content-type') ?? '';
-      const text = sourceLooksLikePdf(sourceUrl, contentType)
-        ? await pdfToSourceText(await response.arrayBuffer())
-        : htmlToSourceText(await response.text());
-      return text
-        ? { ok: true, text }
-        : { ok: false, text: '', warning: 'source_evidence_empty' };
+      const source = sourceLooksLikePdf(sourceUrl, contentType)
+        ? { ok: true, text: await pdfToSourceText(await response.arrayBuffer()), media: [] }
+        : htmlToSourceDocument(await response.text(), sourceUrl);
+      return source.text
+        ? source
+        : { ok: false, text: '', media: source.media, sourceTitle: source.sourceTitle, warning: 'source_evidence_empty' };
     } catch {
-      return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
+      return { ok: false, text: '', media: [], warning: 'source_evidence_fetch_failed' };
     }
   })();
   cache.set(sourceUrl, promise);
@@ -737,14 +874,14 @@ async function evidenceItemSourceText(input: {
     sourceTitle: input.item.sourceTitle
   });
   if (input.item.sourceType === 'catalog' || (catalogProduct && !input.item.sourceType)) {
-    if (!catalogProduct) return { ok: false, text: '', warning: 'source_evidence_catalog_source_missing' };
-    return { ok: true, text: productSourceText(catalogProduct) };
+    if (!catalogProduct) return { ok: false, text: '', media: [], warning: 'source_evidence_catalog_source_missing' };
+    return { ok: true, text: productSourceText(catalogProduct), media: [] };
   }
   if (sourceUrlIsHttp(input.item.sourceUrl)) {
     return fetchSourceText(input.item.sourceUrl, input.cache, input.signal);
   }
-  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct) };
-  return { ok: false, text: '', warning: 'source_evidence_source_url_missing' };
+  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct), media: [] };
+  return { ok: false, text: '', media: [], warning: 'source_evidence_source_url_missing' };
 }
 
 function startClaimKindsFromText(value: unknown): SourceBackedStartKind[] {
@@ -840,6 +977,239 @@ async function validateStartEvidenceItem(input: {
       ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
     ])
   };
+}
+
+const visualStartControlKinds = ['key_start', 'button_start', 'switch_start'] as const;
+type VisualStartControlKind = typeof visualStartControlKinds[number];
+
+type VisualStartControlEvidence = {
+  kind: VisualStartControlKind;
+  confidence: 'high' | 'medium';
+  evidence: string;
+  imageUrl: string;
+  sourceUrl: string;
+  sourceTitle?: string;
+};
+
+function visualStartControlJsonFormat() {
+  return {
+    format: {
+      type: 'json_schema',
+      name: 'source_visual_start_control_validation',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          confirmedControls: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                kind: { type: 'string', enum: [...visualStartControlKinds] },
+                confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+                evidence: { type: 'string' },
+                imageUrl: { type: 'string' },
+                sourceUrl: { type: 'string' },
+                sourceTitle: { type: ['string', 'null'] }
+              },
+              required: ['kind', 'confidence', 'evidence', 'imageUrl', 'sourceUrl', 'sourceTitle']
+            }
+          },
+          warnings: { type: 'array', items: { type: 'string' } }
+        },
+        required: ['confirmedControls', 'warnings']
+      }
+    }
+  } as const;
+}
+
+function visualStartControlAttribute(kind: VisualStartControlKind) {
+  if (kind === 'key_start') return 'key start';
+  if (kind === 'button_start') return 'button start';
+  return 'start switch';
+}
+
+function visualStartControlValue(kind: VisualStartControlKind) {
+  if (kind === 'key_start') return 'ignition key / key switch';
+  if (kind === 'button_start') return 'push-button start';
+  return 'START switch';
+}
+
+function sourceEvidenceItemsForVisualCheck(result: ProductComparisonResearchResult): SourceEvidenceItem[] {
+  const items: SourceEvidenceItem[] = [];
+  for (const fact of result.facts) {
+    if (fact.sourceType === 'web' && sourceUrlIsHttp(fact.sourceUrl)) items.push(fact);
+  }
+  return items;
+}
+
+async function collectVisualStartControlCandidates(input: {
+  result: ProductComparisonResearchResult;
+  products: Product[];
+  targetProductNames: string[];
+  cache: SourceTextCache;
+  signal?: AbortSignal;
+}) {
+  const seen = new Set<string>();
+  const candidates: SourceVisualCandidate[] = [];
+  for (const item of sourceEvidenceItemsForVisualCheck(input.result)) {
+    const source = await evidenceItemSourceText({
+      item,
+      products: input.products,
+      targetProductNames: input.targetProductNames,
+      cache: input.cache,
+      signal: input.signal
+    });
+    if (!source.ok || !source.media.length) continue;
+    if (!sourceTextMatchesTarget({ sourceText: source.text, item, targetProductNames: input.targetProductNames })) continue;
+    for (const candidate of source.media) {
+      if (seen.has(candidate.imageUrl)) continue;
+      seen.add(candidate.imageUrl);
+      candidates.push(candidate);
+    }
+  }
+  return candidates
+    .sort((left, right) => right.score - left.score)
+    .slice(0, sourceVisualCandidateLimit);
+}
+
+function normalizeVisualStartControlValidation(
+  parsed: Record<string, unknown>,
+  candidates: SourceVisualCandidate[]
+): { controls: VisualStartControlEvidence[]; warnings: string[] } {
+  const candidatesByImageUrl = new Map(candidates.map((candidate) => [
+    normalizedUrlForCompare(candidate.imageUrl),
+    candidate
+  ]));
+  const controls = Array.isArray(parsed.confirmedControls)
+    ? parsed.confirmedControls
+        .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        .flatMap((item): VisualStartControlEvidence[] => {
+          const kind = visualStartControlKinds.includes(item.kind as VisualStartControlKind)
+            ? item.kind as VisualStartControlKind
+            : null;
+          const confidence = item.confidence === 'high' || item.confidence === 'medium'
+            ? item.confidence
+            : null;
+          const imageUrl = typeof item.imageUrl === 'string' ? item.imageUrl : '';
+          const candidate = candidatesByImageUrl.get(normalizedUrlForCompare(imageUrl));
+          if (!kind || !confidence || !candidate) return [];
+          return [{
+            kind,
+            confidence,
+            evidence: typeof item.evidence === 'string' ? item.evidence : '',
+            imageUrl: candidate.imageUrl,
+            sourceUrl: candidate.sourceUrl,
+            sourceTitle: candidate.sourceTitle
+          }];
+        })
+    : [];
+  return {
+    controls,
+    warnings: Array.isArray(parsed.warnings)
+      ? parsed.warnings.filter((item): item is string => typeof item === 'string')
+      : []
+  };
+}
+
+async function validateVisualStartControlEvidence(input: {
+  result: ProductComparisonResearchResult;
+  products: Product[];
+  targetProductNames: string[];
+  userMessage: string;
+  comparisonAttributes: string[];
+  cache: SourceTextCache;
+  signal?: AbortSignal;
+}): Promise<{
+  facts: ProductComparisonResearchFact[];
+  coverage: ResearchCoverageItem[];
+  warnings: string[];
+}> {
+  if (!needsElectricStarterControlSearch(input)) return { facts: [], coverage: [], warnings: [] };
+  const candidates = await collectVisualStartControlCandidates(input);
+  if (!candidates.length) return { facts: [], coverage: [], warnings: [] };
+  const content: Array<Record<string, unknown>> = [
+    {
+      type: 'input_text',
+      text: JSON.stringify({
+        buyerQuestion: input.userMessage,
+        targetProductNames: input.targetProductNames,
+        comparisonAttributes: input.comparisonAttributes,
+        rule: [
+          'Use only the attached images and their exact source-page context.',
+          'Confirm key_start only when the image visibly shows a keyed ignition/key switch, key slot, or keyed START control.',
+          'Confirm button_start only when the image visibly shows a push-button start control.',
+          'Confirm switch_start only when the image visibly shows a non-key START/engine/starter switch.',
+          'Electric starter, battery, starter text, or a generic feature icon alone is not key/button/switch proof.',
+          'If the image is unclear, generic, or not tied to the exact model source page, return no confirmedControls.'
+        ],
+        candidates: candidates.map((candidate, index) => ({
+          index: index + 1,
+          imageUrl: candidate.imageUrl,
+          sourceUrl: candidate.sourceUrl,
+          sourceTitle: candidate.sourceTitle ?? null,
+          context: candidate.context
+        }))
+      })
+    },
+    ...candidates.flatMap((candidate, index) => [
+      { type: 'input_text', text: `Image ${index + 1}: ${candidate.imageUrl}` },
+      { type: 'input_image', image_url: candidate.imageUrl, detail: 'high' }
+    ])
+  ];
+  try {
+    const { parsed } = await createStructuredJsonResponse({
+      request: {
+        model: config.OPENAI_FACT_MODEL,
+        input: [
+          {
+            role: 'system',
+            content: [
+              'You are a strict multimodal source evidence validator for generator start controls.',
+              'You do not answer the buyer. You only classify visible controls from exact-target source images.',
+              'Never infer key/button/switch from electric starter alone.',
+              'Return JSON only.'
+            ].join('\n')
+          },
+          { role: 'user', content }
+        ],
+        max_output_tokens: Math.min(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, 1200),
+        text: visualStartControlJsonFormat()
+      },
+      stage: 'source_visual_start_control_validation',
+      signal: input.signal
+    });
+    const normalized = normalizeVisualStartControlValidation(parsed, candidates);
+    const facts = normalized.controls.map((control): ProductComparisonResearchFact => ({
+      productName: input.targetProductNames[0] ?? control.sourceTitle ?? 'exact target product',
+      attribute: visualStartControlAttribute(control.kind),
+      value: visualStartControlValue(control.kind),
+      sourceType: 'web',
+      confidence: control.confidence,
+      evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
+      sourceUrl: control.sourceUrl,
+      sourceTitle: control.sourceTitle
+    }));
+    const coverage = normalized.controls.map((control): ResearchCoverageItem => ({
+      attribute: visualStartControlAttribute(control.kind),
+      status: 'confirmed',
+      value: visualStartControlValue(control.kind),
+      evidence: compactEvidence([control.evidence, `visual source image: ${control.imageUrl}`].filter(Boolean).join('; ')),
+      sourceUrl: control.sourceUrl,
+      sourceTitle: control.sourceTitle
+    }));
+    return {
+      facts,
+      coverage,
+      warnings: uniqueStrings([
+        ...normalized.warnings,
+        normalized.controls.length ? 'source_visual_start_control_evidence_used' : 'source_visual_start_control_not_confirmed'
+      ])
+    };
+  } catch {
+    return { facts: [], coverage: [], warnings: ['source_visual_start_control_validation_failed'] };
+  }
 }
 
 function confirmedStartKinds(result: ProductComparisonResearchResult) {
@@ -955,7 +1325,7 @@ async function validateSourceBackedResult(input: {
     coverage.push(item);
   }
 
-  const adjusted: ProductComparisonResearchResult = {
+  let adjusted: ProductComparisonResearchResult = {
     ...input.result,
     facts: uniqueFacts(facts),
     answerGuidance: {
@@ -966,12 +1336,40 @@ async function validateSourceBackedResult(input: {
   };
 
   if (startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes)) {
+    const visualValidation = await validateVisualStartControlEvidence({
+      result: adjusted,
+      products: input.products,
+      targetProductNames: input.targetProductNames,
+      userMessage: input.userMessage,
+      comparisonAttributes: input.comparisonAttributes,
+      cache,
+      signal: input.signal
+    });
+    if (visualValidation.facts.length || visualValidation.coverage.length || visualValidation.warnings.length) {
+      adjusted = {
+        ...adjusted,
+        facts: uniqueFacts([...adjusted.facts, ...visualValidation.facts]),
+        answerGuidance: {
+          ...adjusted.answerGuidance,
+          coverage: uniqueCoverage([...adjusted.answerGuidance.coverage, ...visualValidation.coverage])
+        },
+        warnings: uniqueStrings([...adjusted.warnings, ...visualValidation.warnings])
+      };
+    }
+
     const directAnswerKinds = startClaimKindsFromText(adjusted.answerGuidance.directAnswer);
     const directAnswerClaimsInvalidFact = [...invalidKinds].some((kind) => directAnswerKinds.includes(kind));
     const confirmedKindsSet = confirmedStartKinds(adjusted);
     const hasConfirmedStarterFact = confirmedKindsSet.has('electric_start') || confirmedKindsSet.has('manual_starter');
     const lacksConfirmedPracticalControl = !resultConfirmsPracticalStartControl(adjusted);
-    if (directAnswerClaimsInvalidFact || (lacksConfirmedPracticalControl && hasConfirmedStarterFact)) {
+    const confirmedPracticalKinds = visualStartControlKinds.filter((kind) => confirmedKindsSet.has(kind));
+    const directAnswerMissingConfirmedPractical = confirmedPracticalKinds.length > 0 &&
+      !confirmedPracticalKinds.some((kind) => directAnswerKinds.includes(kind));
+    if (
+      directAnswerClaimsInvalidFact ||
+      directAnswerMissingConfirmedPractical ||
+      (lacksConfirmedPracticalControl && hasConfirmedStarterFact)
+    ) {
       adjusted.answerGuidance = {
         ...adjusted.answerGuidance,
         directAnswer: sourceBackedStartDirectAnswer(adjusted),

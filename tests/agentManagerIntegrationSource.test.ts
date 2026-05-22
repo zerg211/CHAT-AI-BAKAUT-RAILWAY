@@ -23,6 +23,9 @@ describe('agent manager integration source guards', () => {
     expect(research).toContain('Do not stop at a broad fact like "electric starter"');
     expect(research).toContain('answerGuidance.directAnswer');
     expect(research).toContain('switch turned/held in START');
+    expect(research).toContain('source_visual_start_control_validation');
+    expect(research).toContain('input_image');
+    expect(research).toContain('Electric starter, battery, starter text, or a generic feature icon alone is not key/button/switch proof.');
     expect(research).toContain('catalog_product_fact_extraction');
     expect(research).toContain('description является обязательным источником каталожных фактов');
     expect(research).toContain('catalogExtraction');
