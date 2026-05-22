@@ -22,10 +22,10 @@ export interface AgentManagerRuntimeDecision {
 function hasUrlOptIn(pageUrl?: string | null) {
   if (!pageUrl) return false;
   try {
-    const url = new URL(pageUrl);
+    const url = new URL(pageUrl, 'https://local.invalid');
     return url.searchParams.get(AGENT_MANAGER_URL_OPT_IN_PARAM) === '1';
   } catch {
-    return new RegExp(`[?&]${AGENT_MANAGER_URL_OPT_IN_PARAM}=1(?:&|$)`, 'u').test(pageUrl);
+    return false;
   }
 }
 

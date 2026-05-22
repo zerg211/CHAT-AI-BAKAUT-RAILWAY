@@ -1,0 +1,49 @@
+{
+  "taskId": "2026-05-22-no-regex-runtime-url-opt-in",
+  "status": "local_verified",
+  "baseHead": "ec0b005",
+  "implementation": [
+    "Replaced regex fallback URL opt-in detection with structured URL parsing.",
+    "Preserved runtime decision public API and metadata shape.",
+    "Added absolute, relative, bare-query, and non-matching value tests.",
+    "Updated no-regex baseline after removing two legacy findings."
+  ],
+  "checks": [
+    {
+      "command": "npm test -- tests/agentManagerRuntime.test.ts",
+      "status": "PASS",
+      "summary": "6 tests passed"
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "PASS",
+      "summary": "No new regex constructs. Legacy baseline: 1804."
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "git diff --check",
+      "status": "PASS",
+      "summary": "CRLF warnings only"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "summary": "76 files / 614 tests passed"
+    },
+    {
+      "command": "npm run build",
+      "status": "PASS"
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS"
+  }
+}

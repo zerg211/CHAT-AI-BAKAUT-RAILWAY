@@ -28,6 +28,18 @@ describe('agent manager runtime activation', () => {
     });
   });
 
+  it('keeps relative widget opt-in values compatible without regex parsing', () => {
+    expect(isAgentManagerHarnessEnabledForSession({ pageUrl: '/?agentHarness=1' })).toBe(true);
+    expect(isAgentManagerHarnessEnabledForSession({ pageUrl: '?agentHarness=1' })).toBe(true);
+    expect(isAgentManagerHarnessEnabledForSession({ pageUrl: '/catalog/?x=1&agentHarness=1' })).toBe(true);
+  });
+
+  it('does not opt in for similar non-matching harness query values', () => {
+    expect(isAgentManagerHarnessEnabledForSession({ pageUrl: 'https://bakautprof.ru/?agentHarness=10' })).toBe(false);
+    expect(isAgentManagerHarnessEnabledForSession({ pageUrl: '/?agentHarness=true' })).toBe(false);
+    expect(isAgentManagerHarnessEnabledForSession({ pageUrl: '/?other=1' })).toBe(false);
+  });
+
   it('builds response metadata without legacy block for agent manager runtime', () => {
     const decision = getAgentManagerRuntimeDecision({ pageUrl: 'https://bakautprof.ru/?agentHarness=1' });
 
