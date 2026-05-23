@@ -161,12 +161,12 @@
     "AC5": "pass",
     "AC6": "pass",
     "AC7": "pass",
-    "AC8": "pass_local",
-    "AC9": "pending",
+    "AC8": "pass",
+    "AC9": "pass",
     "AC10": "pass"
   },
   "productionPromptfoo": {
-    "status": "failed_before_fix_pass",
+    "status": "pass",
     "required": true,
     "runs": [
       {
@@ -213,9 +213,18 @@
         "total": 6,
         "deterministicAverage": 0.8744999999999999,
         "llmAverage": 0.6083333333333334
+      },
+      {
+        "artifact": ".agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-57fc832.json",
+        "summaryArtifact": ".agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-57fc832.summary.json",
+        "commit": "57fc832",
+        "passed": 6,
+        "total": 6,
+        "deterministicAverage": 0.9914999999999999,
+        "llmAverage": 0.9533333333333333
       }
     ],
-    "nextStep": "Commit and push c5a46d9 fix pass, wait for Railway marker, rerun production Promptfoo."
+    "nextStep": "Production Promptfoo passed after commit 57fc832."
   },
   "fixPassTimestamp": "2026-05-23T21:55:46.9521250+03:00"
 }

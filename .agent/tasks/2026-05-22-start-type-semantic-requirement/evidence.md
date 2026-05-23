@@ -353,4 +353,21 @@ npm run build
 PASS
 ```
 
-AC9 remains pending until this fix pass is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.
+AC9 remained pending until this fix pass was committed, pushed, Railway marker reached it, and production Promptfoo was rerun.
+
+## Production eval after c5a46d9 fix pass
+
+Run after commit `57fc832`:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-57fc832.json
+PASS: 6/6 tests passed
+Deterministic average: 99.15%
+LLM average: 95.33%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-57fc832.json`
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-57fc832.summary.json`
+
+AC9: PASS. Production Promptfoo passed, deterministic average is above 90%, and LLM average is above 90%.
