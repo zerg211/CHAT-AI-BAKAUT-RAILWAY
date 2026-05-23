@@ -57,6 +57,7 @@ import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js
 import {
   compactModelText,
   isModelTokenChar,
+  modelIdentifierDisplayTokens,
   modelIdentifierTokens,
   modelTextTokens,
   normalizeModelText,
@@ -672,6 +673,102 @@ function filterAnswerProductsForBudget(input: {
     products: filteredProducts,
     droppedProductIds,
     warnings: droppedProductIds.length ? [`answer_products_filtered_by_budget:${droppedProductIds.length}`] : []
+  };
+}
+
+function hasCatalogEvidenceRequest(intent: AgentIntentContract) {
+  return intent.toolRequests.some((request) =>
+    request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
+  );
+}
+
+function hasWebEvidenceRequest(intent: AgentIntentContract) {
+  return intent.toolRequests.some((request) => request.tool === 'web.researchProductFacts');
+}
+
+function catalogProductNameGuardApplies(input: {
+  intent: AgentIntentContract;
+  products: Product[];
+}) {
+  if (!input.products.length) return false;
+  if (!hasCatalogEvidenceRequest(input.intent)) return false;
+  if (hasWebEvidenceRequest(input.intent)) return false;
+  return input.intent.grounding?.taskType === 'product_selection' ||
+    input.intent.grounding?.sourcePolicy === 'catalog_required' ||
+    input.intent.toolRequests.some((request) => request.tool === 'catalog.search');
+}
+
+function productEvidenceModelTokens(products: Product[]) {
+  return new Set(products.flatMap((product) =>
+    modelIdentifierTokens([
+      product.name,
+      product.brand,
+      product.externalId,
+      product.slug
+    ].filter(Boolean).join(' '))
+  ));
+}
+
+function nonTargetMentionModelTokens(intent: AgentIntentContract) {
+  return new Set((intent.productMentions ?? [])
+    .filter((mention) => !exactTargetProductMentionRoles.has(mention.role))
+    .flatMap((mention) => modelIdentifierTokens(mention.name)));
+}
+
+function splitAnswerSegments(value: string) {
+  const segments: string[] = [];
+  let current = '';
+  const terminators = new Set(['.', '!', '?', '\n', '。', '！', '？']);
+  for (const char of value) {
+    current += char;
+    if (terminators.has(char)) {
+      segments.push(current);
+      current = '';
+    }
+  }
+  if (current) segments.push(current);
+  return segments;
+}
+
+function collapseExcessBlankLines(value: string) {
+  const lines = value.split('\n');
+  const output: string[] = [];
+  let blank = 0;
+  for (const line of lines) {
+    if (line.trim()) {
+      blank = 0;
+      output.push(line.trimEnd());
+    } else {
+      blank += 1;
+      if (blank <= 1) output.push('');
+    }
+  }
+  return output.join('\n').trim();
+}
+
+function unsupportedCatalogProductMentionSafeRewrite(input: {
+  answerText: string;
+  intent: AgentIntentContract;
+  products: Product[];
+}) {
+  if (!catalogProductNameGuardApplies(input)) return null;
+  const allowedTokens = productEvidenceModelTokens(input.products);
+  for (const token of nonTargetMentionModelTokens(input.intent)) allowedTokens.add(token);
+  if (!allowedTokens.size) return null;
+
+  const unsupportedDisplayTokens = modelIdentifierDisplayTokens(input.answerText)
+    .filter((token) => !allowedTokens.has(compactModelText(token)));
+  const unsupportedTokens = new Set(unsupportedDisplayTokens.map(compactModelText));
+  if (!unsupportedTokens.size) return null;
+
+  const keptSegments = splitAnswerSegments(input.answerText).filter((segment) =>
+    !modelIdentifierTokens(segment).some((token) => unsupportedTokens.has(token))
+  );
+  const revisedAnswerText = collapseExcessBlankLines(keptSegments.join(''));
+  if (!revisedAnswerText || revisedAnswerText === input.answerText.trim()) return null;
+  return {
+    revisedAnswerText,
+    unsupportedDisplayTokens: uniqueStrings(unsupportedDisplayTokens)
   };
 }
 
@@ -2942,6 +3039,19 @@ export class AgentManagerOrchestrator {
         evidence: safeResearchRewrite
       });
     }
+    const unsupportedCatalogProductMentionRewrite = unsupportedCatalogProductMentionSafeRewrite({
+      answerText: input.answer.answerText,
+      intent: input.intent,
+      products: input.products
+    });
+    if (unsupportedCatalogProductMentionRewrite) {
+      mechanicalIssues.push({
+        code: 'unsupported_catalog_product_mention',
+        severity: 'high',
+        message: 'Catalog selection answer names a model identifier that is absent from the product evidence passed to the answer.',
+        evidence: unsupportedCatalogProductMentionRewrite.unsupportedDisplayTokens.join(', ')
+      });
+    }
     const blockingIssueCodes = new Set([
       'unsupported_fact_source',
       'unknown_tool_result_reference',
@@ -2984,6 +3094,16 @@ export class AgentManagerOrchestrator {
         verdict: 'rewrite_required',
         issues: mechanicalIssues,
         revisedAnswerText: failedWebResearchRewrite
+      };
+    }
+    const unsupportedCatalogProductMentionIssue = mechanicalIssues.find((issue) =>
+      issue.code === 'unsupported_catalog_product_mention'
+    );
+    if (unsupportedCatalogProductMentionIssue && unsupportedCatalogProductMentionRewrite) {
+      return {
+        verdict: 'rewrite_required',
+        issues: mechanicalIssues,
+        revisedAnswerText: unsupportedCatalogProductMentionRewrite.revisedAnswerText
       };
     }
     if (mechanicalIssues.length) {

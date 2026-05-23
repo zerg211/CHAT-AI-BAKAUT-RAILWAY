@@ -1549,8 +1549,9 @@ describe('AgentManagerOrchestrator', () => {
       },
       async composeAnswer(input) {
         productIdsSeenByAnswer.push(input.products.map((item) => item.id));
+        const groundedNames = input.products.map((item) => item.name).join('; ');
         return {
-          answerText: input.products.map((item) => item.name).join('; '),
+          answerText: `${groundedNames}. Also mentions dropped product TSS-WP60TH.`,
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['catalog-search'],
@@ -1576,6 +1577,7 @@ describe('AgentManagerOrchestrator', () => {
 
     const metadata = payload.metadata as {
       answerProductEvidence?: { droppedProductIds?: string[] };
+      preSendReview?: { issues?: Array<{ code?: string }> };
       warnings?: string[];
     };
     expect(productIdsSeenByAnswer[0]).toEqual(['under-light', 'under-tss']);
@@ -1583,6 +1585,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.answer).not.toContain('TSS-WP60TH');
     expect(payload.productCards.map((card) => card.id)).toEqual(['under-light', 'under-tss']);
     expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(['over-budget']);
+    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('unsupported_catalog_product_mention');
     expect(metadata.warnings).toContain('answer_products_filtered_by_budget:1');
   });
 

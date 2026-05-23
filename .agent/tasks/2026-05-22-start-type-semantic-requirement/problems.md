@@ -112,3 +112,44 @@ Validation:
 - Add a focused AgentManager test proving the answer LLM receives only in-budget plate products when an in-budget set exists.
 - Rerun focused tests, typecheck, no-regex guard, build, and full test suite.
 - Commit, push, wait for Railway marker, and rerun production Promptfoo.
+
+# Problems after production eval 9a14705
+
+Source artifact: `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-9a14705.json`
+
+Summary:
+
+- Production Promptfoo still exited non-zero: `5/6` tests passed.
+- Deterministic average: `98.64%`
+- LLM average: `92.83%`
+- Both score averages were above 90%, but the failed LLM rubric was still below its per-scenario pass threshold.
+
+## P4: answer text can still name a model absent from answer product evidence
+
+Scenario: `context_shift_agent_completion`
+
+Observed behavior:
+
+- Turn 2 answer correctly used the new budget evidence gate: `answerProductEvidence.products` contained only `TSS-WP60TL` and dropped over-budget candidates.
+- Visible cards also showed only `TSS-WP60TL`.
+- The LLM answer still mentioned `TSS-WP60TH` and discussed an optional mat for that absent model.
+- The judge penalized the mismatch because the answer recommended/discussed a model that was not grounded by the products/cards shown to the buyer.
+
+Cause:
+
+- The pre-answer budget evidence gate removed invalid products from `composeAnswer` input, but there was no pre-send invariant that the final answer text names only model identifiers present in the actual answer product evidence.
+- Existing card selection could only match products still present in `answerProducts`, so it could not detect a hallucinated/unsupported model token that had already been removed from evidence.
+
+Fix direction:
+
+- Add a deterministic pre-send review guard for catalog-selection answers: detect model identifier tokens in answer text and compare them with model identifier tokens from the products passed as answer evidence.
+- If an answer segment names an unsupported model identifier, rewrite by removing that segment before final text/card selection.
+- Allow non-target context equipment mentions from structured `productMentions`, so load devices or compatibility context are not stripped.
+- Keep semantic decisions in the LLM; the code only enforces evidence/card consistency.
+- Do not add regex or a scenario-specific product exception.
+
+Validation:
+
+- Strengthen the budget evidence test so the mocked LLM intentionally mentions dropped `TSS-WP60TH`, and prove pre-send review removes it.
+- Rerun focused tests, typecheck, no-regex guard, build, and full test suite.
+- Commit, push, wait for Railway marker, and rerun production Promptfoo.

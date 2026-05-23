@@ -229,3 +229,64 @@ PASS
 ```
 
 AC9 remains pending until this evidence-gate fix is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.
+
+## Production eval after answer-product evidence gate
+
+Run after commit `9a14705`:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-9a14705.json
+FAIL: 5/6 tests passed
+Deterministic average: 98.64%
+LLM average: 92.83%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-9a14705.json`
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-9a14705.summary.json`
+
+Problems recorded:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/problems.md`
+
+## Fix pass after 9a14705 production eval
+
+Timestamp: `2026-05-23T21:36:51.8876989+03:00`
+
+Changes:
+- Added a pre-send review guard for catalog-selection answers that compares answer model identifier tokens with the products actually passed as answer evidence.
+- If the final answer names a model identifier absent from answer product evidence, the guard removes the unsupported answer segment before card selection and buyer delivery.
+- Context-only structured product mentions remain allowed, so load devices and compatibility context are not treated as unsupported catalog recommendations.
+- Strengthened the budget evidence test so the mocked answer intentionally names dropped `TSS-WP60TH`, then verifies the final answer removes it and records `unsupported_catalog_product_mention`.
+
+Behavior boundary:
+
+Where LLM decides:
+- Which catalog products best satisfy the buyer's need from the evidence it receives.
+- Which context equipment mentions are semantically part of the buyer's task.
+
+Where deterministic code decides:
+- A catalog-selection answer may only name model identifiers grounded in the products passed as answer evidence, except structured context-only product mentions.
+- Unsupported model-token segments are removed before visible cards are selected.
+
+No regex or phrase-specific dialogue workaround was added.
+
+Focused local checks:
+
+```text
+npx vitest run tests/agentManagerOrchestrator.test.ts tests/agentManagerCardSelection.test.ts
+PASS: 2 test files, 47 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36.
+
+npm test
+PASS: 86 test files, 702 tests
+
+npm run build
+PASS
+```
+
+AC9 remains pending until this pre-send evidence guard is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.
