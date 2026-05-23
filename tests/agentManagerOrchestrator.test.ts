@@ -2202,6 +2202,58 @@ describe('AgentManagerOrchestrator', () => {
     expect(leads.created).toHaveLength(0);
   });
 
+  it('rewrites missing-contact commercial handoff without delivery or discount promises', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const unsafeOfferModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks for delivery and discount terms without contact',
+          dialogueUnderstanding: 'commercial terms require specialist verification and contact handoff',
+          nextStepRationale: 'offer contact form because no contact is present',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:missing',
+            tool: 'lead.capture',
+            args: {},
+            rationale: 'buyer has not provided contact yet',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Delivery and discount are available. Leave your phone and we will check details.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:missing'],
+          leadAction: 'offer_form',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, unsafeOfferModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Р”РѕСЃС‚Р°РІРєР° РµСЃС‚СЊ? Р РјРѕР¶РЅРѕ Р»Рё РїРѕР»СѓС‡РёС‚СЊ СЃРєРёРґРєСѓ, РµСЃР»Рё СЃСЂР°Р·Сѓ Р·Р°Р±СЂР°С‚СЊ РіРµРЅРµСЂР°С‚РѕСЂ?'
+    });
+
+    const metadata = payload.metadata as {
+      preSendReview?: { issues?: Array<{ code?: string }> };
+      answerContract?: { leadAction?: string };
+    };
+    expect(payload.answer).not.toContain('Delivery and discount are available');
+    expect(payload.leadRequested).toBe(true);
+    expect(payload.leadCreated).toBe(false);
+    expect(metadata.answerContract?.leadAction).toBe('offer_form');
+    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('lead_capture_missing_contact_offer_form');
+    expect(leads.created).toHaveLength(0);
+  });
+
   it('routes high-risk source disagreements to adjudication instead of sending a final answer', async () => {
     const conversations = new FakeConversations();
     const conflictModel = model({

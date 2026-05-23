@@ -290,3 +290,67 @@ PASS
 ```
 
 AC9 remains pending until this pre-send evidence guard is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.
+
+## Production eval after unsupported-product mention guard
+
+Run after commit `c5a46d9`:
+
+```text
+PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app npm run evals -- --no-cache -j 1 -o .agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-c5a46d9.json
+FAIL: 3/6 tests passed
+Deterministic average: 87.45%
+LLM average: 60.83%
+```
+
+Raw artifact:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-c5a46d9.json`
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-c5a46d9.summary.json`
+
+Problems recorded:
+- `.agent/tasks/2026-05-22-start-type-semantic-requirement/problems.md`
+
+## Fix pass after c5a46d9 production eval
+
+Timestamp: `2026-05-23T21:55:46.9521250+03:00`
+
+Changes:
+- Missing-contact commercial handoff now rewrites to the safe form-offer text whenever `lead.capture` returns missing contact and the buyer has not provided contact data, even if the LLM already set `leadAction="offer_form"`.
+- Failed general THD/web technical grounding now rewrites to a useful unverified engineering-level THD explanation instead of a generic empty failure notice.
+- Specialist-required grounding or planned `lead.capture` now maps turn-contract metadata to `pure_delivery`/lead handoff.
+- Added focused tests for unsafe delivery/discount form-offer repair and failed general THD web grounding repair.
+
+Behavior boundary:
+
+Where LLM decides:
+- Whether the buyer is asking a commercial handoff question.
+- Whether a technical answer requires web grounding.
+- Which technical attributes the web tool should verify.
+
+Where deterministic code decides:
+- Failed lead capture without buyer contact cannot preserve delivery/discount/stock/terms promises.
+- A failed web tool cannot be cited as fact evidence.
+- A failed general technical web check may return only a clearly unverified engineering-level explanation.
+- Lead-capture/specialist-required turns are exposed as delivery/lead-handoff metadata.
+
+No regex was added.
+
+Local checks:
+
+```text
+npx vitest run tests/agentManagerOrchestrator.test.ts tests/agentManagerComparisonResearch.test.ts
+PASS: 2 test files, 47 tests
+
+npm run typecheck
+PASS
+
+npm run lint:no-regex
+PASS: No new regex constructs. Legacy baseline: 1623. Legacy findings removed since baseline: 36.
+
+npm test
+PASS: 86 test files, 704 tests
+
+npm run build
+PASS
+```
+
+AC9 remains pending until this fix pass is committed, pushed, Railway marker reaches it, and production Promptfoo is rerun.

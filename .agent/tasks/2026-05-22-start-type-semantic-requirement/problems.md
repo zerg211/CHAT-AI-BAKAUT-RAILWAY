@@ -153,3 +153,86 @@ Validation:
 - Strengthen the budget evidence test so the mocked LLM intentionally mentions dropped `TSS-WP60TH`, and prove pre-send review removes it.
 - Rerun focused tests, typecheck, no-regex guard, build, and full test suite.
 - Commit, push, wait for Railway marker, and rerun production Promptfoo.
+
+# Problems after production eval c5a46d9
+
+Source artifact: `.agent/tasks/2026-05-22-start-type-semantic-requirement/production-promptfoo-c5a46d9.json`
+
+Summary:
+
+- Production Promptfoo regressed and exited non-zero: `3/6` tests passed.
+- Deterministic average: `87.45%`
+- LLM average: `60.83%`
+
+## P5: missing-contact commercial handoff can still preserve soft promises
+
+Scenario: `commercial_delivery_discount_rules`
+
+Observed behavior:
+
+- The answer did not promise exact delivery price or discount amount, but said delivery and discount "бывают".
+- `lead.capture` returned `not_found` with `lead_contact_missing`.
+- Because the answer already used `leadAction="offer_form"`, mechanical review did not rewrite it.
+- The LLM judge penalized the soft commercial promise and weak next step.
+
+Cause:
+
+- Mechanical lead review only repaired missing-contact lead attempts for `capture_contact` or `confirm_contact_received`.
+- It did not treat `lead.capture:not_found` as sufficient evidence to normalize an unsafe commercial handoff when the model already marked the answer as a form offer.
+
+Fix direction:
+
+- When `lead.capture` returns missing contact and the buyer has not provided contact data, always rewrite to the safe form-offer text.
+- Keep this deterministic because delivery, discount, stock, terms, and timing are business constraints, not semantic buyer-intent decisions.
+
+Validation:
+
+- Add a focused AgentManager test where the mocked answer says delivery/discount are available, `lead.capture` lacks contact, and pre-send review rewrites to a safe form offer.
+
+## P6: failed general web grounding fallback is too empty for technical questions
+
+Scenario: `web_required_technical_grounding`
+
+Observed behavior:
+
+- The LLM planner correctly required `web.researchProductFacts`.
+- The research tool failed with `product_comparison_research did not return a JSON object`.
+- The mechanical rewrite replaced the unsafe generated answer with a generic failure notice that did not answer what THD means for a boiler/electronics.
+- Deterministic completion patterns failed because the final answer no longer contained `THD`/harmonic grounding.
+
+Cause:
+
+- `failedWebResearchSafeRewrite` only had a useful branch for exact named product facts.
+- For general technical questions with no exact model, it returned a one-size failure notice instead of preserving a truthful, clearly unverified engineering-level answer.
+
+Fix direction:
+
+- Add a structured failed-web fallback for general THD/generator power-quality questions based on planner/tool technical attributes.
+- The fallback explains the concept and practical risk, while explicitly saying exact/current verification did not complete.
+- Do not claim web verification succeeded and do not cite failed tool output as evidence.
+
+Validation:
+
+- Add a focused AgentManager test where failed general THD web research is cited by the answer, and mechanical review rewrites to a useful unverified THD explanation while clearing failed facts.
+
+## P7: commercial turn metadata can miss pure delivery/lead-handoff task type
+
+Scenario: `commercial_delivery_discount_rules`
+
+Observed behavior:
+
+- The production turn used specialist-required source policy and lead capture, but `turnContract.answerTask` remained `technical_explanation`.
+- This weakened eval observability for delivery/discount turns.
+
+Cause:
+
+- `agentManagerTaskTypeFromGrounding` only mapped `grounding.taskType="availability_or_delivery"` to `pure_delivery`.
+- It did not fall back to `sourcePolicy="specialist_required"` or a planned `lead.capture` tool.
+
+Fix direction:
+
+- Treat specialist-required grounding or planned lead capture as `pure_delivery` in turn-contract metadata.
+
+Validation:
+
+- Existing metadata assertions plus production eval should show delivery/discount turns as lead handoff instead of technical explanation.

@@ -288,6 +288,96 @@ describe('AgentManager comparison research flow', () => {
     });
   });
 
+  it('rewrites failed general THD web research to a useful unverified technical explanation', async () => {
+    researchProductComparisonFacts.mockRejectedValueOnce(
+      new Error('product_comparison_research did not return a JSON object')
+    );
+
+    const thdModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks why THD matters for inverter generator boiler electronics',
+          dialogueUnderstanding: 'technical fact explanation needs web verification when exact catalog data is missing',
+          nextStepRationale: 'try web research and keep any answer truthful if the research fails',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:thd',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'THD inverter generator boiler electronics',
+              semanticQuery: 'practical THD importance for boiler and sensitive electronics',
+              productIntent: 'generator',
+              limit: 4,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: ['THD', 'harmonic distortion', 'boiler electronics'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'verify technical facts',
+              notes: 'technical explanation only'
+            },
+            rationale: 'the buyer explicitly asked to check facts',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['web_required']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'The web check confirmed a THD fact for boiler electronics.',
+          factsUsed: [{
+            factKey: 'thd.general',
+            sourceEventIds: ['web:thd'],
+            value: 'checked'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['web:thd'],
+          leadAction: 'none',
+          riskFlags: ['web_research_failed']
+        };
+      },
+      async reviewAnswer() {
+        throw new Error('mechanical review should rewrite failed general web fact evidence');
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Explain why THD matters for an inverter generator and check facts if catalog data is missing.')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      { async createLead() { return null; } } as never,
+      thdModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Explain why THD matters for an inverter generator and check facts if catalog data is missing.'
+    });
+
+    const metadata = payload.metadata as {
+      answerContract?: { factsUsed?: unknown[] };
+      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
+    };
+    expect(payload.answer).toContain('THD');
+    expect(payload.answer).toContain('гармонических искажений');
+    expect(payload.answer).toContain('инверторный генератор');
+    expect(payload.answer).toContain('внешняя проверка не завершилась');
+    expect(payload.answer).not.toContain('The web check confirmed');
+    expect(metadata.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'failed_tool_result_used_as_fact_source' })
+      ])
+    });
+    expect(metadata.answerContract?.factsUsed).toEqual([]);
+  });
+
   it('repairs web-required grounding into an executable web research tool', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,

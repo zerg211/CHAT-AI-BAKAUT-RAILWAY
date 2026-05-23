@@ -583,6 +583,8 @@ function sourcePolicyMetadataFromIntent(intent: AgentIntentContract): AgentSourc
 function agentManagerTaskTypeFromGrounding(intent: AgentIntentContract): AgentTaskType | undefined {
   const groundingTaskType = intent.grounding?.taskType;
   if (groundingTaskType === 'availability_or_delivery') return 'pure_delivery';
+  if (intent.grounding?.sourcePolicy === 'specialist_required') return 'pure_delivery';
+  if (intent.toolRequests.some((request) => request.tool === 'lead.capture')) return 'pure_delivery';
   if (
     groundingTaskType === 'technical_answer' ||
     groundingTaskType === 'product_selection' ||
@@ -1303,6 +1305,56 @@ function factSourceIdsFromNonOkTools(input: {
   ));
 }
 
+function failedGeneralTechnicalWebResearchSafeRewrite(input: {
+  intent: AgentIntentContract;
+  request?: ToolRequest;
+}) {
+  const requestText = [
+    input.request?.args.query,
+    input.request?.args.semanticQuery,
+    Array.isArray(input.request?.args.comparisonAttributes) ? input.request?.args.comparisonAttributes.join(' ') : '',
+    input.intent.userMessageSummary,
+    input.intent.grounding?.rationale
+  ].filter(Boolean).join(' ');
+  const normalizedRequestText = normalizeModelText(requestText);
+  const isThdQuestion = normalizedTextIncludesAny(normalizedRequestText, [
+    'thd',
+    'гармоник',
+    'искажен'
+  ]);
+  const isGeneratorPowerQualityQuestion = normalizedTextIncludesAny(normalizedRequestText, [
+    'generator',
+    'inverter',
+    'voltage',
+    'sine',
+    'генератор',
+    'инвертор',
+    'напряжен',
+    'синусоид'
+  ]);
+  if (!isThdQuestion || !isGeneratorPowerQualityQuestion) return null;
+
+  const mentionsSensitiveLoads = normalizedTextIncludesAny(normalizedRequestText, [
+    'boiler',
+    'electronics',
+    'control board',
+    'power supply',
+    'котел',
+    'электроник',
+    'плата',
+    'блок питания'
+  ]);
+  const loadLine = mentionsSensitiveLoads
+    ? 'Для котла, платы управления, блоков питания и другой электроники это важно: чем выше гармонические искажения, тем выше риск ошибок, нагрева, шума в питании и нестабильной работы чувствительных устройств.'
+    : 'Для чувствительной электроники это важно: чем выше гармонические искажения, тем выше риск ошибок, нагрева, шума в питании и нестабильной работы устройств.';
+  return [
+    'THD — это уровень гармонических искажений: насколько форма напряжения генератора отличается от ровной синусоиды.',
+    loadLine,
+    'Практический вывод такой: для чувствительной нагрузки лучше выбирать инверторный генератор или модель, где прямо указаны чистая синусоида, низкий THD или пригодность для электроники.',
+    'Точную цифру THD по конкретной модели в этом ходе не подтверждаю: внешняя проверка не завершилась. Поэтому это общий инженерный ориентир, а точное значение для выбранной модели нужно отдельно подтвердить по источнику или паспорту.'
+  ].join('\n\n');
+}
+
 function failedWebResearchSafeRewrite(input: {
   intent: AgentIntentContract;
   toolResults: ToolResult[];
@@ -1313,6 +1365,8 @@ function failedWebResearchSafeRewrite(input: {
   if (!failedWebResult) return null;
   const request = input.intent.toolRequests.find((item) => item.id === failedWebResult.requestId);
   const productName = productNamesFromToolRequest(request)[0];
+  const generalTechnicalRewrite = failedGeneralTechnicalWebResearchSafeRewrite({ intent: input.intent, request });
+  if (!productName && generalTechnicalRewrite) return generalTechnicalRewrite;
   if (productName) {
     return `Не буду сейчас уверенно утверждать точный факт по ${productName}: внешняя проверка не завершилась. Могу опираться только на уже подтвержденные данные, а спорный параметр нужно добрать по источникам.`;
   }
@@ -3010,6 +3064,18 @@ export class AgentManagerOrchestrator {
           evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'lead.capture'))
         });
       }
+    }
+    if (
+      leadCaptureMissingContact(input.toolResults) &&
+      !hasLeadContact(contactInTurn) &&
+      !mechanicalIssues.some((issue) => issue.code === 'lead_capture_missing_contact_offer_form')
+    ) {
+      mechanicalIssues.push({
+        code: 'lead_capture_missing_contact_offer_form',
+        severity: 'medium',
+        message: 'A commercial handoff was planned without buyer contact; rewrite to a safe form offer without promising delivery, discounts, stock, or special terms.',
+        evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'lead.capture'))
+      });
     }
     if (hasAdjudicationRisk({ answerRiskFlags: input.answer.riskFlags, toolResults: input.toolResults })) {
       mechanicalIssues.push({
