@@ -37,10 +37,6 @@ function embedScript(baseUrl: string) {
   if (existing) return;
   var script = document.currentScript;
   var data = script && script.dataset ? script.dataset : {};
-  // TEMP: keep the embedded chat completely off mobile pages while checking catalog tap blocking.
-  var mobileLauncherDisabled = true;
-  var mobileViewport = (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) || window.innerWidth <= 768;
-  if (mobileLauncherDisabled && mobileViewport) return;
   function trimTrailingSlashes(value) {
     var text = String(value || '');
     while (text.endsWith('/')) text = text.slice(0, -1);
@@ -115,15 +111,19 @@ function embedScript(baseUrl: string) {
   close.setAttribute('aria-label', 'Закрыть чат');
   close.textContent = '×';
 
-  var frame = document.createElement('iframe');
-  frame.id = 'bakaut-ai-widget-frame';
-  frame.title = title;
-  frame.src = baseUrl + '/widget?pageUrl=' + encodeURIComponent(location.href);
-  frame.setAttribute('allow', 'clipboard-write');
-  frame.setAttribute('scrolling', 'no');
+  var frame = null;
+  function ensureFrame() {
+    if (frame) return;
+    frame = document.createElement('iframe');
+    frame.id = 'bakaut-ai-widget-frame';
+    frame.title = title;
+    frame.src = baseUrl + '/widget?pageUrl=' + encodeURIComponent(location.href);
+    frame.setAttribute('allow', 'clipboard-write');
+    frame.setAttribute('scrolling', 'no');
+    panel.appendChild(frame);
+  }
 
   panel.appendChild(close);
-  panel.appendChild(frame);
   root.appendChild(launcher);
   root.appendChild(panel);
 
@@ -131,24 +131,24 @@ function embedScript(baseUrl: string) {
   style.textContent =
     '#bakaut-ai-widget-root{position:fixed;bottom:16px;z-index:2147483647;font-family:Inter,Arial,sans-serif;color:#111827;pointer-events:none}' +
     '#bakaut-ai-widget-root[data-position="left"]{left:32px}#bakaut-ai-widget-root[data-position="right"]{right:32px}' +
-    '#bakaut-ai-widget-launcher{position:relative;display:grid;place-items:center;min-width:144px;width:144px;height:144px;padding:0;border:0;border-radius:999px;background:#0f766e;color:#fff;box-shadow:0 24px 56px rgba(15,23,42,.34),0 0 0 1px rgba(255,255,255,.18);cursor:pointer;overflow:visible;pointer-events:auto;transition:transform .18s ease,box-shadow .18s ease;background-image:radial-gradient(circle at 32% 28%,rgba(255,255,255,.32),rgba(255,255,255,0) 34%),linear-gradient(135deg,#111827,#0f766e)}' +
+    '#bakaut-ai-widget-launcher{position:relative;display:grid;place-items:center;min-width:144px;width:144px;height:144px;padding:0;border:0;border-radius:999px;background:#0f766e;color:#fff;box-shadow:0 24px 56px rgba(15,23,42,.34),0 0 0 1px rgba(255,255,255,.18);cursor:pointer;overflow:visible;pointer-events:auto;touch-action:manipulation;transition:transform .18s ease,box-shadow .18s ease;background-image:radial-gradient(circle at 32% 28%,rgba(255,255,255,.32),rgba(255,255,255,0) 34%),linear-gradient(135deg,#111827,#0f766e)}' +
     '#bakaut-ai-widget-launcher:hover{transform:translateY(-2px);box-shadow:0 20px 52px rgba(15,23,42,.38)}' +
     '#bakaut-ai-widget-launcher:active{transform:translateY(0) scale(.99)}' +
     '.bakaut-ai-widget-pulse{position:absolute;inset:-14px;border-radius:999px;box-shadow:0 0 0 0 rgba(20,184,166,.55);animation:bakautAiPulse 1.8s infinite;pointer-events:none}' +
     '.bakaut-ai-widget-avatar{width:108px;height:108px;flex:0 0 108px;border-radius:999px;background:#f97316;display:grid;place-items:center;font-size:28px;font-weight:800;overflow:hidden;box-shadow:0 0 0 5px rgba(255,255,255,.16)}' +
     '.bakaut-ai-widget-avatar img{width:100%;height:100%;object-fit:cover;display:block}.bakaut-ai-widget-copy{display:none}.bakaut-ai-widget-prompt{display:block;position:absolute;right:0;bottom:calc(100% + 12px);width:max-content;max-width:220px;padding:9px 12px;border-radius:14px;background:#fff;color:#111827;font-size:13px;font-weight:700;line-height:1.2;box-shadow:0 14px 32px rgba(15,23,42,.22);pointer-events:none;opacity:0;animation:bakautAiQuestion 8s ease-in-out infinite}.bakaut-ai-widget-prompt::after{content:"";position:absolute;right:18px;bottom:-6px;width:12px;height:12px;background:#fff;transform:rotate(45deg);box-shadow:4px 4px 14px rgba(15,23,42,.12)}' +
-    '#bakaut-ai-widget-panel{position:absolute;bottom:0;width:' + width + ';height:' + height + ';max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);opacity:0;transform:translateY(16px) scale(.96);pointer-events:none;transition:opacity .2s ease,transform .2s ease}' +
+    '#bakaut-ai-widget-panel{display:none;position:absolute;bottom:0;width:' + width + ';height:' + height + ';max-width:calc(100vw - 32px);max-height:calc(100vh - 32px);opacity:0;transform:translateY(16px) scale(.96);pointer-events:none;transition:opacity .2s ease,transform .2s ease}' +
     '#bakaut-ai-widget-root[data-position="left"] #bakaut-ai-widget-panel{left:0}#bakaut-ai-widget-root[data-position="right"] #bakaut-ai-widget-panel{right:0}' +
     '#bakaut-ai-widget-root.bakaut-ai-open #bakaut-ai-widget-launcher{opacity:0;transform:translateY(10px) scale(.92);pointer-events:none}' +
-    '#bakaut-ai-widget-root.bakaut-ai-open #bakaut-ai-widget-panel{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}' +
+    '#bakaut-ai-widget-root.bakaut-ai-open #bakaut-ai-widget-panel{display:block;opacity:1;transform:translateY(0) scale(1);pointer-events:auto}' +
     '#bakaut-ai-widget-frame{width:100%;height:100%;border:0;border-radius:12px;box-shadow:0 18px 48px rgba(15,23,42,.28);background:#fff;overflow:hidden}' +
     '#bakaut-ai-widget-close{position:absolute;top:-12px;right:-12px;width:32px;height:32px;border:0;border-radius:999px;background:#111827;color:#fff;font-size:24px;line-height:28px;box-shadow:0 10px 24px rgba(15,23,42,.28);cursor:pointer;z-index:2}' +
     '@keyframes bakautAiPulse{0%{box-shadow:0 0 0 0 rgba(20,184,166,.55)}70%{box-shadow:0 0 0 18px rgba(20,184,166,0)}100%{box-shadow:0 0 0 0 rgba(20,184,166,0)}}' +
     '@keyframes bakautAiQuestion{0%,55%,100%{opacity:0;transform:translateY(8px) scale(.96)}8%,42%{opacity:1;transform:translateY(0) scale(1)}}' +
-    '@media (max-width:768px){#bakaut-ai-widget-root{display:none!important}}' +
-    '@media (max-width:640px){#bakaut-ai-widget-root{left:0!important;right:0!important;bottom:0!important}#bakaut-ai-widget-launcher{margin:0 18px calc(58px + env(safe-area-inset-bottom,0px)) auto;min-width:72px;width:72px;height:72px}.bakaut-ai-widget-pulse{inset:-8px}.bakaut-ai-widget-avatar{width:54px;height:54px;flex-basis:54px;font-size:16px;box-shadow:0 0 0 3px rgba(255,255,255,.16)}#bakaut-ai-widget-panel{left:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100svh!important;max-width:none!important;max-height:none!important}#bakaut-ai-widget-frame{border-radius:0;box-shadow:none}#bakaut-ai-widget-close{top:10px;right:10px;background:rgba(15,23,42,.72)}}';
+    '@media (max-width:768px){#bakaut-ai-widget-root{left:auto!important;right:12px!important;bottom:calc(72px + env(safe-area-inset-bottom,0px))!important;width:auto!important;height:auto!important}#bakaut-ai-widget-launcher{min-width:56px;width:56px;height:56px}.bakaut-ai-widget-pulse{inset:-6px}.bakaut-ai-widget-avatar{width:44px;height:44px;flex-basis:44px;font-size:14px;box-shadow:0 0 0 3px rgba(255,255,255,.16)}.bakaut-ai-widget-prompt{display:none}#bakaut-ai-widget-panel{position:fixed;left:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100svh!important;max-width:none!important;max-height:none!important}#bakaut-ai-widget-frame{border-radius:0;box-shadow:none}#bakaut-ai-widget-close{top:10px;right:10px;background:rgba(15,23,42,.72)}}';
 
   launcher.addEventListener('click', function(){
+    ensureFrame();
     root.classList.add('bakaut-ai-open');
     panel.setAttribute('aria-hidden', 'false');
   });
