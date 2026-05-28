@@ -37,6 +37,10 @@ function embedScript(baseUrl: string) {
   if (existing) return;
   var script = document.currentScript;
   var data = script && script.dataset ? script.dataset : {};
+  // TEMP: keep the embedded chat completely off mobile pages while checking catalog tap blocking.
+  var mobileLauncherDisabled = true;
+  var mobileViewport = (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) || window.innerWidth <= 768;
+  if (mobileLauncherDisabled && mobileViewport) return;
   function trimTrailingSlashes(value) {
     var text = String(value || '');
     while (text.endsWith('/')) text = text.slice(0, -1);
@@ -141,6 +145,7 @@ function embedScript(baseUrl: string) {
     '#bakaut-ai-widget-close{position:absolute;top:-12px;right:-12px;width:32px;height:32px;border:0;border-radius:999px;background:#111827;color:#fff;font-size:24px;line-height:28px;box-shadow:0 10px 24px rgba(15,23,42,.28);cursor:pointer;z-index:2}' +
     '@keyframes bakautAiPulse{0%{box-shadow:0 0 0 0 rgba(20,184,166,.55)}70%{box-shadow:0 0 0 18px rgba(20,184,166,0)}100%{box-shadow:0 0 0 0 rgba(20,184,166,0)}}' +
     '@keyframes bakautAiQuestion{0%,55%,100%{opacity:0;transform:translateY(8px) scale(.96)}8%,42%{opacity:1;transform:translateY(0) scale(1)}}' +
+    '@media (max-width:768px){#bakaut-ai-widget-root{display:none!important}}' +
     '@media (max-width:640px){#bakaut-ai-widget-root{left:0!important;right:0!important;bottom:0!important}#bakaut-ai-widget-launcher{margin:0 18px calc(58px + env(safe-area-inset-bottom,0px)) auto;min-width:72px;width:72px;height:72px}.bakaut-ai-widget-pulse{inset:-8px}.bakaut-ai-widget-avatar{width:54px;height:54px;flex-basis:54px;font-size:16px;box-shadow:0 0 0 3px rgba(255,255,255,.16)}#bakaut-ai-widget-panel{left:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100svh!important;max-width:none!important;max-height:none!important}#bakaut-ai-widget-frame{border-radius:0;box-shadow:none}#bakaut-ai-widget-close{top:10px;right:10px;background:rgba(15,23,42,.72)}}';
 
   launcher.addEventListener('click', function(){
