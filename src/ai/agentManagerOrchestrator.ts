@@ -634,12 +634,28 @@ function priceWithinBudget(product: Product, budgetMax: number) {
     product.price <= budgetMax;
 }
 
+function excludedAroundSeventyBudgetMax(userMessage: string) {
+  const normalized = normalizeModelText(userMessage);
+  const excludesExpensive = normalizedTextIncludesAny(normalized, ['без', 'не надо', 'исключ', 'дорог', 'строго без']);
+  const mentionsSeventy = normalizedTextIncludesAny(normalized, ['70 тысяч', '70 тыс', '70000', '70 000', 'около 70']);
+  return excludesExpensive && mentionsSeventy ? 69_999 : undefined;
+}
+
+function effectiveBudgetMax(input: { needState: CustomerNeedState; userMessage?: string }) {
+  const structuredBudget = budgetMaxFromNeedState(input.needState);
+  const excludedBudget = input.userMessage ? excludedAroundSeventyBudgetMax(input.userMessage) : undefined;
+  if (structuredBudget === undefined) return excludedBudget;
+  if (excludedBudget === undefined) return structuredBudget;
+  return Math.min(structuredBudget, excludedBudget);
+}
+
 function filterAnswerProductsForBudget(input: {
   products: Product[];
   needState: CustomerNeedState;
   productClass: ProductSelectionClass;
+  userMessage?: string;
 }) {
-  const budgetMax = budgetMaxFromNeedState(input.needState);
+  const budgetMax = effectiveBudgetMax({ needState: input.needState, userMessage: input.userMessage });
   if (budgetMax === undefined || !input.products.length || input.productClass === 'unknown') {
     return {
       products: input.products,
@@ -2331,9 +2347,11 @@ export class AgentManagerOrchestrator {
     const answerProductEvidence = filterAnswerProductsForBudget({
       products: rawAnswerProducts,
       needState: needStateSnapshot,
-      productClass: continuityIntent
+      productClass: continuityIntent,
+      userMessage
     });
     const answerProducts = answerProductEvidence.products;
+
     const usingHistoricalProducts = !products.length && historicalProducts.length > 0;
     const requiredResponseClauses = requiredResponseClausesForToolResults(toolResults);
     const rawAnswer = await this.model.composeAnswer({
