@@ -1,3 +1,4 @@
+import { Response } from 'undici';
 import { describe, expect, it, vi } from 'vitest';
 
 import { buildCatalogConflictEmail, sendCatalogConflictEmail } from '../src/email/catalogConflictEmail.js';
