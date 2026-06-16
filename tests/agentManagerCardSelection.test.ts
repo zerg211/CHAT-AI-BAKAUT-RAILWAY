@@ -394,6 +394,64 @@ describe('AgentManager visible card readiness', () => {
   });
 
 
+
+  it('keeps only the two in-budget TSS cards when buyer rejects a 70000 rub compromise', () => {
+    const wp60: Product = {
+      id: 'wp60',
+      name: 'Виброплита ТСС TSS-WP60L (60 кг) 207191',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 49907,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '60' }
+    };
+    const wp50: Product = {
+      id: 'wp50',
+      name: 'Виброплита ТСС TSS-WP50L (54кг, колесный комплект) 207189',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 43313,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '54' }
+    };
+    const masalta70: Product = {
+      id: 'masalta70',
+      name: 'Виброплита бензиновая Masalta MSR60-2 (62 кг) ВИБ172',
+      brand: 'Masalta',
+      category: 'Виброплиты',
+      price: 70000,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '62' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [wp60, wp50, masalta70],
+      userMessage: 'Строго в рамках бюджета, без 70 тысяч. Оставьте две модели: одну легче, вторую увереннее под щебень.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer rejects the 70000 rub compromise and wants two in-budget plate options',
+        dialogueUnderstanding: 'visible cards must match the two named TSS options, not previous over-budget Masalta compromise',
+        nextStepRationale: 'show two in-budget cards only',
+        requiresTools: false,
+        toolRequests: [],
+        productMentions: [{
+          name: 'виброплита',
+          role: 'target_product',
+          productClass: 'plate',
+          evidence: 'buyer continues plate selection'
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'TSS-WP50L — более удобная для переноски. TSS-WP60L — более уверенная под щебень и плитку.',
+      needState: needStateWithBudget(65000),
+      allowHistoricalProducts: true
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual(['wp50', 'wp60']);
+    expect(selection.droppedProductIds).toContain('masalta70');
+  });
+
   it('removes 72 kg plate cards when the buyer explicitly narrows to light 54-60 kg options', () => {
     const wp50: Product = {
       id: 'wp50',

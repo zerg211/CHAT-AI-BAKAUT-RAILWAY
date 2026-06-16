@@ -2455,18 +2455,36 @@ export class AgentManagerOrchestrator {
         })
       });
       if (previousProducts.length) {
+        const narrowedPreviousSelection = selectProductsForVisibleCards({
+          products: previousProducts,
+          userMessage,
+          history,
+          intent,
+          answerText: finalText,
+          needState: needStateSnapshot,
+          allowHistoricalProducts: true
+        });
+        const reusedProducts = narrowedPreviousSelection.products.length ? narrowedPreviousSelection.products : previousProducts;
         cardSelection = {
           ...cardSelection,
-          products: previousProducts,
-          selectedProductIds: previousProducts.map((product) => product.id),
-          answerMentionedProductIds: previousProducts.map((product) => product.id),
+          products: reusedProducts,
+          selectedProductIds: reusedProducts.map((product) => product.id),
+          answerMentionedProductIds: narrowedPreviousSelection.answerMentionedProductIds.length
+            ? narrowedPreviousSelection.answerMentionedProductIds
+            : reusedProducts.map((product) => product.id),
+          droppedProductIds: uniqueStrings([
+            ...cardSelection.droppedProductIds,
+            ...narrowedPreviousSelection.droppedProductIds
+          ]),
           warnings: uniqueStrings([
             ...cardSelection.warnings,
+            ...narrowedPreviousSelection.warnings,
             'product_cards_reused_from_previous_turn'
           ])
         };
       }
     }
+
     const finalAnswerContract: AnswerContract = {
       ...answer,
       factsUsed: finalFactsUsed,
