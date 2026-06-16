@@ -203,6 +203,7 @@ function inferVisibleCardIntent(input: {
     input.intent.userMessageSummary,
     input.intent.dialogueUnderstanding,
     input.intent.nextStepRationale,
+    input.intent.productMentions?.map((mention) => [mention.productClass, mention.name, mention.evidence].filter(Boolean).join(' ')).join('\n'),
     toolRequestSemanticText(input.intent),
     input.answerText
   ].filter(Boolean).join('\n');
@@ -620,6 +621,17 @@ function productsWithinPlateWeightRange(products: Product[], range: { min: numbe
   });
 }
 
+function requestedVisibleCardLimit(input: { userMessage: string; semanticContext: string }) {
+  const normalized = normalizedHintText([input.userMessage, input.semanticContext].join(' '));
+  if (hintTextContainsAny(normalized, ['две самые', 'два самых', '2 самые', '2 самых', 'только две', 'только два', 'оставьте две', 'оставьте два'])) {
+    return 2;
+  }
+  if (hintTextContainsAny(normalized, ['три самые', 'три самых', '3 самые', '3 самых', 'только три', 'оставьте три'])) {
+    return 3;
+  }
+  return undefined;
+}
+
 export function rankCatalogProductsByNumericFit(input: {
   products: Product[];
   intent: ProductSelectionClass;
@@ -826,7 +838,16 @@ export function selectProductsForVisibleCards(input: {
     }
   }
 
-  const selectedProducts = uniqueProducts(selected).slice(0, 8);
+  const visibleCardLimit = requestedVisibleCardLimit({
+    userMessage: input.userMessage,
+    semanticContext: [
+      input.intent.userMessageSummary,
+      input.intent.dialogueUnderstanding,
+      input.intent.nextStepRationale,
+      input.answerText
+    ].filter(Boolean).join('\n')
+  });
+  const selectedProducts = uniqueProducts(selected).slice(0, visibleCardLimit ?? 8);
   const selectedIds = new Set(selectedProducts.map((product) => product.id));
   const droppedProductIds = unique
     .filter((product) => !selectedIds.has(product.id))

@@ -393,6 +393,83 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).not.toContain('product_cards_filtered:2');
   });
 
+
+  it('removes 72 kg plate cards when the buyer explicitly narrows to light 54-60 kg options', () => {
+    const wp50: Product = {
+      id: 'wp50',
+      name: 'Виброплита ТСС TSS-WP50L (54 кг)',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 43313,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '54', 'центробежная сила, кН': '8,2' }
+    };
+    const wp60: Product = {
+      id: 'wp60',
+      name: 'Виброплита ТСС TSS-WP60L (60 кг)',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 49907,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '60', 'центробежная сила, кН': '10,5' }
+    };
+    const masalta: Product = {
+      id: 'masalta',
+      name: 'Виброплита Masalta MS50-2 (54 кг)',
+      brand: 'Masalta',
+      category: 'Виброплиты',
+      price: 55000,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '54', 'центробежная сила, кН': '8,2' }
+    };
+    const wp70: Product = {
+      id: 'wp70',
+      name: 'Виброплита ТСС TSS-WP70TL (72 кг)',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 38766,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '72', 'центробежная сила, кН': '14' }
+    };
+    const wp60tl: Product = {
+      id: 'wp60tl',
+      name: 'Виброплита ТСС TSS-WP60TL (72 кг)',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 53360,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '72', 'центробежная сила, кН': '15' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [wp70, wp60tl, wp50, wp60, masalta],
+      userMessage: 'Оставьте из легких две самые удачные. 72 кг пока уберите из основного выбора, хочу 54-60 кг.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer removes 72 kg compromise plates from the main choice',
+        dialogueUnderstanding: 'latest narrowing says light 54-60 kg plates only; 72 kg cards would contradict the answer',
+        nextStepRationale: 'show light plate cards and drop 72 kg compromises',
+        requiresTools: false,
+        toolRequests: [],
+        productMentions: [{
+          name: 'виброплита',
+          role: 'target_product',
+          productClass: 'plate',
+          evidence: 'buyer continues the plate selection'
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Да, из легких я бы оставил так. 72 кг из основного списка убрал, как просили.',
+      needState: needStateWithBudget(60000),
+      allowHistoricalProducts: true
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual(['wp50', 'wp60']);
+    expect(selection.droppedProductIds).toEqual(expect.arrayContaining(['wp70', 'wp60tl']));
+    expect(selection.products.some((product) => product.name.includes('72 кг'))).toBe(false);
+  });
+
   it('allows previous visible cards for a narrowing turn without a new catalog tool', () => {
     const selection = selectProductsForVisibleCards({
       products: [plate],
