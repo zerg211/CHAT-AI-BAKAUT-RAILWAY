@@ -632,6 +632,15 @@ function requestedVisibleCardLimit(input: { userMessage: string; semanticContext
   return undefined;
 }
 
+function allowsHeavierPlateTradeoff(input: { userMessage: string; semanticContext: string }) {
+  const normalized = normalizedHintText([input.userMessage, input.semanticContext].join(' '));
+  const asksForLightOption = hintTextContainsAny(normalized, ['легк', 'перенос', 'перекат', 'грузить', 'одному']);
+  const asksForStrongerOption = hintTextContainsAny(normalized, ['уверенн', 'сильн', 'мощн', 'запас', 'щеб', 'песок']);
+  const asksForSplitChoice = hintTextContainsAny(normalized, ['две позиции', 'два варианта', 'одну', 'вторую', 'один', 'второй']);
+  const explicitlyRemovesHeavy = hintTextContainsAny(normalized, ['уберите 72', 'без 72', '72 кг пока уберите', 'только 54', 'только 60']);
+  return asksForLightOption && asksForStrongerOption && asksForSplitChoice && !explicitlyRemovesHeavy;
+}
+
 export function rankCatalogProductsByNumericFit(input: {
   products: Product[];
   intent: ProductSelectionClass;
@@ -826,9 +835,23 @@ export function selectProductsForVisibleCards(input: {
     : undefined;
   if (plateWeightRange && selected.length) {
     const selectedWithinRange = productsWithinPlateWeightRange(selected, plateWeightRange);
+    const heavierTradeoffAllowed = allowsHeavierPlateTradeoff({
+      userMessage: input.userMessage,
+      semanticContext: [
+        input.intent.userMessageSummary,
+        input.intent.dialogueUnderstanding,
+        input.intent.nextStepRationale,
+        input.answerText
+      ].filter(Boolean).join('\n')
+    });
     if (selectedWithinRange.length) {
-      numericFitFilteredCount = selected.length - selectedWithinRange.length;
-      selected = selectedWithinRange;
+      const inRangeIds = new Set(selectedWithinRange.map((product) => product.id));
+      const mentionedIds = new Set(mentionedMatchingIntent.map((product) => product.id));
+      const selectedAfterNumericFit = heavierTradeoffAllowed
+        ? selected.filter((product) => inRangeIds.has(product.id) || mentionedIds.has(product.id))
+        : selectedWithinRange;
+      numericFitFilteredCount = selected.length - selectedAfterNumericFit.length;
+      selected = selectedAfterNumericFit;
     } else {
       const fallbackWithinRange = productsWithinPlateWeightRange(sameIntentPool, plateWeightRange);
       if (fallbackWithinRange.length) {

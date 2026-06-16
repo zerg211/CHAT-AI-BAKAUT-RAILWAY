@@ -395,6 +395,54 @@ describe('AgentManager visible card readiness', () => {
 
 
 
+
+  it('keeps a heavier answer-mentioned plate card when buyer asks for one light and one stronger option', () => {
+    const light: Product = {
+      id: 'wp50',
+      name: 'Виброплита прямоходная бензиновая ТСС TSS-WP50L (54кг, колесный комплект) 207189',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 43313,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '54' }
+    };
+    const champion: Product = {
+      id: 'champion90',
+      name: 'Виброплита прямоходная CHAMPION PC 9045 F (90 кг)',
+      brand: 'CHAMPION',
+      category: 'Виброплиты',
+      price: 52000,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '90' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [light, champion],
+      userMessage: 'Одному реально перекатывать и грузить в машину. Оставьте две позиции: более легкую для переноски и более уверенную под щебень. Строго без вариантов за 70 тысяч.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer asks for one light plate and one stronger plate under budget',
+        dialogueUnderstanding: 'one heavier in-budget plate is allowed as the stronger option, not a hidden mismatch',
+        nextStepRationale: 'show both answer-mentioned cards',
+        requiresTools: false,
+        toolRequests: [],
+        productMentions: [{
+          name: 'виброплита',
+          role: 'target_product',
+          productClass: 'plate',
+          evidence: 'buyer continues plate selection'
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'TSS-WP50L — более удобная для переноски. CHAMPION PC9045F — более уверенная под щебень и песок, но тяжелее.',
+      needState: needStateWithBudget(65000),
+      allowHistoricalProducts: true
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual(['wp50', 'champion90']);
+  });
+
   it('keeps only the two in-budget TSS cards when buyer rejects a 70000 rub compromise', () => {
     const wp60: Product = {
       id: 'wp60',
