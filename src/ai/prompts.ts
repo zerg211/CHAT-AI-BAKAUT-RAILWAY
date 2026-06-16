@@ -1,5 +1,7 @@
+import { config } from '../config.js';
 import type { CatalogPage, CustomerNeedState, DataConflict, Message, Product, TroubleshootingCase } from '../shared/types.js';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
+import { salesManagerBehaviorPolicyPromptBlock, salesManagerPlannerPolicyPromptBlock } from './salesManagerBehaviorPolicy.js';
 import { classifyProduct, isCoreEquipment } from './productClassifier.js';
 
 const FINAL_CONTEXT_HISTORY_LIMIT = 4;
@@ -126,8 +128,20 @@ function compactProduct(product: Product, mode: AssistantContextMode) {
   };
 }
 
-export function buildSystemPrompt() {
+interface SalesPolicyPromptOptions {
+  latestUserMessage?: string;
+  dynamicPolicyEnabled?: boolean;
+  dynamicPolicyShadowMode?: boolean;
+}
+
+export function buildSystemPrompt(options: SalesPolicyPromptOptions = {}) {
   const styleExamples = approvedAnswerStyleExamplesPromptBlock();
+  const behaviorPolicy = salesManagerBehaviorPolicyPromptBlock({
+    target: 'answer',
+    latestUserMessage: options.latestUserMessage,
+    enabled: options.dynamicPolicyEnabled ?? config.DYNAMIC_SALES_POLICY_ENABLED,
+    shadowMode: options.dynamicPolicyShadowMode ?? config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+  });
   return `Ты AI-продавец-консультант компании БАКАУТ. Компания продает строительное и силовое оборудование: генераторы, виброплиты, вибротрамбовки, резчики, алмазную оснастку, расходники и близкие категории.
 
 Главная задача: вести живой диалог как сильный менеджер по продажам, понять задачу покупателя, довыяснить потребность, подобрать подходящие товары, объяснить выбор через пользу для покупателя и перевести к заявке, когда требуется специалист.
@@ -151,6 +165,8 @@ export function buildSystemPrompt() {
 - Если интерфейс показывает карточки товаров, не дублируй все карточки текстом. Назови максимум 1-2 лучшие модели, дай краткий вывод и оставь широкий выбор карточкам.
 
 When the buyer confirms they want to take/order/buy the selected items, do not say that an order or lead is already created. Summarize the selected bundle, ask for name and phone in the form, and show only the chosen items, not alternatives.
+
+${behaviorPolicy}
 
 ${styleExamples}
 
@@ -281,7 +297,13 @@ export function buildNeedExtractorPrompt() {
 - Скрытые потребности допускаются только как вероятные выводы из слов покупателя; не заменяй ими явные факты.`;
 }
 
-export function buildTurnPlannerPrompt() {
+export function buildTurnPlannerPrompt(options: SalesPolicyPromptOptions = {}) {
+  const plannerPolicy = salesManagerPlannerPolicyPromptBlock({
+    target: 'planner',
+    latestUserMessage: options.latestUserMessage,
+    enabled: options.dynamicPolicyEnabled ?? config.DYNAMIC_SALES_POLICY_ENABLED,
+    shadowMode: options.dynamicPolicyShadowMode ?? config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+  });
   return `Ты внутренний AI-планировщик хода диалога для продавца-консультанта БАКАУТ.
 
 Твоя задача - не отвечать покупателю, а решить, как финальному AI-ассистенту действовать в этом сообщении.
@@ -316,6 +338,8 @@ export function buildTurnPlannerPrompt() {
 Если searchScope="broadenAlternatives", catalogSearchQuery должен описывать критерии товара и диапазон, а не перечислять только уже показанные модели. selectedProductIds тоже должны включать новые лучшие варианты из preliminaryCatalogCandidates, а не только старые карточки. Если есть вариант дешевле при тех же ключевых требованиях, обязательно подними его выше старой рекомендации. Если есть вариант мощнее и дешевле, но он нарушает важное требование вроде закрытого кожуха, так и объясни: "мощнее/дешевле есть, но это открытое исполнение".
 Если последняя реплика покупателя касается точного наличия, стоимости доставки, скидки, спецусловий, сроков, оформления заказа или просьбы перезвонить - планируй handoff_specialist или collect_lead. Не планируй handoff только потому, что в контексте есть товар: для технического ответа, сравнения или подбора это лишняя информация.
 Если покупатель спрашивает про сервисное обслуживание, регламент, запасные части, расходные материалы, ремонт или стоимость владения, планируй verify_with_web, если в каталоге нет достаточных свежих фактов. Не своди такой вопрос к handoff: финальный ассистент должен дать практический сравнительный вывод, ориентиры по ценам/затратам и честно отделить точные коммерческие условия от технической оценки. В catalogSearchQuery и answerGuidance явно добавляй поиск по российским маркетплейсам, российским магазинам запчастей и dyadko.ru. В answerGuidance явно попроси переводить зарубежные цены в рубли, не заменять цены расходников ценой самой техники и не заканчивать предложением "могу сравнить дальше", если покупатель уже попросил сравнение.
+
+${plannerPolicy}
 
 Верни только JSON по схеме:
 {

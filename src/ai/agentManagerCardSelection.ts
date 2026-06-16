@@ -18,6 +18,11 @@ import {
   tokenHasDigit,
   tokenHasLetter
 } from './modelTextMatching.js';
+import {
+  classifyProductSuitability,
+  selectProductsBySuitability,
+  type BuyerRequirementContract
+} from './productSuitability.js';
 
 export function productCards(products: Product[], reasons: string[] = []): ProductCard[] {
   return products.map((product) => ({
@@ -254,8 +259,8 @@ function modelSequenceTokens(value: string) {
     .filter((token) => token.length > 0 && !shortModelIgnoredTokens.has(token));
 }
 
-function containsTokenSequence(haystack: string[], sequence: string[]) {
-  if (!sequence.length || sequence.length > haystack.length) return false;
+function indexOfTokenSequence(haystack: string[], sequence: string[]) {
+  if (!sequence.length || sequence.length > haystack.length) return -1;
   for (let start = 0; start <= haystack.length - sequence.length; start += 1) {
     let matches = true;
     for (let offset = 0; offset < sequence.length; offset += 1) {
@@ -264,9 +269,13 @@ function containsTokenSequence(haystack: string[], sequence: string[]) {
         break;
       }
     }
-    if (matches) return true;
+    if (matches) return start;
   }
-  return false;
+  return -1;
+}
+
+function containsTokenSequence(haystack: string[], sequence: string[]) {
+  return indexOfTokenSequence(haystack, sequence) >= 0;
 }
 
 function shortModelSequenceCandidates(productName: string) {
@@ -292,15 +301,43 @@ function productShortModelSequenceMentionedInText(product: Product, text: string
   );
 }
 
+function productMentionIndexInText(product: Product, text: string) {
+  const answerTokens = modelSequenceTokens(text);
+  const sequenceIndexes = shortModelSequenceCandidates(product.name)
+    .map((sequence) => indexOfTokenSequence(answerTokens, sequence))
+    .filter((index) => index >= 0);
+  if (sequenceIndexes.length) return Math.min(...sequenceIndexes);
+
+  const modelTokenIndexes = extractModelTokens(product.name)
+    .map((token) => compactModelText(token))
+    .filter((token) => token.length >= 5)
+    .map((token) => answerTokens.indexOf(token))
+    .filter((index) => index >= 0);
+  if (modelTokenIndexes.length) return Math.min(...modelTokenIndexes);
+
+  const compactText = compactModelText(text);
+  const brand = displayProductBrand(product) || product.brand;
+  const compactBrand = compactModelText(brand ?? '');
+  const brandIndex = compactBrand.length >= 3 ? compactText.indexOf(compactBrand) : -1;
+  return brandIndex >= 0 ? brandIndex + answerTokens.length : Number.MAX_SAFE_INTEGER;
+}
+
+function sortByAnswerMentionOrder(products: Product[], answerText: string) {
+  return products
+    .map((product, index) => ({ product, index, mentionIndex: productMentionIndexInText(product, answerText) }))
+    .sort((left, right) => left.mentionIndex - right.mentionIndex || left.index - right.index)
+    .map((item) => item.product);
+}
+
 function answerMentionedProducts(products: Product[], answerText: string) {
   const exactModelMatches = products.filter((product) =>
     productModelMentionedInText(product, answerText) ||
     productShortModelSequenceMentionedInText(product, answerText)
   );
   const exactWithBrand = exactModelMatches.filter((product) => productBrandMentionedInText(product, answerText));
-  if (exactWithBrand.length) return exactWithBrand;
-  if (exactModelMatches.length) return exactModelMatches;
-  return products.filter((product) => productMentionedInText(product, answerText));
+  if (exactWithBrand.length) return sortByAnswerMentionOrder(exactWithBrand, answerText);
+  if (exactModelMatches.length) return sortByAnswerMentionOrder(exactModelMatches, answerText);
+  return sortByAnswerMentionOrder(products.filter((product) => productMentionedInText(product, answerText)), answerText);
 }
 
 function parseKw(value: string) {
@@ -620,6 +657,49 @@ function sameIntentProducts(products: Product[], cardIntent: ProductSelectionCla
   return products.filter((product) => productMatchesIntent(product, cardIntent));
 }
 
+function plateRequirementsForCardSelection(input: {
+  needState: CustomerNeedState;
+  intent: AgentIntentContract;
+  userMessage: string;
+  plateWeightRange?: { min?: number; max?: number };
+}): BuyerRequirementContract {
+  const maxRub = budgetMaxFromNeedState(input.needState);
+  const hasLightConstraint = Boolean(input.plateWeightRange);
+  return {
+    buyerGoal: [input.intent.userMessageSummary, input.intent.dialogueUnderstanding, input.userMessage].filter(Boolean).join(' / '),
+    targetProductClass: 'plate',
+    hardRequirements: maxRub ? [{ kind: 'budgetMaxRub', value: maxRub, evidence: 'structured budget', strictness: 'strict' }] : [],
+    softRequirements: hasLightConstraint ? [{ kind: 'notTooHeavy', value: true, evidence: 'structured light/weight preference', strictness: 'soft' }] : [],
+    allowedCompromises: hasLightConstraint ? [{ kind: 'slightlyHeavierForBetterCompaction', value: true, evidence: 'plate compaction tradeoff' }] : [],
+    forbiddenRecommendations: [],
+    criticalAttributes: ['weightKg'],
+    budgetPolicy: maxRub ? { maxRub, strictness: 'strict', allowSlightlyAboveWhenFewMatches: true } : undefined,
+    topicAction: 'continue_current_need',
+    rationale: 'visible card selection safety gate'
+  };
+}
+
+function honestPlateExpansionProducts(input: {
+  products: Product[];
+  needState: CustomerNeedState;
+  intent: AgentIntentContract;
+  userMessage: string;
+  plateWeightRange?: { min?: number; max?: number };
+}) {
+  const requirements = plateRequirementsForCardSelection(input);
+  const maxRub = budgetMaxFromNeedState(input.needState);
+  const inBudgetMatchCount = maxRub === undefined
+    ? input.products.length
+    : input.products.filter((product) => typeof product.price === 'number' && Number.isFinite(product.price) && product.price <= maxRub).length;
+  const decisions = input.products.map((product) => classifyProductSuitability({
+    product,
+    requirements,
+    matchContext: { inBudgetMatchCount }
+  }));
+  return selectProductsBySuitability({ decisions, uiSafeCap: 8, minimumGoodMatchesBeforeCompromises: 3 })
+    .map((decision) => decision.product);
+}
+
 export function selectProductsForVisibleCards(input: {
   products: Product[];
   userMessage: string;
@@ -652,7 +732,33 @@ export function selectProductsForVisibleCards(input: {
 
   let selected: Product[];
   if (mentionedMatchingIntent.length) {
-    selected = mentionedMatchingIntent;
+    const shouldExpandCatalogSearch = cardIntent === 'plate' &&
+      mentionedMatchingIntent.length === 1 &&
+      input.intent.toolRequests.some((request) => request.tool === 'catalog.search') &&
+      sameIntentPool.length > mentionedMatchingIntent.length;
+    if (shouldExpandCatalogSearch) {
+      const honestExpandedIds = new Set(honestPlateExpansionProducts({
+        products: sameIntentPool,
+        needState: input.needState,
+        intent: input.intent,
+        userMessage: input.userMessage,
+        plateWeightRange: requestedPlateWeightRangeKg({
+          userMessage: input.userMessage,
+          query: toolRequestSemanticText(input.intent),
+          semanticContext: [
+            input.intent.userMessageSummary,
+            input.intent.dialogueUnderstanding,
+            input.intent.nextStepRationale
+          ].filter(Boolean).join('\n')
+        })
+      }).map((product) => product.id));
+      selected = uniqueProducts([
+        ...mentionedMatchingIntent,
+        ...sameIntentPool.filter((product) => honestExpandedIds.has(product.id))
+      ]);
+    } else {
+      selected = mentionedMatchingIntent;
+    }
   } else if (mentioned.length && cardIntent === 'unknown') {
     selected = mentioned;
   } else if (cardIntent !== 'unknown') {

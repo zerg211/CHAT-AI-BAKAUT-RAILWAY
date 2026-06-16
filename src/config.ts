@@ -89,6 +89,8 @@ const schema = z.object({
   AGENT_MANAGER_COMPARISON_RESEARCH_ENABLED: booleanFlag(false),
   AGENT_MANAGER_LEAD_OUTBOX_ENABLED: booleanFlag(false),
   AGENT_MANAGER_DISABLE_LEGACY_ANSWER_WRITERS: booleanFlag(true),
+  DYNAMIC_SALES_POLICY_ENABLED: booleanFlag(true),
+  DYNAMIC_SALES_POLICY_SHADOW_MODE: booleanFlag(false),
   CATALOG_BASE_URL: z.string().url().default('https://bakautprof.ru'),
   CATALOG_MAX_PAGES: z.coerce.number().int().positive().default(300),
   EMAIL_HTTP_URL: optionalUrl,

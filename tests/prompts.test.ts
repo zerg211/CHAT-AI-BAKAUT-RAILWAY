@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { emptyNeedState, emptyProductSelectionState } from '../src/ai/needState.js';
+import { __test_buildCompactAnswerSystemPrompt } from '../src/ai/assistant.js';
 import { buildAssistantContext, buildSystemPrompt, buildTurnPlannerPrompt } from '../src/ai/prompts.js';
 
 describe('assistant prompt guardrails', () => {
@@ -50,6 +51,37 @@ describe('assistant prompt guardrails', () => {
     expect(prompt).toContain('productCardsPolicy="show_matching_products"');
     expect(prompt).toContain('it does not mean text-only pure availability');
     expect(prompt).toContain('Do not set catalogAction="verify_catalog_absence"');
+  });
+
+  it('injects the compiled sales-manager policy as compact principles, not a fixed script dump', () => {
+    const prompt = buildSystemPrompt();
+
+    expect(prompt).toContain('DYNAMIC SALES POLICY');
+    expect(prompt).toContain('core.help_first');
+    expect(prompt).toContain('stock.no_false_stock_claim');
+    expect(prompt).toContain('cards.explain_compromise');
+    expect(prompt).toContain('contact.ask_only_for_result');
+    expect(prompt).toContain('не готовые ответы');
+    expect(prompt).not.toContain('11) Исправления и ошибки');
+  });
+
+  it('injects the sales-manager policy into the compact final-answer runtime prompt', () => {
+    const prompt = __test_buildCompactAnswerSystemPrompt('Есть в наличии и можно забрать сегодня?');
+
+    expect(prompt).toContain('DYNAMIC SALES POLICY');
+    expect(prompt).toContain('stock.no_false_stock_claim');
+    expect(prompt).toContain('contact.ask_only_for_result');
+    expect(prompt).toContain('не готовые ответы');
+  });
+
+  it('keeps planner decisions aligned with compiled contact timing and compromise rules', () => {
+    const prompt = buildTurnPlannerPrompt();
+
+    expect(prompt).toContain('DYNAMIC SALES POLICY');
+    expect(prompt).toContain('contact.ask_only_for_result');
+    expect(prompt).toContain('stock.no_false_stock_claim');
+    expect(prompt).toContain('cards.explain_compromise');
+    expect(prompt).toContain('Buyer corrections require evidence check before apologizing');
   });
 
   it('builds a compact final-answer context for low-token turns', () => {

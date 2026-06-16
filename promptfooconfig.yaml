@@ -255,3 +255,180 @@ tests:
             - product_selection
           expectedProductClasses:
             - plate
+
+  - description: brand_comparison_gives_real_orientation
+    vars:
+      caseId: brand_comparison_gives_real_orientation
+      messagesJson: |
+        [
+          "Что лучше для дома: генератор TSS или Huter? Бюджетные бренды вообще норм или лучше не связываться?"
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 80
+          finalMustContainAll:
+            - 'TSS|ТСС'
+            - 'Huter|Хутер'
+          finalMustContainAny:
+            - 'бюджет|норм|сервис|запчаст|модел|задач'
+          finalMustNotContain:
+            - 'только зависит|смотря под задачу без'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
+        config:
+          expectNoCards: true
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedTaskTypes:
+            - comparison
+            - technical_answer
+          taskMustContainAll:
+            - 'TSS|ТСС|Huter|Хутер'
+
+  - description: contact_refusal_continues_without_pressure
+    vars:
+      caseId: contact_refusal_continues_without_pressure
+      messagesJson: |
+        [
+          "Подберите генератор для дома 220 В около 5 кВт, желательно с электростартером.",
+          "Телефон пока не дам, просто скажите какие варианты смотреть и почему."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+        config:
+          minTurns: 2
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 90
+          finalMustContainAll:
+            - 'генератор'
+            - 'электростартер|ключ|запуск'
+          finalMustNotContainTextAny:
+            - 'не настаиваю, но оставьте'
+            - 'без телефона не смогу помочь'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
+        config:
+          expectedLeadPolicies:
+            - none
+            - forbidden
+          expectedTaskTypes:
+            - product_selection
+            - contact_refusal_continue_selection
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedProductClasses:
+            - generator
+          taskMustContainAll:
+            - 'генератор'
+
+  - description: cheapest_plate_preliminary_cards_with_logical_question
+    vars:
+      caseId: cheapest_plate_preliminary_cards_with_logical_question
+      messagesJson: |
+        [
+          "Покажите самую дешевую виброплиту, без лишних вопросов."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 80
+          expectedProductClasses:
+            - plate
+          finalMustContainAll:
+            - 'виброплит'
+          finalMustContainAny:
+            - 'плитк|грунт|щеб|асфальт|задач'
+          finalMustNotContainTextAny:
+            - 'цвет'
+            - 'бренд, цвет'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertRetrievalGrounding
+        config:
+          expectCards: true
+          minCards: 1
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedTaskTypes:
+            - product_selection
+          expectedProductClasses:
+            - plate
+          taskMustContainAll:
+            - 'виброплит'
+
+  - description: buyer_correction_requires_evidence_not_blind_apology
+    vars:
+      caseId: buyer_correction_requires_evidence_not_blind_apology
+      messagesJson: |
+        [
+          "Нужен генератор для дома 220 В с запуском с ключа.",
+          "Вы показали ручную модель, а я же писал про электростартер."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+        config:
+          minTurns: 2
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 80
+          finalMustContainAll:
+            - 'электростартер|ключ|запуск'
+          finalMustContainAny:
+            - 'упустил|правы|пересмотр|убираю|не подходят'
+          finalMustNotContainTextAny:
+            - 'ручной подойдет'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          expectedProductClasses:
+            - generator
+          taskMustContainAll:
+            - 'электростартер|ключ|запуск'
+
+  - description: product_photo_prefers_bakaut_card_link
+    vars:
+      caseId: product_photo_prefers_bakaut_card_link
+      messagesJson: |
+        [
+          "Скиньте ссылку или фото генератора TSS SGG 6000EH с вашего сайта, хочу посмотреть как выглядит."
+        ]
+    assert:
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertNoRuntimeFailure
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertSupportAnswerQuality
+        config:
+          minAnswerChars: 60
+          finalMustContainAll:
+            - 'ссылк|карточк|фото|сайт'
+          finalMustContainAny:
+            - 'bakautprof|БАКАУТ|у нас|карточк'
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertToolCallCorrectness
+        config:
+          requiredToolsAny:
+            - searchCatalog
+            - getProductDetails
+          expectedTaskTypes:
+            - pure_availability
+            - technical_answer
+            - product_selection
+      - type: javascript
+        value: file://evals/promptfoo/assertions.cjs:assertAgentTaskCompletion
+        config:
+          taskMustContainAll:
+            - 'TSS|ТСС|SGG|6000EH'

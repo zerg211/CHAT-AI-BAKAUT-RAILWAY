@@ -273,6 +273,126 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_budget:1');
   });
 
+  it('orders visible cards by the recommendation order in the answer text', () => {
+    const wp70: Product = {
+      id: 'wp70',
+      name: 'Виброплита прямоходная бензиновая ТСС TSS-WP70TL (72 кг)',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 38766,
+      currency: 'RUB',
+      specs: {}
+    };
+    const stemE: Product = {
+      id: 'stem-e',
+      name: 'Виброплита прямоходная бензиновая STEM Techno SPC 162E (67 кг)',
+      brand: 'STEM Techno',
+      category: 'Виброплиты',
+      price: 44100,
+      currency: 'RUB',
+      specs: {}
+    };
+    const stemEs: Product = {
+      id: 'stem-es',
+      name: 'Виброплита прямоходная бензиновая STEM Techno SPC 162ES (67 кг)',
+      brand: 'STEM Techno',
+      category: 'Виброплиты',
+      price: 42000,
+      currency: 'RUB',
+      specs: {}
+    };
+    const wp60: Product = {
+      id: 'wp60',
+      name: 'Виброплита прямоходная бензиновая ТСС TSS-WP60L (60 кг)',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 49907,
+      currency: 'RUB',
+      specs: {}
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [wp70, stemE, stemEs, wp60],
+      userMessage: 'Строго до 60 тысяч, без заявки, где компромисс.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer asks for in-budget plate options',
+        dialogueUnderstanding: 'budget is strict and cards should match textual recommendation order',
+        nextStepRationale: 'show catalog plates under budget',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'виброплита до 60000' },
+          rationale: 'find plate compactors under budget',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Я бы начинал с ТСС TSS-WP60L. Если нужен запас — TSS-WP70TL. Еще варианты: STEM Techno SPC 162ES или STEM Techno SPC 162E.',
+      needState: needStateWithBudget(60000)
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual(['wp60', 'wp70', 'stem-es', 'stem-e']);
+  });
+
+  it('does not collapse visible cards to one mentioned product when several catalog products honestly fit', () => {
+    const wp60: Product = {
+      id: 'wp60',
+      name: 'Виброплита ТСС TSS-WP60L (60 кг)',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 49907,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '60', 'центробежная сила, кН': '10,5' }
+    };
+    const masalta: Product = {
+      id: 'masalta',
+      name: 'Виброплита Masalta MS50-2 (54 кг)',
+      brand: 'Masalta',
+      category: 'Виброплиты',
+      price: 55000,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '54', 'центробежная сила, кН': '8,2' }
+    };
+    const zitrek: Product = {
+      id: 'zitrek',
+      name: 'Виброплита Zitrek z3k60 (57 кг)',
+      brand: 'Zitrek',
+      category: 'Виброплиты',
+      price: 38000,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '57', 'центробежная сила, кН': '11' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [masalta, wp60, zitrek],
+      userMessage: 'До 60 тысяч, не самую дешевую, нужна нормальная для дорожек.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer asks for vibroplate options under budget',
+        dialogueUnderstanding: 'several in-budget plate options can honestly fit; do not collapse to one card',
+        nextStepRationale: 'show all honest in-budget matches before compromises',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-1',
+          tool: 'catalog.search',
+          args: { productIntent: 'plate', query: 'виброплита до 60000' },
+          rationale: 'find all suitable plate compactors',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Из нормальных я бы начал с TSS-WP60L, но есть несколько подходящих вариантов до 60 тысяч.',
+      needState: needStateWithBudget(60000)
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual(['wp60', 'masalta', 'zitrek']);
+    expect(selection.warnings).not.toContain('product_cards_filtered:2');
+  });
+
   it('allows previous visible cards for a narrowing turn without a new catalog tool', () => {
     const selection = selectProductsForVisibleCards({
       products: [plate],

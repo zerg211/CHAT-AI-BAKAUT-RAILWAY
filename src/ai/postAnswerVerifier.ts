@@ -8,6 +8,7 @@ import type {
   ProductEvidenceRegistry
 } from '../shared/types.js';
 import { answerProductReferenceViolations } from './productEvidenceRegistry.js';
+import { validateFactClaimAuditEvidence } from './evidence/claimEvidenceContract.js';
 
 function normalized(value: unknown) {
   return String(value ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -203,6 +204,16 @@ export function verifyPostAnswer(input: {
       message: `Fact claim audit warning: ${warning}`
     });
   }
+  if (input.factClaimAudit) {
+    const evidenceValidation = validateFactClaimAuditEvidence(input.factClaimAudit);
+    for (const violation of evidenceValidation.violations) {
+      issues.push({
+        code: `claim_evidence_contract:${violation.reason}`,
+        severity: 'error',
+        message: `Claim evidence contract violation: ${violation.reason}. ${violation.repairAction}`
+      });
+    }
+  }
   for (const productId of input.productEvidenceRegistry ? answerProductReferenceViolations({
     answer: input.answer,
     registry: input.productEvidenceRegistry
@@ -212,6 +223,31 @@ export function verifyPostAnswer(input: {
       severity: 'error',
       message: `Answer names product ${productId} even though product evidence registry does not allow it in answer text.`
     });
+  }
+
+  if (input.productEvidenceRegistry) {
+    const registryById = new Map(input.productEvidenceRegistry.items.map((item) => [item.productId, item]));
+    const manifestVisibleIds = new Set([
+      ...input.cardManifest.visibleProductIds,
+      ...input.cardManifest.items.filter((item) => item.visible).map((item) => item.productId)
+    ]);
+    for (const productId of Array.from(manifestVisibleIds)) {
+      const registryItem = registryById.get(productId);
+      if (registryItem && registryItem.allowedAsVisibleCard === false) {
+        issues.push({
+          code: 'final_payload_disallowed_visible_card',
+          severity: 'error',
+          message: `Final payload exposes card ${productId} even though product evidence registry forbids it as a visible card.`
+        });
+      }
+      if (input.productEvidenceRegistry.rejectedProductIds.includes(productId)) {
+        issues.push({
+          code: 'final_payload_rejected_visible_card',
+          severity: 'error',
+          message: `Final payload exposes rejected product ${productId} as a visible card.`
+        });
+      }
+    }
   }
 
   return {
@@ -225,7 +261,9 @@ export function verifyPostAnswer(input: {
       'visible_card_constraint_policy',
       'fact_claim_planner_warnings',
       'fact_claim_audit_warnings',
-      'product_evidence_registry'
+      'claim_evidence_contract',
+      'product_evidence_registry',
+      'final_payload_atomic_validation'
     ]
   };
 }
