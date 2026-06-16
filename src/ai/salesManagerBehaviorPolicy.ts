@@ -123,6 +123,21 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     repairAction: 'mark recommendation as preliminary and ask the one decisive fit question'
   }),
   policyRule({
+    code: 'selection.cutter_ambiguous_material_question',
+    title: '“Резчик/резак” сначала уточнять по материалу и работе',
+    body: 'Если покупатель просит “резчик/резак” без задачи, считай класс неоднозначным: это может быть шовнарезчик для швов/реза пола, бетона или асфальта, либо ручной бензорез для металла, бетона, кирпича и похожих работ. Не смешивай карточки разных классов как подходящие; дай короткую ориентацию и задай один главный вопрос: по какому материалу и какой работе нужен рез.',
+    category: 'selection',
+    tags: ['cutter', 'ambiguous_category', 'selection', 'material_question'],
+    appliesTo: ['answer', 'planner', 'reviewer'],
+    riskLevel: 'high',
+    severity: 'must',
+    priority: 85,
+    mandatory: false,
+    forbiddenActions: ['mix_joint_cutters_and_cutoff_saws_as_matches', 'show_cutter_cards_before_material_or_work_is_clear'],
+    repairAction: 'replace broad mixed recommendations with a short orientation and one material/work clarification question',
+    reviewBy
+  }),
+  policyRule({
     code: 'correction.verify_before_apology',
     title: 'Исправления только после проверки',
     body: 'Buyer corrections require evidence check before apologizing: buyer requirements by conversation memory, product facts by catalog plus reliable sources, stock/delivery/price by checked operational data.',
@@ -186,6 +201,11 @@ function textMatches(text: string, re: RegExp) {
   return re.test(text.toLocaleLowerCase('ru'));
 }
 
+function textContainsAny(text: string, fragments: string[]) {
+  const normalized = text.toLocaleLowerCase('ru');
+  return fragments.some((fragment) => normalized.includes(fragment));
+}
+
 function inferSalesPolicyRouting(text: string) {
   const tags = ['core'];
   const riskFlags = ['commercial', 'hard_requirements'];
@@ -213,6 +233,11 @@ function inferSalesPolicyRouting(text: string) {
   if (textMatches(text, /(?:сравн|лучше|бренд|тсс|huter|аналог|compare|brand)/i)) {
     tags.push('comparison', 'brand');
     reasonCodes.push('text:comparison_or_brand');
+  }
+  if (textContainsAny(text, ['резчик', 'резак', 'резки', 'резку', 'шовнарез', 'бензорез', 'cutter', 'cutoff saw'])) {
+    tags.push('cutter', 'ambiguous_category', 'selection', 'material_question');
+    riskFlags.push('hard_requirements');
+    reasonCodes.push('text:cutter_ambiguous_category');
   }
   if (textMatches(text, /(?:фото|ссылк|картин|изображ|photo|link)/i)) {
     tags.push('photo', 'link', 'bakaut');

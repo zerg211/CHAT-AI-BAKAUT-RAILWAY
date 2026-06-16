@@ -73,4 +73,22 @@ describe('dynamic sales manager policy routing', () => {
     expect(prompt).toContain('photo.prefer_bakaut_card');
     expect(prompt).toContain('cheap.preliminary_not_final');
   });
+
+  it('routes ambiguous cutter requests to a material/work clarification policy', () => {
+    const trace = buildSalesManagerPolicyTrace({
+      target: 'answer',
+      latestUserMessage: 'мне нужен резчик че у вас есть?',
+      enabled: true,
+      shadowMode: false,
+      maxRules: 9
+    });
+
+    expect(trace.tags).toEqual(expect.arrayContaining(['cutter', 'ambiguous_category', 'material_question']));
+    expect(trace.reasonCodes).toContain('text:cutter_ambiguous_category');
+    expect(trace.selectedRuleCodes).toContain('selection.cutter_ambiguous_material_question');
+    expect(trace.promptBlock).toContain('по какому материалу');
+    expect(trace.promptBlock).toContain('шовнарезчик');
+    expect(trace.promptBlock).toContain('бензорез');
+    expect(trace.promptBlock).not.toContain('напиши клиенту:');
+  });
 });
