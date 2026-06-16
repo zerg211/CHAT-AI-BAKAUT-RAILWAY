@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "purpose": "Regression scenarios for non-regex AI sales-manager product selection logic.",
+  "focusedScenarios": [
+    {
+      "id": "name_specs_conflict_weight_confirmed",
+      "buyerUtteranceVariants": [
+        "Нужна не тяжелая виброплита для дорожек",
+        "Чтобы одному было нормально таскать и под плитку песок утрамбовать",
+        "Посоветуй плиту для небольшого участка, не махину"
+      ],
+      "catalogSetup": "Product name says 60 kg, specs say 72 kg.",
+      "expectedBehavior": [
+        "detect name/specs conflict before answer",
+        "run fact-check/evidence search",
+        "if two independent sources confirm 60 kg, answer buyer using 60 kg without exposing internal conflict",
+        "send internal catalog conflict email with product link, conflicting values, corrected value, and sources"
+      ]
+    },
+    {
+      "id": "strict_budget_few_matches_near_budget_optional",
+      "buyerUtteranceVariants": [
+        "Строго до 60 тысяч, без заявки пока",
+        "Пока просто варианты до 60, телефон оставлять не хочу",
+        "Бюджет 60к, если прям есть чуть дороже и лучше — покажи отдельно"
+      ],
+      "catalogSetup": "Few honest in-budget matches plus one near-budget upgrade.",
+      "expectedBehavior": [
+        "main cards are in budget",
+        "one near-budget card may be shown only as above-budget compromise when in-budget matches are few or weak",
+        "do not present above-budget product as satisfying the budget"
+      ]
+    },
+    {
+      "id": "many_honest_matches_no_compromises",
+      "buyerUtteranceVariants": [
+        "Покажи какие варианты подходят",
+        "Что у вас есть нормальное под эту задачу?",
+        "Дай подборку, чтобы было из чего выбрать"
+      ],
+      "catalogSetup": "Many products match hard requirements and materially fit the job.",
+      "expectedBehavior": [
+        "show all honest matches within UI-safe limits",
+        "group/prioritize briefly if many",
+        "do not add compromises when honest matches are enough",
+        "do not collapse to one or two random products"
+      ]
+    },
+    {
+      "id": "missing_critical_fact_search_more",
+      "buyerUtteranceVariants": [
+        "Мне надо, чтобы нормально трамбовала песок под плитку",
+        "Сила удара важна, чтобы не игрушка была",
+        "А она точно трамбует нормально?"
+      ],
+      "catalogSetup": "Candidate lacks centrifugal force in local specs.",
+      "expectedBehavior": [
+        "search multiple query variants and source types before deciding fact is unavailable",
+        "if fact is found, use it",
+        "if not found after reasonable search, continue looking for other products with enough data",
+        "if suitability is clear from other non-critical facts, decision may proceed with that caveat"
+      ]
+    },
+    {
+      "id": "not_cheapest_soft_preference",
+      "buyerUtteranceVariants": [
+        "Самую дешевую не надо, лучше нормальную",
+        "Дешман не хочу, хочу чтобы работала нормально",
+        "Можно не минимальную цену, главное нормальный вариант"
+      ],
+      "catalogSetup": "Cheapest product fits specs, middle products also fit.",
+      "expectedBehavior": [
+        "rank middle/normal options first",
+        "cheapest may appear only as backup/economy option if specs are genuinely good",
+        "if cheapest is weak or data is poor, do not show it"
+      ]
+    }
+  ],
+  "longDialogueScenario": {
+    "id": "plate_to_generator_and_back",
+    "turns": [
+      "Нужна виброплита для дорожек под плитку.",
+      "Участок небольшой, самую дешевую не надо.",
+      "До 60 тысяч, без заявки пока.",
+      "А 72 кг не тяжело?",
+      "Ну если чуть дороже, но лучше — покажи отдельно.",
+      "А есть ТСС? Можно аналоги, но ТСС сначала.",
+      "Теперь генератор для дома на 220В подбери.",
+      "Телефон не хочу оставлять, просто подскажи.",
+      "Вернемся к виброплите, что бы ты взял?",
+      "А почему не самый дешевый?"
+    ],
+    "expectedBehavior": [
+      "preserve plate requirements when returning to plate topic",
+      "do not leak plate budget/weight constraints into generator topic",
+      "do not show stale plate cards for generator topic",
+      "do not pressure lead capture when buyer says no lead yet",
+      "explain 72 kg as heavier compromise, not light",
+      "show TSS first when buyer prefers TSS but allow honest analogs",
+      "explain cheapest product as backup/economy only when it is technically good"
+    ]
+  }
+}

@@ -45,8 +45,9 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('plan web.researchProductFacts even without a named model');
     expect(orchestrator).toContain('For multi-turn generator selection, do not run catalog.search alone');
     expect(orchestrator).toContain('Re-run calculator.generatorLoad in the current turn before catalog.search');
-    expect(orchestrator).toContain('Treat every named product as a visible recommendation candidate');
+    expect(orchestrator).toContain('every named catalog recommendation must be strong enough to be shown as a visible card');
     expect(orchestrator).toContain('Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context');
+    expect(orchestrator).toContain('first cover all honestly suitable products');
     expect(orchestrator).toContain('rank the shortlist by fit to both constraints');
     expect(orchestrator).toContain('two or more clearly lighter in-budget candidates');
     expect(orchestrator).toContain('hasConfirmedStartControlCoverage');

@@ -275,6 +275,81 @@ describe('post-answer verifier', () => {
     expect(after.status).toBe('pass');
   });
 
+  it('fails the final payload when a visible card is not allowed by product evidence registry', () => {
+    const result = verifyPostAnswer({
+      answer: 'Вот основной вариант — TSS SGG 5000.',
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest: {
+        ...cardManifest,
+        visibleProductIds: ['bad-card'],
+        items: [{
+          productId: 'bad-card',
+          name: 'TSS SGG 5000',
+          rank: 1,
+          visible: true,
+          role: 'primary',
+          constraintStatus: 'satisfies_hard_constraints',
+          violations: []
+        }]
+      },
+      productEvidenceRegistry: {
+        version: 1,
+        visibleProductIds: [],
+        hiddenProductIds: ['bad-card'],
+        rejectedProductIds: ['bad-card'],
+        allowedProductIdsForText: ['bad-card'],
+        warnings: [],
+        items: [{
+          productId: 'bad-card',
+          name: 'TSS SGG 5000',
+          source: 'catalog',
+          role: 'rejected',
+          allowedInAnswerText: true,
+          allowedAsVisibleCard: false,
+          rejectionReason: 'violates hard requirement',
+          constraintStatus: 'violates_hard_constraints',
+          evidence: ['Rejected by card contract']
+        }]
+      }
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'final_payload_disallowed_visible_card' })
+    ]));
+    expect(result.checkedPolicies).toContain('final_payload_atomic_validation');
+  });
+
+  it('uses claim evidence contract to block unsupported commercial claims even without heuristic warnings', () => {
+    const result = verifyPostAnswer({
+      answer: 'Товар есть в наличии.',
+      factClaimPlanner,
+      leadStateMachine,
+      cardManifest,
+      factClaimAudit: {
+        version: 1,
+        claims: [{
+          kind: 'availability',
+          text: 'Товар есть в наличии.',
+          requiredSource: 'specialist',
+          groundingStatus: 'ungrounded',
+          matchedProductIds: []
+        }],
+        warnings: []
+      }
+    });
+
+    expect(result.status).toBe('error');
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'claim_evidence_contract:stock_claim_requires_live_warehouse_or_manager_evidence',
+        severity: 'error'
+      })
+    ]));
+    expect(result.checkedPolicies).toContain('claim_evidence_contract');
+  });
+
   it('elevates ungrounded fact claim audit warnings into verification errors', () => {
     const result = verifyPostAnswer({
       answer: 'Эта модель актуальна в текущей линейке производителя.',

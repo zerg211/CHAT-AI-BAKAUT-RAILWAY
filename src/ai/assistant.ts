@@ -3,6 +3,7 @@ import { ConversationRepository, LeadRepository, ProductRepository, type Embeddi
 import yaml from 'js-yaml';
 import type { ActiveCustomerNeed, AgentToolTraceItem, AgentTurnContract, AgentTurnContractV2, CardDisplayOptions, CardManifest, ChatResponsePayload, ConversationSession, CustomerNeedState, DataConflict, ExecutionContract, FactClaimPlanner, GeneratorPowerProfile, Lead, LeadDraft, LeadStateMachine, MentionedProductMemory, Message, PolicyGateEnforcement, PolicyGateResult, PostAnswerVerification, Product, ProductCard, ProductElectricalLoadItem, ProductEvidenceRegistry, ProductFitProfile, ProductGeneratorLoadProfile, ProductRankingPreference, ProductSelectionClass, ProductSelectionCriteria, ProductSelectionMetadata, ProductSelectionRejection, ProductSelectionState, ProductSelectionToken, RequirementLedger, SemanticMemory, SemanticRequirement, SemanticRequirementKind, TroubleshootingCase } from '../shared/types.js';
 import { buildAssistantContext, buildNeedExtractorPrompt, buildSystemPrompt, buildTurnPlannerPrompt } from './prompts.js';
+import { buildSalesManagerPolicyTrace, salesManagerBehaviorPolicyPromptBlock } from './salesManagerBehaviorPolicy.js';
 import { createEmbedding, createOpenAIClient, withRetry } from './openaiClient.js';
 import { embeddingMetadataForText } from './embeddingUtils.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
@@ -6878,7 +6879,13 @@ function technicalCurrentLevelAnswerGuidance(contract: AgentTurnContract) {
   return 'For this technical/comparison turn, do not answer only by asking for exact model, power, duty cycle, or other missing inputs. First answer the buyer question at the highest truthful specificity available: general engineering comparison, typical tradeoffs, fit by use case, or bounded practical conclusion. Clearly mark what is general and what depends on exact model/data. Ask at most two precise clarifying questions only after the direct answer.';
 }
 
-function buildCompactAnswerSystemPrompt() {
+function buildCompactAnswerSystemPrompt(latestUserMessage?: string) {
+  const behaviorPolicy = salesManagerBehaviorPolicyPromptBlock({
+    target: 'answer',
+    latestUserMessage,
+    enabled: config.DYNAMIC_SALES_POLICY_ENABLED,
+    shadowMode: config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+  });
   return [
     'You are the BAKAUT AI sales consultant for construction and power equipment.',
     'The upstream LLM planner and agentTurnContract are the semantic brain for the turn. Follow their task, catalogAction, cardsRole, leadAllowed, and mustAnswerNow exactly.',
@@ -6889,9 +6896,12 @@ function buildCompactAnswerSystemPrompt() {
     'Never write that "a manager will confirm/check/call" or "through a manager". You are the AI manager in this chat; for stock/logistics facts write in first person: "я сверю по складу", "я посчитаю доставку через логистику", or "я передам запрос профильному специалисту".',
     'Do not ask for name, phone, callback, or a form unless agentTurnContract.leadAllowed is true and the current task actually requires specialist follow-up.',
     'For technical or comparison turns, answer the buyer question first at the truthful general level, then mention what depends on exact model or conditions.',
-    'If catalog matches are shown, do not say there are no matching products. If no trustworthy catalog product is provided, do not invent model names.'
-  ].join('\n');
+    'If catalog matches are shown, do not say there are no matching products. If no trustworthy catalog product is provided, do not invent model names.',
+    behaviorPolicy
+  ].filter(Boolean).join('\n');
 }
+
+export const __test_buildCompactAnswerSystemPrompt = buildCompactAnswerSystemPrompt;
 
 function commercialManagerVerificationGuidance(contract: AgentTurnContract) {
   if (contract.commercialAction !== 'explain_manager_required') return '';
@@ -9068,7 +9078,7 @@ export class AssistantService {
       input.conflicts.filter((conflict) => conflict.status === 'open').length
     );
     const plannerInput = [
-      { role: 'system', content: buildTurnPlannerPrompt() },
+      { role: 'system', content: buildTurnPlannerPrompt({ latestUserMessage: input.userMessage }) },
       {
         role: 'user',
         content: yaml.dump(cleanEmpty({
@@ -10922,7 +10932,14 @@ export class AssistantService {
         : null,
       responseStyle
     };
+    const answerSalesPolicyTrace = buildSalesManagerPolicyTrace({
+      target: 'answer',
+      latestUserMessage: input.userMessage,
+      enabled: config.DYNAMIC_SALES_POLICY_ENABLED,
+      shadowMode: config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+    });
     const answerInputPayload = {
+      salesManagerPolicyTrace: answerSalesPolicyTrace,
       turnPlan: compactTurnPlanForAnswer(effectivePlan),
       agentTurnContract: answerAgentTurnContract,
       agentContractV2,
@@ -10999,7 +11016,9 @@ export class AssistantService {
       model,
       reasoning: { effort: compactCommercialHandoffAnswer ? 'none' : effort },
       instructions: [
-        useCompactAnswerRequest ? buildCompactAnswerSystemPrompt() : buildSystemPrompt(),
+        useCompactAnswerRequest
+          ? buildCompactAnswerSystemPrompt(input.userMessage)
+          : buildSystemPrompt({ latestUserMessage: input.userMessage }),
         buildOfftopicGuard(),
         consistencyGuard.buildConsistencyContext(),
         temperatureGuidance(assessLeadTemperature(input.userMessage, needState, history).level),
