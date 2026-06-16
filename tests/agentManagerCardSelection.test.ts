@@ -396,6 +396,68 @@ describe('AgentManager visible card readiness', () => {
 
 
 
+
+  it('filters previous 70000 rub cards when buyer says no options around 70k and asks to narrow to two', () => {
+    const wp60: Product = {
+      id: 'wp60',
+      name: 'Виброплита прямоходная бензиновая ТСС TSS-WP60L (60 кг) 207191',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 49907,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '60' }
+    };
+    const wp70: Product = {
+      id: 'wp70',
+      name: 'Виброплита прямоходная бензиновая ТСС TSS-WP70TL (72 кг) 207188',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 38766,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '72' }
+    };
+    const wp50: Product = {
+      id: 'wp50',
+      name: 'Виброплита прямоходная бензиновая ТСС TSS-WP50L (54кг) 207189',
+      brand: 'ТСС',
+      category: 'Виброплиты',
+      price: 43313,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '54' }
+    };
+    const masalta70: Product = {
+      id: 'masalta70',
+      name: 'Виброплита бензиновая Masalta MSR60-2 (62 кг) ВИБ172',
+      brand: 'Masalta',
+      category: 'Виброплиты',
+      price: 70000,
+      currency: 'RUB',
+      specs: { 'рабочая масса, кг': '62' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [wp60, wp70, wp50, masalta70],
+      userMessage: 'Теперь без вариантов около 70 тысяч. Сведите к двум: первая легче для переноски, вторая более уверенная под щебень.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer rejects around 70000 rub options and wants two plate cards',
+        dialogueUnderstanding: 'previous 70000 rub compromise must not remain visible',
+        nextStepRationale: 'narrow visible cards to two under the rejected price point',
+        requiresTools: false,
+        toolRequests: [],
+        productMentions: [{ name: 'виброплита', role: 'target_product', productClass: 'plate', evidence: 'plate follow-up' }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'TSS-WP60L — легче для переноски. TSS-WP70TL — более уверенная под щебень.',
+      needState: needStateWithBudget(70000),
+      allowHistoricalProducts: true
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual(['wp60', 'wp70']);
+    expect(selection.droppedProductIds).toContain('masalta70');
+  });
+
   it('keeps a heavier answer-mentioned plate card when buyer asks for one light and one stronger option', () => {
     const light: Product = {
       id: 'wp50',

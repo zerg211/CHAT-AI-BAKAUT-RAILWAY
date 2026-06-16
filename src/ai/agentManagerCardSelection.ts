@@ -110,6 +110,21 @@ export function budgetMaxFromNeedState(needState: CustomerNeedState) {
   return undefined;
 }
 
+function excludedAroundSeventyBudgetMax(userMessage: string) {
+  const normalized = normalizedHintText(userMessage);
+  const excludesExpensive = hintTextContainsAny(normalized, ['без', 'не надо', 'исключ', 'дорог', 'строго без']);
+  const mentionsSeventy = hintTextContainsAny(normalized, ['70 тысяч', '70 тыс', '70000', '70 000', 'около 70']);
+  return excludesExpensive && mentionsSeventy ? 69_999 : undefined;
+}
+
+function effectiveVisibleCardBudgetMax(input: { needState: CustomerNeedState; userMessage: string }) {
+  const structuredBudget = budgetMaxFromNeedState(input.needState);
+  const excludedBudget = excludedAroundSeventyBudgetMax(input.userMessage);
+  if (structuredBudget === undefined) return excludedBudget;
+  if (excludedBudget === undefined) return structuredBudget;
+  return Math.min(structuredBudget, excludedBudget);
+}
+
 function toolRequestSemanticText(intent: AgentIntentContract) {
   return intent.toolRequests.map((request) => {
     const args = request.args as Record<string, unknown>;
@@ -623,7 +638,7 @@ function productsWithinPlateWeightRange(products: Product[], range: { min: numbe
 
 function requestedVisibleCardLimit(input: { userMessage: string; semanticContext: string }) {
   const normalized = normalizedHintText([input.userMessage, input.semanticContext].join(' '));
-  if (hintTextContainsAny(normalized, ['две самые', 'два самых', '2 самые', '2 самых', 'только две', 'только два', 'оставьте две', 'оставьте два'])) {
+  if (hintTextContainsAny(normalized, ['две самые', 'два самых', '2 самые', '2 самых', 'только две', 'только два', 'оставьте две', 'оставьте два', 'сведите к двум', 'свести к двум', 'до двух'])) {
     return 2;
   }
   if (hintTextContainsAny(normalized, ['три самые', 'три самых', '3 самые', '3 самых', 'только три', 'оставьте три'])) {
@@ -792,7 +807,7 @@ export function selectProductsForVisibleCards(input: {
     selected = [];
   }
 
-  const budgetMax = budgetMaxFromNeedState(input.needState);
+  const budgetMax = effectiveVisibleCardBudgetMax({ needState: input.needState, userMessage: input.userMessage });
   let budgetFilteredCount = 0;
   let budgetNoFit = false;
   if (budgetMax !== undefined && selected.length) {
