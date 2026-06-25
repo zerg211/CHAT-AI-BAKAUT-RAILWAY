@@ -22,7 +22,7 @@ import { deriveNeedStateSnapshotFromLedger, reduceDialogueLedger, type ReducedDi
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts, type ProductComparisonResearchFact, type ProductComparisonResearchResult } from './productComparisonResearch.js';
-import { inferProductIntent, productMatchesIntent } from './productClassifier.js';
+import { extractWeightKg, inferProductIntent, parseWeightNeedRangeKg, productMatchesIntent } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
@@ -784,6 +784,72 @@ function requiredResponseClausesForNarrowedProductReplacement(input: {
   }];
 }
 
+function explicitHeavyPlateRequestConflictsWithTask(input: {
+  userMessage: string;
+  intent: AgentIntentContract;
+  policy?: { reason: string; maxPracticalWeightKg: number };
+}) {
+  if (!input.policy) return false;
+  const plateMentionText = (input.intent.productMentions ?? [])
+    .filter((mention) => mention.productClass === 'plate' || mention.productClass === 'unknown')
+    .map((mention) => [mention.name, mention.evidence, mention.role].filter(Boolean).join(' '))
+    .join('\n');
+  const plateToolText = input.intent.toolRequests
+    .filter((request) => request.args?.productIntent === 'plate' || request.tool === 'catalog.search')
+    .map((request) => [
+      typeof request.args?.query === 'string' ? request.args.query : '',
+      typeof request.args?.semanticQuery === 'string' ? request.args.semanticQuery : '',
+      request.rationale
+    ].filter(Boolean).join(' '))
+    .join('\n');
+  const semanticText = [
+    input.userMessage,
+    input.intent.userMessageSummary,
+    input.intent.dialogueUnderstanding,
+    input.intent.nextStepRationale,
+    plateMentionText,
+    plateToolText
+  ].filter(Boolean).join('\n');
+  const explicitRange = parseWeightNeedRangeKg(semanticText);
+  if (explicitRange && explicitRange.min > input.policy.maxPracticalWeightKg) return true;
+
+  const normalized = normalizeModelText(semanticText);
+  return normalizedTextIncludesAny(normalized, [
+    'heavy plate',
+    'heavy vibroplate',
+    'reversible plate',
+    'reversible vibroplate',
+    '\u0442\u044f\u0436\u0435\u043b',
+    '\u0440\u0435\u0432\u0435\u0440\u0441\u0438\u0432'
+  ]);
+}
+
+function requiredResponseClausesForExplicitHeavyPlateTaskConflict(input: {
+  userMessage: string;
+  intent: AgentIntentContract;
+  policy?: { reason: string; maxPracticalWeightKg: number };
+  products: Product[];
+  droppedProductIds: string[];
+}): RequiredResponseClause[] {
+  if (
+    input.droppedProductIds.length > 0 ||
+    !explicitHeavyPlateRequestConflictsWithTask({
+      userMessage: input.userMessage,
+      intent: input.intent,
+      policy: input.policy
+    })
+  ) return [];
+
+  const hasProducts = input.products.length > 0;
+  return [{
+    code: 'plate_explicit_heavy_request_conflicts_with_small_site_task',
+    sourceRequestId: 'current_user_task',
+    instruction: hasProducts
+      ? `The buyer explicitly asked about a heavy plate class around 300-400 kg, but the stated task requires a small-site plate policy: ${input.policy?.reason}. Do not answer only that 400 kg was not found or only that "lighter" products are available. Say directly that the requested 300-400/400 kg class is excessive and not recommended as the primary choice for private yard/paving tile work. State the concrete practical target weight range: roughly 60-120 kg, usually around 60-90/100 kg for a private yard/paving tile job depending on base and area. Because suitable products are already passed in products, do not make the buyer ask again for options; use those products now as suitable alternatives and mention their weights.`
+      : `The buyer explicitly asked about a heavy plate class around 300-400 kg, but the stated task requires a small-site plate policy: ${input.policy?.reason}. Do not answer only that 400 kg was not found and do not say only "lighter class". Say directly that the requested 300-400/400 kg class is excessive and not recommended as the primary choice for private yard/paving tile work. State the concrete practical target weight range: roughly 60-120 kg, usually around 60-90/100 kg for a private yard/paving tile job depending on base and area. Since no suitable products are available in products, offer to select/show catalog options in that range as the next step.`
+  }];
+}
+
 function requiredResponseClausesForPlateTaskProductMismatch(input: {
   originalProducts: Product[];
   filteredProductIds: string[];
@@ -821,6 +887,44 @@ function plateTaskMismatchSafeRewrite(clause: RequiredResponseClause) {
     `Из этих вариантов я бы не выбирал ни один как основной для домашней укладки тротуарной плитки${namesText}.`,
     'Это тяжелые реверсивные плиты около 400 кг: они нужны под серьезное основание, щебень, грунт, дорожные и профессиональные работы. Для двора и плитки такой вес избыточный: выше риск повредить плитку, сложнее работать у дома и обычно нужен другой класс плиты.',
     'Под домашнюю плитку лучше смотреть конкретный рабочий диапазон: примерно 60-120 кг, а для частного двора чаще 60-90/100 кг в зависимости от основания, площади и того, сколько щебня. По уже уложенной плитке нужен резиновый или полиуретановый коврик. Я бы подобрал и показал варианты из каталога в этом диапазоне, а эти 400 кг оставил бы только если у вас реально тяжелая подготовка основания, а не финишная укладка плитки.'
+  ].join('\n\n');
+}
+
+function answerSatisfiesExplicitHeavyPlateTaskConflict(answerText: string) {
+  const normalized = normalizeModelText(answerText);
+  const mentionsHeavyRequestedWeight = /(?:^|[^\d])(?:3\d{2}|4\d{2})\s*(?:\u043a\u0433|kg)?/iu.test(answerText);
+  const hasDirectRejection = normalizedTextIncludesAny(normalized, [
+    'not recommend',
+    'not recommended',
+    'too heavy',
+    'excessive',
+    'overkill',
+    'not the right',
+    '\u043d\u0435 \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434',
+    '\u043d\u0435 \u0441\u043e\u0432\u0435\u0442',
+    '\u0441\u043b\u0438\u0448\u043a\u043e\u043c',
+    '\u0438\u0437\u0431\u044b\u0442\u043e\u0447',
+    '\u043d\u0435 \u043f\u043e\u0434\u0445\u043e\u0434'
+  ]);
+  const statesConcreteRange = /60\s*(?:-|–|—|\/|\u0434\u043e)\s*120\s*(?:\u043a\u0433|kg)?/iu.test(answerText) ||
+    (/60\s*(?:\u043a\u0433|kg)?/iu.test(answerText) && /(?:90|100)\s*(?:\u043a\u0433|kg)?/iu.test(answerText));
+  return mentionsHeavyRequestedWeight && hasDirectRejection && statesConcreteRange;
+}
+
+function plateExplicitHeavyTaskConflictSafeRewrite(products: Product[]) {
+  const productLines = products.slice(0, 6).map((product) => {
+    const weight = extractWeightKg(product);
+    return weight !== undefined
+      ? `- ${product.name} (${weight} kg)`
+      : `- ${product.name}`;
+  });
+  const productBlock = productLines.length
+    ? `Из подходящих вариантов сейчас можно смотреть:\n${productLines.join('\n')}`
+    : 'Могу подобрать и показать варианты из каталога в этом диапазоне.';
+  return [
+    'Плиту около 300-400 кг под тротуарную плитку во дворе я бы не рекомендовал как основной вариант. Это слишком тяжелый класс для такой задачи: он больше нужен под серьезную подготовку основания, щебень, грунт, дорожные и профессиональные объемы.',
+    'Для двора и тротуарной плитки практичнее смотреть примерно 60-120 кг, а для частного двора чаще 60-90/100 кг в зависимости от основания, площади и слоя щебня. По уже уложенной плитке нужен резиновый или полиуретановый коврик.',
+    productBlock
   ].join('\n\n');
 }
 
@@ -2651,6 +2755,13 @@ export class AgentManagerOrchestrator {
         reason: budgetNarrowingRejection.reason,
         productIntent: continuityIntent
       }),
+      ...requiredResponseClausesForExplicitHeavyPlateTaskConflict({
+        userMessage,
+        intent: effectiveIntent,
+        policy: plateAnswerProductEvidence.policy,
+        products: answerProducts,
+        droppedProductIds: plateAnswerProductEvidence.droppedProductIds
+      }),
       ...requiredResponseClausesForPlateTaskProductMismatch({
         originalProducts: budgetAnswerProductEvidence.products,
         filteredProductIds: answerProducts.map((product) => product.id),
@@ -3722,12 +3833,26 @@ export class AgentManagerOrchestrator {
     const plateTaskMismatchClause = (input.requiredResponseClauses ?? []).find((clause) =>
       clause.code === 'plate_previous_cards_unsuitable_for_current_task'
     );
+    const explicitHeavyPlateTaskConflictClause = (input.requiredResponseClauses ?? []).find((clause) =>
+      clause.code === 'plate_explicit_heavy_request_conflicts_with_small_site_task'
+    );
     if (plateTaskMismatchClause) {
       mechanicalIssues.push({
         code: 'plate_previous_cards_unsuitable_for_current_task',
         severity: 'high',
         message: 'Previous heavy plate products conflict with the current home paving/tile task and must not be recommended.',
         evidence: uniqueStrings(plateTaskMismatchClause.catalogProductNames ?? []).join(', ') || plateTaskMismatchClause.instruction
+      });
+    }
+    if (
+      explicitHeavyPlateTaskConflictClause &&
+      !answerSatisfiesExplicitHeavyPlateTaskConflict(input.answer.answerText)
+    ) {
+      mechanicalIssues.push({
+        code: 'plate_explicit_heavy_request_conflicts_with_small_site_task',
+        severity: 'high',
+        message: 'Explicit heavy plate request conflicts with the current home paving/tile task and must be rejected with a concrete lighter weight range.',
+        evidence: explicitHeavyPlateTaskConflictClause.instruction
       });
     }
     const blockingIssueCodes = new Set([
@@ -3792,6 +3917,16 @@ export class AgentManagerOrchestrator {
         verdict: 'rewrite_required',
         issues: mechanicalIssues,
         revisedAnswerText: plateTaskMismatchSafeRewrite(plateTaskMismatchClause)
+      };
+    }
+    const explicitHeavyPlateTaskConflictIssue = mechanicalIssues.find((issue) =>
+      issue.code === 'plate_explicit_heavy_request_conflicts_with_small_site_task'
+    );
+    if (explicitHeavyPlateTaskConflictIssue) {
+      return {
+        verdict: 'rewrite_required',
+        issues: mechanicalIssues,
+        revisedAnswerText: plateExplicitHeavyTaskConflictSafeRewrite(input.products)
       };
     }
     if (mechanicalIssues.length) {

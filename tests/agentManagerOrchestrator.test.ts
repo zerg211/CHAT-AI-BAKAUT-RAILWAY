@@ -2541,6 +2541,134 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.toolResults?.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
   });
 
+  it('rejects explicit 400 kg plate first-turn even when search already returns light paving options', async () => {
+    class LightPlateProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          {
+            ...product('masalta-msr60', 'Masalta MSR60-4 62 kg vibroplate', 'Vibroplita'),
+            specs: { weight: '62 kg' }
+          },
+          {
+            ...product('firman-fpc90', 'FIRMAN FPC90BF 84 kg vibroplate', 'Vibroplita'),
+            specs: { weight: '84 kg' }
+          },
+          {
+            ...product('wacker-aps1135', 'Wacker Neuson APS1135we 73 kg vibroplate', 'Vibroplita'),
+            specs: { weight: '73 kg' }
+          }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    conversations.messages = [
+      message('Do you have a 400 kg plate? I need it for paving tile in my yard.')
+    ];
+    const firstTurnModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'buyer asks for 400 kg plate but states yard paving tile use',
+          events: [{
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'product_request', value: 'vibroplate 400 kg' },
+            evidence: '400 kg plate',
+            source: 'llm_state_delta',
+            status: 'active'
+          }, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'application', value: 'paving tile in yard' },
+            evidence: 'paving tile in my yard',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks whether a 400 kg vibroplate is available for yard paving tile',
+          dialogueUnderstanding: '400 kg conflicts with the stated private yard paving tile task',
+          nextStepRationale: 'search catalog and show suitable lighter plate alternatives',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'search-plates-400kg',
+            tool: 'catalog.search',
+            args: {
+              query: '400 kg vibroplate for paving tile in yard',
+              semanticQuery: '400 kg vibroplate for paving tile in yard',
+              productIntent: 'plate',
+              limit: 6,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: ['weight', 'application'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'buyer asks about 400 kg vibroplate availability and suitability',
+              notes: null
+            },
+            rationale: 'check catalog and correct the suitability mismatch',
+            required: true
+          }],
+          productMentions: [{
+            name: '400 kg vibroplate',
+            role: 'target_product' as const,
+            productClass: 'plate',
+            evidence: '400 kg plate'
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.products.map((item) => item.id)).toEqual(['wacker-aps1135', 'masalta-msr60', 'firman-fpc90']);
+        const clause = input.requiredResponseClauses?.find((item) =>
+          item.code === 'plate_explicit_heavy_request_conflicts_with_small_site_task'
+        );
+        expect(clause?.instruction).toContain('60-120 kg');
+        expect(clause?.instruction).toContain('do not make the buyer ask again for options');
+        return {
+          answerText: 'I do not see a 400 kg plate by this search. For yard paving tile people usually take 60-100 kg. Here are Masalta MSR60-4, Wacker APS1135we, and FIRMAN FPC90BF. Use a mat on installed tile.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['search-plates-400kg'],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'plate',
+            status: 'ready_for_exact_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'Light plate options match the stated yard paving tile task.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new LightPlateProducts() as never, new FakeLeads() as never, firstTurnModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Do you have a 400 kg plate? I need it for paving tile in my yard.'
+    });
+
+    const metadata = payload.metadata as {
+      answerProductEvidence?: { droppedProductIds?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number } };
+      preSendReview?: { issues?: Array<{ code?: string }> };
+    };
+    expect(payload.answer).toContain('300-400');
+    expect(payload.answer).toContain('60-120');
+    expect(payload.answer).toContain('не рекомендовал');
+    expect(payload.productCards.map((card) => card.id)).toEqual(['wacker-aps1135', 'masalta-msr60', 'firman-fpc90']);
+    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual([]);
+    expect(metadata.answerProductEvidence?.plateTaskPolicy?.maxPracticalWeightKg).toBe(120);
+    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('plate_explicit_heavy_request_conflicts_with_small_site_task');
+  });
+
   it('replaces previous 400 kg vibroplate cards with suitable home paving tile options in the same turn', async () => {
     const conversations = new FakeConversations();
     const heavyCards: ProductCard[] = [{
