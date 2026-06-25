@@ -2383,6 +2383,161 @@ describe('AgentManagerOrchestrator', () => {
     expect(leads.created).toHaveLength(0);
   });
 
+  it('replaces first-turn 400 kg vibroplate request when the same message says home paving tile', async () => {
+    class FirstTurnPlateReplacementProducts extends FakeProducts {
+      async searchProducts(query = '') {
+        if (query.includes('60 90') || query.includes('тротуарной плитки')) {
+          return [
+            {
+              ...product('plate-80', 'Vibroplita TSS VP80 80 kg', 'Vibroplita'),
+              specs: { weight: '80 kg' }
+            },
+            {
+              ...product('plate-95', 'Vibroplita Champion PC95 95 kg', 'Vibroplita'),
+              specs: { weight: '95 kg' }
+            },
+            {
+              ...product('plate-160', 'Vibroplita Heavy 160 kg', 'Vibroplita'),
+              specs: { weight: '160 kg' }
+            }
+          ];
+        }
+        return [
+          {
+            ...product('grost-vh-400d', 'GROST VH 400D 400 kg vibroplita', 'Vibroplita'),
+            specs: { weight: '400 kg' }
+          },
+          {
+            ...product('masterpac-pcr7060h2', 'MASTERPAC PCR7060H.2 400 kg vibroplita', 'Vibroplita'),
+            specs: { weight: '400 kg' }
+          },
+          {
+            ...product('husqvarna-lg-400', 'Husqvarna LG 400 398 kg vibroplita', 'Vibroplita'),
+            specs: { weight: '398 kg' }
+          }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    conversations.messages = [
+      message('Есть у вас плита 400 кг? Мне для тротуарной плитки во дворе.')
+    ];
+    const firstTurnModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'buyer asks for 400 kg plate but states home paving tile use',
+          events: [{
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'product_request', value: 'vibroplita 400 kg' },
+            evidence: 'Есть у вас плита 400 кг',
+            source: 'llm_state_delta',
+            status: 'active'
+          }, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'application', value: 'home paving tile in yard' },
+            evidence: 'для тротуарной плитки во дворе',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks whether 400 kg vibroplates are available for yard paving tile',
+          dialogueUnderstanding: '400 kg conflicts with the stated home paving tile task',
+          nextStepRationale: 'search catalog, reject heavy task mismatch, and show lighter suitable plate alternatives',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search-heavy',
+            tool: 'catalog.search',
+            args: {
+              query: 'виброплита 400 кг',
+              semanticQuery: '400 kg vibroplate for paving tile in yard',
+              productIntent: 'plate',
+              limit: 6,
+              productIds: [],
+              productNames: [],
+              comparisonAttributes: ['weight', 'application'],
+              loads: [],
+              simultaneousStarting: null,
+              simultaneousStartingKinds: [],
+              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+              reason: 'buyer asks about 400 kg vibroplate availability and suitability',
+              notes: null
+            },
+            rationale: 'check catalog products mentioned by buyer before correcting suitability',
+            required: true
+          }],
+          productMentions: [{
+            name: 'виброплита 400 кг',
+            role: 'target_product' as const,
+            productClass: 'plate',
+            evidence: 'Есть у вас плита 400 кг'
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.products.map((item) => item.id)).toEqual(['plate-80', 'plate-95']);
+        expect(input.toolResults.map((result) => result.requestId)).toEqual(expect.arrayContaining([
+          'catalog-search-heavy',
+          'catalog-search:plate-replacement'
+        ]));
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('plate_previous_cards_unsuitable_replaced_by_task_search');
+        return {
+          answerText: '400 кг для тротуарной плитки во дворе я бы не рекомендовал как основной вариант. Это тяжелый класс под основание и большие работы. Для вашей задачи лучше смотреть Vibroplita TSS VP80 80 kg и Vibroplita Champion PC95 95 kg, а по плитке использовать коврик.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search:plate-replacement'],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'plate',
+            status: 'ready_for_exact_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'Replacement products match the stated paving tile task better than 400 kg plates.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FirstTurnPlateReplacementProducts() as never, new FakeLeads() as never, firstTurnModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Есть у вас плита 400 кг? Мне для тротуарной плитки во дворе.'
+    });
+
+    const metadata = payload.metadata as {
+      answerProductEvidence?: { droppedProductIds?: string[]; replacementProductIds?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number } };
+      replacementProductEvidence?: { productIds?: string[]; droppedPreviousProductIds?: string[]; warnings?: string[] };
+      toolResults?: Array<{ requestId?: string; payload?: { productIds?: string[] } }>;
+    };
+    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-80', 'plate-95']);
+    expect(payload.productCards.map((card) => card.id)).not.toContain('grost-vh-400d');
+    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(expect.arrayContaining([
+      'grost-vh-400d',
+      'masterpac-pcr7060h2',
+      'husqvarna-lg-400'
+    ]));
+    expect(metadata.answerProductEvidence?.replacementProductIds).toEqual(['plate-80', 'plate-95']);
+    expect(metadata.answerProductEvidence?.plateTaskPolicy?.maxPracticalWeightKg).toBe(120);
+    expect(metadata.replacementProductEvidence?.productIds).toEqual(['plate-80', 'plate-95']);
+    expect(metadata.replacementProductEvidence?.droppedPreviousProductIds).toEqual(expect.arrayContaining([
+      'grost-vh-400d',
+      'masterpac-pcr7060h2',
+      'husqvarna-lg-400'
+    ]));
+    expect(metadata.replacementProductEvidence?.warnings).toContain('answer_products_replaced_by_plate_task_search');
+    expect(metadata.toolResults?.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
+  });
+
   it('replaces previous 400 kg vibroplate cards with suitable home paving tile options in the same turn', async () => {
     const conversations = new FakeConversations();
     const heavyCards: ProductCard[] = [{
