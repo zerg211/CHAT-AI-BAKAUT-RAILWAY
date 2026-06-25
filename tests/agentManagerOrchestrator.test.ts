@@ -1469,6 +1469,135 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.cardSelection?.warnings).toContain('product_cards_reused_from_previous_turn');
   });
 
+  it('replaces previous over-budget cutter cards after the buyer narrows the budget without a planned tool', async () => {
+    const previousCards: ProductCard[] = [{
+      id: 'cutter-old-1',
+      name: 'Cutter Pro 350 expensive',
+      brand: 'TEST',
+      category: 'Cutters',
+      price: 155000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/cutter-old-1',
+      specs: { blade: '350 mm' },
+      reasons: ['previous visible card'],
+      caveats: []
+    }, {
+      id: 'cutter-old-2',
+      name: 'Cutter Road 400 expensive',
+      brand: 'TEST',
+      category: 'Cutters',
+      price: 185000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/cutter-old-2',
+      specs: { blade: '400 mm' },
+      reasons: ['previous visible card'],
+      caveats: []
+    }];
+    const previousAssistant = message('These cutter options fit serious concrete/asphalt work.', 'assistant');
+    previousAssistant.metadata = { productCards: previousCards };
+
+    class BudgetCutterProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          { ...product('cutter-under-1', 'Cutter Compact 300 budget', 'Cutters'), price: 62000, specs: { blade: '300 mm' } },
+          { ...product('cutter-under-2', 'Cutter Light 300 budget', 'Cutters'), price: 68000, specs: { blade: '300 mm' } },
+          { ...product('cutter-over-noise', 'Cutter Premium 400 over budget', 'Cutters'), price: 190000, specs: { blade: '400 mm' } }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    conversations.messages = [
+      message('Need a cutter for small repair work, show variants.'),
+      previousAssistant,
+      message('Actually only up to 70000, which is better now?')
+    ];
+    const cutterModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'buyer narrowed cutter budget',
+          events: [{
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'product.type', value: 'cutter' },
+            evidence: 'Need a cutter',
+            source: 'llm_state_delta',
+            status: 'active'
+          }, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'budget.max', value: 70000 },
+            evidence: 'only up to 70000',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'buyer asks which previous cutter option is better after limiting budget to 70000',
+          dialogueUnderstanding: 'previous visible cutter cards are above the new budget and should be replaced',
+          nextStepRationale: 'explain the mismatch and use suitable in-budget cutter alternatives',
+          requiresTools: false,
+          toolRequests: [],
+          productMentions: previousCards.map((card) => ({
+            name: card.name,
+            role: 'comparison_subject' as const,
+            productClass: 'cutter',
+            evidence: 'previous visible card'
+          })),
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.products.map((item) => item.id)).toEqual(['cutter-under-1', 'cutter-under-2']);
+        expect(input.toolResults.map((result) => result.requestId)).toContain('catalog-search:narrowed-replacement');
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('previous_cards_unsuitable_replaced_by_narrowed_search');
+        return {
+          answerText: 'The previous cutters are above the new budget, so I would not choose them for this narrowed request. From the in-budget replacements I would look at Cutter Compact 300 budget and Cutter Light 300 budget.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search:narrowed-replacement'],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'cutter',
+            status: 'ready_for_exact_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'Replacement cutter products match the narrowed budget.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BudgetCutterProducts() as never, new FakeLeads() as never, cutterModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Actually only up to 70000, which is better now?'
+    });
+
+    const metadata = payload.metadata as {
+      answerProductEvidence?: { droppedProductIds?: string[]; replacementProductIds?: string[]; warnings?: string[] };
+      replacementProductEvidence?: { productIds?: string[]; droppedPreviousProductIds?: string[]; productIntent?: string; warnings?: string[] };
+      toolResults?: Array<{ requestId?: string; payload?: { productIds?: string[] } }>;
+      warnings?: string[];
+    };
+    expect(payload.productCards.map((card) => card.id)).toEqual(['cutter-under-1', 'cutter-under-2']);
+    expect(payload.productCards.map((card) => card.id)).not.toContain('cutter-old-1');
+    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(['cutter-old-1', 'cutter-old-2']);
+    expect(metadata.answerProductEvidence?.replacementProductIds).toEqual(['cutter-under-1', 'cutter-under-2']);
+    expect(metadata.replacementProductEvidence?.productIntent).toBe('cutter');
+    expect(metadata.replacementProductEvidence?.droppedPreviousProductIds).toEqual(['cutter-old-1', 'cutter-old-2']);
+    expect(metadata.replacementProductEvidence?.warnings).toContain('answer_products_replaced_by_narrowed_need_search');
+    expect(metadata.toolResults?.map((result) => result.requestId)).toContain('catalog-search:narrowed-replacement');
+    expect(metadata.toolResults?.find((result) => result.requestId === 'catalog-search:narrowed-replacement')?.payload?.productIds).toEqual(['cutter-under-1', 'cutter-under-2']);
+    expect(metadata.warnings).toContain('answer_products_previous_cards_rejected_by_narrowed_need');
+  });
+
   it('keeps over-budget products out of answer evidence when in-budget catalog candidates exist', async () => {
     class BudgetPlateProducts extends FakeProducts {
       async searchProducts() {

@@ -696,6 +696,34 @@ function filterAnswerProductsForBudget(input: {
   };
 }
 
+function previousProductsRejectedByCurrentBudget(input: {
+  products: Product[];
+  needState: CustomerNeedState;
+  productClass: ProductSelectionClass;
+  userMessage?: string;
+}) {
+  const budgetMax = effectiveBudgetMax({ needState: input.needState, userMessage: input.userMessage });
+  if (budgetMax === undefined || input.productClass === 'unknown') {
+    return { droppedProductIds: [] as string[], reason: undefined as string | undefined };
+  }
+  const sameClassProducts = input.products.filter((product) =>
+    productMatchesIntent(product, input.productClass)
+  );
+  if (!sameClassProducts.length) return { droppedProductIds: [] as string[], reason: undefined };
+  const overBudgetProducts = sameClassProducts.filter((product) =>
+    typeof product.price === 'number' &&
+    Number.isFinite(product.price) &&
+    product.price > budgetMax
+  );
+  if (overBudgetProducts.length !== sameClassProducts.length) {
+    return { droppedProductIds: [] as string[], reason: undefined };
+  }
+  return {
+    droppedProductIds: overBudgetProducts.map((product) => product.id),
+    reason: `current budget limit is ${budgetMax} RUB and all previous same-class cards are above it`
+  };
+}
+
 function answerProductSemanticContext(intent: AgentIntentContract) {
   return [
     intent.userMessageSummary,
@@ -708,6 +736,52 @@ function answerProductSemanticContext(intent: AgentIntentContract) {
       JSON.stringify(request.args ?? {})
     ].filter(Boolean).join(' '))
   ].filter(Boolean).join('\n');
+}
+
+type ReplacementProductEvidence = {
+  query: string;
+  productIds: string[];
+  droppedPreviousProductIds: string[];
+  warnings: string[];
+  sourceRequestId: string;
+  productIntent: ProductSelectionClass;
+  reason: string;
+  policy?: { reason: string; maxPracticalWeightKg: number };
+};
+
+function requiredResponseClausesForNarrowedProductReplacement(input: {
+  originalProducts: Product[];
+  droppedProductIds: string[];
+  replacementProductIds?: string[];
+  sourceRequestId?: string;
+  reason?: string;
+  productIntent: ProductSelectionClass;
+}): RequiredResponseClause[] {
+  if (
+    input.productIntent === 'unknown' ||
+    input.productIntent === 'plate' ||
+    !input.originalProducts.length ||
+    !input.droppedProductIds.length ||
+    !input.reason
+  ) return [];
+
+  const droppedIds = new Set(input.droppedProductIds);
+  const blockedProductNames = input.originalProducts
+    .filter((product) => droppedIds.has(product.id))
+    .map((product) => product.name);
+  if (!blockedProductNames.length) return [];
+
+  const hasReplacementProducts = Boolean(input.replacementProductIds?.length);
+  return [{
+    code: hasReplacementProducts
+      ? 'previous_cards_unsuitable_replaced_by_narrowed_search'
+      : 'previous_cards_unsuitable_for_narrowed_need',
+    sourceRequestId: input.sourceRequestId ?? 'current_user_need',
+    catalogProductNames: uniqueStrings(blockedProductNames),
+    instruction: hasReplacementProducts
+      ? `The buyer narrowed or corrected the need, so the previous visible ${input.productIntent} cards no longer match: ${input.reason}. Do not recommend those previous products as suitable for the current need. Explain the mismatch briefly, then use only the replacement catalog products passed in products as the suitable alternatives for the narrowed need. Product cards may be shown only for those replacement products.`
+      : `The buyer narrowed or corrected the need, so the previous visible ${input.productIntent} cards no longer match: ${input.reason}. Do not recommend those previous products as suitable for the current need. Explain the mismatch briefly and say that a fresh selection is needed for the narrowed requirement.`
+  }];
 }
 
 function requiredResponseClausesForPlateTaskProductMismatch(input: {
@@ -1943,6 +2017,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для доставки, наличия, скидок, сроков и индивидуальных условий не обещай точный результат: планируй lead.capture/offer form, если нужен контакт.',
             'Для сравнения товаров и нехватки важных фактов планируй web.researchProductFacts.',
             'Для подбора товара планируй catalog.search.',
+            'If previous visible product cards become unsuitable after the buyer narrows or corrects the need, plan a fresh catalog.search in the same product class instead of only explaining that the old cards do not fit. The answer should reject the old cards by reason and use the new catalog results as replacement cards when available.',
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
             'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
             'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
@@ -2428,13 +2503,7 @@ export class AgentManagerOrchestrator {
           warnings: [] as string[],
           policy: undefined
         };
-    let replacementProductEvidence: {
-      query: string;
-      productIds: string[];
-      droppedPreviousProductIds: string[];
-      warnings: string[];
-      policy?: { reason: string; maxPracticalWeightKg: number };
-    } | null = null;
+    let replacementProductEvidence: ReplacementProductEvidence | null = null;
     let effectiveIntent = intent;
     let answerProductEvidence = {
       products: plateAnswerProductEvidence.products,
@@ -2450,6 +2519,12 @@ export class AgentManagerOrchestrator {
       originalProductIds: rawAnswerProducts.map((product) => product.id),
       replacementProductIds: [] as string[]
     };
+    const budgetNarrowingRejection = previousProductsRejectedByCurrentBudget({
+      products: historicalProducts,
+      needState: needStateSnapshot,
+      productClass: continuityIntent,
+      userMessage
+    });
     if (
       continuityIntent === 'plate' &&
       plateAnswerProductEvidence.policy &&
@@ -2504,11 +2579,77 @@ export class AgentManagerOrchestrator {
         products = [...new Map([...products, ...replacement.products].map((product) => [product.id, product])).values()];
       }
     }
+    if (
+      !replacementProductEvidence &&
+      historicalProducts.length > 0 &&
+      continuityIntent !== 'unknown' &&
+      !isGeneratorProductClass(continuityIntent) &&
+      budgetNarrowingRejection.droppedProductIds.length > 0
+    ) {
+      const replacement = await this.searchNarrowedReplacementProducts({
+        session: input.session,
+        turnId: input.turnId,
+        userMessage,
+        intent,
+        needState: needStateSnapshot,
+        productIntent: continuityIntent,
+        reason: budgetNarrowingRejection.reason ?? 'current buyer constraints no longer match the previous visible cards',
+        droppedPreviousProductIds: budgetNarrowingRejection.droppedProductIds,
+        signal: input.signal
+      });
+      toolResults = [...toolResults, replacement.toolResult];
+      replacementProductEvidence = replacement.evidence;
+      effectiveIntent = {
+        ...intent,
+        toolRequests: [
+          ...intent.toolRequests,
+          {
+            id: replacement.evidence.sourceRequestId,
+            tool: 'catalog.search',
+            args: {
+              query: replacement.evidence.query,
+              semanticQuery: [
+                userMessage,
+                answerProductSemanticContext(intent),
+                replacement.evidence.reason
+              ].filter(Boolean).join('\n'),
+              productIntent: replacement.evidence.productIntent,
+              limit: 8
+            },
+            rationale: 'Automatic replacement catalog search after previous visible cards no longer matched the narrowed current need.',
+            required: true
+          }
+        ]
+      };
+      answerProductEvidence = {
+        ...answerProductEvidence,
+        products: replacement.products,
+        droppedProductIds: uniqueStrings([
+          ...answerProductEvidence.droppedProductIds,
+          ...budgetNarrowingRejection.droppedProductIds
+        ]),
+        warnings: uniqueStrings([
+          ...answerProductEvidence.warnings,
+          ...replacement.evidence.warnings,
+          'answer_products_previous_cards_rejected_by_narrowed_need'
+        ]),
+        replacementProductIds: replacement.products.map((product) => product.id)
+      };
+      products = [...new Map([...products, ...replacement.products].map((product) => [product.id, product])).values()];
+    }
     const answerProducts = answerProductEvidence.products;
 
     const usingHistoricalProducts = !products.length && historicalProducts.length > 0;
     const requiredResponseClauses = [
       ...requiredResponseClausesForUserMessage(userMessage),
+      ...requiredResponseClausesForNarrowedProductReplacement({
+        originalProducts: historicalProducts,
+        droppedProductIds: budgetNarrowingRejection.droppedProductIds,
+        replacementProductIds: replacementProductEvidence?.productIds,
+        sourceRequestId: replacementProductEvidence?.sourceRequestId,
+        reason: budgetNarrowingRejection.reason,
+        productIntent: continuityIntent
+      }),
       ...requiredResponseClausesForPlateTaskProductMismatch({
         originalProducts: budgetAnswerProductEvidence.products,
         filteredProductIds: answerProducts.map((product) => product.id),
@@ -2650,9 +2791,13 @@ export class AgentManagerOrchestrator {
         const previousSelectionBlockedByPlateTask = narrowedPreviousSelection.warnings.some((warning) =>
           warning.includes('plate_task_weight_mismatch')
         );
-        const reusedProducts = narrowedPreviousSelection.products.length
-          ? narrowedPreviousSelection.products
-          : (previousSelectionBlockedByPlateTask ? [] : previousProducts);
+        const previousSelectionBlockedByNarrowedNeed = answerProductEvidence.warnings.some((warning) =>
+          warning.includes('previous_cards_rejected_by_narrowed_need')
+        );
+        const previousSelectionBlocked = previousSelectionBlockedByPlateTask || previousSelectionBlockedByNarrowedNeed;
+        const reusedProducts = previousSelectionBlocked
+          ? []
+          : (narrowedPreviousSelection.products.length ? narrowedPreviousSelection.products : previousProducts);
         cardSelection = {
           ...cardSelection,
           products: reusedProducts,
@@ -3078,7 +3223,7 @@ export class AgentManagerOrchestrator {
         signal: input.signal,
         userMessage: input.userMessage,
         semanticContext,
-        productIntent: 'plate',
+        productIntent: 'plate' as ProductSelectionClass,
         embeddingQuery: 'виброплита 60 90 кг тротуарная плитка двор коврик',
         budgetMax
       });
@@ -3149,7 +3294,148 @@ export class AgentManagerOrchestrator {
         productIds: replacementProducts.map((product) => product.id),
         droppedPreviousProductIds: input.droppedPreviousProductIds,
         warnings: result.warnings,
+        sourceRequestId: 'catalog-search:plate-replacement',
+        productIntent: 'plate' as ProductSelectionClass,
+        reason: input.policy?.reason ?? 'previous visible plate cards no longer match the current task',
         policy: input.policy
+      }
+    };
+  }
+
+  private async searchNarrowedReplacementProducts(input: {
+    session: ConversationSession;
+    turnId: string;
+    userMessage: string;
+    intent: AgentIntentContract;
+    needState: CustomerNeedState;
+    productIntent: ProductSelectionClass;
+    reason: string;
+    droppedPreviousProductIds: string[];
+    signal?: AbortSignal;
+  }) {
+    const startedAt = Date.now();
+    const requestId = 'catalog-search:narrowed-replacement';
+    const semanticContext = [
+      input.userMessage,
+      answerProductSemanticContext(input.intent),
+      input.reason,
+      'replacement search after previous visible product cards no longer match the narrowed current need'
+    ].filter(Boolean).join('\n');
+    const query = [
+      input.userMessage,
+      input.reason,
+      input.productIntent
+    ].filter(Boolean).join(' ');
+    const budgetMax = effectiveBudgetMax({ needState: input.needState, userMessage: input.userMessage });
+    let result: ToolResult;
+    let replacementProducts: Product[] = [];
+
+    try {
+      const search = await this.searchCatalogProducts({
+        query,
+        limit: 16,
+        signal: input.signal,
+        userMessage: input.userMessage,
+        semanticContext,
+        productIntent: input.productIntent,
+        embeddingQuery: semanticContext,
+        budgetMax
+      });
+      const budgetFiltered = filterAnswerProductsForBudget({
+        products: search.products,
+        needState: input.needState,
+        productClass: input.productIntent,
+        userMessage: input.userMessage
+      });
+      const plateFiltered = input.productIntent === 'plate'
+        ? filterPlateProductsByCurrentTask({
+            products: budgetFiltered.products,
+            userMessage: input.userMessage,
+            query,
+            semanticContext
+          })
+        : {
+            products: budgetFiltered.products,
+            droppedProductIds: [] as string[],
+            warnings: [] as string[]
+          };
+      const droppedPreviousIds = new Set(input.droppedPreviousProductIds);
+      replacementProducts = plateFiltered.products
+        .filter((product) => productMatchesIntent(product, input.productIntent))
+        .filter((product) => !droppedPreviousIds.has(product.id))
+        .slice(0, 8);
+      result = ToolResultSchema.parse({
+        requestId,
+        tool: 'catalog.search',
+        status: replacementProducts.length ? 'ok' : 'not_found',
+        payload: {
+          query,
+          productIds: replacementProducts.map((product) => product.id),
+          products: replacementProducts,
+          replacementFor: 'narrowed_need_mismatch',
+          droppedPreviousProductIds: input.droppedPreviousProductIds,
+          sourceRequestId: requestId,
+          productIntent: input.productIntent,
+          reason: input.reason,
+          retrieval: {
+            intent: search.productIntent,
+            query: search.query,
+            embeddingQuery: search.embeddingQuery,
+            textCount: search.textCount,
+            vectorCount: search.vectorCount,
+            usedEmbeddings: search.vectorCount > 0
+          }
+        },
+        warnings: uniqueStrings([
+          'answer_products_replaced_by_narrowed_need_search',
+          ...search.warnings,
+          ...budgetFiltered.warnings,
+          ...plateFiltered.warnings,
+          ...(replacementProducts.length ? [] : ['catalog_search_no_matches'])
+        ])
+      });
+    } catch (error) {
+      result = ToolResultSchema.parse({
+        requestId,
+        tool: 'catalog.search',
+        status: 'error',
+        payload: {
+          query,
+          productIds: [],
+          products: [],
+          replacementFor: 'narrowed_need_mismatch',
+          droppedPreviousProductIds: input.droppedPreviousProductIds,
+          sourceRequestId: requestId,
+          productIntent: input.productIntent,
+          reason: input.reason,
+          error: safeError(error)
+        },
+        warnings: ['answer_products_narrowed_replacement_search_error'],
+        errorCode: safeError(error).code ?? safeError(error).message
+      });
+    }
+
+    await this.conversations.saveToolArtifact({
+      sessionId: input.session.id,
+      turnId: input.turnId,
+      toolName: result.tool,
+      toolRequestId: result.requestId,
+      status: result.status,
+      payload: result.payload,
+      warnings: [...result.warnings, `duration_ms:${Date.now() - startedAt}`]
+    });
+
+    return {
+      products: replacementProducts,
+      toolResult: result,
+      evidence: {
+        query,
+        productIds: replacementProducts.map((product) => product.id),
+        droppedPreviousProductIds: input.droppedPreviousProductIds,
+        warnings: result.warnings,
+        sourceRequestId: requestId,
+        productIntent: input.productIntent,
+        reason: input.reason
       }
     };
   }
