@@ -715,13 +715,23 @@ function requiredResponseClausesForPlateTaskProductMismatch(input: {
   filteredProductIds: string[];
   droppedProductIds: string[];
   policy?: { reason: string; maxPracticalWeightKg: number };
+  replacementProductIds?: string[];
 }): RequiredResponseClause[] {
-  if (!input.policy || !input.originalProducts.length || input.filteredProductIds.length) return [];
+  const hasReplacementProducts = Boolean(input.replacementProductIds?.length);
+  if (!input.policy || !input.originalProducts.length || (input.filteredProductIds.length && !hasReplacementProducts)) return [];
   const droppedIds = new Set(input.droppedProductIds);
   const blockedProductNames = input.originalProducts
     .filter((product) => droppedIds.has(product.id))
     .map((product) => product.name);
   if (!blockedProductNames.length) return [];
+  if (hasReplacementProducts) {
+    return [{
+      code: 'plate_previous_cards_unsuitable_replaced_by_task_search',
+      sourceRequestId: 'catalog-search:plate-replacement',
+      catalogProductNames: uniqueStrings(blockedProductNames),
+      instruction: `The current buyer task conflicts with the previous heavy plate options: ${input.policy.reason}. Do not recommend the previous heavy options as the best choice. Explain that the shown 380-400 kg class is not the right primary choice for home paving/tile, then use the replacement catalog products passed in products as suitable alternatives for the corrected task. Product cards may be shown only for those replacement products.`
+    }];
+  }
   return [{
     code: 'plate_previous_cards_unsuitable_for_current_task',
     sourceRequestId: 'current_user_task',
@@ -2368,7 +2378,7 @@ export class AgentManagerOrchestrator {
       productMentions: intent.productMentions ?? []
     });
 
-    const { toolResults, products } = await this.executeTools({
+    let { toolResults, products } = await this.executeTools({
       session: input.session,
       turnId: input.turnId,
       userMessage,
@@ -2418,7 +2428,15 @@ export class AgentManagerOrchestrator {
           warnings: [] as string[],
           policy: undefined
         };
-    const answerProductEvidence = {
+    let replacementProductEvidence: {
+      query: string;
+      productIds: string[];
+      droppedPreviousProductIds: string[];
+      warnings: string[];
+      policy?: { reason: string; maxPracticalWeightKg: number };
+    } | null = null;
+    let effectiveIntent = intent;
+    let answerProductEvidence = {
       products: plateAnswerProductEvidence.products,
       droppedProductIds: uniqueStrings([
         ...budgetAnswerProductEvidence.droppedProductIds,
@@ -2429,8 +2447,63 @@ export class AgentManagerOrchestrator {
         ...plateAnswerProductEvidence.warnings
       ]),
       plateTaskPolicy: plateAnswerProductEvidence.policy,
-      originalProductIds: rawAnswerProducts.map((product) => product.id)
+      originalProductIds: rawAnswerProducts.map((product) => product.id),
+      replacementProductIds: [] as string[]
     };
+    if (
+      continuityIntent === 'plate' &&
+      plateAnswerProductEvidence.policy &&
+      budgetAnswerProductEvidence.products.length > 0 &&
+      !answerProductEvidence.products.length &&
+      plateAnswerProductEvidence.droppedProductIds.length > 0
+    ) {
+      const replacement = await this.searchPlateReplacementProducts({
+        session: input.session,
+        turnId: input.turnId,
+        userMessage,
+        intent,
+        needState: needStateSnapshot,
+        policy: plateAnswerProductEvidence.policy,
+        droppedPreviousProductIds: plateAnswerProductEvidence.droppedProductIds,
+        signal: input.signal
+      });
+      toolResults = [...toolResults, replacement.toolResult];
+      replacementProductEvidence = replacement.evidence;
+      if (replacement.products.length) {
+        effectiveIntent = {
+          ...intent,
+          toolRequests: [
+            ...intent.toolRequests,
+            {
+              id: 'catalog-search:plate-replacement',
+              tool: 'catalog.search',
+              args: {
+                query: replacement.evidence.query,
+                semanticQuery: [
+                  userMessage,
+                  'replacement plate search after unsuitable heavy 400 kg options',
+                  plateAnswerProductEvidence.policy.reason
+                ].join('\n'),
+                productIntent: 'plate',
+                limit: 8
+              },
+              rationale: 'Automatic replacement catalog search after all previous heavy vibroplates failed the current home paving/tile task.',
+              required: true
+            }
+          ]
+        };
+        answerProductEvidence = {
+          ...answerProductEvidence,
+          products: replacement.products,
+          warnings: uniqueStrings([
+            ...answerProductEvidence.warnings,
+            ...replacement.evidence.warnings
+          ]),
+          replacementProductIds: replacement.products.map((product) => product.id)
+        };
+        products = [...new Map([...products, ...replacement.products].map((product) => [product.id, product])).values()];
+      }
+    }
     const answerProducts = answerProductEvidence.products;
 
     const usingHistoricalProducts = !products.length && historicalProducts.length > 0;
@@ -2440,7 +2513,8 @@ export class AgentManagerOrchestrator {
         originalProducts: budgetAnswerProductEvidence.products,
         filteredProductIds: answerProducts.map((product) => product.id),
         droppedProductIds: plateAnswerProductEvidence.droppedProductIds,
-        policy: plateAnswerProductEvidence.policy
+        policy: plateAnswerProductEvidence.policy,
+        replacementProductIds: replacementProductEvidence?.productIds
       }),
       ...requiredResponseClausesForToolResults(toolResults)
     ];
@@ -2450,7 +2524,7 @@ export class AgentManagerOrchestrator {
       userMessage,
       ledgerEvents: [...ledgerEvents, ...newEvents],
       ledgerState,
-      intent,
+      intent: effectiveIntent,
       toolResults,
       products: answerProducts,
       requiredResponseClauses,
@@ -2487,7 +2561,7 @@ export class AgentManagerOrchestrator {
       userMessage,
       ledgerEvents: [...ledgerEvents, ...newEvents],
       ledgerState,
-      intent,
+      intent: effectiveIntent,
       toolResults,
       products: answerProducts,
       requiredResponseClauses,
@@ -2531,7 +2605,7 @@ export class AgentManagerOrchestrator {
       products: answerProducts,
       userMessage,
       history,
-      intent,
+      intent: effectiveIntent,
       answerText: finalText,
       needState: needStateSnapshot,
       allowHistoricalProducts: usingHistoricalProducts
@@ -2565,11 +2639,11 @@ export class AgentManagerOrchestrator {
       });
       if (previousProducts.length) {
         const narrowedPreviousSelection = selectProductsForVisibleCards({
-          products: previousProducts,
-          userMessage,
-          history,
-          intent,
-          answerText: finalText,
+            products: previousProducts,
+            userMessage,
+            history,
+            intent: effectiveIntent,
+            answerText: finalText,
           needState: needStateSnapshot,
           allowHistoricalProducts: true
         });
@@ -2628,6 +2702,7 @@ export class AgentManagerOrchestrator {
       ledgerState,
       ledgerEventIds: newEvents.map((event) => event.eventId),
       intentContract: intent,
+      effectiveIntentContract: effectiveIntent === intent ? undefined : effectiveIntent,
       turnContract: turnContractMetadataFromIntent(intent),
       sourcePolicy: sourcePolicyMetadataFromIntent(intent),
       answerContract: finalAnswerContract,
@@ -2636,6 +2711,7 @@ export class AgentManagerOrchestrator {
       cardSelection,
       selectionReadiness,
       answerProductEvidence,
+      replacementProductEvidence,
       productCards: cards,
       needStateSnapshot,
       warnings: [
@@ -2970,6 +3046,112 @@ export class AgentManagerOrchestrator {
     }
 
     return { toolResults, products: [...productsById.values()] };
+  }
+
+  private async searchPlateReplacementProducts(input: {
+    session: ConversationSession;
+    turnId: string;
+    userMessage: string;
+    intent: AgentIntentContract;
+    needState: CustomerNeedState;
+    policy?: { reason: string; maxPracticalWeightKg: number };
+    droppedPreviousProductIds: string[];
+    signal?: AbortSignal;
+  }) {
+    const startedAt = Date.now();
+    const query = 'виброплита 60 90 кг для тротуарной плитки во дворе с ковриком';
+    const semanticContext = [
+      input.userMessage,
+      answerProductSemanticContext(input.intent),
+      input.policy?.reason,
+      'replacement search after previous heavy plate options failed task suitability',
+      'home paving tile yard small plate rubber mat'
+    ].filter(Boolean).join('\n');
+    const budgetMax = budgetMaxFromNeedState(input.needState);
+    let result: ToolResult;
+    let replacementProducts: Product[] = [];
+
+    try {
+      const search = await this.searchCatalogProducts({
+        query,
+        limit: 16,
+        signal: input.signal,
+        userMessage: input.userMessage,
+        semanticContext,
+        productIntent: 'plate',
+        embeddingQuery: 'виброплита 60 90 кг тротуарная плитка двор коврик',
+        budgetMax
+      });
+      const filtered = filterPlateProductsByCurrentTask({
+        products: search.products,
+        userMessage: input.userMessage,
+        query,
+        semanticContext
+      });
+      replacementProducts = filtered.products.slice(0, 8);
+      result = ToolResultSchema.parse({
+        requestId: 'catalog-search:plate-replacement',
+        tool: 'catalog.search',
+        status: replacementProducts.length ? 'ok' : 'not_found',
+        payload: {
+          query,
+          productIds: replacementProducts.map((product) => product.id),
+          products: replacementProducts,
+          replacementFor: 'plate_task_weight_mismatch',
+          droppedPreviousProductIds: input.droppedPreviousProductIds,
+          retrieval: {
+            intent: search.productIntent,
+            query: search.query,
+            embeddingQuery: search.embeddingQuery,
+            textCount: search.textCount,
+            vectorCount: search.vectorCount,
+            usedEmbeddings: search.vectorCount > 0
+          }
+        },
+        warnings: uniqueStrings([
+          'answer_products_replaced_by_plate_task_search',
+          ...search.warnings,
+          ...filtered.warnings,
+          ...(replacementProducts.length ? [] : ['catalog_search_no_matches'])
+        ])
+      });
+    } catch (error) {
+      result = ToolResultSchema.parse({
+        requestId: 'catalog-search:plate-replacement',
+        tool: 'catalog.search',
+        status: 'error',
+        payload: {
+          query,
+          replacementFor: 'plate_task_weight_mismatch',
+          droppedPreviousProductIds: input.droppedPreviousProductIds,
+          error: safeError(error)
+        },
+        warnings: ['answer_products_replacement_search_error'],
+        errorCode: safeError(error).code ?? safeError(error).message
+      });
+    }
+
+    await this.conversations.saveToolArtifact({
+      sessionId: input.session.id,
+      turnId: input.turnId,
+      toolName: result.tool,
+      toolRequestId: result.requestId,
+      status: result.status,
+      payload: result.payload,
+      warnings: [...result.warnings, `duration_ms:${Date.now() - startedAt}`]
+    });
+
+    return {
+      products: replacementProducts,
+      toolResult: result,
+      evidence: {
+        query,
+        productIds: replacementProducts.map((product) => product.id),
+        droppedPreviousProductIds: input.droppedPreviousProductIds,
+        warnings: result.warnings,
+        policy: input.policy
+      }
+    };
   }
 
   private async canUseProductEmbeddings() {

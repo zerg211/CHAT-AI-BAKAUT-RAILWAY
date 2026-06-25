@@ -2254,7 +2254,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(leads.created).toHaveLength(0);
   });
 
-  it('rejects previous 400 kg vibroplate cards for home paving tile instead of recommending the lightest heavy option', async () => {
+  it('replaces previous 400 kg vibroplate cards with suitable home paving tile options in the same turn', async () => {
     const conversations = new FakeConversations();
     const heavyCards: ProductCard[] = [{
       id: 'grost-vh-400d',
@@ -2299,6 +2299,24 @@ describe('AgentManagerOrchestrator', () => {
         }
       }
     ];
+    class PlateReplacementProducts extends FakeProducts {
+      async searchProducts() {
+        return [
+          {
+            ...product('plate-80', 'Vibroplita TSS VP80 80 kg', 'Vibroplita'),
+            specs: { weight: '80 kg' }
+          },
+          {
+            ...product('plate-95', 'Vibroplita Champion PC95 95 kg', 'Vibroplita'),
+            specs: { weight: '95 kg' }
+          },
+          {
+            ...product('plate-160', 'Vibroplita Heavy 160 kg', 'Vibroplita'),
+            specs: { weight: '160 kg' }
+          }
+        ];
+      }
+    }
     const unsafeModel = model({
       async proposeLedgerDelta() {
         return {
@@ -2338,18 +2356,27 @@ describe('AgentManagerOrchestrator', () => {
         };
       },
       async composeAnswer(input) {
-        expect(input.products).toEqual([]);
+        expect(input.products.map((item) => item.id)).toEqual(['plate-95', 'plate-80']);
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('plate_previous_cards_unsuitable_replaced_by_task_search');
+        expect(input.toolResults.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
         return {
-          answerText: 'I would choose Husqvarna LG 400: it is a little lighter than the other 400 kg plates and will work for paving tile.',
+          answerText: 'Из этих 400 кг ни одну не выбирал бы для домашней плитки. Вместо них смотрите Vibroplita TSS VP80 80 kg и Vibroplita Champion PC95 95 kg: это более нормальный класс под двор и плитку, а по уже уложенной плитке нужен коврик.',
           factsUsed: [],
           questionsAsked: [],
-          toolResultIds: [],
+          toolResultIds: ['catalog-search:plate-replacement'],
           leadAction: 'none',
-          riskFlags: []
+          riskFlags: [],
+          selectionReadiness: {
+            status: 'ready_for_exact_cards',
+            rationale: 'Replacement products match the corrected home paving tile task.',
+            missingFacts: [],
+            productClass: 'plate',
+            canShowProductCards: true
+          }
         };
       }
     });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, unsafeModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PlateReplacementProducts() as never, new FakeLeads() as never, unsafeModel);
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -2360,15 +2387,18 @@ describe('AgentManagerOrchestrator', () => {
     const metadata = payload.metadata as {
       productCards?: ProductCard[];
       cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
-      answerProductEvidence?: { droppedProductIds?: string[]; warnings?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number } };
+      answerProductEvidence?: { droppedProductIds?: string[]; warnings?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number }; replacementProductIds?: string[] };
+      replacementProductEvidence?: { productIds?: string[]; warnings?: string[] };
       preSendReview?: { issues?: Array<{ code?: string }> };
+      toolResults?: Array<{ requestId?: string; payload?: { productIds?: string[] } }>;
       warnings?: string[];
     };
     expect(payload.answer).not.toContain('I would choose Husqvarna LG 400');
-    expect(payload.answer).toContain('ни один');
+    expect(payload.answer).toContain('ни одну');
     expect(payload.answer).toContain('400 кг');
-    expect(metadata.productCards).toEqual([]);
-    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
+    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-95', 'plate-80']);
+    expect(metadata.productCards?.map((card) => card.id)).toEqual(['plate-95', 'plate-80']);
+    expect(metadata.cardSelection?.selectedProductIds).toEqual(['plate-95', 'plate-80']);
     expect(metadata.answerProductEvidence?.droppedProductIds).toEqual([
       'grost-vh-400d',
       'masterpac-pcr7060h2',
@@ -2381,7 +2411,12 @@ describe('AgentManagerOrchestrator', () => {
       expect.stringContaining('plate_task_weight_mismatch')
     ]));
     expect(metadata.answerProductEvidence?.plateTaskPolicy?.maxPracticalWeightKg).toBe(120);
-    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('plate_previous_cards_unsuitable_for_current_task');
+    expect(metadata.answerProductEvidence?.replacementProductIds).toEqual(['plate-95', 'plate-80']);
+    expect(metadata.replacementProductEvidence?.productIds).toEqual(['plate-95', 'plate-80']);
+    expect(metadata.replacementProductEvidence?.warnings).toContain('answer_products_replaced_by_plate_task_search');
+    expect(metadata.toolResults?.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
+    expect(metadata.toolResults?.find((result) => result.requestId === 'catalog-search:plate-replacement')?.payload?.productIds).toEqual(['plate-95', 'plate-80']);
+    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).not.toContain('plate_previous_cards_unsuitable_for_current_task');
   });
 
   it('routes high-risk source disagreements to adjudication instead of sending a final answer', async () => {
