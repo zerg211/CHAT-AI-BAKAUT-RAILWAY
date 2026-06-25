@@ -803,14 +803,14 @@ function requiredResponseClausesForPlateTaskProductMismatch(input: {
       code: 'plate_previous_cards_unsuitable_replaced_by_task_search',
       sourceRequestId: 'catalog-search:plate-replacement',
       catalogProductNames: uniqueStrings(blockedProductNames),
-      instruction: `The current buyer task conflicts with the previous heavy plate options: ${input.policy.reason}. Do not recommend the previous heavy options as the best choice. Explain that the shown 380-400 kg class is not the right primary choice for home paving/tile, then use the replacement catalog products passed in products as suitable alternatives for the corrected task. Product cards may be shown only for those replacement products.`
+      instruction: `The current buyer task conflicts with the previous heavy plate options: ${input.policy.reason}. Do not recommend the previous heavy options as the best choice. Explain that the shown 380-400 kg class is not the right primary choice for home paving/tile. State the concrete practical target weight range for this task: roughly 60-120 kg, and usually around 60-90/100 kg for a private yard/paving tile job depending on base and area. Because replacement products are already passed in products, do not make the buyer ask again for options; use those products now as suitable alternatives for the corrected task and mention their weights. Product cards may be shown only for those replacement products.`
     }];
   }
   return [{
     code: 'plate_previous_cards_unsuitable_for_current_task',
     sourceRequestId: 'current_user_task',
     catalogProductNames: uniqueStrings(blockedProductNames),
-    instruction: `The current buyer task conflicts with the previous heavy plate options: ${input.policy.reason}. The available previous options are outside the practical task range above ${input.policy.maxPracticalWeightKg} kg. Do not recommend any of these products as the best choice. State that none of the shown heavy options is a good primary choice for the current home paving/tile task, and offer to search/select a lighter suitable plate class instead.`
+    instruction: `The current buyer task conflicts with the previous heavy plate options: ${input.policy.reason}. The available previous options are outside the practical task range above ${input.policy.maxPracticalWeightKg} kg. Do not recommend any of these products as the best choice. State that none of the shown heavy options is a good primary choice for the current home paving/tile task. Do not use vague wording like "lighter class" by itself: state the concrete practical target weight range, roughly 60-120 kg and usually around 60-90/100 kg for a private yard/paving tile job depending on base and area. Since no replacement products are available in products, offer to show/select catalog options in that range as the next step.`
   }];
 }
 
@@ -820,7 +820,7 @@ function plateTaskMismatchSafeRewrite(clause: RequiredResponseClause) {
   return [
     `Из этих вариантов я бы не выбирал ни один как основной для домашней укладки тротуарной плитки${namesText}.`,
     'Это тяжелые реверсивные плиты около 400 кг: они нужны под серьезное основание, щебень, грунт, дорожные и профессиональные работы. Для двора и плитки такой вес избыточный: выше риск повредить плитку, сложнее работать у дома и обычно нужен другой класс плиты.',
-    'Под домашнюю плитку лучше смотреть более легкую виброплиту, ориентировочно малый класс с ковриком для плитки. Я бы заново подобрал варианты под двор, площадь и основание, а эти 400 кг оставил бы только если у вас реально тяжелая подготовка основания, а не финишная укладка плитки.'
+    'Под домашнюю плитку лучше смотреть конкретный рабочий диапазон: примерно 60-120 кг, а для частного двора чаще 60-90/100 кг в зависимости от основания, площади и того, сколько щебня. По уже уложенной плитке нужен резиновый или полиуретановый коврик. Я бы подобрал и показал варианты из каталога в этом диапазоне, а эти 400 кг оставил бы только если у вас реально тяжелая подготовка основания, а не финишная укладка плитки.'
   ].join('\n\n');
 }
 
@@ -2093,6 +2093,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Do not add availability, delivery, discount, lead form, callback, or price discussion for a pure technical fact question unless the buyer asked for those commercial terms.',
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
+            'For a plate compactor mismatch where the buyer asked for around 300-400 kg but the stated job is private yard / paving tile / paths, never say only "lighter class". State a concrete range: roughly 60-120 kg, usually around 60-90/100 kg for a private paving tile job depending on base and area. If products are provided, show and explain those options now instead of asking the buyer to request them again; ask whether to show/select options only when no suitable products are available in products.',
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, rank the shortlist by fit to both constraints: first show the lightest in-budget candidates that still match the job. If two or more clearly lighter in-budget candidates are present in products, do not put a heavier in-budget product in the primary bullet list as an equal recommendation; mention it only after the shortlist as a heavier compromise if that tradeoff is useful.',
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, if no clearly light in-budget candidate is available, do not call a heavier in-budget candidate light or clearly best. Present it as a budget/availability compromise, state the weight tradeoff, and ask whether that weight is acceptable before final selection.',
             'When the buyer gives a budget, never present products above that budget as satisfying it. If in-budget catalog candidates exist but are weaker or compromise options, say that plainly and treat higher-priced models only as above-budget reference points.',

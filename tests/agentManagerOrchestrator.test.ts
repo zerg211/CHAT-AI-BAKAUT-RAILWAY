@@ -2489,6 +2489,9 @@ describe('AgentManagerOrchestrator', () => {
           'catalog-search:plate-replacement'
         ]));
         expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('plate_previous_cards_unsuitable_replaced_by_task_search');
+        const mismatchClause = input.requiredResponseClauses?.find((clause) => clause.code === 'plate_previous_cards_unsuitable_replaced_by_task_search');
+        expect(mismatchClause?.instruction).toContain('60-120 kg');
+        expect(mismatchClause?.instruction).toContain('do not make the buyer ask again for options');
         return {
           answerText: '400 кг для тротуарной плитки во дворе я бы не рекомендовал как основной вариант. Это тяжелый класс под основание и большие работы. Для вашей задачи лучше смотреть Vibroplita TSS VP80 80 kg и Vibroplita Champion PC95 95 kg, а по плитке использовать коврик.',
           factsUsed: [],
@@ -2642,6 +2645,9 @@ describe('AgentManagerOrchestrator', () => {
       async composeAnswer(input) {
         expect(input.products.map((item) => item.id)).toEqual(['plate-95', 'plate-80']);
         expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('plate_previous_cards_unsuitable_replaced_by_task_search');
+        const mismatchClause = input.requiredResponseClauses?.find((clause) => clause.code === 'plate_previous_cards_unsuitable_replaced_by_task_search');
+        expect(mismatchClause?.instruction).toContain('60-120 kg');
+        expect(mismatchClause?.instruction).toContain('do not make the buyer ask again for options');
         expect(input.toolResults.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
         return {
           answerText: 'Из этих 400 кг ни одну не выбирал бы для домашней плитки. Вместо них смотрите Vibroplita TSS VP80 80 kg и Vibroplita Champion PC95 95 kg: это более нормальный класс под двор и плитку, а по уже уложенной плитке нужен коврик.',
