@@ -2254,6 +2254,136 @@ describe('AgentManagerOrchestrator', () => {
     expect(leads.created).toHaveLength(0);
   });
 
+  it('rejects previous 400 kg vibroplate cards for home paving tile instead of recommending the lightest heavy option', async () => {
+    const conversations = new FakeConversations();
+    const heavyCards: ProductCard[] = [{
+      id: 'grost-vh-400d',
+      name: 'GROST VH 400D 400 kg vibroplita',
+      brand: 'GROST',
+      category: 'vibroplity',
+      price: 310000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/grost-vh-400d',
+      specs: { weight: '400 kg' },
+      reasons: [],
+      caveats: []
+    }, {
+      id: 'masterpac-pcr7060h2',
+      name: 'MASTERPAC PCR7060H.2 400 kg vibroplita',
+      brand: 'MASTERPAC',
+      category: 'vibroplity',
+      price: 320000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/masterpac-pcr7060h2',
+      specs: { weight: '400 kg' },
+      reasons: [],
+      caveats: []
+    }, {
+      id: 'husqvarna-lg-400',
+      name: 'Husqvarna LG 400 398 kg vibroplita',
+      brand: 'Husqvarna',
+      category: 'vibroplity',
+      price: 330000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/husqvarna-lg-400',
+      specs: { weight: '398 kg' },
+      reasons: [],
+      caveats: []
+    }];
+    conversations.messages = [
+      message('Need vibroplita about 400 kg', 'user'),
+      {
+        ...message('Here are 400 kg options: GROST VH 400D, MASTERPAC PCR7060H.2, Husqvarna LG 400.', 'assistant'),
+        metadata: {
+          productCards: heavyCards
+        }
+      }
+    ];
+    const unsafeModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'buyer clarified home paving tile use',
+          events: [{
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'product_request', value: 'vibroplita' },
+            evidence: 'Need vibroplita about 400 kg',
+            source: 'llm_state_delta',
+            status: 'active'
+          }, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: { factKey: 'application', value: 'home paving tile' },
+            evidence: 'For home paving tile in the yard',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks which previous 400 kg vibroplate is better for home paving tile',
+          dialogueUnderstanding: 'current application is home paving tile in the yard, so heavy 400 kg plates conflict with the task',
+          nextStepRationale: 'do not recommend previous heavy plates; explain mismatch and offer lighter suitable plate selection',
+          requiresTools: false,
+          toolRequests: [],
+          productMentions: heavyCards.map((card) => ({
+            name: card.name,
+            role: 'comparison_subject' as const,
+            productClass: 'plate',
+            evidence: 'previous visible card'
+          })),
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.products).toEqual([]);
+        return {
+          answerText: 'I would choose Husqvarna LG 400: it is a little lighter than the other 400 kg plates and will work for paving tile.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: [],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, unsafeModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'For home paving tile in the yard, which of these is better?'
+    });
+
+    const metadata = payload.metadata as {
+      productCards?: ProductCard[];
+      cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
+      answerProductEvidence?: { droppedProductIds?: string[]; warnings?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number } };
+      preSendReview?: { issues?: Array<{ code?: string }> };
+      warnings?: string[];
+    };
+    expect(payload.answer).not.toContain('I would choose Husqvarna LG 400');
+    expect(payload.answer).toContain('ни один');
+    expect(payload.answer).toContain('400 кг');
+    expect(metadata.productCards).toEqual([]);
+    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
+    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual([
+      'grost-vh-400d',
+      'masterpac-pcr7060h2',
+      'husqvarna-lg-400'
+    ]);
+    expect(metadata.answerProductEvidence?.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('plate_task_weight_mismatch')
+    ]));
+    expect(metadata.warnings).toEqual(expect.arrayContaining([
+      expect.stringContaining('plate_task_weight_mismatch')
+    ]));
+    expect(metadata.answerProductEvidence?.plateTaskPolicy?.maxPracticalWeightKg).toBe(120);
+    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('plate_previous_cards_unsuitable_for_current_task');
+  });
+
   it('routes high-risk source disagreements to adjudication instead of sending a final answer', async () => {
     const conversations = new FakeConversations();
     const conflictModel = model({

@@ -36,9 +36,11 @@ import {
 } from './leadReviewGuards.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import {
+  ambiguousCutterRequestNeedsMaterialClarification,
   assessVisibleCardReadiness,
   budgetMaxFromNeedState,
   filterGeneratorProductsByLoadProfile,
+  filterPlateProductsByCurrentTask,
   productSelectionClasses,
   productCards,
   rankCatalogProductsByNumericFit,
@@ -694,6 +696,50 @@ function filterAnswerProductsForBudget(input: {
   };
 }
 
+function answerProductSemanticContext(intent: AgentIntentContract) {
+  return [
+    intent.userMessageSummary,
+    intent.dialogueUnderstanding,
+    intent.nextStepRationale,
+    ...intent.toolRequests.map((request) => [
+      typeof request.args.query === 'string' ? request.args.query : '',
+      typeof request.args.semanticQuery === 'string' ? request.args.semanticQuery : '',
+      request.rationale,
+      JSON.stringify(request.args ?? {})
+    ].filter(Boolean).join(' '))
+  ].filter(Boolean).join('\n');
+}
+
+function requiredResponseClausesForPlateTaskProductMismatch(input: {
+  originalProducts: Product[];
+  filteredProductIds: string[];
+  droppedProductIds: string[];
+  policy?: { reason: string; maxPracticalWeightKg: number };
+}): RequiredResponseClause[] {
+  if (!input.policy || !input.originalProducts.length || input.filteredProductIds.length) return [];
+  const droppedIds = new Set(input.droppedProductIds);
+  const blockedProductNames = input.originalProducts
+    .filter((product) => droppedIds.has(product.id))
+    .map((product) => product.name);
+  if (!blockedProductNames.length) return [];
+  return [{
+    code: 'plate_previous_cards_unsuitable_for_current_task',
+    sourceRequestId: 'current_user_task',
+    catalogProductNames: uniqueStrings(blockedProductNames),
+    instruction: `The current buyer task conflicts with the previous heavy plate options: ${input.policy.reason}. The available previous options are outside the practical task range above ${input.policy.maxPracticalWeightKg} kg. Do not recommend any of these products as the best choice. State that none of the shown heavy options is a good primary choice for the current home paving/tile task, and offer to search/select a lighter suitable plate class instead.`
+  }];
+}
+
+function plateTaskMismatchSafeRewrite(clause: RequiredResponseClause) {
+  const names = uniqueStrings(clause.catalogProductNames ?? []);
+  const namesText = names.length ? `: ${names.join(', ')}` : '';
+  return [
+    `Из этих вариантов я бы не выбирал ни один как основной для домашней укладки тротуарной плитки${namesText}.`,
+    'Это тяжелые реверсивные плиты около 400 кг: они нужны под серьезное основание, щебень, грунт, дорожные и профессиональные работы. Для двора и плитки такой вес избыточный: выше риск повредить плитку, сложнее работать у дома и обычно нужен другой класс плиты.',
+    'Под домашнюю плитку лучше смотреть более легкую виброплиту, ориентировочно малый класс с ковриком для плитки. Я бы заново подобрал варианты под двор, площадь и основание, а эти 400 кг оставил бы только если у вас реально тяжелая подготовка основания, а не финишная укладка плитки.'
+  ].join('\n\n');
+}
+
 function hasCatalogEvidenceRequest(intent: AgentIntentContract) {
   return intent.toolRequests.some((request) =>
     request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
@@ -995,6 +1041,15 @@ function generatorLoadProfileNumbers(result: ToolResult) {
     requiredStartingKw: Number.isFinite(requiredStartingKw) && requiredStartingKw > 0 ? requiredStartingKw : undefined,
     confidence: Number.isFinite(confidence) && confidence >= 0 ? confidence : undefined
   };
+}
+
+function requiredResponseClausesForUserMessage(userMessage: string): RequiredResponseClause[] {
+  if (!ambiguousCutterRequestNeedsMaterialClarification(userMessage)) return [];
+  return [{
+    code: 'cutter_ambiguous_material_or_work',
+    sourceRequestId: 'user_message',
+    instruction: 'The buyer asked for a “резчик/резак” without material or work context. Do not list concrete cutter models, prices, or catalog cards yet. Briefly explain that this can mean a шовнарезчик for floor/asphalt/concrete seams or a handheld бензорез/cut-off saw for metal, concrete, brick, pipes, etc.; ask one main question about what material/work they need to cut. Set selectionReadiness.canShowProductCards=false and missingFacts must include cutter_material_or_work.'
+  }];
 }
 
 function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
@@ -2344,16 +2399,51 @@ export class AgentManagerOrchestrator {
       ? []
       : previousVisibleCardProducts({ history, intent: continuityIntent });
     const rawAnswerProducts = products.length ? products : historicalProducts;
-    const answerProductEvidence = filterAnswerProductsForBudget({
+    const budgetAnswerProductEvidence = filterAnswerProductsForBudget({
       products: rawAnswerProducts,
       needState: needStateSnapshot,
       productClass: continuityIntent,
       userMessage
     });
+    const plateAnswerProductEvidence = continuityIntent === 'plate'
+      ? filterPlateProductsByCurrentTask({
+          products: budgetAnswerProductEvidence.products,
+          userMessage,
+          query: '',
+          semanticContext: answerProductSemanticContext(intent)
+        })
+      : {
+          products: budgetAnswerProductEvidence.products,
+          droppedProductIds: [] as string[],
+          warnings: [] as string[],
+          policy: undefined
+        };
+    const answerProductEvidence = {
+      products: plateAnswerProductEvidence.products,
+      droppedProductIds: uniqueStrings([
+        ...budgetAnswerProductEvidence.droppedProductIds,
+        ...plateAnswerProductEvidence.droppedProductIds
+      ]),
+      warnings: uniqueStrings([
+        ...budgetAnswerProductEvidence.warnings,
+        ...plateAnswerProductEvidence.warnings
+      ]),
+      plateTaskPolicy: plateAnswerProductEvidence.policy,
+      originalProductIds: rawAnswerProducts.map((product) => product.id)
+    };
     const answerProducts = answerProductEvidence.products;
 
     const usingHistoricalProducts = !products.length && historicalProducts.length > 0;
-    const requiredResponseClauses = requiredResponseClausesForToolResults(toolResults);
+    const requiredResponseClauses = [
+      ...requiredResponseClausesForUserMessage(userMessage),
+      ...requiredResponseClausesForPlateTaskProductMismatch({
+        originalProducts: budgetAnswerProductEvidence.products,
+        filteredProductIds: answerProducts.map((product) => product.id),
+        droppedProductIds: plateAnswerProductEvidence.droppedProductIds,
+        policy: plateAnswerProductEvidence.policy
+      }),
+      ...requiredResponseClausesForToolResults(toolResults)
+    ];
     const rawAnswer = await this.model.composeAnswer({
       session: input.session,
       history,
@@ -2458,7 +2548,8 @@ export class AgentManagerOrchestrator {
     const selectionReadiness = assessVisibleCardReadiness({
       cardSelection: initialCardSelection,
       answer: initialAnswerContract,
-      toolResults
+      toolResults,
+      userMessage
     });
     let cardSelection = suppressVisibleCardsForReadiness({
       cardSelection: initialCardSelection,
@@ -2482,7 +2573,12 @@ export class AgentManagerOrchestrator {
           needState: needStateSnapshot,
           allowHistoricalProducts: true
         });
-        const reusedProducts = narrowedPreviousSelection.products.length ? narrowedPreviousSelection.products : previousProducts;
+        const previousSelectionBlockedByPlateTask = narrowedPreviousSelection.warnings.some((warning) =>
+          warning.includes('plate_task_weight_mismatch')
+        );
+        const reusedProducts = narrowedPreviousSelection.products.length
+          ? narrowedPreviousSelection.products
+          : (previousSelectionBlockedByPlateTask ? [] : previousProducts);
         cardSelection = {
           ...cardSelection,
           products: reusedProducts,
@@ -3154,6 +3250,17 @@ export class AgentManagerOrchestrator {
         evidence: unsupportedCatalogProductMentionRewrite.unsupportedDisplayTokens.join(', ')
       });
     }
+    const plateTaskMismatchClause = (input.requiredResponseClauses ?? []).find((clause) =>
+      clause.code === 'plate_previous_cards_unsuitable_for_current_task'
+    );
+    if (plateTaskMismatchClause) {
+      mechanicalIssues.push({
+        code: 'plate_previous_cards_unsuitable_for_current_task',
+        severity: 'high',
+        message: 'Previous heavy plate products conflict with the current home paving/tile task and must not be recommended.',
+        evidence: uniqueStrings(plateTaskMismatchClause.catalogProductNames ?? []).join(', ') || plateTaskMismatchClause.instruction
+      });
+    }
     const blockingIssueCodes = new Set([
       'unsupported_fact_source',
       'unknown_tool_result_reference',
@@ -3206,6 +3313,16 @@ export class AgentManagerOrchestrator {
         verdict: 'rewrite_required',
         issues: mechanicalIssues,
         revisedAnswerText: unsupportedCatalogProductMentionRewrite.revisedAnswerText
+      };
+    }
+    const plateTaskMismatchIssue = mechanicalIssues.find((issue) =>
+      issue.code === 'plate_previous_cards_unsuitable_for_current_task'
+    );
+    if (plateTaskMismatchIssue && plateTaskMismatchClause) {
+      return {
+        verdict: 'rewrite_required',
+        issues: mechanicalIssues,
+        revisedAnswerText: plateTaskMismatchSafeRewrite(plateTaskMismatchClause)
       };
     }
     if (mechanicalIssues.length) {

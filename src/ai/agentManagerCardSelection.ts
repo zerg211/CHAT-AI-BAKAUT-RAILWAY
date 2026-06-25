@@ -597,20 +597,108 @@ function isHeavyPlateSiteText(text: string) {
   return hintTextContainsAny(normalizedHintText(text), heavyPlateSiteFragments);
 }
 
+type PlateTaskWeightPolicy = {
+  min: number;
+  max: number;
+  source: 'self_loading' | 'small_site';
+  maxPracticalWeightKg: number;
+  reason: string;
+};
+
+type PlateWeightRange = {
+  min: number;
+  max: number;
+  source: 'explicit_user' | 'planner' | PlateTaskWeightPolicy['source'];
+};
+
+export type PlateTaskProductFilter = {
+  products: Product[];
+  droppedProductIds: string[];
+  warnings: string[];
+  policy?: PlateTaskWeightPolicy;
+};
+
+function plateTaskWeightPolicy(input: {
+  userMessage: string;
+  query: string;
+  semanticContext: string;
+}): PlateTaskWeightPolicy | undefined {
+  const joined = [input.userMessage, input.query, input.semanticContext].join('\n');
+  if (isSelfLoadingPlateText(joined)) {
+    return {
+      min: 40,
+      max: 75,
+      source: 'self_loading',
+      maxPracticalWeightKg: 90,
+      reason: 'one-person loading or transport requires a light plate class'
+    };
+  }
+  if (isSmallPlateSiteText(joined) && !isHeavyPlateSiteText(joined)) {
+    return {
+      min: 45,
+      max: 95,
+      source: 'small_site',
+      maxPracticalWeightKg: 120,
+      reason: 'home paving, yard, paths, or paving tile require a small/light plate class'
+    };
+  }
+  return undefined;
+}
+
 function requestedPlateWeightRangeKg(input: {
   userMessage: string;
   query: string;
   semanticContext: string;
-}) {
+}): PlateWeightRange | undefined {
+  const taskPolicy = plateTaskWeightPolicy(input);
   const userExplicit = parseWeightNeedRangeKg(input.userMessage);
+  if (taskPolicy && userExplicit && userExplicit.min > taskPolicy.maxPracticalWeightKg) {
+    return { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source };
+  }
   if (userExplicit) return { ...userExplicit, source: 'explicit_user' as const };
-
-  const joined = [input.userMessage, input.query, input.semanticContext].join('\n');
-  if (isSelfLoadingPlateText(joined)) return { min: 40, max: 75, source: 'self_loading' as const };
-  if (isSmallPlateSiteText(joined) && !isHeavyPlateSiteText(joined)) return { min: 45, max: 95, source: 'small_site' as const };
-
   const plannerExplicit = parseWeightNeedRangeKg(input.query) ?? parseWeightNeedRangeKg(input.semanticContext);
-  return plannerExplicit ? { ...plannerExplicit, source: 'planner' as const } : undefined;
+  if (taskPolicy && plannerExplicit && plannerExplicit.min > taskPolicy.maxPracticalWeightKg) {
+    return { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source };
+  }
+  if (plannerExplicit) return { ...plannerExplicit, source: 'planner' as const };
+  if (taskPolicy) return { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source };
+  return undefined;
+}
+
+export function filterPlateProductsByCurrentTask(input: {
+  products: Product[];
+  userMessage: string;
+  query: string;
+  semanticContext: string;
+}): PlateTaskProductFilter {
+  const policy = plateTaskWeightPolicy(input);
+  if (!policy || !input.products.length) {
+    return {
+      products: input.products,
+      droppedProductIds: [],
+      warnings: []
+    };
+  }
+  const filtered = input.products.filter((product) => {
+    const weight = extractWeightKg(product);
+    return weight === undefined || weight <= policy.maxPracticalWeightKg;
+  });
+  const keptIds = new Set(filtered.map((product) => product.id));
+  const droppedProductIds = input.products
+    .filter((product) => !keptIds.has(product.id))
+    .map((product) => product.id);
+  return {
+    products: filtered,
+    droppedProductIds,
+    warnings: droppedProductIds.length ? [`product_cards_suppressed:plate_task_weight_mismatch:${droppedProductIds.length}`] : [],
+    policy
+  };
+}
+
+function productAllowedByPlateTaskPolicy(product: Product, policy?: { maxPracticalWeightKg: number }) {
+  if (!policy) return true;
+  const weight = extractWeightKg(product);
+  return weight === undefined || weight <= policy.maxPracticalWeightKg;
 }
 
 function plateWeightFitScore(product: Product, range: { min: number; max: number; source: string }) {
@@ -666,11 +754,15 @@ export function rankCatalogProductsByNumericFit(input: {
   if (input.intent === 'plate') {
     const range = requestedPlateWeightRangeKg(input);
     if (!range) return input.products;
+    const taskPolicy = plateTaskWeightPolicy(input);
+    const scoringRange = taskPolicy?.source === 'self_loading'
+      ? { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source }
+      : range;
     return input.products
       .map((product, index) => ({
         product,
         index,
-        score: plateWeightFitScore(product, range)
+        score: plateWeightFitScore(product, scoringRange)
       }))
       .sort((left, right) => right.score - left.score || left.index - right.index)
       .map((item) => item.product);
@@ -837,6 +929,8 @@ export function selectProductsForVisibleCards(input: {
   }
 
   let numericFitFilteredCount = 0;
+  let plateTaskFilteredCount = 0;
+  let plateTaskWarnings: string[] = [];
   const plateWeightRange = cardIntent === 'plate'
     ? requestedPlateWeightRangeKg({
         userMessage: input.userMessage,
@@ -848,8 +942,21 @@ export function selectProductsForVisibleCards(input: {
         ].filter(Boolean).join('\n')
       })
     : undefined;
+  const plateTaskPolicyForSelection = cardIntent === 'plate'
+    ? plateTaskWeightPolicy({
+        userMessage: input.userMessage,
+        query: toolRequestSemanticText(input.intent),
+        semanticContext: [
+          input.intent.userMessageSummary,
+          input.intent.dialogueUnderstanding,
+          input.intent.nextStepRationale,
+          input.answerText
+        ].filter(Boolean).join('\n')
+      })
+    : undefined;
   if (plateWeightRange && selected.length) {
-    const selectedWithinRange = productsWithinPlateWeightRange(selected, plateWeightRange);
+    const selectedWithinRange = productsWithinPlateWeightRange(selected, plateWeightRange)
+      .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
     const heavierTradeoffAllowed = allowsHeavierPlateTradeoff({
       userMessage: input.userMessage,
       semanticContext: [
@@ -868,11 +975,34 @@ export function selectProductsForVisibleCards(input: {
       numericFitFilteredCount = selected.length - selectedAfterNumericFit.length;
       selected = selectedAfterNumericFit;
     } else {
-      const fallbackWithinRange = productsWithinPlateWeightRange(sameIntentPool, plateWeightRange);
+      const fallbackWithinRange = productsWithinPlateWeightRange(sameIntentPool, plateWeightRange)
+        .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
       if (fallbackWithinRange.length) {
         numericFitFilteredCount = selected.length;
         selected = fallbackWithinRange;
+      } else if (plateWeightRange.source === 'self_loading' || plateWeightRange.source === 'small_site') {
+        numericFitFilteredCount = selected.length;
+        plateTaskWarnings = ['product_cards_suppressed:plate_task_weight_mismatch:selected_outside_task_range'];
+        selected = [];
       }
+    }
+  }
+  if (cardIntent === 'plate' && selected.length) {
+    const plateTaskFilter = filterPlateProductsByCurrentTask({
+      products: selected,
+      userMessage: input.userMessage,
+      query: toolRequestSemanticText(input.intent),
+      semanticContext: [
+        input.intent.userMessageSummary,
+        input.intent.dialogueUnderstanding,
+        input.intent.nextStepRationale,
+        input.answerText
+      ].filter(Boolean).join('\n')
+    });
+    if (plateTaskFilter.droppedProductIds.length) {
+      plateTaskFilteredCount = plateTaskFilter.droppedProductIds.length;
+      plateTaskWarnings = plateTaskFilter.warnings;
+      selected = plateTaskFilter.products;
     }
   }
 
@@ -894,7 +1024,9 @@ export function selectProductsForVisibleCards(input: {
     ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
     ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : []),
     ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
-    ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : [])
+    ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
+    ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
+    ...plateTaskWarnings
   ];
 
   return {
@@ -905,6 +1037,23 @@ export function selectProductsForVisibleCards(input: {
     droppedProductIds,
     warnings
   };
+}
+
+const ambiguousCutterTerms = ['резчик', 'резак', 'резки', 'резку', 'шовнарез', 'бензорез', 'cutter', 'cutoff saw'];
+const cutterMaterialOrWorkTerms = [
+  'бетон', 'асфальт', 'металл', 'кирпич', 'труб', 'рельс', 'камень', 'плит', 'пол', 'шв',
+  'проем', 'двер', 'окн', 'мокр', 'сух', 'помещ', 'улиц', 'дорог', 'алмаз', 'диск'
+];
+
+function textContainsAnyFragment(text: string, fragments: string[]) {
+  const normalized = text.toLocaleLowerCase('ru');
+  return fragments.some((fragment) => normalized.includes(fragment));
+}
+
+export function ambiguousCutterRequestNeedsMaterialClarification(text: string) {
+  const normalized = text.toLocaleLowerCase('ru');
+  if (!textContainsAnyFragment(normalized, ambiguousCutterTerms)) return false;
+  return !textContainsAnyFragment(normalized, cutterMaterialOrWorkTerms);
 }
 
 type VisibleCardSelection = ReturnType<typeof selectProductsForVisibleCards>;
@@ -922,8 +1071,19 @@ export function assessVisibleCardReadiness(input: {
   cardSelection: VisibleCardSelection;
   answer: AnswerContract;
   toolResults?: ToolResult[];
+  userMessage?: string;
 }): VisibleCardReadiness {
   const productClass = input.cardSelection.intent;
+  if (input.userMessage && ambiguousCutterRequestNeedsMaterialClarification(input.userMessage)) {
+    return {
+      status: 'blocked_by_tool_safety',
+      productClass,
+      missingFacts: ['cutter_material_or_work'],
+      rationale: 'The buyer used ambiguous cutter wording without material/work, so product cards would mix different cutter classes.',
+      warnings: ['product_cards_suppressed:cutter_ambiguous_material_or_work'],
+      decision: input.answer.selectionReadiness
+    };
+  }
   if (isGeneratorProductClass(productClass) && hasUnconfirmedGeneratorLoadBasisResult(input.toolResults ?? [])) {
     return {
       status: 'blocked_by_tool_safety',

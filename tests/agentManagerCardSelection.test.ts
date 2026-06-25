@@ -1008,4 +1008,60 @@ describe('AgentManager visible card readiness', () => {
 
     expect(ranked.map((product) => product.id)).toEqual(['heavy-160', 'light-50', 'mid-83']);
   });
+
+  it('suppresses previous 400 kg plate cards when the current task is home paving tile', () => {
+    const grost = plateWithNameAndWeight('grost-vh-400d', 'GROST VH 400D 400 kg vibroplita', 400);
+    const masterpac = plateWithNameAndWeight('masterpac-pcr7060h2', 'MASTERPAC PCR7060H.2 400 kg vibroplita', 400);
+    const husqvarna = plateWithNameAndWeight('husqvarna-lg-400', 'Husqvarna LG 400 398 kg vibroplita', 398);
+
+    const selection = selectProductsForVisibleCards({
+      products: [grost, masterpac, husqvarna],
+      userMessage: 'For home paving tile in the yard, which vibroplita of these is better?',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer compares previous 400 kg vibroplates for home paving tile',
+        dialogueUnderstanding: 'current use is home paving tile, not heavy base compaction',
+        nextStepRationale: 'reject unsuitable heavy previous options and search a lighter plate class',
+        requiresTools: false,
+        toolRequests: [],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Husqvarna LG 400 is lighter than the rest.',
+      needState: needStateWithBudget(),
+      allowHistoricalProducts: true
+    });
+
+    expect(selection.selectedProductIds).toEqual([]);
+    expect(selection.droppedProductIds).toEqual(['grost-vh-400d', 'masterpac-pcr7060h2', 'husqvarna-lg-400']);
+    expect(selection.warnings).toContain('product_cards_suppressed:plate_task_weight_mismatch:selected_outside_task_range');
+  });
+
+  it('keeps 400 kg plate cards for explicit heavy professional plate work', () => {
+    const grost = plateWithNameAndWeight('grost-vh-400d', 'GROST VH 400D 400 kg vibroplita', 400);
+    const husqvarna = plateWithNameAndWeight('husqvarna-lg-400', 'Husqvarna LG 400 398 kg vibroplita', 398);
+
+    const selection = selectProductsForVisibleCards({
+      products: [grost, husqvarna],
+      userMessage: 'Need about 400 kg reversible vibroplita for a heavy professional site and crushed stone base',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs heavy reversible 400 kg vibroplate',
+        dialogueUnderstanding: 'professional heavy site, crushed stone base',
+        nextStepRationale: 'compare heavy reversible plates',
+        requiresTools: false,
+        toolRequests: [],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'GROST VH 400D and Husqvarna LG 400 match.',
+      needState: needStateWithBudget(),
+      allowHistoricalProducts: true
+    });
+
+    expect(selection.selectedProductIds).toEqual(['grost-vh-400d', 'husqvarna-lg-400']);
+    expect(selection.warnings).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('plate_task_weight_mismatch')
+    ]));
+  });
 });
