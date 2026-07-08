@@ -18,6 +18,25 @@
       "testFiles": 94
     },
     {
+      "command": "node .agent/tasks/2026-07-08-agentic-dialogue-fixes/production-dialogue-check.mjs",
+      "status": "FAIL",
+      "reason": "Production live check found no visible cards for 1-1.8 kW battery station request; see problems.md."
+    },
+    {
+      "command": "npm test -- tests/recommendationRanking.test.ts tests/agentManagerCardSelection.test.ts",
+      "status": "PASS",
+      "tests": 234,
+      "testFiles": 2,
+      "afterFix": true
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "tests": 763,
+      "testFiles": 94,
+      "afterFix": true
+    },
+    {
       "command": "npm run lint:no-regex",
       "status": "NON_BLOCKING_FAIL",
       "reason": "Repository guard reports pre-existing regex constructs outside this task diff; no new regex literals were introduced by this task."
@@ -31,6 +50,6 @@
     "AC5": "LOCAL_PASS",
     "AC6": "LOCAL_PASS",
     "AC7": "PASS",
-    "AC8": "PENDING_PRODUCTION"
+    "AC8": "PRODUCTION_FAIL_FIXED_LOCALLY_PENDING_REDEPLOY"
   }
 }

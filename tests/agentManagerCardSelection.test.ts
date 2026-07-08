@@ -164,6 +164,21 @@ function batteryStationWithPower(id: string, powerKw: string): Product {
   };
 }
 
+function batteryStationWithWatts(id: string, watts: number): Product {
+  return {
+    id,
+    name: `Battery power station generator ${watts} W`,
+    brand: 'APS',
+    category: 'Battery power stations generators',
+    price: 90000,
+    currency: 'RUB',
+    sourceUrl: `https://example.test/battery/${id}`,
+    specs: {
+      'Nominal power': `${watts} W`
+    }
+  };
+}
+
 function generatorWithPrice(id: string, name: string, price: number): Product {
   return {
     id,
@@ -991,6 +1006,22 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(ranked.map((product) => product.id)).toEqual(['point-eight-kw', 'one-eight-kw', 'five-kw']);
+  });
+
+  it('normalizes watt product specs against kilowatt range requests', () => {
+    const aps600 = batteryStationWithWatts('aps-600', 600);
+    const aps800 = batteryStationWithWatts('aps-800', 800);
+    const aps1800 = batteryStationWithWatts('aps-1800', 1800);
+
+    const ranked = rankCatalogProductsByNumericFit({
+      products: [aps600, aps800, aps1800],
+      intent: 'generator',
+      query: 'battery generator 1-1.8 kW 220 V',
+      semanticContext: '',
+      userMessage: ''
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['aps-1800', 'aps-800', 'aps-600']);
   });
 
   it('filters visible generator cards to battery stations when the structured need requires battery power', () => {

@@ -24,6 +24,7 @@ import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts, type ProductComparisonResearchFact, type ProductComparisonResearchResult } from './productComparisonResearch.js';
 import {
   extractWeightKg,
+  fromEscaped,
   inferProductIntent,
   isBatteryPowerStation,
   parseWeightNeedRangeKg,
@@ -3706,18 +3707,38 @@ export class AgentManagerOrchestrator {
     if (productIntent !== 'unknown' && matchingProducts.length !== mergedProducts.length) {
       warnings.push(`catalog_products_filtered_by_intent:${productIntent}:${mergedProducts.length - matchingProducts.length}`);
     }
-    const sourceFilteredProducts = isGeneratorProductClass(productIntent) &&
+    const batteryPowerRequired = isGeneratorProductClass(productIntent) &&
       requiresBatteryPowerStationFromText([
         query,
         semanticContext,
         input.userMessage,
         input.embeddingQuery
-      ].filter(Boolean).join('\n'))
+      ].filter(Boolean).join('\n'));
+    let sourceFilteredProducts = batteryPowerRequired
       ? matchingProducts.filter(isBatteryPowerStation)
       : matchingProducts;
     if (sourceFilteredProducts.length !== matchingProducts.length) {
       warnings.push(`catalog_products_filtered_by_power_source:battery:${matchingProducts.length - sourceFilteredProducts.length}`);
-      if (!sourceFilteredProducts.length) warnings.push('catalog_search_no_power_source_fit:battery');
+      if (!sourceFilteredProducts.length) {
+        try {
+          const fallbackBatteryProducts = await this.products.searchProducts(
+            fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446\\u0438\\u044f'),
+            Math.max(limit * 6, 80)
+          );
+          sourceFilteredProducts = fallbackBatteryProducts
+            .filter((product) => productMatchesIntent(product, productIntent))
+            .filter(isBatteryPowerStation);
+          if (sourceFilteredProducts.length) {
+            warnings.push(`catalog_battery_power_station_fallback_pool:${sourceFilteredProducts.length}`);
+          } else {
+            warnings.push('catalog_search_no_power_source_fit:battery');
+          }
+        } catch (error) {
+          firstError ??= error;
+          warnings.push(`catalog_battery_power_station_fallback_error:${safeError(error).code ?? safeError(error).message}`);
+          warnings.push('catalog_search_no_power_source_fit:battery');
+        }
+      }
     }
     const rankedProducts = rankCatalogProductsByNumericFit({
       products: sourceFilteredProducts,

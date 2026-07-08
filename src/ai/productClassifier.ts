@@ -4,6 +4,7 @@ export type ProductIntent = ProductSelectionClass;
 
 export const fromEscaped = (value: string) => JSON.parse(`"${value}"`) as string;
 export const powerRegex = new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430)`, 'i');
+const wattPowerRegex = new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:\u0432\u0430\u0442\u0442|\u0432\u0442|w)`, 'i');
 export const powerRangeRegex = new RegExp(String.raw`(\d+(?:[,.]\d+)?)\s*(?:-|–|—|\u0434\u043e)\s*(\d+(?:[,.]\d+)?)\s*(?:\u043a\u0432\u0442|kw|kva|\u043a\u0432\u0430)`, 'i');
 export const budgetMaxRegex = new RegExp(String.raw`(?:\u0434\u043e|\u0437\u0430|\u0432\s+\u043f\u0440\u0435\u0434\u0435\u043b\u0430\u0445|\u0432\s+\u0440\u0430\u043c\u043a\u0430\u0445|\u043d\u0435\s+\u0434\u043e\u0440\u043e\u0436\u0435|budget\s*(?:up\s*to)?|max|maximum|<=?)\s*(\d+(?:[,.]\d+)?)\s*(?:\u0442\u044b\u0441(?:\u044f\u0447)?|\u0442\.?\s*\u0440\.?|\u0440\u0443\u0431|rub|₽)?`, 'i');
 export const plateTerms = ['vibroplity', 'vibroplita', 'виброплит', fromEscaped('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043f\\u043b\\u0438\\u0442')];
@@ -464,18 +465,33 @@ export function extractPowerKw(product: Product) {
     product.description,
     JSON.stringify(product.specs ?? {})
   ].join(' ');
-  const match = text.match(powerRegex);
-  return match ? Number(match[1].replace(',', '.')) : undefined;
+  return extractPowerTextKw(text);
 }
 
 export function extractNamePowerKw(product: Product) {
-  const match = String(product.name ?? '').match(powerRegex);
-  return match ? Number(match[1].replace(',', '.')) : undefined;
+  return extractPowerTextKw(String(product.name ?? ''));
 }
 
 export function normalizePowerValue(value: string) {
   const number = Number(value.replace(',', '.'));
   return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function normalizePowerMatchKw(match: RegExpMatchArray) {
+  const value = normalizePowerValue(match[1]);
+  if (value === undefined) return undefined;
+  const unit = String(match[2] ?? '').toLocaleLowerCase('ru-RU');
+  return unit === 'w' || unit === fromEscaped('\\u0432\\u0442') || unit === fromEscaped('\\u0432\\u0430\\u0442\\u0442')
+    ? value / 1000
+    : value;
+}
+
+function extractPowerTextKw(text: string) {
+  const kw = text.match(powerRegex);
+  if (kw) return normalizePowerMatchKw(kw);
+  const watt = text.match(wattPowerRegex);
+  const wattValue = watt ? normalizePowerValue(watt[1]) : undefined;
+  return wattValue === undefined ? undefined : wattValue / 1000;
 }
 
 export function extractPowerNearKeywords(text: string, keywords: string[]) {
@@ -484,8 +500,8 @@ export function extractPowerNearKeywords(text: string, keywords: string[]) {
     const index = lower.indexOf(keyword.toLowerCase());
     if (index < 0) continue;
     const excerpt = lower.slice(index, index + 160);
-    const match = excerpt.match(powerRegex);
-    if (match) return normalizePowerValue(match[1]);
+    const value = extractPowerTextKw(excerpt);
+    if (value !== undefined) return value;
   }
   return undefined;
 }
@@ -524,7 +540,7 @@ export function numberNearNeed(text: string, need: RegExp) {
     return value ? value / 1000 : undefined;
   }
   const kw = excerpt.match(powerRegex);
-  if (kw) return normalizePowerValue(kw[1]);
+  if (kw) return normalizePowerMatchKw(kw);
   return undefined;
 }
 

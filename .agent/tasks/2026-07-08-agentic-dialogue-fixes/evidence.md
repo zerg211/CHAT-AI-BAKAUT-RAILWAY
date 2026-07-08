@@ -17,8 +17,18 @@ PASS `npm run typecheck`
 
 PASS `npm test`
 
+- 94 test files passed before production verification.
+- 762 tests passed before production verification.
+
+PASS `npm test -- tests/recommendationRanking.test.ts tests/agentManagerCardSelection.test.ts`
+
+- 2 test files passed after the production-found watt/kW battery-station fix.
+- 234 tests passed.
+
+PASS `npm test` after production-found fix
+
 - 94 test files passed.
-- 762 tests passed.
+- 763 tests passed.
 
 NON-BLOCKING FAIL `npm run lint:no-regex`
 
@@ -35,4 +45,4 @@ NON-BLOCKING FAIL `npm run lint:no-regex`
 
 ## Pending Production Proof
 
-Production widget verification is still pending until this change is committed, pushed, and Railway deploys from GitHub.
+Production widget verification found one battery kW-range issue, documented in `problems.md`. A follow-up fix has passed local verification and is pending commit/push/Railway redeploy.
