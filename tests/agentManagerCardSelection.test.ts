@@ -149,6 +149,21 @@ function generatorWithPower(id: string, powerKw: string): Product {
   };
 }
 
+function batteryStationWithPower(id: string, powerKw: string): Product {
+  return {
+    id,
+    name: `Battery power station generator ${powerKw} kW`,
+    brand: 'APS',
+    category: 'Battery power stations generators',
+    price: 90000,
+    currency: 'RUB',
+    sourceUrl: `https://example.test/battery/${id}`,
+    specs: {
+      'Nominal power': `${powerKw} kW`
+    }
+  };
+}
+
 function generatorWithPrice(id: string, name: string, price: number): Product {
   return {
     id,
@@ -960,6 +975,60 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(ranked.map((product) => product.id)).toEqual(['five-half-kw', 'five-kw', 'seven-kw']);
+  });
+
+  it('normalizes watt power requests before ranking generator cards', () => {
+    const pointEightKw = generatorWithPower('point-eight-kw', '0.8');
+    const oneEightKw = generatorWithPower('one-eight-kw', '1.8');
+    const fiveKw = generatorWithPower('five-kw', '5.0');
+
+    const ranked = rankCatalogProductsByNumericFit({
+      products: [fiveKw, oneEightKw, pointEightKw],
+      intent: 'generator',
+      query: 'need accumulator generator 800 watt',
+      semanticContext: '',
+      userMessage: ''
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['point-eight-kw', 'one-eight-kw', 'five-kw']);
+  });
+
+  it('filters visible generator cards to battery stations when the structured need requires battery power', () => {
+    const battery = batteryStationWithPower('aps-800', '0.8');
+    const gasoline = generatorWithPower('gasoline-1kw', '1.0');
+    const diesel = {
+      ...generatorWithPower('diesel-24kw', '24.0'),
+      name: 'Diesel generator 24 kW'
+    };
+
+    const needState = needStateWithBudget();
+    needState.selectionState.hardConstraints.mustHaveTraits = ['battery_powered: true'];
+    const selection = selectProductsForVisibleCards({
+      products: [gasoline, diesel, battery],
+      userMessage: 'Need battery power station 220v 800 watt',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs a battery powered generator',
+        dialogueUnderstanding: 'power_source: battery, 220v, 800 watt',
+        nextStepRationale: 'show only battery power station cards',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-search',
+          tool: 'catalog.search',
+          args: { query: 'battery power station 800 watt', limit: 8 },
+          rationale: 'find battery stations',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'Here are the relevant generator options.',
+      needState
+    });
+
+    expect(selection.selectedProductIds).toEqual(['aps-800']);
+    expect(selection.droppedProductIds).toEqual(expect.arrayContaining(['gasoline-1kw', 'diesel-24kw']));
+    expect(selection.warnings).toContain('product_cards_filtered_by_power_source:battery:2');
   });
 
   it('keeps self-loading plate card ranking without regex parsing', () => {

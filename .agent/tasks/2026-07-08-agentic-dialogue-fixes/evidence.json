@@ -1,0 +1,36 @@
+{
+  "taskId": "2026-07-08-agentic-dialogue-fixes",
+  "localVerification": [
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts tests/leadReviewGuards.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "PASS",
+      "tests": 68,
+      "testFiles": 3
+    },
+    {
+      "command": "npm run typecheck",
+      "status": "PASS"
+    },
+    {
+      "command": "npm test",
+      "status": "PASS",
+      "tests": 762,
+      "testFiles": 94
+    },
+    {
+      "command": "npm run lint:no-regex",
+      "status": "NON_BLOCKING_FAIL",
+      "reason": "Repository guard reports pre-existing regex constructs outside this task diff; no new regex literals were introduced by this task."
+    }
+  ],
+  "acceptanceCriteria": {
+    "AC1": "LOCAL_PASS",
+    "AC2": "LOCAL_PASS",
+    "AC3": "LOCAL_PASS",
+    "AC4": "LOCAL_PARTIAL_PENDING_PRODUCTION_DIALOGUE",
+    "AC5": "LOCAL_PASS",
+    "AC6": "LOCAL_PASS",
+    "AC7": "PASS",
+    "AC8": "PENDING_PRODUCTION"
+  }
+}

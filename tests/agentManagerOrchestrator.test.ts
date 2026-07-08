@@ -2084,6 +2084,68 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.leadCreated).toBe(true);
   });
 
+  it('uses an existing session lead instead of asking for contact again after a form submission', async () => {
+    const conversations = new FakeConversations();
+    const leads = new class extends FakeLeads {
+      async latestLeadForSession() {
+        return {
+          id: 'existing-lead-id',
+          sessionId,
+          name: 'Nikolay',
+          phone: '+7 900 000-00-22',
+          status: 'sent_email',
+          createdAt: new Date().toISOString()
+        };
+      }
+    }();
+    const leadModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks to check delivery after submitting the form',
+          dialogueUnderstanding: 'contact is already captured in this session',
+          nextStepRationale: 'reuse the saved lead and continue the handoff',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:existing',
+            tool: 'lead.capture',
+            args: {},
+            rationale: 'delivery check needs a saved contact',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Contact is already saved for this chat. I will pass the delivery question to the manager.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:existing'],
+          leadAction: 'confirm_contact_received',
+          riskFlags: []
+        };
+      }
+    });
+    conversations.messages = [message('Can you check delivery to Crimea?')];
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, leadModel);
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Can you check delivery to Crimea?'
+    });
+
+    expect(payload.answer).toContain('already saved');
+    expect(leads.created).toHaveLength(0);
+    expect(conversations.outbox).toHaveLength(0);
+    expect(payload.leadCreated).toBe(true);
+    expect((payload.metadata as { toolResults?: Array<{ payload?: Record<string, unknown> }> }).toolResults?.[0]?.payload).toMatchObject({
+      leadId: 'existing-lead-id',
+      existing: true
+    });
+  });
+
   it('recovers from the saved user message without adding a duplicate user message', async () => {
     const conversations = new FakeConversations();
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, model());

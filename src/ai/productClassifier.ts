@@ -52,6 +52,30 @@ export const homeTerms = [
 export const inverterTerms = ['invertor', 'inverter', fromEscaped('\\u0438\\u043d\\u0432\\u0435\\u0440\\u0442\\u043e\\u0440')];
 export const dieselTerms = ['diesel', 'dizel', 'дизел', fromEscaped('\\u0434\\u0438\\u0437\\u0435\\u043b')];
 export const gasolineTerms = ['benzin', 'бензин', fromEscaped('\\u0431\\u0435\\u043d\\u0437\\u0438\\u043d')];
+export const batteryPowerStationTerms = [
+  'battery power station',
+  'portable power station',
+  'powerstation',
+  'li-ion',
+  'lifepo4',
+  fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d'),
+  fromEscaped('\\u0430\\u043a\\u0431'),
+  fromEscaped('\\u043f\\u043e\\u0440\\u0442\\u0430\\u0442\\u0438\\u0432\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446'),
+  fromEscaped('\\u0437\\u0430\\u0440\\u044f\\u0434\\u043d\\u0430\\u044f \\u0441\\u0442\\u0430\\u043d\\u0446')
+];
+const batteryRequirementTerms = [
+  'battery_powered: true',
+  'power_source:battery',
+  'power_source: battery',
+  'battery powered',
+  'battery generator',
+  'portable power station',
+  fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u044b\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440'),
+  fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446'),
+  fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0443\\u044e \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446'),
+  fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u044b\\u0439 220'),
+  fromEscaped('\\u043d\\u0430 \\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u0435')
+];
 export const professionalTerms = [
   fromEscaped('\\u043f\\u0440\\u043e\\u0444'),
   fromEscaped('\\u043f\\u0440\\u043e\\u043c\\u044b\\u0448\\u043b'),
@@ -818,6 +842,47 @@ export function productFullText(product: Product) {
     .filter(Boolean)
     .join(' ')
     .toLowerCase();
+}
+
+function productClassText(product: Product) {
+  return [product.name, product.category, product.sourceUrl]
+    .filter(Boolean)
+    .join(' ')
+    .toLocaleLowerCase('ru-RU');
+}
+
+export function isBatteryPowerStation(product: Product) {
+  const classText = productClassText(product);
+  if (!containsAny(classText, batteryPowerStationTerms)) return false;
+  if (containsAny(classText, gasolineTerms) || containsAny(classText, dieselTerms)) return false;
+  return containsAny(classText, generatorTerms) ||
+    classText.includes('power station') ||
+    classText.includes(fromEscaped('\\u0441\\u0442\\u0430\\u043d\\u0446'));
+}
+
+export type ProductPowerSource = 'battery' | 'gasoline' | 'diesel' | 'unknown';
+
+export function productPowerSource(product: Product): ProductPowerSource {
+  if (isBatteryPowerStation(product)) return 'battery';
+  const flags = classifyProduct(product);
+  if (flags.isGasoline) return 'gasoline';
+  if (flags.isDiesel) return 'diesel';
+  return 'unknown';
+}
+
+export function requiresBatteryPowerStationFromText(text: string) {
+  const normalized = text.toLocaleLowerCase('ru-RU');
+  if (!containsAny(normalized, batteryRequirementTerms)) return false;
+  if (normalized.includes(fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440 \\u0432 \\u043a\\u043e\\u043c\\u043f\\u043b\\u0435\\u043a\\u0442'))) {
+    return containsAny(normalized, [
+      'battery_powered: true',
+      'power_source:battery',
+      'power_source: battery',
+      fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u044b\\u0439 \\u0433\\u0435\\u043d\\u0435\\u0440\\u0430\\u0442\\u043e\\u0440'),
+      fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446')
+    ]);
+  }
+  return true;
 }
 
 export function productHasExactModel(product: Product, profile: ProductFitProfile) {

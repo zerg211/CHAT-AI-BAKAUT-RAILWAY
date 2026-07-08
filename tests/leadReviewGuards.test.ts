@@ -8,6 +8,8 @@ import {
   stripContactRequestSentence
 } from '../src/ai/leadReviewGuards.js';
 
+const fromEscaped = (value: string) => JSON.parse(`"${value}"`) as string;
+
 function leadResult(warnings: string[]): ToolResult {
   return {
     requestId: 'lead.capture:test',
@@ -45,5 +47,21 @@ describe('lead review guards', () => {
 
     expect(text).toContain('Телефон получил');
     expect(text).toContain('Напишите, пожалуйста, имя');
+  });
+});
+
+describe('lead review repair preservation', () => {
+  it('preserves the useful product answer when adding a safe form handoff', () => {
+    const base = fromEscaped('\\u0418\\u0437 \\u043a\\u0430\\u0442\\u0430\\u043b\\u043e\\u0433\\u0430 \\u043f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 APS 800: \\u044d\\u0442\\u043e \\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u0441\\u0442\\u0430\\u043d\\u0446\\u0438\\u044f \\u043d\\u0430 220 \\u0412.');
+    const removedContactSentence = fromEscaped('\\u041e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u0432 \\u0444\\u043e\\u0440\\u043c\\u0435.');
+    const text = leadCaptureRepairText({
+      contact: {},
+      toolResults: [leadResult(['lead_contact_missing'])],
+      answerText: `${base} ${removedContactSentence}`
+    });
+
+    expect(text).toContain(base);
+    expect(text).toContain(fromEscaped('\\u0427\\u0442\\u043e\\u0431\\u044b \\u043f\\u0440\\u043e\\u0432\\u0435\\u0440\\u0438\\u0442\\u044c \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435'));
+    expect(text).not.toContain(removedContactSentence);
   });
 });

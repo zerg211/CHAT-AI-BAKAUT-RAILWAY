@@ -7,11 +7,14 @@ import {
   extractGeneratorPowerForHardSelection,
   extractModelTokens,
   extractWeightKg,
+  fromEscaped,
   inferProductIntent,
+  isBatteryPowerStation,
   isCoreEquipment,
   parseWeightNeedRangeKg,
   productMatchesIntent,
-  productMentionedInText
+  productMentionedInText,
+  requiresBatteryPowerStationFromText
 } from './productClassifier.js';
 import {
   modelTextTokens as matchingModelTextTokens,
@@ -405,25 +408,40 @@ function rangeSeparatorEnd(value: string, index: number) {
     : undefined;
 }
 
-function hasPowerUnitAt(value: string, index: number) {
+function powerUnitAt(value: string, index: number) {
   const tail = value.slice(index).toLocaleLowerCase('ru-RU');
-  return ['квт', 'kw', 'kva', 'ква'].some((unit) => tail.startsWith(unit));
+  const units = [
+    { unit: 'kw' as const, scale: 1, terms: [fromEscaped('\\u043a\\u0432\\u0442'), 'kw', 'kva', fromEscaped('\\u043a\\u0432\\u0430')] },
+    { unit: 'w' as const, scale: 0.001, terms: [fromEscaped('\\u0432\\u0430\\u0442\\u0442'), fromEscaped('\\u0432\\u0442'), 'w'] }
+  ];
+  for (const candidate of units) {
+    const term = candidate.terms.find((item) => tail.startsWith(item));
+    if (!term) continue;
+    return { unit: candidate.unit, scale: candidate.scale, end: index + term.length };
+  }
+  return undefined;
 }
 
 function requestedPowerRangeKw(text: string) {
   for (let index = 0; index < text.length; index += 1) {
     const left = decimalNumberAt(text, index);
     if (!left) continue;
+    const leftUnit = powerUnitAt(text, skipWhitespace(text, left.end));
     const separatorEnd = rangeSeparatorEnd(text, skipWhitespace(text, left.end));
     if (separatorEnd === undefined) {
       index = left.end;
       continue;
     }
     const right = decimalNumberAt(text, skipWhitespace(text, separatorEnd));
-    if (right && hasPowerUnitAt(text, skipWhitespace(text, right.end))) {
+    const rightUnit = right ? powerUnitAt(text, skipWhitespace(text, right.end)) : undefined;
+    if (right && rightUnit) {
+      const leftScale = leftUnit?.scale ?? rightUnit.scale;
+      const rightScale = rightUnit.scale;
+      const leftKw = left.value * leftScale;
+      const rightKw = right.value * rightScale;
       return {
-        min: Math.min(left.value, right.value),
-        max: Math.max(left.value, right.value)
+        min: Math.min(leftKw, rightKw),
+        max: Math.max(leftKw, rightKw)
       };
     }
     index = left.end;
@@ -432,8 +450,11 @@ function requestedPowerRangeKw(text: string) {
   for (let index = 0; index < text.length; index += 1) {
     const exact = decimalNumberAt(text, index);
     if (!exact) continue;
-    if (hasPowerUnitAt(text, skipWhitespace(text, exact.end))) {
-      return { min: Math.max(0.1, exact.value - 0.75), max: exact.value + 0.75 };
+    const unit = powerUnitAt(text, skipWhitespace(text, exact.end));
+    if (unit) {
+      const valueKw = exact.value * unit.scale;
+      const tolerance = unit.unit === 'w' ? Math.max(0.1, valueKw * 0.25) : 0.75;
+      return { min: Math.max(0.1, valueKw - tolerance), max: valueKw + tolerance };
     }
     index = exact.end;
   }
@@ -828,6 +849,32 @@ function honestPlateExpansionProducts(input: {
     .map((decision) => decision.product);
 }
 
+function visibleCardRequirementText(input: {
+  userMessage: string;
+  intent: AgentIntentContract;
+  answerText: string;
+  needState: CustomerNeedState;
+}) {
+  return [
+    input.userMessage,
+    input.intent.userMessageSummary,
+    input.intent.dialogueUnderstanding,
+    input.intent.nextStepRationale,
+    toolRequestSemanticText(input.intent),
+    input.answerText,
+    input.needState.lastSummary,
+    ...(input.needState.activeNeeds ?? []).flatMap((need) => [
+      need.summary,
+      ...(need.constraints ?? []),
+      ...(need.openQuestions ?? [])
+    ]),
+    ...(input.needState.confirmedFacts ?? []).map((fact) => fact.value),
+    ...(input.needState.constraints ?? []).map((constraint) => constraint.value),
+    ...(input.needState.selectionState?.hardConstraints.mustHaveTraits ?? []),
+    ...(input.needState.selectionState?.softPreferences.mustHaveTraits ?? [])
+  ].filter(Boolean).join('\n');
+}
+
 export function selectProductsForVisibleCards(input: {
   products: Product[];
   userMessage: string;
@@ -897,6 +944,21 @@ export function selectProductsForVisibleCards(input: {
 
   if (cardIntent === 'unknown' && !mentioned.length) {
     selected = [];
+  }
+
+  let powerSourceFilteredCount = 0;
+  let powerSourceNoFit = false;
+  if (isGeneratorProductClass(cardIntent) && selected.length && requiresBatteryPowerStationFromText(visibleCardRequirementText(input))) {
+    const batterySelected = selected.filter(isBatteryPowerStation);
+    if (batterySelected.length) {
+      powerSourceFilteredCount = selected.length - batterySelected.length;
+      selected = batterySelected;
+    } else {
+      const fallbackBatteryProducts = sameIntentPool.filter(isBatteryPowerStation);
+      powerSourceFilteredCount = selected.length;
+      selected = fallbackBatteryProducts;
+      powerSourceNoFit = fallbackBatteryProducts.length === 0;
+    }
   }
 
   const budgetMax = effectiveVisibleCardBudgetMax({ needState: input.needState, userMessage: input.userMessage });
@@ -1024,6 +1086,8 @@ export function selectProductsForVisibleCards(input: {
     ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
     ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : []),
     ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
+    ...(powerSourceFilteredCount > 0 ? [`product_cards_filtered_by_power_source:battery:${powerSourceFilteredCount}`] : []),
+    ...(powerSourceNoFit ? ['product_cards_suppressed:power_source_no_fit:battery'] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
     ...plateTaskWarnings

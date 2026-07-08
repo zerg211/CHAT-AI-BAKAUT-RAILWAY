@@ -1842,6 +1842,14 @@ export class LeadRepository {
     return result.rowCount ? mapLead(result.rows[0]) : null;
   }
 
+  async latestLeadForSession(sessionId: string) {
+    const result = await this.db.query(
+      'SELECT * FROM leads WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [sessionId]
+    );
+    return result.rowCount ? mapLead(result.rows[0]) : null;
+  }
+
   async claimDueLeadOutbox(limit = 10) {
     const result = await this.db.query(
       `WITH due AS (

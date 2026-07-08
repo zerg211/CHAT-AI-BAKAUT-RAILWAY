@@ -22,7 +22,14 @@ import { deriveNeedStateSnapshotFromLedger, reduceDialogueLedger, type ReducedDi
 import { createEmbedding } from './openaiClient.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts, type ProductComparisonResearchFact, type ProductComparisonResearchResult } from './productComparisonResearch.js';
-import { extractWeightKg, inferProductIntent, parseWeightNeedRangeKg, productMatchesIntent } from './productClassifier.js';
+import {
+  extractWeightKg,
+  inferProductIntent,
+  isBatteryPowerStation,
+  parseWeightNeedRangeKg,
+  productMatchesIntent,
+  requiresBatteryPowerStationFromText
+} from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
 import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
@@ -3228,11 +3235,37 @@ export class AgentManagerOrchestrator {
             ]
           });
         } else if (request.tool === 'lead.capture') {
+          const extractedContact = extractContact(input.userMessage);
           const contact = {
-            ...extractContact(input.userMessage),
+            ...extractedContact,
             ...(request.args.contact && typeof request.args.contact === 'object' ? request.args.contact as Record<string, unknown> : {})
           };
-          if (!contact.phone && !contact.email) {
+          const latestLeadForSession = (this.leads as unknown as {
+            latestLeadForSession?: (sessionId: string) => Promise<{
+              id: string;
+              name?: string | null;
+              phone?: string | null;
+              email?: string | null;
+            } | null>;
+          }).latestLeadForSession;
+          const existingLead = latestLeadForSession
+            ? await latestLeadForSession.call(this.leads, input.session.id)
+            : null;
+          const currentTurnHasContact = Boolean(extractedContact.phone || extractedContact.email);
+          if (existingLead && !currentTurnHasContact) {
+            contact.name ??= existingLead.name ?? undefined;
+            contact.phone ??= existingLead.phone ?? undefined;
+            contact.email ??= existingLead.email ?? undefined;
+          }
+          if (existingLead && !currentTurnHasContact && contact.name && (contact.phone || contact.email)) {
+            result = ToolResultSchema.parse({
+              requestId: request.id,
+              tool: request.tool,
+              status: 'ok',
+              payload: { leadId: existingLead.id, existing: true },
+              warnings: ['lead_existing_session_contact_used']
+            });
+          } else if (!contact.phone && !contact.email) {
             result = ToolResultSchema.parse({
               requestId: request.id,
               tool: request.tool,
@@ -3673,8 +3706,21 @@ export class AgentManagerOrchestrator {
     if (productIntent !== 'unknown' && matchingProducts.length !== mergedProducts.length) {
       warnings.push(`catalog_products_filtered_by_intent:${productIntent}:${mergedProducts.length - matchingProducts.length}`);
     }
+    const sourceFilteredProducts = isGeneratorProductClass(productIntent) &&
+      requiresBatteryPowerStationFromText([
+        query,
+        semanticContext,
+        input.userMessage,
+        input.embeddingQuery
+      ].filter(Boolean).join('\n'))
+      ? matchingProducts.filter(isBatteryPowerStation)
+      : matchingProducts;
+    if (sourceFilteredProducts.length !== matchingProducts.length) {
+      warnings.push(`catalog_products_filtered_by_power_source:battery:${matchingProducts.length - sourceFilteredProducts.length}`);
+      if (!sourceFilteredProducts.length) warnings.push('catalog_search_no_power_source_fit:battery');
+    }
     const rankedProducts = rankCatalogProductsByNumericFit({
-      products: matchingProducts,
+      products: sourceFilteredProducts,
       intent: productIntent,
       query,
       semanticContext,
@@ -3876,7 +3922,11 @@ export class AgentManagerOrchestrator {
       return {
         verdict: 'rewrite_required',
         issues: mechanicalIssues,
-        revisedAnswerText: leadCaptureRepairText({ contact: contactInTurn, toolResults: input.toolResults })
+        revisedAnswerText: leadCaptureRepairText({
+          contact: contactInTurn,
+          toolResults: input.toolResults,
+          answerText: input.answer.answerText
+        })
       };
     }
     const researchGuidanceRepairIssue = mechanicalIssues.find((issue) => issue.code === 'research_guidance_uncertainty_safe_rewrite');

@@ -1,6 +1,7 @@
 import type { ToolResult } from './agentManagerContracts.js';
 import { type ExtractedContact, hasLeadContact } from './contactExtraction.js';
 
+const fromEscaped = (value: string) => JSON.parse(`"${value}"`) as string;
 const contactRequestStarts = ['оставьте', 'оставь'];
 const contactRequestTargets = ['телефон', 'номер', 'контакт', 'имя'];
 
@@ -80,6 +81,22 @@ export function stripContactRequestSentence(answerText: string) {
   return output.trim();
 }
 
+function unsafeLeadRepairBase(answerText: string) {
+  const lower = lowerRu(answerText);
+  const confirmsContact = [
+    'contact received',
+    fromEscaped('\\u043a\\u043e\\u043d\\u0442\\u0430\\u043a\\u0442 \\u043f\\u043e\\u043b\\u0443\\u0447'),
+    fromEscaped('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u043f\\u043e\\u043b\\u0443\\u0447'),
+    fromEscaped('\\u0437\\u0430\\u044f\\u0432\\u043a\\u0430 \\u043f\\u0440\\u0438\\u043d\\u044f\\u0442')
+  ].some((phrase) => lower.includes(phrase));
+  const promisesUncheckedCommercialResult = (
+    lower.includes('delivery and discount are available') ||
+    lower.includes(fromEscaped('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430 \\u0435\\u0441\\u0442\\u044c')) ||
+    lower.includes(fromEscaped('\\u0441\\u043a\\u0438\\u0434\\u043a\\u0430 \\u0435\\u0441\\u0442\\u044c'))
+  );
+  return confirmsContact || promisesUncheckedCommercialResult;
+}
+
 export function leadCaptureMissingContact(toolResults: ToolResult[]) {
   return toolResults.some((result) =>
     result.tool === 'lead.capture' &&
@@ -99,9 +116,31 @@ export function leadCaptureMissingName(toolResults: ToolResult[]) {
 export function leadCaptureRepairText(input: {
   contact: ExtractedContact;
   toolResults: ToolResult[];
+  answerText?: string;
 }) {
+  const baseAnswer = input.answerText && !unsafeLeadRepairBase(input.answerText)
+    ? stripContactRequestSentence(input.answerText)
+    : '';
+  const hasProductContext = input.toolResults.some((result) => {
+    const payload = result.payload as Record<string, unknown> | undefined;
+    return Array.isArray(payload?.productIds) && payload.productIds.length > 0;
+  });
+  const subject = hasProductContext
+    ? fromEscaped('\\u0432\\u044b\\u0431\\u0440\\u0430\\u043d\\u043d\\u044b\\u0435 \\u043f\\u043e\\u0437\\u0438\\u0446\\u0438\\u0438')
+    : fromEscaped('\\u0432\\u043e\\u043f\\u0440\\u043e\\u0441');
+  const append = (suffix: string) => baseAnswer ? `${baseAnswer}\n\n${suffix}` : suffix;
   if (hasLeadContact(input.contact) && leadCaptureMissingName(input.toolResults)) {
-    return 'Телефон получил. Напишите, пожалуйста, имя, и я передам выбранные позиции на проверку наличия, доставки и условий. После проверки с вами свяжутся с точным ответом.';
+    return append([
+      fromEscaped('\\u0422\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u043f\\u043e\\u043b\\u0443\\u0447\\u0438\\u043b.'),
+      fromEscaped('\\u041d\\u0430\\u043f\\u0438\\u0448\\u0438\\u0442\\u0435, \\u043f\\u043e\\u0436\\u0430\\u043b\\u0443\\u0439\\u0441\\u0442\\u0430, \\u0438\\u043c\\u044f, \\u0438 \\u044f \\u043f\\u0435\\u0440\\u0435\\u0434\\u0430\\u043c'),
+      subject,
+      fromEscaped('\\u043d\\u0430 \\u043f\\u0440\\u043e\\u0432\\u0435\\u0440\\u043a\\u0443 \\u043f\\u0440\\u043e\\u0444\\u0438\\u043b\\u044c\\u043d\\u043e\\u043c\\u0443 \\u0441\\u043e\\u0442\\u0440\\u0443\\u0434\\u043d\\u0438\\u043a\\u0443.')
+    ].join(' '));
   }
-  return 'Наличие, доставку, сроки и индивидуальные условия нужно проверить по складу и логистике. Оставьте имя и телефон в форме, и я передам выбранные позиции на проверку; после проверки с вами свяжутся с точным ответом.';
+  return append([
+    fromEscaped('\\u0427\\u0442\\u043e\\u0431\\u044b \\u043f\\u0440\\u043e\\u0432\\u0435\\u0440\\u0438\\u0442\\u044c \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435, \\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0443, \\u0441\\u0440\\u043e\\u043a\\u0438 \\u0438\\u043b\\u0438 \\u0438\\u043d\\u0434\\u0438\\u0432\\u0438\\u0434\\u0443\\u0430\\u043b\\u044c\\u043d\\u044b\\u0435 \\u0443\\u0441\\u043b\\u043e\\u0432\\u0438\\u044f, \\u041e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435 \\u0438\\u043c\\u044f \\u0438 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u0432 \\u0444\\u043e\\u0440\\u043c\\u0435.'),
+    fromEscaped('\\u042f \\u043f\\u0435\\u0440\\u0435\\u0434\\u0430\\u043c'),
+    subject,
+    fromEscaped('\\u043d\\u0430 \\u0443\\u0442\\u043e\\u0447\\u043d\\u0435\\u043d\\u0438\\u0435.')
+  ].join(' '));
 }
