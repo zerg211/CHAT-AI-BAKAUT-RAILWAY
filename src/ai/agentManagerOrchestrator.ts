@@ -556,6 +556,72 @@ function repairIntentForGroundingPolicy(intent: AgentIntentContract, userMessage
   };
 }
 
+function groundingRequiresCatalogSearch(grounding: AgentIntentGrounding | undefined) {
+  return grounding?.sourcePolicy === 'catalog_required' ||
+    grounding?.requiredToolKinds.includes('catalog.search') === true ||
+    grounding?.taskType === 'product_selection';
+}
+
+function intentHasCatalogSearchRequest(intent: AgentIntentContract) {
+  return intent.toolRequests.some((request) => request.tool === 'catalog.search');
+}
+
+function repairIntentForCatalogGrounding(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
+  if (!groundingRequiresCatalogSearch(intent.grounding)) return intent;
+  if (intentHasCatalogSearchRequest(intent)) {
+    return {
+      ...intent,
+      requiresTools: true,
+      riskFlags: uniqueStrings([...intent.riskFlags, 'grounding_policy_catalog_required'])
+    };
+  }
+  const productIntent = productClassFromIntentMention(intent) ?? inferProductIntent([
+    userMessage,
+    intent.userMessageSummary,
+    intent.dialogueUnderstanding,
+    intent.nextStepRationale
+  ].filter(Boolean).join('\n'));
+  if (productIntent === 'unknown') return intent;
+  const grounding = intent.grounding;
+  const repairRequest: ToolRequest = {
+    id: uniqueToolRequestId(intent, 'auto:catalog-grounding'),
+    tool: 'catalog.search',
+    args: {
+      query: userMessage,
+      semanticQuery: [
+        intent.userMessageSummary,
+        intent.dialogueUnderstanding,
+        intent.nextStepRationale,
+        grounding?.rationale
+      ].filter(Boolean).join('\n'),
+      productIntent,
+      limit: 8,
+      productIds: [],
+      productNames: [],
+      comparisonAttributes: grounding?.technicalAttributes ?? [],
+      loads: [],
+      simultaneousStarting: null,
+      simultaneousStartingKinds: [],
+      estimateBasis: null,
+      contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
+      reason: grounding?.rationale ?? 'The semantic grounding policy requires catalog products for this selection.',
+      notes: 'Synthetic catalog request added because the planner grounding contract required catalog search but omitted toolRequests.'
+    },
+    rationale: grounding?.rationale ?? 'The semantic grounding policy requires catalog products for this selection.',
+    required: true
+  };
+  return {
+    ...intent,
+    requiresTools: true,
+    toolRequests: [...intent.toolRequests, repairRequest],
+    riskFlags: uniqueStrings([
+      ...intent.riskFlags,
+      'grounding_policy_catalog_required',
+      'planner_repaired_grounding_catalog_tool'
+    ])
+  };
+}
+
 function sourcePolicyMetadataFromIntent(intent: AgentIntentContract): AgentSourcePolicyV2 {
   const grounding = intent.grounding;
   if (grounding?.sourcePolicy === 'web_required') {
@@ -2542,7 +2608,10 @@ export class AgentManagerOrchestrator {
     const needStateSnapshot = deriveNeedStateSnapshotFromLedger(ledgerState, input.session.needState ?? emptyNeedState());
     const plannedIntent = await this.model.planTurn({ session: input.session, history, userMessage, ledgerEvents: [...ledgerEvents, ...newEvents], ledgerState, signal: input.signal });
     const intent = repairIntentForExactModelEvidence(
-      repairIntentForGroundingPolicy(plannedIntent, userMessage),
+      repairIntentForCatalogGrounding(
+        repairIntentForGroundingPolicy(plannedIntent, userMessage),
+        userMessage
+      ),
       userMessage
     );
     await this.conversations.updateTurn({

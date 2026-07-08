@@ -454,7 +454,7 @@ function requestedPowerRangeKw(text: string) {
     const unit = powerUnitAt(text, skipWhitespace(text, exact.end));
     if (unit) {
       const valueKw = exact.value * unit.scale;
-      const tolerance = unit.unit === 'w' ? Math.max(0.1, valueKw * 0.25) : 0.75;
+      const tolerance = unit.unit === 'w' ? Math.max(0.03, valueKw * 0.1) : 0.75;
       return { min: Math.max(0.1, valueKw - tolerance), max: valueKw + tolerance };
     }
     index = exact.end;

@@ -151,6 +151,15 @@ class HybridProducts extends FakeProducts {
   }
 }
 
+class PlateProducts extends FakeProducts {
+  async searchProducts() {
+    return [
+      product('plate-light', 'Vibroplita light 60 kg', 'vibroplity'),
+      product('plate-mid', 'Vibroplita compact 72 kg', 'vibroplity')
+    ];
+  }
+}
+
 class FakeLeads {
   created: unknown[] = [];
   async createLead(input: unknown) {
@@ -228,6 +237,74 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(1);
     expect(payload.needState.activeNeeds[0]).toMatchObject({ id: 'ledger-current', productClass: 'generator' });
     expect(payload.needState.activeNeeds[0]?.openQuestions).not.toContain('What is the coffee machine power?');
+  });
+
+  it('repairs catalog-required product selection plans that omit catalog.search', async () => {
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Need a vibroplate for paving slabs that I can load into a trunk.')];
+    let composeInput: Parameters<AgentManagerModel['composeAnswer']>[0] | undefined;
+    const catalogRequiredModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer needs a compact plate for paving slabs and trunk loading',
+          dialogueUnderstanding: 'this is a product selection and catalog cards are needed',
+          nextStepRationale: 'search the catalog for compact vibroplates',
+          requiresTools: false,
+          toolRequests: [],
+          grounding: {
+            taskType: 'product_selection',
+            sourcePolicy: 'catalog_required',
+            webPurpose: 'none',
+            requiredToolKinds: ['catalog.search'],
+            technicalAttributes: ['compact vibroplate', 'paving slabs', 'trunk loading'],
+            rationale: 'A concrete product selection must use catalog products.'
+          },
+          productMentions: [{
+            name: 'vibroplate',
+            role: 'target_product',
+            productClass: 'plate',
+            evidence: 'Need a vibroplate'
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        composeInput = input;
+        return {
+          answerText: 'I found compact plate options from the catalog for paving slabs and trunk loading.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: input.toolResults.map((result) => result.requestId),
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'plate',
+            status: 'ready_for_exact_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'catalog products were retrieved for the concrete plate selection'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new PlateProducts() as never,
+      new FakeLeads() as never,
+      catalogRequiredModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Need a vibroplate for paving slabs that I can load into a trunk.'
+    });
+
+    expect(composeInput?.intent.toolRequests.map((request) => request.tool)).toContain('catalog.search');
+    expect(composeInput?.intent.riskFlags).toContain('planner_repaired_grounding_catalog_tool');
+    expect(composeInput?.products.map((item) => item.id)).toEqual(expect.arrayContaining(['plate-light', 'plate-mid']));
+    expect(payload.productCards.map((card: ProductCard) => card.id)).toEqual(expect.arrayContaining(['plate-light', 'plate-mid']));
   });
 
   it('uses product embeddings inside catalog tools when embedding coverage is usable', async () => {

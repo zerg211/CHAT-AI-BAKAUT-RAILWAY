@@ -1112,6 +1112,40 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_generator_power:1');
   });
 
+  it('filters battery station cards below an exact watt request as visibly weaker alternatives', () => {
+    const aps600 = batteryStationWithWatts('aps-600', 600);
+    const aps800 = batteryStationWithWatts('aps-800', 800);
+
+    const needState = needStateWithBudget();
+    needState.selectionState.hardConstraints.mustHaveTraits = ['power_source:battery', '800 W'];
+    const selection = selectProductsForVisibleCards({
+      products: [aps800, aps600],
+      userMessage: 'Need battery power station 800 W, 220 V.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs a battery power station 800 W',
+        dialogueUnderstanding: 'APS600 is weaker than the exact requested power',
+        nextStepRationale: 'show the 800 W card, not weaker alternatives',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-search',
+          tool: 'catalog.search',
+          args: { productIntent: 'generator', query: 'battery power station 800 W 220 V' },
+          rationale: 'find battery stations',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'APS800 fits. APS600 is weaker than the request.',
+      needState
+    });
+
+    expect(selection.selectedProductIds).toEqual(['aps-800']);
+    expect(selection.droppedProductIds).toContain('aps-600');
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_power:1');
+  });
+
   it('filters single-phase 220 V generator cards when the buyer requires 380 V even if the answer names them as unsuitable', () => {
     const threePhase = generatorWithPowerAndVoltage('diesel-380', '16', '380 V three phase');
     const singlePhase = generatorWithPowerAndVoltage('diesel-220', '16', '220 V single phase');
