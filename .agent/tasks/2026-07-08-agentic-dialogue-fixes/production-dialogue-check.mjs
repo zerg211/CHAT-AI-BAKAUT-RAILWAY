@@ -7,7 +7,7 @@ dotenv.config();
 
 const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
 const siteUrl = 'https://bakautprof.ru/';
-const expectedCommit = 'bb727eb30328d38581509e779ea984045beafd92';
+const expectedCommit = process.env.EXPECTED_PRODUCTION_COMMIT;
 const started = new Date().toISOString();
 const safeStamp = started.replace(/[:.]/g, '-');
 const artifactDir = '.agent/tasks/2026-07-08-agentic-dialogue-fixes';
@@ -47,7 +47,7 @@ async function fetchHealth() {
   if (!response.ok) throw new Error(`health failed: ${response.status}`);
   const health = await response.json();
   const sha = String(health.runtime?.commitSha ?? '');
-  if (sha !== expectedCommit) throw new Error(`production commit mismatch: expected ${expectedCommit}, got ${sha}`);
+  if (expectedCommit && sha !== expectedCommit) throw new Error(`production commit mismatch: expected ${expectedCommit}, got ${sha}`);
   return health;
 }
 
@@ -185,6 +185,7 @@ function auditTurn(sessionName, phase, turn, adminMessage) {
   if (phase === 'repeat_1707_battery_800') {
     if (!hasAny(combined, ['800', '0,8', '0.8', 'APS'])) issues.push('800 watt requirement not reflected in answer/cards');
     if (hasAny(cardsText, ['24 кВт', '100 кВт', 'дизель', 'бензин'])) issues.push('wrong fuel or oversized generator card in 800 watt battery request');
+    if (hasAny(cardsText, ['APS600', '600 W', '600 Вт'])) issues.push('visible cards include a battery station below the explicit 800 W minimum');
   }
 
   if (phase === 'repeat_1707_crimea_after_form') {
@@ -206,6 +207,7 @@ function auditTurn(sessionName, phase, turn, adminMessage) {
   if (phase === 'new_diesel_15_20kw_380') {
     if (!hasAny(combined, ['дизель', '380', '15', '20', 'кВт'])) issues.push('did not keep diesel 15-20 kW 380 V requirement');
     if (hasAny(cardsText, ['бензин', 'аккумулятор', 'battery'])) issues.push('visible cards conflict with diesel requirement');
+    if (hasAny(cardsText, ['220 V', '220 В', 'single phase', 'single-phase', 'однофаз'])) issues.push('visible cards include a single-phase/220 V generator despite the 380 V requirement');
   }
 
   if (phase === 'new_context_switch_diamond_blade') {

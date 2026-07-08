@@ -149,6 +149,21 @@ function generatorWithPower(id: string, powerKw: string): Product {
   };
 }
 
+function generatorWithPowerAndVoltage(id: string, powerKw: string, voltage: string): Product {
+  return {
+    id,
+    name: `Generator diesel ${powerKw} kW ${voltage}`,
+    brand: 'TSS',
+    category: 'Generators',
+    price: 90000,
+    currency: 'RUB',
+    specs: {
+      'Nominal power': `${powerKw} kW`,
+      voltage
+    }
+  };
+}
+
 function batteryStationWithPower(id: string, powerKw: string): Product {
   return {
     id,
@@ -1060,6 +1075,76 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.selectedProductIds).toEqual(['aps-800']);
     expect(selection.droppedProductIds).toEqual(expect.arrayContaining(['gasoline-1kw', 'diesel-24kw']));
     expect(selection.warnings).toContain('product_cards_filtered_by_power_source:battery:2');
+  });
+
+  it('filters battery station cards below an explicit watt lower bound even when the answer rejects them by name', () => {
+    const aps600 = batteryStationWithWatts('aps-600', 600);
+    const aps800 = batteryStationWithWatts('aps-800', 800);
+    const aps1800 = batteryStationWithWatts('aps-1800', 1800);
+
+    const needState = needStateWithBudget();
+    needState.selectionState.hardConstraints.mustHaveTraits = ['power_source:battery', 'minimum 800 W'];
+    const selection = selectProductsForVisibleCards({
+      products: [aps600, aps800, aps1800],
+      userMessage: 'Need battery power station 800 W or more, 220 V.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs a battery power station at least 800 W',
+        dialogueUnderstanding: 'APS600 is below the buyer minimum and must not be a visible recommendation card',
+        nextStepRationale: 'show only battery station cards that satisfy the minimum power',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-search',
+          tool: 'catalog.search',
+          args: { productIntent: 'generator', query: 'battery power station 800 W or more 220 V' },
+          rationale: 'find battery stations',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'APS800 fits the minimum. APS1800 is a stronger reserve option. APS600 is weaker than the required minimum, so I am not taking it into the selection.',
+      needState
+    });
+
+    expect(selection.selectedProductIds).toEqual(['aps-800', 'aps-1800']);
+    expect(selection.droppedProductIds).toContain('aps-600');
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_power:1');
+  });
+
+  it('filters single-phase 220 V generator cards when the buyer requires 380 V even if the answer names them as unsuitable', () => {
+    const threePhase = generatorWithPowerAndVoltage('diesel-380', '16', '380 V three phase');
+    const singlePhase = generatorWithPowerAndVoltage('diesel-220', '16', '220 V single phase');
+
+    const needState = needStateWithBudget();
+    needState.constraints = [{ value: '380 V', evidence: 'explicit buyer voltage', confidence: 1, updatedAt: '2026-07-08T00:00:00.000Z' }];
+    needState.selectionState.hardConstraints.mustHaveTraits = ['diesel', '380 V'];
+    const selection = selectProductsForVisibleCards({
+      products: [threePhase, singlePhase],
+      userMessage: 'Need diesel generator 15-20 kW for 380 V. Gasoline does not fit.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs diesel 15-20 kW 380 V generator',
+        dialogueUnderstanding: 'single-phase 220 V cards contradict the explicit 380 V requirement',
+        nextStepRationale: 'show diesel generator cards compatible with 380 V',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-search',
+          tool: 'catalog.search',
+          args: { productIntent: 'generator', query: 'diesel generator 15-20 kW 380 V' },
+          rationale: 'find diesel 380 V generators',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'The 16 kW 380 V model fits. The 16 kW 220 V model is single-phase and does not fit a 380 V request.',
+      needState
+    });
+
+    expect(selection.selectedProductIds).toEqual(['diesel-380']);
+    expect(selection.droppedProductIds).toContain('diesel-220');
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_phase:1');
   });
 
   it('keeps self-loading plate card ranking without regex parsing', () => {

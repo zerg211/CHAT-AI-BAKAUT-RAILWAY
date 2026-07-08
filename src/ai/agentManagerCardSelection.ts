@@ -8,6 +8,7 @@ import {
   extractModelTokens,
   extractWeightKg,
   fromEscaped,
+  generatorPhaseProfile,
   inferProductIntent,
   isBatteryPowerStation,
   isCoreEquipment,
@@ -461,6 +462,67 @@ function requestedPowerRangeKw(text: string) {
   return undefined;
 }
 
+const powerLowerBoundBeforeTerms = [
+  '>=',
+  'at least',
+  'minimum',
+  'min',
+  'from',
+  fromEscaped('\\u043e\\u0442'),
+  fromEscaped('\\u043d\\u0435 \\u043c\\u0435\\u043d\\u0435\\u0435'),
+  fromEscaped('\\u043d\\u0435 \\u043c\\u0435\\u043d\\u044c\\u0448\\u0435'),
+  fromEscaped('\\u043c\\u0438\\u043d\\u0438\\u043c\\u0443\\u043c')
+];
+
+const powerLowerBoundAfterTerms = [
+  '+',
+  'or more',
+  'or higher',
+  'and above',
+  'and up',
+  fromEscaped('\\u0438\\u043b\\u0438 \\u0431\\u043e\\u043b\\u044c\\u0448\\u0435'),
+  fromEscaped('\\u0438\\u043b\\u0438 \\u0432\\u044b\\u0448\\u0435'),
+  fromEscaped('\\u0438\\u043b\\u0438 \\u0431\\u043e\\u043b\\u0435\\u0435'),
+  fromEscaped('\\u0438 \\u0432\\u044b\\u0448\\u0435'),
+  fromEscaped('\\u0438 \\u0431\\u043e\\u043b\\u0435\\u0435')
+];
+
+function windowContainsAny(text: string, terms: string[]) {
+  return terms.some((term) => text.includes(term));
+}
+
+function requestedPowerLowerBoundKw(text: string) {
+  const normalized = text.toLocaleLowerCase('ru-RU');
+  for (let index = 0; index < normalized.length; index += 1) {
+    const exact = decimalNumberAt(normalized, index);
+    if (!exact) continue;
+    const unit = powerUnitAt(normalized, skipWhitespace(normalized, exact.end));
+    if (!unit) {
+      index = exact.end;
+      continue;
+    }
+    const before = normalized.slice(Math.max(0, index - 36), index);
+    const after = normalized.slice(unit.end, Math.min(normalized.length, unit.end + 44));
+    if (windowContainsAny(before, powerLowerBoundBeforeTerms) || windowContainsAny(after, powerLowerBoundAfterTerms)) {
+      return exact.value * unit.scale;
+    }
+    index = exact.end;
+  }
+  return undefined;
+}
+
+type GeneratorPowerCardRequirement = {
+  minKw?: number;
+  maxKw?: number;
+};
+
+function generatorPowerRequirementForCardSelection(text: string): GeneratorPowerCardRequirement | undefined {
+  const lowerBound = requestedPowerLowerBoundKw(text);
+  if (lowerBound !== undefined) return { minKw: lowerBound };
+  const range = requestedPowerRangeKw(text);
+  return range ? { minKw: range.min, maxKw: range.max } : undefined;
+}
+
 function generatorPowerFitScore(product: Product, range: { min: number; max: number }) {
   const power = extractGeneratorPowerForHardSelection(product);
   const nominal = power.nominalKw ?? power.maxKw;
@@ -478,6 +540,75 @@ function generatorPowerFitScore(product: Product, range: { min: number; max: num
   score -= distance * 12;
   if (nominal > range.max * 3 && nominal > range.max + 20) score -= 10_000;
   return score;
+}
+
+function productMeetsGeneratorPowerCardRequirement(product: Product, requirement?: GeneratorPowerCardRequirement) {
+  if (!requirement) return true;
+  const power = extractGeneratorPowerForHardSelection(product);
+  const nominal = power.nominalKw ?? power.maxKw;
+  if (nominal === undefined) return true;
+  if (requirement.minKw !== undefined && nominal < requirement.minKw - 0.05) return false;
+  if (requirement.maxKw !== undefined) {
+    const toleratedMax = Math.max(requirement.maxKw + 0.3, requirement.maxKw * 1.25);
+    if (nominal > toleratedMax) return false;
+  }
+  return true;
+}
+
+type GeneratorPhaseRequirement = 'single_220' | 'three_380';
+
+const generatorThreePhaseTerms = [
+  'three phase',
+  'three-phase',
+  '3 phase',
+  '3-phase',
+  fromEscaped('\\u0442\\u0440\\u0435\\u0445 \\u0444\\u0430\\u0437'),
+  fromEscaped('\\u0442\\u0440\\u0451\\u0445 \\u0444\\u0430\\u0437'),
+  fromEscaped('\\u0442\\u0440\\u0435\\u0445\\u0444\\u0430\\u0437'),
+  fromEscaped('\\u0442\\u0440\\u0451\\u0445\\u0444\\u0430\\u0437'),
+  fromEscaped('3 \\u0444\\u0430\\u0437'),
+  fromEscaped('3-\\u0444\\u0430\\u0437')
+];
+
+const generatorSinglePhaseTerms = [
+  'single phase',
+  'single-phase',
+  fromEscaped('\\u043e\\u0434\\u043d\\u043e \\u0444\\u0430\\u0437'),
+  fromEscaped('\\u043e\\u0434\\u043d\\u043e\\u0444\\u0430\\u0437')
+];
+
+function isAsciiDigit(char: string | undefined) {
+  return Boolean(char && char >= '0' && char <= '9');
+}
+
+function containsStandaloneNumberToken(text: string, values: string[]) {
+  for (const value of values) {
+    let index = text.indexOf(value);
+    while (index >= 0) {
+      const before = text[index - 1];
+      const after = text[index + value.length];
+      if (!isAsciiDigit(before) && !isAsciiDigit(after)) return true;
+      index = text.indexOf(value, index + 1);
+    }
+  }
+  return false;
+}
+
+function requestedGeneratorPhaseRequirement(text: string): GeneratorPhaseRequirement | undefined {
+  const normalized = text.toLocaleLowerCase('ru-RU');
+  const has380 = containsStandaloneNumberToken(normalized, ['380', '400']) ||
+    windowContainsAny(normalized, generatorThreePhaseTerms);
+  if (has380) return 'three_380';
+  const has220 = containsStandaloneNumberToken(normalized, ['220', '230']) ||
+    windowContainsAny(normalized, generatorSinglePhaseTerms);
+  return has220 ? 'single_220' : undefined;
+}
+
+function productMeetsGeneratorPhaseRequirement(product: Product, requirement?: GeneratorPhaseRequirement) {
+  if (!requirement) return true;
+  const profile = generatorPhaseProfile(product);
+  if (requirement === 'three_380') return profile !== 'single_220';
+  return profile !== 'three_phase_380' && profile !== 'mixed_220_380';
 }
 
 export function generatorMeetsRequiredLoad(product: Product, requiredNominalKw: number) {
@@ -849,10 +980,9 @@ function honestPlateExpansionProducts(input: {
     .map((decision) => decision.product);
 }
 
-function visibleCardRequirementText(input: {
+function buyerRequirementTextForCardSelection(input: {
   userMessage: string;
   intent: AgentIntentContract;
-  answerText: string;
   needState: CustomerNeedState;
 }) {
   return [
@@ -861,7 +991,6 @@ function visibleCardRequirementText(input: {
     input.intent.dialogueUnderstanding,
     input.intent.nextStepRationale,
     toolRequestSemanticText(input.intent),
-    input.answerText,
     input.needState.lastSummary,
     ...(input.needState.activeNeeds ?? []).flatMap((need) => [
       need.summary,
@@ -948,7 +1077,12 @@ export function selectProductsForVisibleCards(input: {
 
   let powerSourceFilteredCount = 0;
   let powerSourceNoFit = false;
-  if (isGeneratorProductClass(cardIntent) && selected.length && requiresBatteryPowerStationFromText(visibleCardRequirementText(input))) {
+  const buyerRequirementText = buyerRequirementTextForCardSelection(input);
+  const batteryPowerSourceRequired = requiresBatteryPowerStationFromText(buyerRequirementText);
+  const sourceConstrainedGeneratorPool = isGeneratorProductClass(cardIntent) && batteryPowerSourceRequired
+    ? sameIntentPool.filter(isBatteryPowerStation)
+    : sameIntentPool;
+  if (isGeneratorProductClass(cardIntent) && selected.length && batteryPowerSourceRequired) {
     const batterySelected = selected.filter(isBatteryPowerStation);
     if (batterySelected.length) {
       powerSourceFilteredCount = selected.length - batterySelected.length;
@@ -958,6 +1092,50 @@ export function selectProductsForVisibleCards(input: {
       powerSourceFilteredCount = selected.length;
       selected = fallbackBatteryProducts;
       powerSourceNoFit = fallbackBatteryProducts.length === 0;
+    }
+  }
+
+  let generatorPowerFilteredCount = 0;
+  let generatorPowerNoFit = false;
+  const generatorPowerRequirement = isGeneratorProductClass(cardIntent)
+    ? generatorPowerRequirementForCardSelection(buyerRequirementText)
+    : undefined;
+  if (isGeneratorProductClass(cardIntent) && selected.length && generatorPowerRequirement) {
+    const powerMatchingSelected = selected.filter((product) =>
+      productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement)
+    );
+    if (powerMatchingSelected.length) {
+      generatorPowerFilteredCount = selected.length - powerMatchingSelected.length;
+      selected = powerMatchingSelected;
+    } else {
+      const fallbackPowerMatches = sourceConstrainedGeneratorPool.filter((product) =>
+        productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement)
+      );
+      generatorPowerFilteredCount = selected.length;
+      selected = fallbackPowerMatches;
+      generatorPowerNoFit = fallbackPowerMatches.length === 0;
+    }
+  }
+
+  let generatorPhaseFilteredCount = 0;
+  let generatorPhaseNoFit = false;
+  const generatorPhaseRequirement = isGeneratorProductClass(cardIntent)
+    ? requestedGeneratorPhaseRequirement(buyerRequirementText)
+    : undefined;
+  if (isGeneratorProductClass(cardIntent) && selected.length && generatorPhaseRequirement) {
+    const phaseMatchingSelected = selected.filter((product) =>
+      productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement)
+    );
+    if (phaseMatchingSelected.length) {
+      generatorPhaseFilteredCount = selected.length - phaseMatchingSelected.length;
+      selected = phaseMatchingSelected;
+    } else {
+      const fallbackPhaseMatches = sourceConstrainedGeneratorPool
+        .filter((product) => productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement))
+        .filter((product) => productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement));
+      generatorPhaseFilteredCount = selected.length;
+      selected = fallbackPhaseMatches;
+      generatorPhaseNoFit = fallbackPhaseMatches.length === 0;
     }
   }
 
@@ -1088,6 +1266,10 @@ export function selectProductsForVisibleCards(input: {
     ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
     ...(powerSourceFilteredCount > 0 ? [`product_cards_filtered_by_power_source:battery:${powerSourceFilteredCount}`] : []),
     ...(powerSourceNoFit ? ['product_cards_suppressed:power_source_no_fit:battery'] : []),
+    ...(generatorPowerFilteredCount > 0 ? [`product_cards_filtered_by_generator_power:${generatorPowerFilteredCount}`] : []),
+    ...(generatorPowerNoFit ? ['product_cards_suppressed:generator_power_no_fit'] : []),
+    ...(generatorPhaseFilteredCount > 0 ? [`product_cards_filtered_by_generator_phase:${generatorPhaseFilteredCount}`] : []),
+    ...(generatorPhaseNoFit ? ['product_cards_suppressed:generator_phase_no_fit'] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
     ...plateTaskWarnings
