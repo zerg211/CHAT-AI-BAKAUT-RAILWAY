@@ -465,9 +465,9 @@ function productClassFromIntentMention(intent: AgentIntentContract) {
   const mention = (intent.productMentions ?? []).find((item) =>
     exactTargetProductMentionRoles.has(item.role) &&
     typeof item.productClass === 'string' &&
-    productSelectionClasses.includes(item.productClass as ProductSelectionClass)
+    coerceVisibleCardIntent(item.productClass) !== 'unknown'
   );
-  return mention?.productClass as ProductSelectionClass | undefined;
+  return mention?.productClass ? coerceVisibleCardIntent(mention.productClass) : undefined;
 }
 
 function exactProductNamesFromIntent(intent: AgentIntentContract, userMessage: string) {
@@ -1159,6 +1159,15 @@ function productFromVisibleCard(card: ProductCard): Product {
 function coerceVisibleCardIntent(value: unknown): ProductSelectionClass {
   if (typeof value !== 'string' || !value.trim()) return 'unknown';
   const trimmed = value.trim();
+  const normalized = trimmed.toLocaleLowerCase('ru-RU');
+  if (
+    normalized.includes('battery power station') ||
+    normalized.includes('portable power station') ||
+    normalized.includes(fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446')) ||
+    normalized.includes(fromEscaped('\\u0437\\u0430\\u0440\\u044f\\u0434\\u043d\\u0430\\u044f \\u0441\\u0442\\u0430\\u043d\\u0446'))
+  ) {
+    return 'generator';
+  }
   if (trimmed === 'vibroplate') return 'plate';
   if (productSelectionClasses.includes(trimmed as ProductSelectionClass)) return trimmed as ProductSelectionClass;
   return inferProductIntent(trimmed);

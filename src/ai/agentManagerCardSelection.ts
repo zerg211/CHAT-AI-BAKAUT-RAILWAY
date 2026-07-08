@@ -164,6 +164,17 @@ export const productSelectionClasses: ProductSelectionClass[] = [
 ];
 
 function coerceProductSelectionClass(value: unknown): ProductSelectionClass {
+  if (typeof value === 'string') {
+    const normalized = value.toLocaleLowerCase('ru-RU');
+    if (
+      normalized.includes('battery power station') ||
+      normalized.includes('portable power station') ||
+      normalized.includes(fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446')) ||
+      normalized.includes(fromEscaped('\\u0437\\u0430\\u0440\\u044f\\u0434\\u043d\\u0430\\u044f \\u0441\\u0442\\u0430\\u043d\\u0446'))
+    ) {
+      return 'generator';
+    }
+  }
   return productSelectionClasses.includes(value as ProductSelectionClass)
     ? value as ProductSelectionClass
     : 'unknown';
@@ -609,6 +620,34 @@ function productMeetsGeneratorPhaseRequirement(product: Product, requirement?: G
   const profile = generatorPhaseProfile(product);
   if (requirement === 'three_380') return profile !== 'single_220';
   return profile !== 'three_phase_380' && profile !== 'mixed_220_380';
+}
+
+const ceramicBladeMaterialTerms = [
+  'porcelain',
+  'porcelain tile',
+  'ceramic',
+  'ceramic tile',
+  fromEscaped('\\u043a\\u0435\\u0440\\u0430\\u043c\\u043e\\u0433\\u0440\\u0430\\u043d\\u0438\\u0442'),
+  fromEscaped('\\u043a\\u0435\\u0440\\u0430\\u043c\\u0438\\u043a'),
+  fromEscaped('\\u043f\\u043b\\u0438\\u0442\\u043a')
+];
+
+function productTextForMaterial(product: Product) {
+  return [
+    product.name,
+    product.brand,
+    product.category,
+    product.description,
+    JSON.stringify(product.specs ?? {})
+  ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU');
+}
+
+function requiresCeramicDiamondBlade(text: string) {
+  return windowContainsAny(text.toLocaleLowerCase('ru-RU'), ceramicBladeMaterialTerms);
+}
+
+function diamondBladeSupportsCeramic(product: Product) {
+  return windowContainsAny(productTextForMaterial(product), ceramicBladeMaterialTerms);
 }
 
 export function generatorMeetsRequiredLoad(product: Product, requiredNominalKw: number) {
@@ -1246,6 +1285,21 @@ export function selectProductsForVisibleCards(input: {
     }
   }
 
+  let diamondMaterialFilteredCount = 0;
+  let diamondMaterialNoFit = false;
+  if (cardIntent === 'diamondBlade' && selected.length && requiresCeramicDiamondBlade(buyerRequirementText)) {
+    const ceramicSelected = selected.filter(diamondBladeSupportsCeramic);
+    if (ceramicSelected.length) {
+      diamondMaterialFilteredCount = selected.length - ceramicSelected.length;
+      selected = ceramicSelected;
+    } else {
+      const fallbackCeramic = sameIntentPool.filter(diamondBladeSupportsCeramic);
+      diamondMaterialFilteredCount = selected.length;
+      selected = fallbackCeramic;
+      diamondMaterialNoFit = fallbackCeramic.length === 0;
+    }
+  }
+
   const visibleCardLimit = requestedVisibleCardLimit({
     userMessage: input.userMessage,
     semanticContext: [
@@ -1272,6 +1326,8 @@ export function selectProductsForVisibleCards(input: {
     ...(generatorPhaseNoFit ? ['product_cards_suppressed:generator_phase_no_fit'] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
+    ...(diamondMaterialFilteredCount > 0 ? [`product_cards_filtered_by_diamond_material:${diamondMaterialFilteredCount}`] : []),
+    ...(diamondMaterialNoFit ? ['product_cards_suppressed:diamond_material_no_fit'] : []),
     ...plateTaskWarnings
   ];
 

@@ -5,7 +5,8 @@ import {
   filterGeneratorProductsByLoadProfile,
   rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
-  suppressVisibleCardsForReadiness
+  suppressVisibleCardsForReadiness,
+  toolRequestProductIntent
 } from '../src/ai/agentManagerCardSelection.js';
 import type { AnswerContract, ToolResult } from '../src/ai/agentManagerContracts.js';
 import type { CustomerNeedState, Product } from '../src/shared/types.js';
@@ -191,6 +192,18 @@ function batteryStationWithWatts(id: string, watts: number): Product {
     specs: {
       'Nominal power': `${watts} W`
     }
+  };
+}
+
+function diamondBlade(id: string, name: string, specs: Record<string, string> = {}): Product {
+  return {
+    id,
+    name,
+    brand: 'TEST',
+    category: 'Diamond blades',
+    price: 9000,
+    currency: 'RUB',
+    specs
   };
 }
 
@@ -1179,6 +1192,53 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.selectedProductIds).toEqual(['diesel-380']);
     expect(selection.droppedProductIds).toContain('diesel-220');
     expect(selection.warnings).toContain('product_cards_filtered_by_generator_phase:1');
+  });
+
+  it('coerces free-form battery power station product intents to generator selection', () => {
+    const productIntent = toolRequestProductIntent({
+      id: 'catalog-search',
+      tool: 'catalog.search',
+      args: {
+        productIntent: 'battery power station',
+        query: 'battery power station 800 W 220 V'
+      },
+      rationale: 'find battery power stations',
+      required: true
+    } as never);
+
+    expect(productIntent).toBe('generator');
+  });
+
+  it('filters concrete-only diamond blade cards when the buyer asks for porcelain or ceramic tile', () => {
+    const porcelain = diamondBlade('porcelain', 'Diamond blade 350 porcelain tile ceramic');
+    const concrete = diamondBlade('concrete', 'Diamond blade 350 concrete reinforced concrete');
+
+    const selection = selectProductsForVisibleCards({
+      products: [porcelain, concrete],
+      userMessage: 'Need a 350 mm diamond blade for porcelain tile.',
+      history: [],
+      intent: {
+        userMessageSummary: 'buyer needs a 350 mm diamond blade for porcelain tile',
+        dialogueUnderstanding: 'concrete-only blades must not be visible as suitable cards for porcelain tile',
+        nextStepRationale: 'show ceramic/porcelain diamond blade cards',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-search',
+          tool: 'catalog.search',
+          args: { productIntent: 'diamondBlade', query: 'diamond blade 350 porcelain tile' },
+          rationale: 'find diamond blades for porcelain tile',
+          required: true
+        }],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      },
+      answerText: 'The porcelain blade fits. The concrete blade is for concrete, not porcelain tile.',
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual(['porcelain']);
+    expect(selection.droppedProductIds).toContain('concrete');
+    expect(selection.warnings).toContain('product_cards_filtered_by_diamond_material:1');
   });
 
   it('keeps self-loading plate card ranking without regex parsing', () => {

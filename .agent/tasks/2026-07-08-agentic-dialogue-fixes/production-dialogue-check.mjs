@@ -186,6 +186,7 @@ function auditTurn(sessionName, phase, turn, adminMessage) {
     if (!hasAny(combined, ['800', '0,8', '0.8', 'APS'])) issues.push('800 watt requirement not reflected in answer/cards');
     if (hasAny(cardsText, ['24 кВт', '100 кВт', 'дизель', 'бензин'])) issues.push('wrong fuel or oversized generator card in 800 watt battery request');
     if (hasAny(cardsText, ['APS600', '600 W', '600 Вт'])) issues.push('visible cards include a battery station below the explicit 800 W minimum');
+    if (!turn.newCards.length) issues.push('no visible product cards for direct 800 watt battery station request');
   }
 
   if (phase === 'repeat_1707_crimea_after_form') {
@@ -213,6 +214,7 @@ function auditTurn(sessionName, phase, turn, adminMessage) {
   if (phase === 'new_context_switch_diamond_blade') {
     if (!hasAny(combined, ['диск', 'алмаз', 'керамогранит', '350'])) issues.push('did not switch from generator context to diamond blade request');
     if (hasAny(cardsText, ['генератор', 'электростанц'])) issues.push('generator cards leaked into diamond blade context switch');
+    if (hasAny(cardsText, ['бетон', 'concrete'])) issues.push('visible diamond blade cards include concrete-only material despite porcelain/ceramic request');
   }
 
   return { sessionName, phase, issues, warnings, cards: turn.newCards };
