@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { compilePolicyPack, formatPolicyRulesForPrompt, selectPolicyRules } from './policy/policyCompiler.js';
 import type { PolicyRule } from './policy/policyRuleTypes.js';
 
@@ -169,6 +170,19 @@ export const salesManagerPolicyRules: PolicyRule[] = [
 ];
 
 export const compiledSalesManagerPolicyPack = compilePolicyPack(salesManagerPolicyRules);
+export const SALES_MANAGER_POLICY_PACK_VERSION = '2026-07-10.1';
+export const SALES_MANAGER_POLICY_PACK_HASH = createHash('sha256')
+  .update(JSON.stringify(salesManagerPolicyRules.map((rule) => ({
+    code: rule.code,
+    version: rule.version,
+    status: rule.status,
+    mandatory: rule.mandatory,
+    appliesTo: rule.appliesTo,
+    body: rule.body,
+    forbiddenActions: rule.forbiddenActions,
+    repairAction: rule.repairAction
+  }))))
+  .digest('hex');
 
 export interface SalesManagerPolicyTraceInput {
   target: 'planner' | 'answer' | 'reviewer' | 'gate';
@@ -182,7 +196,9 @@ export interface SalesManagerPolicyTraceInput {
 }
 
 export interface SalesManagerPolicyTrace {
-  version: 1;
+  version: 2;
+  policyPackVersion: typeof SALES_MANAGER_POLICY_PACK_VERSION;
+  policyPackHash: string;
   mode: 'static' | 'dynamic' | 'shadow' | 'disabled';
   target: SalesManagerPolicyTraceInput['target'];
   tags: string[];
@@ -197,65 +213,6 @@ function unique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
-function textMatches(text: string, re: RegExp) {
-  return re.test(text.toLocaleLowerCase('ru'));
-}
-
-function textContainsAny(text: string, fragments: string[]) {
-  const normalized = text.toLocaleLowerCase('ru');
-  return fragments.some((fragment) => normalized.includes(fragment));
-}
-
-function inferSalesPolicyRouting(text: string) {
-  const tags = ['core'];
-  const riskFlags = ['commercial', 'hard_requirements'];
-  const reasonCodes: string[] = ['default:core_safety'];
-
-  if (textMatches(text, /(?:налич|склад|остат|самовывоз|отгруз|in stock|available)/i)) {
-    tags.push('stock', 'availability');
-    riskFlags.push('availability');
-    reasonCodes.push('text:stock_or_availability');
-  }
-  if (textMatches(text, /(?:достав|логист|срок|адрес|отправ|delivery|shipping)/i)) {
-    tags.push('delivery');
-    riskFlags.push('delivery');
-    reasonCodes.push('text:delivery_or_logistics');
-  }
-  if (textMatches(text, /(?:телефон|номер|контакт|звон|заявк|phone|contact|callback)/i)) {
-    tags.push('contact', 'lead');
-    riskFlags.push('lead');
-    reasonCodes.push('text:contact_or_phone');
-  }
-  if (textMatches(text, /(?:дешев|бюджет|минимальн|самый\s+доступн|цена|cheap|budget)/i)) {
-    tags.push('cheap', 'budget');
-    reasonCodes.push('text:cheap_or_budget');
-  }
-  if (textMatches(text, /(?:сравн|лучше|бренд|тсс|huter|аналог|compare|brand)/i)) {
-    tags.push('comparison', 'brand');
-    reasonCodes.push('text:comparison_or_brand');
-  }
-  if (textContainsAny(text, ['резчик', 'резак', 'резки', 'резку', 'шовнарез', 'бензорез', 'cutter', 'cutoff saw'])) {
-    tags.push('cutter', 'ambiguous_category', 'selection', 'material_question');
-    riskFlags.push('hard_requirements');
-    reasonCodes.push('text:cutter_ambiguous_category');
-  }
-  if (textMatches(text, /(?:фото|ссылк|картин|изображ|photo|link)/i)) {
-    tags.push('photo', 'link', 'bakaut');
-    reasonCodes.push('text:photo_or_link');
-  }
-  if (textMatches(text, /(?:ошиб|невер|не так|исправ|ты сказал|wrong|mistake)/i)) {
-    tags.push('correction', 'evidence');
-    riskFlags.push('correction');
-    reasonCodes.push('text:buyer_correction');
-  }
-
-  return {
-    tags: unique(tags),
-    riskFlags: unique(riskFlags),
-    reasonCodes: unique(reasonCodes)
-  };
-}
-
 function mandatoryPromptRulesForTarget(target: SalesManagerPolicyTraceInput['target']) {
   return selectPolicyRules(compiledSalesManagerPolicyPack, {
     tags: ['core'],
@@ -267,14 +224,14 @@ function mandatoryPromptRulesForTarget(target: SalesManagerPolicyTraceInput['tar
 
 export function buildSalesManagerPolicyTrace(input: SalesManagerPolicyTraceInput): SalesManagerPolicyTrace {
   const enabled = input.enabled ?? true;
-  const inferred = inferSalesPolicyRouting(input.latestUserMessage ?? '');
-  const tags = unique([...inferred.tags, ...(input.tags ?? [])]);
-  const riskFlags = unique([...inferred.riskFlags, ...(input.riskFlags ?? [])]);
+  const tags = unique(input.tags ?? []);
+  const riskFlags = unique(input.riskFlags ?? []);
+  const semanticRuleIds = unique(input.semanticRuleIds ?? []);
   const dynamicRules = selectPolicyRules(compiledSalesManagerPolicyPack, {
     tags,
     riskFlags,
     target: input.target,
-    semanticRuleIds: input.semanticRuleIds,
+    semanticRuleIds,
     maxRules: input.maxRules ?? (input.target === 'planner' ? 9 : 7)
   });
   const activeRules = !enabled
@@ -283,12 +240,19 @@ export function buildSalesManagerPolicyTrace(input: SalesManagerPolicyTraceInput
       ? mandatoryPromptRulesForTarget(input.target)
       : dynamicRules;
   return {
-    version: 1,
+    version: 2,
+    policyPackVersion: SALES_MANAGER_POLICY_PACK_VERSION,
+    policyPackHash: SALES_MANAGER_POLICY_PACK_HASH,
     mode: !enabled ? 'disabled' : input.shadowMode ? 'shadow' : 'dynamic',
     target: input.target,
     tags,
     riskFlags,
-    reasonCodes: inferred.reasonCodes,
+    reasonCodes: unique([
+      ...tags.map((tag) => `structured_tag:${tag}`),
+      ...riskFlags.map((risk) => `structured_risk:${risk}`),
+      ...semanticRuleIds.map((ruleId) => `planner_rule:${ruleId}`),
+      ...(!tags.length && !riskFlags.length && !semanticRuleIds.length ? ['mandatory_business_rules'] : [])
+    ]),
     selectedRuleCodes: activeRules.map((rule) => rule.code),
     shadowSelectedRuleCodes: input.shadowMode ? dynamicRules.map((rule) => rule.code) : [],
     promptBlock: formatPolicyRulesForPrompt(activeRules)
@@ -309,14 +273,16 @@ export function salesManagerBehaviorPolicyPromptBlock(input: Partial<SalesManage
 }
 
 export function salesManagerPlannerPolicyPromptBlock(input: Partial<SalesManagerPolicyTraceInput> = {}) {
+  const optionalPlannerRuleIds = salesManagerPolicyRules
+    .filter((rule) => rule.status === 'active' && !rule.mandatory && rule.appliesTo.includes('planner'))
+    .map((rule) => rule.code);
   return buildSalesManagerPolicyTrace({
     target: 'planner',
-    latestUserMessage: input.latestUserMessage,
-    tags: ['cheap', 'correction', 'photo', ...(input.tags ?? [])],
-    riskFlags: ['availability', 'commercial', 'lead', 'hard_requirements', ...(input.riskFlags ?? [])],
-    semanticRuleIds: input.semanticRuleIds ?? ['correction.verify_before_apology', 'cheap.preliminary_not_final', 'photo.prefer_bakaut_card'],
+    tags: input.tags,
+    riskFlags: input.riskFlags,
+    semanticRuleIds: input.semanticRuleIds ?? optionalPlannerRuleIds,
     enabled: input.enabled,
     shadowMode: input.shadowMode,
-    maxRules: input.maxRules ?? 9
+    maxRules: input.maxRules ?? 100
   }).promptBlock;
 }

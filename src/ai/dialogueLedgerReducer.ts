@@ -4,8 +4,16 @@ import {
   type DialogueLedgerEvent,
   type LedgerStateDelta
 } from './agentManagerContracts.js';
-import { emptyNeedState } from './needState.js';
-import type { CustomerNeedState, NeedItem, ProductSelectionClass } from '../shared/types.js';
+import { emptyNeedState, emptyProductSelectionState } from './needState.js';
+import type {
+  ActiveCustomerNeed,
+  ActiveNeedStatus,
+  CustomerNeedState,
+  NeedItem,
+  ProductSelectionClass
+} from '../shared/types.js';
+
+export type ReducedRequirementRole = 'hard_requirement' | 'preference' | 'context' | 'commercial' | 'unknown';
 
 export interface ReducedFact {
   factKey: string;
@@ -14,6 +22,9 @@ export interface ReducedFact {
   status: 'active' | 'superseded' | 'negated' | 'closed' | 'rejected';
   evidence: string;
   source: string;
+  needId?: string;
+  role: ReducedRequirementRole;
+  productClass?: string;
 }
 
 export interface ReducedQuestion {
@@ -23,15 +34,47 @@ export interface ReducedQuestion {
   status: 'open' | 'answered' | 'closed';
   answer?: unknown;
   closedByEventId?: string;
+  needId?: string;
+}
+
+export interface ReducedNeed {
+  needId: string;
+  productClass: string;
+  summary: string;
+  constraints: string[];
+  openQuestions: string[];
+  selectedProductIds: string[];
+  rejectedProductIds: string[];
+  status: ActiveNeedStatus;
+  eventId: string;
+  updatedAt?: string;
 }
 
 export interface ReducedDialogueLedgerState {
   eventIds: string[];
   factsByKey: Record<string, ReducedFact>;
   questionsById: Record<string, ReducedQuestion>;
+  needsById: Record<string, ReducedNeed>;
   openQuestions: ReducedQuestion[];
   warnings: string[];
 }
+
+const knownProductClasses = new Set<ProductSelectionClass>([
+  'generator',
+  'weldingGenerator',
+  'generatorOil',
+  'engineOil',
+  'generatorAccessory',
+  'plateAccessory',
+  'plate',
+  'rammer',
+  'roller',
+  'cutter',
+  'diamondBlade',
+  'diamondCore',
+  'trowel',
+  'unknown'
+]);
 
 function factValueText(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -41,16 +84,6 @@ function factValueText(value: unknown): string {
   } catch {
     return String(value);
   }
-}
-
-function inferProductClassFromLedger(facts: ReducedFact[]): ProductSelectionClass | 'commercial' {
-  const text = facts.map((fact) => `${fact.factKey} ${factValueText(fact.value)}`).join(' ').toLowerCase();
-  if (/generator|генератор|coffee|кофе|kw|квт/u.test(text)) return 'generator';
-  if (/plate|виброплит|compactor|трамбов/u.test(text)) return 'plate';
-  if (/rammer|вибротрамб/u.test(text)) return 'rammer';
-  if (/cutter|резчик|шов/u.test(text)) return 'cutter';
-  if (/business|commercial|бизнес|производств|проф/u.test(text)) return 'commercial';
-  return 'unknown';
 }
 
 function factNeedItem(fact: ReducedFact, updatedAt: string): NeedItem {
@@ -69,16 +102,106 @@ function stringPayload(payload: Record<string, unknown>, key: string) {
 
 function stringListPayload(payload: Record<string, unknown>, key: string) {
   const value = payload[key];
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
 }
 
-export function reduceDialogueLedger(events: DialogueLedgerEvent[]): ReducedDialogueLedgerState {
-  const seen = new Set<string>();
-  const eventIds: string[] = [];
+function optionalStringListPayload(payload: Record<string, unknown>, key: string) {
+  return Array.isArray(payload[key]) ? stringListPayload(payload, key) : undefined;
+}
+
+function requirementRole(payload: Record<string, unknown>): ReducedRequirementRole {
+  const role = payload.role;
+  return role === 'hard_requirement' || role === 'preference' || role === 'context' || role === 'commercial'
+    ? role
+    : 'unknown';
+}
+
+function needStatus(value: unknown, fallback: ActiveNeedStatus): ActiveNeedStatus {
+  return value === 'open' || value === 'selected' || value === 'paused' || value === 'closed'
+    ? value
+    : fallback;
+}
+
+function productClass(value: unknown, fallback: string = 'unknown') {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function factMapKey(factKey: string, needId?: string) {
+  return needId ? `${needId}::${factKey}` : factKey;
+}
+
+function cloneInitialState(initial?: ReducedDialogueLedgerState): ReducedDialogueLedgerState {
+  if (!initial) {
+    return {
+      eventIds: [],
+      factsByKey: {},
+      questionsById: {},
+      needsById: {},
+      openQuestions: [],
+      warnings: []
+    };
+  }
+  return {
+    eventIds: [...initial.eventIds],
+    factsByKey: Object.fromEntries(Object.entries(initial.factsByKey).map(([key, fact]) => [key, { ...fact }])),
+    questionsById: Object.fromEntries(Object.entries(initial.questionsById).map(([key, question]) => [key, { ...question }])),
+    needsById: Object.fromEntries(Object.entries(initial.needsById ?? {}).map(([key, need]) => [key, {
+      ...need,
+      constraints: [...need.constraints],
+      openQuestions: [...need.openQuestions],
+      selectedProductIds: [...need.selectedProductIds],
+      rejectedProductIds: [...need.rejectedProductIds]
+    }])),
+    openQuestions: [],
+    warnings: [...initial.warnings]
+  };
+}
+
+export function parseReducedDialogueLedgerState(value: unknown): ReducedDialogueLedgerState {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('invalid_dialogue_ledger_snapshot');
+  }
+  const state = value as Record<string, unknown>;
+  if (
+    !Array.isArray(state.eventIds) ||
+    !state.factsByKey || typeof state.factsByKey !== 'object' || Array.isArray(state.factsByKey) ||
+    !state.questionsById || typeof state.questionsById !== 'object' || Array.isArray(state.questionsById)
+  ) {
+    throw new Error('invalid_dialogue_ledger_snapshot');
+  }
+  return cloneInitialState({
+    eventIds: state.eventIds.filter((id): id is string => typeof id === 'string'),
+    factsByKey: state.factsByKey as Record<string, ReducedFact>,
+    questionsById: state.questionsById as Record<string, ReducedQuestion>,
+    needsById: state.needsById && typeof state.needsById === 'object' && !Array.isArray(state.needsById)
+      ? state.needsById as Record<string, ReducedNeed>
+      : {},
+    openQuestions: [],
+    warnings: Array.isArray(state.warnings)
+      ? state.warnings.filter((warning): warning is string => typeof warning === 'string')
+      : []
+  });
+}
+
+export function reduceDialogueLedger(
+  events: DialogueLedgerEvent[],
+  initialState?: ReducedDialogueLedgerState
+): ReducedDialogueLedgerState {
+  const initial = cloneInitialState(initialState);
+  const seen = new Set(initial.eventIds);
+  const eventIds = [...initial.eventIds];
   const factsByEventId = new Map<string, ReducedFact>();
   const factEventByKey = new Map<string, string>();
-  const questionsById: Record<string, ReducedQuestion> = {};
-  const warnings: string[] = [];
+  const questionsById = initial.questionsById;
+  const needsById = initial.needsById;
+  const warnings = initial.warnings;
+
+  for (const [key, fact] of Object.entries(initial.factsByKey)) {
+    factsByEventId.set(fact.eventId, fact);
+    factEventByKey.set(key, fact.eventId);
+  }
 
   for (const rawEvent of events) {
     const parsed = DialogueLedgerEventSchema.safeParse(rawEvent);
@@ -100,13 +223,64 @@ export function reduceDialogueLedger(events: DialogueLedgerEvent[]): ReducedDial
       if (fact) fact.status = 'negated';
     }
 
+    if (event.eventType === 'need.opened' || event.eventType === 'need.updated') {
+      const needId = stringPayload(event.payload, 'needId');
+      if (!needId) {
+        warnings.push('need_event_without_need_id');
+        continue;
+      }
+      const previous = needsById[needId];
+      const activate = event.payload.activate === true || (event.eventType === 'need.opened' && event.payload.activate !== false);
+      if (activate) {
+        for (const need of Object.values(needsById)) {
+          if (need.needId !== needId && (need.status === 'open' || need.status === 'selected')) {
+            need.status = 'paused';
+          }
+        }
+      }
+      const constraints = optionalStringListPayload(event.payload, 'constraints');
+      const openQuestions = optionalStringListPayload(event.payload, 'openQuestions');
+      const selectedProductIds = optionalStringListPayload(event.payload, 'selectedProductIds');
+      const rejectedProductIds = optionalStringListPayload(event.payload, 'rejectedProductIds');
+      needsById[needId] = {
+        needId,
+        productClass: productClass(event.payload.productClass, previous?.productClass),
+        summary: stringPayload(event.payload, 'summary') ?? previous?.summary ?? needId,
+        constraints: constraints ?? previous?.constraints ?? [],
+        openQuestions: openQuestions ?? previous?.openQuestions ?? [],
+        selectedProductIds: selectedProductIds ?? previous?.selectedProductIds ?? [],
+        rejectedProductIds: rejectedProductIds ?? previous?.rejectedProductIds ?? [],
+        status: needStatus(event.payload.status, activate ? 'open' : previous?.status ?? 'open'),
+        eventId: event.eventId,
+        updatedAt: event.createdAt
+      };
+      continue;
+    }
+
+    if (event.eventType === 'need.closed') {
+      const needId = stringPayload(event.payload, 'needId');
+      if (!needId || !needsById[needId]) {
+        warnings.push('need_close_without_known_need');
+        continue;
+      }
+      needsById[needId] = {
+        ...needsById[needId],
+        status: 'closed',
+        eventId: event.eventId,
+        updatedAt: event.createdAt
+      };
+      continue;
+    }
+
     if (event.eventType === 'fact.observed' || event.eventType === 'fact.confirmed') {
       const factKey = stringPayload(event.payload, 'factKey');
       if (!factKey) {
         warnings.push('fact_event_without_fact_key');
         continue;
       }
-      const previousEventId = factEventByKey.get(factKey);
+      const needId = stringPayload(event.payload, 'needId');
+      const scopedKey = factMapKey(factKey, needId);
+      const previousEventId = factEventByKey.get(scopedKey);
       if (previousEventId) {
         const previous = factsByEventId.get(previousEventId);
         if (previous && previous.status === 'active') previous.status = 'superseded';
@@ -117,25 +291,20 @@ export function reduceDialogueLedger(events: DialogueLedgerEvent[]): ReducedDial
         eventId: event.eventId,
         status: event.status,
         evidence: event.evidence,
-        source: event.source
+        source: event.source,
+        needId,
+        role: requirementRole(event.payload),
+        productClass: stringPayload(event.payload, 'productClass')
       };
       factsByEventId.set(event.eventId, fact);
-      factEventByKey.set(factKey, event.eventId);
+      factEventByKey.set(scopedKey, event.eventId);
       continue;
     }
 
-    if (event.eventType === 'fact.superseded') {
+    if (event.eventType === 'fact.superseded' || event.eventType === 'fact.negated') {
       for (const eventId of stringListPayload(event.payload, 'targetEventIds')) {
         const fact = factsByEventId.get(eventId);
-        if (fact) fact.status = 'superseded';
-      }
-      continue;
-    }
-
-    if (event.eventType === 'fact.negated') {
-      for (const eventId of stringListPayload(event.payload, 'targetEventIds')) {
-        const fact = factsByEventId.get(eventId);
-        if (fact) fact.status = 'negated';
+        if (fact) fact.status = event.eventType === 'fact.superseded' ? 'superseded' : 'negated';
       }
       continue;
     }
@@ -151,7 +320,8 @@ export function reduceDialogueLedger(events: DialogueLedgerEvent[]): ReducedDial
         questionId,
         text,
         askedEventId: event.eventId,
-        status: event.payload.answerKnown === true ? 'answered' : 'open'
+        status: event.payload.answerKnown === true ? 'answered' : 'open',
+        needId: stringPayload(event.payload, 'needId')
       };
       continue;
     }
@@ -174,17 +344,37 @@ export function reduceDialogueLedger(events: DialogueLedgerEvent[]): ReducedDial
   }
 
   const factsByKey: Record<string, ReducedFact> = {};
-  for (const [factKey, eventId] of factEventByKey.entries()) {
+  for (const [scopedKey, eventId] of factEventByKey.entries()) {
     const fact = factsByEventId.get(eventId);
-    if (fact) factsByKey[factKey] = fact;
+    if (fact) factsByKey[scopedKey] = fact;
+  }
+
+  const openQuestions = Object.values(questionsById).filter((question) => question.status === 'open');
+  for (const need of Object.values(needsById)) {
+    const resolvedQuestionTexts = new Set(
+      Object.values(questionsById)
+        .filter((question) =>
+          question.status !== 'open' &&
+          (!question.needId || question.needId === need.needId)
+        )
+        .map((question) => question.text)
+    );
+    const linkedOpenQuestions = openQuestions
+      .filter((question) => question.needId === need.needId)
+      .map((question) => question.text);
+    need.openQuestions = Array.from(new Set([
+      ...need.openQuestions.filter((question) => !resolvedQuestionTexts.has(question)),
+      ...linkedOpenQuestions
+    ]));
   }
 
   return {
     eventIds,
     factsByKey,
     questionsById,
-    openQuestions: Object.values(questionsById).filter((question) => question.status === 'open'),
-    warnings
+    needsById,
+    openQuestions,
+    warnings: Array.from(new Set(warnings))
   };
 }
 
@@ -193,6 +383,7 @@ export function applyLedgerStateDelta(input: {
   turnId: string;
   existingEvents: DialogueLedgerEvent[];
   delta: LedgerStateDelta;
+  initialState?: ReducedDialogueLedgerState;
 }) {
   const events = normalizeLedgerStateDeltaEvents({
     sessionId: input.sessionId,
@@ -201,8 +392,43 @@ export function applyLedgerStateDelta(input: {
   });
   return {
     events,
-    state: reduceDialogueLedger([...input.existingEvents, ...events])
+    state: reduceDialogueLedger([...input.existingEvents, ...events], input.initialState)
   };
+}
+
+function supportedProductClass(value: string | undefined, fallback: ProductSelectionClass): ProductSelectionClass {
+  return value && knownProductClasses.has(value as ProductSelectionClass)
+    ? value as ProductSelectionClass
+    : fallback;
+}
+
+function activeCustomerNeedsFromLedger(
+  ledgerState: ReducedDialogueLedgerState,
+  base: CustomerNeedState,
+  now: string
+): ActiveCustomerNeed[] {
+  const needs = Object.values(ledgerState.needsById);
+  if (!needs.length) return [];
+  const activeFacts = Object.values(ledgerState.factsByKey).filter((fact) => fact.status === 'active');
+  return needs.map((need) => {
+    const facts = activeFacts.filter((fact) => fact.needId === need.needId);
+    const factConstraints = facts
+      .filter((fact) => fact.role === 'hard_requirement')
+      .map((fact) => `${fact.factKey}: ${factValueText(fact.value)}`);
+    const linkedQuestions = ledgerState.openQuestions
+      .filter((question) => question.needId === need.needId)
+      .map((question) => question.text);
+    return {
+      id: need.needId,
+      productClass: supportedProductClass(need.productClass, 'unknown'),
+      summary: need.summary,
+      constraints: Array.from(new Set([...need.constraints, ...factConstraints])).slice(0, 24),
+      openQuestions: Array.from(new Set([...need.openQuestions, ...linkedQuestions])).slice(0, 12),
+      selectedProductIds: [...need.selectedProductIds].slice(0, 24),
+      status: need.status,
+      updatedAt: need.updatedAt ?? now
+    };
+  });
 }
 
 export function deriveNeedStateSnapshotFromLedger(
@@ -211,42 +437,85 @@ export function deriveNeedStateSnapshotFromLedger(
 ): CustomerNeedState {
   const now = new Date().toISOString();
   const activeFacts = Object.values(ledgerState.factsByKey).filter((fact) => fact.status === 'active');
-  const confirmedFacts = activeFacts.map((fact) => factNeedItem(fact, now));
-  const productClass = inferProductClassFromLedger(activeFacts);
-  const openQuestions = ledgerState.openQuestions.map((question) => question.text);
-  const summary = confirmedFacts.length
-    ? confirmedFacts.map((item) => item.value).join('; ').slice(0, 800)
-    : openQuestions.length
-      ? `Open questions: ${openQuestions.join('; ').slice(0, 700)}`
-      : base.lastSummary;
+  const ledgerNeeds = activeCustomerNeedsFromLedger(ledgerState, base, now);
+  const currentReducedNeed = [...Object.values(ledgerState.needsById)]
+    .reverse()
+    .find((need) => need.status === 'open' || need.status === 'selected');
+  const latestScopedFactNeedId = [...activeFacts].reverse().find((fact) => fact.needId)?.needId;
+  const fallbackBaseNeed = [...(base.activeNeeds ?? [])]
+    .reverse()
+    .find((need) => need.status === 'open' || need.status === 'selected');
+  const currentNeedId = currentReducedNeed?.needId ?? latestScopedFactNeedId ?? fallbackBaseNeed?.id;
+  const currentNeed = currentReducedNeed
+    ? ledgerNeeds.find((need) => need.id === currentReducedNeed.needId)
+    : undefined;
+  const currentFacts = activeFacts.filter((fact) => !fact.needId || fact.needId === currentNeedId);
+  const confirmedFacts = currentFacts.map((fact) => factNeedItem(fact, now));
+  const fallbackClass = base.selectionState.currentProductClass;
+  const semanticClass: ProductSelectionClass = currentReducedNeed?.productClass === 'commercial'
+    ? fallbackClass
+    : supportedProductClass(
+        currentNeed?.productClass,
+        supportedProductClass(
+          currentFacts.find((fact) => fact.productClass)?.productClass,
+          fallbackClass
+        )
+      );
+  const openQuestions = currentNeed?.openQuestions ?? ledgerState.openQuestions.map((question) => question.text);
+  const summary = ledgerNeeds.length
+    ? ledgerNeeds
+        .filter((need) => need.status !== 'closed')
+        .map((need) => `${need.status === 'paused' ? 'Paused' : 'Active'} ${need.summary}`)
+        .join('; ')
+        .slice(0, 1200)
+    : confirmedFacts.length
+      ? confirmedFacts.map((item) => item.value).join('; ').slice(0, 800)
+      : openQuestions.length
+        ? `Open questions: ${openQuestions.join('; ').slice(0, 700)}`
+        : base.lastSummary;
+  const hasLedgerState = ledgerNeeds.length > 0 || confirmedFacts.length > 0 || openQuestions.length > 0;
+  if (!hasLedgerState) return base;
 
-  const hasLedgerState = confirmedFacts.length > 0 || openQuestions.length > 0;
+  const snapshotBase = emptyNeedState();
+  const rejectedProductIds = currentReducedNeed?.rejectedProductIds ?? [];
+
   return {
-    ...base,
-    activeNeeds: hasLedgerState
-      ? [{
-          id: 'ledger-current',
-          productClass,
-          summary: summary || 'Ledger-derived dialogue state',
-          constraints: confirmedFacts.map((item) => item.value).slice(0, 12),
-          openQuestions,
-          selectedProductIds: base.activeNeeds.flatMap((need) => need.selectedProductIds ?? []).slice(0, 12),
-          status: openQuestions.length ? 'open' : 'selected',
-          updatedAt: now
-        }]
-      : [...base.activeNeeds],
+    ...snapshotBase,
+    activeNeeds: ledgerNeeds.length
+      ? ledgerNeeds
+      : hasLedgerState
+        ? [{
+            id: currentNeedId ?? 'ledger-current',
+            productClass: semanticClass,
+            summary: summary || 'Ledger-derived dialogue state',
+            constraints: currentFacts
+              .filter((fact) => fact.role === 'hard_requirement')
+              .map((fact) => `${fact.factKey}: ${factValueText(fact.value)}`)
+              .slice(0, 24),
+            openQuestions,
+            selectedProductIds: [],
+            status: openQuestions.length ? 'open' : 'selected',
+            updatedAt: now
+          }]
+        : [],
     explicitNeeds: confirmedFacts,
     confirmedFacts,
-    constraints: activeFacts
-      .filter((fact) => /constraint|budget|weight|delivery|availability|налич|достав|бюджет|вес/iu.test(fact.factKey))
+    constraints: currentFacts
+      .filter((fact) => fact.role === 'hard_requirement')
       .map((fact) => factNeedItem(fact, now)),
     selectionState: {
-      ...base.selectionState,
-      currentProductClass: productClass === 'commercial' ? base.selectionState.currentProductClass : productClass,
-      targetProductClass: productClass === 'commercial' ? base.selectionState.targetProductClass : productClass,
+      ...emptyProductSelectionState(),
+      semanticSource: 'planner',
+      currentProductClass: semanticClass,
+      targetProductClass: semanticClass,
       unknowns: openQuestions,
+      selectedProductIds: currentNeed?.selectedProductIds ?? [],
+      rejectedProducts: Array.from(new Set(rejectedProductIds)).map((productId) => ({
+        productId,
+        reason: 'Rejected in the active dialogue need state'
+      })),
       updatedAt: now
     },
-    lastSummary: summary || base.lastSummary
+    lastSummary: summary
   };
 }

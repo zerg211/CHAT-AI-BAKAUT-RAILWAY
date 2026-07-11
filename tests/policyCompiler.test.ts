@@ -36,7 +36,7 @@ describe('policy compiler', () => {
     expect(() => compilePolicyPack([
       rule({ id: 'r1', code: 'stock.no_false_stock_claim' }),
       rule({ id: 'r2', code: 'stock.no_false_stock_claim' })
-    ])).toThrow(/duplicate policy rule code/i);
+    ])).toThrow('Duplicate policy rule code');
   });
 
   it('rejects active high-risk rules without owner and review date', () => {
@@ -48,7 +48,7 @@ describe('policy compiler', () => {
         owner: '',
         reviewBy: undefined
       })
-    ])).toThrow(/owner.*reviewBy/i);
+    ])).toThrow('requires owner and reviewBy');
   });
 
   it('selects mandatory core and deterministic risk rules before semantic extras', () => {

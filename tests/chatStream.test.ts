@@ -7,6 +7,14 @@ function sseEvent(event: string, data: unknown) {
 }
 
 describe('streamChatMessage watchdog and recovery', () => {
+  it('preserves the session across reloads and same-tab catalog navigation', () => {
+    const source = readFileSync('src/client/main.tsx', 'utf8');
+
+    expect(source).toContain("sessionStorage.getItem('bakaut_session_id')");
+    expect(source).not.toContain("addEventListener('pagehide'");
+    expect(source).not.toContain('navigator.sendBeacon');
+  });
+
   it('keeps the browser idle watchdog longer than the server generation timeout', () => {
     const source = readFileSync('src/client/chatStream.ts', 'utf8');
     const match = source.match(/const DEFAULT_STREAM_IDLE_TIMEOUT_MS = ([\d_]+);/);
@@ -147,5 +155,59 @@ describe('streamChatMessage watchdog and recovery', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('sends a stable client message id as the idempotency key', async () => {
+    const payload = { answer: 'Готово', productCards: [], usedWebSearch: false };
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          sseEvent('turn', { turnId: 'turn-client-id' }) +
+          sseEvent('done', payload)
+        ));
+        controller.close();
+      }
+    });
+    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(stream, { status: 200 }));
+    const clientMessageId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+
+    await streamChatMessage(
+      '',
+      'session-1',
+      'да',
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher, clientMessageId }
+    );
+
+    const request = fetcher.mock.calls[0]?.[1] as RequestInit;
+    expect(JSON.parse(String(request.body))).toEqual({ message: 'да', clientMessageId });
+  });
+
+  it('does not start recovery when the server reports a non-recoverable runner collision', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          sseEvent('turn', { turnId: 'turn-running' }) +
+          sseEvent('error', {
+            turnId: 'turn-running',
+            recoverable: false,
+            error: 'Этот ответ уже формируется.'
+          })
+        ));
+        controller.close();
+      }
+    });
+    const fetcher = vi.fn(async () => new Response(stream, { status: 200 }));
+
+    await expect(streamChatMessage(
+      '',
+      'session-1',
+      'да',
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher }
+    )).rejects.toThrow('Этот ответ уже формируется.');
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

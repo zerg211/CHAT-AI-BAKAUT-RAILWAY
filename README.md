@@ -1,8 +1,10 @@
 # БАКАУТ AI Sales Assistant
 
-AI-виджет для сайта БАКАУТ: консультирует покупателей, подбирает строительное и силовое оборудование, показывает карточки товаров и собирает заявки для профильного специалиста.
+Продовый AI-менеджер для сайта БАКАУТ. Он ведёт свободный диалог с покупателем, консультирует по строительному и силовому оборудованию, уточняет задачу, проверяет факты, подбирает товары, показывает согласованные с ответом карточки и передаёт заявку профильному специалисту.
 
-## Быстрый старт локально
+Активный production runtime один: `AgentManagerOrchestrator` + GPT-5.4 через OpenAI Responses API. LLM отвечает за понимание смысла и стратегию разговора; код — за каталог, схемы, доказательства, жёсткие ограничения, безопасность, побочные эффекты и восстановление.
+
+## Локальный запуск
 
 ```bash
 cp .env.example .env
@@ -12,57 +14,48 @@ npm run migrate
 npm run dev
 ```
 
-Открыть виджет: `http://localhost:3010/widget`
-
-Если Vite dev server работает отдельно, Fastify сам отдаст `/widget` с подключением `http://localhost:5173/main.tsx`.
+Локальный виджет доступен на `http://localhost:3010/widget`. Он подходит для UI-разработки и проверок с моками. Локальные вызовы OpenAI в этой среде не являются валидной проверкой поведения; release-проверка AI проводится только после GitHub/Railway-деплоя через встроенный виджет на `https://bakautprof.ru/`.
 
 ## Основные команды
 
 ```bash
-npm run dev              # backend + frontend
-npm run migrate          # SQL-миграции
-npm run catalog:sync     # ручной crawler сайта bakautprof.ru
-npm run catalog:import -- ./catalog.csv
-npm run test
+npm run verify                 # полный локальный release gate
 npm run typecheck
+npm test
+npm run test:eval:agentic
+npm run lint:no-regex
 npm run build
-npm run start
+npm run migrate
+npm run catalog:sync:sitemap   # полный sitemap-sync с freshness lifecycle
+npm run catalog:health
+npm run embeddings:coverage
+npm run feedback:export-evals -- --output .private/feedback-candidates.json --acknowledge-unverified-residual-pii
 ```
 
-## Переменные окружения
+## Конфигурация
 
-См. `.env.example`. Минимум для живого AI:
+См. `.env.example`. Для production обязательны `DATABASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL=gpt-5.4`, `ADMIN_API_KEY`, `PUBLIC_BASE_URL` и HTTP email-настройки. SMTP не используется. Активный production AgentManager fail-safe закрепляет planner, answer и reviewer на `gpt-5.4`, поэтому старые `MODEL`/stage-specific значения не могут незаметно вернуть `gpt-5.4-mini`. `AI_MANAGER_REVIEW_MODE` поддерживает `off | risk | always`; production default — `risk`. `CATALOG_STALE_AFTER_HOURS` по умолчанию равен `48`.
 
-- `DATABASE_URL`
-- `OPENAI_API_KEY`
-- `OPENAI_MODEL=gpt-5.4`
-- `EMAIL_HTTP_URL` и связанные email-переменные на Railway
+## Надёжность диалога
 
-Локально без `OPENAI_API_KEY` чат продолжит работать в fallback-режиме, но это не считается полноценной проверкой AI-поведения.
+- Виджет генерирует стабильный `clientMessageId`; повтор того же HTTP-запроса восстанавливает тот же turn, а два одинаковых сообщения пользователя остаются двумя отдельными turn.
+- Один session не исполняет два turn одновременно; lease, checkpoints и tool artifacts позволяют продолжить прерванный turn без повторных инструментов и заявок.
+- Финальный response payload сохраняется до доставки клиенту и восстанавливается вместе с текстом, карточками и metadata.
+- Память хранится как semantic dialogue ledger: активные/приостановленные потребности, факты, исправления, вопросы и выбранные/отклонённые товары. Snapshot + новый tail сохраняют актуальное состояние длинного диалога.
 
-## Вставка на сайт
-
-```html
-<script src="https://your-railway-domain/embed.js" async></script>
-```
-
-Скрипт создает iframe с `/widget`.
-
-## API
-
-- `POST /api/chat/sessions`
-- `POST /api/chat/sessions/:id/messages`
-- `POST /api/chat/sessions/:id/heartbeat`
-- `POST /api/chat/sessions/:id/close`
-- `POST /api/leads`
-- `POST /api/admin/catalog/import-csv`
-- `POST /api/admin/catalog/sync-site`
-- `GET /api/admin/conversations`
-- `GET /api/admin/leads`
-- `GET /api/admin/conflicts`
+## Admin и наблюдаемость
 
 Admin endpoints требуют `Authorization: Bearer <ADMIN_API_KEY>`.
 
-## Quality gate
+- `/api/admin/conversations`, `/:id`, `/:id/agent-traces`
+- `/api/admin/leads`, `/api/admin/conflicts`, `/api/admin/products`
+- `/api/admin/feedback` и `/api/admin/feedback/:id/export-candidate`
+- `/api/admin/catalog/freshness`, `/api/admin/embedding-coverage`
+- `/api/admin/health` — модели, полный runtime manifest, catalog/embedding/outbox health
+- `/api/admin/runtime/openai`, `/api/admin/openai-usage`
 
-Все изменения поведения ассистента проверяются локально через браузер и живой диалог в интерфейсе. Протокол сохраняется в `local-live-tests/*.local.md`.
+Публичный `GET /api/health` содержит только deployment marker: commit и минимальные runtime/contract версии. Модели, полный список runtime artifacts, policy hash и операционные сигналы доступны только в защищённом `/api/admin/health`.
+
+## Деплой и проверка
+
+Изменения уходят только через `git commit` + `git push`; Railway автоматически собирает GitHub-ветку. Ручной `railway up/deploy` не используется. После появления нового commit marker в `/api/health` проводится адаптивный диалог через виджет на `bakautprof.ru`, затем каждый turn сверяется с карточками, trace/metadata и кодом. См. `docs/RAILWAY_DEPLOY.md` и `docs/LOCAL_LIVE_TESTING.md`.

@@ -3,16 +3,24 @@ import { fetch } from 'undici';
 import type { CatalogPageInput, CatalogProductInput } from '../src/shared/types.js';
 
 vi.mock('undici', () => ({
-  fetch: vi.fn()
+  fetch: vi.fn(),
+  Agent: class {
+    async close() {}
+  }
+}));
+
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }])
 }));
 
 const { syncCatalogFromSitemap } = await import('../src/catalog/sitemapSync.js');
 
 function xmlResponse(xml: string) {
-  return {
-    status: 200,
-    text: async () => xml
-  } as Awaited<ReturnType<typeof fetch>>;
+  return new Response(xml, { status: 200, headers: { 'content-type': 'application/xml' } }) as unknown as Awaited<ReturnType<typeof fetch>>;
+}
+
+function htmlResponse(html: string) {
+  return new Response(html, { status: 200, headers: { 'content-type': 'text/html' } }) as unknown as Awaited<ReturnType<typeof fetch>>;
 }
 
 describe('sitemap sync no-regex XML parsing', () => {
@@ -160,6 +168,7 @@ describe('sitemap sync no-regex XML parsing', () => {
     const repository = {
       startCatalogSource: vi.fn(async () => 'source-3'),
       finishCatalogSource: vi.fn(async () => undefined),
+      getActiveCatalogInventoryCounts: vi.fn(async () => ({ products: 0, pages: 0 })),
       upsertProduct,
       upsertCatalogPage
     };
@@ -191,5 +200,182 @@ describe('sitemap sync no-regex XML parsing', () => {
     expect(raw?.documents?.[0]?.url).toBe('https://bakautprof.ru/docs/manual.pdf?download=1');
     expect(raw?.images).toContain('https://bakautprof.ru/images/thumb.jpg');
     expect(upsertCatalogPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails the whole sitemap run when an in-loop heartbeat update fails', async () => {
+    let currentTime = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => currentTime);
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith('/heartbeat.xml')) {
+        return xmlResponse(`
+          <urlset>
+            <url><loc>https://bakautprof.ru/catalog/generators/heartbeat-product/</loc></url>
+          </urlset>
+        `);
+      }
+      currentTime = 20_000;
+      return htmlResponse(`
+        <html><body>
+          <div itemscope itemtype="https://schema.org/Product">
+            <h1>Heartbeat generator</h1>
+            <div class="card__current-price">100 000</div>
+          </div>
+        </body></html>
+      `);
+    });
+    const heartbeatError = new Error('heartbeat database unavailable');
+    const finishCatalogSource = vi.fn(async () => undefined);
+    const repository = {
+      startCatalogSource: vi.fn(async () => 'source-heartbeat-failure'),
+      finishCatalogSource,
+      heartbeatCatalogSource: vi.fn(async () => {
+        throw heartbeatError;
+      }),
+      getActiveCatalogInventoryCounts: vi.fn(async () => ({ products: 0, pages: 0 })),
+      upsertProduct: vi.fn(async () => undefined)
+    };
+
+    try {
+      await expect(syncCatalogFromSitemap({
+        sitemapUrl: 'https://bakautprof.ru/heartbeat.xml',
+        includeContent: false,
+        includeEmbeddings: false,
+        requestDelayMs: 0,
+        concurrency: 2
+      }, repository as never)).rejects.toBe(heartbeatError);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(repository.heartbeatCatalogSource).toHaveBeenCalledOnce();
+    expect(finishCatalogSource).toHaveBeenCalledWith(
+      'source-heartbeat-failure',
+      'failed',
+      expect.objectContaining({ coverageComplete: false }),
+      expect.stringContaining('heartbeat database unavailable'),
+      expect.objectContaining({ coverageComplete: false })
+    );
+  });
+
+  it('fails a non-empty full run before writes when discovered inventory drops sharply', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async () => xmlResponse(`
+      <urlset>
+        <url><loc>https://bakautprof.ru/catalog/generators/product-one/</loc></url>
+        <url><loc>https://bakautprof.ru/catalog/generators/product-two/</loc></url>
+      </urlset>
+    `));
+    const finishCatalogSource = vi.fn(async () => undefined);
+    const upsertProduct = vi.fn(async () => undefined);
+    const repository = {
+      startCatalogSource: vi.fn(async () => 'source-incomplete'),
+      finishCatalogSource,
+      getActiveCatalogInventoryCounts: vi.fn(async () => ({ products: 100, pages: 0 })),
+      upsertProduct
+    };
+
+    await expect(syncCatalogFromSitemap({
+      sitemapUrl: 'https://bakautprof.ru/incomplete.xml',
+      includeContent: false,
+      includeEmbeddings: false,
+      requestDelayMs: 0
+    }, repository as never)).rejects.toThrow('catalog_inventory_coverage_below_threshold:products');
+
+    expect(upsertProduct).not.toHaveBeenCalled();
+    expect(finishCatalogSource).toHaveBeenCalledWith(
+      'source-incomplete',
+      'failed',
+      expect.objectContaining({
+        productCandidates: 2,
+        activeProductsBefore: 100,
+        inventoryCoverageSafe: false
+      }),
+      expect.stringContaining('catalog_inventory_coverage_below_threshold:products'),
+      expect.objectContaining({ coverageComplete: false })
+    );
+  });
+
+  it('applies the same fail-closed inventory guard to content pages', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async () => xmlResponse(`
+      <urlset>
+        <url><loc>https://bakautprof.ru/articles/only-one-page/</loc></url>
+      </urlset>
+    `));
+    const finishCatalogSource = vi.fn(async () => undefined);
+    const upsertCatalogPage = vi.fn(async () => undefined);
+    const repository = {
+      startCatalogSource: vi.fn(async () => 'source-incomplete-pages'),
+      finishCatalogSource,
+      getActiveCatalogInventoryCounts: vi.fn(async () => ({ products: 0, pages: 100 })),
+      upsertCatalogPage
+    };
+
+    await expect(syncCatalogFromSitemap({
+      sitemapUrl: 'https://bakautprof.ru/incomplete-pages.xml',
+      includeProducts: false,
+      includeEmbeddings: false,
+      requestDelayMs: 0
+    }, repository as never)).rejects.toThrow('catalog_inventory_coverage_below_threshold:pages');
+
+    expect(upsertCatalogPage).not.toHaveBeenCalled();
+    expect(finishCatalogSource).toHaveBeenCalledWith(
+      'source-incomplete-pages',
+      'failed',
+      expect.objectContaining({
+        contentCandidates: 1,
+        activeContentPagesBefore: 100,
+        inventoryCoverageSafe: false
+      }),
+      expect.stringContaining('catalog_inventory_coverage_below_threshold:pages'),
+      expect.objectContaining({ coverageComplete: false })
+    );
+  });
+
+  it('preserves a full initial-catalog bootstrap when no active inventory exists', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (url) => {
+      if (String(url).endsWith('/bootstrap.xml')) {
+        return xmlResponse(`
+          <urlset>
+            <url><loc>https://bakautprof.ru/catalog/generators/bootstrap-product/</loc></url>
+          </urlset>
+        `);
+      }
+      return htmlResponse(`
+        <html><body>
+          <div itemscope itemtype="https://schema.org/Product">
+            <h1>Bootstrap generator</h1>
+            <div class="card__current-price">100 000</div>
+          </div>
+        </body></html>
+      `);
+    });
+    const finishCatalogSource = vi.fn(async () => undefined);
+    const upsertProduct = vi.fn(async () => undefined);
+    const repository = {
+      startCatalogSource: vi.fn(async () => 'source-bootstrap'),
+      finishCatalogSource,
+      heartbeatCatalogSource: vi.fn(async () => undefined),
+      getActiveCatalogInventoryCounts: vi.fn(async () => ({ products: 0, pages: 0 })),
+      upsertProduct
+    };
+
+    const result = await syncCatalogFromSitemap({
+      sitemapUrl: 'https://bakautprof.ru/bootstrap.xml',
+      includeContent: false,
+      includeEmbeddings: false,
+      requestDelayMs: 0
+    }, repository as never);
+
+    expect(result.importedProducts).toBe(1);
+    expect(finishCatalogSource).toHaveBeenCalledWith(
+      'source-bootstrap',
+      'completed',
+      expect.objectContaining({ inventoryCoverageSafe: true }),
+      undefined,
+      expect.objectContaining({ coverageComplete: true, deactivateProducts: true })
+    );
   });
 });

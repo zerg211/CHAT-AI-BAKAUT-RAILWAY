@@ -7,7 +7,8 @@ describe('submitLead watchdog', () => {
     try {
       const fetcher = vi.fn(() => new Promise<Response>(() => undefined));
       const result = submitLead('', {
-        sessionId: 'session-1',
+        sessionId: '00000000-0000-4000-8000-000000000001',
+        clientLeadId: '00000000-0000-4000-8000-000000000002',
         name: 'Иван',
         phone: '+79990000000',
         question: 'Нужен генератор'
@@ -23,10 +24,25 @@ describe('submitLead watchdog', () => {
 
   it('returns when the lead endpoint accepts the request', async () => {
     await expect(submitLead('', {
-      sessionId: 'session-1',
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      clientLeadId: '00000000-0000-4000-8000-000000000002',
       name: 'Иван',
       email: 'buyer@example.com',
       question: 'Нужен генератор'
     }, { fetcher: async () => new Response(JSON.stringify({ id: 'lead-1' }), { status: 201 }) })).resolves.toBeUndefined();
+  });
+
+  it('sends the client idempotency key with the lead payload', async () => {
+    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response('{}', { status: 200 }));
+    const payload = {
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      clientLeadId: '00000000-0000-4000-8000-000000000002',
+      name: 'Иван',
+      phone: '+79990000000'
+    };
+
+    await submitLead('', payload, { fetcher });
+
+    expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(payload);
   });
 });

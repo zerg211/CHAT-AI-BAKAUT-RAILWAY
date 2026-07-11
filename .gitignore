@@ -13,6 +13,7 @@ logs/
 .hermes/
 .hermes-admin-api-key
 data/
+.private/
 tmp-*.mjs
 tmp-live-logs/
 *.log

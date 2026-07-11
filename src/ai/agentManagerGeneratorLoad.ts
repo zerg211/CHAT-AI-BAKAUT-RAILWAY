@@ -115,7 +115,7 @@ function isProductClassLoadKind(value: unknown) {
   return loadProductClassAliases.has(compactLoadToken(value));
 }
 
-function loadsFromArgs(args: Record<string, unknown>, fallbackEvidence: string): {
+function loadsFromArgs(args: { loads?: unknown[] }, fallbackEvidence: string): {
   loads: GeneratorLoadToolItem[];
   warnings: string[];
 } {

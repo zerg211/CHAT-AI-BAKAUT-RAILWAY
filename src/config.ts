@@ -33,6 +33,11 @@ const defaultPositiveInt = (defaultValue: number) => z.preprocess(
   z.coerce.number().int().positive().default(defaultValue)
 );
 
+const defaultUnitRatio = (defaultValue: number) => z.preprocess(
+  (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
+  z.coerce.number().gt(0).lte(1).default(defaultValue)
+);
+
 const emailHttpMethod = z.preprocess(
   (value) => typeof value === 'string' && value.trim() === '' ? undefined : value,
   z.enum(['POST', 'PUT']).default('POST')
@@ -77,22 +82,25 @@ const schema = z.object({
   EMBEDDING_MIN_COVERAGE: z.coerce.number().min(0).max(1).default(0.05),
   DEBUG_OPENAI_USAGE: booleanFlag(false),
   OPENAI_USAGE_GUARD_ENABLED: booleanFlag(true),
-  OPENAI_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(0),
-  OPENAI_HEADLESS_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(6000000),
+  OPENAI_DAILY_TOKEN_BUDGET: defaultPositiveInt(6000000),
   OPENAI_BUDGET_GUARD_RESERVE_TOKENS: defaultNonNegativeInt(16000),
   OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(true),
   AGENT_MANAGER_HARNESS_ENABLED: booleanFlag(process.env.NODE_ENV !== 'test'),
-  AGENT_MANAGER_LEDGER_STATE_ENABLED: booleanFlag(false),
-  AGENT_MANAGER_LLM_ANSWER_STEP_ENABLED: booleanFlag(false),
-  AGENT_MANAGER_TURN_CHECKPOINT_RECOVERY_ENABLED: booleanFlag(false),
-  AGENT_MANAGER_PRE_SEND_REVIEW_ENABLED: booleanFlag(false),
-  AGENT_MANAGER_COMPARISON_RESEARCH_ENABLED: booleanFlag(false),
-  AGENT_MANAGER_LEAD_OUTBOX_ENABLED: booleanFlag(false),
+  AI_MANAGER_REVIEW_MODE: z.enum(['off', 'risk', 'always']).default(process.env.NODE_ENV === 'test' ? 'off' : 'risk'),
   AGENT_MANAGER_DISABLE_LEGACY_ANSWER_WRITERS: booleanFlag(true),
-  DYNAMIC_SALES_POLICY_ENABLED: booleanFlag(true),
-  DYNAMIC_SALES_POLICY_SHADOW_MODE: booleanFlag(false),
   CATALOG_BASE_URL: z.string().url().default('https://bakautprof.ru'),
   CATALOG_MAX_PAGES: z.coerce.number().int().positive().default(300),
+  CATALOG_REQUEST_TIMEOUT_MS: defaultPositiveInt(35_000),
+  CATALOG_MAX_RESPONSE_BYTES: defaultPositiveInt(2 * 1024 * 1024),
+  CATALOG_MAX_SITEMAP_BYTES: defaultPositiveInt(5 * 1024 * 1024),
+  CATALOG_MAX_SITEMAP_FILES: defaultPositiveInt(100),
+  CATALOG_MAX_SITEMAP_ENTRIES: defaultPositiveInt(100_000),
+  CATALOG_DEACTIVATION_MIN_DISCOVERY_RATIO: defaultUnitRatio(0.8),
+  CATALOG_DEACTIVATION_MIN_DISCOVERY_FLOOR: defaultNonNegativeInt(100),
+  CATALOG_IMPORT_ROOT: z.string().trim().min(1).default('catalog-imports'),
+  CATALOG_MAX_CSV_BYTES: defaultPositiveInt(25 * 1024 * 1024),
+  CATALOG_MAX_CSV_ROWS: defaultPositiveInt(50_000),
+  CATALOG_STALE_AFTER_HOURS: defaultPositiveInt(48),
   EMAIL_HTTP_URL: optionalUrl,
   EMAIL_HTTP_METHOD: emailHttpMethod,
   EMAIL_HTTP_AUTH_HEADER: optionalString,
@@ -110,24 +118,37 @@ const schema = z.object({
 const parsedConfig = schema.parse(process.env);
 const resendEmailUrl = parsedConfig.RESEND_API_KEY ? 'https://api.resend.com/emails' : undefined;
 const resendAuthHeader = parsedConfig.RESEND_API_KEY ? `Authorization: Bearer ${parsedConfig.RESEND_API_KEY}` : undefined;
-const primaryModel = parsedConfig.OPENAI_ANSWER_MODEL
-  || parsedConfig.MODEL
+const requiredProductionManagerModel = 'gpt-5.4';
+const configuredPrimaryModel = parsedConfig.OPENAI_ANSWER_MODEL
   || parsedConfig.OPENAI_MODEL
-  || 'gpt-5.4-mini';
+  || parsedConfig.MODEL
+  || requiredProductionManagerModel;
+const primaryModel = parsedConfig.NODE_ENV === 'production'
+  ? requiredProductionManagerModel
+  : configuredPrimaryModel;
 const deepReasoningModel = parsedConfig.OPENAI_DEEP_REASONING_MODEL || 'gpt-5.5';
-const plannerModel = parsedConfig.OPENAI_PLANNER_MODEL || primaryModel;
-const factModel = parsedConfig.OPENAI_FACT_MODEL || plannerModel;
+const plannerModel = parsedConfig.NODE_ENV === 'production'
+  ? requiredProductionManagerModel
+  : parsedConfig.OPENAI_PLANNER_MODEL || primaryModel;
+const factModel = parsedConfig.NODE_ENV === 'production'
+  ? requiredProductionManagerModel
+  : parsedConfig.OPENAI_FACT_MODEL || plannerModel;
 const normalizeReasoningEffort = (value: z.infer<typeof reasoningEffort>) =>
   value === 'minimal' ? 'none' : value;
 
 export const config = {
   ...parsedConfig,
+  AI_MANAGER_REVIEW_MODE: parsedConfig.NODE_ENV === 'production' && parsedConfig.AI_MANAGER_REVIEW_MODE === 'off'
+    ? 'risk' as const
+    : parsedConfig.AI_MANAGER_REVIEW_MODE,
   EMAIL_HTTP_URL: parsedConfig.EMAIL_HTTP_URL || resendEmailUrl,
   EMAIL_HTTP_AUTH_HEADER: parsedConfig.EMAIL_HTTP_AUTH_HEADER || resendAuthHeader,
   EMAIL_HTTP_TIMEOUT_MS: parsedConfig.RESEND_TIMEOUT_MS || parsedConfig.EMAIL_HTTP_TIMEOUT_MS,
   EMAIL_FROM: parsedConfig.EMAIL_FROM || parsedConfig.RESEND_FROM,
   LEADS_TO_EMAIL: parsedConfig.LEADS_TO_EMAIL || parsedConfig.LEAD_EMAIL_TO || parsedConfig.LEAD_EMAIL,
-  OPENAI_MODEL: parsedConfig.OPENAI_MODEL || primaryModel,
+  OPENAI_MODEL: parsedConfig.NODE_ENV === 'production'
+    ? requiredProductionManagerModel
+    : parsedConfig.OPENAI_MODEL || primaryModel,
   OPENAI_ANSWER_MODEL: primaryModel,
   OPENAI_PLANNER_MODEL: plannerModel,
   OPENAI_FACT_MODEL: factModel,

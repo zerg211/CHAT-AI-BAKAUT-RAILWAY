@@ -24,6 +24,19 @@ import type {
   VerifiedProductFactInput
 } from '../shared/types.js';
 import { emptyNeedState } from '../ai/needState.js';
+import {
+  catalogSourceContentHash,
+  catalogSyncLockIdentity,
+  evaluateCatalogSyncHealth,
+  type CatalogSyncMode
+} from '../catalog/catalogFreshness.js';
+import {
+  AssistantFeedbackQueueItemSchema,
+  type AssistantFeedbackQueueItem,
+  type AssistantFeedbackQueueStatus,
+  type AssistantFeedbackRating,
+  type AssistantFeedbackRegressionFixture
+} from '../ai/assistantFeedbackQueue.js';
 
 type Db = Pool | PoolClient;
 export type EmbeddingCoverageTarget = 'products' | 'catalog_pages' | 'troubleshooting_cases';
@@ -54,6 +67,32 @@ export interface EmbeddingBackfillCatalogPage {
 
 function jsonbParam(value: unknown) {
   return value === undefined || value === null ? null : JSON.stringify(value);
+}
+
+function freshnessHashInput(input: CatalogProductInput | CatalogPageInput) {
+  const raw = { ...(input.raw ?? {}) };
+  delete raw.crawledAt;
+  delete raw.importedAt;
+  delete raw.syncedAt;
+  return { ...input, raw };
+}
+
+export class ActiveConversationTurnError extends Error {
+  readonly code = 'active_conversation_turn_exists';
+
+  constructor(readonly activeTurnId?: string) {
+    super('Another turn is already active for this conversation');
+    this.name = 'ActiveConversationTurnError';
+  }
+}
+
+export class ClientMessagePayloadConflictError extends Error {
+  readonly code = 'client_message_id_reused_with_different_payload';
+
+  constructor() {
+    super('The client message id was already used with a different payload');
+    this.name = 'ClientMessagePayloadConflictError';
+  }
 }
 
 function charCode(value: string) {
@@ -201,6 +240,10 @@ function mapProduct(row: QueryResultRow): Product {
     description: row.description,
     specs: row.specs ?? {},
     raw: row.raw ?? {},
+    lastSeenAt: row.last_seen_at ? row.last_seen_at.toISOString() : null,
+    lastSyncedAt: row.last_synced_at ? row.last_synced_at.toISOString() : null,
+    isActive: row.is_active === undefined ? true : Boolean(row.is_active),
+    sourceContentHash: row.source_content_hash ?? null,
     retrievalScore,
     retrievalSource
   };
@@ -218,15 +261,20 @@ const PRODUCT_RESPONSE_COLUMNS = [
   'currency',
   'image_url',
   'description',
-  'specs'
+  'specs',
+  'last_seen_at',
+  'last_synced_at',
+  'is_active',
+  'source_content_hash'
 ].join(', ');
 
-const PRODUCT_FILTER = `(raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')`;
+const PRODUCT_FILTER = `is_active IS NOT FALSE AND (raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')`;
 
 function mapConversationTurn(row: QueryResultRow): ConversationTurn {
   return {
     id: row.id,
     sessionId: row.session_id,
+    clientMessageId: row.client_message_id ?? null,
     userMessageId: row.user_message_id ?? null,
     assistantMessageId: row.assistant_message_id ?? null,
     status: row.status,
@@ -237,6 +285,10 @@ function mapConversationTurn(row: QueryResultRow): ConversationTurn {
     plannerContract: row.planner_contract ?? null,
     activeNeedsBefore: row.active_needs_before ?? null,
     activeNeedsAfter: row.active_needs_after ?? null,
+    executionOwner: row.execution_owner ?? null,
+    executionLeaseExpiresAt: row.execution_lease_expires_at
+      ? new Date(row.execution_lease_expires_at).toISOString()
+      : null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
@@ -266,6 +318,10 @@ function mapLead(row: QueryResultRow): Lead {
   return {
     id: row.id,
     sessionId: row.session_id,
+    clientLeadId: row.client_lead_id ?? null,
+    clientRequestHash: row.client_request_hash ?? null,
+    originTurnId: row.origin_turn_id ?? null,
+    originToolRequestId: row.origin_tool_request_id ?? null,
     name: row.name,
     phone: row.phone,
     email: row.email,
@@ -284,6 +340,10 @@ function mapCatalogPage(row: QueryResultRow): CatalogPage {
     content: row.content,
     summary: row.summary,
     raw: row.raw ?? {},
+    lastSeenAt: row.last_seen_at ? row.last_seen_at.toISOString() : null,
+    lastSyncedAt: row.last_synced_at ? row.last_synced_at.toISOString() : null,
+    isActive: row.is_active === undefined ? true : Boolean(row.is_active),
+    sourceContentHash: row.source_content_hash ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
@@ -315,7 +375,7 @@ export interface LeadOutboxItem {
   id: string;
   leadId: string;
   sessionId: string;
-  turnId: string;
+  turnId: string | null;
   destination: string;
   payload: Record<string, unknown>;
   status: string;
@@ -340,6 +400,64 @@ function mapLeadOutboxItem(row: QueryResultRow): LeadOutboxItem {
     lastError: row.last_error ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
+  };
+}
+
+function isoTimestamp(value: unknown) {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string') return new Date(value).toISOString();
+  return new Date(0).toISOString();
+}
+
+function mapAssistantFeedbackQueueItem(row: QueryResultRow): AssistantFeedbackQueueItem {
+  return AssistantFeedbackQueueItemSchema.parse({
+    id: row.id,
+    sessionId: row.session_id,
+    turnId: row.turn_id,
+    userMessageId: row.user_message_id ?? null,
+    assistantMessageId: row.assistant_message_id,
+    rating: row.rating,
+    status: row.status,
+    buyerMessage: row.buyer_message,
+    assistantAnswer: row.assistant_answer,
+    policyEvidence: row.policy_evidence ?? {},
+    modelEvidence: row.model_evidence ?? {},
+    toolEvidence: row.tool_evidence ?? [],
+    cardEvidence: row.card_evidence ?? [],
+    diagnosticMetadata: row.diagnostic_metadata ?? {},
+    feedbackCreatedAt: isoTimestamp(row.feedback_created_at),
+    createdAt: isoTimestamp(row.created_at),
+    updatedAt: isoTimestamp(row.updated_at)
+  });
+}
+
+export interface CatalogFreshnessReport {
+  status: 'fresh' | 'stale' | 'unknown';
+  syncHealth: ReturnType<typeof evaluateCatalogSyncHealth>;
+  latestRun: {
+    id: string;
+    sourceType: string;
+    sourceLocation: string;
+    syncMode: CatalogSyncMode;
+    status: 'running' | 'completed' | 'failed';
+    coverageComplete: boolean;
+    discoveredItemCount: number;
+    syncedItemCount: number;
+    failedItemCount: number;
+    startedAt: string;
+    heartbeatAt: string;
+    finishedAt: string | null;
+  } | null;
+  lastSuccessfulSyncAt: string | null;
+  products: {
+    active: number;
+    inactive: number;
+    stale: number;
+  };
+  pages: {
+    active: number;
+    inactive: number;
+    stale: number;
   };
 }
 
@@ -528,42 +646,118 @@ export class ConversationRepository {
   async createTurn(input: {
     sessionId: string;
     id?: string;
+    clientMessageId: string;
     requestHash: string;
     status?: ConversationTurn['status'];
     stage?: string;
     activeNeedsBefore?: unknown;
   }) {
-    const existing = await this.db.query(
-      `SELECT * FROM conversation_turns
-       WHERE session_id = $1
-         AND request_hash = $2
-         AND status IN ('received', 'need_extracted', 'planned', 'answering', 'completed', 'recovered')
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [input.sessionId, input.requestHash]
-    );
-    if (existing.rowCount) return mapConversationTurn(existing.rows[0]);
+    try {
+      const result = await this.db.query(
+        `INSERT INTO conversation_turns(
+           id,
+           session_id,
+           client_message_id,
+           request_hash,
+           status,
+           stage,
+           active_needs_before
+         )
+         VALUES (coalesce($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7::jsonb)
+         ON CONFLICT (session_id, client_message_id) DO UPDATE
+         SET updated_at = conversation_turns.updated_at
+         WHERE conversation_turns.request_hash = EXCLUDED.request_hash
+         RETURNING *`,
+        [
+          input.id ?? null,
+          input.sessionId,
+          input.clientMessageId,
+          input.requestHash,
+          input.status ?? 'received',
+          input.stage ?? null,
+          jsonbParam(input.activeNeedsBefore)
+        ]
+      );
+      if (!result.rowCount) throw new ClientMessagePayloadConflictError();
+      return mapConversationTurn(result.rows[0]);
+    } catch (error) {
+      const pgError = error as { code?: string; constraint?: string };
+      if (pgError.code !== '23505' || pgError.constraint !== 'conversation_turns_one_active_per_session_idx') {
+        throw error;
+      }
+      const active = await this.db.query(
+        `SELECT id
+         FROM conversation_turns
+         WHERE session_id = $1
+           AND status IN ('received', 'need_extracted', 'planned', 'answering')
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [input.sessionId]
+      );
+      throw new ActiveConversationTurnError(active.rows[0]?.id);
+    }
+  }
 
+  async claimTurnExecution(input: {
+    sessionId: string;
+    turnId: string;
+    ownerId: string;
+    leaseMs: number;
+  }) {
+    const leaseMs = Math.max(1_000, Math.min(300_000, Math.trunc(input.leaseMs)));
     const result = await this.db.query(
-      `INSERT INTO conversation_turns(id, session_id, request_hash, status, stage, active_needs_before)
-       VALUES (coalesce($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6::jsonb)
-       ON CONFLICT (id) DO UPDATE
-       SET request_hash = EXCLUDED.request_hash,
-           status = EXCLUDED.status,
-           stage = EXCLUDED.stage,
-           active_needs_before = EXCLUDED.active_needs_before,
+      `UPDATE conversation_turns
+       SET execution_owner = $3::uuid,
+           execution_lease_expires_at = now() + ($4::text || ' milliseconds')::interval,
            updated_at = now()
+       WHERE session_id = $1
+         AND id = $2
+         AND status NOT IN ('completed', 'recovered')
+         AND (
+           execution_owner IS NULL
+           OR execution_owner = $3::uuid
+           OR execution_lease_expires_at IS NULL
+           OR execution_lease_expires_at < now()
+         )
        RETURNING *`,
-      [
-        input.id ?? null,
-        input.sessionId,
-        input.requestHash,
-        input.status ?? 'received',
-        input.stage ?? null,
-        jsonbParam(input.activeNeedsBefore)
-      ]
+      [input.sessionId, input.turnId, input.ownerId, leaseMs]
     );
-    return mapConversationTurn(result.rows[0]);
+    return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
+  }
+
+  async renewTurnExecution(input: {
+    sessionId: string;
+    turnId: string;
+    ownerId: string;
+    leaseMs: number;
+  }) {
+    const leaseMs = Math.max(1_000, Math.min(300_000, Math.trunc(input.leaseMs)));
+    const result = await this.db.query(
+      `UPDATE conversation_turns
+       SET execution_lease_expires_at = now() + ($4::text || ' milliseconds')::interval,
+           updated_at = now()
+       WHERE session_id = $1
+         AND id = $2
+         AND execution_owner = $3::uuid
+       RETURNING *`,
+      [input.sessionId, input.turnId, input.ownerId, leaseMs]
+    );
+    return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
+  }
+
+  async releaseTurnExecution(input: { sessionId: string; turnId: string; ownerId: string }) {
+    const result = await this.db.query(
+      `UPDATE conversation_turns
+       SET execution_owner = NULL,
+           execution_lease_expires_at = NULL,
+           updated_at = now()
+       WHERE session_id = $1
+         AND id = $2
+         AND execution_owner = $3::uuid
+       RETURNING *`,
+      [input.sessionId, input.turnId, input.ownerId]
+    );
+    return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
   }
 
   async getTurn(sessionId: string, turnId: string) {
@@ -664,13 +858,87 @@ export class ConversationRepository {
   async listDialogueLedgerEvents(sessionId: string, limit = 500) {
     const result = await this.db.query(
       `SELECT *
-       FROM dialogue_ledger_events
-       WHERE session_id = $1
-       ORDER BY created_at ASC
-       LIMIT $2`,
+       FROM (
+         SELECT *
+         FROM dialogue_ledger_events
+         WHERE session_id = $1
+         ORDER BY event_seq DESC
+         LIMIT $2
+       ) AS recent_events
+       ORDER BY event_seq ASC`,
       [sessionId, limit]
     );
     return result.rows;
+  }
+
+  async listDialogueLedgerEventsAfter(sessionId: string, afterEventSeq: number, limit = 2_000) {
+    const result = await this.db.query(
+      `SELECT *
+       FROM dialogue_ledger_events
+       WHERE session_id = $1
+         AND event_seq > $2
+       ORDER BY event_seq ASC
+       LIMIT $3`,
+      [sessionId, afterEventSeq, limit]
+    );
+    return result.rows;
+  }
+
+  async getDialogueLedgerSnapshot(sessionId: string) {
+    const result = await this.db.query(
+      'SELECT * FROM dialogue_ledger_snapshots WHERE session_id = $1',
+      [sessionId]
+    );
+    return result.rowCount ? result.rows[0] : null;
+  }
+
+  async saveDialogueLedgerSnapshot(input: {
+    sessionId: string;
+    throughEventSeq: number;
+    eventCount: number;
+    state: unknown;
+    recentEvents: unknown[];
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO dialogue_ledger_snapshots(
+         session_id,
+         through_event_seq,
+         event_count,
+         state,
+         recent_events
+       )
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+       ON CONFLICT (session_id) DO UPDATE
+       SET through_event_seq = EXCLUDED.through_event_seq,
+           event_count = EXCLUDED.event_count,
+           state = EXCLUDED.state,
+           recent_events = EXCLUDED.recent_events,
+           updated_at = now()
+       WHERE dialogue_ledger_snapshots.through_event_seq <= EXCLUDED.through_event_seq
+       RETURNING *`,
+      [
+        input.sessionId,
+        input.throughEventSeq,
+        input.eventCount,
+        jsonbParam(input.state),
+        jsonbParam(input.recentEvents)
+      ]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async latestDialogueLedgerEventSeq(sessionId: string) {
+    const result = await this.db.query(
+      `SELECT coalesce(max(event_seq), 0)::text AS event_seq,
+              count(*)::text AS event_count
+       FROM dialogue_ledger_events
+       WHERE session_id = $1`,
+      [sessionId]
+    );
+    return {
+      eventSeq: Number(result.rows[0]?.event_seq ?? 0),
+      eventCount: Number(result.rows[0]?.event_count ?? 0)
+    };
   }
 
   async upsertTurnCheckpoint(input: {
@@ -708,6 +976,17 @@ export class ConversationRepository {
     return result.rows[0] ?? null;
   }
 
+  async listTurnCheckpoints(sessionId: string, turnId: string) {
+    const result = await this.db.query(
+      `SELECT *
+       FROM turn_checkpoints
+       WHERE session_id = $1 AND turn_id = $2
+       ORDER BY created_at ASC`,
+      [sessionId, turnId]
+    );
+    return result.rows;
+  }
+
   async saveToolArtifact(input: {
     sessionId: string;
     turnId: string;
@@ -716,15 +995,17 @@ export class ConversationRepository {
     status: string;
     payload: unknown;
     warnings?: unknown[];
+    errorCode?: string | null;
   }) {
     const result = await this.db.query(
-      `INSERT INTO tool_artifacts(session_id, turn_id, tool_name, tool_request_id, status, payload, warnings)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
+      `INSERT INTO tool_artifacts(session_id, turn_id, tool_name, tool_request_id, status, payload, warnings, error_code)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
        ON CONFLICT (session_id, turn_id, tool_request_id) DO UPDATE
        SET tool_name = EXCLUDED.tool_name,
            status = EXCLUDED.status,
            payload = EXCLUDED.payload,
-           warnings = EXCLUDED.warnings
+           warnings = EXCLUDED.warnings,
+           error_code = EXCLUDED.error_code
        RETURNING *`,
       [
         input.sessionId,
@@ -733,10 +1014,22 @@ export class ConversationRepository {
         input.toolRequestId,
         input.status,
         jsonbParam(input.payload),
-        jsonbParam(input.warnings ?? [])
+        jsonbParam(input.warnings ?? []),
+        input.errorCode ?? null
       ]
     );
     return result.rows[0] ?? null;
+  }
+
+  async listToolArtifacts(sessionId: string, turnId: string) {
+    const result = await this.db.query(
+      `SELECT *
+       FROM tool_artifacts
+       WHERE session_id = $1 AND turn_id = $2
+       ORDER BY created_at ASC`,
+      [sessionId, turnId]
+    );
+    return result.rows;
   }
 
   async saveAnswerContract(input: {
@@ -745,15 +1038,17 @@ export class ConversationRepository {
     answerText: string;
     contract: unknown;
     review?: unknown;
+    responsePayload?: unknown;
     status: string;
   }) {
     const result = await this.db.query(
-      `INSERT INTO answer_contracts(session_id, turn_id, answer_text, contract, review, status)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+      `INSERT INTO answer_contracts(session_id, turn_id, answer_text, contract, review, response_payload, status)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)
        ON CONFLICT (session_id, turn_id) WHERE status = 'final' DO UPDATE
        SET answer_text = EXCLUDED.answer_text,
            contract = EXCLUDED.contract,
-           review = EXCLUDED.review
+           review = EXCLUDED.review,
+           response_payload = EXCLUDED.response_payload
        RETURNING *`,
       [
         input.sessionId,
@@ -761,6 +1056,7 @@ export class ConversationRepository {
         input.answerText,
         jsonbParam(input.contract),
         jsonbParam(input.review ?? null),
+        jsonbParam(input.responsePayload),
         input.status
       ]
     );
@@ -803,7 +1099,8 @@ export class ConversationRepository {
        ),
        inserted_message AS (
          INSERT INTO messages(session_id, role, content, metadata)
-         SELECT $1, 'assistant', $3, $4::jsonb
+         SELECT locked_turn.session_id, 'assistant', $3, $4::jsonb
+         FROM locked_turn
          WHERE NOT EXISTS (SELECT 1 FROM existing_message)
          RETURNING *
        ),
@@ -842,10 +1139,72 @@ export class ConversationRepository {
     return mapMessage(result.rows[0]);
   }
 
+  async addUserMessageForTurn(input: {
+    sessionId: string;
+    turnId: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    activeNeedsBefore?: unknown;
+  }) {
+    const result = await this.db.query(
+      `WITH locked_turn AS (
+         SELECT *
+         FROM conversation_turns
+         WHERE session_id = $1 AND id = $2
+         FOR UPDATE
+       ),
+       existing_message AS (
+         SELECT m.*
+         FROM messages m
+         JOIN locked_turn t ON t.user_message_id = m.id
+         WHERE m.role = 'user'
+       ),
+       inserted_message AS (
+         INSERT INTO messages(session_id, role, content, metadata)
+         SELECT locked_turn.session_id, 'user', $3, $4::jsonb
+         FROM locked_turn
+         WHERE NOT EXISTS (SELECT 1 FROM existing_message)
+         RETURNING *
+       ),
+       chosen_message AS (
+         SELECT * FROM existing_message
+         UNION ALL
+         SELECT * FROM inserted_message
+         LIMIT 1
+       ),
+       updated_turn AS (
+         UPDATE conversation_turns
+         SET user_message_id = (SELECT id FROM chosen_message),
+             stage = 'user_message_saved',
+             active_needs_before = coalesce($5::jsonb, active_needs_before),
+             updated_at = now()
+         WHERE session_id = $1 AND id = $2
+         RETURNING *
+       )
+       SELECT *
+       FROM chosen_message`,
+      [
+        input.sessionId,
+        input.turnId,
+        input.content,
+        jsonbParam(input.metadata ?? {}),
+        jsonbParam(input.activeNeedsBefore)
+      ]
+    );
+    if (!result.rowCount) throw new Error('Unable to save user message for turn');
+    await this.db.query(
+      `UPDATE conversation_sessions
+       SET updated_at = now()
+       WHERE id = $1`,
+      [input.sessionId]
+    );
+    return mapMessage(result.rows[0]);
+  }
+
   async enqueueLeadOutbox(input: {
     leadId: string;
     sessionId: string;
-    turnId: string;
+    turnId: string | null;
     destination: string;
     payload: unknown;
     status?: string;
@@ -856,11 +1215,8 @@ export class ConversationRepository {
        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7::timestamptz)
        ON CONFLICT (lead_id, destination) DO UPDATE
        SET payload = EXCLUDED.payload,
-           status = CASE
-             WHEN lead_outbox.status = 'sent' THEN lead_outbox.status
-             ELSE EXCLUDED.status
-           END,
-           next_attempt_at = EXCLUDED.next_attempt_at,
+           status = lead_outbox.status,
+           next_attempt_at = lead_outbox.next_attempt_at,
            updated_at = now()
        RETURNING *`,
       [
@@ -921,26 +1277,226 @@ export class ConversationRepository {
     messageId: string;
     rating: 'positive' | 'negative' | 'wrong_cards';
   }) {
+    const feedback = {
+      rating: input.rating,
+      createdAt: new Date().toISOString()
+    };
     const result = await this.db.query(
-      `UPDATE messages
-       SET metadata = jsonb_set(
-         coalesce(metadata, '{}'::jsonb),
-         '{feedback}',
-         $3::jsonb,
-         true
+      `WITH updated AS (
+         UPDATE messages
+         SET metadata = jsonb_set(
+           coalesce(metadata, '{}'::jsonb),
+           '{feedback}',
+           $3::jsonb,
+           true
+         )
+         WHERE id = $1 AND session_id = $2 AND role = 'assistant'
+         RETURNING *
+       ), turn_context AS (
+         SELECT t.id AS turn_id, t.user_message_id
+         FROM conversation_turns t
+         JOIN updated u ON u.id = t.assistant_message_id
+         LIMIT 1
+       ), buyer_message AS (
+         SELECT m.id, m.content
+         FROM messages m
+         JOIN turn_context t ON t.user_message_id = m.id
+         WHERE m.role = 'user'
+         LIMIT 1
+       ), queued AS (
+         INSERT INTO assistant_feedback_events(
+           session_id,
+           turn_id,
+           user_message_id,
+           assistant_message_id,
+           rating,
+           buyer_message,
+           assistant_answer,
+           policy_evidence,
+           model_evidence,
+           tool_evidence,
+           card_evidence,
+           diagnostic_metadata,
+           feedback_created_at
+         )
+         SELECT
+           u.session_id,
+           t.turn_id,
+           buyer.id,
+           u.id,
+           $4,
+           buyer.content,
+           u.content,
+           jsonb_build_object(
+             'version', u.metadata #>> '{managerPolicy,packVersion}',
+             'hash', u.metadata #>> '{managerPolicy,packHash}',
+             'selectedRuleIds', coalesce(u.metadata #> '{managerPolicy,selectedByPlanner}', '[]'::jsonb),
+             'reviewMode', u.metadata #>> '{managerPolicy,reviewMode}',
+             'reviewReason', u.metadata #>> '{managerPolicy,reviewReason}'
+           ),
+           jsonb_build_object(
+             'plannerModel', u.metadata #>> '{models,planner}',
+             'answerModel', u.metadata #>> '{models,answer}',
+             'reviewerModel', u.metadata #>> '{models,reviewer}',
+             'responseIds', '[]'::jsonb
+           ),
+           coalesce(u.metadata->'toolResults', '[]'::jsonb),
+           coalesce((
+             SELECT jsonb_agg(jsonb_build_object(
+               'productId', card.value->>'id',
+               'name', card.value->>'name',
+               'position', card.ordinality - 1,
+               'price', card.value->'price',
+               'currency', card.value->>'currency',
+               'visible', true,
+               'sourceUrl', card.value->>'sourceUrl'
+             ) ORDER BY card.ordinality)
+             FROM jsonb_array_elements(coalesce(u.metadata->'productCards', '[]'::jsonb))
+               WITH ORDINALITY AS card(value, ordinality)
+           ), '[]'::jsonb),
+           jsonb_build_object(
+             'runtimeMode', u.metadata->'runtimeMode',
+             'turnBudget', u.metadata->'turnBudget',
+             'selectionReadiness', u.metadata->'selectionReadiness',
+             'warnings', coalesce(u.metadata->'warnings', '[]'::jsonb)
+           ),
+           now()
+         FROM updated u
+         JOIN turn_context t ON true
+         JOIN buyer_message buyer ON true
+         WHERE $4::text IN ('negative', 'wrong_cards')
+         ON CONFLICT (assistant_message_id, rating) DO UPDATE SET
+           buyer_message = EXCLUDED.buyer_message,
+           assistant_answer = EXCLUDED.assistant_answer,
+           policy_evidence = EXCLUDED.policy_evidence,
+           model_evidence = EXCLUDED.model_evidence,
+           tool_evidence = EXCLUDED.tool_evidence,
+           card_evidence = EXCLUDED.card_evidence,
+           diagnostic_metadata = EXCLUDED.diagnostic_metadata,
+           feedback_created_at = EXCLUDED.feedback_created_at,
+           status = CASE
+             WHEN assistant_feedback_events.status IN ('resolved', 'dismissed') THEN assistant_feedback_events.status
+             ELSE 'pending'
+           END,
+           updated_at = now()
+         RETURNING id
        )
-       WHERE id = $1 AND session_id = $2 AND role = 'assistant'
-       RETURNING *`,
+       SELECT * FROM updated`,
       [
         input.messageId,
         input.sessionId,
-        jsonbParam({
-          rating: input.rating,
-          createdAt: new Date().toISOString()
-        })
+        jsonbParam(feedback),
+        input.rating
       ]
     );
     return result.rowCount ? mapMessage(result.rows[0]) : null;
+  }
+
+  async listAssistantFeedbackQueue(input: {
+    status?: AssistantFeedbackQueueStatus;
+    rating?: AssistantFeedbackRating;
+    statuses?: AssistantFeedbackQueueStatus[];
+    ratings?: AssistantFeedbackRating[];
+    limit?: number;
+  } = {}) {
+    const params: unknown[] = [Math.max(1, Math.min(500, input.limit ?? 100))];
+    const clauses: string[] = [];
+    if (input.status) {
+      params.push(input.status);
+      clauses.push(`status = $${params.length}`);
+    }
+    if (input.rating) {
+      params.push(input.rating);
+      clauses.push(`rating = $${params.length}`);
+    }
+    if (input.statuses?.length) {
+      params.push(input.statuses);
+      clauses.push(`status = ANY($${params.length}::text[])`);
+    }
+    if (input.ratings?.length) {
+      params.push(input.ratings);
+      clauses.push(`rating = ANY($${params.length}::text[])`);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+    const result = await this.db.query(
+      `SELECT *
+       FROM assistant_feedback_events
+       ${where}
+       ORDER BY created_at ASC
+       LIMIT $1`,
+      params
+    );
+    return result.rows.map(mapAssistantFeedbackQueueItem);
+  }
+
+  async getAssistantFeedbackQueueItem(id: string) {
+    const result = await this.db.query(
+      'SELECT * FROM assistant_feedback_events WHERE id = $1',
+      [id]
+    );
+    return result.rowCount ? mapAssistantFeedbackQueueItem(result.rows[0]) : null;
+  }
+
+  async updateAssistantFeedbackQueueStatus(input: {
+    id: string;
+    status: AssistantFeedbackQueueStatus;
+  }) {
+    const result = await this.db.query(
+      `UPDATE assistant_feedback_events
+       SET status = $2,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [input.id, input.status]
+    );
+    return result.rowCount ? mapAssistantFeedbackQueueItem(result.rows[0]) : null;
+  }
+
+  async markAssistantFeedbackExported(input: {
+    id: string;
+    fixture: AssistantFeedbackRegressionFixture;
+  } | {
+    exportedAt: string;
+    items: Array<{ eventId: string; fixture: AssistantFeedbackRegressionFixture }>;
+  }) {
+    if ('items' in input) {
+      if (!input.items.length) return [];
+      const result = await this.db.query(
+        `WITH export_items AS (
+           SELECT event_id, fixture
+           FROM jsonb_to_recordset($1::jsonb) AS item(event_id uuid, fixture jsonb)
+         )
+         UPDATE assistant_feedback_events feedback
+         SET status = 'exported',
+             exported_fixture = export_items.fixture,
+             exported_at = $2::timestamptz,
+             updated_at = now()
+         FROM export_items
+         WHERE feedback.id = export_items.event_id
+           AND feedback.status IN ('pending', 'in_review', 'exported')
+         RETURNING feedback.*`,
+        [
+          jsonbParam(input.items.map((item) => ({
+            event_id: item.eventId,
+            fixture: item.fixture
+          }))),
+          input.exportedAt
+        ]
+      );
+      return result.rows.map(mapAssistantFeedbackQueueItem);
+    }
+    const result = await this.db.query(
+      `UPDATE assistant_feedback_events
+       SET status = 'exported',
+           exported_fixture = $2::jsonb,
+           exported_at = now(),
+           updated_at = now()
+       WHERE id = $1
+         AND status IN ('pending', 'in_review', 'exported')
+       RETURNING *`,
+      [input.id, jsonbParam(input.fixture)]
+    );
+    return result.rowCount ? mapAssistantFeedbackQueueItem(result.rows[0]) : null;
   }
 
   async listMessages(sessionId: string, limit = 80) {
@@ -1056,25 +1612,280 @@ export class ConversationRepository {
 }
 
 export class ProductRepository {
+  private readonly catalogSyncLocks = new Map<string, { client: PoolClient; lockIdentity: string }>();
+
   constructor(private readonly db: Db = pool) {}
 
-  async startCatalogSource(input: { type: 'site_crawl' | 'csv_import'; location: string }) {
+  async getActiveCatalogInventoryCounts() {
     const result = await this.db.query(
-      `INSERT INTO catalog_sources(type, location)
-       VALUES ($1, $2)
-       RETURNING id`,
-      [input.type, input.location]
+      `SELECT
+         (SELECT count(*)::int
+          FROM products
+          WHERE is_active
+            AND raw->>'sourceType' = 'site') AS active_products,
+         (SELECT count(*)::int
+          FROM catalog_pages
+          WHERE is_active) AS active_pages`
     );
-    return result.rows[0].id as string;
+    return {
+      products: Number(result.rows[0]?.active_products ?? 0),
+      pages: Number(result.rows[0]?.active_pages ?? 0)
+    };
   }
 
-  async finishCatalogSource(id: string, status: 'completed' | 'failed', stats: Record<string, unknown>, error?: string) {
-    await this.db.query(
-      `UPDATE catalog_sources
-       SET status = $2, stats = $3, error = $4, finished_at = now()
-       WHERE id = $1`,
-      [id, status, stats, error ?? null]
+  async startCatalogSource(input: {
+    type: 'site_crawl' | 'csv_import';
+    location: string;
+    syncMode?: CatalogSyncMode;
+  }) {
+    const syncMode = input.syncMode ?? 'partial';
+    const lockIdentity = catalogSyncLockIdentity(input.type, input.location);
+    let lock: { client: PoolClient; lockIdentity: string } | null = null;
+    if (!('release' in this.db) && 'connect' in this.db && typeof this.db.connect === 'function') {
+      const client = await (this.db as Pool).connect();
+      try {
+        const acquired = await client.query(
+          'SELECT pg_try_advisory_lock(catalog_sync_advisory_key($1)) AS acquired',
+          [lockIdentity]
+        );
+        if (!acquired.rows[0]?.acquired) {
+          throw new Error(`catalog_sync_already_running:${lockIdentity}`);
+        }
+        lock = { client, lockIdentity };
+      } catch (error) {
+        client.release();
+        throw error;
+      }
+    }
+    const runner = lock?.client ?? this.db;
+    try {
+      const result = await runner.query(
+        `WITH source AS (
+           INSERT INTO catalog_sources(type, location)
+           VALUES ($1, $2)
+           RETURNING id
+         )
+         INSERT INTO catalog_sync_runs(id, source_type, source_location, lock_identity, sync_mode)
+         SELECT id, $1, $2, $3, $4 FROM source
+         RETURNING id`,
+        [input.type, input.location, lockIdentity, syncMode]
+      );
+      const id = result.rows[0].id as string;
+      if (lock) this.catalogSyncLocks.set(id, lock);
+      return id;
+    } catch (error) {
+      if (lock) {
+        await lock.client.query('SELECT pg_advisory_unlock(catalog_sync_advisory_key($1))', [lock.lockIdentity]).catch(() => undefined);
+        lock.client.release();
+      }
+      throw error;
+    }
+  }
+
+  async heartbeatCatalogSource(id: string) {
+    const lock = this.catalogSyncLocks.get(id);
+    const runner = lock?.client ?? this.db;
+    const result = await runner.query(
+      `UPDATE catalog_sync_runs
+       SET heartbeat_at = now(), updated_at = now()
+       WHERE id = $1 AND status = 'running'`,
+      [id]
     );
+    if (result.rowCount !== 1) throw new Error(`catalog_sync_heartbeat_not_updated:${id}`);
+  }
+
+  async finishCatalogSource(
+    id: string,
+    status: 'completed' | 'failed',
+    stats: Record<string, unknown>,
+    error?: string,
+    lifecycle: {
+      coverageComplete?: boolean;
+      discoveredItemCount?: number;
+      syncedItemCount?: number;
+      failedItemCount?: number;
+      deactivateProducts?: boolean;
+      deactivatePages?: boolean;
+    } = {}
+  ) {
+    const lock = this.catalogSyncLocks.get(id);
+    const runner = lock?.client ?? this.db;
+    try {
+      await runner.query(
+        `WITH run_updated AS (
+           UPDATE catalog_sync_runs
+           SET status = $2,
+               coverage_complete = $5,
+               discovered_item_count = $6,
+               synced_item_count = $7,
+               failed_item_count = $8,
+               stats = $3,
+               error = $4,
+               heartbeat_at = now(),
+               finished_at = now(),
+               updated_at = now()
+           WHERE id = $1
+           RETURNING id, started_at, deactivation_eligible
+         ), eligible AS (
+           SELECT id, started_at
+           FROM run_updated
+           WHERE deactivation_eligible
+             AND ($9::boolean OR $10::boolean)
+         ), deactivated_products AS (
+           UPDATE products
+           SET is_active = false,
+               updated_at = now()
+           FROM eligible
+           WHERE $9::boolean
+             AND products.is_active
+             AND products.raw->>'sourceType' = 'site'
+             AND products.last_seen_at < eligible.started_at
+           RETURNING products.id
+         ), deactivated_pages AS (
+           UPDATE catalog_pages
+           SET is_active = false,
+               updated_at = now()
+           FROM eligible
+           WHERE $10::boolean
+             AND catalog_pages.is_active
+             AND catalog_pages.last_seen_at < eligible.started_at
+           RETURNING catalog_pages.id
+         ), deactivation_counts AS (
+           SELECT
+             (SELECT count(*)::int FROM deactivated_products) AS products,
+             (SELECT count(*)::int FROM deactivated_pages) AS pages
+         ), run_marked AS (
+           UPDATE catalog_sync_runs
+           SET deactivated_item_count = deactivation_counts.products + deactivation_counts.pages,
+               deactivation_applied_at = now(),
+               updated_at = now()
+           FROM deactivation_counts
+           WHERE id = $1
+             AND EXISTS (SELECT 1 FROM eligible)
+           RETURNING id
+         )
+         UPDATE catalog_sources
+         SET status = $2, stats = $3, error = $4, finished_at = now()
+         WHERE id = $1
+           AND EXISTS (SELECT 1 FROM run_updated)`,
+        [
+          id,
+          status,
+          stats,
+          error ?? null,
+          status === 'completed' && Boolean(lifecycle.coverageComplete),
+          Math.max(0, lifecycle.discoveredItemCount ?? 0),
+          Math.max(0, lifecycle.syncedItemCount ?? 0),
+          Math.max(0, lifecycle.failedItemCount ?? 0),
+          lifecycle.deactivateProducts ?? false,
+          lifecycle.deactivatePages ?? false
+        ]
+      );
+    } finally {
+      if (lock) {
+        this.catalogSyncLocks.delete(id);
+        await lock.client.query('SELECT pg_advisory_unlock(catalog_sync_advisory_key($1))', [lock.lockIdentity]).catch(() => undefined);
+        lock.client.release();
+      }
+    }
+  }
+
+  async getCatalogFreshness(staleAfterHours = config.CATALOG_STALE_AFTER_HOURS): Promise<CatalogFreshnessReport> {
+    const result = await this.db.query(
+      `WITH latest_run AS (
+         SELECT * FROM catalog_sync_runs ORDER BY started_at DESC LIMIT 1
+       ), latest_success AS (
+         SELECT finished_at
+         FROM catalog_sync_runs
+         WHERE status = 'completed'
+           AND coverage_complete
+           AND failed_item_count = 0
+         ORDER BY finished_at DESC
+         LIMIT 1
+       ), product_counts AS (
+         SELECT
+           count(*) FILTER (WHERE is_active)::int AS active,
+           count(*) FILTER (WHERE NOT is_active)::int AS inactive,
+           count(*) FILTER (
+             WHERE is_active
+               AND greatest(last_seen_at, last_synced_at) < now() - ($1 || ' hours')::interval
+           )::int AS stale
+         FROM products
+         WHERE raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv'
+       ), page_counts AS (
+         SELECT
+           count(*) FILTER (WHERE is_active)::int AS active,
+           count(*) FILTER (WHERE NOT is_active)::int AS inactive,
+           count(*) FILTER (
+             WHERE is_active
+               AND greatest(last_seen_at, last_synced_at) < now() - ($1 || ' hours')::interval
+           )::int AS stale
+         FROM catalog_pages
+       )
+       SELECT
+         latest_run.*,
+         latest_success.finished_at AS last_successful_sync_at,
+         product_counts.active AS active_products,
+         product_counts.inactive AS inactive_products,
+         product_counts.stale AS stale_products,
+         page_counts.active AS active_pages,
+         page_counts.inactive AS inactive_pages,
+         page_counts.stale AS stale_pages
+       FROM product_counts
+       CROSS JOIN page_counts
+       LEFT JOIN latest_run ON true
+       LEFT JOIN latest_success ON true`,
+      [Math.max(1, staleAfterHours)]
+    );
+    const row = result.rows[0] ?? {};
+    const latestRun = row.id ? {
+      id: String(row.id),
+      sourceType: String(row.source_type),
+      sourceLocation: String(row.source_location),
+      syncMode: row.sync_mode as CatalogSyncMode,
+      status: row.status as 'running' | 'completed' | 'failed',
+      coverageComplete: Boolean(row.coverage_complete),
+      discoveredItemCount: Number(row.discovered_item_count ?? 0),
+      syncedItemCount: Number(row.synced_item_count ?? 0),
+      failedItemCount: Number(row.failed_item_count ?? 0),
+      startedAt: isoTimestamp(row.started_at),
+      heartbeatAt: isoTimestamp(row.heartbeat_at),
+      finishedAt: row.finished_at ? isoTimestamp(row.finished_at) : null
+    } : null;
+    const syncHealth = evaluateCatalogSyncHealth({
+      now: new Date(),
+      latestRun: latestRun ? {
+        syncMode: latestRun.syncMode,
+        status: latestRun.status,
+        coverageComplete: latestRun.coverageComplete,
+        failedItemCount: latestRun.failedItemCount,
+        startedAt: latestRun.startedAt,
+        heartbeatAt: latestRun.heartbeatAt,
+        finishedAt: latestRun.finishedAt
+      } : null
+    });
+    const hasStaleRecords = Number(row.stale_products ?? 0) > 0 || Number(row.stale_pages ?? 0) > 0;
+    const status = !latestRun
+      ? 'unknown'
+      : hasStaleRecords || ['degraded', 'overdue', 'stuck', 'failed'].includes(syncHealth.status)
+        ? 'stale'
+        : 'fresh';
+    return {
+      status,
+      syncHealth,
+      latestRun,
+      lastSuccessfulSyncAt: row.last_successful_sync_at ? isoTimestamp(row.last_successful_sync_at) : null,
+      products: {
+        active: Number(row.active_products ?? 0),
+        inactive: Number(row.inactive_products ?? 0),
+        stale: Number(row.stale_products ?? 0)
+      },
+      pages: {
+        active: Number(row.active_pages ?? 0),
+        inactive: Number(row.inactive_pages ?? 0),
+        stale: Number(row.stale_pages ?? 0)
+      }
+    };
   }
 
   async getEmbeddingCoverage(target: EmbeddingCoverageTarget, model = config.OPENAI_EMBEDDING_MODEL): Promise<EmbeddingCoverage> {
@@ -1192,12 +2003,17 @@ export class ProductRepository {
 
   async upsertProduct(input: CatalogProductInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
     const vector = embedding ? `[${embedding.join(',')}]` : null;
+    const sourceContentHash = catalogSourceContentHash(freshnessHashInput(input));
     const result = await this.db.query(
       `INSERT INTO products(
          external_id, source_url, slug, name, brand, category, price, currency, image_url,
-         description, specs, raw, source_priority, embedding, embedding_model, embedding_source_hash, embedding_updated_at
+         description, specs, raw, source_priority, embedding, embedding_model, embedding_source_hash, embedding_updated_at,
+         last_seen_at, last_synced_at, is_active, source_content_hash
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector, $15, $16, CASE WHEN $14::vector IS NULL THEN NULL ELSE now() END)
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector, $15, $16,
+         CASE WHEN $14::vector IS NULL THEN NULL ELSE now() END, now(), now(), true, $17
+       )
        ON CONFLICT (source_url) DO UPDATE SET
          external_id = coalesce(EXCLUDED.external_id, products.external_id),
          slug = coalesce(EXCLUDED.slug, products.slug),
@@ -1215,6 +2031,10 @@ export class ProductRepository {
          embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_model ELSE EXCLUDED.embedding_model END,
          embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_source_hash ELSE EXCLUDED.embedding_source_hash END,
          embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_updated_at ELSE EXCLUDED.embedding_updated_at END,
+         last_seen_at = now(),
+         last_synced_at = now(),
+         is_active = true,
+         source_content_hash = EXCLUDED.source_content_hash,
          updated_at = now()
        RETURNING *`,
       [
@@ -1233,7 +2053,8 @@ export class ProductRepository {
         input.sourcePriority ?? 50,
         vector,
         embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
-        embedding ? embeddingMetadata?.sourceHash ?? null : null
+        embedding ? embeddingMetadata?.sourceHash ?? null : null,
+        sourceContentHash
       ]
     );
 
@@ -1411,9 +2232,16 @@ export class ProductRepository {
 
   async upsertCatalogPage(input: CatalogPageInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
     const vector = embedding ? `[${embedding.join(',')}]` : null;
+    const sourceContentHash = catalogSourceContentHash(freshnessHashInput(input));
     const result = await this.db.query(
-      `INSERT INTO catalog_pages(source_url, page_type, title, content, summary, raw, embedding, embedding_model, embedding_source_hash, embedding_updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::vector, $8, $9, CASE WHEN $7::vector IS NULL THEN NULL ELSE now() END)
+      `INSERT INTO catalog_pages(
+         source_url, page_type, title, content, summary, raw, embedding, embedding_model,
+         embedding_source_hash, embedding_updated_at, last_seen_at, last_synced_at, is_active, source_content_hash
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7::vector, $8, $9,
+         CASE WHEN $7::vector IS NULL THEN NULL ELSE now() END, now(), now(), true, $10
+       )
        ON CONFLICT (source_url) DO UPDATE SET
          page_type = EXCLUDED.page_type,
          title = EXCLUDED.title,
@@ -1424,6 +2252,10 @@ export class ProductRepository {
          embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_model ELSE EXCLUDED.embedding_model END,
          embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_source_hash ELSE EXCLUDED.embedding_source_hash END,
          embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NULL THEN catalog_pages.embedding_updated_at ELSE EXCLUDED.embedding_updated_at END,
+         last_seen_at = now(),
+         last_synced_at = now(),
+         is_active = true,
+         source_content_hash = EXCLUDED.source_content_hash,
          updated_at = now()
        RETURNING *`,
       [
@@ -1435,7 +2267,8 @@ export class ProductRepository {
         input.raw ?? {},
         vector,
         embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
-        embedding ? embeddingMetadata?.sourceHash ?? null : null
+        embedding ? embeddingMetadata?.sourceHash ?? null : null,
+        sourceContentHash
       ]
     );
     return mapCatalogPage(result.rows[0]);
@@ -1446,8 +2279,10 @@ export class ProductRepository {
     const result = await this.db.query(
       `SELECT *, ts_rank_cd(search_tsv, websearch_to_tsquery('russian', $1)) AS rank
        FROM catalog_pages
-       WHERE $1 <> '' AND search_tsv @@ websearch_to_tsquery('russian', $1)
-       ORDER BY retrieval_score DESC NULLS LAST, updated_at DESC
+       WHERE is_active IS NOT FALSE
+         AND $1 <> ''
+         AND search_tsv @@ websearch_to_tsquery('russian', $1)
+       ORDER BY rank DESC NULLS LAST, updated_at DESC
        LIMIT $2`,
       [normalized, limit]
     );
@@ -1460,6 +2295,7 @@ export class ProductRepository {
       `SELECT *, 1 - (embedding <=> $1::vector) AS score
        FROM catalog_pages
        WHERE embedding IS NOT NULL
+         AND is_active IS NOT FALSE
          AND embedding_model = $3
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
@@ -1723,7 +2559,14 @@ export class ProductRepository {
   }
 
   async listProducts(limit = 100) {
-    const result = await this.db.query(`SELECT ${PRODUCT_RESPONSE_COLUMNS} FROM products ORDER BY updated_at DESC LIMIT $1`, [limit]);
+    const result = await this.db.query(
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}
+       FROM products
+       WHERE ${PRODUCT_FILTER}
+       ORDER BY updated_at DESC
+       LIMIT $1`,
+      [limit]
+    );
     return result.rows.map(mapProduct);
   }
 
@@ -1732,7 +2575,7 @@ export class ProductRepository {
       return this.listProducts(limit);
     }
     const conditions = patterns.map((_, i) => `(LOWER(name || ' ' || COALESCE(brand, '') || ' ' || COALESCE(category, '') || ' ' || COALESCE(description, '') || ' ' || COALESCE(source_url, '') || ' ' || COALESCE(specs::text, '')) LIKE $${i + 1})`);
-    const query = `SELECT ${PRODUCT_RESPONSE_COLUMNS} FROM products WHERE ${conditions.join(' OR ')} ORDER BY updated_at DESC LIMIT $${patterns.length + 1}`;
+    const query = `SELECT ${PRODUCT_RESPONSE_COLUMNS} FROM products WHERE ${PRODUCT_FILTER} AND (${conditions.join(' OR ')}) ORDER BY updated_at DESC LIMIT $${patterns.length + 1}`;
     const params = [...patterns.map((p) => `%${p.toLowerCase()}%`), limit];
     const result = await this.db.query(query, params);
     return result.rows.map(mapProduct);
@@ -1743,6 +2586,7 @@ export class ProductRepository {
       `SELECT source_url
        FROM products
        WHERE source_url IS NOT NULL
+         AND ${PRODUCT_FILTER}
        ORDER BY updated_at DESC
        LIMIT $1`,
       [limit]
@@ -1816,12 +2660,77 @@ export class ProductRepository {
 export class LeadRepository {
   constructor(private readonly db: Db = pool) {}
 
-  async createLead(input: { sessionId?: string; name: string; phone?: string; email?: string; question?: string }) {
+  async createClientLead(input: {
+    sessionId: string;
+    clientLeadId: string;
+    clientRequestHash: string;
+    name: string;
+    phone?: string;
+    email?: string;
+    question?: string;
+  }) {
     const result = await this.db.query(
-      `INSERT INTO leads(session_id, name, phone, email, question)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO leads(
+         session_id,
+         client_lead_id,
+         client_request_hash,
+         name,
+         phone,
+         email,
+         question
+       )
+       SELECT $1, $2::uuid, $3, $4, $5, $6, $7
+       FROM conversation_sessions
+       WHERE id = $1 AND status = 'active'
+       ON CONFLICT (session_id, client_lead_id) WHERE client_lead_id IS NOT NULL DO UPDATE
+       SET client_request_hash = leads.client_request_hash
+       WHERE leads.client_request_hash = EXCLUDED.client_request_hash
        RETURNING *`,
-      [input.sessionId ?? null, input.name, input.phone ?? null, input.email ?? null, input.question ?? null]
+      [
+        input.sessionId,
+        input.clientLeadId,
+        input.clientRequestHash,
+        input.name,
+        input.phone ?? null,
+        input.email ?? null,
+        input.question ?? null
+      ]
+    );
+    return result.rowCount ? mapLead(result.rows[0]) : null;
+  }
+
+  async createLead(input: {
+    sessionId?: string;
+    originTurnId?: string;
+    originToolRequestId?: string;
+    name: string;
+    phone?: string;
+    email?: string;
+    question?: string;
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO leads(
+         session_id,
+         origin_turn_id,
+         origin_tool_request_id,
+         name,
+         phone,
+         email,
+         question
+       )
+       VALUES ($1, $2::uuid, $3, $4, $5, $6, $7)
+       ON CONFLICT (session_id, origin_turn_id, origin_tool_request_id) DO UPDATE
+       SET name = leads.name
+       RETURNING *`,
+      [
+        input.sessionId ?? null,
+        input.originTurnId ?? null,
+        input.originToolRequestId ?? null,
+        input.name,
+        input.phone ?? null,
+        input.email ?? null,
+        input.question ?? null
+      ]
     );
     return mapLead(result.rows[0]);
   }
@@ -1829,7 +2738,15 @@ export class LeadRepository {
   async markEmailResult(id: string, status: 'sent_email' | 'email_failed', providerResponse: Record<string, unknown>) {
     const result = await this.db.query(
       `UPDATE leads
-       SET status = $2, email_provider_response = $3, sent_at = CASE WHEN $2 = 'sent_email' THEN now() ELSE sent_at END
+       SET status = CASE
+             WHEN status = 'sent_email' AND $2 = 'email_failed' THEN status
+             ELSE $2
+           END,
+           email_provider_response = CASE
+             WHEN status = 'sent_email' AND $2 = 'email_failed' THEN email_provider_response
+             ELSE $3
+           END,
+           sent_at = CASE WHEN $2 = 'sent_email' AND status <> 'sent_email' THEN now() ELSE sent_at END
        WHERE id = $1
        RETURNING *`,
       [id, status, providerResponse]
@@ -1855,8 +2772,13 @@ export class LeadRepository {
       `WITH due AS (
          SELECT id
          FROM lead_outbox
-         WHERE status IN ('pending', 'failed')
-           AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+         WHERE (
+             status IN ('pending', 'failed')
+             AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+           ) OR (
+             status = 'sending'
+             AND updated_at < now() - interval '15 minutes'
+           )
          ORDER BY created_at ASC
          LIMIT $1
          FOR UPDATE SKIP LOCKED
@@ -1899,6 +2821,39 @@ export class LeadRepository {
       [input.id, input.dead ? 'dead' : 'failed', input.error, input.nextAttemptAt ?? null]
     );
     return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
+  }
+
+  async getLeadOutboxHealth() {
+    const result = await this.db.query(
+      `SELECT
+         count(*) FILTER (WHERE status = 'pending')::int AS pending,
+         count(*) FILTER (WHERE status = 'sending')::int AS sending,
+         count(*) FILTER (WHERE status = 'failed')::int AS failed,
+         count(*) FILTER (WHERE status = 'dead')::int AS dead,
+         count(*) FILTER (
+           WHERE status = 'sending'
+             AND updated_at < now() - interval '15 minutes'
+         )::int AS stale_sending,
+         min(created_at) FILTER (WHERE status IN ('pending', 'failed', 'sending')) AS oldest_backlog_at,
+         max(updated_at) FILTER (WHERE status = 'sent') AS last_sent_at
+       FROM lead_outbox`
+    );
+    const row = result.rows[0] ?? {};
+    const pending = Number(row.pending ?? 0);
+    const sending = Number(row.sending ?? 0);
+    const failed = Number(row.failed ?? 0);
+    const dead = Number(row.dead ?? 0);
+    const staleSending = Number(row.stale_sending ?? 0);
+    return {
+      status: dead > 0 || failed > 0 || staleSending > 0 ? 'degraded' as const : 'healthy' as const,
+      pending,
+      sending,
+      failed,
+      dead,
+      staleSending,
+      oldestBacklogAt: row.oldest_backlog_at ? isoTimestamp(row.oldest_backlog_at) : null,
+      lastSentAt: row.last_sent_at ? isoTimestamp(row.last_sent_at) : null
+    };
   }
 
   async listLeads(limit = 100) {

@@ -27,34 +27,157 @@ export interface ProductAttributeConflict {
   specsRaw: string;
 }
 
-const attributeSpecKeyPatterns: Record<ProductAttributeKey, RegExp[]> = {
-  weightKg: [/(?:рабоч|эксплуатац|снаряж|общ).*масса.*кг/i, /(?:^|\s)(?:масса|вес).*кг/i],
-  voltageV: [/(?:напряж|вольт|v\b|в\b)/i],
-  powerKw: [/(?:мощн).*квт/i, /kw|кw|квт/i],
-  starterType: [/(?:стартер|запуск|пуск)/i],
-  centrifugalForceKn: [/(?:центробеж|вынуждающ|сила).*кн/i, /(?:кн|kn)/i],
-  plateSizeMm: [/(?:размер|габарит|длина|ширина).*основан/i, /(?:плит|основан).*мм/i]
-};
+const productAttributeKeys: ProductAttributeKey[] = [
+  'weightKg',
+  'voltageV',
+  'powerKw',
+  'starterType',
+  'centrifugalForceKn',
+  'plateSizeMm'
+];
+
+function isWhitespace(value: string) {
+  return value.length > 0 && value.trim() === '';
+}
+
+function isAsciiDigit(value: string) {
+  const code = value.codePointAt(0) ?? 0;
+  return code >= 48 && code <= 57;
+}
+
+function isLetterOrDigit(value: string | undefined) {
+  if (!value) return false;
+  const code = value.toLocaleLowerCase('ru').codePointAt(0) ?? 0;
+  return isAsciiDigit(value) || (code >= 97 && code <= 122) || (code >= 0x0430 && code <= 0x044f) || code === 0x0451;
+}
+
+function compactWhitespace(value: string) {
+  let output = '';
+  let pendingSpace = false;
+  for (const character of value) {
+    if (isWhitespace(character)) {
+      pendingSpace = output.length > 0;
+      continue;
+    }
+    if (pendingSpace) output += ' ';
+    output += character;
+    pendingSpace = false;
+  }
+  return output;
+}
+
+function firstOrderedIndex(value: string, alternatives: string[], fromIndex: number) {
+  let selected = -1;
+  let selectedLength = 0;
+  for (const alternative of alternatives) {
+    const foundAt = value.indexOf(alternative, fromIndex);
+    if (foundAt < 0 || (selected >= 0 && foundAt >= selected)) continue;
+    selected = foundAt;
+    selectedLength = alternative.length;
+  }
+  return selected < 0 ? null : { index: selected, length: selectedLength };
+}
+
+function containsInOrder(value: string, groups: string[][]) {
+  let cursor = 0;
+  for (const alternatives of groups) {
+    const found = firstOrderedIndex(value, alternatives, cursor);
+    if (!found) return false;
+    cursor = found.index + found.length;
+  }
+  return true;
+}
+
+function startsAtTextOrWhitespaceBoundary(value: string, term: string) {
+  let cursor = 0;
+  while (cursor < value.length) {
+    const foundAt = value.indexOf(term, cursor);
+    if (foundAt < 0) return -1;
+    if (foundAt === 0 || isWhitespace(value[foundAt - 1])) return foundAt;
+    cursor = foundAt + 1;
+  }
+  return -1;
+}
+
+function containsWithEndBoundary(value: string, term: string) {
+  let cursor = 0;
+  while (cursor < value.length) {
+    const foundAt = value.indexOf(term, cursor);
+    if (foundAt < 0) return false;
+    if (!isLetterOrDigit(value[foundAt + term.length])) return true;
+    cursor = foundAt + 1;
+  }
+  return false;
+}
+
+function specKeyMatches(attribute: ProductAttributeKey, rawKey: string) {
+  const key = compactWhitespace(rawKey).toLocaleLowerCase('ru');
+  if (attribute === 'weightKg') {
+    if (containsInOrder(key, [['рабоч', 'эксплуатац', 'снаряж', 'общ'], ['масса'], ['кг']])) return true;
+    for (const term of ['масса', 'вес']) {
+      const termIndex = startsAtTextOrWhitespaceBoundary(key, term);
+      if (termIndex >= 0 && key.indexOf('кг', termIndex + term.length) >= 0) return true;
+    }
+    return false;
+  }
+  if (attribute === 'voltageV') {
+    return ['напряж', 'вольт'].some((term) => key.includes(term)) ||
+      containsWithEndBoundary(key, 'v') || containsWithEndBoundary(key, 'в');
+  }
+  if (attribute === 'powerKw') {
+    return containsInOrder(key, [['мощн'], ['квт']]) || ['kw', 'кw', 'квт'].some((term) => key.includes(term));
+  }
+  if (attribute === 'starterType') {
+    return ['стартер', 'запуск', 'пуск'].some((term) => key.includes(term));
+  }
+  if (attribute === 'centrifugalForceKn') {
+    return containsInOrder(key, [['центробеж', 'вынуждающ', 'сила'], ['кн']]) ||
+      ['кн', 'kn'].some((term) => key.includes(term));
+  }
+  return containsInOrder(key, [['размер', 'габарит', 'длина', 'ширина'], ['основан']]) ||
+    containsInOrder(key, [['плит', 'основан'], ['мм']]);
+}
 
 function parseNumber(value: string): number | null {
-  const match = value.replace(/\s+/g, ' ').match(/\d+(?:[,.]\d+)?/);
-  if (!match) return null;
-  const parsed = Number(match[0].replace(',', '.'));
-  return Number.isFinite(parsed) ? parsed : null;
+  for (let start = 0; start < value.length; start += 1) {
+    if (!isAsciiDigit(value[start])) continue;
+    let end = start;
+    while (end < value.length && isAsciiDigit(value[end])) end += 1;
+    if ((value[end] === ',' || value[end] === '.') && isAsciiDigit(value[end + 1] ?? '')) {
+      end += 1;
+      while (end < value.length && isAsciiDigit(value[end])) end += 1;
+    }
+    const parsed = Number(value.slice(start, end).split(',').join('.'));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
 }
 
 function compactRaw(value: unknown): string {
-  return String(value ?? '').replace(/\s+/g, ' ').trim();
+  return compactWhitespace(String(value ?? ''));
 }
 
 function normalizePlateSize(value: string): string | null {
-  const normalized = value
-    .replace(/[×хХX]/g, 'x')
-    .replace(/\s+/g, '')
-    .trim();
-  const match = normalized.match(/(\d{2,4})x(\d{2,4})/);
-  if (!match) return null;
-  return `${Number(match[1])}x${Number(match[2])}`;
+  let normalized = '';
+  for (const character of value) {
+    if (isWhitespace(character)) continue;
+    normalized += character === '×' || character === 'х' || character === 'Х' || character === 'X'
+      ? 'x'
+      : character;
+  }
+  for (let start = 0; start < normalized.length; start += 1) {
+    if (!isAsciiDigit(normalized[start])) continue;
+    let separator = start;
+    while (separator < normalized.length && separator - start < 4 && isAsciiDigit(normalized[separator])) separator += 1;
+    const leftLength = separator - start;
+    if (leftLength < 2 || normalized[separator] !== 'x') continue;
+    const rightStart = separator + 1;
+    let rightEnd = rightStart;
+    while (rightEnd < normalized.length && rightEnd - rightStart < 4 && isAsciiDigit(normalized[rightEnd])) rightEnd += 1;
+    if (rightEnd - rightStart < 2) continue;
+    return `${Number(normalized.slice(start, separator))}x${Number(normalized.slice(rightStart, rightEnd))}`;
+  }
+  return null;
 }
 
 export function normalizeAttributeValue(attribute: ProductAttributeKey | string, value: unknown): number | string | null {
@@ -74,31 +197,93 @@ function extracted(attribute: ProductAttributeKey, value: unknown, source: 'name
   return { value: normalized, raw, source };
 }
 
+function isUnitBoundary(value: string | undefined) {
+  return value === undefined || isWhitespace(value) || value === ',' || value === ';' || value === ')';
+}
+
+function findNumberWithUnit(input: {
+  text: string;
+  units: string[];
+  minIntegerDigits?: number;
+  maxIntegerDigits?: number;
+  allowDecimal?: boolean;
+}) {
+  const lower = input.text.toLocaleLowerCase('ru');
+  const minimumDigits = input.minIntegerDigits ?? 1;
+  for (let start = 0; start < input.text.length; start += 1) {
+    if (!isAsciiDigit(input.text[start])) continue;
+    let numberEnd = start;
+    while (
+      numberEnd < input.text.length &&
+      isAsciiDigit(input.text[numberEnd]) &&
+      (input.maxIntegerDigits === undefined || numberEnd - start < input.maxIntegerDigits)
+    ) {
+      numberEnd += 1;
+    }
+    if (numberEnd - start < minimumDigits) continue;
+    if (input.allowDecimal && (input.text[numberEnd] === ',' || input.text[numberEnd] === '.') && isAsciiDigit(input.text[numberEnd + 1] ?? '')) {
+      numberEnd += 1;
+      while (numberEnd < input.text.length && isAsciiDigit(input.text[numberEnd])) numberEnd += 1;
+    }
+    let unitStart = numberEnd;
+    while (unitStart < input.text.length && isWhitespace(input.text[unitStart])) unitStart += 1;
+    for (const unit of input.units) {
+      if (!lower.startsWith(unit, unitStart)) continue;
+      const end = unitStart + unit.length;
+      if (isUnitBoundary(input.text[end])) return input.text.slice(start, end);
+    }
+  }
+  return null;
+}
+
+function findPlateSizeRaw(value: string) {
+  for (let start = 0; start < value.length; start += 1) {
+    if (!isAsciiDigit(value[start])) continue;
+    let separator = start;
+    while (separator < value.length && separator - start < 4 && isAsciiDigit(value[separator])) separator += 1;
+    if (separator - start < 2) continue;
+    let separatorStart = separator;
+    while (separatorStart < value.length && isWhitespace(value[separatorStart])) separatorStart += 1;
+    if (!['x', 'х', 'Х', 'X'].includes(value[separatorStart])) continue;
+    let rightStart = separatorStart + 1;
+    while (rightStart < value.length && isWhitespace(value[rightStart])) rightStart += 1;
+    let rightEnd = rightStart;
+    while (rightEnd < value.length && rightEnd - rightStart < 4 && isAsciiDigit(value[rightEnd])) rightEnd += 1;
+    if (rightEnd - rightStart >= 2) return value.slice(start, rightEnd);
+  }
+  return null;
+}
+
 export function extractAttributesFromProductName(product: Product): ExtractedProductAttributes {
   const name = product.name;
   const result: ExtractedProductAttributes = {};
 
-  const weightMatch = name.match(/(\d+(?:[,.]\d+)?)\s*кг(?=$|[\s,;)])/i);
+  const weightMatch = findNumberWithUnit({ text: name, units: ['кг'], allowDecimal: true });
   if (weightMatch) {
-    const item = extracted('weightKg', weightMatch[0], 'name');
+    const item = extracted('weightKg', weightMatch, 'name');
     if (item) result.weightKg = item;
   }
 
-  const forceMatch = name.match(/(\d+(?:[,.]\d+)?)\s*(?:кн|kn)(?=$|[\s,;)])/i);
+  const forceMatch = findNumberWithUnit({ text: name, units: ['кн', 'kn'], allowDecimal: true });
   if (forceMatch) {
-    const item = extracted('centrifugalForceKn', forceMatch[0], 'name');
+    const item = extracted('centrifugalForceKn', forceMatch, 'name');
     if (item) result.centrifugalForceKn = item;
   }
 
-  const plateMatch = name.match(/\d{2,4}\s*[xхХX]\s*\d{2,4}/);
+  const plateMatch = findPlateSizeRaw(name);
   if (plateMatch) {
-    const item = extracted('plateSizeMm', plateMatch[0], 'name');
+    const item = extracted('plateSizeMm', plateMatch, 'name');
     if (item) result.plateSizeMm = item;
   }
 
-  const voltageMatch = name.match(/(\d{2,3})\s*(?:в|v)(?=$|[\s,;)])/i);
+  const voltageMatch = findNumberWithUnit({
+    text: name,
+    units: ['в', 'v'],
+    minIntegerDigits: 2,
+    maxIntegerDigits: 3
+  });
   if (voltageMatch) {
-    const item = extracted('voltageV', voltageMatch[0], 'name');
+    const item = extracted('voltageV', voltageMatch, 'name');
     if (item) result.voltageV = item;
   }
 
@@ -115,15 +300,14 @@ function findSpecValue(product: Product, attribute: ProductAttributeKey): { raw:
   if (attribute === 'plateSizeMm') {
     const combined = entries.find((entry) => normalizePlateSize(entry.valueText));
     if (combined) return { raw: combined.valueText, key: combined.keyText };
-    const length = entries.find((entry) => /длина.*основан|длина.*плит/i.test(entry.keyText));
-    const width = entries.find((entry) => /ширина.*основан|ширина.*плит/i.test(entry.keyText));
+    const length = entries.find((entry) => containsInOrder(entry.keyText.toLocaleLowerCase('ru'), [['длина'], ['основан', 'плит']]));
+    const width = entries.find((entry) => containsInOrder(entry.keyText.toLocaleLowerCase('ru'), [['ширина'], ['основан', 'плит']]));
     const lengthNumber = length ? parseNumber(length.valueText) : null;
     const widthNumber = width ? parseNumber(width.valueText) : null;
     if (lengthNumber && widthNumber) return { raw: `${lengthNumber}x${widthNumber}`, key: `${length?.keyText}/${width?.keyText}` };
   }
 
-  const patterns = attributeSpecKeyPatterns[attribute];
-  const direct = entries.find((entry) => patterns.some((pattern) => pattern.test(entry.keyText)));
+  const direct = entries.find((entry) => specKeyMatches(attribute, entry.keyText));
   if (direct) return { raw: direct.valueText, key: direct.keyText };
 
   return null;
@@ -131,7 +315,7 @@ function findSpecValue(product: Product, attribute: ProductAttributeKey): { raw:
 
 export function extractStructuredProductAttributes(product: Product): ExtractedProductAttributes {
   const result: ExtractedProductAttributes = {};
-  for (const attribute of Object.keys(attributeSpecKeyPatterns) as ProductAttributeKey[]) {
+  for (const attribute of productAttributeKeys) {
     const spec = findSpecValue(product, attribute);
     if (!spec) continue;
     const item = extracted(attribute, spec.raw, 'specs');

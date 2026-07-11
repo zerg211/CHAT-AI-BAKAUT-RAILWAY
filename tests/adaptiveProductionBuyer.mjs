@@ -307,7 +307,7 @@ async function llmDecision({ goal, steps, turnIndex, signal }) {
   const model = process.env.OPENAI_ADAPTIVE_BUYER_MODEL ||
     process.env.OPENAI_PLANNER_MODEL ||
     process.env.OPENAI_MODEL ||
-    'gpt-5.4-mini';
+    'gpt-5.4';
   const response = await client.responses.create({
     model,
     reasoning: { effort: process.env.OPENAI_ADAPTIVE_BUYER_REASONING_EFFORT || 'low' },

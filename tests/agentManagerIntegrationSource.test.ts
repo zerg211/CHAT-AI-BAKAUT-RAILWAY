@@ -92,23 +92,30 @@ describe('agent manager integration source guards', () => {
     expect(repositories).toContain('AS retrieval_score');
     expect(repositories).toContain('token_match_count');
     expect(repositories).toContain('ORDER BY retrieval_score DESC NULLS LAST, token_match_count DESC, updated_at DESC');
-    expect(repositories).not.toContain('ORDER BY rank DESC NULLS LAST, updated_at DESC');
+    expect(repositories).toContain("search_tsv @@ websearch_to_tsquery('russian', $1)");
+    expect(repositories).toContain('ORDER BY rank DESC NULLS LAST, updated_at DESC');
   });
 
-  it('starts the lead outbox worker through the feature flag controlled worker', () => {
+  it('starts the lead outbox worker as an active runtime component', () => {
     const app = readFileSync('src/app.ts', 'utf8');
     const worker = readFileSync('src/ai/leadOutbox.ts', 'utf8');
 
     expect(app).toContain('startLeadOutboxWorker({ log: app.log })');
-    expect(worker).toContain('if (!config.AGENT_MANAGER_HARNESS_ENABLED && !config.AGENT_MANAGER_LEAD_OUTBOX_ENABLED) return undefined;');
+    expect(worker).not.toContain('AGENT_MANAGER_LEAD_OUTBOX_ENABLED');
+    expect(worker).toContain('processLeadOutboxBatch().catch');
   });
 
   it('exposes a production runtime marker through health for deploy verification', () => {
     const app = readFileSync('src/app.ts', 'utf8');
+    const admin = readFileSync('src/routes/admin.ts', 'utf8');
 
     expect(app).toContain('commitSha: process.env.RAILWAY_GIT_COMMIT_SHA');
-    expect(app).toContain('branch: process.env.RAILWAY_GIT_BRANCH');
-    expect(app).toContain('agentManagerUrlOptInParam: AGENT_MANAGER_URL_OPT_IN_PARAM');
+    expect(app).toContain('productionRuntime: AI_MANAGER_RUNTIME_MANIFEST.productionRuntime');
+    expect(app).not.toContain('getAgentManagerRuntimeDecision');
+    expect(app).not.toContain('getCatalogFreshness');
+    expect(admin).toContain("app.get('/api/admin/health'");
+    expect(admin).toContain('decision: getAgentManagerRuntimeDecision(null)');
+    expect(admin).toContain('manifest: AI_MANAGER_RUNTIME_MANIFEST');
   });
 
   it('tries same-turn recovery before returning a saved-turn error in the harness path', () => {
@@ -119,9 +126,10 @@ describe('agent manager integration source guards', () => {
     expect(route).toContain('stopStatusTimer = startStatusTimer({');
     expect(route).toContain('closeSseReply(reply);');
     expect(route).not.toContain('reply.raw.writeHead(200');
-    expect(route).toContain('if (!controller.signal.aborted && agentManagerHarnessEnabled)');
+    expect(route).toContain('if (!controller.signal.aborted && agentManagerHarnessEnabled && recoveryAllowed)');
     expect(route).toContain('assistant.recoverTurn({');
-    expect(route).toContain('recoverable: agentManagerHarnessEnabled');
+    expect(route).toContain('recoverable: agentManagerHarnessEnabled && recoveryAllowed');
+    expect(route).toContain('if (recoveryAllowed) {');
   });
 
   it('marks runtime mode and legacy paths in stream payloads, saved metadata, and admin UI', () => {
@@ -140,6 +148,19 @@ describe('agent manager integration source guards', () => {
     expect(orchestrator).toContain('runtimeModeReason: runtimeDecision.reason');
     expect(client).toContain("label: `mode: ${runtimeMode} (${shortDiagnosticReason(runtimeReason)})`");
     expect(client).toContain("label: `legacy path: ${shortDiagnosticReason(metadata.legacyRuntime.path ?? 'unknown')}`");
+  });
+
+  it('uses one versioned manager policy and an explicit untrusted-evidence boundary in every model stage', () => {
+    const orchestrator = readFileSync('src/ai/agentManagerOrchestrator.ts', 'utf8');
+    const manifest = readFileSync('src/ai/aiManagerRuntimeManifest.ts', 'utf8');
+
+    expect(orchestrator).toContain('SECURITY/TRUST BOUNDARY');
+    expect(orchestrator).toContain('salesManagerPlannerPolicyPromptBlock()');
+    expect(orchestrator).toContain("target: 'answer'");
+    expect(orchestrator).toContain("target: 'reviewer'");
+    expect(orchestrator).toContain('policyPackHash: SALES_MANAGER_POLICY_PACK_HASH');
+    expect(manifest).toContain("productionRuntime: 'agent_manager'");
+    expect(manifest).toContain("responseWriter: 'AgentManagerOrchestrator.executeClaimedTurn'");
   });
 
   it('renders agent manager traces in the admin conversation detail UI', () => {

@@ -1,0 +1,11 @@
+{
+  "taskId": "2026-07-10-ai-manager-10of10",
+  "verdict": "PENDING_PRODUCTION_PROOF",
+  "completionClaimed": false,
+  "localImplementation": "PASS",
+  "localReleaseGate": "PASS",
+  "independentVerifier": "PASS_LOCAL",
+  "productionDeployment": "PENDING",
+  "productionWidgetAudit": "PENDING",
+  "reason": "AC26-AC29 require evidence from the exact pushed Railway build and the embedded bakautprof.ru widget; AC30 forbids completion before that proof."
+}

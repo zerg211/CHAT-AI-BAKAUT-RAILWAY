@@ -33,4 +33,10 @@ describe('contact extraction', () => {
 
     expect(contact.email).toBe('buyer@example.com');
   });
+
+  it('counts phone digits rather than formatting characters and rejects overlong numeric blobs', () => {
+    expect(extractContact('+7 (12) 34-56')).toEqual({});
+    expect(extractContact('1234567890123456')).toEqual({});
+    expect(extractContact('+7 (900) 000-00-11').phone).toBe('+7 (900) 000-00-11');
+  });
 });

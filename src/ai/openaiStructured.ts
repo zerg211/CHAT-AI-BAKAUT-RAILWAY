@@ -5,6 +5,17 @@ import { extractResponseText, safeError } from './responseUtils.js';
 
 const JSON_RETRY_OUTPUT_TOKEN_MIN = 1800;
 
+export function structuredJsonRetryOutputTokenLimit(currentValue: unknown, configuredCap?: number) {
+  const current = Number(currentValue);
+  const normalizedCurrent = Number.isFinite(current) && current > 0
+    ? Math.floor(current)
+    : JSON_RETRY_OUTPUT_TOKEN_MIN;
+  const normalizedCap = Number.isFinite(configuredCap) && Number(configuredCap) > 0
+    ? Math.floor(Number(configuredCap))
+    : normalizedCurrent;
+  return Math.min(Math.max(normalizedCurrent, JSON_RETRY_OUTPUT_TOKEN_MIN), normalizedCap);
+}
+
 function stripMarkdownJsonFence(text: string) {
   const trimmed = text.trim();
   if (!trimmed.startsWith('```')) return trimmed;
@@ -81,6 +92,7 @@ export async function createStructuredJsonResponse(input: {
   request: Record<string, unknown>;
   stage: string;
   signal?: AbortSignal;
+  retryOutputTokenCap?: number;
 }) {
   const client = createOpenAIClient();
   if (!client) throw new Error('OpenAI client is not configured');
@@ -93,11 +105,13 @@ export async function createStructuredJsonResponse(input: {
     return { response, parsed: parseJsonObject(responseTextForJson(response), input.stage) };
   } catch (error) {
     if (input.signal?.aborted) throw error;
-    console.warn(`[${input.stage}] Structured JSON parse failed; retrying with larger output budget`, safeError(error));
-    const currentMax = Number(input.request.max_output_tokens ?? 0);
+    console.warn(`[${input.stage}] Structured JSON parse failed; retrying within the configured output budget`, safeError(error));
     const retryRequest: Record<string, unknown> = {
       ...input.request,
-      max_output_tokens: Math.max(currentMax * 2, JSON_RETRY_OUTPUT_TOKEN_MIN)
+      max_output_tokens: structuredJsonRetryOutputTokenLimit(
+        input.request.max_output_tokens,
+        input.retryOutputTokenCap
+      )
     };
     const retryResponse = await send(retryRequest);
     await recordOpenAIUsageOnce(`${input.stage}_retry`, String(retryRequest.model ?? config.OPENAI_MODEL), retryResponse);

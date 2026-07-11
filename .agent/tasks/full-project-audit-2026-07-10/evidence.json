@@ -1,0 +1,24 @@
+{
+  "taskId": "full-project-audit-2026-07-10",
+  "repository": "C:\\Projects\\chatAI",
+  "branch": "main",
+  "head": "2ce1ce43b3804b72e723d403fc355a66331b3358",
+  "sourceChanged": false,
+  "checks": [
+    { "name": "typecheck", "status": "PASS" },
+    { "name": "build", "status": "PASS" },
+    { "name": "full_tests", "status": "FAIL", "passed": 768, "failed": 1, "reason": "productionLiveGate.test.ts timeout at default 5s" },
+    { "name": "isolated_live_gate_test", "status": "PASS", "passed": 5, "failed": 0, "testTimeoutMs": 15000 },
+    { "name": "no_regex_guard", "status": "FAIL", "newConstructs": 91 },
+    { "name": "npm_audit_production", "status": "FAIL", "high": 2, "moderate": 2, "total": 4 },
+    { "name": "diff_check", "status": "PASS_WITH_EXISTING_LINE_ENDING_WARNINGS" }
+  ],
+  "findingCounts": {
+    "P0": 2,
+    "P1": 7,
+    "P2": 5,
+    "P3": 1
+  },
+  "verdict": "PARTIAL_NOT_PRODUCTION_COMPLETE",
+  "report": ".agent/tasks/full-project-audit-2026-07-10/report.md"
+}

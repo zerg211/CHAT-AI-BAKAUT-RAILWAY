@@ -21,6 +21,13 @@ describe('database schema migrations', () => {
     expect(queries).toContain('ALTER TABLE troubleshooting_cases ADD COLUMN IF NOT EXISTS embedding_updated_at timestamptz');
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS troubleshooting_cases'))).toBe(true);
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS openai_usage_events'))).toBe(true);
+    expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS openai_usage_reservations'))).toBe(true);
+    expect(queries).toContain('ALTER SEQUENCE dialogue_ledger_event_seq_seq OWNED BY dialogue_ledger_events.event_seq');
+    expect(queries.filter((query) => query.includes("SELECT setval(\n      'dialogue_ledger_event_seq_seq'")).length).toBe(2);
+    expect(queries).toContain('ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_lead_id uuid');
+    expect(queries).toContain('ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_request_hash text');
+    expect(queries).toContain('ALTER TABLE lead_outbox ALTER COLUMN turn_id DROP NOT NULL');
+    expect(queries.some((query) => query.includes('leads_session_client_lead_id_idx'))).toBe(true);
   });
 
   it('creates history_summary in the fresh database schema', async () => {
@@ -58,5 +65,48 @@ describe('database schema migrations', () => {
     expect(schema).toContain('request_source text NOT NULL');
     expect(schema).toContain('total_tokens integer');
     expect(schema).toContain('openai_usage_events_source_created_idx');
+  });
+
+  it('adds atomic OpenAI token reservations for concurrent budget enforcement', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '016_openai_usage_reservations.sql'), 'utf8');
+
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS openai_usage_reservations');
+    expect(schema).toContain("status IN ('reserved', 'reconciled', 'released')");
+    expect(schema).toContain('reserved_tokens integer NOT NULL');
+    expect(schema).toContain('openai_usage_reservations_active_idx');
+  });
+
+  it('adds durable turn idempotency, execution leases, exact response recovery, and lead origin keys', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '011_turn_idempotency_recovery.sql'), 'utf8');
+
+    expect(schema).toContain('client_message_id uuid');
+    expect(schema).toContain('UNIQUE INDEX IF NOT EXISTS conversation_turns_client_message_id_idx');
+    expect(schema).toContain('conversation_turns_one_active_per_session_idx');
+    expect(schema).toContain('execution_lease_expires_at');
+    expect(schema).toContain('response_payload jsonb');
+    expect(schema).toContain('origin_tool_request_id');
+    expect(schema).toContain('leads_origin_tool_request_idx');
+    expect(schema).toContain('DROP INDEX IF EXISTS conversation_turns_request_hash_active_idx');
+  });
+
+  it('adds monotonic ledger sequencing and snapshot-plus-tail compaction', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '012_dialogue_ledger_snapshots.sql'), 'utf8');
+
+    expect(schema).toContain('dialogue_ledger_event_seq_seq');
+    expect(schema).toContain('event_seq bigint');
+    expect(schema).toContain('dialogue_ledger_events_session_event_seq_idx');
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS dialogue_ledger_snapshots');
+    expect(schema).toContain('through_event_seq bigint NOT NULL');
+    expect(schema).toContain('recent_events jsonb');
+  });
+
+  it('adds public lead-form idempotency and allows pre-turn email outbox rows', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '015_lead_form_idempotency.sql'), 'utf8');
+
+    expect(schema).toContain('client_lead_id uuid');
+    expect(schema).toContain('client_request_hash text');
+    expect(schema).toContain('leads_session_client_lead_id_idx');
+    expect(schema).toContain('WHERE client_lead_id IS NOT NULL');
+    expect(schema).toContain('ALTER TABLE lead_outbox ALTER COLUMN turn_id DROP NOT NULL');
   });
 });

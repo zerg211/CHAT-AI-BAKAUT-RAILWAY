@@ -18,7 +18,7 @@ describe('production OpenAI runtime preflight', () => {
   it('keeps the headless live-test budget above the final scenario burn rate', () => {
     const configSource = readFileSync(new URL('../src/config.ts', import.meta.url), 'utf8');
 
-    expect(configSource).toContain('OPENAI_HEADLESS_DAILY_TOKEN_BUDGET: defaultNonNegativeInt(6000000)');
+    expect(configSource).toContain('OPENAI_DAILY_TOKEN_BUDGET: defaultPositiveInt(6000000)');
   });
 
   it('passes when the admin runtime probe is healthy', async () => {
@@ -27,8 +27,9 @@ describe('production OpenAI runtime preflight', () => {
       fetchImpl: async () => response(200, {
         ok: true,
         class: 'ok',
-        answerModel: 'gpt-answer',
-        plannerModel: 'gpt-planner',
+        answerModel: 'gpt-5.4',
+        plannerModel: 'gpt-5.4',
+        factModel: 'gpt-5.4',
         outputPresent: true
       })
     });
@@ -36,8 +37,53 @@ describe('production OpenAI runtime preflight', () => {
     expect(result).toMatchObject({
       ok: true,
       class: 'ok',
-      answerModel: 'gpt-answer',
-      plannerModel: 'gpt-planner'
+      answerModel: 'gpt-5.4',
+      plannerModel: 'gpt-5.4',
+      factModel: 'gpt-5.4',
+      expectedModel: 'gpt-5.4'
+    });
+  });
+
+  it('blocks a healthy runtime that still reports the legacy mini manager model', async () => {
+    const result = await checkProductionOpenAiRuntime({
+      token: 'admin',
+      fetchImpl: async () => response(200, {
+        ok: true,
+        class: 'ok',
+        answerModel: 'gpt-5.4-mini',
+        plannerModel: 'gpt-5.4-mini',
+        factModel: 'gpt-5.4-mini',
+        outputPresent: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      class: 'model_mismatch',
+      code: 'production_manager_model_mismatch',
+      expectedModel: 'gpt-5.4'
+    });
+  });
+
+  it('blocks a legacy mini fact/reviewer model even when planner and answer use GPT-5.4', async () => {
+    const result = await checkProductionOpenAiRuntime({
+      token: 'admin',
+      fetchImpl: async () => response(200, {
+        ok: true,
+        class: 'ok',
+        answerModel: 'gpt-5.4',
+        plannerModel: 'gpt-5.4',
+        factModel: 'gpt-5.4-mini',
+        outputPresent: true
+      })
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      class: 'model_mismatch',
+      code: 'production_manager_model_mismatch',
+      factModel: 'gpt-5.4-mini',
+      expectedModel: 'gpt-5.4'
     });
   });
 
@@ -80,7 +126,7 @@ describe('production OpenAI runtime preflight', () => {
       token: 'admin',
       fetchImpl: async () => response(200, {
         budget: {
-          headlessDailyTokenBudget: 160000,
+          dailyTokenBudget: 160000,
           guardReserveTokens: 16000
         },
         rows: [
@@ -105,7 +151,7 @@ describe('production OpenAI runtime preflight', () => {
       requiredRemainingTokens: 400000,
       fetchImpl: async () => response(200, {
         budget: {
-          headlessDailyTokenBudget: 600000,
+          dailyTokenBudget: 600000,
           guardReserveTokens: 16000
         },
         rows: [
@@ -130,10 +176,17 @@ describe('production OpenAI runtime preflight', () => {
       fetchImpl: async () => {
         call += 1;
         if (call === 1) {
-          return response(200, { ok: true, class: 'ok', outputPresent: true });
+          return response(200, {
+            ok: true,
+            class: 'ok',
+            answerModel: 'gpt-5.4',
+            plannerModel: 'gpt-5.4',
+            factModel: 'gpt-5.4',
+            outputPresent: true
+          });
         }
         return response(200, {
-          budget: { headlessDailyTokenBudget: 160000, guardReserveTokens: 16000 },
+          budget: { dailyTokenBudget: 160000, guardReserveTokens: 16000 },
           rows: [{ totalTokens: 25000 }]
         });
       }

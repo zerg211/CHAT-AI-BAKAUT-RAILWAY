@@ -11,6 +11,7 @@ export type ChatStreamOptions = {
   fetcher?: FetchLike;
   idleTimeoutMs?: number;
   recoverOnError?: boolean;
+  clientMessageId?: string;
 };
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 150_000;
@@ -121,8 +122,10 @@ export async function streamChatMessage(
   const fetcher = options.fetcher ?? fetch;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
   const recoverOnError = options.recoverOnError !== false;
+  const clientMessageId = options.clientMessageId ?? crypto.randomUUID();
   let turnId: string | undefined;
   let recoveryAttempted = false;
+  let serverAllowsRecovery = true;
   const recoverOnce = async (resolvedTurnId: string) => {
     if (recoveryAttempted) throw new Error(FRIENDLY_FINAL_ERROR);
     recoveryAttempted = true;
@@ -132,21 +135,32 @@ export async function streamChatMessage(
   const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({ message, clientMessageId }),
     signal
   });
-  if (!response.ok || !response.body) throw new Error('Не удалось получить ответ');
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({})) as { error?: string };
+    if (errorPayload.error === 'active_conversation_turn_exists') {
+      throw new Error('Предыдущий ответ ещё формируется. Дождитесь его завершения и повторите отправку.');
+    }
+    if (errorPayload.error === 'client_message_id_reused_with_different_payload') {
+      throw new Error('Не удалось безопасно повторить отправку сообщения. Отправьте его ещё раз.');
+    }
+    throw new Error('Не удалось получить ответ');
+  }
+  if (!response.body) throw new Error('Не удалось получить ответ');
 
   try {
     return await consumeSse(response, handlers, signal, idleTimeoutMs, async (event, data) => {
       if (event === 'turn') turnId = String(data.turnId ?? turnId ?? '');
-      if (event === 'error' && recoverOnError && (data.turnId || turnId)) {
+      if (event === 'error' && data.recoverable === false) serverAllowsRecovery = false;
+      if (event === 'error' && data.recoverable !== false && recoverOnError && (data.turnId || turnId)) {
         return recoverOnce(String(data.turnId ?? turnId));
       }
     });
   } catch (error) {
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-    if (recoverOnError && turnId && !recoveryAttempted) {
+    if (serverAllowsRecovery && recoverOnError && turnId && !recoveryAttempted) {
       return recoverOnce(turnId);
     }
     throw new Error(error instanceof Error && error.message ? error.message : FRIENDLY_FINAL_ERROR);

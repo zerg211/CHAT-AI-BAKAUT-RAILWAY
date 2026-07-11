@@ -4,36 +4,31 @@ import Fastify from 'fastify';
 import { config } from './config.js';
 import { ConversationRepository } from './db/repositories.js';
 import { startLeadOutboxWorker } from './ai/leadOutbox.js';
-import { AGENT_MANAGER_URL_OPT_IN_PARAM } from './ai/agentManagerRuntime.js';
+import { AI_MANAGER_RUNTIME_MANIFEST } from './ai/aiManagerRuntimeManifest.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerLeadRoutes } from './routes/leads.js';
 import { registerWidgetRoutes } from './routes/widget.js';
 
-export const REMEDIATION_CONTRACT_VERSION = '2026-05-19-generator-load-scenarios-recovery-v38';
-export const REMEDIATION_RUNTIME_ARTIFACTS = [
-  'agentContractV2',
-  'sourcePolicy',
-  'toolTrace',
-  'productEvidenceRegistry',
-  'policyGate',
-  'policyGateEnforcement',
-  'leadDraft',
-  'executionContract',
-  'requirementLedger',
-  'cardManifest',
-  'factClaimPlanner',
-  'factClaimAudit',
-  'leadStateMachine',
-  'postAnswerVerification'
-] as const;
+export function corsOriginsForEnvironment(input: {
+  nodeEnv: 'development' | 'test' | 'production';
+  configuredOrigins?: string;
+  publicBaseUrl: string;
+  catalogBaseUrl: string;
+}) {
+  if (input.configuredOrigins) {
+    return input.configuredOrigins.split(',').map((origin) => origin.trim()).filter(Boolean);
+  }
+  if (input.nodeEnv !== 'production') return true as const;
+  return [...new Set([new URL(input.publicBaseUrl).origin, new URL(input.catalogBaseUrl).origin])];
+}
 
 export async function buildApp() {
   const app = Fastify({
     logger: {
       level: config.NODE_ENV === 'development' ? 'info' : 'warn'
     },
-    bodyLimit: 10 * 1024 * 1024
+    bodyLimit: 2 * 1024 * 1024
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -44,38 +39,40 @@ export async function buildApp() {
   });
 
   app.addHook('onRequest', async (request, reply) => {
-    if (request.headers['access-control-request-private-network'] === 'true') {
+    if (config.NODE_ENV === 'development' && request.headers['access-control-request-private-network'] === 'true') {
       reply.header('Access-Control-Allow-Private-Network', 'true');
     }
   });
 
-  const corsOrigins = config.CORS_ORIGINS
-    ? config.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
-    : true;
+  const corsOrigins = corsOriginsForEnvironment({
+    nodeEnv: config.NODE_ENV,
+    configuredOrigins: config.CORS_ORIGINS,
+    publicBaseUrl: config.PUBLIC_BASE_URL,
+    catalogBaseUrl: config.CATALOG_BASE_URL
+  });
   await app.register(cors, {
     origin: corsOrigins,
-    credentials: true
+    credentials: false
   });
   await app.register(rateLimit, {
     max: 120,
     timeWindow: '1 minute'
   });
 
-  app.get('/api/health', async () => ({
-    ok: true,
-    answerModel: config.OPENAI_ANSWER_MODEL,
-    plannerModel: config.OPENAI_PLANNER_MODEL,
-    runtime: {
-      commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
-      branch: process.env.RAILWAY_GIT_BRANCH ?? process.env.GIT_BRANCH ?? null,
-      agentManagerHarnessEnabled: config.AGENT_MANAGER_HARNESS_ENABLED,
-      agentManagerUrlOptInParam: AGENT_MANAGER_URL_OPT_IN_PARAM
-    },
-    remediation: {
-      contractVersion: REMEDIATION_CONTRACT_VERSION,
-      runtimeArtifacts: REMEDIATION_RUNTIME_ARTIFACTS
-    }
-  }));
+  app.get('/api/health', async () => {
+    return {
+      ok: true,
+      runtime: {
+        commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
+        version: AI_MANAGER_RUNTIME_MANIFEST.version,
+        contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion,
+        productionRuntime: AI_MANAGER_RUNTIME_MANIFEST.productionRuntime
+      },
+      remediation: {
+        contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion
+      }
+    };
+  });
 
   await registerChatRoutes(app);
   await registerLeadRoutes(app);
@@ -93,7 +90,7 @@ export async function buildApp() {
     });
   }, 60_000).unref();
 
-  startLeadOutboxWorker({ log: app.log });
+  if (config.NODE_ENV !== 'test') startLeadOutboxWorker({ log: app.log });
 
   return app;
 }

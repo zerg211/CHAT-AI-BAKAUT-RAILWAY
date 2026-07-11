@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { emptyNeedState } from '../src/ai/needState.js';
+import type { ToolRequest } from '../src/ai/agentManagerContracts.js';
 import type { AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import type { ConversationSession, ConversationTurn, Message, Product, VerifiedProductFact, VerifiedProductFactInput } from '../src/shared/types.js';
 
@@ -206,6 +207,45 @@ function model(): AgentManagerModel {
   };
 }
 
+const allowedToolArgKeys: Record<ToolRequest['tool'], Set<string>> = {
+  'catalog.search': new Set([
+    'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
+    'limit', 'comparisonAttributes', 'reason', 'notes'
+  ]),
+  'catalog.getProductDetails': new Set([
+    'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
+    'productIds', 'productNames', 'comparisonAttributes', 'limit', 'reason', 'notes'
+  ]),
+  'calculator.generatorLoad': new Set([
+    'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
+    'loads', 'simultaneousStarting', 'simultaneousStartingKinds', 'estimateBasis', 'reason', 'notes'
+  ]),
+  'web.researchProductFacts': new Set([
+    'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
+    'productNames', 'comparisonAttributes', 'limit', 'reason', 'notes'
+  ]),
+  'lead.capture': new Set(['contact', 'reason', 'notes'])
+};
+
+function withStrictToolFixtures(implementation: AgentManagerModel): AgentManagerModel {
+  const planTurn = implementation.planTurn;
+  return {
+    ...implementation,
+    async planTurn(input) {
+      const intent = await planTurn(input);
+      return {
+        ...intent,
+        toolRequests: intent.toolRequests.map((request) => ({
+          ...request,
+          args: Object.fromEntries(Object.entries(request.args).filter(([key]) =>
+            allowedToolArgKeys[request.tool].has(key)
+          ))
+        })) as ToolRequest[]
+      };
+    }
+  };
+}
+
 describe('AgentManager comparison research flow', () => {
   it('requires explicit grounding when web research fails before the answer is composed', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
@@ -265,7 +305,7 @@ describe('AgentManager comparison research flow', () => {
       conversations as never,
       new FakeProducts() as never,
       { async createLead() { return null; } } as never,
-      groundingModel
+      withStrictToolFixtures(groundingModel)
     );
 
     const payload = await orchestrator.generateAnswer({
@@ -351,7 +391,7 @@ describe('AgentManager comparison research flow', () => {
       conversations as never,
       new FakeProducts() as never,
       { async createLead() { return null; } } as never,
-      thdModel
+      withStrictToolFixtures(thdModel)
     );
 
     const payload = await orchestrator.generateAnswer({
@@ -455,7 +495,7 @@ describe('AgentManager comparison research flow', () => {
       conversations as never,
       new FakeProducts() as never,
       { async createLead() { return null; } } as never,
-      groundingRepairModel
+      withStrictToolFixtures(groundingRepairModel)
     );
 
     const payload = await orchestrator.generateAnswer({
@@ -556,7 +596,7 @@ describe('AgentManager comparison research flow', () => {
       conversations as never,
       new ExactCatalogProducts() as never,
       { async createLead() { return null; } } as never,
-      badGroundingModel
+      withStrictToolFixtures(badGroundingModel)
     );
 
     const payload = await orchestrator.generateAnswer({
@@ -675,7 +715,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD8910E - заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new MissingCatalogProducts() as never, {} as never, exactFactModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new MissingCatalogProducts() as never, {} as never, withStrictToolFixtures(exactFactModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -804,7 +844,7 @@ describe('AgentManager comparison research flow', () => {
 
     const conversations = new FakeConversations();
     conversations.messages = [message('Нужен генератор для котла Baxi 24, насоса 1,1 кВт, холодильника и света.')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, baxiContextModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, withStrictToolFixtures(baxiContextModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -887,7 +927,7 @@ describe('AgentManager comparison research flow', () => {
 
     const conversations = new FakeConversations();
     conversations.messages = [message('Подберите генератор для Baxi 24 и насоса 1,1 кВт.')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, baxiSanitizingModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, withStrictToolFixtures(baxiSanitizingModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -1015,7 +1055,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD2910E - заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new SuffixCatalogProducts() as never, {} as never, exactFactModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new SuffixCatalogProducts() as never, {} as never, withStrictToolFixtures(exactFactModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -1131,7 +1171,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD3910E есть? Он с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, overconfidentModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(overconfidentModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -1247,7 +1287,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, omittingModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(omittingModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -1377,7 +1417,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, modelThatDropsCoverageFacts);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(modelThatDropsCoverageFacts));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -1496,7 +1536,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD4910E заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, badModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, withStrictToolFixtures(badModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -1618,7 +1658,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, badModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(badModel));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -1719,7 +1759,7 @@ describe('AgentManager comparison research flow', () => {
 
     const conversations = new FakeConversations();
     conversations.messages = [message('SUNREKA G7000iS starts by cord or button?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, savingModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, withStrictToolFixtures(savingModel));
 
     await orchestrator.generateAnswer({
       sessionId,
@@ -1862,7 +1902,7 @@ describe('AgentManager comparison research flow', () => {
 
     const conversations = new FakeConversations();
     conversations.messages = [message('SUNREKA G7000iS starts by cord or button?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, memoryModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, withStrictToolFixtures(memoryModel));
 
     await orchestrator.generateAnswer({
       sessionId,
@@ -1973,7 +2013,7 @@ describe('AgentManager comparison research flow', () => {
       message('RD2910E с ключа, в каталоге нет. Из близких есть RD3910E.', 'assistant'),
       message('А Firman RD3910E у вас есть? Там запуск так же через ключ/выключатель, а не кнопкой?')
     ];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, badFollowUpPlanner);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(badFollowUpPlanner));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -2020,7 +2060,7 @@ describe('AgentManager comparison research flow', () => {
     });
     const conversations = new FakeConversations();
     const products = new FakeProducts();
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, {} as never, model());
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, {} as never, withStrictToolFixtures(model()));
 
     const payload = await orchestrator.generateAnswer({
       sessionId,

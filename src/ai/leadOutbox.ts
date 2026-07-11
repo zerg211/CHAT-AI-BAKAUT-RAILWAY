@@ -1,4 +1,3 @@
-import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, type LeadOutboxItem } from '../db/repositories.js';
 import { sendLeadEmail } from '../email/httpEmail.js';
 import { safeError } from './responseUtils.js';
@@ -61,7 +60,6 @@ export function startLeadOutboxWorker(input: {
   log?: { warn: (value: unknown, message?: string) => void };
   intervalMs?: number;
 } = {}) {
-  if (!config.AGENT_MANAGER_HARNESS_ENABLED && !config.AGENT_MANAGER_LEAD_OUTBOX_ENABLED) return undefined;
   const intervalMs = input.intervalMs ?? 30_000;
   const run = () => {
     processLeadOutboxBatch().catch((error) => {

@@ -14,15 +14,14 @@
     "evals": "node evals/promptfoo/run-promptfoo.cjs eval -c promptfooconfig.yaml --no-table",
     "evals:summarize": "node evals/promptfoo/summarize-results.cjs",
     "lint:no-regex": "node scripts/no-regex-guard.mjs",
+    "verify": "node tests/aiManagerReleaseGate.mjs",
     "test:eval:agentic": "vitest run tests/agentRuntimeContractsEval.test.ts tests/agenticCycle876.test.ts tests/agentTurnContract.test.ts tests/recommendationRanking.test.ts",
     "test:remediation:external-readiness": "node tests/remediationExternalReadiness.mjs",
     "test:remediation:railway-source": "node tests/remediationRailwaySourceReadiness.mjs",
     "test:remediation:docker-image": "node tests/remediationDockerImageProof.mjs",
     "test:remediation:completion-audit": "node tests/remediationCompletionAudit.mjs",
     "test:remediation:postdeploy": "node tests/remediationPostdeploy.mjs",
-    "test:remediation:predeploy": "node tests/remediationPredeploy.mjs",
-    "deploy:remediation:railway": "node tests/remediationRailwayDeploy.mjs",
-    "test:live:local:llm": "node tests/liveAgentCycle.local-llm-full.mjs",
+    "test:remediation:predeploy": "node tests/aiManagerReleaseGate.mjs",
     "test:live:production": "node tests/liveAgentCycle.production.mjs",
     "prepare:live:production:scenario": "node tests/prepareProductionLiveDialogueScenario.mjs",
     "test:live:production:diverse": "node tests/liveAgentCycle.diverse.production.mjs",
@@ -33,9 +32,11 @@
     "catalog:sync": "tsx src/scripts/syncCatalog.ts",
     "catalog:sync:sitemap": "tsx src/scripts/syncCatalogSitemap.ts",
     "catalog:inventory": "tsx src/scripts/inventoryCatalog.ts",
+    "catalog:health": "tsx src/scripts/catalogHealth.ts",
     "catalog:import": "tsx src/scripts/importCatalogCsv.ts",
     "embeddings:backfill": "tsx src/scripts/backfillEmbeddings.ts",
-    "embeddings:coverage": "tsx src/scripts/embeddingCoverage.ts"
+    "embeddings:coverage": "tsx src/scripts/embeddingCoverage.ts",
+    "feedback:export-evals": "tsx src/scripts/exportAssistantFeedbackEvals.ts"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",
@@ -45,14 +46,14 @@
     "csv-parse": "^6.1.0",
     "dotenv": "^17.2.3",
     "fastify": "^5.6.2",
-    "js-yaml": "^4.1.1",
+    "ipaddr.js": "^2.4.0",
+    "js-yaml": "^4.3.0",
     "openai": "^6.9.1",
-    "pdfjs-dist": "^5.7.284",
     "pg": "^8.16.3",
     "pino": "^10.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "undici": "^7.16.0",
+    "undici": "^7.28.0",
     "zod": "^4.1.13"
   },
   "devDependencies": {
@@ -63,14 +64,17 @@
     "@types/react": "^19.2.6",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
-    "concurrently": "^9.2.1",
+    "concurrently": "^9.2.4",
     "jsdom": "^27.2.0",
     "playwright": "^1.57.0",
-    "promptfoo": "^0.121.12",
-    "tsx": "^4.21.0",
+    "promptfoo": "^0.121.18",
+    "tsx": "^4.23.0",
     "typescript": "^5.9.3",
-    "vite": "^7.2.7",
+    "vite": "^7.3.6",
     "vitest": "^4.0.15"
+  },
+  "overrides": {
+    "ws": "^8.21.0"
   },
   "engines": {
     "node": ">=22"

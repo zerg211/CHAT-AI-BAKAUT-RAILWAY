@@ -24,7 +24,10 @@ describe('sales manager selection scenario fixtures', () => {
     for (const scenario of scenarios.focusedScenarios) {
       expect(scenario.buyerUtteranceVariants.length).toBeGreaterThanOrEqual(3);
       expect(scenario.expectedBehavior.length).toBeGreaterThanOrEqual(3);
-      expect(scenario.expectedBehavior.join(' ')).not.toMatch(/contains exact phrase|regex|keyword only/i);
+      const expectedBehavior = scenario.expectedBehavior.join(' ').toLocaleLowerCase('en');
+      expect(expectedBehavior).not.toContain('contains exact phrase');
+      expect(expectedBehavior).not.toContain('regex');
+      expect(expectedBehavior).not.toContain('keyword only');
     }
   });
 

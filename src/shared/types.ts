@@ -50,6 +50,10 @@ export interface Product {
   description?: string | null;
   specs: Record<string, unknown>;
   raw?: Record<string, unknown>;
+  lastSeenAt?: string | null;
+  lastSyncedAt?: string | null;
+  isActive?: boolean;
+  sourceContentHash?: string | null;
   retrievalScore?: number | null;
   retrievalSource?: ProductRetrievalSource | null;
 }
@@ -159,6 +163,10 @@ export interface CatalogPage {
   content: string;
   summary?: string | null;
   raw: Record<string, unknown>;
+  lastSeenAt?: string | null;
+  lastSyncedAt?: string | null;
+  isActive?: boolean;
+  sourceContentHash?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -184,6 +192,10 @@ export interface DataConflict {
 export interface Lead {
   id: string;
   sessionId?: string | null;
+  clientLeadId?: string | null;
+  clientRequestHash?: string | null;
+  originTurnId?: string | null;
+  originToolRequestId?: string | null;
   name: string;
   phone?: string | null;
   email?: string | null;
@@ -807,6 +819,7 @@ export interface PostAnswerVerificationRecovery {
 export interface ConversationTurn {
   id: string;
   sessionId: string;
+  clientMessageId?: string | null;
   userMessageId?: string | null;
   assistantMessageId?: string | null;
   status: TurnLifecycleStatus;
@@ -817,6 +830,8 @@ export interface ConversationTurn {
   plannerContract?: AgentTurnContract | Record<string, unknown> | null;
   activeNeedsBefore?: ActiveCustomerNeed[] | null;
   activeNeedsAfter?: ActiveCustomerNeed[] | null;
+  executionOwner?: string | null;
+  executionLeaseExpiresAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

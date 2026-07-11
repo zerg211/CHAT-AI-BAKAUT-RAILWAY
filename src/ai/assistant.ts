@@ -6883,8 +6883,8 @@ function buildCompactAnswerSystemPrompt(latestUserMessage?: string) {
   const behaviorPolicy = salesManagerBehaviorPolicyPromptBlock({
     target: 'answer',
     latestUserMessage,
-    enabled: config.DYNAMIC_SALES_POLICY_ENABLED,
-    shadowMode: config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+    enabled: true,
+    shadowMode: false
   });
   return [
     'You are the BAKAUT AI sales consultant for construction and power equipment.',
@@ -7735,7 +7735,7 @@ export class AssistantService {
         email: contact.email,
         question: leadQuestionSummary(userMessage, history, state, cards)
       });
-      if (config.AGENT_MANAGER_LEAD_OUTBOX_ENABLED && turnId) {
+      if (turnId) {
         await this.conversations.enqueueLeadOutbox({
           leadId: lead.id,
           sessionId: session.id,
@@ -10935,8 +10935,8 @@ export class AssistantService {
     const answerSalesPolicyTrace = buildSalesManagerPolicyTrace({
       target: 'answer',
       latestUserMessage: input.userMessage,
-      enabled: config.DYNAMIC_SALES_POLICY_ENABLED,
-      shadowMode: config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+      enabled: true,
+      shadowMode: false
     });
     const answerInputPayload = {
       salesManagerPolicyTrace: answerSalesPolicyTrace,

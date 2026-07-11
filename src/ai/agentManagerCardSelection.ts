@@ -15,6 +15,7 @@ import {
   parseWeightNeedRangeKg,
   productMatchesIntent,
   productMentionedInText,
+  productPowerSource,
   requiresBatteryPowerStationFromText
 } from './productClassifier.js';
 import {
@@ -61,6 +62,7 @@ export function uniqueStrings(values: string[]) {
 
 function latestActiveNeedProductClass(needState: CustomerNeedState): ProductSelectionClass {
   const classes = (needState.activeNeeds ?? [])
+    .filter((need) => need.status === 'open' || need.status === 'selected')
     .map((need) => need.productClass)
     .filter((value): value is ProductSelectionClass => value !== 'commercial' && value !== 'unknown');
   return classes.length ? classes[classes.length - 1] : 'unknown';
@@ -73,7 +75,16 @@ function positiveFiniteNumber(value: unknown) {
 
 function numberFromStructuredBudgetText(value: string) {
   const trimmed = value.trim().toLowerCase();
-  const prefix = ['budget.max:', 'budget_max:', 'budgetmax:', 'budget:'].find((candidate) => trimmed.startsWith(candidate));
+  const prefix = [
+    'budget.max_rub:',
+    'budget_max_rub:',
+    'price.max_rub:',
+    'price_max_rub:',
+    'budget.max:',
+    'budget_max:',
+    'budgetmax:',
+    'budget:'
+  ].find((candidate) => trimmed.startsWith(candidate));
   if (!prefix) return undefined;
   let numeric = '';
   let hasDecimal = false;
@@ -101,11 +112,14 @@ export function budgetMaxFromNeedState(needState: CustomerNeedState) {
     if (budget !== undefined) return budget;
   }
 
+  const focusedNeed = [...(needState.activeNeeds ?? [])]
+    .reverse()
+    .find((need) => need.status === 'open' || need.status === 'selected');
   const textValues = [
     ...(needState.constraints ?? []).map((item) => item.value),
     ...(needState.confirmedFacts ?? []).map((item) => item.value),
     ...(needState.explicitNeeds ?? []).map((item) => item.value),
-    ...(needState.activeNeeds ?? []).flatMap((need) => need.constraints ?? [])
+    ...(focusedNeed?.constraints ?? [])
   ];
   for (const value of textValues) {
     const budget = typeof value === 'string' ? numberFromStructuredBudgetText(value) : undefined;
@@ -164,35 +178,16 @@ export const productSelectionClasses: ProductSelectionClass[] = [
 ];
 
 function coerceProductSelectionClass(value: unknown): ProductSelectionClass {
-  if (typeof value === 'string') {
-    const normalized = value.toLocaleLowerCase('ru-RU');
-    if (
-      normalized.includes('battery power station') ||
-      normalized.includes('portable power station') ||
-      normalized.includes(fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446')) ||
-      normalized.includes(fromEscaped('\\u0437\\u0430\\u0440\\u044f\\u0434\\u043d\\u0430\\u044f \\u0441\\u0442\\u0430\\u043d\\u0446'))
-    ) {
-      return 'generator';
-    }
-  }
   return productSelectionClasses.includes(value as ProductSelectionClass)
     ? value as ProductSelectionClass
     : 'unknown';
 }
 
-export function toolRequestProductIntent(request: ToolRequest, fallbackText = ''): ProductSelectionClass {
+export function toolRequestProductIntent(request: ToolRequest, _fallbackText = ''): ProductSelectionClass {
   const args = request.args as Record<string, unknown>;
-  const explicit = coerceProductSelectionClass(args.productIntent);
-  if (explicit !== 'unknown') return explicit;
-  const semanticText = [
-    typeof args.semanticQuery === 'string' ? args.semanticQuery : '',
-    typeof args.query === 'string' ? args.query : '',
-    typeof args.reason === 'string' ? args.reason : '',
-    typeof args.notes === 'string' ? args.notes : '',
-    request.rationale,
-    fallbackText
-  ].filter(Boolean).join('\n');
-  return inferProductIntent(semanticText);
+  const canonical = coerceProductSelectionClass(args.canonicalProductIntent);
+  if (canonical !== 'unknown') return canonical;
+  return coerceProductSelectionClass(args.productIntent);
 }
 
 export function toolRequestScopedQuery(request: ToolRequest, fallbackQuery: string) {
@@ -224,21 +219,27 @@ function inferVisibleCardIntent(input: {
   history: Message[];
   intent: AgentIntentContract;
   answerText: string;
+  selectedProductIds?: string[];
   needState: CustomerNeedState;
 }): ProductSelectionClass {
   const toolIntent = intentFromContractToolRequests(input.intent);
   if (toolIntent !== 'unknown') return toolIntent;
-  const semanticText = [
+  const policyIntent = coerceProductSelectionClass(input.intent.selectionPolicy?.canonicalProductClass);
+  if (policyIntent !== 'unknown') return policyIntent;
+  for (const mention of input.intent.productMentions ?? []) {
+    const mentionIntent = coerceProductSelectionClass(mention.productClass);
+    if (mentionIntent !== 'unknown') return mentionIntent;
+  }
+  if (input.intent.selectionPolicy) return 'unknown';
+  const activeNeedIntent = latestActiveNeedProductClass(input.needState);
+  if (activeNeedIntent !== 'unknown') return activeNeedIntent;
+  return inferProductIntent([
     input.userMessage,
     input.intent.userMessageSummary,
     input.intent.dialogueUnderstanding,
     input.intent.nextStepRationale,
-    input.intent.productMentions?.map((mention) => [mention.productClass, mention.name, mention.evidence].filter(Boolean).join(' ')).join('\n'),
-    toolRequestSemanticText(input.intent),
     input.answerText
-  ].filter(Boolean).join('\n');
-  const textIntent = inferProductIntent(semanticText);
-  return textIntent !== 'unknown' ? textIntent : latestActiveNeedProductClass(input.needState);
+  ].filter(Boolean).join('\n'));
 }
 
 function productModelMentionedInText(product: Product, text: string) {
@@ -434,6 +435,153 @@ function powerUnitAt(value: string, index: number) {
   return undefined;
 }
 
+function structuredRequirementNumber(intent: AgentIntentContract, kinds: string[]) {
+  const accepted = new Set(kinds);
+  for (const requirement of intent.selectionPolicy?.requirements ?? []) {
+    if (
+      !accepted.has(requirement.kind) ||
+      requirement.role !== 'hard_constraint' ||
+      requirement.strictness !== 'strict'
+    ) continue;
+    const value = typeof requirement.value === 'number'
+      ? requirement.value
+      : typeof requirement.value === 'string'
+        ? Number(requirement.value)
+        : Number.NaN;
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return undefined;
+}
+
+const supportedStrictNumericRequirementKinds = new Set([
+  'budget_max_rub',
+  'price_max_rub',
+  'weight_min_kg',
+  'weight_max_kg',
+  'nominal_power_min_kw',
+  'nominal_power_max_kw',
+  'power_min_kw',
+  'power_max_kw'
+]);
+
+const supportedCeramicMaterialValues = new Set(['ceramic', 'porcelain_tile', 'ceramic_tile']);
+
+export function strictSelectionRequirementBlockers(
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass
+) {
+  const policy = intent.selectionPolicy;
+  if (!policy) return [] as Array<{ id: string; kind: string; reason: string }>;
+
+  const blockers: Array<{ id: string; kind: string; reason: string }> = [];
+  for (const requirement of policy.requirements) {
+    if (requirement.role !== 'hard_constraint' || requirement.strictness !== 'strict') continue;
+
+    if (supportedStrictNumericRequirementKinds.has(requirement.kind)) {
+      const value = typeof requirement.value === 'number'
+        ? requirement.value
+        : typeof requirement.value === 'string'
+          ? Number(requirement.value)
+          : Number.NaN;
+      if (!Number.isFinite(value) || value < 0) {
+        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'invalid_numeric_value' });
+      }
+      continue;
+    }
+
+    if (requirement.kind === 'phase') {
+      const value = String(requirement.value ?? '').trim().toLocaleLowerCase('en-US');
+      const expected = value === 'single_phase' || value === 'single' || value === '220' || value === '220v'
+        ? 'single_phase'
+        : value === 'three_phase' || value === 'three' || value === '380' || value === '380v'
+          ? 'three_phase'
+          : undefined;
+      if (!expected || policy.phase !== expected) {
+        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'phase_not_bound_to_typed_policy' });
+      }
+      continue;
+    }
+
+    if (requirement.kind === 'quantity') {
+      const value = typeof requirement.value === 'number'
+        ? requirement.value
+        : typeof requirement.value === 'string'
+          ? Number(requirement.value)
+          : Number.NaN;
+      if (!Number.isSafeInteger(value) || value < 1) {
+        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'invalid_quantity_value' });
+      }
+      continue;
+    }
+
+    if (requirement.kind === 'material') {
+      const value = typeof requirement.value === 'string'
+        ? requirement.value.trim().toLocaleLowerCase('en-US')
+        : '';
+      if (productClass !== 'diamondBlade' || !supportedCeramicMaterialValues.has(value)) {
+        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'material_not_mechanically_verifiable' });
+      }
+      continue;
+    }
+
+    blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'unsupported_strict_requirement_kind' });
+  }
+  return blockers;
+}
+
+function structuredBudgetMax(intent: AgentIntentContract) {
+  return structuredRequirementNumber(intent, ['budget_max_rub', 'price_max_rub']);
+}
+
+function structuredGeneratorPowerRequirement(intent: AgentIntentContract): GeneratorPowerCardRequirement | undefined {
+  const minKw = structuredRequirementNumber(intent, ['nominal_power_min_kw', 'power_min_kw']);
+  const maxKw = structuredRequirementNumber(intent, ['nominal_power_max_kw', 'power_max_kw']);
+  return minKw === undefined && maxKw === undefined ? undefined : { minKw, maxKw };
+}
+
+function structuredPlateWeightRange(intent: AgentIntentContract): PlateWeightRange | undefined {
+  const min = structuredRequirementNumber(intent, ['weight_min_kg']);
+  const max = structuredRequirementNumber(intent, ['weight_max_kg']);
+  if (min === undefined && max === undefined) return undefined;
+  return {
+    min: min ?? 0,
+    max: max ?? Number.MAX_SAFE_INTEGER,
+    source: 'planner'
+  };
+}
+
+function structuredMaterialRequirement(intent: AgentIntentContract) {
+  const requirement = (intent.selectionPolicy?.requirements ?? []).find((item) =>
+    item.kind === 'material' && item.role === 'hard_constraint' && item.strictness === 'strict'
+  );
+  return typeof requirement?.value === 'string'
+    ? requirement.value.trim().toLocaleLowerCase('ru-RU')
+    : undefined;
+}
+
+export function productMeetsSupportedStrictMaterialRequirement(
+  product: Product,
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass
+) {
+  const material = structuredMaterialRequirement(intent);
+  if (!material) return true;
+  return productClass === 'diamondBlade' &&
+    supportedCeramicMaterialValues.has(material) &&
+    diamondBladeSupportsCeramic(product);
+}
+
+function productMeetsStructuredPowerSource(
+  product: Product,
+  powerSource: 'battery' | 'fuel' | 'mains' | 'any' | null | undefined
+) {
+  if (!powerSource || powerSource === 'any') return true;
+  const actual = productPowerSource(product);
+  if (powerSource === 'battery') return actual === 'battery';
+  if (powerSource === 'fuel') return actual === 'gasoline' || actual === 'diesel';
+  return false;
+}
+
 function requestedPowerRangeKw(text: string) {
   for (let index = 0; index < text.length; index += 1) {
     const left = decimalNumberAt(text, index);
@@ -553,11 +701,15 @@ function generatorPowerFitScore(product: Product, range: { min: number; max: num
   return score;
 }
 
-function productMeetsGeneratorPowerCardRequirement(product: Product, requirement?: GeneratorPowerCardRequirement) {
+function productMeetsGeneratorPowerCardRequirement(
+  product: Product,
+  requirement?: GeneratorPowerCardRequirement,
+  failClosed = false
+) {
   if (!requirement) return true;
   const power = extractGeneratorPowerForHardSelection(product);
   const nominal = power.nominalKw ?? power.maxKw;
-  if (nominal === undefined) return true;
+  if (nominal === undefined) return !failClosed;
   if (requirement.minKw !== undefined && nominal < requirement.minKw - 0.05) return false;
   if (requirement.maxKw !== undefined) {
     const toleratedMax = Math.max(requirement.maxKw + 0.3, requirement.maxKw * 1.25);
@@ -615,11 +767,16 @@ function requestedGeneratorPhaseRequirement(text: string): GeneratorPhaseRequire
   return has220 ? 'single_220' : undefined;
 }
 
-function productMeetsGeneratorPhaseRequirement(product: Product, requirement?: GeneratorPhaseRequirement) {
+function productMeetsGeneratorPhaseRequirement(
+  product: Product,
+  requirement?: GeneratorPhaseRequirement,
+  failClosed = false
+) {
   if (!requirement) return true;
   const profile = generatorPhaseProfile(product);
-  if (requirement === 'three_380') return profile !== 'single_220';
-  return profile !== 'three_phase_380' && profile !== 'mixed_220_380';
+  if (profile === 'unknown') return !failClosed;
+  if (requirement === 'three_380') return profile === 'three_phase_380' || profile === 'mixed_220_380';
+  return profile === 'single_220';
 }
 
 const ceramicBladeMaterialTerms = [
@@ -982,7 +1139,9 @@ function plateRequirementsForCardSelection(input: {
   userMessage: string;
   plateWeightRange?: { min?: number; max?: number };
 }): BuyerRequirementContract {
-  const maxRub = budgetMaxFromNeedState(input.needState);
+  const maxRub = input.intent.selectionPolicy
+    ? structuredBudgetMax(input.intent)
+    : budgetMaxFromNeedState(input.needState);
   const hasLightConstraint = Boolean(input.plateWeightRange);
   return {
     buyerGoal: [input.intent.userMessageSummary, input.intent.dialogueUnderstanding, input.userMessage].filter(Boolean).join(' / '),
@@ -1006,7 +1165,9 @@ function honestPlateExpansionProducts(input: {
   plateWeightRange?: { min?: number; max?: number };
 }) {
   const requirements = plateRequirementsForCardSelection(input);
-  const maxRub = budgetMaxFromNeedState(input.needState);
+  const maxRub = input.intent.selectionPolicy
+    ? structuredBudgetMax(input.intent)
+    : budgetMaxFromNeedState(input.needState);
   const inBudgetMatchCount = maxRub === undefined
     ? input.products.length
     : input.products.filter((product) => typeof product.price === 'number' && Number.isFinite(product.price) && product.price <= maxRub).length;
@@ -1049,6 +1210,7 @@ export function selectProductsForVisibleCards(input: {
   history: Message[];
   intent: AgentIntentContract;
   answerText: string;
+  selectedProductIds?: string[];
   needState: CustomerNeedState;
   allowHistoricalProducts?: boolean;
 }) {
@@ -1057,8 +1219,12 @@ export function selectProductsForVisibleCards(input: {
     request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
   ) || input.allowHistoricalProducts === true;
   const cardIntent = inferVisibleCardIntent(input);
+  const structuredSelection = Boolean(
+    input.intent.selectionPolicy && input.selectedProductIds !== undefined
+  );
   if (!hasExplicitCardTool) {
     return {
+      semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
       intent: cardIntent,
       products: [],
       selectedProductIds: [],
@@ -1072,9 +1238,31 @@ export function selectProductsForVisibleCards(input: {
     ? mentioned
     : mentioned.filter((product) => productMatchesIntent(product, cardIntent));
   const sameIntentPool = sameIntentProducts(unique, cardIntent);
+  const strictRequirementBlockers = strictSelectionRequirementBlockers(input.intent, cardIntent);
+  if (strictRequirementBlockers.length) {
+    return {
+      semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
+      intent: cardIntent,
+      products: [],
+      selectedProductIds: [],
+      answerMentionedProductIds: mentioned.map((product) => product.id),
+      droppedProductIds: unique.map((product) => product.id),
+      warnings: [`product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementBlockers.length}`]
+    };
+  }
 
   let selected: Product[];
-  if (mentionedMatchingIntent.length) {
+  if (structuredSelection) {
+    const requestedIds = new Set(input.selectedProductIds ?? []);
+    selected = unique.filter((product) => requestedIds.has(product.id));
+    const strictProductClass = input.intent.selectionPolicy?.alternativePolicy === 'exact_only' ||
+      input.intent.selectionPolicy?.alternativePolicy === 'same_class_only';
+    if (strictProductClass && cardIntent !== 'unknown') {
+      selected = selected.filter((product) => productMatchesIntent(product, cardIntent));
+    }
+    const mentionedIds = new Set(mentioned.map((product) => product.id));
+    selected = selected.filter((product) => mentionedIds.has(product.id));
+  } else if (mentionedMatchingIntent.length) {
     const shouldExpandCatalogSearch = cardIntent === 'plate' &&
       mentionedMatchingIntent.length === 1 &&
       input.intent.toolRequests.some((request) => request.tool === 'catalog.search') &&
@@ -1117,68 +1305,111 @@ export function selectProductsForVisibleCards(input: {
   let powerSourceFilteredCount = 0;
   let powerSourceNoFit = false;
   const buyerRequirementText = buyerRequirementTextForCardSelection(input);
-  const batteryPowerSourceRequired = requiresBatteryPowerStationFromText(buyerRequirementText);
-  const sourceConstrainedGeneratorPool = isGeneratorProductClass(cardIntent) && batteryPowerSourceRequired
-    ? sameIntentPool.filter(isBatteryPowerStation)
+  const structuredPowerSource = structuredSelection
+    ? input.intent.selectionPolicy?.powerSource
+    : undefined;
+  const batteryPowerSourceRequired = structuredSelection
+    ? structuredPowerSource === 'battery'
+    : requiresBatteryPowerStationFromText(buyerRequirementText);
+  const sourceConstrainedGeneratorPool = isGeneratorProductClass(cardIntent)
+    ? structuredSelection && structuredPowerSource && structuredPowerSource !== 'any'
+      ? sameIntentPool.filter((product) => productMeetsStructuredPowerSource(product, structuredPowerSource))
+      : batteryPowerSourceRequired
+        ? sameIntentPool.filter(isBatteryPowerStation)
+        : sameIntentPool
     : sameIntentPool;
-  if (isGeneratorProductClass(cardIntent) && selected.length && batteryPowerSourceRequired) {
-    const batterySelected = selected.filter(isBatteryPowerStation);
-    if (batterySelected.length) {
-      powerSourceFilteredCount = selected.length - batterySelected.length;
-      selected = batterySelected;
+  const hasStructuredPowerSource = Boolean(
+    structuredSelection && structuredPowerSource && structuredPowerSource !== 'any'
+  );
+  if (
+    isGeneratorProductClass(cardIntent) &&
+    selected.length &&
+    (batteryPowerSourceRequired || hasStructuredPowerSource)
+  ) {
+    const sourceMatchingSelected = structuredSelection
+      ? selected.filter((product) => productMeetsStructuredPowerSource(product, structuredPowerSource))
+      : selected.filter(isBatteryPowerStation);
+    if (sourceMatchingSelected.length) {
+      powerSourceFilteredCount = selected.length - sourceMatchingSelected.length;
+      selected = sourceMatchingSelected;
     } else {
-      const fallbackBatteryProducts = sameIntentPool.filter(isBatteryPowerStation);
       powerSourceFilteredCount = selected.length;
-      selected = fallbackBatteryProducts;
-      powerSourceNoFit = fallbackBatteryProducts.length === 0;
+      if (structuredSelection) {
+        selected = [];
+        powerSourceNoFit = true;
+      } else {
+        const fallbackBatteryProducts = sameIntentPool.filter(isBatteryPowerStation);
+        selected = fallbackBatteryProducts;
+        powerSourceNoFit = fallbackBatteryProducts.length === 0;
+      }
     }
   }
 
   let generatorPowerFilteredCount = 0;
   let generatorPowerNoFit = false;
   const generatorPowerRequirement = isGeneratorProductClass(cardIntent)
-    ? generatorPowerRequirementForCardSelection(buyerRequirementText)
+    ? structuredSelection
+      ? structuredGeneratorPowerRequirement(input.intent)
+      : generatorPowerRequirementForCardSelection(buyerRequirementText)
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPowerRequirement) {
     const powerMatchingSelected = selected.filter((product) =>
-      productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement)
+      productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement, structuredSelection)
     );
     if (powerMatchingSelected.length) {
       generatorPowerFilteredCount = selected.length - powerMatchingSelected.length;
       selected = powerMatchingSelected;
     } else {
-      const fallbackPowerMatches = sourceConstrainedGeneratorPool.filter((product) =>
-        productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement)
-      );
       generatorPowerFilteredCount = selected.length;
-      selected = fallbackPowerMatches;
-      generatorPowerNoFit = fallbackPowerMatches.length === 0;
+      if (structuredSelection) {
+        selected = [];
+        generatorPowerNoFit = true;
+      } else {
+        const fallbackPowerMatches = sourceConstrainedGeneratorPool.filter((product) =>
+          productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement)
+        );
+        selected = fallbackPowerMatches;
+        generatorPowerNoFit = fallbackPowerMatches.length === 0;
+      }
     }
   }
 
   let generatorPhaseFilteredCount = 0;
   let generatorPhaseNoFit = false;
   const generatorPhaseRequirement = isGeneratorProductClass(cardIntent)
-    ? requestedGeneratorPhaseRequirement(buyerRequirementText)
+    ? structuredSelection
+      ? input.intent.selectionPolicy?.phase === 'single_phase'
+        ? 'single_220'
+        : input.intent.selectionPolicy?.phase === 'three_phase'
+          ? 'three_380'
+          : undefined
+      : requestedGeneratorPhaseRequirement(buyerRequirementText)
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPhaseRequirement) {
     const phaseMatchingSelected = selected.filter((product) =>
-      productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement)
+      productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, structuredSelection)
     );
     if (phaseMatchingSelected.length) {
       generatorPhaseFilteredCount = selected.length - phaseMatchingSelected.length;
       selected = phaseMatchingSelected;
     } else {
-      const fallbackPhaseMatches = sourceConstrainedGeneratorPool
-        .filter((product) => productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement))
-        .filter((product) => productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement));
       generatorPhaseFilteredCount = selected.length;
-      selected = fallbackPhaseMatches;
-      generatorPhaseNoFit = fallbackPhaseMatches.length === 0;
+      if (structuredSelection) {
+        selected = [];
+        generatorPhaseNoFit = true;
+      } else {
+        const fallbackPhaseMatches = sourceConstrainedGeneratorPool
+          .filter((product) => productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement))
+          .filter((product) => productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement));
+        selected = fallbackPhaseMatches;
+        generatorPhaseNoFit = fallbackPhaseMatches.length === 0;
+      }
     }
   }
 
-  const budgetMax = effectiveVisibleCardBudgetMax({ needState: input.needState, userMessage: input.userMessage });
+  const budgetMax = structuredSelection
+    ? structuredBudgetMax(input.intent)
+    : effectiveVisibleCardBudgetMax({ needState: input.needState, userMessage: input.userMessage });
   let budgetFilteredCount = 0;
   let budgetNoFit = false;
   if (budgetMax !== undefined && selected.length) {
@@ -1191,6 +1422,11 @@ export function selectProductsForVisibleCards(input: {
       budgetFilteredCount = selected.length - withinBudget.length;
       selected = withinBudget;
     } else {
+      if (structuredSelection) {
+        budgetFilteredCount = selected.length;
+        budgetNoFit = true;
+        selected = [];
+      } else {
       const fallbackWithinBudget = sameIntentPool.filter((product) =>
         typeof product.price === 'number' &&
         Number.isFinite(product.price) &&
@@ -1204,6 +1440,7 @@ export function selectProductsForVisibleCards(input: {
         budgetNoFit = true;
         selected = [];
       }
+      }
     }
   }
 
@@ -1211,7 +1448,9 @@ export function selectProductsForVisibleCards(input: {
   let plateTaskFilteredCount = 0;
   let plateTaskWarnings: string[] = [];
   const plateWeightRange = cardIntent === 'plate'
-    ? requestedPlateWeightRangeKg({
+    ? structuredSelection
+      ? structuredPlateWeightRange(input.intent)
+      : requestedPlateWeightRangeKg({
         userMessage: input.userMessage,
         query: toolRequestSemanticText(input.intent),
         semanticContext: [
@@ -1219,10 +1458,12 @@ export function selectProductsForVisibleCards(input: {
           input.intent.dialogueUnderstanding,
           input.intent.nextStepRationale
         ].filter(Boolean).join('\n')
-      })
+        })
     : undefined;
   const plateTaskPolicyForSelection = cardIntent === 'plate'
-    ? plateTaskWeightPolicy({
+    ? structuredSelection
+      ? undefined
+      : plateTaskWeightPolicy({
         userMessage: input.userMessage,
         query: toolRequestSemanticText(input.intent),
         semanticContext: [
@@ -1231,20 +1472,23 @@ export function selectProductsForVisibleCards(input: {
           input.intent.nextStepRationale,
           input.answerText
         ].filter(Boolean).join('\n')
-      })
+        })
     : undefined;
   if (plateWeightRange && selected.length) {
     const selectedWithinRange = productsWithinPlateWeightRange(selected, plateWeightRange)
       .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
-    const heavierTradeoffAllowed = allowsHeavierPlateTradeoff({
-      userMessage: input.userMessage,
-      semanticContext: [
-        input.intent.userMessageSummary,
-        input.intent.dialogueUnderstanding,
-        input.intent.nextStepRationale,
-        input.answerText
-      ].filter(Boolean).join('\n')
-    });
+    const heavierTradeoffAllowed = structuredSelection
+      ? input.intent.selectionPolicy?.alternativePolicy === 'allow_adjacent_with_explanation' ||
+        input.intent.selectionPolicy?.alternativePolicy === 'open_to_alternatives'
+      : allowsHeavierPlateTradeoff({
+          userMessage: input.userMessage,
+          semanticContext: [
+            input.intent.userMessageSummary,
+            input.intent.dialogueUnderstanding,
+            input.intent.nextStepRationale,
+            input.answerText
+          ].filter(Boolean).join('\n')
+        });
     if (selectedWithinRange.length) {
       const inRangeIds = new Set(selectedWithinRange.map((product) => product.id));
       const mentionedIds = new Set(mentionedMatchingIntent.map((product) => product.id));
@@ -1254,6 +1498,11 @@ export function selectProductsForVisibleCards(input: {
       numericFitFilteredCount = selected.length - selectedAfterNumericFit.length;
       selected = selectedAfterNumericFit;
     } else {
+      if (structuredSelection) {
+        numericFitFilteredCount = selected.length;
+        plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
+        selected = [];
+      } else {
       const fallbackWithinRange = productsWithinPlateWeightRange(sameIntentPool, plateWeightRange)
         .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
       if (fallbackWithinRange.length) {
@@ -1264,9 +1513,10 @@ export function selectProductsForVisibleCards(input: {
         plateTaskWarnings = ['product_cards_suppressed:plate_task_weight_mismatch:selected_outside_task_range'];
         selected = [];
       }
+      }
     }
   }
-  if (cardIntent === 'plate' && selected.length) {
+  if (!structuredSelection && cardIntent === 'plate' && selected.length) {
     const plateTaskFilter = filterPlateProductsByCurrentTask({
       products: selected,
       userMessage: input.userMessage,
@@ -1287,39 +1537,61 @@ export function selectProductsForVisibleCards(input: {
 
   let diamondMaterialFilteredCount = 0;
   let diamondMaterialNoFit = false;
-  if (cardIntent === 'diamondBlade' && selected.length && requiresCeramicDiamondBlade(buyerRequirementText)) {
+  const structuredMaterial = structuredSelection ? structuredMaterialRequirement(input.intent) : undefined;
+  const requiresCeramic = structuredSelection
+    ? structuredMaterial === 'ceramic' || structuredMaterial === 'porcelain_tile' || structuredMaterial === 'ceramic_tile'
+    : requiresCeramicDiamondBlade(buyerRequirementText);
+  if (cardIntent === 'diamondBlade' && selected.length && requiresCeramic) {
     const ceramicSelected = selected.filter(diamondBladeSupportsCeramic);
     if (ceramicSelected.length) {
       diamondMaterialFilteredCount = selected.length - ceramicSelected.length;
       selected = ceramicSelected;
     } else {
-      const fallbackCeramic = sameIntentPool.filter(diamondBladeSupportsCeramic);
       diamondMaterialFilteredCount = selected.length;
-      selected = fallbackCeramic;
-      diamondMaterialNoFit = fallbackCeramic.length === 0;
+      if (structuredSelection) {
+        selected = [];
+        diamondMaterialNoFit = true;
+      } else {
+        const fallbackCeramic = sameIntentPool.filter(diamondBladeSupportsCeramic);
+        selected = fallbackCeramic;
+        diamondMaterialNoFit = fallbackCeramic.length === 0;
+      }
     }
   }
 
-  const visibleCardLimit = requestedVisibleCardLimit({
-    userMessage: input.userMessage,
-    semanticContext: [
-      input.intent.userMessageSummary,
-      input.intent.dialogueUnderstanding,
-      input.intent.nextStepRationale,
-      input.answerText
-    ].filter(Boolean).join('\n')
-  });
+  const visibleCardLimit = structuredSelection
+    ? input.intent.selectionPolicy?.maxCards ?? undefined
+    : requestedVisibleCardLimit({
+        userMessage: input.userMessage,
+        semanticContext: [
+          input.intent.userMessageSummary,
+          input.intent.dialogueUnderstanding,
+          input.intent.nextStepRationale,
+          input.answerText
+        ].filter(Boolean).join('\n')
+      });
   const selectedProducts = uniqueProducts(selected).slice(0, visibleCardLimit ?? 8);
   const selectedIds = new Set(selectedProducts.map((product) => product.id));
+  const structuredRequestedIds = new Set(input.selectedProductIds ?? []);
+  const structuredSuppressedCount = structuredSelection
+    ? [...structuredRequestedIds].filter((id) => !selectedIds.has(id)).length
+    : 0;
   const droppedProductIds = unique
     .filter((product) => !selectedIds.has(product.id))
     .map((product) => product.id);
   const warnings = [
     ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
+    ...(structuredSuppressedCount > 0
+      ? [`product_cards_suppressed:selected_id_not_grounded_mentioned_or_fit:${structuredSuppressedCount}`]
+      : []),
     ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : []),
     ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
-    ...(powerSourceFilteredCount > 0 ? [`product_cards_filtered_by_power_source:battery:${powerSourceFilteredCount}`] : []),
-    ...(powerSourceNoFit ? ['product_cards_suppressed:power_source_no_fit:battery'] : []),
+    ...(powerSourceFilteredCount > 0
+      ? [`product_cards_filtered_by_power_source:${structuredPowerSource ?? 'battery'}:${powerSourceFilteredCount}`]
+      : []),
+    ...(powerSourceNoFit
+      ? [`product_cards_suppressed:power_source_no_fit:${structuredPowerSource ?? 'battery'}`]
+      : []),
     ...(generatorPowerFilteredCount > 0 ? [`product_cards_filtered_by_generator_power:${generatorPowerFilteredCount}`] : []),
     ...(generatorPowerNoFit ? ['product_cards_suppressed:generator_power_no_fit'] : []),
     ...(generatorPhaseFilteredCount > 0 ? [`product_cards_filtered_by_generator_phase:${generatorPhaseFilteredCount}`] : []),
@@ -1332,6 +1604,7 @@ export function selectProductsForVisibleCards(input: {
   ];
 
   return {
+    semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
     intent: cardIntent,
     products: selectedProducts,
     selectedProductIds: selectedProducts.map((product) => product.id),
@@ -1358,7 +1631,9 @@ export function ambiguousCutterRequestNeedsMaterialClarification(text: string) {
   return !textContainsAnyFragment(normalized, cutterMaterialOrWorkTerms);
 }
 
-type VisibleCardSelection = ReturnType<typeof selectProductsForVisibleCards>;
+type VisibleCardSelection = Omit<ReturnType<typeof selectProductsForVisibleCards>, 'semanticAuthority'> & {
+  semanticAuthority?: 'llm_contract' | 'legacy_fallback';
+};
 
 export type VisibleCardReadiness = {
   status: 'ready_for_cards' | 'blocked_by_answer_contract' | 'blocked_by_tool_safety';
@@ -1376,7 +1651,11 @@ export function assessVisibleCardReadiness(input: {
   userMessage?: string;
 }): VisibleCardReadiness {
   const productClass = input.cardSelection.intent;
-  if (input.userMessage && ambiguousCutterRequestNeedsMaterialClarification(input.userMessage)) {
+  if (
+    input.cardSelection.semanticAuthority !== 'llm_contract' &&
+    input.userMessage &&
+    ambiguousCutterRequestNeedsMaterialClarification(input.userMessage)
+  ) {
     return {
       status: 'blocked_by_tool_safety',
       productClass,

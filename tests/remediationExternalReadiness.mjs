@@ -260,6 +260,7 @@ async function checkProductionOpenAiRuntime() {
       code: parsed?.error?.code ?? parsed?.code,
       answerModel: parsed?.answerModel,
       plannerModel: parsed?.plannerModel,
+      factModel: parsed?.factModel,
       error: parsed?.error,
       body: response.ok ? undefined : truncate(body)
     };

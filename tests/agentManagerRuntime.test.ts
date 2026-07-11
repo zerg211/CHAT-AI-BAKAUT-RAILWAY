@@ -3,15 +3,29 @@ import {
   AGENT_MANAGER_URL_OPT_IN_PARAM,
   getAgentManagerRuntimeDecision,
   isAgentManagerHarnessEnabledForSession,
+  resolveAgentManagerRuntimeDecision,
   runtimeResponseMetadata
 } from '../src/ai/agentManagerRuntime.js';
 
 describe('agent manager runtime activation', () => {
+  it('uses the agent manager as the sole runtime in production even if the old harness flag is false', () => {
+    expect(resolveAgentManagerRuntimeDecision({
+      nodeEnv: 'production',
+      testHarnessEnabled: false,
+      urlOptIn: false,
+      legacyAnswerWritersDisabled: false
+    })).toMatchObject({
+      runtimeMode: 'agent_manager',
+      reason: 'sole_production_runtime',
+      agentManagerHarnessEnabled: true,
+      legacyAnswerWritersDisabled: true
+    });
+  });
   it('keeps the harness off in automated tests unless explicitly enabled', () => {
     expect(isAgentManagerHarnessEnabledForSession({ pageUrl: 'https://bakautprof.ru/' })).toBe(false);
     expect(getAgentManagerRuntimeDecision({ pageUrl: 'https://bakautprof.ru/' })).toMatchObject({
       runtimeMode: 'legacy',
-      reason: 'harness_disabled_and_no_url_opt_in',
+      reason: 'test_legacy_runtime',
       agentManagerHarnessEnabled: false,
       urlOptIn: false
     });
@@ -55,12 +69,12 @@ describe('agent manager runtime activation', () => {
 
     expect(runtimeResponseMetadata(decision, 'legacy_full_pipeline')).toEqual({
       runtimeMode: 'legacy',
-      runtimeModeReason: 'harness_disabled_and_no_url_opt_in',
+      runtimeModeReason: 'test_legacy_runtime',
       agentManagerRuntime: decision,
       legacyRuntime: {
         active: true,
         path: 'legacy_full_pipeline',
-        reason: 'harness_disabled_and_no_url_opt_in',
+        reason: 'test_legacy_runtime',
         legacyAnswerWritersDisabled: decision.legacyAnswerWritersDisabled
       }
     });

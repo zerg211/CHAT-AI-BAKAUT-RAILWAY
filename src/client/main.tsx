@@ -653,11 +653,12 @@ function ProductCards({ cards, initialVisibleCount }: { cards: ProductCard[]; in
   );
 }
 
-function LeadPanel({ sessionId, latestQuestion, autoOpenKey }: { sessionId: string | null; latestQuestion: string; autoOpenKey: number }) {
+function LeadPanel({ latestQuestion, autoOpenKey }: { latestQuestion: string; autoOpenKey: number }) {
   const [form, setForm] = useState<LeadForm>({ name: '', phone: '', email: '', question: latestQuestion });
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [expanded, setExpanded] = useState(false);
   const lastAutoQuestionRef = useRef(latestQuestion);
+  const clientLeadIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     setForm((current) => {
@@ -674,14 +675,20 @@ function LeadPanel({ sessionId, latestQuestion, autoOpenKey }: { sessionId: stri
   async function submit(event: FormEvent) {
     event.preventDefault();
     setStatus('sending');
+    const clientLeadId = clientLeadIdRef.current ?? crypto.randomUUID();
+    clientLeadIdRef.current = clientLeadId;
     try {
+      const activeSessionId = await createSession(true);
+      if (!activeSessionId) throw new Error('Не удалось создать сессию чата');
       await submitLead(apiBase, {
-        sessionId: sessionId ?? undefined,
+        sessionId: activeSessionId,
+        clientLeadId,
         name: form.name,
         phone: form.phone || undefined,
         email: form.email || undefined,
-        question: form.question || latestQuestion
+        question: form.question || latestQuestion || undefined
       });
+      clientLeadIdRef.current = null;
       setStatus('sent');
       setForm({ name: '', phone: '', email: '', question: '' });
     } catch (submitError) {
@@ -1194,15 +1201,9 @@ function App() {
         /* network blip — keep trying */
       }
     }, 25_000);
-    const close = () => {
-      const url = `${apiBase}/api/chat/sessions/${sessionId}/close`;
-      navigator.sendBeacon?.(url, new Blob(['{}'], { type: 'application/json' }));
-    };
-    window.addEventListener('pagehide', close);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
-      window.removeEventListener('pagehide', close);
     };
   }, [sessionId]);
 
@@ -1222,6 +1223,7 @@ function App() {
       controller.abort();
     }, CHAT_TURN_TIMEOUT_MS);
     const assistantId = id();
+    const clientMessageId = crypto.randomUUID();
     setMessages((current) => [
       ...current,
       { id: id(), role: 'user', content: userText, createdAt: nowIso() },
@@ -1253,7 +1255,7 @@ function App() {
               : message
           )));
         }
-      }, controller.signal);
+      }, controller.signal, { clientMessageId });
       if (payload?.leadRequested) setLeadAutoOpenKey((value) => value + 1);
       setMessages((current) => current.map((message) => (
         message.id === assistantId
@@ -1425,7 +1427,7 @@ function App() {
         <button type="submit" disabled={busy || !input.trim()}>{busy ? '...' : 'Отправить'}</button>
       </form>
 
-      <LeadPanel sessionId={sessionId} latestQuestion={latestQuestion} autoOpenKey={leadAutoOpenKey} />
+      <LeadPanel latestQuestion={latestQuestion} autoOpenKey={leadAutoOpenKey} />
     </main>
   );
 }

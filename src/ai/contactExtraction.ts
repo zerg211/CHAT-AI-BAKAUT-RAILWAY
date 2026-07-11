@@ -102,8 +102,15 @@ function compactPhone(candidate: string) {
   return compacted.trim();
 }
 
+function phoneDigitCount(candidate: string) {
+  let count = 0;
+  for (const char of candidate) if (isAsciiDigit(char)) count += 1;
+  return count;
+}
+
 function extractPhone(normalized: string) {
   for (let index = 0; index < normalized.length; index += 1) {
+    if (index > 0 && isAsciiDigit(normalized[index - 1])) continue;
     const startsWithPlus = normalized[index] === '+' && isAsciiDigit(normalized[index + 1] ?? '');
     const startsWithDigit = isAsciiDigit(normalized[index]);
     if (!startsWithPlus && !startsWithDigit) continue;
@@ -116,7 +123,8 @@ function extractPhone(normalized: string) {
     while (end > start && !isAsciiDigit(normalized[end - 1])) end -= 1;
 
     const candidate = normalized.slice(start, end);
-    if (candidate.length >= 10) return compactPhone(candidate);
+    const digitCount = phoneDigitCount(candidate);
+    if (digitCount >= 10 && digitCount <= 15) return compactPhone(candidate);
   }
   return undefined;
 }

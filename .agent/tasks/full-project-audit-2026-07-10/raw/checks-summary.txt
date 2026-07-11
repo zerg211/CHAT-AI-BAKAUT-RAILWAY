@@ -1,0 +1,32 @@
+Repository: C:\Projects\chatAI
+HEAD: 2ce1ce43b3804b72e723d403fc355a66331b3358
+
+npm run typecheck
+PASS
+
+npm run build
+PASS
+
+npm test -- --run
+FAIL
+Test files: 93 passed, 1 failed
+Tests: 768 passed, 1 failed
+Failure: tests/productionLiveGate.test.ts default 5000ms timeout
+
+npm test -- tests/productionLiveGate.test.ts --testTimeout=15000
+PASS
+Tests: 5 passed
+
+npm run lint:no-regex
+FAIL
+New regex constructs detected: 91
+
+npm audit --omit=dev --json
+FAIL
+High: 2
+Moderate: 2
+Total: 4
+Direct affected packages: undici, js-yaml
+
+git diff --check
+PASS with existing LF/CRLF warnings in user-modified evidence files.

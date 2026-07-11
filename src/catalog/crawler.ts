@@ -1,10 +1,11 @@
 import * as cheerio from 'cheerio';
-import { fetch } from 'undici';
 import { config } from '../config.js';
 import { ProductRepository } from '../db/repositories.js';
 import { createEmbedding } from '../ai/openaiClient.js';
 import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
+import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
 import type { CatalogProductInput } from '../shared/types.js';
+import { createCatalogSyncHeartbeat } from './catalogFreshness.js';
 import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
 
 const skippedCatalogSuffixes = [
@@ -176,14 +177,18 @@ function extractProduct(html: string, pageUrl: string, baseUrl: string): Catalog
   };
 }
 
-async function fetchText(url: string) {
-  const response = await fetch(url, {
+async function fetchText(url: string, baseUrl: string) {
+  const response = await safeFetchBytes(url, {
+    allowedOrigin: baseUrl,
+    maxBytes: config.CATALOG_MAX_RESPONSE_BYTES,
+    timeoutMs: config.CATALOG_REQUEST_TIMEOUT_MS,
+    maxRedirects: 3,
     headers: {
       'user-agent': 'Bakaut AI catalog crawler (+local development; contact site owner)'
     }
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
-  return response.text();
+  if (response.status < 200 || response.status >= 300) throw new Error(`HTTP ${response.status} for ${url}`);
+  return outboundText(response);
 }
 
 export async function syncCatalogFromSite(
@@ -193,7 +198,12 @@ export async function syncCatalogFromSite(
   const baseUrl = options.baseUrl ?? config.CATALOG_BASE_URL;
   const maxPages = options.maxPages ?? config.CATALOG_MAX_PAGES;
   const startUrl = new URL(options.startPath ?? '/catalog/', baseUrl).toString();
-  const sourceId = await repository.startCatalogSource({ type: 'site_crawl', location: startUrl });
+  const sourceId = await repository.startCatalogSource({
+    type: 'site_crawl',
+    location: startUrl,
+    syncMode: 'partial'
+  });
+  const heartbeat = createCatalogSyncHeartbeat(() => repository.heartbeatCatalogSource(sourceId));
   const queue = [startUrl];
   const visited = new Set<string>();
   let imported = 0;
@@ -204,9 +214,10 @@ export async function syncCatalogFromSite(
       const url = queue.shift()!;
       if (visited.has(url)) continue;
       visited.add(url);
+      await heartbeat();
 
       try {
-        const html = await fetchText(url);
+        const html = await fetchText(url, baseUrl);
         for (const link of extractLinks(html, url, baseUrl)) {
           if (!visited.has(link) && queue.length + visited.size < maxPages) queue.push(link);
         }
@@ -221,12 +232,35 @@ export async function syncCatalogFromSite(
       } catch {
         failed += 1;
       }
+      await heartbeat();
     }
 
-    await repository.finishCatalogSource(sourceId, 'completed', { visited: visited.size, imported, failed });
+    await repository.finishCatalogSource(
+      sourceId,
+      'completed',
+      { visited: visited.size, imported, failed, coverageComplete: false },
+      undefined,
+      {
+        coverageComplete: false,
+        discoveredItemCount: visited.size,
+        syncedItemCount: imported,
+        failedItemCount: failed
+      }
+    );
     return { visited: visited.size, imported, failed };
   } catch (error) {
-    await repository.finishCatalogSource(sourceId, 'failed', { visited: visited.size, imported, failed }, String(error));
+    await repository.finishCatalogSource(
+      sourceId,
+      'failed',
+      { visited: visited.size, imported, failed, coverageComplete: false },
+      String(error),
+      {
+        coverageComplete: false,
+        discoveredItemCount: visited.size,
+        syncedItemCount: imported,
+        failedItemCount: failed + 1
+      }
+    );
     throw error;
   }
 }
@@ -252,52 +286,120 @@ export async function inventoryCatalogFromSite(
   const queue = [startUrl];
   const visited = new Set<string>();
   const siteProducts = new Map<string, CatalogProductInput>();
+  const sourceId = options.importMissing
+    ? await repository.startCatalogSource({
+        type: 'site_crawl',
+        location: startUrl,
+        syncMode: 'partial'
+      })
+    : null;
+  const heartbeat = sourceId
+    ? createCatalogSyncHeartbeat(() => repository.heartbeatCatalogSource(sourceId))
+    : null;
   let failed = 0;
+  let dbProductUrlCount = 0;
+  let missingProducts: CatalogProductInput[] = [];
+  let importedMissing = 0;
 
-  while (queue.length && visited.size < maxPages) {
-    const url = queue.shift()!;
-    const normalizedUrl = normalizeInventoryUrl(url);
-    if (visited.has(normalizedUrl)) continue;
-    visited.add(normalizedUrl);
+  try {
+    while (queue.length && visited.size < maxPages) {
+      const url = queue.shift()!;
+      const normalizedUrl = normalizeInventoryUrl(url);
+      if (visited.has(normalizedUrl)) continue;
+      visited.add(normalizedUrl);
+      await heartbeat?.();
 
-    try {
-      const html = await fetchText(url);
-      for (const link of extractLinks(html, url, baseUrl)) {
-        const normalizedLink = normalizeInventoryUrl(link);
-        if (!visited.has(normalizedLink) && queue.length + visited.size < maxPages) queue.push(link);
+      try {
+        const html = await fetchText(url, baseUrl);
+        for (const link of extractLinks(html, url, baseUrl)) {
+          const normalizedLink = normalizeInventoryUrl(link);
+          if (!visited.has(normalizedLink) && queue.length + visited.size < maxPages) queue.push(link);
+        }
+        const product = extractProduct(html, url, baseUrl);
+        if (product?.sourceUrl) siteProducts.set(normalizeInventoryUrl(product.sourceUrl), product);
+      } catch {
+        failed += 1;
       }
-      const product = extractProduct(html, url, baseUrl);
-      if (product?.sourceUrl) siteProducts.set(normalizeInventoryUrl(product.sourceUrl), product);
-    } catch {
-      failed += 1;
+      await heartbeat?.();
     }
-  }
 
-  const dbUrls = new Set((await repository.listProductSourceUrls(20000)).map(normalizeInventoryUrl));
-  const missingProducts = [...siteProducts.entries()]
-    .filter(([url]) => !dbUrls.has(url))
-    .map(([, product]) => product);
+    const dbUrls = new Set((await repository.listProductSourceUrls(20000)).map(normalizeInventoryUrl));
+    dbProductUrlCount = dbUrls.size;
+    missingProducts = [...siteProducts.entries()]
+      .filter(([url]) => !dbUrls.has(url))
+      .map(([, product]) => product);
 
-  if (options.importMissing) {
-    for (const product of missingProducts) {
-      const embeddingText = productToEmbeddingText(product);
-      const embedding = await createEmbedding(embeddingText).catch(() => null);
-      await repository.upsertProduct(product, embedding ?? undefined, embedding ? embeddingMetadataForText(embeddingText) : undefined);
+    if (options.importMissing) {
+      for (const product of missingProducts) {
+        await heartbeat?.();
+        const embeddingText = productToEmbeddingText(product);
+        const embedding = await createEmbedding(embeddingText).catch(() => null);
+        await repository.upsertProduct(product, embedding ?? undefined, embedding ? embeddingMetadataForText(embeddingText) : undefined);
+        importedMissing += 1;
+        await heartbeat?.();
+      }
     }
-  }
 
-  return {
-    visited: visited.size,
-    failed,
-    siteProductCount: siteProducts.size,
-    dbProductUrlCount: dbUrls.size,
-    missingCount: missingProducts.length,
-    importedMissing: options.importMissing ? missingProducts.length : 0,
-    missingProducts: missingProducts.slice(0, 200).map((product) => ({
-      name: product.name,
-      sourceUrl: product.sourceUrl,
-      price: product.price,
-      category: product.category
-    }))
-  };
+    if (sourceId) {
+      await repository.finishCatalogSource(
+        sourceId,
+        'completed',
+        {
+          visited: visited.size,
+          failed,
+          siteProductCount: siteProducts.size,
+          dbProductUrlCount,
+          missingCount: missingProducts.length,
+          importedMissing,
+          coverageComplete: false
+        },
+        undefined,
+        {
+          coverageComplete: false,
+          discoveredItemCount: visited.size,
+          syncedItemCount: importedMissing,
+          failedItemCount: failed
+        }
+      );
+    }
+
+    return {
+      visited: visited.size,
+      failed,
+      siteProductCount: siteProducts.size,
+      dbProductUrlCount,
+      missingCount: missingProducts.length,
+      importedMissing,
+      missingProducts: missingProducts.slice(0, 200).map((product) => ({
+        name: product.name,
+        sourceUrl: product.sourceUrl,
+        price: product.price,
+        category: product.category
+      }))
+    };
+  } catch (error) {
+    if (sourceId) {
+      await repository.finishCatalogSource(
+        sourceId,
+        'failed',
+        {
+          visited: visited.size,
+          failed,
+          siteProductCount: siteProducts.size,
+          dbProductUrlCount,
+          missingCount: missingProducts.length,
+          importedMissing,
+          coverageComplete: false
+        },
+        String(error),
+        {
+          coverageComplete: false,
+          discoveredItemCount: visited.size,
+          syncedItemCount: importedMissing,
+          failedItemCount: failed + 1
+        }
+      );
+    }
+    throw error;
+  }
 }

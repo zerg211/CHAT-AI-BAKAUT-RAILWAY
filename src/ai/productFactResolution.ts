@@ -76,7 +76,8 @@ export function sourceCredibilityRank(sourceType: ProductFactSourceType): number
 
 function hostname(url: string): string {
   try {
-    return new URL(url).hostname.replace(/^www\./, '').toLocaleLowerCase('ru');
+    const value = new URL(url).hostname.toLocaleLowerCase('ru');
+    return value.startsWith('www.') ? value.slice(4) : value;
   } catch {
     return url.toLocaleLowerCase('ru');
   }
@@ -185,13 +186,116 @@ export function resolveProductFactCandidate(input: {
   };
 }
 
+function characterCode(value: string) {
+  return value.codePointAt(0) ?? 0;
+}
+
+function isAsciiDigit(value: string) {
+  const code = characterCode(value);
+  return code >= 48 && code <= 57;
+}
+
+function isAsciiLetter(value: string) {
+  const code = characterCode(value.toLocaleLowerCase('en-US'));
+  return code >= 97 && code <= 122;
+}
+
+function isCyrillicLetter(value: string) {
+  const code = characterCode(value.toLocaleLowerCase('ru'));
+  return (code >= 0x0430 && code <= 0x044f) || code === 0x0451;
+}
+
+function isModelTokenCharacter(value: string) {
+  return isAsciiLetter(value) || isCyrillicLetter(value) || isAsciiDigit(value) || value === '-' || value === '_';
+}
+
+function hasAsciiLetterAndDigit(value: string) {
+  let hasLetter = false;
+  let hasDigit = false;
+  for (const character of value) {
+    if (isAsciiLetter(character)) hasLetter = true;
+    if (isAsciiDigit(character)) hasDigit = true;
+  }
+  return hasLetter && hasDigit;
+}
+
+function modelCandidateFromLetterStart(candidate: string) {
+  let initialLetterEnd = 0;
+  while (
+    initialLetterEnd < candidate.length &&
+    (isAsciiLetter(candidate[initialLetterEnd]) || isCyrillicLetter(candidate[initialLetterEnd]))
+  ) {
+    initialLetterEnd += 1;
+  }
+  const separator = candidate[initialLetterEnd];
+  if ((separator === '-' || separator === '_') && initialLetterEnd > 0 && initialLetterEnd + 1 < candidate.length) {
+    let end = initialLetterEnd + 1;
+    while (
+      end < candidate.length &&
+      (isAsciiLetter(candidate[end]) || isCyrillicLetter(candidate[end]) || isAsciiDigit(candidate[end]) || candidate[end] === '-')
+    ) {
+      end += 1;
+    }
+    const separatedCandidate = candidate.slice(0, end);
+    return hasAsciiLetterAndDigit(separatedCandidate) ? separatedCandidate : null;
+  }
+
+  let asciiPrefixLength = 0;
+  while (asciiPrefixLength < candidate.length && isAsciiLetter(candidate[asciiPrefixLength])) asciiPrefixLength += 1;
+  if (asciiPrefixLength < 2) return null;
+  let end = asciiPrefixLength;
+  if (candidate[end] === '-' || candidate[end] === '_') end += 1;
+  while (
+    end < candidate.length &&
+    (isAsciiLetter(candidate[end]) || isAsciiDigit(candidate[end]) || candidate[end] === '-')
+  ) {
+    end += 1;
+  }
+  const asciiCandidate = candidate.slice(0, end);
+  return hasAsciiLetterAndDigit(asciiCandidate) ? asciiCandidate : null;
+}
+
+function modelCandidateFromToken(token: string) {
+  for (let start = 0; start < token.length; start += 1) {
+    if (!isAsciiLetter(token[start]) && !isCyrillicLetter(token[start])) continue;
+    const candidate = modelCandidateFromLetterStart(token.slice(start));
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
 function extractModelToken(productName: string): string {
-  const tokens = productName.match(/[A-Za-zА-Яа-я]+[-_][A-Za-z0-9А-Яа-я-]+|[A-Za-z]{2,}[-_]?[A-Za-z0-9-]*\d[A-Za-z0-9-]*/g) ?? [];
-  return tokens.find((token) => /\d/.test(token) && /[A-Za-z]/.test(token)) ?? productName;
+  let token = '';
+  for (let index = 0; index <= productName.length; index += 1) {
+    const character = productName[index];
+    if (character && isModelTokenCharacter(character)) {
+      token += character;
+      continue;
+    }
+    const candidate = modelCandidateFromToken(token);
+    if (candidate) return candidate;
+    token = '';
+  }
+  return productName;
+}
+
+function compactWhitespace(value: string) {
+  let output = '';
+  let pendingSpace = false;
+  for (const character of value) {
+    if (character.trim() === '') {
+      pendingSpace = output.length > 0;
+      continue;
+    }
+    if (pendingSpace) output += ' ';
+    output += character;
+    pendingSpace = false;
+  }
+  return output;
 }
 
 function unique(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.replace(/\s+/g, ' ').trim()).filter(Boolean)));
+  return Array.from(new Set(values.map(compactWhitespace).filter(Boolean)));
 }
 
 export function buildProductFactSearchPlan(input: ProductFactSearchPlanInput): ProductFactSearchPlan {

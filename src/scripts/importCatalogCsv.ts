@@ -7,7 +7,7 @@ if (!filePath) {
   process.exit(1);
 }
 
-importCatalogCsv(filePath)
+importCatalogCsv(filePath, undefined, { allowOutsideRoot: true })
   .then(async (stats) => {
     console.log(JSON.stringify(stats, null, 2));
     await pool.end();

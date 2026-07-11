@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import type { Product } from '../shared/types.js';
 import * as cheerio from 'cheerio';
-import { fetch } from 'undici';
+import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 
@@ -482,6 +482,7 @@ function normalizeAnswerGuidance(value: unknown): ProductComparisonResearchAnswe
           sourceTitle: typeof item.sourceTitle === 'string' ? item.sourceTitle : undefined
         }))
         .filter((item) => item.attribute || item.value || item.evidence)
+        .slice(0, 12)
     : [];
   return {
     directAnswer: typeof raw.directAnswer === 'string' ? raw.directAnswer : '',
@@ -498,7 +499,7 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
           ...fact,
           sourceUrl: typeof fact.sourceUrl === 'string' ? fact.sourceUrl : undefined,
           sourceTitle: typeof fact.sourceTitle === 'string' ? fact.sourceTitle : undefined
-        }))
+        })).slice(0, 12)
       : [],
     conflicts: Array.isArray(parsed.conflicts)
       ? (parsed.conflicts as Array<ProductComparisonResearchConflict & { catalogValue?: string | null }>).map((conflict) => ({
@@ -514,12 +515,14 @@ function normalizeResearchParsed(parsed: Record<string, unknown>): ProductCompar
 
 const sourceTextLimit = 250000;
 const semanticSourceTextLimit = 18000;
+const sourceHtmlMaxBytes = 2 * 1024 * 1024;
 
 type SourceDocument = {
   ok: boolean;
   text: string;
   warning?: string;
   sourceTitle?: string;
+  sourceKind?: 'catalog' | 'web';
 };
 
 type SourceTextCache = Map<string, Promise<SourceDocument>>;
@@ -589,52 +592,36 @@ function htmlToSourceDocument(html: string): SourceDocument {
   };
 }
 
-async function pdfToSourceText(data: ArrayBuffer) {
-  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const loadingTask = getDocument({
-    data: new Uint8Array(data),
-    disableFontFace: true,
-    isEvalSupported: false,
-    useWorkerFetch: false
-  });
-  const pdf = await loadingTask.promise;
-  const parts: string[] = [];
-  try {
-    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-      const page = await pdf.getPage(pageNumber);
-      const content = await page.getTextContent();
-      for (const item of content.items) {
-        if (typeof item.str === 'string' && item.str.trim()) parts.push(item.str);
-      }
-      if (parts.join(' ').length > sourceTextLimit) break;
-    }
-  } finally {
-    await pdf.destroy?.();
-  }
-  return limitSourceText(parts.join(' '));
-}
-
 async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal?: AbortSignal) {
   const cached = cache.get(sourceUrl);
   if (cached) return cached;
   const promise = (async () => {
     try {
-      const response = await fetch(sourceUrl, {
+      if (sourceLooksLikePdf(sourceUrl, '')) {
+        return { ok: false, text: '', warning: 'source_evidence_pdf_unsupported', sourceKind: 'web' as const };
+      }
+      const preview = await safeFetchBytes(sourceUrl, {
+        maxBytes: sourceHtmlMaxBytes,
+        timeoutMs: 20_000,
+        maxRedirects: 3,
         signal,
         headers: {
           'user-agent': 'Mozilla/5.0 BAKAUT source evidence verifier'
         }
       });
-      if (!response.ok) return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
-      const contentType = response.headers.get('content-type') ?? '';
-      const source = sourceLooksLikePdf(sourceUrl, contentType)
-        ? { ok: true, text: await pdfToSourceText(await response.arrayBuffer()) }
-        : htmlToSourceDocument(await response.text());
+      if (preview.status < 200 || preview.status >= 300) {
+        return { ok: false, text: '', warning: 'source_evidence_fetch_failed', sourceKind: 'web' as const };
+      }
+      const contentType = preview.headers.get('content-type') ?? '';
+      if (sourceLooksLikePdf(preview.url, contentType)) {
+        return { ok: false, text: '', warning: 'source_evidence_pdf_unsupported', sourceKind: 'web' as const };
+      }
+      const source = htmlToSourceDocument(outboundText(preview));
       return source.text
-        ? source
-        : { ok: false, text: '', sourceTitle: source.sourceTitle, warning: 'source_evidence_empty' };
+        ? { ...source, sourceKind: 'web' as const }
+        : { ok: false, text: '', sourceTitle: source.sourceTitle, warning: 'source_evidence_empty', sourceKind: 'web' as const };
     } catch {
-      return { ok: false, text: '', warning: 'source_evidence_fetch_failed' };
+      return { ok: false, text: '', warning: 'source_evidence_fetch_failed', sourceKind: 'web' as const };
     }
   })();
   cache.set(sourceUrl, promise);
@@ -722,13 +709,13 @@ async function evidenceItemSourceText(input: {
   const sourceUrlMatchesCatalog = Boolean(catalogProduct && sourceUrl &&
     normalizedUrlForCompare(catalogProduct.sourceUrl) === sourceUrl);
   if (input.item.sourceType === 'catalog' || (catalogProduct && sourceUrlMatchesCatalog && !input.item.sourceType)) {
-    if (!catalogProduct) return { ok: false, text: '', warning: 'source_evidence_catalog_source_missing' };
-    return { ok: true, text: productSourceText(catalogProduct) };
+    if (!catalogProduct) return { ok: false, text: '', warning: 'source_evidence_catalog_source_missing', sourceKind: 'catalog' as const };
+    return { ok: true, text: productSourceText(catalogProduct), sourceKind: 'catalog' as const };
   }
   if (sourceUrlIsHttp(input.item.sourceUrl)) {
     return fetchSourceText(input.item.sourceUrl, input.cache, input.signal);
   }
-  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct) };
+  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct), sourceKind: 'catalog' as const };
   return { ok: false, text: '', warning: 'source_evidence_source_url_missing' };
 }
 
@@ -884,18 +871,18 @@ async function validateEvidenceItem(input: {
       input.item.value,
       input.item.evidence
     ].join(' '));
-    if (!claimKinds.length) return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings };
     return {
       valid: false,
       invalidKinds: claimKinds,
       warnings: uniqueStrings([
         ...warnings,
+        'source_evidence_validation_failed:semantic',
         ...claimKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
       ])
     };
   }
 
-  if (!input.semanticValidation || input.item.sourceType === 'catalog') {
+  if (!input.semanticValidation) {
     return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings };
   }
 
@@ -905,13 +892,13 @@ async function validateEvidenceItem(input: {
       input.item.value,
       input.item.evidence
     ].join(' '));
-    if (!claimKinds.length) return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings };
     return {
       valid: false,
       invalidKinds: claimKinds,
       warnings: uniqueStrings([
         ...warnings,
         'source_evidence_exact_target_not_found',
+        'source_evidence_validation_failed:semantic',
         ...claimKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
       ])
     };
@@ -1011,17 +998,21 @@ async function validateSourceBackedResult(input: {
   comparisonAttributes: string[];
   signal?: AbortSignal;
 }) {
-  if (!startControlQuestionRelevant(input.userMessage, input.comparisonAttributes)) return input.result;
-
   const cache: SourceTextCache = new Map();
   const warnings = [...input.result.warnings];
   const invalidKinds = new Set<SourceBackedStartKind>();
   const facts: ProductComparisonResearchFact[] = [];
-  const semanticValidation = input.result.usedWebSearch || input.result.facts.some((fact) => fact.sourceType === 'web');
+  const semanticValidation = true;
+  let invalidatedEvidence = false;
 
   for (const fact of input.result.facts) {
-    if (fact.sourceType === 'conflict' || fact.confidence === 'low') {
+    if (fact.sourceType === 'conflict') {
       facts.push(fact);
+      continue;
+    }
+    if (fact.confidence === 'low') {
+      invalidatedEvidence = true;
+      warnings.push('source_evidence_low_confidence_rejected');
       continue;
     }
     const validation = await validateEvidenceItem({
@@ -1034,6 +1025,7 @@ async function validateSourceBackedResult(input: {
     });
     warnings.push(...validation.warnings);
     if (!validation.valid) {
+      invalidatedEvidence = true;
       for (const kind of validation.invalidKinds) invalidKinds.add(kind);
       continue;
     }
@@ -1056,6 +1048,7 @@ async function validateSourceBackedResult(input: {
     });
     warnings.push(...validation.warnings);
     if (!validation.valid) {
+      invalidatedEvidence = true;
       for (const kind of validation.invalidKinds) invalidKinds.add(kind);
       coverage.push({
         ...item,
@@ -1080,6 +1073,14 @@ async function validateSourceBackedResult(input: {
     warnings: uniqueStrings(warnings)
   };
 
+  if (invalidatedEvidence) {
+    adjusted.summaryForAnswer = '';
+  }
+
+  const hasValidatedGenericSupport = adjusted.facts.some((fact) =>
+    fact.sourceType !== 'conflict' && (fact.confidence === 'high' || fact.confidence === 'medium')
+  ) || adjusted.answerGuidance.coverage.some((item) => item.status === 'confirmed');
+
   if (startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes)) {
     const directAnswerKinds = startClaimKindsFromText(adjusted.answerGuidance.directAnswer);
     const directAnswerClaimsInvalidFact = [...invalidKinds].some((kind) => directAnswerKinds.includes(kind));
@@ -1092,7 +1093,8 @@ async function validateSourceBackedResult(input: {
     if (
       directAnswerClaimsInvalidFact ||
       directAnswerMissingConfirmedPractical ||
-      (lacksConfirmedPracticalControl && hasConfirmedStarterFact)
+      (lacksConfirmedPracticalControl && hasConfirmedStarterFact) ||
+      invalidatedEvidence
     ) {
       adjusted.answerGuidance = {
         ...adjusted.answerGuidance,
@@ -1104,6 +1106,21 @@ async function validateSourceBackedResult(input: {
         'answer_guidance_rewritten_after_source_validation'
       ]);
     }
+  } else {
+    adjusted.answerGuidance = {
+      ...adjusted.answerGuidance,
+      directAnswer: '',
+      completeness: hasValidatedGenericSupport ? 'partially_answered' : 'not_answered'
+    };
+    adjusted.summaryForAnswer = '';
+    adjusted.warnings = uniqueStrings([
+      ...adjusted.warnings,
+      invalidatedEvidence
+        ? 'answer_guidance_invalidated_after_source_validation'
+        : hasValidatedGenericSupport
+          ? 'answer_guidance_direct_answer_removed_for_evidence_coupling'
+          : 'answer_guidance_invalidated_without_validated_support'
+    ]);
   }
 
   return adjusted;
@@ -1627,7 +1644,7 @@ export async function researchProductComparisonFacts(input: {
             'You are a second-pass exact-model web research module for a sales assistant.',
             'The first pass did not fully answer the exact-target question. Treat every missing, not_confirmed, ambiguous, or contradicted coverage item as a semantic missing-fact slot.',
             'For each missing-fact slot, reason about what information would make the buyer answer useful, then search deeper exact-model sources for that information. Do not reduce the task to a fixed phrase list.',
-            'Search public web pages, official manufacturer pages, distributor pages, PDFs, manuals, specification sheets, text-only marketplace listings, cached listings, forums, and classified/product-description pages that mention the exact model/code.',
+            'Search public HTML pages, official manufacturer pages, distributor pages, HTML manuals/specification pages, text-only marketplace listings, cached listings, forums, and classified/product-description pages that mention the exact model/code. Do not rely on PDF-only evidence because this runtime rejects PDF parsing.',
             'Use exactTargetSearchQueries only as starting hints. Generate additional source-language search wording from the buyer question, the missing-fact slot, and what the current sources failed to answer.',
             'Extract useful facts from the deeper sources, then decide which facts are needed in answerGuidance.directAnswer and which are only supporting context for summaryForAnswer.',
             'Use non-official pages as medium-confidence evidence only when they name the exact model/code and semantically answer the missing-fact slot.',

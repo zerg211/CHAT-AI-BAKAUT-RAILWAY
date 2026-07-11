@@ -1,5 +1,6 @@
 export type LeadSubmitPayload = {
-  sessionId?: string;
+  sessionId: string;
+  clientLeadId: string;
   name: string;
   phone?: string;
   email?: string;

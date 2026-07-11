@@ -12,6 +12,7 @@
 - `DATABASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL=gpt-5.4`
+- production runtime принудительно использует `gpt-5.4` для planner/answer/reviewer и preflight отклоняет любой другой фактический model marker;
 - `ADMIN_API_KEY`
 - `PUBLIC_BASE_URL`
 
@@ -27,11 +28,24 @@ SMTP не используется.
 
 ## Деплой
 
-`railway.json` запускает:
+Railway подключён к GitHub и подтягивает изменения автоматически. Разрешённый production flow:
+
+1. `npm run verify`;
+2. осознанный `git commit`;
+3. `git push` в GitHub;
+4. ожидание Railway deployment из этого commit;
+5. проверка `/api/health` и production widget.
+
+Не запускать `railway up`, `railway deploy`, `railway deployment up` и другие ручные upload-команды, если пользователь явно не запросил ручной Railway-деплой.
+
+`railway.json` выполняет миграции отдельной pre-deploy командой, затем запускает сервер:
 
 ```bash
-npm run migrate && npm run start
+node dist/server/db/migrate.js
+node dist/server/server.js
 ```
+
+Dockerfile содержит эквивалентный безопасный fallback `node dist/server/db/migrate.js && node dist/server/server.js`; при Railway deployment authoritative-команды заданы в `railway.json`.
 
 Healthcheck:
 
@@ -41,8 +55,14 @@ Healthcheck:
 
 ## Перед продом
 
-1. Прогнать `npm run test`.
-2. Прогнать `npm run build`.
-3. После деплоя открыть встроенный виджет на `https://bakautprof.ru/`.
-4. Провести живой тест поведения только через сайтовый виджет, не через localhost, локальный iframe или прямой API.
-5. Сохранить протокол в `local-live-tests/*.production.md` или другой `.md` файл с явной пометкой, что проверка была через `bakautprof.ru`.
+1. Прогнать `npm run verify` и `npm audit --omit=dev --audit-level=high`.
+2. Убедиться, что миграции additive и сохранён rollback commit/ref.
+3. После push дождаться, пока публичный `/api/health` покажет новый commit и ожидаемые `runtime.version`, `runtime.contractVersion` и `runtime.productionRuntime`; внутренние artifact names в публичный marker не входят.
+4. С admin bearer проверить `/api/admin/health`: полный runtime/policy manifest, freshness каталога, embedding coverage и lead-outbox backlog/failures.
+5. Открыть встроенный виджет на `https://bakautprof.ru/` и провести адаптивный живой тест, не localhost/прямой API.
+6. Сверить UI каждого turn с `/api/admin/conversations/:id`, agent traces, cards, tool evidence, warnings и recovery state.
+7. Сохранить production-протокол и raw evidence в task directory или `local-live-tests/*.production.md`.
+
+## Rollback
+
+Rollback выполняется через GitHub: revert проблемного commit и push. Railway автоматически разворачивает revert. Миграции текущего цикла не удаляют старые данные/колонки, поэтому откат кода не требует destructive SQL. После rollback снова проверить commit marker, health и виджет.

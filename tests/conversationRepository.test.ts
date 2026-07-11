@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConversationRepository, ProductRepository } from '../src/db/repositories.js';
+import { ConversationRepository, LeadRepository, ProductRepository } from '../src/db/repositories.js';
 
 function sessionRow() {
   const now = new Date('2026-04-27T08:00:00.000Z');
@@ -68,8 +68,10 @@ describe('ConversationRepository.updateAssistantFeedback', () => {
     expect(query).toHaveBeenCalledWith(expect.stringContaining('jsonb_set'), [
       'message-id',
       'session-id',
-      expect.any(String)
+      expect.any(String),
+      'negative'
     ]);
+    expect(query.mock.calls[0][0]).toContain('INSERT INTO assistant_feedback_events');
     expect(JSON.parse(query.mock.calls[0][1][2])).toMatchObject({ rating: 'negative' });
     expect(message).toMatchObject({
       id: 'message-id',
@@ -127,6 +129,7 @@ describe('ConversationRepository turn JSON storage', () => {
       user_message_id: null,
       assistant_message_id: null,
       status: 'planned',
+      client_message_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       request_hash: 'hash',
       stage: 'planned',
       error_code: null,
@@ -137,13 +140,12 @@ describe('ConversationRepository turn JSON storage', () => {
       created_at: now,
       updated_at: now
     };
-    const query = vi.fn()
-      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
-      .mockResolvedValue({ rowCount: 1, rows: [turnRow] });
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [turnRow] });
     const repository = new ConversationRepository({ query } as never);
 
     await repository.createTurn({
       sessionId: 'session-id',
+      clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       requestHash: 'hash',
       status: 'received',
       activeNeedsBefore: [{ summary: 'before' }]
@@ -156,9 +158,368 @@ describe('ConversationRepository turn JSON storage', () => {
       activeNeedsAfter: [{ summary: 'after' }]
     });
 
-    expect(query.mock.calls[1][1][5]).toBe(JSON.stringify([{ summary: 'before' }]));
-    expect(query.mock.calls[2][1][8]).toBe(JSON.stringify({ taskType: 'product_selection_with_availability' }));
-    expect(query.mock.calls[2][1][10]).toBe(JSON.stringify([{ summary: 'after' }]));
+    expect(query.mock.calls[0][1][6]).toBe(JSON.stringify([{ summary: 'before' }]));
+    expect(query.mock.calls[1][1][8]).toBe(JSON.stringify({ taskType: 'product_selection_with_availability' }));
+    expect(query.mock.calls[1][1][10]).toBe(JSON.stringify([{ summary: 'after' }]));
+  });
+});
+
+describe('LeadRepository.markEmailResult', () => {
+  it('never downgrades an already sent lead when a replay reports a later failure', async () => {
+    const now = new Date('2026-04-27T08:00:00.000Z');
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{
+        id: 'lead-id',
+        session_id: 'session-id',
+        name: 'Buyer',
+        phone: '+79990000000',
+        email: null,
+        question: 'Question',
+        status: 'sent_email',
+        email_provider_response: { ok: true },
+        sent_at: now,
+        created_at: now
+      }]
+    });
+    const repository = new LeadRepository({ query } as never);
+
+    await repository.markEmailResult('lead-id', 'email_failed', { ok: false });
+
+    expect(query.mock.calls[0][0]).toContain("status = 'sent_email' AND $2 = 'email_failed'");
+    expect(query.mock.calls[0][0]).toContain('THEN email_provider_response');
+    expect(query.mock.calls[0][1]).toEqual(['lead-id', 'email_failed', { ok: false }]);
+  });
+});
+
+describe('ConversationRepository turn idempotency', () => {
+  const now = new Date('2026-07-10T12:00:00.000Z');
+
+  function turnRow(id: string, clientMessageId: string) {
+    return {
+      id,
+      session_id: 'session-id',
+      client_message_id: clientMessageId,
+      user_message_id: null,
+      assistant_message_id: null,
+      status: 'received',
+      request_hash: 'same-text-hash',
+      stage: 'received',
+      error_code: null,
+      error_message: null,
+      planner_contract: null,
+      active_needs_before: null,
+      active_needs_after: null,
+      execution_owner: null,
+      execution_lease_expires_at: null,
+      created_at: now,
+      updated_at: now
+    };
+  }
+
+  it('creates distinct turns for distinct client actions with identical text hashes', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [turnRow('turn-1', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [turnRow('turn-2', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')] });
+    const repository = new ConversationRepository({ query } as never);
+
+    const first = await repository.createTurn({
+      sessionId: 'session-id',
+      clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      requestHash: 'same-text-hash'
+    });
+    const second = await repository.createTurn({
+      sessionId: 'session-id',
+      clientMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      requestHash: 'same-text-hash'
+    });
+
+    expect(first.id).toBe('turn-1');
+    expect(second.id).toBe('turn-2');
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0]?.[0]).toContain('ON CONFLICT (session_id, client_message_id)');
+    expect(query.mock.calls[0]?.[0]).not.toContain('WHERE session_id = $1\n         AND request_hash');
+  });
+
+  it('returns the same turn when the same client operation is retried', async () => {
+    const row = turnRow('turn-1', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [row] });
+    const repository = new ConversationRepository({ query } as never);
+    const operation = {
+      sessionId: 'session-id',
+      clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      requestHash: 'same-text-hash'
+    };
+
+    const first = await repository.createTurn(operation);
+    const retry = await repository.createTurn(operation);
+
+    expect(first.id).toBe('turn-1');
+    expect(retry.id).toBe('turn-1');
+    expect(query.mock.calls[0]?.[0]).toContain('WHERE conversation_turns.request_hash = EXCLUDED.request_hash');
+  });
+
+  it('reports the existing active turn when a different client action collides', async () => {
+    const query = vi.fn()
+      .mockRejectedValueOnce({
+        code: '23505',
+        constraint: 'conversation_turns_one_active_per_session_idx'
+      })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'active-turn' }] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.createTurn({
+      sessionId: 'session-id',
+      clientMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      requestHash: 'different-message'
+    })).rejects.toMatchObject({
+      code: 'active_conversation_turn_exists',
+      activeTurnId: 'active-turn'
+    });
+  });
+
+  it('maps execution lease state used to prevent concurrent turn runners', async () => {
+    const leaseAt = new Date('2026-07-10T12:01:00.000Z');
+    const row = {
+      ...turnRow('turn-1', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      execution_owner: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      execution_lease_expires_at: leaseAt
+    };
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [row] });
+    const repository = new ConversationRepository({ query } as never);
+
+    const claimed = await repository.claimTurnExecution({
+      sessionId: 'session-id',
+      turnId: 'turn-1',
+      ownerId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      leaseMs: 30_000
+    });
+
+    expect(claimed).toMatchObject({
+      executionOwner: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      executionLeaseExpiresAt: leaseAt.toISOString()
+    });
+    expect(query.mock.calls[0]?.[0]).toContain('execution_lease_expires_at < now()');
+  });
+
+  it('saves the user message and links it to the turn atomically', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          id: 'message-id',
+          session_id: 'session-id',
+          role: 'user',
+          content: 'да',
+          metadata: {},
+          created_at: now
+        }]
+      })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    const message = await repository.addUserMessageForTurn({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      content: 'да',
+      activeNeedsBefore: []
+    });
+
+    expect(message.id).toBe('message-id');
+    expect(query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(query.mock.calls[0]?.[0]).toContain("SELECT locked_turn.session_id, 'user'");
+    expect(query.mock.calls[0]?.[0]).toContain('WHERE NOT EXISTS (SELECT 1 FROM existing_message)');
+    expect(query.mock.calls[0]?.[0]).toContain('SET user_message_id = (SELECT id FROM chosen_message)');
+  });
+
+  it('inserts an assistant message only from the locked existing turn', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          id: 'assistant-message-id',
+          session_id: 'session-id',
+          role: 'assistant',
+          content: 'ответ',
+          metadata: {},
+          created_at: now
+        }]
+      })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.addAssistantMessageForTurn({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      content: 'ответ'
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
+    expect(query.mock.calls[0]?.[0]).toContain("SELECT locked_turn.session_id, 'assistant'");
+    expect(query.mock.calls[0]?.[0]).toContain('SET assistant_message_id = (SELECT id FROM chosen_message)');
+  });
+});
+
+describe('ConversationRepository dialogue ledger compaction', () => {
+  it('keeps the newest bounded event window and returns it in chronological order', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.listDialogueLedgerEvents('session-id', 500);
+
+    expect(query.mock.calls[0]?.[0]).toContain('ORDER BY event_seq DESC');
+    expect(query.mock.calls[0]?.[0]).toContain('ORDER BY event_seq ASC');
+    expect(query.mock.calls[0]?.[0]).not.toContain('ORDER BY created_at ASC\n       LIMIT');
+  });
+
+  it('persists a monotonic snapshot cursor with reduced state and recent evidence', async () => {
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{ session_id: 'session-id', through_event_seq: '81' }]
+    });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.saveDialogueLedgerSnapshot({
+      sessionId: 'session-id',
+      throughEventSeq: 81,
+      eventCount: 81,
+      state: { eventIds: ['event-81'] },
+      recentEvents: [{ eventId: 'event-81' }]
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain('ON CONFLICT (session_id) DO UPDATE');
+    expect(query.mock.calls[0]?.[0]).toContain('dialogue_ledger_snapshots.through_event_seq <= EXCLUDED.through_event_seq');
+    expect(query.mock.calls[0]?.[1]?.[3]).toBe(JSON.stringify({ eventIds: ['event-81'] }));
+  });
+});
+
+describe('LeadRepository turn idempotency', () => {
+  it('uses the client lead id and payload hash for public-form idempotency', async () => {
+    const now = new Date('2026-07-10T12:00:00.000Z');
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{
+        id: 'lead-id',
+        session_id: 'session-id',
+        client_lead_id: 'client-lead-id',
+        client_request_hash: 'request-hash',
+        name: 'Алексей',
+        phone: '+79000000000',
+        email: null,
+        question: 'Нужна доставка',
+        status: 'pending_email',
+        created_at: now
+      }]
+    });
+    const { LeadRepository } = await import('../src/db/repositories.js');
+    const repository = new LeadRepository({ query } as never);
+
+    const lead = await repository.createClientLead({
+      sessionId: 'session-id',
+      clientLeadId: 'client-lead-id',
+      clientRequestHash: 'request-hash',
+      name: 'Алексей',
+      phone: '+79000000000',
+      question: 'Нужна доставка'
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain('ON CONFLICT (session_id, client_lead_id) WHERE client_lead_id IS NOT NULL');
+    expect(query.mock.calls[0]?.[0]).toContain("WHERE id = $1 AND status = 'active'");
+    expect(query.mock.calls[0]?.[0]).toContain('leads.client_request_hash = EXCLUDED.client_request_hash');
+    expect(query.mock.calls[0]?.[1]).toContain('request-hash');
+    expect(lead).toMatchObject({ clientLeadId: 'client-lead-id', clientRequestHash: 'request-hash' });
+  });
+
+  it('returns null when the client idempotency key has a different payload hash', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const { LeadRepository } = await import('../src/db/repositories.js');
+    const repository = new LeadRepository({ query } as never);
+
+    await expect(repository.createClientLead({
+      sessionId: 'session-id',
+      clientLeadId: 'client-lead-id',
+      clientRequestHash: 'different-request-hash',
+      name: 'Алексей',
+      phone: '+79000000000'
+    })).resolves.toBeNull();
+  });
+
+  it('uses the originating turn and tool request as the business idempotency key', async () => {
+    const now = new Date('2026-07-10T12:00:00.000Z');
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{
+        id: 'lead-id',
+        session_id: 'session-id',
+        origin_turn_id: 'turn-id',
+        origin_tool_request_id: 'lead-request',
+        name: 'Алексей',
+        phone: '+79000000000',
+        email: null,
+        question: 'Нужна доставка',
+        status: 'pending_email',
+        created_at: now
+      }]
+    });
+    const { LeadRepository } = await import('../src/db/repositories.js');
+    const repository = new LeadRepository({ query } as never);
+
+    await repository.createLead({
+      sessionId: 'session-id',
+      originTurnId: 'turn-id',
+      originToolRequestId: 'lead-request',
+      name: 'Алексей',
+      phone: '+79000000000',
+      question: 'Нужна доставка'
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain('ON CONFLICT (session_id, origin_turn_id, origin_tool_request_id)');
+    expect(query.mock.calls[0]?.[1]).toContain('lead-request');
+  });
+
+  it('does not reset an existing outbox delivery state when recovery enqueues the same lead again', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [{ id: 'outbox-id' }] });
+    const { ConversationRepository } = await import('../src/db/repositories.js');
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.enqueueLeadOutbox({
+      leadId: 'lead-id',
+      sessionId: 'session-id',
+      turnId: null,
+      destination: 'lead_email',
+      payload: { leadId: 'lead-id' }
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain('status = lead_outbox.status');
+    expect(query.mock.calls[0]?.[0]).toContain('next_attempt_at = lead_outbox.next_attempt_at');
+    expect(query.mock.calls[0]?.[0]).not.toContain("WHEN lead_outbox.status = 'sent'");
+    expect(query.mock.calls[0]?.[1]?.[2]).toBeNull();
+  });
+
+  it('reclaims stale sending rows and reports them as degraded outbox health', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{
+          pending: 0,
+          sending: 1,
+          failed: 0,
+          dead: 0,
+          stale_sending: 1,
+          oldest_backlog_at: null,
+          last_sent_at: null
+        }]
+      });
+    const { LeadRepository } = await import('../src/db/repositories.js');
+    const repository = new LeadRepository({ query } as never);
+
+    await repository.claimDueLeadOutbox();
+    const health = await repository.getLeadOutboxHealth();
+
+    expect(query.mock.calls[0]?.[0]).toContain("status = 'sending'");
+    expect(query.mock.calls[0]?.[0]).toContain("interval '15 minutes'");
+    expect(health).toMatchObject({ status: 'degraded', sending: 1, staleSending: 1 });
   });
 });
 

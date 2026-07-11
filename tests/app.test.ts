@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { buildApp } from '../src/app.js';
+import { buildApp, corsOriginsForEnvironment } from '../src/app.js';
 
 describe('app', () => {
-  it('serves healthcheck with configured model', async () => {
+  it('does not reflect arbitrary origins in production defaults', () => {
+    expect(corsOriginsForEnvironment({
+      nodeEnv: 'production',
+      publicBaseUrl: 'https://chat.example.test',
+      catalogBaseUrl: 'https://bakautprof.ru'
+    })).toEqual(['https://chat.example.test', 'https://bakautprof.ru']);
+  });
+
+  it('serves a minimal public deployment health marker without operational diagnostics', async () => {
     const app = await buildApp();
     const response = await app.inject({ method: 'GET', url: '/api/health' });
     await app.close();
@@ -10,28 +18,34 @@ describe('app', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       ok: true,
-      answerModel: expect.any(String),
-      plannerModel: expect.any(String),
+      runtime: {
+        version: '2026-07-10.manager-runtime-v1',
+        contractVersion: '2026-07-10.manager-contract-v1',
+        productionRuntime: 'agent_manager'
+      },
       remediation: {
-        contractVersion: '2026-05-19-generator-load-scenarios-recovery-v38',
-        runtimeArtifacts: expect.arrayContaining([
-          'agentContractV2',
-          'sourcePolicy',
-          'toolTrace',
-          'productEvidenceRegistry',
-          'policyGate',
-          'policyGateEnforcement',
-          'leadDraft',
-          'executionContract',
-          'requirementLedger',
-          'cardManifest',
-          'factClaimPlanner',
-          'factClaimAudit',
-          'leadStateMachine',
-          'postAnswerVerification'
-        ])
+        contractVersion: '2026-07-10.manager-contract-v1'
       }
     });
+    expect(response.json()).not.toHaveProperty('answerModel');
+    expect(response.json()).not.toHaveProperty('plannerModel');
+    expect(response.json()).not.toHaveProperty('operations');
+    expect(response.json().runtime).not.toHaveProperty('branch');
+    expect(response.json().runtime).not.toHaveProperty('decision');
+    expect(response.json().runtime).not.toHaveProperty('manifest');
+    expect(response.json().remediation).not.toHaveProperty('runtimeArtifacts');
+  }, 15_000);
+
+  it('rejects oversized JSON bodies before public route validation or persistence', async () => {
+    const app = await buildApp();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/chat/sessions',
+      payload: { visitorId: 'x'.repeat(2 * 1024 * 1024 + 1) }
+    });
+    await app.close();
+
+    expect(response.statusCode).toBe(413);
   }, 15_000);
 
   it('serves a launcher widget script compatible with old embed snippets', async () => {

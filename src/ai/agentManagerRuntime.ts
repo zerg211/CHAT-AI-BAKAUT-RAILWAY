@@ -5,9 +5,10 @@ export const AGENT_MANAGER_URL_OPT_IN_PARAM = 'agentHarness';
 
 export type AgentManagerRuntimeMode = 'agent_manager' | 'legacy';
 export type AgentManagerRuntimeReason =
-  | 'global_harness_enabled'
+  | 'sole_production_runtime'
+  | 'test_harness_enabled'
   | `url_opt_in_${typeof AGENT_MANAGER_URL_OPT_IN_PARAM}_1`
-  | 'harness_disabled_and_no_url_opt_in';
+  | 'test_legacy_runtime';
 
 export interface AgentManagerRuntimeDecision {
   runtimeMode: AgentManagerRuntimeMode;
@@ -17,6 +18,33 @@ export interface AgentManagerRuntimeDecision {
   urlOptIn: boolean;
   urlOptInParam: typeof AGENT_MANAGER_URL_OPT_IN_PARAM;
   legacyAnswerWritersDisabled: boolean;
+}
+
+export function resolveAgentManagerRuntimeDecision(input: {
+  nodeEnv: 'development' | 'test' | 'production';
+  testHarnessEnabled: boolean;
+  urlOptIn: boolean;
+  legacyAnswerWritersDisabled: boolean;
+}): AgentManagerRuntimeDecision {
+  const productionRuntime = input.nodeEnv !== 'test';
+  const globalHarnessEnabled = productionRuntime || input.testHarnessEnabled;
+  const agentManagerHarnessEnabled = globalHarnessEnabled || input.urlOptIn;
+  const reason: AgentManagerRuntimeReason = productionRuntime
+    ? 'sole_production_runtime'
+    : input.testHarnessEnabled
+      ? 'test_harness_enabled'
+      : input.urlOptIn
+        ? `url_opt_in_${AGENT_MANAGER_URL_OPT_IN_PARAM}_1`
+        : 'test_legacy_runtime';
+  return {
+    runtimeMode: agentManagerHarnessEnabled ? 'agent_manager' : 'legacy',
+    reason,
+    agentManagerHarnessEnabled,
+    globalHarnessEnabled,
+    urlOptIn: input.urlOptIn,
+    urlOptInParam: AGENT_MANAGER_URL_OPT_IN_PARAM,
+    legacyAnswerWritersDisabled: productionRuntime ? true : input.legacyAnswerWritersDisabled
+  };
 }
 
 function hasUrlOptIn(pageUrl?: string | null) {
@@ -30,23 +58,13 @@ function hasUrlOptIn(pageUrl?: string | null) {
 }
 
 export function getAgentManagerRuntimeDecision(session?: Pick<ConversationSession, 'pageUrl'> | null): AgentManagerRuntimeDecision {
-  const globalHarnessEnabled = config.AGENT_MANAGER_HARNESS_ENABLED;
   const urlOptIn = hasUrlOptIn(session?.pageUrl);
-  const agentManagerHarnessEnabled = globalHarnessEnabled || urlOptIn;
-  const reason: AgentManagerRuntimeReason = globalHarnessEnabled
-    ? 'global_harness_enabled'
-    : urlOptIn
-      ? `url_opt_in_${AGENT_MANAGER_URL_OPT_IN_PARAM}_1`
-      : 'harness_disabled_and_no_url_opt_in';
-  return {
-    runtimeMode: agentManagerHarnessEnabled ? 'agent_manager' : 'legacy',
-    reason,
-    agentManagerHarnessEnabled,
-    globalHarnessEnabled,
+  return resolveAgentManagerRuntimeDecision({
+    nodeEnv: config.NODE_ENV,
+    testHarnessEnabled: config.AGENT_MANAGER_HARNESS_ENABLED,
     urlOptIn,
-    urlOptInParam: AGENT_MANAGER_URL_OPT_IN_PARAM,
     legacyAnswerWritersDisabled: config.AGENT_MANAGER_DISABLE_LEGACY_ANSWER_WRITERS
-  };
+  });
 }
 
 export function runtimeResponseMetadata(runtimeDecision: AgentManagerRuntimeDecision, legacyPath?: string) {

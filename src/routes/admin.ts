@@ -8,6 +8,14 @@ import { buildEmbeddingCoverageReport } from '../ai/embeddingCoverage.js';
 import { EvalLlmRubricJudgeInputSchema, runEvalLlmRubricJudge } from '../ai/evalJudge.js';
 import { createOpenAIClient } from '../ai/openaiClient.js';
 import { recordOpenAIUsageOnce } from '../ai/openaiUsageGuard.js';
+import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
+import { AI_MANAGER_RUNTIME_MANIFEST } from '../ai/aiManagerRuntimeManifest.js';
+import {
+  AssistantFeedbackQueueStatusSchema,
+  AssistantFeedbackRatingSchema,
+  buildAssistantFeedbackRegressionCandidate,
+  knownPiiValuesForFeedback
+} from '../ai/assistantFeedbackQueue.js';
 import { config } from '../config.js';
 import { pool } from '../db/pool.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
@@ -107,15 +115,53 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     if (request.url.startsWith('/api/admin/')) assertAdmin(request);
   });
 
+  app.get('/api/admin/health', async () => {
+    const operations = config.NODE_ENV === 'test'
+      ? {
+          catalog: { status: 'not_checked_in_test' },
+          embeddings: { status: 'not_checked_in_test' },
+          leadOutbox: { status: 'not_checked_in_test' }
+        }
+      : await (async () => {
+          const [catalog, embeddings, leadOutbox] = await Promise.allSettled([
+            products.getCatalogFreshness(),
+            products.getEmbeddingCoverage('products'),
+            leads.getLeadOutboxHealth()
+          ]);
+          const unavailable = (_result: PromiseRejectedResult) => ({
+            status: 'unavailable',
+            errorCode: 'operation_health_check_failed'
+          });
+          return {
+            catalog: catalog.status === 'fulfilled' ? catalog.value : unavailable(catalog),
+            embeddings: embeddings.status === 'fulfilled' ? embeddings.value : unavailable(embeddings),
+            leadOutbox: leadOutbox.status === 'fulfilled' ? leadOutbox.value : unavailable(leadOutbox)
+          };
+        })();
+    return {
+      ok: true,
+      answerModel: config.OPENAI_ANSWER_MODEL,
+      plannerModel: config.OPENAI_PLANNER_MODEL,
+      factModel: config.OPENAI_FACT_MODEL,
+      runtime: {
+        commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
+        branch: process.env.RAILWAY_GIT_BRANCH ?? process.env.GIT_BRANCH ?? null,
+        decision: getAgentManagerRuntimeDecision(null),
+        manifest: AI_MANAGER_RUNTIME_MANIFEST
+      },
+      operations
+    };
+  });
+
   app.post('/api/admin/catalog/import-csv', async (request) => {
-    const input = z.object({ filePath: z.string().min(1) }).parse(request.body ?? {});
+    const input = z.object({ filePath: z.string().trim().min(1).max(1000) }).parse(request.body ?? {});
     return importCatalogCsv(input.filePath, products);
   });
 
   app.post('/api/admin/catalog/sync-site', async (request) => {
     const input = z.object({
-      maxPages: z.number().int().positive().optional(),
-      startPath: z.string().min(1).optional()
+      maxPages: z.number().int().positive().max(5000).optional(),
+      startPath: z.string().trim().min(1).max(2000).optional()
     }).parse(request.body ?? {});
     return syncCatalogFromSite({ maxPages: input.maxPages, startPath: input.startPath }, products);
   });
@@ -123,14 +169,14 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.post('/api/admin/catalog/sync-sitemap', async (request) => {
     const input = z.object({
       sitemapUrl: z.string().url().optional(),
-      maxProducts: z.number().int().positive().optional(),
-      maxContentPages: z.number().int().positive().optional(),
+      maxProducts: z.number().int().positive().max(100_000).optional(),
+      maxContentPages: z.number().int().positive().max(100_000).optional(),
       concurrency: z.number().int().positive().max(10).optional(),
-      requestDelayMs: z.number().int().nonnegative().optional(),
+      requestDelayMs: z.number().int().nonnegative().max(60_000).optional(),
       includeEmbeddings: z.boolean().optional(),
       includeProducts: z.boolean().optional(),
       includeContent: z.boolean().optional(),
-      onlyUrls: z.array(z.string().url()).optional()
+      onlyUrls: z.array(z.string().url()).max(5000).optional()
     }).parse(request.body ?? {});
     return syncCatalogFromSitemap(input, products);
   });
@@ -190,6 +236,48 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     return { leads: await leads.listLeads(query.limit) };
   });
 
+  app.get('/api/admin/feedback', async (request) => {
+    const query = z.object({
+      limit: z.coerce.number().int().positive().max(500).default(100),
+      status: AssistantFeedbackQueueStatusSchema.optional(),
+      rating: AssistantFeedbackRatingSchema.optional()
+    }).parse(request.query);
+    return { items: await conversations.listAssistantFeedbackQueue(query) };
+  });
+
+  app.patch('/api/admin/feedback/:id', async (request) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ status: AssistantFeedbackQueueStatusSchema }).parse(request.body ?? {});
+    const item = await conversations.updateAssistantFeedbackQueueStatus({ id: params.id, status: body.status });
+    if (!item) {
+      const error = new Error('Feedback event not found');
+      (error as Error & { statusCode?: number }).statusCode = 404;
+      throw error;
+    }
+    return { item };
+  });
+
+  app.post('/api/admin/feedback/:id/export-candidate', async (request) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      knownPiiValues: z.array(z.string().trim().min(2).max(300)).max(30).default([])
+    }).parse(request.body ?? {});
+    const item = await conversations.getAssistantFeedbackQueueItem(params.id);
+    if (!item) {
+      const error = new Error('Feedback event not found');
+      (error as Error & { statusCode?: number }).statusCode = 404;
+      throw error;
+    }
+    const fixture = buildAssistantFeedbackRegressionCandidate(item, {
+      knownPiiValues: [...new Set([
+        ...knownPiiValuesForFeedback(item),
+        ...body.knownPiiValues
+      ])]
+    });
+    await conversations.markAssistantFeedbackExported({ id: item.id, fixture });
+    return { fixture };
+  });
+
   app.get('/api/admin/conflicts', async (request) => {
     const query = z.object({ limit: z.coerce.number().int().positive().max(500).default(100) }).parse(request.query);
     return { conflicts: await products.listOpenConflicts(query.limit) };
@@ -202,6 +290,13 @@ export async function registerAdminRoutes(app: FastifyInstance) {
 
   app.get('/api/admin/embedding-coverage', async () => buildEmbeddingCoverageReport(products));
 
+  app.get('/api/admin/catalog/freshness', async (request) => {
+    const query = z.object({
+      staleAfterHours: z.coerce.number().int().positive().max(24 * 30).default(config.CATALOG_STALE_AFTER_HOURS)
+    }).parse(request.query);
+    return products.getCatalogFreshness(query.staleAfterHours);
+  });
+
   app.get('/api/admin/runtime/openai', async () => {
     const client = createOpenAIClient();
     if (!client) {
@@ -211,7 +306,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         class: 'authentication',
         code: 'missing_openai_api_key',
         answerModel: config.OPENAI_ANSWER_MODEL,
-        plannerModel: config.OPENAI_PLANNER_MODEL
+        plannerModel: config.OPENAI_PLANNER_MODEL,
+        factModel: config.OPENAI_FACT_MODEL
       };
     }
 
@@ -231,6 +327,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         class: 'ok',
         answerModel: config.OPENAI_ANSWER_MODEL,
         plannerModel: config.OPENAI_PLANNER_MODEL,
+        factModel: config.OPENAI_FACT_MODEL,
         responseId: typeof response?.id === 'string' ? response.id : null,
         outputPresent: Boolean(response?.output_text || response?.output?.length)
       };
@@ -240,6 +337,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
         provider: 'openai',
         answerModel: config.OPENAI_ANSWER_MODEL,
         plannerModel: config.OPENAI_PLANNER_MODEL,
+        factModel: config.OPENAI_FACT_MODEL,
         error: safeOpenAIError(error)
       };
     } finally {
@@ -289,7 +387,6 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       source: query.source ?? null,
       budget: {
         dailyTokenBudget: config.OPENAI_DAILY_TOKEN_BUDGET,
-        headlessDailyTokenBudget: config.OPENAI_HEADLESS_DAILY_TOKEN_BUDGET,
         guardReserveTokens: config.OPENAI_BUDGET_GUARD_RESERVE_TOKENS
       },
       rows: result.rows.map((row) => ({

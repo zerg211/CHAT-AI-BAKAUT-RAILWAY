@@ -22,6 +22,133 @@ export const dialogueLedgerStatuses = ['active', 'superseded', 'negated', 'close
 const nonEmptyString = z.string().trim().min(1);
 const jsonObject = z.record(z.string(), z.unknown());
 
+export const AgentManagerToolNameSchema = z.enum([
+  'catalog.search',
+  'catalog.getProductDetails',
+  'calculator.generatorLoad',
+  'web.researchProductFacts',
+  'lead.capture'
+]);
+
+const canonicalProductClassSchema = z.enum([
+  'generator',
+  'weldingGenerator',
+  'generatorOil',
+  'engineOil',
+  'generatorAccessory',
+  'plateAccessory',
+  'plate',
+  'rammer',
+  'roller',
+  'cutter',
+  'diamondBlade',
+  'diamondCore',
+  'trowel',
+  'unknown'
+]);
+const productClassSchema = z.string().trim().min(1).max(120);
+const optionalPlaceholder = <T extends z.ZodTypeAny>(schema: T) =>
+  z.preprocess((value) => value === null ? undefined : value, schema.optional());
+const optionalText = optionalPlaceholder(nonEmptyString);
+const optionalProductClass = optionalPlaceholder(productClassSchema);
+const optionalCanonicalProductClass = optionalPlaceholder(canonicalProductClassSchema);
+const optionalPowerSource = optionalPlaceholder(z.enum(['battery', 'fuel', 'mains', 'any']));
+const optionalPhase = optionalPlaceholder(z.enum(['single_phase', 'three_phase', 'any']));
+const optionalPositiveLimit = (max: number) => optionalPlaceholder(z.number().int().min(1).max(max));
+const stringList = (max: number) => z.array(nonEmptyString).max(max).optional();
+
+export const CatalogSearchToolArgsSchema = z.object({
+  query: optionalText,
+  semanticQuery: optionalText,
+  productIntent: optionalProductClass,
+  canonicalProductIntent: optionalCanonicalProductClass,
+  powerSource: optionalPowerSource,
+  phase: optionalPhase,
+  limit: optionalPositiveLimit(12),
+  comparisonAttributes: stringList(12),
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
+export const ProductDetailsToolArgsSchema = z.object({
+  query: optionalText,
+  semanticQuery: optionalText,
+  productIntent: optionalProductClass,
+  canonicalProductIntent: optionalCanonicalProductClass,
+  powerSource: optionalPowerSource,
+  phase: optionalPhase,
+  productIds: stringList(8),
+  productNames: stringList(4),
+  comparisonAttributes: stringList(12),
+  limit: optionalPositiveLimit(12),
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
+const generatorLoadItemSchema = z.object({
+  kind: optionalText,
+  name: optionalText,
+  count: optionalPlaceholder(z.number().positive()),
+  runningKw: optionalPlaceholder(z.number().nonnegative()),
+  startingKw: optionalPlaceholder(z.number().nonnegative()),
+  source: optionalPlaceholder(z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average'])),
+  evidence: optionalText,
+  basisKind: optionalPlaceholder(z.enum(['exact_power', 'checked_fact', 'specific_type_or_function', 'generic_load_name', 'unknown'])),
+  basisSignals: z.array(z.enum([
+    'consumer_type_known',
+    'consumer_function_known',
+    'voltage_or_phase_known',
+    'usage_scope_known',
+    'simultaneous_operation_known',
+    'buyer_requested_approximation',
+    'catalog_or_web_fact',
+    'explicit_power'
+  ])).max(8).optional()
+}).strict();
+
+export const GeneratorLoadToolArgsSchema = z.object({
+  query: optionalText,
+  semanticQuery: optionalText,
+  productIntent: optionalProductClass,
+  canonicalProductIntent: optionalCanonicalProductClass,
+  powerSource: optionalPowerSource,
+  phase: optionalPhase,
+  loads: z.array(generatorLoadItemSchema).max(24),
+  simultaneousStarting: optionalPlaceholder(z.boolean()),
+  simultaneousStartingKinds: stringList(24),
+  estimateBasis: optionalPlaceholder(z.enum(['exact_or_user_provided', 'catalog_or_web_fact', 'bounded_assumption', 'unbounded_guess'])),
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
+export const WebResearchToolArgsSchema = z.object({
+  query: optionalText,
+  semanticQuery: optionalText,
+  productIntent: optionalProductClass,
+  canonicalProductIntent: optionalCanonicalProductClass,
+  powerSource: optionalPowerSource,
+  phase: optionalPhase,
+  productNames: stringList(4),
+  comparisonAttributes: stringList(12),
+  limit: optionalPositiveLimit(12),
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
+const leadContactSchema = z.object({
+  name: optionalText,
+  phone: optionalText,
+  email: optionalText,
+  preferredContact: optionalText,
+  comment: optionalText
+}).strict();
+
+export const LeadCaptureToolArgsSchema = z.object({
+  contact: z.preprocess((value) => value === null ? undefined : value, leadContactSchema.optional()),
+  reason: optionalText,
+  notes: optionalText
+}).strict();
+
 export const DialogueLedgerEventSchema = z.object({
   id: z.string().uuid().optional(),
   sessionId: z.string().uuid(),
@@ -51,23 +178,49 @@ export const LedgerStateDeltaSchema = z.object({
   events: z.array(LedgerStateDeltaEventSchema).max(40)
 }).strict();
 
-export const ToolRequestSchema = z.object({
+const toolRequestFields = {
   id: nonEmptyString,
-  tool: z.enum([
-    'catalog.search',
-    'catalog.getProductDetails',
-    'calculator.generatorLoad',
-    'web.researchProductFacts',
-    'lead.capture'
-  ]),
-  args: jsonObject,
   rationale: nonEmptyString,
   required: z.boolean().default(true)
-}).strict();
+};
+
+export const ToolRequestSchema = z.discriminatedUnion('tool', [
+  z.object({ ...toolRequestFields, tool: z.literal('catalog.search'), args: CatalogSearchToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('catalog.getProductDetails'), args: ProductDetailsToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('calculator.generatorLoad'), args: GeneratorLoadToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('web.researchProductFacts'), args: WebResearchToolArgsSchema }).strict(),
+  z.object({ ...toolRequestFields, tool: z.literal('lead.capture'), args: LeadCaptureToolArgsSchema }).strict()
+]);
+
+export interface ToolRequestArgs {
+  query?: string | null;
+  semanticQuery?: string | null;
+  productIntent?: string | null;
+  canonicalProductIntent?: z.infer<typeof canonicalProductClassSchema> | null;
+  powerSource?: 'battery' | 'fuel' | 'mains' | 'any' | null;
+  phase?: 'single_phase' | 'three_phase' | 'any' | null;
+  limit?: number | null;
+  productIds?: string[];
+  productNames?: string[];
+  comparisonAttributes?: string[];
+  loads?: unknown[];
+  simultaneousStarting?: boolean | null;
+  simultaneousStartingKinds?: string[];
+  estimateBasis?: 'exact_or_user_provided' | 'catalog_or_web_fact' | 'bounded_assumption' | 'unbounded_guess' | null;
+  contact?: {
+    name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    preferredContact?: string | null;
+    comment?: string | null;
+  } | null;
+  reason?: string | null;
+  notes?: string | null;
+}
 
 export const ToolResultSchema = z.object({
   requestId: nonEmptyString,
-  tool: ToolRequestSchema.shape.tool,
+  tool: AgentManagerToolNameSchema,
   status: z.enum(['ok', 'denied', 'not_found', 'error', 'timeout']),
   payload: jsonObject,
   warnings: z.array(z.string()).default([]),
@@ -90,6 +243,56 @@ export const ProductMentionSchema = z.object({
   evidence: nonEmptyString
 }).strict();
 
+export const SelectionRequirementSchema = z.object({
+  id: nonEmptyString,
+  kind: nonEmptyString,
+  value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+  unit: z.string().trim().min(1).nullable(),
+  role: z.enum(['hard_constraint', 'preference', 'context', 'mentioned_only']),
+  strictness: z.enum(['strict', 'preferred', 'informational']),
+  evidence: nonEmptyString
+}).strict();
+
+export const AgentSelectionPolicySchema = z.object({
+  targetProductClass: nonEmptyString.nullable(),
+  canonicalProductClass: nonEmptyString.nullable(),
+  needAction: z.enum(['continue', 'open', 'switch', 'resume', 'close', 'none']),
+  alternativePolicy: z.enum([
+    'exact_only',
+    'same_class_only',
+    'allow_adjacent_with_explanation',
+    'open_to_alternatives',
+    'unknown'
+  ]),
+  reusePreviousCards: z.boolean(),
+  maxCards: z.number().int().min(0).max(8).nullable(),
+  powerSource: z.enum(['battery', 'fuel', 'mains', 'any']).nullable(),
+  phase: z.enum(['single_phase', 'three_phase', 'any']).nullable(),
+  requirements: z.array(SelectionRequirementSchema).max(40),
+  rationale: nonEmptyString
+}).strict();
+
+export const LeadCaptureAuthorizationSchema = z.object({
+  authorized: z.boolean(),
+  contactSource: z.enum(['current_message', 'existing_session', 'none']),
+  purpose: nonEmptyString.nullable(),
+  evidence: nonEmptyString.nullable()
+}).strict().superRefine((authorization, context) => {
+  if (authorization.authorized) {
+    if (authorization.contactSource === 'none') {
+      context.addIssue({ code: 'custom', path: ['contactSource'], message: 'authorized lead requires a contact source' });
+    }
+    if (!authorization.purpose) {
+      context.addIssue({ code: 'custom', path: ['purpose'], message: 'authorized lead requires a purpose' });
+    }
+    if (!authorization.evidence) {
+      context.addIssue({ code: 'custom', path: ['evidence'], message: 'authorized lead requires current-message evidence' });
+    }
+  } else if (authorization.contactSource !== 'none' || authorization.purpose !== null || authorization.evidence !== null) {
+    context.addIssue({ code: 'custom', message: 'unauthorized lead must not carry contact source, purpose, or evidence' });
+  }
+});
+
 export const AgentIntentGroundingSchema = z.object({
   taskType: z.enum([
     'technical_answer',
@@ -111,7 +314,7 @@ export const AgentIntentGroundingSchema = z.object({
     'current_lineup',
     'none'
   ]),
-  requiredToolKinds: z.array(ToolRequestSchema.shape.tool).default([]),
+  requiredToolKinds: z.array(AgentManagerToolNameSchema).default([]),
   technicalAttributes: z.array(nonEmptyString).default([]),
   rationale: nonEmptyString
 }).strict();
@@ -134,6 +337,9 @@ export const AgentIntentContractSchema = z.object({
   toolRequests: z.array(ToolRequestSchema).default([]),
   grounding: AgentIntentGroundingSchema.default(defaultAgentIntentGrounding),
   productMentions: z.array(ProductMentionSchema).default([]),
+  selectionPolicy: AgentSelectionPolicySchema.optional(),
+  leadCaptureAuthorization: LeadCaptureAuthorizationSchema.optional(),
+  policyRuleIds: z.array(nonEmptyString).default([]),
   mustNotAskQuestionIds: z.array(z.string()).default([]),
   riskFlags: z.array(z.string()).default([])
 }).strict();
@@ -164,6 +370,7 @@ export const AnswerContractSchema = z.object({
     reason: nonEmptyString
   }).strict()).default([]),
   toolResultIds: z.array(nonEmptyString).default([]),
+  selectedProductIds: z.array(nonEmptyString).max(8).optional(),
   leadAction: z.enum(['none', 'offer_form', 'capture_contact', 'confirm_contact_received']).default('none'),
   riskFlags: z.array(z.string()).default([]),
   selectionReadiness: AnswerSelectionReadinessSchema.optional()
@@ -182,15 +389,23 @@ export const PreSendReviewSchema = z.object({
 
 export type DialogueLedgerEvent = z.infer<typeof DialogueLedgerEventSchema>;
 export type LedgerStateDelta = z.infer<typeof LedgerStateDeltaSchema>;
-export type ToolRequest = z.infer<typeof ToolRequestSchema>;
+type ParsedToolRequest = z.infer<typeof ToolRequestSchema>;
+export type ToolRequest = Omit<ParsedToolRequest, 'args'> & { args: ToolRequestArgs };
 export type ToolResult = z.infer<typeof ToolResultSchema>;
 export type ProductMentionRole = z.infer<typeof ProductMentionRoleSchema>;
 export type ProductMention = z.infer<typeof ProductMentionSchema>;
+export type SelectionRequirement = z.infer<typeof SelectionRequirementSchema>;
+export type AgentSelectionPolicy = z.infer<typeof AgentSelectionPolicySchema>;
+export type LeadCaptureAuthorization = z.infer<typeof LeadCaptureAuthorizationSchema>;
 export type AgentIntentGrounding = z.infer<typeof AgentIntentGroundingSchema>;
 type ParsedAgentIntentContract = z.infer<typeof AgentIntentContractSchema>;
-export type AgentIntentContract = Omit<ParsedAgentIntentContract, 'productMentions' | 'grounding'> & {
+export type AgentIntentContract = Omit<ParsedAgentIntentContract, 'toolRequests' | 'productMentions' | 'grounding' | 'policyRuleIds' | 'selectionPolicy' | 'leadCaptureAuthorization'> & {
+  toolRequests: ToolRequest[];
   productMentions?: ProductMention[];
   grounding?: AgentIntentGrounding;
+  policyRuleIds?: string[];
+  selectionPolicy?: AgentSelectionPolicy;
+  leadCaptureAuthorization?: LeadCaptureAuthorization;
 };
 export type AnswerContract = z.infer<typeof AnswerContractSchema>;
 export type AnswerSelectionReadiness = z.infer<typeof AnswerSelectionReadinessSchema>;

@@ -1,15 +1,58 @@
 import OpenAI from 'openai';
 import { config } from '../config.js';
-import { assertOpenAIUsageBudget, recordOpenAIUsageOnce } from './openaiUsageGuard.js';
+import {
+  assertOpenAIUsageBudget,
+  bindOpenAIUsageReservation,
+  recordOpenAIUsageOnce,
+  releaseOpenAIUsageReservation
+} from './openaiUsageGuard.js';
 import { embeddingInputText } from './embeddingUtils.js';
+import {
+  AgentManagerTurnBudgetExceededError,
+  consumeCurrentAgentManagerProviderCall,
+  hasCurrentAgentManagerTurnBudget
+} from './agentManagerTurnBudget.js';
+import {
+  ProviderBudgetEstimationError,
+  estimateEmbeddingProviderCall,
+  estimateResponsesProviderCall,
+  type ProviderCallEstimate
+} from './openaiRequestBudget.js';
+
+function reserveCurrentTurnProviderCall(buildEstimate: () => ProviderCallEstimate) {
+  if (!hasCurrentAgentManagerTurnBudget()) return undefined;
+  try {
+    const estimate = buildEstimate();
+    consumeCurrentAgentManagerProviderCall(estimate);
+    return estimate;
+  } catch (error) {
+    if (error instanceof ProviderBudgetEstimationError) {
+      throw new AgentManagerTurnBudgetExceededError(error.stopReason);
+    }
+    throw error;
+  }
+}
 
 export function createOpenAIClient() {
   if (!config.OPENAI_API_KEY) return null;
   const client = new OpenAI({ apiKey: config.OPENAI_API_KEY, maxRetries: 0 }) as any;
   const createResponse = client.responses.create.bind(client.responses);
   client.responses.create = async (body: Record<string, unknown>, options?: unknown) => {
-    await assertOpenAIUsageBudget('openai_response', String(body?.model ?? config.OPENAI_MODEL));
-    return createResponse(body, options);
+    const maxOutputTokens = Number(body?.max_output_tokens ?? 0);
+    const turnEstimate = reserveCurrentTurnProviderCall(() => estimateResponsesProviderCall(body));
+    const reservationId = await assertOpenAIUsageBudget(
+      'openai_response',
+      String(body?.model ?? config.OPENAI_MODEL),
+      turnEstimate?.estimatedTotalTokens ?? Math.max(0, maxOutputTokens) + 8000
+    );
+    try {
+      const response = await createResponse(body, options);
+      bindOpenAIUsageReservation(response, reservationId);
+      return response;
+    } catch (error) {
+      await releaseOpenAIUsageReservation(reservationId);
+      throw error;
+    }
   };
   return client;
 }
@@ -62,13 +105,28 @@ export async function createEmbedding(text: string, signal?: AbortSignal) {
   const client = createOpenAIClient();
   if (!client) return null;
   return withRetry(async () => {
-    await assertOpenAIUsageBudget('embedding', config.OPENAI_EMBEDDING_MODEL);
-    const response = await client.embeddings.create({
+    const value = embeddingInputText(text);
+    const turnEstimate = reserveCurrentTurnProviderCall(() => estimateEmbeddingProviderCall({
       model: config.OPENAI_EMBEDDING_MODEL,
-      input: embeddingInputText(text)
-    }, signal ? { signal } : undefined);
-    await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
-    return response.data?.[0]?.embedding as number[] | undefined;
+      values: [value]
+    }));
+    const reservationId = await assertOpenAIUsageBudget(
+      'embedding',
+      config.OPENAI_EMBEDDING_MODEL,
+      turnEstimate?.estimatedTotalTokens ?? 4000
+    );
+    try {
+      const response = await client.embeddings.create({
+        model: config.OPENAI_EMBEDDING_MODEL,
+        input: value
+      }, signal ? { signal } : undefined);
+      bindOpenAIUsageReservation(response, reservationId);
+      await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
+      return response.data?.[0]?.embedding as number[] | undefined;
+    } catch (error) {
+      await releaseOpenAIUsageReservation(reservationId);
+      throw error;
+    }
   }, 2, signal);
 }
 
@@ -78,18 +136,33 @@ export async function createEmbeddings(texts: string[], signal?: AbortSignal) {
   const client = createOpenAIClient();
   if (!client) return texts.map(() => null);
   return withRetry(async () => {
-    await assertOpenAIUsageBudget('embedding', config.OPENAI_EMBEDDING_MODEL);
-    const response = await client.embeddings.create({
+    const values = texts.map((text) => embeddingInputText(text));
+    const turnEstimate = reserveCurrentTurnProviderCall(() => estimateEmbeddingProviderCall({
       model: config.OPENAI_EMBEDDING_MODEL,
-      input: texts.map((text) => embeddingInputText(text))
-    }, signal ? { signal } : undefined);
-    await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
-    const byIndex = new Map<number, number[]>();
-    for (const item of response.data ?? []) {
-      if (typeof item.index === 'number' && Array.isArray(item.embedding)) {
-        byIndex.set(item.index, item.embedding as number[]);
+      values
+    }));
+    const reservationId = await assertOpenAIUsageBudget(
+      'embedding',
+      config.OPENAI_EMBEDDING_MODEL,
+      turnEstimate?.estimatedTotalTokens ?? Math.max(4000, texts.length * 2000)
+    );
+    try {
+      const response = await client.embeddings.create({
+        model: config.OPENAI_EMBEDDING_MODEL,
+        input: values
+      }, signal ? { signal } : undefined);
+      bindOpenAIUsageReservation(response, reservationId);
+      await recordOpenAIUsageOnce('embedding', config.OPENAI_EMBEDDING_MODEL, response);
+      const byIndex = new Map<number, number[]>();
+      for (const item of response.data ?? []) {
+        if (typeof item.index === 'number' && Array.isArray(item.embedding)) {
+          byIndex.set(item.index, item.embedding as number[]);
+        }
       }
+      return texts.map((_, index) => byIndex.get(index) ?? null);
+    } catch (error) {
+      await releaseOpenAIUsageReservation(reservationId);
+      throw error;
     }
-    return texts.map((_, index) => byIndex.get(index) ?? null);
   }, 2, signal);
 }

@@ -3,6 +3,7 @@ const blockingRuntimeClasses = new Set([
   'provider_access_region',
   'quota_or_billing',
   'model_project_or_org_access',
+  'model_mismatch',
   'rate_limit',
   'network_or_timeout',
   'network_or_runtime'
@@ -21,7 +22,8 @@ export async function checkProductionOpenAiRuntime({
   productionApiBase = process.env.PRODUCTION_API_BASE || 'https://chat-ai-production-3057.up.railway.app',
   token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY,
   fetchImpl = fetch,
-  timeoutMs = 30_000
+  timeoutMs = 30_000,
+  expectedModel = process.env.PRODUCTION_EXPECTED_OPENAI_MODEL || 'gpt-5.4'
 } = {}) {
   if (!token) {
     return {
@@ -47,13 +49,23 @@ export async function checkProductionOpenAiRuntime({
       // Keep raw text in the result.
     }
     const runtimeClass = classifyRuntimePayload(payload, response.status);
+    const answerModel = payload?.answerModel ?? null;
+    const plannerModel = payload?.plannerModel ?? null;
+    const factModel = payload?.factModel ?? null;
+    const modelsMatch = answerModel === expectedModel
+      && plannerModel === expectedModel
+      && factModel === expectedModel;
     return {
-      ok: response.ok && payload?.ok === true && runtimeClass === 'ok',
+      ok: response.ok && payload?.ok === true && runtimeClass === 'ok' && modelsMatch,
       status: response.status,
-      class: runtimeClass,
-      code: payload?.error?.code ?? payload?.code ?? null,
-      answerModel: payload?.answerModel ?? null,
-      plannerModel: payload?.plannerModel ?? null,
+      class: runtimeClass === 'ok' && !modelsMatch ? 'model_mismatch' : runtimeClass,
+      code: runtimeClass === 'ok' && !modelsMatch
+        ? 'production_manager_model_mismatch'
+        : payload?.error?.code ?? payload?.code ?? null,
+      answerModel,
+      plannerModel,
+      factModel,
+      expectedModel,
       outputPresent: payload?.outputPresent ?? null,
       error: payload?.error ?? null,
       body: response.ok ? undefined : body.slice(0, 1200)
@@ -89,7 +101,7 @@ export async function checkProductionLiveTestBudget({
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(`${productionApiBase}/api/admin/openai-usage?hours=24&source=production_live_test`, {
+    const response = await fetchImpl(`${productionApiBase}/api/admin/openai-usage?hours=24`, {
       headers: { authorization: `Bearer ${token}` },
       signal: controller.signal
     });
@@ -102,7 +114,7 @@ export async function checkProductionLiveTestBudget({
     }
     const rows = Array.isArray(payload?.rows) ? payload.rows : [];
     const usedTokens = rows.reduce((sum, row) => sum + Number(row.totalTokens ?? row.total_tokens ?? 0), 0);
-    const budget = Number(payload?.budget?.headlessDailyTokenBudget ?? 0);
+    const budget = Number(payload?.budget?.dailyTokenBudget ?? 0);
     const reserve = Number(payload?.budget?.guardReserveTokens ?? 0);
     const budgetConfigured = Number.isFinite(budget) && budget > 0;
     const remainingAfterReserve = budgetConfigured ? budget - usedTokens - reserve : null;
@@ -156,7 +168,7 @@ export async function requireProductionOpenAiRuntimeReady(options = {}) {
     stage: 'production_live_test_budget',
     blocking: true,
     runtime,
-    policy: 'Production live widget dialogs require remaining production_live_test token budget before browser launch.'
+    policy: 'Production live widget dialogs require remaining capacity in the same global OpenAI budget enforced for every caller.'
   };
   throw error;
 }

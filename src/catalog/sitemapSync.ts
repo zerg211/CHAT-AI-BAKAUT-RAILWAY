@@ -1,10 +1,11 @@
 import * as cheerio from 'cheerio';
-import { fetch } from 'undici';
 import { createEmbedding } from '../ai/openaiClient.js';
 import { embeddingMetadataForText } from '../ai/embeddingUtils.js';
 import { config } from '../config.js';
 import { ProductRepository } from '../db/repositories.js';
 import type { CatalogPageInput, CatalogProductInput } from '../shared/types.js';
+import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
+import { createCatalogSyncHeartbeat, evaluateCatalogInventoryCoverage } from './catalogFreshness.js';
 import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
 
 type SitemapEntry = {
@@ -257,25 +258,42 @@ function isBrandLikeToken(value: string) {
   return value.length >= 3 && [...value].every(isAsciiAlnumOrHyphen);
 }
 
-async function fetchText(url: string): Promise<FetchResult> {
-  const response = await fetch(url, {
+async function fetchText(url: string, baseUrl: string, maxBytes = config.CATALOG_MAX_RESPONSE_BYTES): Promise<FetchResult> {
+  const response = await safeFetchBytes(url, {
+    allowedOrigin: baseUrl,
+    maxBytes,
+    timeoutMs: config.CATALOG_REQUEST_TIMEOUT_MS,
+    maxRedirects: 3,
     headers: { 'user-agent': 'Bakaut AI catalog sync (+local development; respects sitemap)' },
-    signal: AbortSignal.timeout(35_000)
   });
-  return { url, status: response.status, html: await response.text() };
+  return { url: response.url, status: response.status, html: outboundText(response) };
 }
 
-async function collectSitemapEntries(sitemapUrl: string) {
-  const root = await fetchText(sitemapUrl);
+async function collectSitemapEntries(
+  sitemapUrl: string,
+  baseUrl: string,
+  heartbeat: () => Promise<void>
+) {
+  await heartbeat();
+  const root = await fetchText(sitemapUrl, baseUrl, config.CATALOG_MAX_SITEMAP_BYTES);
+  await heartbeat();
   if (root.status >= 400) throw new Error(`Sitemap HTTP ${root.status}: ${sitemapUrl}`);
   const sitemapUrls = parseSitemapIndex(root.html);
+  if (sitemapUrls.length > config.CATALOG_MAX_SITEMAP_FILES) {
+    throw new Error(`Sitemap index exceeds ${config.CATALOG_MAX_SITEMAP_FILES} files`);
+  }
   const targetSitemaps = sitemapUrls.length ? sitemapUrls : [sitemapUrl];
   const entries: SitemapEntry[] = [];
 
   for (const url of targetSitemaps) {
-    const response = await fetchText(url);
+    await heartbeat();
+    const response = await fetchText(url, baseUrl, config.CATALOG_MAX_SITEMAP_BYTES);
+    await heartbeat();
     if (response.status >= 400) continue;
     entries.push(...parseSitemapEntries(response.html));
+    if (entries.length > config.CATALOG_MAX_SITEMAP_ENTRIES) {
+      throw new Error(`Sitemap inventory exceeds ${config.CATALOG_MAX_SITEMAP_ENTRIES} entries`);
+    }
   }
 
   const byUrl = new Map<string, SitemapEntry>();
@@ -523,14 +541,20 @@ async function runPool<T>(
   handler: (item: T, index: number) => Promise<void>
 ) {
   let next = 0;
+  const failures: unknown[] = [];
   const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
-    while (next < items.length) {
+    while (failures.length === 0 && next < items.length) {
       const index = next;
       next += 1;
-      await handler(items[index], index);
+      try {
+        await handler(items[index], index);
+      } catch (error) {
+        if (failures.length === 0) failures.push(error);
+      }
     }
   });
   await Promise.all(workers);
+  if (failures.length) throw failures[0];
 }
 
 function sleep(ms: number) {
@@ -552,7 +576,16 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
   const concurrency = options.concurrency ?? 4;
   const requestDelayMs = options.requestDelayMs ?? 150;
   const errors: Array<{ url: string; error: string }> = [];
-  const sourceId = await repository.startCatalogSource({ type: 'site_crawl', location: sitemapUrl });
+  const limitedScope = Boolean(options.onlyUrls?.length) ||
+    (includeProducts && options.maxProducts !== undefined) ||
+    (includeContent && options.maxContentPages !== undefined);
+  const syncMode = limitedScope ? 'partial' : 'full';
+  const sourceId = await repository.startCatalogSource({
+    type: 'site_crawl',
+    location: sitemapUrl,
+    syncMode
+  });
+  const heartbeat = createCatalogSyncHeartbeat(() => repository.heartbeatCatalogSource(sourceId));
 
   const stats = {
     sitemapUrl,
@@ -568,11 +601,16 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
     failedContentPages: 0,
     productsWithoutPrice: 0,
     productsWithoutSpecs: 0,
+    activeProductsBefore: 0,
+    activeContentPagesBefore: 0,
+    minimumProductCandidates: 0,
+    minimumContentCandidates: 0,
+    inventoryCoverageSafe: syncMode !== 'full',
     errors
   };
 
   try {
-    const collected = await collectSitemapEntries(sitemapUrl);
+    const collected = await collectSitemapEntries(sitemapUrl, baseUrl, heartbeat);
     stats.sitemapFiles = collected.sitemapUrls.length;
     stats.sitemapEntries = collected.entries.length;
 
@@ -596,10 +634,43 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
     stats.contentCandidates = contentEntries.length;
     options.onProgress?.(`Sitemap: ${stats.sitemapEntries} URLs, ${stats.productCandidates} catalog candidates, ${stats.contentCandidates} content candidates`);
 
+    if (syncMode === 'full' && (includeProducts || includeContent)) {
+      const activeInventory = await repository.getActiveCatalogInventoryCounts();
+      const thresholds = {
+        minimumRatio: config.CATALOG_DEACTIVATION_MIN_DISCOVERY_RATIO,
+        minimumFloor: config.CATALOG_DEACTIVATION_MIN_DISCOVERY_FLOOR
+      };
+      const productInventory = evaluateCatalogInventoryCoverage({
+        activeItems: activeInventory.products,
+        discoveredItems: stats.productCandidates
+      }, thresholds);
+      const contentInventory = evaluateCatalogInventoryCoverage({
+        activeItems: activeInventory.pages,
+        discoveredItems: stats.contentCandidates
+      }, thresholds);
+      stats.activeProductsBefore = activeInventory.products;
+      stats.activeContentPagesBefore = activeInventory.pages;
+      stats.minimumProductCandidates = productInventory.requiredItems;
+      stats.minimumContentCandidates = contentInventory.requiredItems;
+      const unsafeInventory = [
+        includeProducts && !productInventory.safe
+          ? `products(active=${productInventory.activeItems},discovered=${productInventory.discoveredItems},required=${productInventory.requiredItems})`
+          : null,
+        includeContent && !contentInventory.safe
+          ? `pages(active=${contentInventory.activeItems},discovered=${contentInventory.discoveredItems},required=${contentInventory.requiredItems})`
+          : null
+      ].filter((value): value is string => Boolean(value));
+      stats.inventoryCoverageSafe = unsafeInventory.length === 0;
+      if (unsafeInventory.length) {
+        throw new Error(`catalog_inventory_coverage_below_threshold:${unsafeInventory.join(',')}`);
+      }
+    }
+
     if (includeProducts) {
       await runPool(productEntries, concurrency, async (entry, index) => {
+        await heartbeat();
         try {
-          const response = await fetchText(entry.loc);
+          const response = await fetchText(entry.loc, baseUrl);
           const product = extractProduct(response, baseUrl, entry.lastmod);
           if (!product) {
             stats.skippedProducts += 1;
@@ -619,14 +690,16 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
           limitedErrors(errors, entry.loc, error);
         } finally {
           if (requestDelayMs > 0) await sleep(requestDelayMs);
+          await heartbeat();
         }
       });
     }
 
     if (includeContent) {
       await runPool(contentEntries, Math.min(concurrency, 3), async (entry) => {
+        await heartbeat();
         try {
-          const response = await fetchText(entry.loc);
+          const response = await fetchText(entry.loc, baseUrl);
           const page = extractCatalogPage(response, baseUrl, entry.pageType, entry.lastmod);
           if (!page) {
             stats.skippedContentPages += 1;
@@ -641,14 +714,62 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
           limitedErrors(errors, entry.loc, error);
         } finally {
           if (requestDelayMs > 0) await sleep(requestDelayMs);
+          await heartbeat();
         }
       });
     }
 
-    await repository.finishCatalogSource(sourceId, 'completed', stats);
+    const failedItemCount = stats.failedProducts + stats.failedContentPages;
+    const discoveredItemCount =
+      (includeProducts ? stats.productCandidates : 0) +
+      (includeContent ? stats.contentCandidates : 0);
+    const syncedItemCount = stats.importedProducts + stats.importedContentPages;
+    const productCoverageComplete = !includeProducts || (
+      stats.productCandidates > 0 &&
+      stats.importedProducts === stats.productCandidates &&
+      stats.skippedProducts === 0 &&
+      stats.failedProducts === 0
+    );
+    const contentCoverageComplete = !includeContent || (
+      stats.contentCandidates > 0 &&
+      stats.importedContentPages === stats.contentCandidates &&
+      stats.skippedContentPages === 0 &&
+      stats.failedContentPages === 0
+    );
+    const coverageComplete = syncMode === 'full' &&
+      discoveredItemCount > 0 &&
+      syncedItemCount === discoveredItemCount &&
+      failedItemCount === 0 &&
+      productCoverageComplete &&
+      contentCoverageComplete;
+    await repository.finishCatalogSource(
+      sourceId,
+      'completed',
+      { ...stats, syncMode, coverageComplete },
+      undefined,
+      {
+        coverageComplete,
+        discoveredItemCount,
+        syncedItemCount,
+        failedItemCount,
+        deactivateProducts: coverageComplete && includeProducts,
+        deactivatePages: coverageComplete && includeContent
+      }
+    );
     return stats;
   } catch (error) {
-    await repository.finishCatalogSource(sourceId, 'failed', stats, error instanceof Error ? error.message : String(error));
+    await repository.finishCatalogSource(
+      sourceId,
+      'failed',
+      { ...stats, syncMode, coverageComplete: false },
+      error instanceof Error ? error.message : String(error),
+      {
+        coverageComplete: false,
+        discoveredItemCount: stats.productCandidates + stats.contentCandidates,
+        syncedItemCount: stats.importedProducts + stats.importedContentPages,
+        failedItemCount: stats.failedProducts + stats.failedContentPages + 1
+      }
+    );
     throw error;
   }
 }

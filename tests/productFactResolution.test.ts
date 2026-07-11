@@ -147,6 +147,33 @@ describe('productFactResolution', () => {
     expect(plan.requiredSourceClasses).toEqual(expect.arrayContaining(['manual', 'manufacturer', 'dealer', 'marketplace']));
   });
 
+  it('keeps model-token extraction stable for separated and embedded identifiers', () => {
+    const separated = buildProductFactSearchPlan({
+      productName: 'Виброплита TSS WP60TH 60 кг',
+      attribute: 'weightKg'
+    });
+    const embedded = buildProductFactSearchPlan({
+      productName: 'Генератор 1ABC2 профессиональный',
+      attribute: 'powerKw'
+    });
+
+    expect(separated.queries).toContain('WP60TH масса кг');
+    expect(embedded.queries).toContain('ABC2 мощность кВт');
+  });
+
+  it('treats www and bare host variants as one independent source', () => {
+    const resolution = resolveProductFactCandidate({
+      conflict,
+      sources: [
+        source('https://www.manual.example/wp60th', 'manual', 60),
+        source('https://manual.example/copy/wp60th', 'manual', 60)
+      ]
+    });
+
+    expect(resolution.status).toBe('not_enough_evidence');
+    expect(resolution.valueGroups[0]?.sources).toHaveLength(1);
+  });
+
   it('ranks manuals/manufacturers above dealers and marketplaces', () => {
     expect(sourceCredibilityRank('manual')).toBeGreaterThan(sourceCredibilityRank('dealer'));
     expect(sourceCredibilityRank('manufacturer')).toBeGreaterThan(sourceCredibilityRank('marketplace'));

@@ -6,6 +6,7 @@ import {
   parseLoosePositiveNumber,
   productLiters,
   productMatchesIntent,
+  productPowerSource,
   requestedLiters
 } from '../src/ai/productClassifier.js';
 import type { Product } from '../src/shared/types.js';
@@ -36,6 +37,11 @@ describe('productClassifier core title prefix parsing', () => {
 
     expect(productMatchesIntent(item, 'generator')).toBe(true);
     expect(productMatchesIntent(item, 'generatorAccessory')).toBe(false);
+  });
+
+  it('recognizes English gasoline and petrol catalog labels as fuel evidence', () => {
+    expect(productPowerSource(product('Gasoline generator 5 kW'))).toBe('gasoline');
+    expect(productPowerSource(product('Petrol generator 5 kW'))).toBe('gasoline');
   });
 });
 

@@ -19,6 +19,10 @@ describe('OpenAI usage guard', () => {
       pageUrl: 'https://bakautprof.ru/',
       userAgent: 'Mozilla/5.0 Chrome/124.0'
     })).toBe('production_widget');
+    expect(requestSourceFromContext({
+      pageUrl: 'https://bakautprof.ru.evil.example/',
+      userAgent: 'HeadlessChrome/124.0'
+    })).toBe('automated_browser');
   });
 
   it('propagates session and turn context across async work', async () => {

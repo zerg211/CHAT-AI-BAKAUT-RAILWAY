@@ -81,22 +81,6 @@ export function stripContactRequestSentence(answerText: string) {
   return output.trim();
 }
 
-function unsafeLeadRepairBase(answerText: string) {
-  const lower = lowerRu(answerText);
-  const confirmsContact = [
-    'contact received',
-    fromEscaped('\\u043a\\u043e\\u043d\\u0442\\u0430\\u043a\\u0442 \\u043f\\u043e\\u043b\\u0443\\u0447'),
-    fromEscaped('\\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u043f\\u043e\\u043b\\u0443\\u0447'),
-    fromEscaped('\\u0437\\u0430\\u044f\\u0432\\u043a\\u0430 \\u043f\\u0440\\u0438\\u043d\\u044f\\u0442')
-  ].some((phrase) => lower.includes(phrase));
-  const promisesUncheckedCommercialResult = (
-    lower.includes('delivery and discount are available') ||
-    lower.includes(fromEscaped('\\u0434\\u043e\\u0441\\u0442\\u0430\\u0432\\u043a\\u0430 \\u0435\\u0441\\u0442\\u044c')) ||
-    lower.includes(fromEscaped('\\u0441\\u043a\\u0438\\u0434\\u043a\\u0430 \\u0435\\u0441\\u0442\\u044c'))
-  );
-  return confirmsContact || promisesUncheckedCommercialResult;
-}
-
 export function leadCaptureMissingContact(toolResults: ToolResult[]) {
   return toolResults.some((result) =>
     result.tool === 'lead.capture' &&
@@ -118,9 +102,7 @@ export function leadCaptureRepairText(input: {
   toolResults: ToolResult[];
   answerText?: string;
 }) {
-  const baseAnswer = input.answerText && !unsafeLeadRepairBase(input.answerText)
-    ? stripContactRequestSentence(input.answerText)
-    : '';
+  const baseAnswer = '';
   const hasProductContext = input.toolResults.some((result) => {
     const payload = result.payload as Record<string, unknown> | undefined;
     return Array.isArray(payload?.productIds) && payload.productIds.length > 0;

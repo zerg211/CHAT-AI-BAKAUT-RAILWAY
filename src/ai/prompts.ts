@@ -139,8 +139,8 @@ export function buildSystemPrompt(options: SalesPolicyPromptOptions = {}) {
   const behaviorPolicy = salesManagerBehaviorPolicyPromptBlock({
     target: 'answer',
     latestUserMessage: options.latestUserMessage,
-    enabled: options.dynamicPolicyEnabled ?? config.DYNAMIC_SALES_POLICY_ENABLED,
-    shadowMode: options.dynamicPolicyShadowMode ?? config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+    enabled: options.dynamicPolicyEnabled ?? true,
+    shadowMode: options.dynamicPolicyShadowMode ?? false
   });
   return `Ты AI-продавец-консультант компании БАКАУТ. Компания продает строительное и силовое оборудование: генераторы, виброплиты, вибротрамбовки, резчики, алмазную оснастку, расходники и близкие категории.
 
@@ -301,8 +301,8 @@ export function buildTurnPlannerPrompt(options: SalesPolicyPromptOptions = {}) {
   const plannerPolicy = salesManagerPlannerPolicyPromptBlock({
     target: 'planner',
     latestUserMessage: options.latestUserMessage,
-    enabled: options.dynamicPolicyEnabled ?? config.DYNAMIC_SALES_POLICY_ENABLED,
-    shadowMode: options.dynamicPolicyShadowMode ?? config.DYNAMIC_SALES_POLICY_SHADOW_MODE
+    enabled: options.dynamicPolicyEnabled ?? true,
+    shadowMode: options.dynamicPolicyShadowMode ?? false
   });
   return `Ты внутренний AI-планировщик хода диалога для продавца-консультанта БАКАУТ.
 

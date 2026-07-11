@@ -1,0 +1,89 @@
+{
+  "taskId": "2026-07-10-ai-manager-10of10",
+  "date": "2026-07-11",
+  "baselineCommit": "2ce1ce43b3804b72e723d403fc355a66331b3358",
+  "verdict": "PENDING_PRODUCTION_PROOF",
+  "completionClaimed": false,
+  "localChecks": {
+    "releaseGate": {
+      "command": "npm run verify",
+      "exitCode": 0,
+      "testFiles": 105,
+      "tests": 918,
+      "agenticEvalFiles": 4,
+      "agenticEvalTests": 251,
+      "typecheck": "PASS",
+      "build": "PASS",
+      "noRegexDelta": "PASS",
+      "productionAuditHigh": "PASS"
+    },
+    "allSeverityAudit": {
+      "command": "npm audit --audit-level=low",
+      "exitCode": 0,
+      "vulnerabilities": 0
+    },
+    "migrationFreshness": {
+      "command": "npx vitest run tests/migrate.test.ts tests/assistantFeedbackMigration.test.ts tests/catalogFreshness.test.ts tests/catalogRepositoryFreshness.test.ts",
+      "exitCode": 0,
+      "testFiles": 4,
+      "tests": 25
+    },
+    "diffCheck": "PASS"
+  },
+  "independentVerifier": {
+    "verdict": "PASS_LOCAL",
+    "acceptanceCriteria": "AC1-AC25",
+    "releaseGate": "PASS",
+    "remainingScope": "AC26-AC29 require deployed production evidence"
+  },
+  "security": {
+    "candidateIds": 59,
+    "uniqueCandidateIds": 59,
+    "currentReportableFindings": 0,
+    "currentDeferredFindings": 0,
+    "reports": [
+      "security/threat_model.md",
+      "security/repository_coverage_ledger.md",
+      "security/validation_report.md",
+      "security/attack_path_analysis_report.md"
+    ]
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS_LOCAL",
+    "AC2": "PASS_LOCAL",
+    "AC3": "PASS_LOCAL",
+    "AC4": "PASS_LOCAL",
+    "AC5": "PASS_LOCAL",
+    "AC6": "PASS_LOCAL",
+    "AC7": "PASS_LOCAL",
+    "AC8": "PASS_LOCAL",
+    "AC9": "PASS_LOCAL",
+    "AC10": "PASS_LOCAL",
+    "AC11": "PASS_LOCAL",
+    "AC12": "PASS_LOCAL",
+    "AC13": "PASS_LOCAL",
+    "AC14": "PASS_LOCAL",
+    "AC15": "PASS_LOCAL",
+    "AC16": "PASS_LOCAL",
+    "AC17": "PASS_LOCAL",
+    "AC18": "PASS_LOCAL",
+    "AC19": "PASS_LOCAL",
+    "AC20": "PASS_LOCAL",
+    "AC21": "PASS_LOCAL",
+    "AC22": "PASS_LOCAL",
+    "AC23": "PASS_LOCAL",
+    "AC24": "PASS_LOCAL",
+    "AC25": "PASS_LOCAL",
+    "AC26": "PENDING",
+    "AC27": "PENDING",
+    "AC28": "PENDING",
+    "AC29": "PENDING",
+    "AC30": "PENDING"
+  },
+  "nextRequiredProof": [
+    "intentional commit and GitHub push",
+    "Railway commit marker readback",
+    "adaptive embedded production widget dialogues",
+    "buyer UI plus admin trace audit"
+  ]
+}

@@ -57,9 +57,19 @@ export interface ProductCandidateSet {
 
 function categoryMatches(product: Product, productClass: ProductSelectionClass): boolean {
   const text = `${product.category ?? ''} ${product.name}`.toLocaleLowerCase('ru');
-  if (productClass === 'plate') return /виброплит|plate/.test(text);
-  if (productClass === 'generator') return /генератор|электростанц|generator/.test(text) && !/свароч/.test(text);
-  if (productClass === 'weldingGenerator') return /свароч.*генератор|welding/.test(text);
+  if (productClass === 'plate') return text.includes('виброплит') || text.includes('plate');
+  if (productClass === 'generator') {
+    return (
+      text.includes('генератор') ||
+      text.includes('электростанц') ||
+      text.includes('generator')
+    ) && !text.includes('свароч');
+  }
+  if (productClass === 'weldingGenerator') {
+    const weldingIndex = text.indexOf('свароч');
+    const generatorIndex = text.indexOf('генератор', weldingIndex + 'свароч'.length);
+    return (weldingIndex >= 0 && generatorIndex >= 0) || text.includes('welding');
+  }
   if (productClass === 'unknown') return true;
   return true;
 }

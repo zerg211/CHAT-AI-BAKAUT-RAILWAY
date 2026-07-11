@@ -8,12 +8,6 @@ import {
 function flags(overrides: Partial<AgentManagerFeatureFlags> = {}): AgentManagerFeatureFlags {
   return {
     harnessEnabled: false,
-    ledgerStateEnabled: false,
-    llmAnswerStepEnabled: false,
-    turnCheckpointRecoveryEnabled: false,
-    preSendReviewEnabled: false,
-    comparisonResearchEnabled: false,
-    leadOutboxEnabled: false,
     disableLegacyAnswerWriters: true,
     ...overrides
   };
@@ -50,20 +44,12 @@ describe('agent manager feature flags', () => {
   it('maps environment config names to internal feature flags', () => {
     const mapped = readAgentManagerFeatureFlags({
       AGENT_MANAGER_HARNESS_ENABLED: true,
-      AGENT_MANAGER_LEDGER_STATE_ENABLED: true,
-      AGENT_MANAGER_LLM_ANSWER_STEP_ENABLED: false,
-      AGENT_MANAGER_TURN_CHECKPOINT_RECOVERY_ENABLED: true,
-      AGENT_MANAGER_PRE_SEND_REVIEW_ENABLED: false,
-      AGENT_MANAGER_COMPARISON_RESEARCH_ENABLED: false,
-      AGENT_MANAGER_LEAD_OUTBOX_ENABLED: true,
       AGENT_MANAGER_DISABLE_LEGACY_ANSWER_WRITERS: true
     });
 
     expect(mapped).toMatchObject({
       harnessEnabled: true,
-      ledgerStateEnabled: true,
-      turnCheckpointRecoveryEnabled: true,
-      leadOutboxEnabled: true
+      disableLegacyAnswerWriters: true
     });
   });
 });

@@ -134,6 +134,7 @@ describe('sendLeadEmail', () => {
       method: 'POST',
       headers: expect.objectContaining({
         'content-type': 'application/json',
+        'Idempotency-Key': 'bakaut-lead-lead-1',
         Authorization: 'Bearer test-token'
       })
     }));

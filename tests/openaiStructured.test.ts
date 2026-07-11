@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseJsonObject } from '../src/ai/openaiStructured.js';
+import {
+  parseJsonObject,
+  structuredJsonRetryOutputTokenLimit
+} from '../src/ai/openaiStructured.js';
 
 describe('parseJsonObject', () => {
   it('parses the first complete JSON object and ignores trailing model text', () => {
@@ -19,5 +22,17 @@ describe('parseJsonObject', () => {
 
   it('parses markdown fenced JSON without regex-based extraction', () => {
     expect(parseJsonObject('```json\n{"contract":"ok"}\n```', 'stage')).toEqual({ contract: 'ok' });
+  });
+});
+
+describe('structuredJsonRetryOutputTokenLimit', () => {
+  it('does not silently expand the requested output budget by default', () => {
+    expect(structuredJsonRetryOutputTokenLimit(800)).toBe(800);
+    expect(structuredJsonRetryOutputTokenLimit(3200)).toBe(3200);
+  });
+
+  it('uses an explicit cap when the caller reserved a larger retry budget', () => {
+    expect(structuredJsonRetryOutputTokenLimit(800, 1800)).toBe(1800);
+    expect(structuredJsonRetryOutputTokenLimit(3200, 4000)).toBe(3200);
   });
 });

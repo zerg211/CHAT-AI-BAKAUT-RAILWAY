@@ -108,7 +108,9 @@ export function buildCatalogConflictEmail(input: CatalogConflictEmailInput): Cat
 function isResendEndpoint(url: string) {
   try {
     const target = new URL(url);
-    return target.hostname === 'api.resend.com' && target.pathname.replace(/\/+$/, '') === '/emails';
+    let pathnameEnd = target.pathname.length;
+    while (pathnameEnd > 0 && target.pathname[pathnameEnd - 1] === '/') pathnameEnd -= 1;
+    return target.hostname === 'api.resend.com' && target.pathname.slice(0, pathnameEnd) === '/emails';
   } catch {
     return false;
   }

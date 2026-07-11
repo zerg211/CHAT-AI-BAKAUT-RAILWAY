@@ -228,15 +228,59 @@ function specificCommercialReason(type: CustomerFacingClaimType): ClaimEvidenceV
   return 'missing_evidence';
 }
 
+function normalizedWhitespaceText(value: string) {
+  let normalized = '';
+  let pendingSpace = false;
+  for (const character of value.toLocaleLowerCase('ru')) {
+    if (character.trim() === '') {
+      pendingSpace = normalized.length > 0;
+      continue;
+    }
+    if (pendingSpace) normalized += ' ';
+    normalized += character;
+    pendingSpace = false;
+  }
+  return normalized;
+}
+
+function includesAny(text: string, phrases: string[]) {
+  return phrases.some((phrase) => text.includes(phrase));
+}
+
 function isConfidentCommercialPromise(type: CustomerFacingClaimType, text: string) {
+  const normalizedText = normalizedWhitespaceText(text);
   if (type === 'stock') {
-    return /(?:есть\s+в\s+наличии|на\s+складе|in\s+stock|available\s+(?:now|today))/iu.test(text);
+    return includesAny(normalizedText, [
+      'есть в наличии',
+      'на складе',
+      'in stock',
+      'available now',
+      'available today'
+    ]);
   }
   if (type === 'delivery') {
-    return /(?:достав(?:им|ка\s+(?:будет|стоит|бесплатн))|отгрузим\s+(?:сегодня|завтра)|delivery\s+(?:is|will|costs|free)|ships\s+today)/iu.test(text);
+    return includesAny(normalizedText, [
+      'доставим',
+      'доставка будет',
+      'доставка стоит',
+      'доставка бесплатн',
+      'отгрузим сегодня',
+      'отгрузим завтра',
+      'delivery is',
+      'delivery will',
+      'delivery costs',
+      'delivery free',
+      'ships today'
+    ]);
   }
   if (type === 'discount') {
-    return /(?:скидка\s+(?:будет|есть|составит)|discount\s+(?:is|will))/iu.test(text);
+    return includesAny(normalizedText, [
+      'скидка будет',
+      'скидка есть',
+      'скидка составит',
+      'discount is',
+      'discount will'
+    ]);
   }
   return false;
 }

@@ -8,7 +8,12 @@ import {
   suppressVisibleCardsForReadiness,
   toolRequestProductIntent
 } from '../src/ai/agentManagerCardSelection.js';
-import type { AnswerContract, ToolResult } from '../src/ai/agentManagerContracts.js';
+import type {
+  AgentIntentContract,
+  AgentSelectionPolicy,
+  AnswerContract,
+  ToolResult
+} from '../src/ai/agentManagerContracts.js';
 import type { CustomerNeedState, Product } from '../src/shared/types.js';
 
 function answerContract(selectionReadiness: AnswerContract['selectionReadiness']): AnswerContract {
@@ -192,6 +197,45 @@ function batteryStationWithWatts(id: string, watts: number): Product {
     specs: {
       'Nominal power': `${watts} W`
     }
+  };
+}
+
+function structuredSelectionIntent(
+  policy: Partial<AgentSelectionPolicy> = {}
+): AgentIntentContract {
+  return {
+    userMessageSummary: 'structured generator selection',
+    dialogueUnderstanding: 'use the typed selection contract',
+    nextStepRationale: 'show only the products selected by the answer writer that pass hard facts',
+    requiresTools: true,
+    toolRequests: [{
+      id: 'catalog-search',
+      tool: 'catalog.search',
+      args: {
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        query: 'generator'
+      },
+      rationale: 'ground generator candidates',
+      required: true
+    }],
+    productMentions: [],
+    selectionPolicy: {
+      targetProductClass: 'generator',
+      canonicalProductClass: 'generator',
+      needAction: 'continue',
+      alternativePolicy: 'same_class_only',
+      reusePreviousCards: false,
+      maxCards: 4,
+      powerSource: 'any',
+      phase: 'any',
+      requirements: [],
+      rationale: 'typed test policy',
+      ...policy
+    },
+    policyRuleIds: [],
+    mustNotAskQuestionIds: [],
+    riskFlags: []
   };
 }
 
@@ -1194,8 +1238,8 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_generator_phase:1');
   });
 
-  it('coerces free-form battery power station product intents to generator selection', () => {
-    const productIntent = toolRequestProductIntent({
+  it('requires an explicit canonical product intent instead of classifying free-form text in code', () => {
+    const freeFormIntent = toolRequestProductIntent({
       id: 'catalog-search',
       tool: 'catalog.search',
       args: {
@@ -1205,8 +1249,20 @@ describe('AgentManager visible card readiness', () => {
       rationale: 'find battery power stations',
       required: true
     } as never);
+    const canonicalIntent = toolRequestProductIntent({
+      id: 'catalog-search-canonical',
+      tool: 'catalog.search',
+      args: {
+        productIntent: 'battery power station',
+        canonicalProductIntent: 'generator',
+        query: 'battery power station 800 W 220 V'
+      },
+      rationale: 'LLM supplied the canonical class explicitly',
+      required: true
+    } as never);
 
-    expect(productIntent).toBe('generator');
+    expect(freeFormIntent).toBe('unknown');
+    expect(canonicalIntent).toBe('generator');
   });
 
   it('filters concrete-only diamond blade cards when the buyer asks for porcelain or ceramic tile', () => {
@@ -1342,5 +1398,226 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).not.toEqual(expect.arrayContaining([
       expect.stringContaining('plate_task_weight_mismatch')
     ]));
+  });
+
+  it('fails closed on unknown phase for a structured three-phase selection', () => {
+    const knownThreePhase = {
+      ...generatorWithPowerAndVoltage('diesel-380', '16', '380 V three phase'),
+      name: 'TSS SDG 16000EHA diesel generator 16 kW 380 V three phase'
+    };
+    const unknownPhase = {
+      ...generatorWithPower('unknown-phase', '16'),
+      name: 'TSS SDG 16000UNKNOWN diesel generator 16 kW'
+    };
+    const intent = structuredSelectionIntent({ powerSource: 'fuel', phase: 'three_phase' });
+
+    const selection = selectProductsForVisibleCards({
+      products: [knownThreePhase, unknownPhase],
+      userMessage: 'Нужен дизельный генератор 380 В.',
+      history: [],
+      intent,
+      answerText: `${knownThreePhase.name} подходит. ${unknownPhase.name} тоже рассматривался.`,
+      selectedProductIds: [knownThreePhase.id, unknownPhase.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.semanticAuthority).toBe('llm_contract');
+    expect(selection.selectedProductIds).toEqual(['diesel-380']);
+    expect(selection.droppedProductIds).toContain('unknown-phase');
+  });
+
+  it('suppresses an invalid structured selection without substituting an unselected catalog product', () => {
+    const selectedOverBudget = generatorWithPrice('selected-expensive', 'TSS SGG 6000EH gasoline generator 5 kW', 120_000);
+    const unselectedWithinBudget = generatorWithPrice('unselected-cheap', 'TSS SGG 5000EH gasoline generator 5 kW', 70_000);
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'budget',
+        kind: 'budget_max_rub',
+        value: 80_000,
+        unit: 'RUB',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'Бюджет до 80 000 рублей'
+      }]
+    });
+
+    const selection = selectProductsForVisibleCards({
+      products: [selectedOverBudget, unselectedWithinBudget],
+      userMessage: 'Бюджет до 80 000 рублей.',
+      history: [],
+      intent,
+      answerText: `${selectedOverBudget.name} выбран.`,
+      selectedProductIds: [selectedOverBudget.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([]);
+    expect(selection.selectedProductIds).not.toContain(unselectedWithinBudget.id);
+    expect(selection.warnings).toContain('product_cards_suppressed:budget_no_fit');
+  });
+
+  it('does not enforce a preferred requirement as a hard structured filter', () => {
+    const selected = generatorWithPrice('preferred-budget', 'TSS SGG 6000EHA gasoline generator 5 kW', 120_000);
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'preferred-budget',
+        kind: 'budget_max_rub',
+        value: 80_000,
+        unit: 'RUB',
+        role: 'hard_constraint',
+        strictness: 'preferred',
+        evidence: 'Желательно уложиться в 80 000 рублей'
+      }]
+    });
+
+    const selection = selectProductsForVisibleCards({
+      products: [selected],
+      userMessage: 'Желательно уложиться в 80 000 рублей.',
+      history: [],
+      intent,
+      answerText: `${selected.name} — осознанный вариант выше желаемого бюджета.`,
+      selectedProductIds: [selected.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([selected.id]);
+  });
+
+  it('fails closed when a strict planner constraint has no deterministic product verifier', () => {
+    const selected = generatorWithPrice('g1', 'TSS SGG 5000EH gasoline generator 5 kW', 70000);
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'noise-limit',
+        kind: 'noise_max_db',
+        value: 60,
+        unit: 'dB',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'noise must be no more than 60 dB'
+      }]
+    });
+
+    const selection = selectProductsForVisibleCards({
+      products: [selected],
+      userMessage: 'Noise must be no more than 60 dB.',
+      history: [],
+      intent,
+      answerText: `${selected.name} fits.`,
+      selectedProductIds: [selected.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([]);
+    expect(selection.products).toEqual([]);
+    expect(selection.droppedProductIds).toEqual([selected.id]);
+    expect(selection.warnings).toContain(
+      'product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:1'
+    );
+  });
+
+  it('fails closed when a supported strict numeric constraint has an invalid value', () => {
+    const selected = generatorWithPrice('g2', 'TSS SGG 6000EH gasoline generator 5 kW', 70000);
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'invalid-budget',
+        kind: 'budget_max_rub',
+        value: null,
+        unit: 'RUB',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'budget was marked strict but no value was supplied'
+      }]
+    });
+
+    const selection = selectProductsForVisibleCards({
+      products: [selected],
+      userMessage: 'The budget is a hard limit.',
+      history: [],
+      intent,
+      answerText: `${selected.name} fits.`,
+      selectedProductIds: [selected.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([]);
+    expect(selection.warnings).toContain(
+      'product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:1'
+    );
+  });
+
+  it('does not apply an old legacy budget to a new structured plate need without a budget requirement', () => {
+    const intent = structuredSelectionIntent({
+      targetProductClass: 'plate',
+      canonicalProductClass: 'plate',
+      requirements: []
+    });
+    intent.toolRequests = [{
+      id: 'plate-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'plate compactor',
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate'
+      },
+      rationale: 'ground the current structured plate need',
+      required: true
+    }];
+
+    const selection = selectProductsForVisibleCards({
+      products: [plate, overBudgetPlate],
+      userMessage: 'Покажите две виброплиты для новой задачи.',
+      history: [],
+      intent,
+      answerText: `${plate.name} и ${overBudgetPlate.name} подходят под новую задачу.`,
+      selectedProductIds: [plate.id, overBudgetPlate.id],
+      needState: needStateWithBudget(70_000)
+    });
+
+    expect(selection.selectedProductIds).toEqual([plate.id, overBudgetPlate.id]);
+    expect(selection.warnings).not.toContain('product_cards_filtered_by_budget:1');
+  });
+
+  it('keeps an unfamiliar structured product class unknown instead of falling back to a paused generator need', () => {
+    const intent = structuredSelectionIntent({
+      targetProductClass: 'laser cleaning machine',
+      canonicalProductClass: null,
+      reusePreviousCards: false,
+      requirements: []
+    });
+    intent.requiresTools = false;
+    intent.toolRequests = [];
+    const needState = needStateWithBudget();
+    needState.activeNeeds = [{
+      id: 'old-generator',
+      productClass: 'generator',
+      summary: 'old generator task',
+      constraints: [],
+      openQuestions: [],
+      selectedProductIds: [generator.id],
+      status: 'paused',
+      updatedAt: '2026-05-21T00:00:00.000Z'
+    }, {
+      id: 'laser-cleaner',
+      productClass: 'unknown',
+      summary: 'current unfamiliar equipment task',
+      constraints: [],
+      openQuestions: [],
+      selectedProductIds: [],
+      status: 'open',
+      updatedAt: '2026-05-21T00:01:00.000Z'
+    }];
+
+    const selection = selectProductsForVisibleCards({
+      products: [generator],
+      userMessage: 'Нужна установка лазерной очистки.',
+      history: [],
+      intent,
+      answerText: 'Сначала уточню параметры установки лазерной очистки.',
+      selectedProductIds: [],
+      needState
+    });
+
+    expect(selection.intent).toBe('unknown');
+    expect(selection.selectedProductIds).toEqual([]);
   });
 });

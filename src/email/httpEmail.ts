@@ -187,7 +187,8 @@ export async function sendLeadEmail(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.EMAIL_HTTP_TIMEOUT_MS);
   const headers: Record<string, string> = {
-    'content-type': 'application/json'
+    'content-type': 'application/json',
+    'Idempotency-Key': `bakaut-lead-${lead.id}`
   };
 
   if (config.EMAIL_HTTP_AUTH_HEADER) {
@@ -221,6 +222,7 @@ export async function sendLeadEmail(
           text
         }
       : {
+          idempotencyKey: `bakaut-lead-${lead.id}`,
           from,
           to: recipients.join(', '),
           subject,

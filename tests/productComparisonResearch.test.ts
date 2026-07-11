@@ -9,7 +9,14 @@ vi.mock('../src/ai/openaiStructured.js', () => ({
 }));
 
 vi.mock('undici', () => ({
-  fetch: fetchMock
+  fetch: fetchMock,
+  Agent: class {
+    async close() {}
+  }
+}));
+
+vi.mock('node:dns/promises', () => ({
+  lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }])
 }));
 
 const { researchProductComparisonFacts } = await import('../src/ai/productComparisonResearch.js');
@@ -17,14 +24,7 @@ const { researchProductComparisonFacts } = await import('../src/ai/productCompar
 const queuedResearchResponses: Array<{ parsed: ReturnType<typeof result> }> = [];
 
 function sourceResponse(body: string, contentType = 'text/html; charset=utf-8') {
-  return {
-    ok: true,
-    headers: {
-      get: (name: string) => name.toLocaleLowerCase('en-US') === 'content-type' ? contentType : null
-    },
-    text: async () => body,
-    arrayBuffer: async () => new TextEncoder().encode(body).buffer
-  };
+  return new Response(body, { status: 200, headers: { 'content-type': contentType } });
 }
 
 function product(overrides: Partial<Product> = {}): Product {
@@ -587,9 +587,9 @@ describe('product comparison research', () => {
   });
 
   it('rejects invented key-start evidence when the cited source only proves electric starter', async () => {
-    fetchMock
-      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E. Starting system: manual starter, electric starter. Kit: spark plug wrench.'))
-      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E PDF. Starting system: manual starter, electric starter. Kit: spark plug wrench.'));
+    fetchMock.mockResolvedValueOnce(
+      sourceResponse('FIRMAN RD4910E. Starting system: manual starter, electric starter. Kit: spark plug wrench.')
+    );
     createStructuredJsonResponse
       .mockResolvedValueOnce({
         parsed: result({
@@ -686,7 +686,7 @@ describe('product comparison research', () => {
     });
 
     expect(researchCalls()).toHaveLength(2);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(actual.answerGuidance.coverage.some((item) =>
       item.attribute === 'key start' && item.status === 'confirmed'
     )).toBe(false);
@@ -694,9 +694,235 @@ describe('product comparison research', () => {
     expect(actual.answerGuidance.directAnswer).toContain('источники');
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'source_evidence_validation_failed:key_start',
+      'source_evidence_pdf_unsupported',
       'answer_guidance_rewritten_after_source_validation',
       'electric_start_control_not_confirmed_after_retry'
     ]));
+  });
+
+  it('invalidates generic direct answer when its source evidence is rejected', async () => {
+    fetchMock
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E manual. Fuel type: gasoline.'))
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E specification. Fuel type: gasoline.'));
+    const unsupportedResult = (sourceUrl: string) => result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD4910E',
+        attribute: 'fuel tank capacity',
+        value: '15 liters',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'source allegedly states a 15 liter tank',
+        sourceUrl,
+        sourceTitle: 'FIRMAN RD4910E specification'
+      }],
+      answerGuidance: {
+        directAnswer: 'У FIRMAN RD4910E топливный бак на 15 литров.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'fuel tank capacity',
+          status: 'confirmed',
+          value: '15 liters',
+          evidence: 'source allegedly states a 15 liter tank',
+          sourceUrl,
+          sourceTitle: 'FIRMAN RD4910E specification'
+        }]
+      },
+      summaryForAnswer: 'The source allegedly confirms a 15 liter tank.'
+    });
+    queueResearchResponse({ parsed: unsupportedResult('https://example.test/firman-rd4910e-spec') });
+    queueResearchResponse({ parsed: unsupportedResult('https://example.test/firman-rd4910e-spec-retry') });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой объем топливного бака у FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(actual.facts).toEqual([]);
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'fuel tank capacity', status: 'not_confirmed' })
+    ]));
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.completeness).toBe('not_answered');
+    expect(actual.summaryForAnswer).toBe('');
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'source_evidence_validation_failed:semantic',
+      'answer_guidance_invalidated_after_source_validation'
+    ]));
+  });
+
+  it('rejects PDF evidence without invoking a PDF parser', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse('%PDF-1.7', 'application/pdf'));
+    const unsupportedPdfResult = (sourceUrl: string) => result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD4910E',
+        attribute: 'fuel tank capacity',
+        value: '15 liters',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'PDF allegedly states a 15 liter tank',
+        sourceUrl,
+        sourceTitle: 'FIRMAN RD4910E PDF'
+      }],
+      answerGuidance: {
+        directAnswer: 'У FIRMAN RD4910E топливный бак на 15 литров.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'fuel tank capacity',
+          status: 'confirmed',
+          value: '15 liters',
+          evidence: 'PDF allegedly states a 15 liter tank',
+          sourceUrl,
+          sourceTitle: 'FIRMAN RD4910E PDF'
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: unsupportedPdfResult('https://example.test/firman-rd4910e.pdf') });
+    queueResearchResponse({ parsed: unsupportedPdfResult('https://example.test/firman-rd4910e-download') });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой объем топливного бака у FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(actual.facts).toEqual([]);
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.completeness).toBe('not_answered');
+    expect(actual.summaryForAnswer).toBe('');
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'source_evidence_pdf_unsupported',
+      'answer_guidance_invalidated_after_source_validation'
+    ]));
+  });
+
+  it('invalidates generic direct answers that contain no validated evidence', async () => {
+    const unsupported = result({
+      usedWebSearch: true,
+      facts: [],
+      answerGuidance: {
+        directAnswer: 'У FIRMAN RD4910E топливный бак на 15 литров.',
+        completeness: 'answered',
+        coverage: []
+      },
+      summaryForAnswer: 'The tank is allegedly 15 liters.'
+    });
+    queueResearchResponse({ parsed: unsupported });
+    queueResearchResponse({ parsed: unsupported });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой объем топливного бака у FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.completeness).toBe('not_answered');
+    expect(actual.summaryForAnswer).toBe('');
+    expect(actual.warnings).toContain('answer_guidance_invalidated_without_validated_support');
+  });
+
+  it('does not treat low-confidence facts as support for a generic direct answer', async () => {
+    const unsupported = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD4910E',
+        attribute: 'fuel tank capacity',
+        value: '15 liters',
+        sourceType: 'web',
+        confidence: 'low',
+        evidence: 'Unverified snippet',
+        sourceUrl: 'https://example.test/unverified'
+      }],
+      answerGuidance: {
+        directAnswer: 'У FIRMAN RD4910E топливный бак на 15 литров.',
+        completeness: 'answered',
+        coverage: []
+      },
+      summaryForAnswer: 'An unverified snippet says 15 liters.'
+    });
+    queueResearchResponse({ parsed: unsupported });
+    queueResearchResponse({ parsed: unsupported });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой объем топливного бака у FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(actual.facts).toEqual([]);
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.completeness).toBe('not_answered');
+    expect(actual.summaryForAnswer).toBe('');
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'source_evidence_low_confidence_rejected',
+      'answer_guidance_invalidated_after_source_validation'
+    ]));
+  });
+
+  it('never treats an unrelated validated fact as evidence for generic direct-answer prose', async () => {
+    fetchMock
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E fuel type gasoline. Fuel type: gasoline.'))
+      .mockResolvedValueOnce(sourceResponse('FIRMAN RD4910E fuel type gasoline. Fuel type: gasoline.'));
+    const unrelated = result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD4910E',
+          attribute: 'fuel type',
+          value: 'gasoline',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'Fuel type: gasoline',
+          sourceUrl: 'https://example.test/firman-rd4910e'
+        }],
+        answerGuidance: {
+          directAnswer: 'У FIRMAN RD4910E топливный бак на 15 литров.',
+          completeness: 'answered',
+          coverage: []
+        },
+        summaryForAnswer: 'The tank is allegedly 15 liters.'
+    });
+    queueResearchResponse({ parsed: unrelated });
+    queueResearchResponse({ parsed: unrelated });
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return {
+          parsed: {
+            claimSupported: true,
+            claimStartKinds: [],
+            supportedStartKinds: [],
+            evidence: 'validated unrelated fuel-type fact',
+            warnings: []
+          }
+        };
+      }
+      const next = queuedResearchResponses.shift();
+      if (!next) throw new Error(`No queued structured response for stage ${call.stage}`);
+      return next;
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой объем топливного бака у FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(actual.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'fuel type', value: 'gasoline' })
+    ]));
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.completeness).toBe('partially_answered');
+    expect(actual.summaryForAnswer).toBe('');
+    expect(actual.warnings).toContain('answer_guidance_direct_answer_removed_for_evidence_coupling');
   });
 
   it('keeps key-start evidence when the cited source text actually supports it', async () => {

@@ -2,24 +2,31 @@ import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
+import { TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
+import { AgentManagerTurnBudgetExceededError } from '../ai/agentManagerTurnBudget.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
-import { ConversationRepository } from '../db/repositories.js';
+import {
+  ActiveConversationTurnError,
+  ClientMessagePayloadConflictError,
+  ConversationRepository
+} from '../db/repositories.js';
 import { closeSseReply, openSseReply, startStatusTimer } from './sse.js';
 
 const createSessionSchema = z.object({
-  visitorId: z.string().optional(),
-  pageUrl: z.string().optional()
-});
+  visitorId: z.string().trim().min(1).max(200).optional(),
+  pageUrl: z.string().trim().url().max(2048).optional()
+}).strict();
 
 const messageSchema = z.object({
-  message: z.string().trim().min(1).max(6000)
-});
+  message: z.string().trim().min(1).max(6000),
+  clientMessageId: z.string().uuid().optional()
+}).strict();
 
 const feedbackSchema = z.object({
   rating: z.enum(['positive', 'negative', 'wrong_cards'])
-});
+}).strict();
 
 const generationStatusMessages = [
   'Проверяю каталог и контекст диалога...',
@@ -46,7 +53,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const session = await conversations.createSession({
       visitorId: input.visitorId,
       pageUrl: input.pageUrl,
-      userAgent: request.headers['user-agent']
+      userAgent: request.headers['user-agent']?.slice(0, 500)
     });
     return reply.send({ session });
   });
@@ -87,13 +94,30 @@ export async function registerChatRoutes(app: FastifyInstance) {
     if (!session || session.status !== 'active') return reply.code(404).send({ error: 'Session not found or inactive' });
     const runtimeDecision = getAgentManagerRuntimeDecision(session);
     const requestedTurnId = randomUUID();
-    const turn = await conversations.createTurn({
-      id: requestedTurnId,
-      sessionId: params.id,
-      requestHash: requestHash(params.id, input.message),
-      status: 'received',
-      stage: 'received'
-    });
+    const clientMessageId = input.clientMessageId ?? randomUUID();
+    let turn: Awaited<ReturnType<ConversationRepository['createTurn']>>;
+    try {
+      turn = await conversations.createTurn({
+        id: requestedTurnId,
+        sessionId: params.id,
+        clientMessageId,
+        requestHash: requestHash(params.id, input.message),
+        status: 'received',
+        stage: 'received'
+      });
+    } catch (error) {
+      if (error instanceof ActiveConversationTurnError) {
+        return reply.code(409).send({
+          error: error.code,
+          activeTurnId: error.activeTurnId,
+          recoverable: true
+        });
+      }
+      if (error instanceof ClientMessagePayloadConflictError) {
+        return reply.code(409).send({ error: error.code, recoverable: false });
+      }
+      throw error;
+    }
     const turnId = turn.id;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
@@ -106,6 +130,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       send('start', { ok: true });
       send('turn', {
         turnId,
+        clientMessageId,
         runtimeMode: runtimeDecision.runtimeMode,
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision
@@ -132,7 +157,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
       send('done', payload);
     } catch (error) {
       const agentManagerHarnessEnabled = runtimeDecision.agentManagerHarnessEnabled;
-      if (!controller.signal.aborted && agentManagerHarnessEnabled) {
+      const executionInProgress = error instanceof TurnExecutionInProgressError;
+      const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
+      const recoveryAllowed = !executionInProgress && !budgetStopped;
+      if (!controller.signal.aborted && agentManagerHarnessEnabled && recoveryAllowed) {
         try {
           const recoveredPayload = await runWithOpenAIUsageContext({
             sessionId: params.id,
@@ -153,17 +181,23 @@ export async function registerChatRoutes(app: FastifyInstance) {
           app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(recoveryError) }, 'agent manager same-turn recovery failed');
         }
       }
-      await conversations.updateTurn({
-        sessionId: params.id,
-        turnId,
-        status: 'failed',
-        stage: controller.signal.aborted ? 'timeout_or_aborted' : 'failed',
-        errorCode: controller.signal.aborted
-          ? `${runtimeDecision.runtimeMode}_generation_aborted_or_timeout`
-          : `${runtimeDecision.runtimeMode}_generation_failed`,
-        errorMessage: safeErrorMessage(error)
-      }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
-      const message = agentManagerHarnessEnabled
+      if (recoveryAllowed) {
+        await conversations.updateTurn({
+          sessionId: params.id,
+          turnId,
+          status: 'failed',
+          stage: controller.signal.aborted ? 'timeout_or_aborted' : 'failed',
+          errorCode: controller.signal.aborted
+            ? `${runtimeDecision.runtimeMode}_generation_aborted_or_timeout`
+            : `${runtimeDecision.runtimeMode}_generation_failed`,
+          errorMessage: safeErrorMessage(error)
+        }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
+      }
+      const message = executionInProgress
+        ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
+        : budgetStopped
+          ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
+        : agentManagerHarnessEnabled
         ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
         : controller.signal.aborted
           ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
@@ -179,7 +213,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       send('error', {
         error: message,
         turnId,
-        recoverable: true,
+        recoverable: recoveryAllowed,
         runtimeMode: runtimeDecision.runtimeMode,
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision
@@ -233,16 +267,21 @@ export async function registerChatRoutes(app: FastifyInstance) {
       }));
       send('done', payload);
     } catch (error) {
-      await conversations.updateTurn({
-        sessionId: params.id,
-        turnId: params.turnId,
-        status: 'failed',
-        stage: 'recovery_failed',
-        errorCode: controller.signal.aborted
-          ? `${runtimeDecision.runtimeMode}_recovery_aborted_or_timeout`
-          : `${runtimeDecision.runtimeMode}_recovery_failed`,
-        errorMessage: safeErrorMessage(error)
-      }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(updateError) }, 'turn recovery failure update failed'));
+      const executionInProgress = error instanceof TurnExecutionInProgressError;
+      const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
+      const recoveryAllowed = !executionInProgress && !budgetStopped;
+      if (recoveryAllowed) {
+        await conversations.updateTurn({
+          sessionId: params.id,
+          turnId: params.turnId,
+          status: 'failed',
+          stage: 'recovery_failed',
+          errorCode: controller.signal.aborted
+            ? `${runtimeDecision.runtimeMode}_recovery_aborted_or_timeout`
+            : `${runtimeDecision.runtimeMode}_recovery_failed`,
+          errorMessage: safeErrorMessage(error)
+        }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(updateError) }, 'turn recovery failure update failed'));
+      }
       app.log.warn({
         sessionId: params.id,
         turnId: params.turnId,
@@ -253,11 +292,15 @@ export async function registerChatRoutes(app: FastifyInstance) {
       const agentManagerHarnessEnabled = runtimeDecision.agentManagerHarnessEnabled;
       send('error', {
         turnId: params.turnId,
-        recoverable: agentManagerHarnessEnabled,
+        recoverable: agentManagerHarnessEnabled && recoveryAllowed,
         runtimeMode: runtimeDecision.runtimeMode,
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision,
-        error: agentManagerHarnessEnabled
+        error: executionInProgress
+          ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
+          : budgetStopped
+            ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
+          : agentManagerHarnessEnabled
           ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
           : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
       });

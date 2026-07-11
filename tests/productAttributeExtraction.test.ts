@@ -75,4 +75,27 @@ describe('productAttributeExtraction', () => {
     expect(normalizeAttributeValue('weightKg', '60 кг')).toEqual(60);
     expect(normalizeAttributeValue('voltageV', '220 В')).toEqual(220);
   });
+
+  it('preserves numeric, unit-boundary, whitespace, and alternate size-separator behavior', () => {
+    const item = product({
+      name: 'Установка 220V; 10.5KN) основание 500 X 360, ложное значение 60кгс',
+      specs: {
+        'V, номинальное': '220',
+        'Тип запуска': '  электрический\n   стартер  ',
+        'Размер основания, мм': '500 × 360'
+      }
+    });
+
+    expect(extractAttributesFromProductName(item)).toMatchObject({
+      voltageV: { value: 220, raw: '220V' },
+      centrifugalForceKn: { value: 10.5, raw: '10.5KN' },
+      plateSizeMm: { value: '500x360', raw: '500 X 360' }
+    });
+    expect(extractAttributesFromProductName(item).weightKg).toBeUndefined();
+    expect(extractStructuredProductAttributes(item)).toMatchObject({
+      voltageV: { value: 220 },
+      starterType: { value: 'электрический стартер', raw: 'электрический стартер' },
+      plateSizeMm: { value: '500x360', raw: '500 × 360' }
+    });
+  });
 });
