@@ -548,7 +548,7 @@ describe('AgentManagerOrchestrator', () => {
               unit: 'dB',
               role: 'hard_constraint',
               strictness: 'strict',
-              evidence: 'no louder than 60 dB'
+              evidence: '«no louder than 60 dB»'
             }],
             rationale: 'the buyer made noise a strict constraint'
           },
@@ -593,6 +593,7 @@ describe('AgentManagerOrchestrator', () => {
 
     expect(payload.answer).toContain('Не буду рекомендовать конкретную модель наугад');
     expect(payload.answer).toContain('no louder than 60 dB');
+    expect(payload.answer).not.toContain('««');
     expect(payload.answer).not.toContain('noise_max_db');
     expect(payload.answer).not.toContain('Generator 5 kW');
     expect(payload.productCards).toEqual([]);
@@ -604,6 +605,112 @@ describe('AgentManagerOrchestrator', () => {
         expect.objectContaining({ code: 'selected_product_without_evidence' })
       ])
     });
+  });
+
+  it('preserves a safe clarification when a strict typed requirement is intentionally pending', async () => {
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Need a generator for a house with a refrigerator, pump, boiler and occasional power tools.')];
+    const semanticReview = vi.fn(async () => ({ verdict: 'pass' as const, issues: [] }));
+    const clarificationText = 'A precise model would be premature until the pump load is known. As an orientation, this class often starts around 5–7 kW. What type and power is the pump, and is it 220 or 380 V?';
+    const clarificationModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'orient the buyer and ask for the decisive pump fact',
+          dialogueUnderstanding: 'the generator load scenario is real but cannot be calculated before clarification',
+          nextStepRationale: 'give a bounded orientation without product cards and ask one useful question',
+          requiresTools: false,
+          toolRequests: [],
+          productMentions: [],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 0,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [{
+              id: 'product-class',
+              kind: 'product_type',
+              value: 'generator',
+              unit: null,
+              role: 'hard_constraint',
+              strictness: 'strict',
+              evidence: 'Need a generator',
+              verification: { mode: 'product_attribute' }
+            }, {
+              id: 'pending-load-scenario',
+              kind: 'generator_load_scenario',
+              value: true,
+              unit: null,
+              role: 'hard_constraint',
+              strictness: 'strict',
+              evidence: 'refrigerator, pump, boiler and occasional power tools',
+              verification: {
+                mode: 'typed_tool',
+                toolRequestId: 'future-load-calculation',
+                tool: 'calculator.generatorLoad',
+                verifier: 'generator_load_profile',
+                bindAs: 'nominal_power_min_kw'
+              }
+            }],
+            rationale: 'product selection stays blocked until the pump fact is known'
+          },
+          policyRuleIds: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['unresolved_strict_clarification']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: clarificationText,
+          factsUsed: [],
+          questionsAsked: [{
+            questionId: 'pump-specs',
+            text: 'What type and power is the pump, and is it 220 or 380 V?',
+            reason: 'The pump determines the starting load.'
+          }],
+          toolResultIds: [],
+          selectedProductIds: [],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            missingFacts: ['pump_type', 'pump_power', 'pump_phase'],
+            rationale: 'No concrete product should be selected before the pump load is known.'
+          }
+        };
+      },
+      reviewAnswer: semanticReview
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      clarificationModel
+    );
+
+    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
+    config.AI_MANAGER_REVIEW_MODE = 'risk';
+    try {
+      const payload = await orchestrator.generateAnswer({
+        sessionId,
+        turnId,
+        userMessage: 'Need a generator for a house with a refrigerator, pump, boiler and occasional power tools.'
+      });
+
+      expect(payload.answer).toBe(clarificationText);
+      expect(payload.answer).not.toContain('could not reliably complete');
+      expect(payload.productCards).toEqual([]);
+      expect(semanticReview).toHaveBeenCalledTimes(1);
+      expect(payload.metadata?.preSendReview).toMatchObject({ verdict: 'pass', issues: [] });
+      expect(payload.metadata?.answerProductEvidence).toMatchObject({ products: [] });
+    } finally {
+      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
+    }
   });
 
   it('keeps derived simultaneous-operation requirements eligible after covered generator calculation', async () => {

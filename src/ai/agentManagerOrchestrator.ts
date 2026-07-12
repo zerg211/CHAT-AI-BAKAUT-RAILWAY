@@ -2067,6 +2067,13 @@ function llmReviewPolicy(input: {
   const currentMessageHasContact = input.userMessage
     ? hasLeadContact(extractContact(input.userMessage))
     : false;
+  const unresolvedStrictClarification = (
+    input.answer.selectionReadiness?.canShowProductCards === false &&
+    (input.answer.selectedProductIds?.length ?? 0) === 0 &&
+    (input.intent.selectionPolicy?.requirements ?? []).some((requirement) =>
+      requirement.role === 'hard_constraint' && requirement.strictness === 'strict'
+    )
+  );
   const reasons = uniqueStrings([
     ...(input.intent.riskFlags.length ? ['intent_risk_flags'] : []),
     ...(input.answer.riskFlags.length ? ['answer_risk_flags'] : []),
@@ -2077,7 +2084,8 @@ function llmReviewPolicy(input: {
     ...(input.products.length ? ['catalog_product_evidence'] : []),
     ...(input.answer.selectedProductIds?.length ? ['selected_product_ids'] : []),
     ...(input.toolResults.some((result) => result.status !== 'ok') ? ['non_ok_tool_result'] : []),
-    ...(input.toolResults.some((result) => result.warnings.length > 0) ? ['tool_warnings'] : [])
+    ...(input.toolResults.some((result) => result.warnings.length > 0) ? ['tool_warnings'] : []),
+    ...(unresolvedStrictClarification ? ['unresolved_strict_clarification'] : [])
   ]);
   return {
     mode: config.AI_MANAGER_REVIEW_MODE,
@@ -2091,7 +2099,15 @@ function unverifiableStrictHardConstraintSafeRewrite(
   blockers: Array<{ kind: string; reason: string; evidence: string }>
 ) {
   const constraints = blockers
-    .map((blocker) => `«${blocker.evidence}»`)
+    .map((blocker) => {
+      const evidence = blocker.evidence.trim();
+      const alreadyQuoted = (
+        (evidence.startsWith('«') && evidence.endsWith('»')) ||
+        (evidence.startsWith('"') && evidence.endsWith('"')) ||
+        (evidence.startsWith("'") && evidence.endsWith("'"))
+      );
+      return alreadyQuoted ? evidence : `«${evidence}»`;
+    })
     .join('; ');
   const calculationFailure = blockers.some((blocker) =>
     blocker.reason.startsWith('typed_tool_') || blocker.reason.startsWith('generator_load_')
@@ -5266,7 +5282,11 @@ export class AgentManagerOrchestrator {
       canonicalProductClassFromIntent(input.intent),
       input.toolResults
     );
-    if (strictRequirementBlockers.length) {
+    const answerAttemptsConcreteSelection = (
+      (input.answer.selectedProductIds?.length ?? 0) > 0 ||
+      input.answer.selectionReadiness?.canShowProductCards === true
+    );
+    if (strictRequirementBlockers.length && answerAttemptsConcreteSelection) {
       mechanicalIssues.push({
         code: 'unverifiable_strict_hard_constraint',
         severity: 'high',

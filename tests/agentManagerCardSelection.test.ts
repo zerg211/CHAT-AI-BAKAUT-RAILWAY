@@ -1855,6 +1855,29 @@ describe('AgentManager visible card readiness', () => {
     ]);
   });
 
+  it('binds a strict product type to the canonical product class and fails closed on mismatch', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'required-product-class',
+        kind: 'product_type',
+        value: 'generator',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'Need a generator',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(intent, 'generator').blockers).toEqual([]);
+    expect(assessStrictSelectionRequirements(intent, 'plate').blockers).toEqual([
+      expect.objectContaining({
+        id: 'required-product-class',
+        reason: 'product_class_not_bound_to_canonical_policy'
+      })
+    ]);
+  });
+
   it('fails closed when a supported strict numeric constraint has an invalid value', () => {
     const selected = generatorWithPrice('g2', 'TSS SGG 6000EH gasoline generator 5 kW', 70000);
     const intent = structuredSelectionIntent({

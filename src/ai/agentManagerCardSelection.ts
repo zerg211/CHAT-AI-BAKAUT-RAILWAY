@@ -578,6 +578,19 @@ export function assessStrictSelectionRequirements(
       continue;
     }
 
+    if (requirement.kind === 'product_type' || requirement.kind === 'product_class') {
+      const expectedProductClass = coerceProductSelectionClass(requirement.value);
+      if (
+        requirement.unit !== null ||
+        expectedProductClass === 'unknown' ||
+        productClass === 'unknown' ||
+        expectedProductClass !== productClass
+      ) {
+        addBlocker(requirement, 'product_class_not_bound_to_canonical_policy');
+      }
+      continue;
+    }
+
     if (supportedStrictNumericRequirementKinds.has(requirement.kind)) {
       const normalizedUnit = requirement.unit?.trim().toLocaleLowerCase('ru-RU');
       if (!normalizedUnit || !supportedStrictNumericRequirementUnits[requirement.kind]?.has(normalizedUnit)) {

@@ -75,6 +75,42 @@ Internal audit:
 
 ## Current verdict
 
-`FAIL_REQUIRES_FIX`
+`FAIL_REQUIRES_SECOND_FIX`
 
-This protocol is intentionally not marked PASS. The failure is being remediated under `.agent/tasks/2026-07-11-live-derived-constraint-fix/spec.md`; the same adaptive dialogue must be repeated after commit, GitHub push, Railway deployment, and marker verification.
+This protocol is intentionally not marked PASS. The original failure was remediated under `.agent/tasks/2026-07-11-live-derived-constraint-fix/spec.md`, but the first post-deploy replay exposed a separate clarification-path regression documented below.
+
+## Post-deploy replay attempt 1 — clarification path regression
+
+Date: 2026-07-12 (Europe/Moscow)
+
+Deployed commit and marker: `bebf07fd6e23f868fcb8b0ee8dc31845c626c00a`.
+
+Production session: `b7d72da7-2b6e-4a3f-aa53-cd3f9d03b706`
+
+Turn: `e103014e-8920-4d07-bf24-062179fba510`
+
+Buyer:
+
+> Нужен генератор для загородного дома: холодильник, насос, котёл и иногда электроинструмент. Какой подойдёт?
+
+Assistant shown in the embedded widget:
+
+> Не буду рекомендовать конкретную модель наугад: сейчас не удалось надёжно завершить и применить расчёт для требования ««Нужен генератор»»; «Нужно питать «холодильник, насос, котёл и иногда электроинструмент», но без типа/мощности насоса и инструмента точный расчёт пока невалиден.». Я не стану подменять расчёт предположением; повторите сообщение или уточните исходные данные, и я продолжу подбор.
+
+Buyer-view audit:
+
+- FAIL: the assistant should have given the planner's useful preliminary orientation and asked the decisive pump question.
+- FAIL: the response describes a calculation failure even though calculation was intentionally deferred until the buyer supplied the missing pump fact.
+- FAIL: already quoted evidence was wrapped again, producing `««... »»`.
+- PASS: no premature products or cards were shown.
+
+Internal audit:
+
+- The planner explicitly chose the correct next step: explain an approximate 5–7 kW orientation and ask for pump type/power and 220/380 V.
+- `selectionReadiness.status=needs_more_info`, `canShowProductCards=false`, `selectedProductIds=[]` and the answer contract contained the decisive pump question.
+- Product evidence and cards were correctly suppressed.
+- Mechanical review nevertheless emitted `unverifiable_strict_hard_constraint` because `generator_load_scenario` referenced the intentionally future request `calc_pending_after_clarification`.
+- `product_type=generator` was also treated as unsupported despite matching `canonicalProductClass=generator`.
+- Root cause: the strict requirement guard correctly protects recommendations, but it was applied to a non-recommendation clarification answer as though the answer were attempting product selection.
+
+Remediation task: `.agent/tasks/2026-07-12-unresolved-constraint-clarification/spec.md`.
