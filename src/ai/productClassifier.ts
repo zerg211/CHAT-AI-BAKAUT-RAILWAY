@@ -573,6 +573,62 @@ export function extractGeneratorPower(product: Product) {
   };
 }
 
+const confirmedGeneratorNominalPowerLabels = [
+  'nominal',
+  'rated',
+  fromEscaped('\\u043d\\u043e\\u043c\\u0438\\u043d\\u0430\\u043b'),
+  fromEscaped('\\u043d\\u043e\\u043c.')
+];
+
+const activeKilowattUnitLabels = [
+  fromEscaped('\\u043a\\u0432\\u0442'),
+  'kw'
+];
+
+const apparentKilovoltAmpereUnitLabels = [
+  fromEscaped('\\u043a\\u0432\\u0430'),
+  'kva'
+];
+
+function extractConfirmedActivePowerKw(text: string) {
+  const kilowatts = extractNumberBeforeUnit(text, activeKilowattUnitLabels);
+  if (kilowatts !== undefined) return kilowatts;
+  const watts = extractNumberBeforeUnit(text, [
+    fromEscaped('\\u0432\\u0430\\u0442\\u0442'),
+    fromEscaped('\\u0432\\u0442'),
+    'w'
+  ]);
+  return watts === undefined ? undefined : watts / 1000;
+}
+
+function extractConfirmedActivePowerNearLabels(text: string) {
+  const normalized = text.toLocaleLowerCase('ru-RU');
+  for (const label of confirmedGeneratorNominalPowerLabels) {
+    const index = normalized.indexOf(label);
+    if (index < 0) continue;
+    const value = extractConfirmedActivePowerKw(normalized.slice(index, index + 160));
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+export function extractConfirmedGeneratorNominalPowerKw(product: Product) {
+  for (const [key, rawValue] of Object.entries(product.specs ?? {})) {
+    const normalizedKey = key.toLocaleLowerCase('ru-RU');
+    if (!confirmedGeneratorNominalPowerLabels.some((label) => normalizedKey.includes(label))) continue;
+    const value = extractConfirmedActivePowerKw(String(rawValue));
+    if (value !== undefined) return value;
+    const keyDeclaresKilowatts = activeKilowattUnitLabels.some((unit) => normalizedKey.includes(unit));
+    const keyDeclaresApparentPower = apparentKilovoltAmpereUnitLabels.some((unit) => normalizedKey.includes(unit));
+    if (keyDeclaresKilowatts && !keyDeclaresApparentPower) {
+      const unitlessValue = normalizePowerValue(String(rawValue).trim());
+      if (unitlessValue !== undefined) return unitlessValue;
+    }
+  }
+  const labeledText = [product.name, product.description].filter(Boolean).join(' ');
+  return extractConfirmedActivePowerNearLabels(labeledText);
+}
+
 export function numberNearNeed(text: string, need: RegExp) {
   const match = text.match(need);
   if (!match || match.index === undefined) return undefined;

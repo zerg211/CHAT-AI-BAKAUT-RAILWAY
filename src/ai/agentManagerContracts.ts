@@ -181,7 +181,8 @@ export const LedgerStateDeltaSchema = z.object({
 const toolRequestFields = {
   id: nonEmptyString,
   rationale: nonEmptyString,
-  required: z.boolean().default(true)
+  required: z.boolean().default(true),
+  coversRequirementIds: z.array(nonEmptyString).max(40).optional()
 };
 
 export const ToolRequestSchema = z.discriminatedUnion('tool', [
@@ -243,6 +244,19 @@ export const ProductMentionSchema = z.object({
   evidence: nonEmptyString
 }).strict();
 
+export const SelectionRequirementVerificationSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('product_attribute')
+  }).strict(),
+  z.object({
+    mode: z.literal('typed_tool'),
+    toolRequestId: nonEmptyString,
+    tool: AgentManagerToolNameSchema,
+    verifier: nonEmptyString,
+    bindAs: nonEmptyString
+  }).strict()
+]);
+
 export const SelectionRequirementSchema = z.object({
   id: nonEmptyString,
   kind: nonEmptyString,
@@ -250,7 +264,8 @@ export const SelectionRequirementSchema = z.object({
   unit: z.string().trim().min(1).nullable(),
   role: z.enum(['hard_constraint', 'preference', 'context', 'mentioned_only']),
   strictness: z.enum(['strict', 'preferred', 'informational']),
-  evidence: nonEmptyString
+  evidence: nonEmptyString,
+  verification: SelectionRequirementVerificationSchema.optional()
 }).strict();
 
 export const AgentSelectionPolicySchema = z.object({

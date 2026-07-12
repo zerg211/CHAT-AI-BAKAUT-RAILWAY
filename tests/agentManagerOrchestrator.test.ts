@@ -138,8 +138,11 @@ class FakeConversations {
 }
 
 class FakeProducts {
-  async searchProducts() {
-    return [product('p1', 'Generator 5 kW'), product('p2', 'Generator 6 kW')];
+  async searchProducts(_query?: string, _limit?: number): Promise<Product[]> {
+    return [
+      { ...product('p1', 'Generator 5 kW'), specs: { 'Nominal power': '5 kW' } },
+      { ...product('p2', 'Generator 6 kW'), specs: { 'Nominal power': '6 kW' } }
+    ];
   }
   async recordDataQualityIssue() {
     return null;
@@ -589,6 +592,8 @@ describe('AgentManagerOrchestrator', () => {
     });
 
     expect(payload.answer).toContain('Не буду рекомендовать конкретную модель наугад');
+    expect(payload.answer).toContain('no louder than 60 dB');
+    expect(payload.answer).not.toContain('noise_max_db');
     expect(payload.answer).not.toContain('Generator 5 kW');
     expect(payload.productCards).toEqual([]);
     expect(semanticReview).not.toHaveBeenCalled();
@@ -598,6 +603,189 @@ describe('AgentManagerOrchestrator', () => {
         expect.objectContaining({ code: 'unverifiable_strict_hard_constraint' }),
         expect.objectContaining({ code: 'selected_product_without_evidence' })
       ])
+    });
+  });
+
+  it('keeps derived simultaneous-operation requirements eligible after covered generator calculation', async () => {
+    class DerivedConstraintProducts extends FakeProducts {
+      queries: string[] = [];
+
+      async searchProducts(query = ''): Promise<Product[]> {
+        this.queries.push(query);
+        if (query.includes('generator nominal power at least')) {
+          return [{
+            ...generatorProductWithPower('strong-derived', 'TSS SGG 10000EH generator', 9),
+            specs: { 'мощность номинальная при 220 в, квт': '9' }
+          }];
+        }
+        return [
+          generatorProductWithPower('weak-derived', 'TSS SGG 4000EH generator', 3),
+          {
+            ...generatorProductWithPower('maximum-only-derived', 'TSS SGG 6000EH gasoline generator maximum power 6 kW', 6),
+            specs: { 'Максимальная мощность': '6 кВт' }
+          },
+          {
+            ...generatorProductWithPower('apparent-only-derived', 'TSS SGG 6500EH gasoline generator', 6),
+            specs: { 'Номинальная мощность': '6 кВА' }
+          },
+          {
+            ...generatorProductWithPower('displayed-max-derived', 'TSS SGG 6000EH generator 6 kW', 6),
+            specs: {
+              'Номинальная мощность': '1 кВт',
+              'Максимальная мощность': '6 кВт'
+            }
+          }
+        ];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('The 1.1 kW borehole pump and 1.5 kW angle grinder run simultaneously at 220 V.')];
+    const semanticReview = vi.fn(async () => ({ verdict: 'pass' as const, issues: [] }));
+    const derivedModel = model({
+      async planTurn() {
+        return {
+          turnId,
+          userMessageSummary: 'size a single-phase generator for two simultaneous loads',
+          dialogueUnderstanding: 'simultaneous operation is consumed by the typed load calculator',
+          nextStepRationale: 'calculate the minimum and search products above it',
+          requiresTools: true,
+          toolRequests: ([{
+            id: 'load-calculation',
+            tool: 'calculator.generatorLoad',
+            args: {
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              phase: 'single_phase',
+              loads: [{
+                kind: 'pump',
+                name: 'borehole pump',
+                count: 1,
+                runningKw: 1.1,
+                startingKw: 3.3,
+                source: 'explicit_user',
+                evidence: '1.1 kW borehole pump',
+                basisKind: 'exact_power',
+                basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'simultaneous_operation_known', 'explicit_power']
+              }, {
+                kind: 'handheld_tool',
+                name: 'angle grinder',
+                count: 1,
+                runningKw: 1.5,
+                startingKw: 2,
+                source: 'explicit_user',
+                evidence: '1.5 kW angle grinder',
+                basisKind: 'exact_power',
+                basisSignals: ['voltage_or_phase_known', 'simultaneous_operation_known', 'explicit_power']
+              }],
+              simultaneousStarting: false,
+              simultaneousStartingKinds: [],
+              estimateBasis: 'exact_or_user_provided'
+            },
+            rationale: 'derive the minimum nominal generator power',
+            required: true,
+            coversRequirementIds: ['simultaneous-loads']
+          }, {
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'single-phase generator for 5 kW calculated load',
+              semanticQuery: 'single-phase generator above the calculated minimum',
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              phase: 'single_phase',
+              limit: 8
+            },
+            rationale: 'find generator products after the calculation',
+            required: true,
+            coversRequirementIds: []
+          }] satisfies ToolRequest[]).reverse(),
+          productMentions: [],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 4,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [{
+              id: 'simultaneous-loads',
+              kind: 'generator_load_scenario',
+              value: true,
+              unit: null,
+              role: 'hard_constraint',
+              strictness: 'strict',
+              evidence: 'the borehole pump and angle grinder run simultaneously',
+              verification: {
+                mode: 'typed_tool',
+                toolRequestId: 'load-calculation',
+                tool: 'calculator.generatorLoad',
+                verifier: 'generator_load_profile',
+                bindAs: 'nominal_power_min_kw'
+              }
+            }],
+            rationale: 'the operating condition is verified through the load result'
+          },
+          policyRuleIds: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.products.map((item) => item.id)).toEqual(['strong-derived']);
+        const required = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } }).profile?.requiredNominalKw;
+        return {
+          answerText: `The calculated minimum is ${required} kW. TSS SGG 10000EH generator clears that requirement.`,
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['load-calculation', 'catalog-search'],
+          selectedProductIds: ['strong-derived'],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'ready_for_exact_cards',
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'The exact input powers and successful calculation support selection.'
+          }
+        };
+      },
+      reviewAnswer: semanticReview
+    });
+    const products = new DerivedConstraintProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      derivedModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'The 1.1 kW borehole pump and 1.5 kW angle grinder run simultaneously at 220 V.'
+    });
+
+    expect(payload.answer).toContain('TSS SGG 10000EH');
+    expect(products.queries).toEqual(expect.arrayContaining([
+      expect.stringContaining('generator nominal power at least')
+    ]));
+    expect(payload.productCards.map((card) => card.id)).toEqual(['strong-derived']);
+    expect(payload.productCards.map((card) => card.id)).not.toContain('weak-derived');
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ payload?: { profile?: { simultaneousStarting?: boolean } } }>;
+      preSendReview?: unknown;
+    };
+    expect(metadata.toolResults?.[0]?.payload?.profile?.simultaneousStarting).toBe(false);
+    expect((metadata.toolResults?.[1]?.payload as {
+      generatorLoadFit?: { loadAwareRetry?: boolean };
+    })?.generatorLoadFit?.loadAwareRetry).toBe(true);
+    expect(payload.metadata?.preSendReview).toMatchObject({ verdict: 'pass' });
+    expect(payload.metadata?.preSendReview).not.toMatchObject({
+      issues: expect.arrayContaining([expect.objectContaining({ code: 'unverifiable_strict_hard_constraint' })])
     });
   });
 
@@ -3234,7 +3422,7 @@ describe('AgentManagerOrchestrator', () => {
         }
       }
     ];
-    const planTurn = vi.fn(async () => ({
+    const planTurn = vi.fn(async (): Promise<AgentIntentContract> => ({
       userMessageSummary: 'current recovered summary',
       dialogueUnderstanding: 'the recovery path now uses the structured planner contract',
       nextStepRationale: 'compose a fresh safe answer',
@@ -3341,6 +3529,107 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.traces).toContainEqual(expect.objectContaining({
       eventType: 'legacy_intent_contract_upgraded',
       payload: expect.objectContaining({ reason: 'saved_intent_failed_current_strict_schema' })
+    }));
+  });
+
+  it('does not reuse a stale tool artifact with the same id after recovery replans the intent', async () => {
+    const conversations = new FakeConversations();
+    conversations.checkpoints = [{
+      checkpoint: 'ledger_delta_proposed',
+      status: 'succeeded',
+      payload: { rationale: 'saved recovery delta', events: [] }
+    }, {
+      checkpoint: 'intent_contract_created',
+      status: 'succeeded',
+      payload: {
+        userMessageSummary: 'legacy generator calculation',
+        dialogueUnderstanding: 'legacy contract without a selection policy',
+        nextStepRationale: 'calculate an old load',
+        requiresTools: true,
+        toolRequests: [],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      }
+    }];
+    conversations.toolArtifacts = [{
+      tool_name: 'calculator.generatorLoad',
+      tool_request_id: 'load-calculation',
+      status: 'ok',
+      payload: {
+        loads: [{ name: 'old 0.5 kW load', runningKw: 0.5, startingKw: 0.5 }],
+        profile: { requiredNominalKw: 1 }
+      },
+      warnings: []
+    }];
+    const planTurn = vi.fn(async (): Promise<AgentIntentContract> => ({
+      userMessageSummary: 'calculate the current 4 kW load',
+      dialogueUnderstanding: 'the current turn supersedes the stale calculator request',
+      nextStepRationale: 'run a fresh typed calculation',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'load-calculation',
+        tool: 'calculator.generatorLoad' as const,
+        args: {
+          loads: [{
+            kind: 'coffee_machine',
+            name: 'current 4 kW load',
+            count: 1,
+            runningKw: 4,
+            startingKw: 4,
+            source: 'explicit_user',
+            evidence: 'current load is 4 kW',
+            basisKind: 'exact_power',
+            basisSignals: ['explicit_power']
+          }],
+          simultaneousStarting: false,
+          simultaneousStartingKinds: [],
+          estimateBasis: 'exact_or_user_provided'
+        },
+        rationale: 'calculate the current load rather than reuse the old profile',
+        required: true,
+        coversRequirementIds: []
+      }],
+      selectionPolicy: currentNoProductSelectionPolicy(),
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    }));
+    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
+      const payload = input.toolResults[0]?.payload as {
+        loads?: Array<{ name?: string; runningKw?: number }>;
+        profile?: { requiredNominalKw?: number };
+      };
+      expect(payload.loads?.[0]).toMatchObject({ name: 'current 4 kW load', runningKw: 4 });
+      expect(payload.profile?.requiredNominalKw).toBeGreaterThan(1);
+      return {
+        answerText: `Fresh calculated minimum: ${payload.profile?.requiredNominalKw} kW.`,
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['load-calculation'],
+        leadAction: 'none' as const,
+        riskFlags: []
+      };
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ planTurn, composeAnswer })
+    );
+
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+    expect(payload.answer).toContain('Fresh calculated minimum');
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(composeAnswer).toHaveBeenCalledTimes(1);
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'recovery',
+      eventType: 'stale_tool_artifacts_ignored_after_replan',
+      payload: expect.objectContaining({ requestIds: ['load-calculation'] })
+    }));
+    expect(conversations.traces).not.toContainEqual(expect.objectContaining({
+      phase: 'recovery',
+      eventType: 'tool_artifact_reused',
+      payload: expect.objectContaining({ requestId: 'load-calculation' })
     }));
   });
 

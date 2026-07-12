@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assessStrictSelectionRequirements,
   assessVisibleCardReadiness,
   filterGeneratorProductsByLoadProfile,
   rankCatalogProductsByNumericFit,
@@ -236,6 +237,63 @@ function structuredSelectionIntent(
     policyRuleIds: [],
     mustNotAskQuestionIds: [],
     riskFlags: []
+  };
+}
+
+function generatorLoadDerivedConstraintIntent(): AgentIntentContract {
+  const intent = structuredSelectionIntent({
+    requirements: [{
+      id: 'simultaneous-loads',
+      kind: 'generator_load_scenario',
+      value: true,
+      unit: null,
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'pump and angle grinder must run at the same time',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        verifier: 'generator_load_profile',
+        bindAs: 'nominal_power_min_kw'
+      }
+    }]
+  });
+  intent.toolRequests = [{
+    id: 'load-calculation',
+    tool: 'calculator.generatorLoad',
+    args: {
+      loads: [{
+        name: 'pump and angle grinder',
+        count: 1,
+        runningKw: 2.6,
+        startingKw: 5.5,
+        source: 'explicit_user',
+        evidence: '1.1 kW + 1.5 kW, simultaneous operation',
+        basisKind: 'exact_power',
+        basisSignals: ['explicit_power', 'simultaneous_operation_known']
+      }],
+      simultaneousStarting: false,
+      simultaneousStartingKinds: [],
+      estimateBasis: 'exact_or_user_provided'
+    },
+    rationale: 'derive the minimum generator power from the operating condition',
+    required: true,
+    coversRequirementIds: ['simultaneous-loads']
+  }, ...intent.toolRequests];
+  return intent;
+}
+
+function generatorLoadResult(
+  status: ToolResult['status'] = 'ok',
+  requiredNominalKw: unknown = 5.5
+): ToolResult {
+  return {
+    requestId: 'load-calculation',
+    tool: 'calculator.generatorLoad',
+    status,
+    payload: { profile: { requiredNominalKw } },
+    warnings: []
   };
 }
 
@@ -1483,6 +1541,266 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.selectedProductIds).toEqual([selected.id]);
   });
 
+  it('accepts a strict operating condition only through its covered successful typed calculation and filters weak cards', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    const weak = {
+      ...generatorWithPower('weak-generator', '4.5'),
+      name: 'TSS SGG 5000EH generator'
+    };
+    const suitable = {
+      ...generatorWithPower('suitable-generator', '9'),
+      name: 'TSS SGG 10000EH generator'
+    };
+    const toolResults = [generatorLoadResult()];
+
+    const assessment = assessStrictSelectionRequirements(intent, 'generator', toolResults);
+    expect(assessment).toEqual({ blockers: [], generatorNominalPowerMinKw: 5.5 });
+
+    const selection = selectProductsForVisibleCards({
+      products: [weak, suitable],
+      userMessage: 'The pump and angle grinder must run at the same time.',
+      history: [],
+      intent,
+      answerText: `${weak.name} and ${suitable.name} were considered; ${suitable.name} fits the calculated minimum.`,
+      selectedProductIds: [weak.id, suitable.id],
+      needState: needStateWithBudget(),
+      toolResults
+    });
+
+    expect(selection.selectedProductIds).toEqual([suitable.id]);
+    expect(selection.warnings).not.toContain(
+      'product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:1'
+    );
+  });
+
+  it.each([
+    {
+      name: 'failed result',
+      mutate: (_intent: AgentIntentContract) => [generatorLoadResult('error')],
+      reason: 'typed_tool_result_error'
+    },
+    {
+      name: 'missing result',
+      mutate: (_intent: AgentIntentContract) => [],
+      reason: 'typed_tool_result_missing'
+    },
+    {
+      name: 'wrong request id',
+      mutate: (intent: AgentIntentContract) => {
+        intent.selectionPolicy!.requirements[0]!.verification = {
+          mode: 'typed_tool',
+          toolRequestId: 'another-calculation',
+          tool: 'calculator.generatorLoad',
+          verifier: 'generator_load_profile',
+          bindAs: 'nominal_power_min_kw'
+        };
+        return [generatorLoadResult()];
+      },
+      reason: 'typed_tool_request_missing'
+    },
+    {
+      name: 'wrong tool request',
+      mutate: (intent: AgentIntentContract) => {
+        intent.toolRequests[0] = {
+          id: 'load-calculation',
+          tool: 'catalog.search',
+          args: { query: 'generator' },
+          rationale: 'mismatched tool request',
+          required: true,
+          coversRequirementIds: ['simultaneous-loads']
+        };
+        return [generatorLoadResult()];
+      },
+      reason: 'typed_tool_request_tool_mismatch'
+    },
+    {
+      name: 'missing request coverage',
+      mutate: (intent: AgentIntentContract) => {
+        intent.toolRequests[0]!.coversRequirementIds = [];
+        return [generatorLoadResult()];
+      },
+      reason: 'typed_tool_request_missing_requirement_coverage'
+    },
+    {
+      name: 'malformed profile',
+      mutate: (_intent: AgentIntentContract) => [generatorLoadResult('ok', '5.5')],
+      reason: 'generator_load_profile_missing_positive_required_nominal_kw'
+    },
+    {
+      name: 'selection-blocking calculation warning',
+      mutate: (_intent: AgentIntentContract) => [{
+        ...generatorLoadResult(),
+        warnings: ['generator_load_bounded_basis_incomplete']
+      }],
+      reason: 'generator_load_result_not_selection_safe'
+    }
+  ])('fails closed for a typed-tool strict requirement with $name', ({ mutate, reason }) => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    const assessment = assessStrictSelectionRequirements(intent, 'generator', mutate(intent));
+    expect(assessment.blockers).toEqual([
+      expect.objectContaining({ id: 'simultaneous-loads', reason })
+    ]);
+  });
+
+  it('does not use a generator-load proof for a different product class', () => {
+    const assessment = assessStrictSelectionRequirements(
+      generatorLoadDerivedConstraintIntent(),
+      'plate',
+      [generatorLoadResult()]
+    );
+    expect(assessment.blockers).toEqual([
+      expect.objectContaining({
+        id: 'simultaneous-loads',
+        reason: 'generator_load_product_class_mismatch'
+      })
+    ]);
+  });
+
+  it('does not let an unsupported strict product attribute borrow a successful generator-load proof', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    intent.selectionPolicy!.requirements[0] = {
+      ...intent.selectionPolicy!.requirements[0]!,
+      kind: 'noise_max_db',
+      value: 60,
+      unit: 'dB',
+      evidence: 'noise must be no more than 60 dB'
+    };
+
+    expect(assessStrictSelectionRequirements(intent, 'generator', [generatorLoadResult()]).blockers).toEqual([
+      expect.objectContaining({
+        id: 'simultaneous-loads',
+        reason: 'generator_load_requirement_kind_mismatch'
+      })
+    ]);
+  });
+
+  it('rejects an incompatible value or unit on a derived generator-load requirement', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    intent.selectionPolicy!.requirements[0] = {
+      ...intent.selectionPolicy!.requirements[0]!,
+      value: 60,
+      unit: 'dB',
+      evidence: 'noise must be no more than 60 dB'
+    };
+
+    expect(assessStrictSelectionRequirements(intent, 'generator', [generatorLoadResult()]).blockers).toEqual([
+      expect.objectContaining({ reason: 'generator_load_requirement_shape_mismatch' })
+    ]);
+  });
+
+  it('rejects a supported numeric kind when its unit belongs to another attribute', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'laundered-noise',
+        kind: 'weight_max_kg',
+        value: 60,
+        unit: 'dB',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'noise must be no more than 60 dB',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(intent, 'generator').blockers).toEqual([
+      expect.objectContaining({ reason: 'numeric_requirement_unit_mismatch' })
+    ]);
+  });
+
+  it('does not treat maximum power as nominal power for a derived generator-load minimum', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    const maximumOnly: Product = {
+      ...generatorWithPower('maximum-only', '6'),
+      name: 'TSS SGG 6000EH gasoline generator maximum power 6 kW',
+      specs: { 'Максимальная мощность': '6 кВт' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [maximumOnly],
+      userMessage: 'The pump and angle grinder must run at the same time.',
+      history: [],
+      intent,
+      answerText: `${maximumOnly.name} fits the calculated minimum.`,
+      selectedProductIds: [maximumOnly.id],
+      needState: needStateWithBudget(),
+      toolResults: [generatorLoadResult()]
+    });
+
+    expect(selection.selectedProductIds).toEqual([]);
+    expect(selection.droppedProductIds).toContain(maximumOnly.id);
+    expect(selection.answerMentionedProductIds).toContain(maximumOnly.id);
+  });
+
+  it('does not treat nominal apparent power in kVA as confirmed active power in kW', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    const apparentPowerOnly: Product = {
+      ...generatorWithPower('apparent-only', '6'),
+      name: 'TSS SGG 6000EH gasoline generator',
+      specs: { 'Номинальная мощность': '6 кВА' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [apparentPowerOnly],
+      userMessage: 'The pump and angle grinder must run at the same time.',
+      history: [],
+      intent,
+      answerText: `${apparentPowerOnly.name} fits the calculated minimum.`,
+      selectedProductIds: [apparentPowerOnly.id],
+      needState: needStateWithBudget(),
+      toolResults: [generatorLoadResult()]
+    });
+
+    expect(selection.answerMentionedProductIds).toContain(apparentPowerOnly.id);
+    expect(selection.selectedProductIds).toEqual([]);
+    expect(selection.droppedProductIds).toContain(apparentPowerOnly.id);
+  });
+
+  it('accepts the real Bakaut catalog shape with kW in the nominal spec key and a unitless value', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    const realCatalogShape: Product = {
+      ...generatorWithPower('real-key-unit', '6'),
+      name: 'TSS SGG 6000EH gasoline generator',
+      specs: { 'мощность номинальная при 220 в, квт': '6' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [realCatalogShape],
+      userMessage: 'The pump and angle grinder must run at the same time.',
+      history: [],
+      intent,
+      answerText: `${realCatalogShape.name} fits the calculated minimum.`,
+      selectedProductIds: [realCatalogShape.id],
+      needState: needStateWithBudget(),
+      toolResults: [generatorLoadResult()]
+    });
+
+    expect(selection.answerMentionedProductIds).toContain(realCatalogShape.id);
+    expect(selection.selectedProductIds).toEqual([realCatalogShape.id]);
+  });
+
+  it('keeps a unitless value under a nominal kVA key fail-closed', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    const apparentKeyOnly: Product = {
+      ...generatorWithPower('apparent-key-only', '6'),
+      name: 'TSS SGG 6500EH gasoline generator',
+      specs: { 'номинальная мощность, ква': '6' }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [apparentKeyOnly],
+      userMessage: 'The pump and angle grinder must run at the same time.',
+      history: [],
+      intent,
+      answerText: `${apparentKeyOnly.name} fits the calculated minimum.`,
+      selectedProductIds: [apparentKeyOnly.id],
+      needState: needStateWithBudget(),
+      toolResults: [generatorLoadResult()]
+    });
+
+    expect(selection.answerMentionedProductIds).toContain(apparentKeyOnly.id);
+    expect(selection.selectedProductIds).toEqual([]);
+  });
+
   it('fails closed when a strict planner constraint has no deterministic product verifier', () => {
     const selected = generatorWithPrice('g1', 'TSS SGG 5000EH gasoline generator 5 kW', 70000);
     const intent = structuredSelectionIntent({
@@ -1513,6 +1831,28 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain(
       'product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:1'
     );
+  });
+
+  it('keeps an explicitly product-attribute strict requirement fail-closed when the attribute is unsupported', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'verified-noise-limit',
+        kind: 'noise_max_db',
+        value: 60,
+        unit: 'dB',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'noise must be no more than 60 dB',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(intent, 'generator').blockers).toEqual([
+      expect.objectContaining({
+        id: 'verified-noise-limit',
+        reason: 'unsupported_strict_requirement_kind'
+      })
+    ]);
   });
 
   it('fails closed when a supported strict numeric constraint has an invalid value', () => {

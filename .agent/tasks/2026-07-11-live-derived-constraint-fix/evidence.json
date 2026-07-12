@@ -1,0 +1,28 @@
+{
+  "taskId": "2026-07-11-live-derived-constraint-fix",
+  "verdict": "PASS_LOCAL_PENDING_COMMIT_DEPLOY_PRODUCTION_REPLAY",
+  "productionFailureSessionId": "678e31eb-6899-4092-83b0-8350fd6a47b7",
+  "productionFailureTurnId": "188153c4-59de-4088-833b-4077c08f83de",
+  "checks": {
+    "focusedTests": { "status": "PASS", "files": 3, "tests": 133 },
+    "releaseGate": { "status": "PASS", "files": 105, "tests": 938, "agenticEvals": 251 },
+    "typecheck": "PASS",
+    "build": "PASS",
+    "noNewRegex": "PASS",
+    "npmAuditLow": { "status": "PASS", "vulnerabilities": 0 },
+    "diffCheck": "PASS"
+  },
+  "adversarialInvariants": {
+    "arbitraryTypedToolBinding": "PASS_FAIL_CLOSED",
+    "maximumOnlyPower": "PASS_FAIL_CLOSED",
+    "apparentPowerKva": "PASS_FAIL_CLOSED",
+    "displayedPowerVsConfirmedNominal": "PASS_FAIL_CLOSED",
+    "realCatalogUnitInNominalKey": "PASS_CONFIRMED_KW",
+    "staleRecoveryArtifact": "PASS_RECOMPUTED",
+    "catalogDependencyOrder": "PASS",
+    "loadAwareCatalogRetry": "PASS"
+  },
+  "commit": "PENDING",
+  "railwayMarker": "PENDING",
+  "productionReplay": "PENDING"
+}

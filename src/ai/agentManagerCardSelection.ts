@@ -4,6 +4,7 @@ import { hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from 
 import {
   compactModelText,
   displayProductBrand,
+  extractConfirmedGeneratorNominalPowerKw,
   extractGeneratorPowerForHardSelection,
   extractModelTokens,
   extractWeightKg,
@@ -464,27 +465,132 @@ const supportedStrictNumericRequirementKinds = new Set([
   'power_max_kw'
 ]);
 
+const supportedStrictNumericRequirementUnits: Record<string, Set<string>> = {
+  budget_max_rub: new Set(['rub', '₽', 'руб', 'руб.']),
+  price_max_rub: new Set(['rub', '₽', 'руб', 'руб.']),
+  weight_min_kg: new Set(['kg', 'кг']),
+  weight_max_kg: new Set(['kg', 'кг']),
+  nominal_power_min_kw: new Set(['kw', 'квт']),
+  nominal_power_max_kw: new Set(['kw', 'квт']),
+  power_min_kw: new Set(['kw', 'квт']),
+  power_max_kw: new Set(['kw', 'квт'])
+};
+
 const supportedCeramicMaterialValues = new Set(['ceramic', 'porcelain_tile', 'ceramic_tile']);
+const generatorLoadDerivedRequirementKind = 'generator_load_scenario';
 
-export function strictSelectionRequirementBlockers(
+export interface StrictSelectionRequirementBlocker {
+  id: string;
+  kind: string;
+  reason: string;
+  evidence: string;
+}
+
+export interface StrictSelectionRequirementAssessment {
+  blockers: StrictSelectionRequirementBlocker[];
+  generatorNominalPowerMinKw?: number;
+}
+
+function typedToolRequirementProof(input: {
+  requirement: NonNullable<AgentIntentContract['selectionPolicy']>['requirements'][number];
+  intent: AgentIntentContract;
+  productClass: ProductSelectionClass;
+  toolResults: ToolResult[];
+}) {
+  const verification = input.requirement.verification;
+  if (!verification || verification.mode !== 'typed_tool') return undefined;
+  const blocker = (reason: string): StrictSelectionRequirementBlocker => ({
+    id: input.requirement.id,
+    kind: input.requirement.kind,
+    reason,
+    evidence: input.requirement.evidence
+  });
+  const request = input.intent.toolRequests.find((item) => item.id === verification.toolRequestId);
+  if (!request) return { blocker: blocker('typed_tool_request_missing') };
+  if (!request.required) return { blocker: blocker('typed_tool_request_not_required') };
+  if (request.tool !== verification.tool) return { blocker: blocker('typed_tool_request_tool_mismatch') };
+  if (!(request.coversRequirementIds ?? []).includes(input.requirement.id)) {
+    return { blocker: blocker('typed_tool_request_missing_requirement_coverage') };
+  }
+  const result = input.toolResults.find((item) => item.requestId === request.id);
+  if (!result) return { blocker: blocker('typed_tool_result_missing') };
+  if (result.tool !== request.tool) return { blocker: blocker('typed_tool_result_tool_mismatch') };
+  if (result.status !== 'ok') return { blocker: blocker(`typed_tool_result_${result.status}`) };
+
+  if (
+    verification.tool === 'calculator.generatorLoad' &&
+    verification.verifier === 'generator_load_profile' &&
+    verification.bindAs === 'nominal_power_min_kw'
+  ) {
+    if (input.requirement.kind !== generatorLoadDerivedRequirementKind) {
+      return { blocker: blocker('generator_load_requirement_kind_mismatch') };
+    }
+    if (input.requirement.value !== true || input.requirement.unit !== null) {
+      return { blocker: blocker('generator_load_requirement_shape_mismatch') };
+    }
+    if (!isGeneratorProductClass(input.productClass)) {
+      return { blocker: blocker('generator_load_product_class_mismatch') };
+    }
+    if (hasUnconfirmedGeneratorLoadBasisResult([result])) {
+      return { blocker: blocker('generator_load_result_not_selection_safe') };
+    }
+    const profile = (result.payload as { profile?: { requiredNominalKw?: unknown } }).profile;
+    const requiredNominalKw = profile?.requiredNominalKw;
+    if (typeof requiredNominalKw !== 'number' || !Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) {
+      return { blocker: blocker('generator_load_profile_missing_positive_required_nominal_kw') };
+    }
+    return { generatorNominalPowerMinKw: requiredNominalKw };
+  }
+
+  return { blocker: blocker('unsupported_typed_tool_verifier') };
+}
+
+export function assessStrictSelectionRequirements(
   intent: AgentIntentContract,
-  productClass: ProductSelectionClass
-) {
+  productClass: ProductSelectionClass,
+  toolResults: ToolResult[] = []
+): StrictSelectionRequirementAssessment {
   const policy = intent.selectionPolicy;
-  if (!policy) return [] as Array<{ id: string; kind: string; reason: string }>;
+  if (!policy) return { blockers: [] };
 
-  const blockers: Array<{ id: string; kind: string; reason: string }> = [];
+  const blockers: StrictSelectionRequirementBlocker[] = [];
+  let generatorNominalPowerMinKw: number | undefined;
+  const addBlocker = (
+    requirement: NonNullable<AgentIntentContract['selectionPolicy']>['requirements'][number],
+    reason: string
+  ) => blockers.push({
+    id: requirement.id,
+    kind: requirement.kind,
+    reason,
+    evidence: requirement.evidence
+  });
   for (const requirement of policy.requirements) {
     if (requirement.role !== 'hard_constraint' || requirement.strictness !== 'strict') continue;
 
+    if (requirement.verification?.mode === 'typed_tool') {
+      const proof = typedToolRequirementProof({ requirement, intent, productClass, toolResults });
+      if (proof?.blocker) blockers.push(proof.blocker);
+      if (proof?.generatorNominalPowerMinKw !== undefined) {
+        generatorNominalPowerMinKw = generatorNominalPowerMinKw === undefined
+          ? proof.generatorNominalPowerMinKw
+          : Math.max(generatorNominalPowerMinKw, proof.generatorNominalPowerMinKw);
+      }
+      continue;
+    }
+
     if (supportedStrictNumericRequirementKinds.has(requirement.kind)) {
+      const normalizedUnit = requirement.unit?.trim().toLocaleLowerCase('ru-RU');
+      if (!normalizedUnit || !supportedStrictNumericRequirementUnits[requirement.kind]?.has(normalizedUnit)) {
+        addBlocker(requirement, 'numeric_requirement_unit_mismatch');
+        continue;
+      }
       const value = typeof requirement.value === 'number'
         ? requirement.value
         : typeof requirement.value === 'string'
           ? Number(requirement.value)
           : Number.NaN;
       if (!Number.isFinite(value) || value < 0) {
-        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'invalid_numeric_value' });
+        addBlocker(requirement, 'invalid_numeric_value');
       }
       continue;
     }
@@ -497,7 +603,7 @@ export function strictSelectionRequirementBlockers(
           ? 'three_phase'
           : undefined;
       if (!expected || policy.phase !== expected) {
-        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'phase_not_bound_to_typed_policy' });
+        addBlocker(requirement, 'phase_not_bound_to_typed_policy');
       }
       continue;
     }
@@ -509,7 +615,7 @@ export function strictSelectionRequirementBlockers(
           ? Number(requirement.value)
           : Number.NaN;
       if (!Number.isSafeInteger(value) || value < 1) {
-        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'invalid_quantity_value' });
+        addBlocker(requirement, 'invalid_quantity_value');
       }
       continue;
     }
@@ -519,14 +625,22 @@ export function strictSelectionRequirementBlockers(
         ? requirement.value.trim().toLocaleLowerCase('en-US')
         : '';
       if (productClass !== 'diamondBlade' || !supportedCeramicMaterialValues.has(value)) {
-        blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'material_not_mechanically_verifiable' });
+        addBlocker(requirement, 'material_not_mechanically_verifiable');
       }
       continue;
     }
 
-    blockers.push({ id: requirement.id, kind: requirement.kind, reason: 'unsupported_strict_requirement_kind' });
+    addBlocker(requirement, 'unsupported_strict_requirement_kind');
   }
-  return blockers;
+  return { blockers, generatorNominalPowerMinKw };
+}
+
+export function strictSelectionRequirementBlockers(
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass,
+  toolResults: ToolResult[] = []
+) {
+  return assessStrictSelectionRequirements(intent, productClass, toolResults).blockers;
 }
 
 function structuredBudgetMax(intent: AgentIntentContract) {
@@ -673,6 +787,7 @@ function requestedPowerLowerBoundKw(text: string) {
 type GeneratorPowerCardRequirement = {
   minKw?: number;
   maxKw?: number;
+  requireNominal?: boolean;
 };
 
 function generatorPowerRequirementForCardSelection(text: string): GeneratorPowerCardRequirement | undefined {
@@ -708,7 +823,9 @@ function productMeetsGeneratorPowerCardRequirement(
 ) {
   if (!requirement) return true;
   const power = extractGeneratorPowerForHardSelection(product);
-  const nominal = power.nominalKw ?? power.maxKw;
+  const nominal = requirement.requireNominal
+    ? extractConfirmedGeneratorNominalPowerKw(product)
+    : power.nominalKw ?? power.maxKw;
   if (nominal === undefined) return !failClosed;
   if (requirement.minKw !== undefined && nominal < requirement.minKw - 0.05) return false;
   if (requirement.maxKw !== undefined) {
@@ -809,15 +926,8 @@ function diamondBladeSupportsCeramic(product: Product) {
 
 export function generatorMeetsRequiredLoad(product: Product, requiredNominalKw: number) {
   if (!Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) return true;
-  const power = extractGeneratorPowerForHardSelection(product);
-  if (power.nominalKw === undefined && power.maxKw === undefined) return false;
-  if (power.nominalKw !== undefined && power.nominalKw >= requiredNominalKw - 0.2) return true;
-  return Boolean(
-    power.nominalKw !== undefined &&
-    power.maxKw !== undefined &&
-    power.nominalKw >= requiredNominalKw - 0.7 &&
-    power.maxKw >= requiredNominalKw + 0.5
-  );
+  const nominalKw = extractConfirmedGeneratorNominalPowerKw(product);
+  return nominalKw !== undefined && nominalKw >= requiredNominalKw;
 }
 
 export function filterGeneratorProductsByLoadProfile(products: Product[], requiredNominalKw?: number) {
@@ -1212,6 +1322,7 @@ export function selectProductsForVisibleCards(input: {
   answerText: string;
   selectedProductIds?: string[];
   needState: CustomerNeedState;
+  toolResults?: ToolResult[];
   allowHistoricalProducts?: boolean;
 }) {
   const unique = uniqueProducts(input.products);
@@ -1238,8 +1349,12 @@ export function selectProductsForVisibleCards(input: {
     ? mentioned
     : mentioned.filter((product) => productMatchesIntent(product, cardIntent));
   const sameIntentPool = sameIntentProducts(unique, cardIntent);
-  const strictRequirementBlockers = strictSelectionRequirementBlockers(input.intent, cardIntent);
-  if (strictRequirementBlockers.length) {
+  const strictRequirementAssessment = assessStrictSelectionRequirements(
+    input.intent,
+    cardIntent,
+    input.toolResults ?? []
+  );
+  if (strictRequirementAssessment.blockers.length) {
     return {
       semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
       intent: cardIntent,
@@ -1247,7 +1362,7 @@ export function selectProductsForVisibleCards(input: {
       selectedProductIds: [],
       answerMentionedProductIds: mentioned.map((product) => product.id),
       droppedProductIds: unique.map((product) => product.id),
-      warnings: [`product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementBlockers.length}`]
+      warnings: [`product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementAssessment.blockers.length}`]
     };
   }
 
@@ -1347,9 +1462,21 @@ export function selectProductsForVisibleCards(input: {
 
   let generatorPowerFilteredCount = 0;
   let generatorPowerNoFit = false;
+  const structuredGeneratorRequirement = structuredSelection
+    ? structuredGeneratorPowerRequirement(input.intent)
+    : undefined;
   const generatorPowerRequirement = isGeneratorProductClass(cardIntent)
     ? structuredSelection
-      ? structuredGeneratorPowerRequirement(input.intent)
+      ? strictRequirementAssessment.generatorNominalPowerMinKw === undefined
+        ? structuredGeneratorRequirement
+        : {
+            minKw: Math.max(
+              structuredGeneratorRequirement?.minKw ?? 0,
+              strictRequirementAssessment.generatorNominalPowerMinKw
+            ),
+            maxKw: structuredGeneratorRequirement?.maxKw,
+            requireNominal: true
+          }
       : generatorPowerRequirementForCardSelection(buyerRequirementText)
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPowerRequirement) {

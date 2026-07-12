@@ -162,6 +162,85 @@ describe('agent manager contracts', () => {
     expect(result.success).toBe(false);
   });
 
+  it('parses typed-tool requirement verification while legacy requirements remain parseable without it', () => {
+    const base = {
+      userMessageSummary: 'size a generator for simultaneous loads',
+      dialogueUnderstanding: 'the operating condition is consumed by a typed load calculation',
+      nextStepRationale: 'calculate the deterministic minimum',
+      requiresTools: true,
+      productMentions: [],
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+    const typed = AgentIntentContractSchema.parse({
+      ...base,
+      toolRequests: [{
+        id: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        args: { loads: [] },
+        rationale: 'consume simultaneous operation in the calculator',
+        required: true,
+        coversRequirementIds: ['simultaneous-loads']
+      }],
+      selectionPolicy: {
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        needAction: 'continue',
+        alternativePolicy: 'same_class_only',
+        reusePreviousCards: false,
+        maxCards: 4,
+        powerSource: 'any',
+        phase: 'single_phase',
+        requirements: [{
+          id: 'simultaneous-loads',
+          kind: 'generator_load_scenario',
+          value: true,
+          unit: null,
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'the two loads run simultaneously',
+          verification: {
+            mode: 'typed_tool',
+            toolRequestId: 'load-calculation',
+            tool: 'calculator.generatorLoad',
+            verifier: 'generator_load_profile',
+            bindAs: 'nominal_power_min_kw'
+          }
+        }],
+        rationale: 'typed derived constraint'
+      }
+    });
+    expect(typed.toolRequests[0]?.coversRequirementIds).toEqual(['simultaneous-loads']);
+    expect(typed.selectionPolicy?.requirements[0]?.verification).toMatchObject({ mode: 'typed_tool' });
+
+    const legacy = AgentIntentContractSchema.parse({
+      ...base,
+      toolRequests: [],
+      selectionPolicy: {
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        needAction: 'continue',
+        alternativePolicy: 'same_class_only',
+        reusePreviousCards: false,
+        maxCards: 0,
+        powerSource: 'any',
+        phase: 'any',
+        requirements: [{
+          id: 'legacy-noise',
+          kind: 'noise_max_db',
+          value: 60,
+          unit: 'dB',
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'no more than 60 dB'
+        }],
+        rationale: 'legacy persisted contract'
+      }
+    });
+    expect(legacy.selectionPolicy?.requirements[0]?.verification).toBeUndefined();
+  });
+
   it('creates stable event ids from sorted semantic content', () => {
     const left = createStableLedgerEventId({
       sessionId,

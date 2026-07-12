@@ -32,6 +32,7 @@ import { compactToolResultsForModel } from './agentManagerModelContext.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { researchProductComparisonFacts, type ProductComparisonResearchFact, type ProductComparisonResearchResult } from './productComparisonResearch.js';
 import {
+  extractConfirmedGeneratorNominalPowerKw,
   extractGeneratorPowerForHardSelection,
   extractWeightKg,
   fromEscaped,
@@ -55,6 +56,7 @@ import {
 } from './leadReviewGuards.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import {
+  assessStrictSelectionRequirements,
   ambiguousCutterRequestNeedsMaterialClarification,
   assessVisibleCardReadiness,
   budgetMaxFromNeedState,
@@ -329,6 +331,60 @@ function assertUniqueToolRequestIds(requests: ToolRequest[]) {
     seen.add(request.id);
   }
   return requests;
+}
+
+function orderToolRequestsForSelectionDependencies(
+  requests: ToolRequest[],
+  intent: AgentIntentContract
+) {
+  const proofRequestIds = new Set(
+    (intent.selectionPolicy?.requirements ?? [])
+      .map((requirement) => requirement.verification)
+      .filter((verification): verification is Extract<NonNullable<typeof verification>, { mode: 'typed_tool' }> =>
+        verification?.mode === 'typed_tool'
+      )
+      .map((verification) => verification.toolRequestId)
+  );
+  if (!proofRequestIds.size) return requests;
+  return requests
+    .map((request, index) => ({ request, index, proof: proofRequestIds.has(request.id) }))
+    .sort((left, right) => Number(right.proof) - Number(left.proof) || left.index - right.index)
+    .map(({ request }) => request);
+}
+
+function reusableSideEffectArtifactsAfterReplan(
+  intent: AgentIntentContract,
+  persistedResults: Map<string, ToolResult>,
+  userMessage: string
+) {
+  const results = new Map<string, ToolResult>();
+  const rebound: ToolResult[] = [];
+  const authorization = intent.leadCaptureAuthorization;
+  const evidence = authorization?.evidence?.trim() ?? '';
+  const evidenceIsCurrent = Boolean(evidence && userMessage.includes(evidence));
+  const evidenceContact = evidenceIsCurrent ? extractContact(evidence) : {};
+  const authorizedForReuse = Boolean(
+    authorization?.authorized &&
+    authorization.contactSource !== 'none' &&
+    authorization.purpose?.trim() &&
+    evidenceIsCurrent &&
+    (authorization.contactSource !== 'current_message' || evidenceContact.phone || evidenceContact.email)
+  );
+  if (!authorizedForReuse) return { results, rebound };
+  const successfulLead = [...persistedResults.values()].find((result) =>
+    result.tool === 'lead.capture' && result.status === 'ok'
+  );
+  if (!successfulLead) return { results, rebound };
+  for (const request of intent.toolRequests) {
+    if (request.tool !== 'lead.capture') continue;
+    const reboundResult = ToolResultSchema.parse({
+      ...successfulLead,
+      requestId: request.id
+    });
+    results.set(request.id, reboundResult);
+    if (request.id !== successfulLead.requestId) rebound.push(reboundResult);
+  }
+  return { results, rebound };
 }
 
 function leadActionAfterReview(input: {
@@ -961,6 +1017,7 @@ function hardSelectionNumber(intent: AgentIntentContract, kinds: string[]) {
 function filterProductsByStructuredSelectionPolicy(input: {
   products: Product[];
   intent: AgentIntentContract;
+  toolResults: ToolResult[];
 }) {
   if (!input.intent.selectionPolicy) {
     return { products: input.products, droppedProductIds: [] as string[], warnings: [] as string[] };
@@ -969,17 +1026,22 @@ function filterProductsByStructuredSelectionPolicy(input: {
   const budgetMax = hardSelectionNumber(input.intent, ['budget_max_rub', 'price_max_rub']);
   const weightMin = hardSelectionNumber(input.intent, ['weight_min_kg']);
   const weightMax = hardSelectionNumber(input.intent, ['weight_max_kg']);
-  const powerMin = hardSelectionNumber(input.intent, ['nominal_power_min_kw', 'power_min_kw']);
+  const explicitPowerMin = hardSelectionNumber(input.intent, ['nominal_power_min_kw', 'power_min_kw']);
   const powerMax = hardSelectionNumber(input.intent, ['nominal_power_max_kw', 'power_max_kw']);
   const policy = input.intent.selectionPolicy;
-  const strictRequirementBlockers = strictSelectionRequirementBlockers(input.intent, canonicalClass);
-  if (strictRequirementBlockers.length) {
+  const strictRequirementAssessment = assessStrictSelectionRequirements(
+    input.intent,
+    canonicalClass,
+    input.toolResults
+  );
+  if (strictRequirementAssessment.blockers.length) {
     return {
       products: [],
       droppedProductIds: input.products.map((product) => product.id),
-      warnings: [`answer_products_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementBlockers.length}`]
+      warnings: [`answer_products_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementAssessment.blockers.length}`]
     };
   }
+  const derivedNominalPowerMin = strictRequirementAssessment.generatorNominalPowerMinKw;
   const exactTargetNames = (input.intent.productMentions ?? [])
     .filter((mention) => mention.role === 'target_product')
     .map((mention) => mention.name);
@@ -999,12 +1061,16 @@ function filterProductsByStructuredSelectionPolicy(input: {
       if (weightMin !== undefined && weight < weightMin) return false;
       if (weightMax !== undefined && weight > weightMax) return false;
     }
-    if (powerMin !== undefined || powerMax !== undefined) {
+    if (explicitPowerMin !== undefined || powerMax !== undefined) {
       const power = extractGeneratorPowerForHardSelection(product);
       const nominal = power.nominalKw ?? power.maxKw;
       if (nominal === undefined) return false;
-      if (powerMin !== undefined && nominal < powerMin) return false;
+      if (explicitPowerMin !== undefined && nominal < explicitPowerMin) return false;
       if (powerMax !== undefined && nominal > powerMax) return false;
+    }
+    if (derivedNominalPowerMin !== undefined) {
+      const nominal = extractConfirmedGeneratorNominalPowerKw(product);
+      if (nominal === undefined || nominal < derivedNominalPowerMin) return false;
     }
     if (policy.powerSource && policy.powerSource !== 'any') {
       const source = productPowerSource(product);
@@ -2021,8 +2087,19 @@ function llmReviewPolicy(input: {
   };
 }
 
-function unverifiableStrictHardConstraintSafeRewrite() {
-  return 'Не буду рекомендовать конкретную модель наугад: одно из ваших строгих требований сейчас нельзя надёжно проверить по доступным характеристикам товаров. Нужны подтверждённые данные по этому параметру; после этого я продолжу подбор и покажу только подходящие карточки.';
+function unverifiableStrictHardConstraintSafeRewrite(
+  blockers: Array<{ kind: string; reason: string; evidence: string }>
+) {
+  const constraints = blockers
+    .map((blocker) => `«${blocker.evidence}»`)
+    .join('; ');
+  const calculationFailure = blockers.some((blocker) =>
+    blocker.reason.startsWith('typed_tool_') || blocker.reason.startsWith('generator_load_')
+  );
+  if (calculationFailure) {
+    return `Не буду рекомендовать конкретную модель наугад: сейчас не удалось надёжно завершить и применить расчёт для требования ${constraints}. Я не стану подменять расчёт предположением; повторите сообщение или уточните исходные данные, и я продолжу подбор.`;
+  }
+  return `Не буду рекомендовать конкретную модель наугад: по доступным характеристикам товаров сейчас нельзя надёжно проверить требование ${constraints}. Нужны подтверждённые данные именно по нему; после этого я продолжу подбор и покажу только подходящие карточки.`;
 }
 
 function uniqueReviewIssues(issues: PreSendReview['issues']) {
@@ -2407,7 +2484,8 @@ function toolRequestVariantJsonSchema(tool: string, args: Record<string, unknown
     tool: { type: 'string', enum: [tool] },
     args,
     rationale: { type: 'string' },
-    required: { type: 'boolean' }
+    required: { type: 'boolean' },
+    coversRequirementIds: stringArrayJsonSchema
   });
 }
 
@@ -2509,9 +2587,23 @@ const selectionRequirementJsonSchema = {
       type: 'string',
       enum: ['strict', 'preferred', 'informational']
     },
-    evidence: { type: 'string' }
+    evidence: { type: 'string' },
+    verification: {
+      anyOf: [
+        strictJsonObject({
+          mode: { type: 'string', enum: ['product_attribute'] }
+        }),
+        strictJsonObject({
+          mode: { type: 'string', enum: ['typed_tool'] },
+          toolRequestId: { type: 'string' },
+          tool: { type: 'string', enum: agentManagerToolNames },
+          verifier: { type: 'string' },
+          bindAs: { type: 'string' }
+        })
+      ]
+    }
   },
-  required: ['id', 'kind', 'value', 'unit', 'role', 'strictness', 'evidence']
+  required: ['id', 'kind', 'value', 'unit', 'role', 'strictness', 'evidence', 'verification']
 } as const;
 
 const selectionPolicyJsonSchema = {
@@ -2742,6 +2834,11 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, requiredToolKinds, technicalAttributes и rationale. Затем toolRequests должны исполнять эту grounding-политику.',
             'Всегда заполни selectionPolicy семантически. targetProductClass — свободное человеческое название класса товара, поэтому незнакомый класс не своди к unknown. canonicalProductClass укажи только когда он точно входит в известную кодовую онтологию; иначе null.',
             'В selectionPolicy.requirements вынеси каждое число и ограничение отдельно: kind описывает смысл числа, value/unit — нормализованное значение, role — hard_constraint, preference, context или mentioned_only, strictness — strict/preferred/informational, evidence — точная опора в диалоге. Код не будет угадывать роль числа по словам.',
+            'For every selectionPolicy requirement set verification explicitly. Use {mode:"product_attribute"} when each recommended product itself must expose and satisfy the attribute. Use {mode:"typed_tool",toolRequestId,tool,verifier,bindAs} only when a required typed tool consumes the requirement and produces the deterministic selection constraint.',
+            'Every typed-tool verification must point to a required tool request whose coversRequirementIds contains that exact requirement id. The currently supported derived binding is calculator.generatorLoad with verifier="generator_load_profile" and bindAs="nominal_power_min_kw"; it requires a successful result with a positive payload.profile.requiredNominalKw.',
+            'For that generator-load derived binding, normalize requirement.kind to the stable ontology value "generator_load_scenario", value=true, and unit=null. Keep the concrete loads and operating relationship (including simultaneous running versus simultaneous starting) in evidence and in calculator args; do not invent another typed-derived kind.',
+            'Every toolRequest must include coversRequirementIds; use [] when it does not verify a selection requirement.',
+            'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Unknown strict product attributes remain fail-closed until product evidence can verify them.',
             'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
             'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',
             'selectionPolicy.reusePreviousCards=true только если прежние карточки всё ещё относятся к активной потребности и не конфликтуют с новыми вводными. maxCards отражает просьбу покупателя о количестве карточек; иначе null. powerSource и phase заполняй только из смысла текущей потребности.',
@@ -2756,6 +2853,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Для подбора товара планируй catalog.search.',
             'If previous visible product cards become unsuitable after the buyer narrows or corrects the need, plan a fresh catalog.search in the same product class instead of only explaining that the old cards do not fit. The answer should reject the old cards by reason and use the new catalog results as replacement cards when available.',
             'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
+            'Set calculator.generatorLoad args.simultaneousStarting=true only when the loads may start at the same moment. Loads that merely run simultaneously must still be included in the same calculation, but do not imply simultaneousStarting=true.',
             'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
             'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
             'Fill productMentions for every named product, model, brand-model, or equipment item in the current buyer turn. Classify its semantic role: target_product when the buyer wants to buy/check that exact product; catalog_candidate for a product alternative being considered; comparison_subject for products being compared; context_load_device when it is only a consumer/load/device used to size or apply another product; compatibility_context when it is only equipment that the target product must work with; mentioned_only when no action is needed.',
@@ -2829,6 +2927,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'If calculator.generatorLoad warnings include generator_load_estimate_only, generator_load_unbounded_guess, generator_load_bounded_basis_incomplete, or generator_load_invalid_load_kind, do not name catalog products or prices. Set selectionReadiness.canShowProductCards=false and ask the minimum useful question to bound the unknown load source.',
             'If calculator.generatorLoad warnings include generator_load_bounded_assumption, you may show only preliminary product cards when the buyer asked for an approximate selection; keep exact missing facts in selectionReadiness.missingFacts and state the assumptions in answerText.',
             'If the buyer explicitly asks for preliminary generator variants and toolResults include calculator.generatorLoad status ok plus catalog.search products, use selectionReadiness.status="ready_for_preliminary_cards" when the catalog products are useful orientation candidates. The answer must say the cards are preliminary and name any missing exact load fact before final purchase-safe selection.',
+            'When the buyer asks for a generator selection and the successful load calculation plus catalog evidence already prove that candidates meet load and phase constraints, missing fuel preference or budget alone must not suppress useful preliminary cards. Show technically suitable options as preliminary, state the remaining assumption, and ask at most one narrowing question. An exact pump model is not required merely to show preliminary cards when the buyer already gave its type and power and the calculator marked the remaining basis as bounded.',
             'You must set selectionReadiness for the current answer. It is your semantic decision about whether buyer-visible product cards are useful and honest now.',
             'You must set selectedProductIds explicitly. Use only IDs from the provided products/toolResults, include only products you actually recommend in answerText, respect selectionPolicy.maxCards and alternativePolicy, and use [] when cards are not useful. The code will validate facts and hard constraints but will not choose products for you.',
             'When selectionReadiness.canShowProductCards is false, answerText must itself explain what is missing or what the next useful question is. The code will not append a canned clarification.',
@@ -2905,6 +3004,8 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For generator answers, require rewrite if the answer names catalog products, prices, or product cards when tool results include generator_load_estimate_only, generator_load_unbounded_guess, generator_load_bounded_basis_incomplete, generator_load_invalid_load_kind, or catalog_search_skipped:generator_load_unconfirmed_basis.',
             'For generator_load_bounded_assumption, allow preliminary product cards only when the answer labels them as approximate, preserves missing exact facts, and does not present assumptions as confirmed nameplate data.',
             'For generator preliminary selection, require rewrite if catalog.search returned useful products and the buyer asked for preliminary variants, but the answer refuses to show any orientation cards solely because one exact load fact is still missing. The rewrite should keep the missing fact caveat and present the candidates as preliminary, not final.',
+            'Treat generator_load_scenario as valid only when its evidence and linked calculator args actually describe generator loads or their operating relationship. If an unrelated constraint was mislabeled or given an incompatible value/unit, require rewrite and do not approve product recommendations.',
+            'Do not reject useful preliminary generator cards solely because fuel preference, budget, or an exact pump model is still unknown when the buyer already supplied the pump type and power and a successful bounded load calculation proves the candidates meet the load and phase constraints.',
             'For a generator clarification answer with selectionReadiness.canShowProductCards=false, require rewrite if the answer is only a short question or does not explicitly mention generator selection plus the missing load/power/model fact.',
             'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
@@ -3429,6 +3530,7 @@ export class AgentManagerOrchestrator {
     const legacyIntentUpgraded = Boolean(savedIntent.found && (
       savedIntentParse?.success === false || !parsedSavedIntent?.selectionPolicy
     ));
+    const intentWasReplanned = !parsedSavedIntent || legacyIntentUpgraded;
     let plannedIntent: AgentIntentContract;
     if (parsedSavedIntent && !legacyIntentUpgraded) {
       plannedIntent = parsedSavedIntent;
@@ -3459,9 +3561,16 @@ export class AgentManagerOrchestrator {
       ),
       userMessage
     );
-    const intent: AgentIntentContract = {
+    const validatedToolRequests = assertUniqueToolRequestIds(
+      repairedIntent.toolRequests.map(validateToolRequest)
+    );
+    const intentWithoutOrderedTools: AgentIntentContract = {
       ...repairedIntent,
-      toolRequests: assertUniqueToolRequestIds(repairedIntent.toolRequests.map(validateToolRequest))
+      toolRequests: validatedToolRequests
+    };
+    const intent: AgentIntentContract = {
+      ...intentWithoutOrderedTools,
+      toolRequests: orderToolRequestsForSelectionDependencies(validatedToolRequests, intentWithoutOrderedTools)
     };
     const answerPolicyTrace = buildSalesManagerPolicyTrace({
       target: 'answer',
@@ -3513,6 +3622,31 @@ export class AgentManagerOrchestrator {
       policyRuleIds: intent.policyRuleIds ?? []
     });
 
+    const replannedArtifactReuse = intentWasReplanned
+      ? reusableSideEffectArtifactsAfterReplan(intent, persistedExecution.toolResults, userMessage)
+      : { results: persistedExecution.toolResults, rebound: [] as ToolResult[] };
+    const reusablePersistedToolResults = replannedArtifactReuse.results;
+    for (const reboundResult of replannedArtifactReuse.rebound) {
+      await this.conversations.saveToolArtifact({
+        sessionId: input.session.id,
+        turnId: input.turnId,
+        toolName: reboundResult.tool,
+        toolRequestId: reboundResult.requestId,
+        status: reboundResult.status,
+        payload: reboundResult.payload,
+        warnings: [...reboundResult.warnings, 'rebound_after_intent_replan'],
+        errorCode: reboundResult.errorCode
+      });
+    }
+    if (intentWasReplanned && persistedExecution.toolResults.size) {
+      const reusedOriginalRequestIds = new Set(
+        [...reusablePersistedToolResults.values()].map((result) => result.requestId)
+      );
+      await this.trace(input.sessionId, input.turnId, 'recovery', 'stale_tool_artifacts_ignored_after_replan', {
+        requestIds: [...persistedExecution.toolResults.keys()].filter((id) => !reusedOriginalRequestIds.has(id)),
+        preservedSideEffectRequestIds: [...reusablePersistedToolResults.keys()]
+      });
+    }
     let { toolResults, products } = await this.executeTools({
       session: input.session,
       turnId: input.turnId,
@@ -3521,7 +3655,7 @@ export class AgentManagerOrchestrator {
       intent,
       needState: needStateSnapshot,
       toolRequests: intent.toolRequests,
-      persistedToolResults: persistedExecution.toolResults,
+      persistedToolResults: reusablePersistedToolResults,
       budget: turnBudget,
       signal: input.signal
     });
@@ -3558,7 +3692,8 @@ export class AgentManagerOrchestrator {
     const rawAnswerProducts = products.length ? products : historicalProducts;
     const structuredPolicyEvidence = filterProductsByStructuredSelectionPolicy({
       products: rawAnswerProducts,
-      intent
+      intent,
+      toolResults
     });
     const budgetAnswerProductEvidence = structuredSemanticPlan
       ? {
@@ -3924,6 +4059,7 @@ export class AgentManagerOrchestrator {
       answerText: finalText,
       selectedProductIds: initialAnswerContract.selectedProductIds,
       needState: needStateSnapshot,
+      toolResults,
       allowHistoricalProducts: usingHistoricalProducts
     });
     if (usingHistoricalProducts && initialCardSelection.products.length) {
@@ -3969,7 +4105,8 @@ export class AgentManagerOrchestrator {
             intent: effectiveIntent,
             answerText: finalText,
             selectedProductIds: initialAnswerContract.selectedProductIds,
-          needState: needStateSnapshot,
+            needState: needStateSnapshot,
+            toolResults,
           allowHistoricalProducts: true
         });
         const previousSelectionBlockedByPlateTask = narrowedPreviousSelection.warnings.some((warning) =>
@@ -4291,7 +4428,7 @@ export class AgentManagerOrchestrator {
               warnings: ['catalog_search_skipped:generator_load_unconfirmed_basis']
             });
           } else {
-            const search = await this.searchCatalogProducts({
+            let search = await this.searchCatalogProducts({
               query,
               limit,
               signal: toolSignal,
@@ -4306,7 +4443,41 @@ export class AgentManagerOrchestrator {
             const loadRequirementKw = isGeneratorProductClass(productIntent)
               ? generatorLoadRequirementKw(toolResults)
               : undefined;
-            const loadFit = filterGeneratorProductsByLoadProfile(search.products, loadRequirementKw);
+            let loadFit = filterGeneratorProductsByLoadProfile(search.products, loadRequirementKw);
+            let loadAwareRetry = false;
+            if (loadRequirementKw !== undefined && !loadFit.products.length) {
+              loadAwareRetry = true;
+              const loadAwareQuery = [
+                query,
+                `generator nominal power at least ${loadRequirementKw} kW`,
+                `генератор номинальная мощность не менее ${loadRequirementKw} кВт`
+              ].filter(Boolean).join(' ');
+              const retrySearch = await this.searchCatalogProducts({
+                query: loadAwareQuery,
+                limit: Math.max(limit, 8),
+                signal: toolSignal,
+                userMessage: input.userMessage,
+                semanticContext: [semanticQuery, loadAwareQuery, input.userMessage, request.rationale].join('\n'),
+                productIntent,
+                powerSource: resolvedToolPowerSource(request, input.intent),
+                useLegacySemanticRanking: !input.intent.selectionPolicy,
+                embeddingQuery: loadAwareQuery,
+                budgetMax
+              });
+              const mergedProducts = [...new Map(
+                [...search.products, ...retrySearch.products].map((product) => [product.id, product])
+              ).values()];
+              search = {
+                ...retrySearch,
+                products: mergedProducts,
+                warnings: uniqueStrings([
+                  ...search.warnings,
+                  ...retrySearch.warnings,
+                  'catalog_search_retried_with_generator_load_minimum'
+                ])
+              };
+              loadFit = filterGeneratorProductsByLoadProfile(search.products, loadRequirementKw);
+            }
             const products = loadFit.products;
             const warnings = [...search.warnings, ...loadFit.warnings];
             products.forEach((product) => productsById.set(product.id, product));
@@ -4321,7 +4492,8 @@ export class AgentManagerOrchestrator {
                 ...(loadRequirementKw === undefined ? {} : {
                   generatorLoadFit: {
                     requiredNominalKw: loadRequirementKw,
-                    droppedProductIds: loadFit.droppedProductIds
+                    droppedProductIds: loadFit.droppedProductIds,
+                    loadAwareRetry
                   }
                 }),
                 retrieval: {
@@ -5091,7 +5263,8 @@ export class AgentManagerOrchestrator {
     const contactInTurn = extractContact(input.userMessage);
     const strictRequirementBlockers = strictSelectionRequirementBlockers(
       input.intent,
-      canonicalProductClassFromIntent(input.intent)
+      canonicalProductClassFromIntent(input.intent),
+      input.toolResults
     );
     if (strictRequirementBlockers.length) {
       mechanicalIssues.push({
@@ -5395,7 +5568,7 @@ export class AgentManagerOrchestrator {
       issue.code === 'unverifiable_strict_hard_constraint'
     );
     if (unverifiableStrictRequirementIssue) {
-      return finalizeMechanicalRewrite(unverifiableStrictHardConstraintSafeRewrite());
+      return finalizeMechanicalRewrite(unverifiableStrictHardConstraintSafeRewrite(strictRequirementBlockers));
     }
     const leadCaptureRepairIssue = mechanicalIssues.find((issue) =>
       issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
