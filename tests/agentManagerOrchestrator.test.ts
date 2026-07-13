@@ -6700,6 +6700,125 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.answerProductEvidence?.droppedProductIds).toContain('oversized-85');
   });
 
+  it('keeps gasoline generator candidates when the planner makes fuel type a strict product attribute', async () => {
+    class MixedFuelProducts extends FakeProducts {
+      override async searchProducts() {
+        return [{
+          ...generatorProductWithPower('tss-5', 'TSS SGG 5000N gasoline generator 5.0 kW', 5),
+          price: 49281,
+          specs: { 'Nominal power': '5 kW', 'вид топлива': 'бензиновые', 'число фаз': 'однофазные' }
+        }, {
+          ...generatorProductWithPower('sumec-6', 'SUMEC SU8800 gasoline generator 6.0 kW', 6),
+          price: 47990,
+          specs: { 'Nominal power': '6 kW', 'вид топлива': 'бензиновые', 'число фаз': 'однофазные' }
+        }, {
+          ...generatorProductWithPower('firman-diesel', 'FIRMAN SDG5500CLE diesel generator 4.8 kW', 4.8),
+          price: 98900,
+          specs: { 'Nominal power': '4.8 kW', 'вид топлива': 'дизельные', 'число фаз': 'однофазные' }
+        }];
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      powerSource: 'fuel',
+      phase: 'single_phase',
+      maxCards: 2,
+      requirements: [{
+        id: 'single-phase',
+        kind: 'phase',
+        value: 'single_phase',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'The house is single-phase 220 V.',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'gasoline-only',
+        kind: 'fuel_type',
+        value: 'gasoline',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'The buyer chose gasoline.',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'preferred-minimum',
+        kind: 'nominal_power_min_kw',
+        value: 5,
+        unit: 'kW',
+        role: 'preference',
+        strictness: 'preferred',
+        relation: 'preferred',
+        evidence: 'The buyer asked for approximately 5-6 kW.',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'preferred-maximum',
+        kind: 'nominal_power_max_kw',
+        value: 6,
+        unit: 'kW',
+        role: 'preference',
+        strictness: 'preferred',
+        relation: 'preferred',
+        evidence: 'The buyer asked for approximately 5-6 kW.',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        query: 'gasoline single-phase generator 5-6 kW',
+        semanticQuery: 'gasoline single-phase generator 5-6 kW',
+        powerSource: 'fuel',
+        phase: 'single_phase',
+        limit: 2
+      }
+    };
+
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new MixedFuelProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((product) => product.id)).toEqual(['sumec-6', 'tss-5']);
+          return {
+            answerText: 'Gasoline options are SUMEC SU8800 6.0 kW for 47,990 RUB and TSS SGG 5000N 5.0 kW for 49,281 RUB.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['catalog-search'],
+            selectedProductIds: ['sumec-6', 'tss-5'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: ['final pump starting current'],
+              rationale: 'Both catalog products satisfy the typed gasoline and phase requirements.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Gasoline. Show 2-3 single-phase options around 5-6 kW with prices.'
+    });
+
+    expect(payload.productCards.map((card) => card.id)).toEqual(['sumec-6', 'tss-5']);
+    expect(payload.productCards.map((card) => card.id)).not.toContain('firman-diesel');
+  });
+
   it('keeps the validated load calculation and close generator options when the buyer asks what to buy without overpaying', async () => {
     const secondTurnId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const thirdTurnId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';

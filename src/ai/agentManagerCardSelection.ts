@@ -667,6 +667,26 @@ export function assessStrictSelectionRequirements(
       continue;
     }
 
+    if (requirement.kind === 'fuel_type' || requirement.kind === 'power_source') {
+      const expected = normalizeStructuredGeneratorFuelRequirement(requirement.value);
+      const expectedPolicyPowerSource = expected === 'battery'
+        ? 'battery'
+        : expected === 'mains'
+          ? 'mains'
+          : expected === 'gasoline' || expected === 'diesel' || expected === 'fuel'
+            ? 'fuel'
+            : undefined;
+      if (
+        requirement.unit !== null ||
+        !isGeneratorProductClass(productClass) ||
+        !expected ||
+        policy.powerSource !== expectedPolicyPowerSource
+      ) {
+        addBlocker(requirement, 'fuel_type_not_bound_to_typed_policy');
+      }
+      continue;
+    }
+
     if (generatorAutoStartRequirementKinds.has(requirement.kind)) {
       const relation = requirement.relation;
       if (
@@ -839,6 +859,48 @@ function productMeetsStructuredPowerSource(
   if (powerSource === 'battery') return actual === 'battery';
   if (powerSource === 'fuel') return actual === 'gasoline' || actual === 'diesel';
   return false;
+}
+
+type StructuredGeneratorFuelRequirement = 'gasoline' | 'diesel' | 'battery' | 'fuel' | 'mains';
+
+function normalizeStructuredGeneratorFuelRequirement(value: unknown): StructuredGeneratorFuelRequirement | undefined {
+  const normalized = compactModelText(String(value ?? ''));
+  if (['gasoline', 'petrol', 'benzine', 'бензин', 'бензиновый', 'бензиновые'].includes(normalized)) {
+    return 'gasoline';
+  }
+  if (['diesel', 'дизель', 'дизельный', 'дизельные'].includes(normalized)) return 'diesel';
+  if (['battery', 'аккумулятор', 'аккумуляторный', 'аккумуляторные'].includes(normalized)) return 'battery';
+  if (['fuel', 'combustion', 'топливный', 'топливные'].includes(normalized)) return 'fuel';
+  if (['mains', 'grid', 'сетевой', 'сетевые'].includes(normalized)) return 'mains';
+  return undefined;
+}
+
+function structuredGeneratorFuelRequirement(intent: AgentIntentContract) {
+  const strictRequirements = (intent.selectionPolicy?.requirements ?? []).filter((requirement) =>
+    (requirement.kind === 'fuel_type' || requirement.kind === 'power_source') &&
+    requirement.role === 'hard_constraint' &&
+    requirement.strictness === 'strict'
+  );
+  if (!strictRequirements.length) return undefined;
+  const values = uniqueStrings(strictRequirements.flatMap((requirement) => {
+    const normalized = normalizeStructuredGeneratorFuelRequirement(requirement.value);
+    return normalized ? [normalized] : [];
+  }));
+  return values.length === 1 ? values[0] as StructuredGeneratorFuelRequirement : 'invalid' as const;
+}
+
+export function productMeetsSupportedStrictFuelRequirement(
+  product: Product,
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass
+) {
+  const requirement = structuredGeneratorFuelRequirement(intent);
+  if (!requirement) return true;
+  if (requirement === 'invalid' || !isGeneratorProductClass(productClass)) return false;
+  const actual = productPowerSource(product);
+  if (requirement === 'fuel') return actual === 'gasoline' || actual === 'diesel';
+  if (requirement === 'mains') return false;
+  return actual === requirement;
 }
 
 function requestedPowerRangeKw(text: string) {
@@ -1576,13 +1638,19 @@ export function selectProductsForVisibleCards(input: {
   const batteryPowerSourceRequired = structuredSelection
     ? structuredPowerSource === 'battery'
     : requiresBatteryPowerStationFromText(buyerRequirementText);
-  const sourceConstrainedGeneratorPool = isGeneratorProductClass(cardIntent)
+  const strictGeneratorFuelRequirement = structuredSelection && isGeneratorProductClass(cardIntent)
+    ? structuredGeneratorFuelRequirement(input.intent)
+    : undefined;
+  const sourceConstrainedGeneratorPool = (isGeneratorProductClass(cardIntent)
     ? structuredSelection && structuredPowerSource && structuredPowerSource !== 'any'
       ? sameIntentPool.filter((product) => productMeetsStructuredPowerSource(product, structuredPowerSource))
       : batteryPowerSourceRequired
         ? sameIntentPool.filter(isBatteryPowerStation)
         : sameIntentPool
-    : sameIntentPool;
+    : sameIntentPool).filter((product) =>
+      !strictGeneratorFuelRequirement ||
+      productMeetsSupportedStrictFuelRequirement(product, input.intent, cardIntent)
+    );
   const hasStructuredPowerSource = Boolean(
     structuredSelection && structuredPowerSource && structuredPowerSource !== 'any'
   );
@@ -1608,6 +1676,17 @@ export function selectProductsForVisibleCards(input: {
         powerSourceNoFit = fallbackBatteryProducts.length === 0;
       }
     }
+  }
+
+  let generatorFuelFilteredCount = 0;
+  let generatorFuelNoFit = false;
+  if (strictGeneratorFuelRequirement && selected.length) {
+    const fuelMatchingSelected = selected.filter((product) =>
+      productMeetsSupportedStrictFuelRequirement(product, input.intent, cardIntent)
+    );
+    generatorFuelFilteredCount = selected.length - fuelMatchingSelected.length;
+    selected = fuelMatchingSelected;
+    generatorFuelNoFit = selected.length === 0;
   }
 
   let generatorPowerFilteredCount = 0;
@@ -1894,6 +1973,12 @@ export function selectProductsForVisibleCards(input: {
       : []),
     ...(powerSourceNoFit
       ? [`product_cards_suppressed:power_source_no_fit:${structuredPowerSource ?? 'battery'}`]
+      : []),
+    ...(generatorFuelFilteredCount > 0
+      ? [`product_cards_filtered_by_generator_fuel:${strictGeneratorFuelRequirement}:${generatorFuelFilteredCount}`]
+      : []),
+    ...(generatorFuelNoFit
+      ? [`product_cards_suppressed:generator_fuel_no_fit:${strictGeneratorFuelRequirement}`]
       : []),
     ...(generatorPowerFilteredCount > 0 ? [`product_cards_filtered_by_generator_power:${generatorPowerFilteredCount}`] : []),
     ...(generatorPowerNoFit ? ['product_cards_suppressed:generator_power_no_fit'] : []),

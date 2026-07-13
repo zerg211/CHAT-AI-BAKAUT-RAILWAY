@@ -2248,6 +2248,54 @@ describe('AgentManager visible card readiness', () => {
     ]);
   });
 
+  it('accepts a typed strict gasoline requirement and removes diesel generator cards', () => {
+    const gasoline = {
+      ...generatorWithPrice('gasoline-5', 'TSS SGG 5000N gasoline generator 5 kW', 49281),
+      specs: {
+        'Nominal power': '5 kW',
+        'вид топлива': 'бензиновые',
+        'число фаз': 'однофазные'
+      }
+    };
+    const diesel = {
+      ...generatorWithPrice('diesel-5', 'FIRMAN SDG5500CLE diesel generator 4.8 kW', 98900),
+      specs: {
+        'Nominal power': '4.8 kW',
+        'вид топлива': 'дизельные',
+        'число фаз': 'однофазные'
+      }
+    };
+    const intent = structuredSelectionIntent({
+      powerSource: 'fuel',
+      requirements: [{
+        id: 'gasoline-only',
+        kind: 'fuel_type',
+        value: 'gasoline',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'Buyer chose a gasoline generator.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(intent, 'generator')).toEqual({ blockers: [] });
+    const selection = selectProductsForVisibleCards({
+      products: [diesel, gasoline],
+      userMessage: 'Show gasoline generators.',
+      history: [],
+      intent,
+      answerText: `${gasoline.name} fits; ${diesel.name} does not match the requested fuel.`,
+      selectedProductIds: [gasoline.id, diesel.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([gasoline.id]);
+    expect(selection.products.map((product) => product.id)).toEqual([gasoline.id]);
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_fuel:gasoline:1');
+  });
+
   it('binds a strict product type to the canonical product class and fails closed on mismatch', () => {
     const intent = structuredSelectionIntent({
       requirements: [{

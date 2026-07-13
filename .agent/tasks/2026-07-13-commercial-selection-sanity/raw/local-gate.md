@@ -15,4 +15,6 @@ Verified against the current worktree on 2026-07-13.
 
 After adding the stale-load compatibility guard, the current-code checks were rerun: focused 147/147, full suite 968/968, agentic eval 251/251, typecheck/build/regex guard PASS, and production dependency audit 0 vulnerabilities.
 
+After production attempt 1 exposed unsupported strict `fuel_type`, the final current-code checks were rerun again: focused 149/149, full suite 970/970, agentic eval 251/251, typecheck/build/regex guard PASS, `git diff --check` PASS, and production dependency audit 0 vulnerabilities.
+
 The first non-networked `npm.cmd run verify` attempt was correctly treated as BLOCKED because the npm audit endpoint was unreachable. It was not counted as a pass. The complete rerun with registry access passed.

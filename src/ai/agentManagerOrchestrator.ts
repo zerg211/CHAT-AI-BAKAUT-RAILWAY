@@ -65,6 +65,7 @@ import {
   productSelectionClasses,
   productCards,
   productMeetsSupportedStrictAutoStartRequirement,
+  productMeetsSupportedStrictFuelRequirement,
   productMeetsSupportedStrictMaterialRequirement,
   rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
@@ -1390,6 +1391,7 @@ function filterProductsByStructuredSelectionPolicy(input: {
       if (policy.phase === 'three_phase' && phase !== 'three_phase_380' && phase !== 'mixed_220_380') return false;
     }
     if (!productMeetsSupportedStrictAutoStartRequirement(product, input.intent, canonicalClass)) return false;
+    if (!productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass)) return false;
     if (!productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass)) return false;
     return true;
   });
