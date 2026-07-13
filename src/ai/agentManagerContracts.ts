@@ -262,6 +262,13 @@ export const SelectionRequirementSchema = z.object({
   kind: nonEmptyString,
   value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
   unit: z.string().trim().min(1).nullable(),
+  relation: z.enum([
+    'must_have',
+    'must_not_have',
+    'preferred',
+    'not_required',
+    'context'
+  ]).optional(),
   role: z.enum(['hard_constraint', 'preference', 'context', 'mentioned_only']),
   strictness: z.enum(['strict', 'preferred', 'informational']),
   evidence: nonEmptyString,
@@ -271,6 +278,7 @@ export const SelectionRequirementSchema = z.object({
 export const AgentSelectionPolicySchema = z.object({
   targetProductClass: nonEmptyString.nullable(),
   canonicalProductClass: nonEmptyString.nullable(),
+  selectionGoal: z.enum(['browse_catalog', 'preliminary_fit', 'final_fit']).optional(),
   needAction: z.enum(['continue', 'open', 'switch', 'resume', 'close', 'none']),
   alternativePolicy: z.enum([
     'exact_only',

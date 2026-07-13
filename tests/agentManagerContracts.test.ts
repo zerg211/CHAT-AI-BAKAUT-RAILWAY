@@ -186,6 +186,7 @@ describe('agent manager contracts', () => {
       selectionPolicy: {
         targetProductClass: 'generator',
         canonicalProductClass: 'generator',
+        selectionGoal: 'preliminary_fit',
         needAction: 'continue',
         alternativePolicy: 'same_class_only',
         reusePreviousCards: false,
@@ -197,6 +198,7 @@ describe('agent manager contracts', () => {
           kind: 'generator_load_scenario',
           value: true,
           unit: null,
+          relation: 'must_have',
           role: 'hard_constraint',
           strictness: 'strict',
           evidence: 'the two loads run simultaneously',
@@ -213,6 +215,8 @@ describe('agent manager contracts', () => {
     });
     expect(typed.toolRequests[0]?.coversRequirementIds).toEqual(['simultaneous-loads']);
     expect(typed.selectionPolicy?.requirements[0]?.verification).toMatchObject({ mode: 'typed_tool' });
+    expect(typed.selectionPolicy?.selectionGoal).toBe('preliminary_fit');
+    expect(typed.selectionPolicy?.requirements[0]?.relation).toBe('must_have');
 
     const legacy = AgentIntentContractSchema.parse({
       ...base,

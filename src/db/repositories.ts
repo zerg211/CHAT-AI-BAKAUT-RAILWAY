@@ -2521,6 +2521,20 @@ export class ProductRepository {
     return result.rows.map(mapProduct);
   }
 
+  async getProductsByIds(productIds: string[]) {
+    const ids = [...new Set(productIds.map((id) => id.trim()).filter(Boolean))].slice(0, 24);
+    if (!ids.length) return [];
+    const result = await this.db.query(
+      `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
+       FROM products
+       WHERE ${PRODUCT_FILTER}
+         AND id::text = ANY($1::text[])
+       ORDER BY array_position($1::text[], id::text)`,
+      [ids]
+    );
+    return result.rows.map(mapProduct);
+  }
+
   async searchProductsByModelTokens(tokens: string[], limit = 20) {
     if (!tokens.length) return [];
     const result = await this.db.query(

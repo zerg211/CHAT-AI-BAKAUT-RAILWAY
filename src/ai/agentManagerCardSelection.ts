@@ -1,6 +1,10 @@
 import type { CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
 import type { AgentIntentContract, AnswerContract, AnswerSelectionReadiness, ToolRequest, ToolResult } from './agentManagerContracts.js';
-import { hasUnconfirmedGeneratorLoadBasisResult, isGeneratorProductClass } from './agentManagerGeneratorLoad.js';
+import {
+  hasGeneratorLoadBasisThatBlocksPreliminaryFit,
+  hasUnconfirmedGeneratorLoadBasisResult,
+  isGeneratorProductClass
+} from './agentManagerGeneratorLoad.js';
 import {
   compactModelText,
   displayProductBrand,
@@ -544,8 +548,18 @@ function typedToolRequirementProof(input: {
     if (!isGeneratorProductClass(input.productClass)) {
       return { blocker: blocker('generator_load_product_class_mismatch') };
     }
-    if (hasUnconfirmedGeneratorLoadBasisResult([result])) {
-      return { blocker: blocker('generator_load_result_not_selection_safe') };
+    const selectionGoal = input.intent.selectionPolicy?.selectionGoal ?? 'final_fit';
+    if (
+      selectionGoal === 'final_fit' &&
+      hasUnconfirmedGeneratorLoadBasisResult([result])
+    ) {
+      return { blocker: blocker('generator_load_result_not_final_fit_safe') };
+    }
+    if (
+      selectionGoal === 'preliminary_fit' &&
+      hasGeneratorLoadBasisThatBlocksPreliminaryFit([result])
+    ) {
+      return { blocker: blocker('generator_load_result_not_preliminary_fit_safe') };
     }
     const profile = (result.payload as { profile?: { requiredNominalKw?: unknown } }).profile;
     const requiredNominalKw = profile?.requiredNominalKw;
@@ -636,12 +650,26 @@ export function assessStrictSelectionRequirements(
     }
 
     if (generatorAutoStartRequirementKinds.has(requirement.kind)) {
+      const relation = requirement.relation;
       if (
         requirement.unit !== null ||
         typeof requirement.value !== 'boolean' ||
         !isGeneratorProductClass(productClass)
       ) {
         addBlocker(requirement, 'autostart_requirement_shape_or_product_class_mismatch');
+      } else if (
+        requirement.value === false &&
+        (relation === undefined || relation === 'not_required' || relation === 'preferred' || relation === 'context')
+      ) {
+        // A false value historically meant both “not required” and “must be
+        // absent”. Legacy false values fail open as optional; only the new
+        // explicit must_not_have relation may exclude catalog products.
+        continue;
+      } else if (
+        (requirement.value === false && relation !== 'must_not_have') ||
+        (requirement.value === true && relation === 'must_not_have')
+      ) {
+        addBlocker(requirement, 'autostart_requirement_relation_mismatch');
       } else if (
         generatorAutoStartRequirement !== undefined &&
         generatorAutoStartRequirement !== requirement.value
@@ -697,6 +725,17 @@ function structuredGeneratorAutoStartRequirement(intent: AgentIntentContract) {
       !generatorAutoStartRequirementKinds.has(requirement.kind)
     ) continue;
     if (requirement.unit !== null || typeof requirement.value !== 'boolean') return 'invalid' as const;
+    if (
+      requirement.value === false &&
+      (requirement.relation === undefined ||
+        requirement.relation === 'not_required' ||
+        requirement.relation === 'preferred' ||
+        requirement.relation === 'context')
+    ) continue;
+    if (
+      (requirement.value === false && requirement.relation !== 'must_not_have') ||
+      (requirement.value === true && requirement.relation === 'must_not_have')
+    ) return 'invalid' as const;
     if (resolved !== undefined && resolved !== requirement.value) return 'invalid' as const;
     resolved = requirement.value;
   }
@@ -719,6 +758,20 @@ export function productMeetsSupportedStrictAutoStartRequirement(
 
 function structuredBudgetMax(intent: AgentIntentContract) {
   return structuredRequirementNumber(intent, ['budget_max_rub', 'price_max_rub']);
+}
+
+function structuredCompromiseProductIds(toolResults: ToolResult[]) {
+  const ids = new Set<string>();
+  for (const result of toolResults) {
+    if (result.tool !== 'catalog.search' || result.status !== 'ok') continue;
+    const retrieval = (result.payload as {
+      retrieval?: { candidateTiers?: Array<{ productId?: unknown; tier?: unknown }> };
+    }).retrieval;
+    for (const candidate of retrieval?.candidateTiers ?? []) {
+      if (candidate.tier === 'compromise' && typeof candidate.productId === 'string') ids.add(candidate.productId);
+    }
+  }
+  return ids;
 }
 
 function structuredGeneratorPowerRequirement(intent: AgentIntentContract): GeneratorPowerCardRequirement | undefined {
@@ -1407,6 +1460,11 @@ export function selectProductsForVisibleCards(input: {
   const structuredSelection = Boolean(
     input.intent.selectionPolicy && input.selectedProductIds !== undefined
   );
+  const compromiseProductIds = structuredSelection
+    ? structuredCompromiseProductIds(input.toolResults ?? [])
+    : new Set<string>();
+  const structuredCompromisesAllowed = input.intent.selectionPolicy?.alternativePolicy === 'allow_adjacent_with_explanation' ||
+    input.intent.selectionPolicy?.alternativePolicy === 'open_to_alternatives';
   if (!hasExplicitCardTool) {
     return {
       semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
@@ -1563,8 +1621,11 @@ export function selectProductsForVisibleCards(input: {
     } else {
       generatorPowerFilteredCount = selected.length;
       if (structuredSelection) {
-        selected = [];
-        generatorPowerNoFit = true;
+        const allowedCompromises = structuredCompromisesAllowed
+          ? selected.filter((product) => compromiseProductIds.has(product.id))
+          : [];
+        selected = allowedCompromises;
+        generatorPowerNoFit = allowedCompromises.length === 0;
       } else {
         const fallbackPowerMatches = sourceConstrainedGeneratorPool.filter((product) =>
           productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement)
@@ -1638,9 +1699,12 @@ export function selectProductsForVisibleCards(input: {
       selected = withinBudget;
     } else {
       if (structuredSelection) {
-        budgetFilteredCount = selected.length;
-        budgetNoFit = true;
-        selected = [];
+        const allowedCompromises = structuredCompromisesAllowed
+          ? selected.filter((product) => compromiseProductIds.has(product.id))
+          : [];
+        budgetFilteredCount = selected.length - allowedCompromises.length;
+        budgetNoFit = allowedCompromises.length === 0;
+        selected = allowedCompromises;
       } else {
       const fallbackWithinBudget = sameIntentPool.filter((product) =>
         typeof product.price === 'number' &&
@@ -1714,9 +1778,14 @@ export function selectProductsForVisibleCards(input: {
       selected = selectedAfterNumericFit;
     } else {
       if (structuredSelection) {
-        numericFitFilteredCount = selected.length;
-        plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
-        selected = [];
+        const allowedCompromises = structuredCompromisesAllowed
+          ? selected.filter((product) => compromiseProductIds.has(product.id))
+          : [];
+        numericFitFilteredCount = selected.length - allowedCompromises.length;
+        plateTaskWarnings = allowedCompromises.length
+          ? ['product_cards_compromise:structured_weight_outside_requested_range']
+          : ['product_cards_suppressed:structured_weight_no_fit'];
+        selected = allowedCompromises;
       } else {
       const fallbackWithinRange = productsWithinPlateWeightRange(sameIntentPool, plateWeightRange)
         .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
@@ -1794,6 +1863,7 @@ export function selectProductsForVisibleCards(input: {
   const droppedProductIds = unique
     .filter((product) => !selectedIds.has(product.id))
     .map((product) => product.id);
+  const visibleCompromiseCount = selectedProducts.filter((product) => compromiseProductIds.has(product.id)).length;
   const warnings = [
     ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
     ...(structuredSuppressedCount > 0
@@ -1813,6 +1883,7 @@ export function selectProductsForVisibleCards(input: {
     ...(generatorPhaseNoFit ? ['product_cards_suppressed:generator_phase_no_fit'] : []),
     ...(generatorAutoStartFilteredCount > 0 ? [`product_cards_filtered_by_generator_autostart:${generatorAutoStartFilteredCount}`] : []),
     ...(generatorAutoStartNoFit ? ['product_cards_suppressed:generator_autostart_no_fit'] : []),
+    ...(visibleCompromiseCount > 0 ? [`product_cards_compromise:${visibleCompromiseCount}`] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
     ...(diamondMaterialFilteredCount > 0 ? [`product_cards_filtered_by_diamond_material:${diamondMaterialFilteredCount}`] : []),
@@ -1866,6 +1937,7 @@ export function assessVisibleCardReadiness(input: {
   answer: AnswerContract;
   toolResults?: ToolResult[];
   userMessage?: string;
+  intent?: AgentIntentContract;
 }): VisibleCardReadiness {
   const productClass = input.cardSelection.intent;
   if (
@@ -1882,7 +1954,13 @@ export function assessVisibleCardReadiness(input: {
       decision: input.answer.selectionReadiness
     };
   }
-  if (isGeneratorProductClass(productClass) && hasUnconfirmedGeneratorLoadBasisResult(input.toolResults ?? [])) {
+  const selectionGoal = input.intent?.selectionPolicy?.selectionGoal ?? 'final_fit';
+  const generatorLoadBlocksCards = selectionGoal === 'browse_catalog'
+    ? false
+    : selectionGoal === 'preliminary_fit'
+      ? hasGeneratorLoadBasisThatBlocksPreliminaryFit(input.toolResults ?? [])
+      : hasUnconfirmedGeneratorLoadBasisResult(input.toolResults ?? []);
+  if (isGeneratorProductClass(productClass) && generatorLoadBlocksCards) {
     return {
       status: 'blocked_by_tool_safety',
       productClass,

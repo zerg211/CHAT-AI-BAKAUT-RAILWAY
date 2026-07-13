@@ -1565,6 +1565,79 @@ describe('AgentManagerOrchestrator', () => {
     }));
   });
 
+  it('honors catalog.getProductDetails productIds without replacing them with a text search', async () => {
+    const exact = product('catalog-id-1', 'TSS SGG 5000A generator');
+    class IdProducts extends FakeProducts {
+      idsSeen: string[] = [];
+      searchCalls = 0;
+      async getProductsByIds(ids: string[]) {
+        this.idsSeen = ids;
+        return ids.includes(exact.id) ? [exact] : [];
+      }
+      override async searchProducts(): Promise<Product[]> {
+        this.searchCalls += 1;
+        throw new Error('text search must not replace exact product ids');
+      }
+    }
+    const products = new IdProducts();
+    const intent = structuredGeneratorCatalogIntent();
+    intent.requiresTools = true;
+    intent.toolRequests = [{
+      id: 'details-by-id',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productIds: [exact.id],
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator'
+      },
+      rationale: 'rehydrate the exact validated catalog product',
+      required: true
+    }];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'browse_catalog',
+      alternativePolicy: 'same_class_only',
+      maxCards: 1
+    };
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((product) => product.id)).toEqual([exact.id]);
+          return {
+            answerText: 'TSS SGG 5000A generator остаётся доступной карточкой для сравнения.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['details-by-id'],
+            selectedProductIds: [exact.id],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'Exact catalog id was rehydrated.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Покажите снова выбранный TSS SGG 5000A.'
+    });
+
+    expect(products.idsSeen).toEqual([exact.id]);
+    expect(products.searchCalls).toBe(0);
+    expect(payload.productCards.map((card) => card.id)).toEqual([exact.id]);
+  });
+
   it('replaces factual text that cites a failed tool instead of only dropping its citation', async () => {
     class FailedCatalogProducts extends FakeProducts {
       async searchProducts(): Promise<Product[]> {
@@ -2258,10 +2331,10 @@ describe('AgentManagerOrchestrator', () => {
         };
       },
       async composeAnswer(input) {
-        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_unconfirmed_load_no_numeric_selection');
+        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_unconfirmed_load_stage_aware_selection');
         expect(input.requiredResponseClauses?.[0]?.sourceRequestId).toBe('generator-load');
         expect(input.requiredResponseClauses?.[0]?.instruction).toContain('rough or partial orientation');
-        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('product cards and prices blocked');
+        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('Product cards and prices may still be shown');
         return {
           answerText: 'I should not show generator cards yet because the pump type/model or power is missing.',
           factsUsed: [],
@@ -3115,6 +3188,7 @@ describe('AgentManagerOrchestrator', () => {
               kind: 'autostart_required',
               value: false,
               unit: null,
+              relation: 'must_not_have',
               role: 'hard_constraint',
               strictness: 'strict',
               evidence: 'automatic start is not needed',
@@ -3193,6 +3267,7 @@ describe('AgentManagerOrchestrator', () => {
       kind: 'autostart_required',
       value: false,
       unit: null,
+      relation: 'must_not_have',
       role: 'hard_constraint',
       strictness: 'strict',
       evidence: 'the requested candidate must be explicitly without autostart',
@@ -3203,7 +3278,15 @@ describe('AgentManagerOrchestrator', () => {
       expect(input.toolResults[0]).toMatchObject({
         requestId: 'catalog-search',
         status: 'ok',
-        payload: { productIds: ['raw-auto-unknown', 'raw-auto-conflict'] }
+        payload: {
+          productIds: [],
+          retrieval: {
+            candidateTiers: expect.arrayContaining([
+              expect.objectContaining({ productId: 'raw-auto-unknown', tier: 'rejected' }),
+              expect.objectContaining({ productId: 'raw-auto-conflict', tier: 'rejected' })
+            ])
+          }
+        }
       });
       return {
         answerText: 'I found catalog rows, but none has a reliable no-autostart fact, so I will not show misleading cards. The useful next step is to verify that exact specification for the current candidates.',
@@ -3227,7 +3310,7 @@ describe('AgentManagerOrchestrator', () => {
       expect(input.toolResults[0]).toMatchObject({
         requestId: 'catalog-search',
         status: 'ok',
-        payload: { productIds: ['raw-auto-unknown', 'raw-auto-conflict'] }
+        payload: { productIds: [] }
       });
       expect(input.answer.answerText).not.toContain('TSS SGG 6000U');
       expect(input.answer.answerText).not.toContain('TSS SGG 6000C');
@@ -3379,7 +3462,7 @@ describe('AgentManagerOrchestrator', () => {
       cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
     };
     expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(7);
-    expect(metadata.toolResults?.[1]?.status).toBe('not_found');
+    expect(metadata.toolResults?.[1]?.status).toBe('ok');
     expect(metadata.toolResults?.[1]?.payload?.productIds).toEqual([]);
     expect(metadata.toolResults?.[1]?.payload?.generatorLoadFit?.requiredNominalKw).toBe(7);
     expect(metadata.toolResults?.[1]?.payload?.generatorLoadFit?.droppedProductIds).toEqual(
@@ -3387,8 +3470,7 @@ describe('AgentManagerOrchestrator', () => {
     );
     expect(metadata.toolResults?.[1]?.warnings).toEqual(expect.arrayContaining([
       'catalog_products_filtered_by_generator_load:2',
-      'catalog_search_no_generator_load_fit',
-      'catalog_search_no_matches'
+      'catalog_search_no_generator_load_fit'
     ]));
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
     expect(payload.productCards).toEqual([]);
@@ -5870,9 +5952,11 @@ describe('AgentManagerOrchestrator', () => {
     });
   });
 
-  it('persists validated card ids and reuses only that current-need selection on a real second structured turn', async () => {
+  it('replays five turns without losing a validated product after noisy searches or an intervening technical answer', async () => {
     const secondTurnId = '77777777-7777-4777-8777-777777777777';
     const thirdTurnId = '88888888-8888-4888-8888-888888888888';
+    const fourthTurnId = '99999999-9999-4999-8999-999999999999';
+    const fifthTurnId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
     class TwoTurnConversations extends FakeConversations {
       currentSession = session();
       ledgerRows: Array<Record<string, unknown>> = [];
@@ -5933,7 +6017,12 @@ describe('AgentManagerOrchestrator', () => {
       }
     }
     class ReusableProducts extends FakeProducts {
+      searchCalls = 0;
       override async searchProducts() {
+        this.searchCalls += 1;
+        if (this.searchCalls > 1) {
+          return [product('new-but-unusable', 'Vibroplita unrelated search noise', 'vibroplity')];
+        }
         return [
           product('p1', 'TSS SGG 5000A generator'),
           product('p2', 'TSS SGG 6000B generator')
@@ -5957,6 +6046,7 @@ describe('AgentManagerOrchestrator', () => {
               summary: 'подбор генератора',
               constraints: [],
               openQuestions: [],
+              ...(turnNumber === 1 ? {} : { selectedProductIds: [] }),
               status: turnNumber === 1 ? 'open' : 'selected',
               activate: true
             },
@@ -5993,22 +6083,22 @@ describe('AgentManagerOrchestrator', () => {
         }
         return {
           ...intent,
-          requiresTools: false,
-          toolRequests: [],
+          requiresTools: true,
           grounding: {
             taskType: 'product_selection' as const,
-            sourcePolicy: 'conversation_only' as const,
+            sourcePolicy: 'catalog_required' as const,
             webPurpose: 'none' as const,
-            requiredToolKinds: [],
+            requiredToolKinds: ['catalog.search' as const],
             technicalAttributes: ['price', 'power'],
-            rationale: 'reuse the exact product card previously validated for this active need'
+            rationale: 'recheck the current catalog while preserving the validated active-need selection'
           },
           selectionPolicy: {
             ...intent.selectionPolicy!,
             needAction: 'resume' as const,
-            reusePreviousCards: true,
+            selectionGoal: 'preliminary_fit' as const,
+            reusePreviousCards: false,
             maxCards: 1,
-            rationale: 'resume the current generator need and only reuse its saved selection'
+            rationale: 'the new search must not erase a still-valid previous selection even if it returns noise'
           }
         };
       },
@@ -6024,7 +6114,7 @@ describe('AgentManagerOrchestrator', () => {
               activeNeeds: input.ledgerState.needsById
             })
           ).toEqual(['p1']);
-        } else {
+        } else if (turnNumber === 3) {
           expect(input.products).toEqual([]);
           return {
             answerText: 'По обслуживанию ориентируйтесь на регламент производителя; выбранный ранее вариант я сохраняю в контексте.',
@@ -6047,7 +6137,7 @@ describe('AgentManagerOrchestrator', () => {
           answerText: 'Возвращаемся к TSS SGG 5000A — это выбранный вариант.',
           factsUsed: [],
           questionsAsked: [],
-          toolResultIds: turnNumber === 1 ? ['catalog-search'] : [],
+          toolResultIds: turnNumber === 3 ? [] : ['catalog-search'],
           selectedProductIds: ['p1'],
           leadAction: 'none',
           riskFlags: [],
@@ -6096,7 +6186,12 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: secondUser.content
     });
 
-    expect(second.productCards.map((card) => card.id)).toEqual(['p1']);
+    expect(second.productCards.map((card) => card.id), JSON.stringify({
+      cardSelection: second.metadata?.cardSelection,
+      selectionReadiness: second.metadata?.selectionReadiness,
+      answerProductEvidence: second.metadata?.answerProductEvidence,
+      toolResults: second.metadata?.toolResults
+    })).toEqual(['p1']);
     expect(second.productCards.map((card) => card.id)).not.toContain('p2');
     expect((second.metadata?.answerContract as { selectedProductIds?: string[] })?.selectedProductIds).toEqual(['p1']);
     expect((second.metadata?.cardSelection as { warnings?: string[] })?.warnings)
@@ -6118,6 +6213,41 @@ describe('AgentManagerOrchestrator', () => {
     });
 
     expect(third.productCards).toEqual([]);
+    expect(conversations.currentSession.needState.activeNeeds.find((need) => need.id === 'generator')?.selectedProductIds)
+      .toEqual(['p1']);
+
+    const fourthUser = { ...message('Покажите ближайший вариант ещё раз.'), id: 'fourth-user-message' };
+    conversations.messages.push(fourthUser);
+    conversations.turn = {
+      ...turn(),
+      id: fourthTurnId,
+      userMessageId: fourthUser.id,
+      assistantMessageId: null,
+      status: 'received'
+    };
+    const fourth = await orchestrator.generateAnswer({
+      sessionId,
+      turnId: fourthTurnId,
+      userMessage: fourthUser.content
+    });
+    expect(fourth.productCards.map((card) => card.id)).toEqual(['p1']);
+
+    const fifthUser = { ...message('Подтвердите: ранее показанный TSS SGG 5000A всё ещё считается кандидатом?'), id: 'fifth-user-message' };
+    conversations.messages.push(fifthUser);
+    conversations.turn = {
+      ...turn(),
+      id: fifthTurnId,
+      userMessageId: fifthUser.id,
+      assistantMessageId: null,
+      status: 'received'
+    };
+    const fifth = await orchestrator.generateAnswer({
+      sessionId,
+      turnId: fifthTurnId,
+      userMessage: fifthUser.content
+    });
+    expect(fifth.answer).toContain('TSS SGG 5000A');
+    expect(fifth.productCards.map((card) => card.id)).toEqual(['p1']);
     expect(conversations.currentSession.needState.activeNeeds.find((need) => need.id === 'generator')?.selectedProductIds)
       .toEqual(['p1']);
   });
@@ -6222,6 +6352,246 @@ describe('AgentManagerOrchestrator', () => {
     } finally {
       dateNow.mockRestore();
     }
+  });
+
+  it('recovers exact 5.5-6.0 kW single-phase catalog matches beyond the noisy first retrieval window', async () => {
+    class RangeRecoveryProducts extends FakeProducts {
+      calls: Array<{ query: string; limit: number }> = [];
+
+      override async searchProducts(query = '', limit = 8) {
+        this.calls.push({ query, limit });
+        if (this.calls.length === 1) {
+          return [
+            {
+              ...generatorProductWithPower('oversized-noise', 'Generator Noise 8.0 kW', 8),
+              specs: { 'Nominal power': '8 kW', voltage: '220 V single phase' }
+            },
+            product('plate-noise', 'Vibroplita noise', 'vibroplity')
+          ];
+        }
+        return [{
+          ...generatorProductWithPower('range-55', 'A-iPower AP6000 5.5 kW generator', 5.5),
+          price: 49990,
+          specs: { 'Nominal power': '5.5 kW', voltage: '230 V single phase', Autostart: 'yes' }
+        }, {
+          ...generatorProductWithPower('range-60', 'ENERGO ED6500KL 6.0 kW generator', 6),
+          price: 69990,
+          specs: { 'Nominal power': '6 kW', voltage: '220 V single phase', Autostart: 'no' }
+        }, {
+          ...generatorProductWithPower('range-60-three-phase', 'Three phase 6.0 kW generator', 6),
+          specs: { 'Nominal power': '6 kW', voltage: '380 V three phase' }
+        }];
+      }
+    }
+
+    const products = new RangeRecoveryProducts();
+    const conversations = new FakeConversations();
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'browse_catalog',
+      alternativePolicy: 'same_class_only',
+      phase: 'single_phase',
+      maxCards: 3,
+      requirements: [{
+        id: 'range-min',
+        kind: 'nominal_power_min_kw',
+        value: 5.5,
+        unit: 'kW',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'buyer requested from 5.5 kW',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'range-max',
+        kind: 'nominal_power_max_kw',
+        value: 6,
+        unit: 'kW',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'buyer requested up to 6.0 kW',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'autostart-optional',
+        kind: 'autostart_required',
+        value: false,
+        unit: null,
+        relation: 'not_required',
+        role: 'preference',
+        strictness: 'informational',
+        evidence: 'automatic start is not needed',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        query: 'home generator around six kilowatts',
+        semanticQuery: 'single-phase generator 5.5 to 6.0 kW with prices',
+        phase: 'single_phase',
+        limit: 3
+      },
+      coversRequirementIds: ['range-min', 'range-max']
+    };
+
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((product) => product.id)).toEqual(['range-55', 'range-60']);
+          return {
+            answerText: 'Предварительно есть A-iPower AP6000 5.5 kW generator за 49 990 ₽ и ENERGO ED6500KL 6.0 kW generator за 69 990 ₽.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['catalog-search'],
+            selectedProductIds: ['range-55', 'range-60'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: ['final load compatibility is not confirmed in browse mode'],
+              rationale: 'The buyer asked to browse a confirmed power and phase range.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show single-phase options from 5.5 to 6.0 kW; autostart is not needed.'
+    });
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ payload?: { retrieval?: { structuredRecovery?: { attempted?: boolean; matchedCount?: number } } } }>;
+    };
+
+    expect(products.calls).toHaveLength(2);
+    expect(products.calls[0]?.limit).toBeGreaterThanOrEqual(200);
+    expect(products.calls[1]?.limit).toBe(1000);
+    expect(payload.productCards.map((card) => card.id), JSON.stringify({
+      cardSelection: payload.metadata?.cardSelection,
+      selectionReadiness: payload.metadata?.selectionReadiness
+    })).toEqual(['range-55', 'range-60']);
+    expect(metadata.toolResults?.[0]?.payload?.retrieval?.structuredRecovery).toMatchObject({
+      attempted: true,
+      matchedCount: 2
+    });
+  });
+
+  it('returns one labelled nearest compromise after one bounded recovery when exact range is empty', async () => {
+    class CompromiseRecoveryProducts extends FakeProducts {
+      calls = 0;
+      override async searchProducts() {
+        this.calls += 1;
+        if (this.calls === 1) return [product('plate-noise', 'Unrelated plate', 'vibroplity')];
+        return [{
+          ...generatorProductWithPower('nearest-72', 'EVOline BPB9000E 7.2 kW generator', 7.2),
+          price: 149990,
+          specs: { 'Nominal power': '7.2 kW', voltage: '220 V single phase', Autostart: 'no' }
+        }];
+      }
+    }
+    const products = new CompromiseRecoveryProducts();
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'browse_catalog',
+      alternativePolicy: 'allow_adjacent_with_explanation',
+      phase: 'single_phase',
+      maxCards: 2,
+      requirements: [{
+        id: 'range-min',
+        kind: 'nominal_power_min_kw',
+        value: 5.5,
+        unit: 'kW',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'requested minimum',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'range-max',
+        kind: 'nominal_power_max_kw',
+        value: 6,
+        unit: 'kW',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'requested maximum',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        query: 'generator requested narrow range',
+        phase: 'single_phase',
+        limit: 2
+      },
+      coversRequirementIds: ['range-min', 'range-max']
+    };
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((product) => product.id)).toEqual(['nearest-72']);
+          expect(input.requiredResponseClauses).toEqual(expect.arrayContaining([
+            expect.objectContaining({ code: 'catalog_compromise_candidates_must_be_labeled' })
+          ]));
+          return {
+            answerText: 'Точного варианта в диапазоне не подтвердил. Ближайший компромисс — EVOline BPB9000E 7.2 kW generator за 149 990 ₽: номинальная мощность выше верхней границы 6 кВт.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['catalog-search'],
+            selectedProductIds: ['nearest-72'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'The buyer allowed an adjacent option and the tradeoff is explicit.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'If there is no exact 5.5-6.0 kW model, show the nearest single-phase option.'
+    });
+    const metadata = payload.metadata as {
+      answerProductEvidence?: { candidateTiers?: Array<{ productId?: string; tier?: string; tradeoffs?: string[] }> };
+      cardSelection?: { warnings?: string[] };
+    };
+
+    expect(products.calls).toBe(2);
+    expect(payload.productCards.map((card) => card.id)).toEqual(['nearest-72']);
+    expect(metadata.answerProductEvidence?.candidateTiers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        productId: 'nearest-72',
+        tier: 'compromise',
+        tradeoffs: ['nominal_power_above_max:6:actual:7.2']
+      })
+    ]));
+    expect(metadata.cardSelection?.warnings).toContain('product_cards_compromise:1');
   });
 
   it('recovers a committed final contract when wall abort interrupts post-commit delivery', async () => {

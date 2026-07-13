@@ -40,7 +40,18 @@ const retrievalResult = z.object({
   embeddingQuery: z.string(),
   textCount: z.number().int().nonnegative(),
   vectorCount: z.number().int().nonnegative(),
-  usedEmbeddings: z.boolean()
+  usedEmbeddings: z.boolean(),
+  candidateTiers: z.array(z.object({
+    productId: nonEmpty,
+    tier: z.enum(['exact_match', 'preliminary_match', 'compromise', 'rejected']),
+    tradeoffs: z.array(z.string())
+  }).strict()).max(12).optional(),
+  structuredRecovery: z.object({
+    attempted: z.boolean(),
+    query: z.string(),
+    scannedCount: z.number().int().nonnegative(),
+    matchedCount: z.number().int().nonnegative()
+  }).strict().nullable().optional()
 }).strict();
 
 const catalogSearchResult = z.object({

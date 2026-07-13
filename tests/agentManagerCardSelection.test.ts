@@ -1657,13 +1657,14 @@ describe('AgentManager visible card readiness', () => {
     ]);
   });
 
-  it('keeps only products with explicit no-autostart facts for a strict false requirement', () => {
+  it('keeps only products with explicit no-autostart facts for an explicit must-not-have requirement', () => {
     const intent = structuredSelectionIntent({
       requirements: [{
         id: 'no-autostart',
         kind: 'autostart_required',
         value: false,
         unit: null,
+        relation: 'must_not_have',
         role: 'hard_constraint',
         strictness: 'strict',
         evidence: 'the buyer does not need automatic start',
@@ -1718,6 +1719,43 @@ describe('AgentManager visible card readiness', () => {
       needState: needStateWithBudget()
     });
     expect(selectionWithoutExplicitIds.selectedProductIds).toEqual([withoutAutoStart.id]);
+  });
+
+  it('does not exclude products with autostart when the feature is merely not required', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'autostart-optional',
+        kind: 'autostart_required',
+        value: false,
+        unit: null,
+        relation: 'not_required',
+        role: 'preference',
+        strictness: 'informational',
+        evidence: 'the buyer says automatic start is not needed',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    const products = [{
+      ...generatorWithPower('with-autostart', '6'),
+      name: 'TSS SGG 6000ATS generator',
+      specs: { 'Nominal power': '6 kW', Autostart: 'yes' }
+    }, {
+      ...generatorWithPower('without-autostart', '6'),
+      name: 'TSS SGG 6000NA generator',
+      specs: { 'Nominal power': '6 kW', Autostart: 'no' }
+    }];
+
+    const selection = selectProductsForVisibleCards({
+      products,
+      userMessage: 'Automatic start is not needed.',
+      history: [],
+      intent,
+      answerText: products.map((product) => product.name).join(', '),
+      selectedProductIds: products.map((product) => product.id),
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual(products.map((product) => product.id));
   });
 
   it('supports the auto_start_required alias in the true direction', () => {
@@ -1780,6 +1818,7 @@ describe('AgentManager visible card readiness', () => {
         kind: 'auto_start_required',
         value: false,
         unit: 'bool',
+        relation: 'must_not_have',
         role: 'hard_constraint',
         strictness: 'strict',
         evidence: 'the typed boolean constraint must not carry a unit',
@@ -1796,6 +1835,7 @@ describe('AgentManager visible card readiness', () => {
         kind: 'autostart_required',
         value: false,
         unit: null,
+        relation: 'must_not_have',
         role: 'hard_constraint',
         strictness: 'strict',
         evidence: 'autostart requirement cannot be applied to an unrelated product class',
@@ -1812,6 +1852,7 @@ describe('AgentManager visible card readiness', () => {
         kind: 'auto_start_required',
         value: true,
         unit: null,
+        relation: 'must_have',
         role: 'hard_constraint',
         strictness: 'strict',
         evidence: 'first strict requirement',
@@ -1821,6 +1862,7 @@ describe('AgentManager visible card readiness', () => {
         kind: 'autostart_required',
         value: false,
         unit: null,
+        relation: 'must_not_have',
         role: 'hard_constraint',
         strictness: 'strict',
         evidence: 'contradictory strict requirement',
@@ -1891,7 +1933,7 @@ describe('AgentManager visible card readiness', () => {
         ...generatorLoadResult(),
         warnings: ['generator_load_bounded_basis_incomplete']
       }],
-      reason: 'generator_load_result_not_selection_safe'
+      reason: 'generator_load_result_not_final_fit_safe'
     }
   ])('fails closed for a typed-tool strict requirement with $name', ({ mutate, reason }) => {
     const intent = generatorLoadDerivedConstraintIntent();
@@ -1899,6 +1941,75 @@ describe('AgentManager visible card readiness', () => {
     expect(assessment.blockers).toEqual([
       expect.objectContaining({ id: 'simultaneous-loads', reason })
     ]);
+  });
+
+  it('uses an incomplete bounded calculation for preliminary orientation but not final fit', () => {
+    const preliminary = generatorLoadDerivedConstraintIntent();
+    preliminary.selectionPolicy!.selectionGoal = 'preliminary_fit';
+    const boundedIncompleteResult = {
+      ...generatorLoadResult(),
+      warnings: ['generator_load_bounded_basis_incomplete']
+    };
+
+    expect(assessStrictSelectionRequirements(preliminary, 'generator', [boundedIncompleteResult])).toEqual({
+      blockers: [],
+      generatorNominalPowerMinKw: 5.5
+    });
+
+    const finalFit = generatorLoadDerivedConstraintIntent();
+    finalFit.selectionPolicy!.selectionGoal = 'final_fit';
+    expect(assessStrictSelectionRequirements(finalFit, 'generator', [boundedIncompleteResult]).blockers).toEqual([
+      expect.objectContaining({ reason: 'generator_load_result_not_final_fit_safe' })
+    ]);
+  });
+
+  it('does not let an unbounded load warning close explicit catalog browsing', () => {
+    const intent = structuredSelectionIntent();
+    intent.selectionPolicy!.selectionGoal = 'browse_catalog';
+    const cardSelection = {
+      semanticAuthority: 'llm_contract' as const,
+      intent: 'generator' as const,
+      products: [generatorWithPower('browse-generator', '6')],
+      selectedProductIds: ['browse-generator'],
+      answerMentionedProductIds: ['browse-generator'],
+      droppedProductIds: [],
+      warnings: []
+    };
+    const answer: AnswerContract = {
+      answerText: 'Here is a catalog option in the requested power range; load compatibility is not confirmed yet.',
+      factsUsed: [],
+      questionsAsked: [],
+      toolResultIds: ['load-calculation'],
+      selectedProductIds: ['browse-generator'],
+      leadAction: 'none',
+      riskFlags: [],
+      selectionReadiness: {
+        productClass: 'generator',
+        status: 'ready_for_preliminary_cards',
+        canShowProductCards: true,
+        missingFacts: ['exact load basis'],
+        rationale: 'Catalog browsing does not claim final compatibility.'
+      }
+    };
+    const unsafeLoadResult = {
+      ...generatorLoadResult(),
+      warnings: ['generator_load_unbounded_guess']
+    };
+
+    expect(assessVisibleCardReadiness({
+      cardSelection,
+      answer,
+      toolResults: [unsafeLoadResult],
+      intent
+    }).status).toBe('ready_for_cards');
+
+    intent.selectionPolicy!.selectionGoal = 'preliminary_fit';
+    expect(assessVisibleCardReadiness({
+      cardSelection,
+      answer,
+      toolResults: [unsafeLoadResult],
+      intent
+    }).status).toBe('blocked_by_tool_safety');
   });
 
   it('does not use a generator-load proof for a different product class', () => {

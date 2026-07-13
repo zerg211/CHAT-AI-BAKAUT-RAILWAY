@@ -306,4 +306,79 @@ describe('dialogue ledger reducer', () => {
     expect(rehydrated.needsById).toEqual(full.needsById);
     expect(deriveNeedStateSnapshotFromLedger(rehydrated).selectionState.currentProductClass).toBe('generator');
   });
+
+  it('does not let an empty LLM selection erase system-validated product ids', () => {
+    const state = reduceDialogueLedger([
+      event({
+        eventId: 'validated-selection',
+        eventType: 'need.opened',
+        scope: 'need',
+        source: 'system_reducer',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'Generator selection',
+          selectedProductIds: ['validated-generator'],
+          rejectedProductIds: [],
+          status: 'selected',
+          activate: true
+        }
+      }),
+      event({
+        eventId: 'llm-empty-update',
+        eventType: 'need.updated',
+        scope: 'need',
+        source: 'llm_state_delta',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'Continue selection',
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          status: 'open',
+          activate: true
+        }
+      })
+    ]);
+
+    expect(state.needsById.generator?.selectedProductIds).toEqual(['validated-generator']);
+  });
+
+  it('removes a validated product when the LLM records an explicit buyer rejection', () => {
+    const state = reduceDialogueLedger([
+      event({
+        eventId: 'validated-selection',
+        eventType: 'need.opened',
+        scope: 'need',
+        source: 'system_reducer',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'Generator selection',
+          selectedProductIds: ['rejected-generator', 'still-valid-generator'],
+          rejectedProductIds: [],
+          status: 'selected',
+          activate: true
+        }
+      }),
+      event({
+        eventId: 'buyer-rejected-one',
+        eventType: 'need.updated',
+        scope: 'need',
+        source: 'llm_state_delta',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'Buyer rejected one option',
+          selectedProductIds: [],
+          rejectedProductIds: ['rejected-generator'],
+          status: 'open',
+          activate: true
+        }
+      })
+    ]);
+
+    expect(state.needsById.generator?.selectedProductIds).toEqual(['still-valid-generator']);
+    expect(state.needsById.generator?.rejectedProductIds).toEqual(['rejected-generator']);
+  });
 });

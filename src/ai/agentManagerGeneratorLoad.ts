@@ -233,10 +233,31 @@ function hasUnconfirmedGeneratorLoadBasisWarning(result: ToolResult) {
     result.warnings.includes('generator_load_invalid_load_kind');
 }
 
+function hasGeneratorLoadBasisWarningThatBlocksPreliminaryFit(result: ToolResult) {
+  return result.warnings.includes('generator_load_estimate_only') ||
+    result.warnings.includes('generator_load_unbounded_guess') ||
+    result.warnings.includes('generator_load_invalid_load_kind');
+}
+
 export function hasUnconfirmedGeneratorLoadBasisResult(results: ToolResult[]) {
   return results.some((result) =>
     result.tool === 'calculator.generatorLoad' &&
     (isEstimateOnlyGeneratorLoadResult(result) || hasUnconfirmedGeneratorLoadBasisWarning(result))
+  );
+}
+
+/**
+ * A vague/unbounded calculation cannot support a preliminary fit claim. This is
+ * intentionally narrower than hasUnconfirmedGeneratorLoadBasisResult: an
+ * incomplete bounded calculation may still accompany catalog browsing or a
+ * clearly labelled preliminary shortlist, while remaining insufficient for a
+ * final purchase-safe recommendation.
+ */
+export function hasGeneratorLoadBasisThatBlocksPreliminaryFit(results: ToolResult[]) {
+  return results.some((result) =>
+    result.tool === 'calculator.generatorLoad' &&
+    result.status === 'ok' &&
+    (isEstimateOnlyGeneratorLoadResult(result) || hasGeneratorLoadBasisWarningThatBlocksPreliminaryFit(result))
   );
 }
 

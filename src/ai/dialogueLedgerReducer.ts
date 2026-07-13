@@ -242,14 +242,21 @@ export function reduceDialogueLedger(
       const openQuestions = optionalStringListPayload(event.payload, 'openQuestions');
       const selectedProductIds = optionalStringListPayload(event.payload, 'selectedProductIds');
       const rejectedProductIds = optionalStringListPayload(event.payload, 'rejectedProductIds');
+      const effectiveRejectedProductIds = rejectedProductIds ?? previous?.rejectedProductIds ?? [];
+      const selectedProductIdsAfterLlmUpdate = event.eventType === 'need.updated' &&
+        event.source === 'llm_state_delta' &&
+        selectedProductIds?.length === 0 &&
+        (previous?.selectedProductIds.length ?? 0) > 0
+        ? previous!.selectedProductIds.filter((productId) => !effectiveRejectedProductIds.includes(productId))
+        : selectedProductIds;
       needsById[needId] = {
         needId,
         productClass: productClass(event.payload.productClass, previous?.productClass),
         summary: stringPayload(event.payload, 'summary') ?? previous?.summary ?? needId,
         constraints: constraints ?? previous?.constraints ?? [],
         openQuestions: openQuestions ?? previous?.openQuestions ?? [],
-        selectedProductIds: selectedProductIds ?? previous?.selectedProductIds ?? [],
-        rejectedProductIds: rejectedProductIds ?? previous?.rejectedProductIds ?? [],
+        selectedProductIds: selectedProductIdsAfterLlmUpdate ?? previous?.selectedProductIds ?? [],
+        rejectedProductIds: effectiveRejectedProductIds,
         status: needStatus(event.payload.status, activate ? 'open' : previous?.status ?? 'open'),
         eventId: event.eventId,
         updatedAt: event.createdAt

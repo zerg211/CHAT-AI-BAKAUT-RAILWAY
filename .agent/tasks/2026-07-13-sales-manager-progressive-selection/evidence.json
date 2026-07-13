@@ -1,0 +1,23 @@
+{
+  "taskId": "2026-07-13-sales-manager-progressive-selection",
+  "status": "IN_PROGRESS",
+  "frozenProductionSessionId": "1cac3ca2-472f-4488-b96d-ac920d1ed310",
+  "acceptanceCriteria": {
+    "AC1": { "status": "PASS", "evidence": ["typed requirement relation", "optional and must-not-have autostart regressions"] },
+    "AC2": { "status": "PASS", "evidence": ["selectionGoal contract", "stage-aware card readiness tests"] },
+    "AC3": { "status": "PASS_LOCAL", "evidence": ["browse stage is not blocked by unconfirmed load warning", "bounded preliminary selection regression"] },
+    "AC4": { "status": "PASS", "evidence": ["5.5-6.0 kW noisy-window recovery regression", "pre-filter retrieval pool expansion"] },
+    "AC5": { "status": "PASS", "evidence": ["five-turn noisy-search continuity replay", "historical/current pool merge"] },
+    "AC6": { "status": "PASS", "evidence": ["empty LLM selection preservation and explicit rejection reducer tests"] },
+    "AC7": { "status": "PASS", "evidence": ["one bounded 1000-row recovery regression", "no retry loop"] },
+    "AC8": { "status": "PASS_LOCAL", "evidence": ["nearest compromise regression and required response clause"] },
+    "AC9": { "status": "PASS", "evidence": ["candidate tier schema, metadata, tradeoff and card warnings"] },
+    "AC10": { "status": "PASS_LOCAL", "evidence": ["five-turn continuity replay", "failed-search answer preservation"] },
+    "AC11": { "status": "PASS", "evidence": ["focused regression suite"] },
+    "AC12": { "status": "PASS", "evidence": ["npm run lint:no-regex"] },
+    "AC13": { "status": "PASS", "evidence": ["final-code npm run verify: 105 files / 965 tests, 251 agentic eval tests, typecheck, audit, regex guard, build"] },
+    "AC14": { "status": "PENDING", "evidence": [] },
+    "AC15": { "status": "PENDING", "evidence": [] },
+    "AC16": { "status": "PENDING", "evidence": [] }
+  }
+}
