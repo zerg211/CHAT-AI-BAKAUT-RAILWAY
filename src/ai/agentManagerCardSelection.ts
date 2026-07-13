@@ -513,15 +513,33 @@ function typedToolRequirementProof(input: {
     evidence: input.requirement.evidence
   });
   const request = input.intent.toolRequests.find((item) => item.id === verification.toolRequestId);
-  if (!request) return { blocker: blocker('typed_tool_request_missing') };
-  if (!request.required) return { blocker: blocker('typed_tool_request_not_required') };
-  if (request.tool !== verification.tool) return { blocker: blocker('typed_tool_request_tool_mismatch') };
-  if (!(request.coversRequirementIds ?? []).includes(input.requirement.id)) {
-    return { blocker: blocker('typed_tool_request_missing_requirement_coverage') };
+  const carriedEvidenceAllowed =
+    input.intent.selectionPolicy?.reusePreviousCards === true &&
+    input.intent.selectionPolicy?.selectionGoal === 'preliminary_fit' &&
+    verification.tool === 'calculator.generatorLoad' &&
+    verification.verifier === 'generator_load_profile' &&
+    verification.bindAs === 'nominal_power_min_kw' &&
+    (
+      input.requirement.kind === generatorLoadDerivedRequirementKind ||
+      generatorLoadDerivedMinimumRequirementKinds.has(input.requirement.kind)
+    );
+  let result: ToolResult | undefined;
+  if (!request) {
+    if (!carriedEvidenceAllowed) return { blocker: blocker('typed_tool_request_missing') };
+    result = [...input.toolResults].reverse().find((item) =>
+      item.tool === verification.tool && item.status === 'ok'
+    );
+    if (!result) return { blocker: blocker('typed_tool_carried_result_missing') };
+  } else {
+    if (!request.required) return { blocker: blocker('typed_tool_request_not_required') };
+    if (request.tool !== verification.tool) return { blocker: blocker('typed_tool_request_tool_mismatch') };
+    if (!(request.coversRequirementIds ?? []).includes(input.requirement.id)) {
+      return { blocker: blocker('typed_tool_request_missing_requirement_coverage') };
+    }
+    result = input.toolResults.find((item) => item.requestId === request.id);
+    if (!result) return { blocker: blocker('typed_tool_result_missing') };
+    if (result.tool !== request.tool) return { blocker: blocker('typed_tool_result_tool_mismatch') };
   }
-  const result = input.toolResults.find((item) => item.requestId === request.id);
-  if (!result) return { blocker: blocker('typed_tool_result_missing') };
-  if (result.tool !== request.tool) return { blocker: blocker('typed_tool_result_tool_mismatch') };
   if (result.status !== 'ok') return { blocker: blocker(`typed_tool_result_${result.status}`) };
 
   if (

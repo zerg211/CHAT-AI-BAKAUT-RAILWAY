@@ -12,7 +12,7 @@ import {
   type ToolRequest
 } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
-import { budgetMaxFromNeedState } from '../src/ai/agentManagerCardSelection.js';
+import { assessStrictSelectionRequirements, budgetMaxFromNeedState } from '../src/ai/agentManagerCardSelection.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 import { config } from '../src/config.js';
 import type { ConversationSession, ConversationTurn, Message, Product, ProductCard } from '../src/shared/types.js';
@@ -6592,6 +6592,386 @@ describe('AgentManagerOrchestrator', () => {
       })
     ]));
     expect(metadata.cardSelection?.warnings).toContain('product_cards_compromise:1');
+  });
+
+  it('does not stop at one oversized expensive generator when canonical recovery has closer adequate options', async () => {
+    class CommercialRecoveryProducts extends FakeProducts {
+      calls = 0;
+
+      override async searchProducts() {
+        this.calls += 1;
+        if (this.calls === 1) {
+          return [{
+            ...generatorProductWithPower('oversized-85', 'Dinking 8.5 kW generator', 8.5),
+            price: 170000,
+            specs: { 'Nominal power': '8.5 kW', voltage: '220 V single phase' }
+          }, {
+            ...generatorProductWithPower('weak-30', 'Weak 3.0 kW generator', 3),
+            price: 40000,
+            specs: { 'Nominal power': '3 kW', voltage: '220 V single phase' }
+          }];
+        }
+        return [{
+          ...generatorProductWithPower('close-55', 'A-iPower AP6000 5.5 kW generator', 5.5),
+          price: 99990,
+          specs: { 'Nominal power': '5.5 kW', voltage: '220 V single phase' }
+        }, {
+          ...generatorProductWithPower('close-60', 'EVOline PB7000 6.0 kW generator', 6),
+          price: 69990,
+          specs: { 'Nominal power': '6 kW', voltage: '220 V single phase' }
+        }, {
+          ...generatorProductWithPower('oversized-85', 'Dinking 8.5 kW generator', 8.5),
+          price: 170000,
+          specs: { 'Nominal power': '8.5 kW', voltage: '220 V single phase' }
+        }];
+      }
+    }
+
+    const intent = typedGeneratorProofIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      maxCards: 2,
+      phase: 'single_phase',
+      reusePreviousCards: false
+    };
+    intent.toolRequests[1] = {
+      ...intent.toolRequests[1]!,
+      args: {
+        ...intent.toolRequests[1]!.args,
+        query: 'single phase home backup generator',
+        semanticQuery: 'closest adequate generator after calculated load',
+        phase: 'single_phase',
+        limit: 2
+      }
+    };
+    const products = new CommercialRecoveryProducts();
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((product) => product.id)).toEqual(['close-55', 'close-60']);
+          expect(input.products.map((product) => product.price)).toEqual([99990, 69990]);
+          return {
+            answerText: 'Preliminary closest options are A-iPower AP6000 5.5 kW generator for 99,990 RUB and EVOline PB7000 6.0 kW generator for 69,990 RUB.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['load-calculation', 'catalog-search'],
+            selectedProductIds: ['close-55', 'close-60'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: ['final pump starting current'],
+              rationale: 'The calculated minimum supports a useful preliminary selection.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Pump and grinder can work together; show a preliminary single-phase generator without overpaying.'
+    });
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ tool?: string; payload?: { retrieval?: { structuredRecovery?: { attempted?: boolean; matchedCount?: number } } } }>;
+      answerProductEvidence?: { droppedProductIds?: string[] };
+    };
+    const catalogResult = metadata.toolResults?.find((result) => result.tool === 'catalog.search');
+
+    expect(products.calls).toBe(2);
+    expect(catalogResult?.payload?.retrieval?.structuredRecovery).toMatchObject({
+      attempted: true,
+      matchedCount: 2
+    });
+    expect(payload.productCards.map((card) => card.id), JSON.stringify({
+      cardSelection: payload.metadata?.cardSelection,
+      selectionReadiness: payload.metadata?.selectionReadiness,
+      answerProductEvidence: payload.metadata?.answerProductEvidence
+    })).toEqual(['close-55', 'close-60']);
+    expect(metadata.answerProductEvidence?.droppedProductIds).toContain('oversized-85');
+  });
+
+  it('keeps the validated load calculation and close generator options when the buyer asks what to buy without overpaying', async () => {
+    const secondTurnId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const thirdTurnId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    class TurnAwareCommercialConversations extends FakeConversations {
+      currentSession = session();
+      ledgerRows: Array<Record<string, unknown>> = [];
+      checkpointRows: Array<Record<string, unknown>> = [];
+      toolRows: Array<Record<string, unknown>> = [];
+
+      override async getSession() {
+        return this.currentSession;
+      }
+
+      async updateNeedState(_sessionId: string, needState: ConversationSession['needState']) {
+        this.currentSession = { ...this.currentSession, needState };
+        return this.currentSession;
+      }
+
+      override async listDialogueLedgerEvents() {
+        return this.ledgerRows;
+      }
+
+      override async upsertDialogueLedgerEvent(input: Record<string, unknown>) {
+        this.ledgerEvents.push(input);
+        const row = {
+          session_id: input.sessionId,
+          turn_id: input.turnId,
+          event_id: input.eventId,
+          event_type: input.eventType,
+          scope: input.scope,
+          payload: input.payload,
+          evidence: input.evidence,
+          source: input.source,
+          status: input.status,
+          event_seq: this.ledgerRows.length + 1
+        };
+        const existing = this.ledgerRows.findIndex((item) => item.event_id === input.eventId);
+        if (existing >= 0) this.ledgerRows[existing] = row;
+        else this.ledgerRows.push(row);
+        return input;
+      }
+
+      override async upsertTurnCheckpoint(input: Record<string, unknown>) {
+        this.checkpoints.push(input);
+        this.checkpointRows.push(input);
+        return input;
+      }
+
+      override async listTurnCheckpoints(_sessionId?: string, requestedTurnId?: string) {
+        return this.checkpointRows.filter((item) => item.turnId === requestedTurnId);
+      }
+
+      override async saveToolArtifact(input: Record<string, unknown>) {
+        this.toolArtifacts.push(input);
+        this.toolRows.push(input);
+        return input;
+      }
+
+      override async listToolArtifacts(_sessionId?: string, requestedTurnId?: string) {
+        return this.toolRows.filter((item) => item.turnId === requestedTurnId);
+      }
+    }
+
+    class CloseGeneratorProducts extends FakeProducts {
+      override async searchProducts() {
+        return [{
+          ...generatorProductWithPower('close-55', 'A-iPower AP6000 5.5 kW generator', 5.5),
+          price: 99990,
+          specs: { 'Nominal power': '5.5 kW', voltage: '220 V single phase' }
+        }, {
+          ...generatorProductWithPower('close-60', 'EVOline PB7000 6.0 kW generator', 6),
+          price: 69990,
+          specs: { 'Nominal power': '6 kW', voltage: '220 V single phase' }
+        }];
+      }
+    }
+
+    const firstIntent = typedGeneratorProofIntent();
+    firstIntent.selectionPolicy = {
+      ...firstIntent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      maxCards: 2,
+      phase: 'single_phase',
+      reusePreviousCards: false
+    };
+    const secondIntent = structuredClone(firstIntent);
+    secondIntent.requiresTools = false;
+    secondIntent.toolRequests = [];
+    secondIntent.userMessageSummary = 'buyer asks which validated generator to buy without overpaying';
+    secondIntent.dialogueUnderstanding = 'compare the previously validated close options against the saved load calculation';
+    secondIntent.nextStepRationale = 'give a concrete preliminary commercial orientation from current conversation evidence';
+    secondIntent.grounding = {
+      taskType: 'comparison',
+      sourcePolicy: 'conversation_only',
+      webPurpose: 'none',
+      requiredToolKinds: [],
+      technicalAttributes: ['price', 'power'],
+      rationale: 'the previous turn already validated the same products and load calculation'
+    };
+    secondIntent.productMentions = [{
+      name: 'A-iPower AP6000 5.5 kW generator',
+      role: 'comparison_subject',
+      productClass: 'generator',
+      evidence: 'previous visible card'
+    }, {
+      name: 'EVOline PB7000 6.0 kW generator',
+      role: 'comparison_subject',
+      productClass: 'generator',
+      evidence: 'previous visible card'
+    }];
+    secondIntent.selectionPolicy = {
+      ...secondIntent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      reusePreviousCards: true,
+      maxCards: 2
+    };
+    secondIntent.selectionPolicy!.requirements = secondIntent.selectionPolicy!.requirements.map((requirement) => ({
+      ...requirement,
+      verification: requirement.verification?.mode === 'typed_tool'
+        ? { ...requirement.verification, toolRequestId: 'carried-load-context' }
+        : requirement.verification
+    }));
+    const changedLoadIntent = structuredClone(secondIntent);
+    changedLoadIntent.userMessageSummary = 'buyer changes the generator load facts';
+    changedLoadIntent.dialogueUnderstanding = 'the previous generator calculation is stale after the changed pump power';
+    changedLoadIntent.nextStepRationale = 'do not reuse the old load proof or show cards as validated';
+    changedLoadIntent.selectionPolicy!.requirements = changedLoadIntent.selectionPolicy!.requirements.map((requirement) => ({
+      ...requirement,
+      evidence: 'the pump is now 3 kW and the grinder is 1.5 kW'
+    }));
+
+    const conversations = new TurnAwareCommercialConversations();
+    conversations.messages = [message('Pump 1.1 kW and grinder 1.5 kW may run together; show close single-phase generators.')];
+    let turnNumber = 0;
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new CloseGeneratorProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() {
+          turnNumber += 1;
+          if (turnNumber === 1) return firstIntent;
+          if (turnNumber === 2) return secondIntent;
+          return changedLoadIntent;
+        },
+        async composeAnswer(input) {
+          if (turnNumber === 3) {
+            expect(input.products).toEqual([]);
+            expect(input.toolResults.map((result) => result.tool)).not.toContain('calculator.generatorLoad');
+            return {
+              answerText: 'The load has changed, so I need to recalculate before treating either previous generator as a validated fit.',
+              factsUsed: [],
+              questionsAsked: [],
+              toolResultIds: [],
+              selectedProductIds: [],
+              leadAction: 'none',
+              riskFlags: [],
+              selectionReadiness: {
+                productClass: 'generator',
+                status: 'needs_more_info',
+                canShowProductCards: false,
+                missingFacts: ['updated generator load calculation'],
+                rationale: 'The previous calculation does not prove the changed load.'
+              }
+            };
+          }
+          expect(input.products.map((product) => product.id), JSON.stringify({
+            turnNumber,
+            intent: input.intent,
+            toolResults: input.toolResults.map((result) => ({ requestId: result.requestId, tool: result.tool, status: result.status }))
+          })).toEqual(['close-55', 'close-60']);
+          if (turnNumber === 2) {
+            expect(input.toolResults.map((result) => result.requestId)).toEqual(expect.arrayContaining([
+              'load-calculation',
+              'catalog-search'
+            ]));
+            expect(input.requiredResponseClauses?.map((clause) => clause.code))
+              .toContain('revalidated_historical_products_are_current_evidence');
+          }
+          return {
+            answerText: turnNumber === 1
+              ? 'Closest preliminary options are A-iPower AP6000 5.5 kW generator and EVOline PB7000 6.0 kW generator.'
+              : 'Compared with A-iPower AP6000 5.5 kW generator, I would start with EVOline PB7000 6.0 kW generator without overpaying: it is cheaper and keeps the required reserve.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['load-calculation', 'catalog-search'],
+            selectedProductIds: ['close-55', 'close-60'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: ['final pump starting current'],
+              rationale: 'Previously validated products and calculation support a preliminary comparison.'
+            }
+          };
+        }
+      })
+    );
+
+    const first = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+    expect(first.productCards.map((card) => card.id)).toEqual(['close-55', 'close-60']);
+    expect(assessStrictSelectionRequirements(
+      secondIntent,
+      'generator',
+      (first.metadata as { toolResults?: Parameters<typeof assessStrictSelectionRequirements>[2] }).toolResults ?? []
+    )).toEqual({ blockers: [], generatorNominalPowerMinKw: 5.5 });
+
+    const secondUser = {
+      ...message('Which one should I buy without overpaying?'),
+      id: 'commercial-second-user-message'
+    };
+    conversations.messages.push(secondUser);
+    conversations.turn = {
+      ...turn(),
+      id: secondTurnId,
+      userMessageId: secondUser.id,
+      assistantMessageId: null,
+      status: 'received'
+    };
+    expect((conversations.messages.find((item) => item.role === 'assistant')?.metadata as { productCards?: ProductCard[] })?.productCards
+      ?.map((card) => card.id)).toEqual(['close-55', 'close-60']);
+    expect(conversations.currentSession.needState.activeNeeds.find((need) => need.id === 'generator')?.selectedProductIds)
+      .toEqual(['close-55', 'close-60']);
+    const second = await orchestrator.generateAnswer({
+      sessionId,
+      turnId: secondTurnId,
+      userMessage: secondUser.content
+    });
+    const secondMetadata = second.metadata as {
+      historicalSelectionEvidence?: { reused?: boolean; toolResultIds?: string[] };
+      warnings?: string[];
+    };
+
+    expect(second.answer).toContain('EVOline PB7000');
+    expect(second.productCards.map((card) => card.id)).toEqual(['close-55', 'close-60']);
+    expect(secondMetadata.historicalSelectionEvidence).toMatchObject({
+      reused: true,
+      toolResultIds: expect.arrayContaining(['load-calculation', 'catalog-search'])
+    });
+    expect(secondMetadata.warnings).toContain('historical_selection_evidence_reused');
+    expect(conversations.turn.status).toBe('completed');
+
+    const thirdUser = {
+      ...message('The pump is actually 3 kW; keep the grinder at 1.5 kW.'),
+      id: 'commercial-third-user-message'
+    };
+    conversations.messages.push(thirdUser);
+    conversations.turn = {
+      ...turn(),
+      id: thirdTurnId,
+      userMessageId: thirdUser.id,
+      assistantMessageId: null,
+      status: 'received'
+    };
+    const changedLoad = await orchestrator.generateAnswer({
+      sessionId,
+      turnId: thirdTurnId,
+      userMessage: thirdUser.content
+    });
+    const changedLoadMetadata = changedLoad.metadata as {
+      historicalSelectionEvidence?: { toolResultIds?: string[]; tools?: string[] };
+    };
+
+    expect(changedLoad.productCards).toEqual([]);
+    expect(changedLoadMetadata.historicalSelectionEvidence?.tools).not.toContain('calculator.generatorLoad');
+    expect(changedLoadMetadata.historicalSelectionEvidence?.toolResultIds).toEqual(['catalog-search']);
   });
 
   it('recovers a committed final contract when wall abort interrupts post-commit delivery', async () => {

@@ -1602,6 +1602,29 @@ describe('AgentManager visible card readiness', () => {
     });
   });
 
+  it('reuses a prior safe generator calculation for a preliminary comparison but never for final fit', () => {
+    const preliminary = generatorLoadDerivedConstraintIntent();
+    preliminary.toolRequests = [];
+    preliminary.selectionPolicy = {
+      ...preliminary.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      reusePreviousCards: true
+    };
+    const verification = preliminary.selectionPolicy.requirements[0]!.verification;
+    if (verification?.mode === 'typed_tool') verification.toolRequestId = 'carried-load-context';
+
+    expect(assessStrictSelectionRequirements(preliminary, 'generator', [generatorLoadResult()])).toEqual({
+      blockers: [],
+      generatorNominalPowerMinKw: 5.5
+    });
+
+    const finalFit = structuredClone(preliminary);
+    finalFit.selectionPolicy!.selectionGoal = 'final_fit';
+    expect(assessStrictSelectionRequirements(finalFit, 'generator', [generatorLoadResult()]).blockers).toEqual([
+      expect.objectContaining({ reason: 'typed_tool_request_missing' })
+    ]);
+  });
+
   it('accepts the power_min_kw alias with a Russian kW unit for a typed derived minimum', () => {
     const intent = generatorLoadDerivedConstraintIntent();
     intent.selectionPolicy!.requirements = [{

@@ -1144,6 +1144,136 @@ function hardSelectionNumber(intent: AgentIntentContract, kinds: string[]) {
   return undefined;
 }
 
+function selectionRequirementNumber(
+  intent: AgentIntentContract,
+  kinds: string[],
+  aggregate: 'max' | 'min' = 'max'
+) {
+  const accepted = new Set(kinds);
+  let resolved: number | undefined;
+  for (const requirement of intent.selectionPolicy?.requirements ?? []) {
+    if (!accepted.has(requirement.kind)) continue;
+    if (requirement.relation === 'must_not_have') continue;
+    const value = typeof requirement.value === 'number'
+      ? requirement.value
+      : typeof requirement.value === 'string'
+        ? Number(requirement.value)
+        : Number.NaN;
+    if (!Number.isFinite(value) || value < 0) continue;
+    resolved = resolved === undefined
+      ? value
+      : aggregate === 'max'
+        ? Math.max(resolved, value)
+        : Math.min(resolved, value);
+  }
+  return resolved;
+}
+
+function generatorCommercialTarget(input: {
+  intent: AgentIntentContract;
+  toolResults: ToolResult[];
+}) {
+  const calculatorMinimum = generatorLoadRequirementKw(input.toolResults);
+  const requestedMinimum = selectionRequirementNumber(input.intent, ['nominal_power_min_kw', 'power_min_kw']);
+  const requestedMaximum = selectionRequirementNumber(
+    input.intent,
+    ['nominal_power_max_kw', 'power_max_kw'],
+    'min'
+  );
+  const minimum = calculatorMinimum === undefined
+    ? requestedMinimum
+    : requestedMinimum === undefined
+      ? calculatorMinimum
+      : Math.max(calculatorMinimum, requestedMinimum);
+  return minimum === undefined && requestedMaximum === undefined
+    ? undefined
+    : { minimum, maximum: requestedMaximum };
+}
+
+function generatorPowerDistanceFromTarget(product: Product, target: { minimum?: number; maximum?: number }) {
+  const nominal = extractConfirmedGeneratorNominalPowerKw(product);
+  if (nominal === undefined) return Number.POSITIVE_INFINITY;
+  if (target.minimum !== undefined && nominal < target.minimum) {
+    return 10_000 + (target.minimum - nominal) * 1_000;
+  }
+  if (target.maximum !== undefined && nominal > target.maximum) {
+    return 1_000 + (nominal - target.maximum) * 100;
+  }
+  if (target.minimum !== undefined && target.maximum !== undefined) {
+    const midpoint = (target.minimum + target.maximum) / 2;
+    return Math.abs(nominal - midpoint);
+  }
+  if (target.minimum !== undefined) return nominal - target.minimum;
+  return Math.abs((target.maximum ?? nominal) - nominal);
+}
+
+function productExplicitlyNamedForCurrentSelection(product: Product, intent: AgentIntentContract) {
+  return (intent.productMentions ?? []).some((mention) =>
+    (mention.role === 'target_product' || mention.role === 'comparison_subject') &&
+    productMatchesTargetName(product, mention.name)
+  );
+}
+
+function shortlistStructuredSelectionProducts(input: {
+  products: Product[];
+  intent: AgentIntentContract;
+  toolResults: ToolResult[];
+}) {
+  const policy = input.intent.selectionPolicy;
+  const canonicalClass = canonicalProductClassFromIntent(input.intent);
+  const target = isGeneratorProductClass(canonicalClass)
+    ? generatorCommercialTarget({ intent: input.intent, toolResults: input.toolResults })
+    : undefined;
+  if (!target || input.products.length <= 1) {
+    return { products: input.products, droppedProductIds: [] as string[], warnings: [] as string[] };
+  }
+
+  const scored = input.products
+    .map((product, index) => ({
+      product,
+      index,
+      distance: generatorPowerDistanceFromTarget(product, target),
+      price: typeof product.price === 'number' && Number.isFinite(product.price)
+        ? product.price
+        : Number.MAX_SAFE_INTEGER,
+      explicitlyNamed: productExplicitlyNamedForCurrentSelection(product, input.intent)
+    }));
+  const ranked = scored
+    .map((candidate) => ({
+      ...candidate,
+      dominated: scored.some((other) =>
+        other.product.id !== candidate.product.id &&
+        other.distance <= candidate.distance &&
+        other.price <= candidate.price &&
+        (other.distance < candidate.distance || other.price < candidate.price)
+      )
+    }))
+    .sort((left, right) =>
+      Number(right.explicitlyNamed) - Number(left.explicitlyNamed) ||
+      Number(left.dominated) - Number(right.dominated) ||
+      left.distance - right.distance ||
+      left.price - right.price ||
+      left.index - right.index
+    );
+  const explicitlyNamedCount = ranked.filter((item) => item.explicitlyNamed).length;
+  const cap = Math.max(
+    explicitlyNamedCount,
+    Math.max(1, Math.min(8, policy?.maxCards ?? 4))
+  );
+  const products = ranked.slice(0, cap).map((item) => item.product);
+  const keptIds = new Set(products.map((product) => product.id));
+  const droppedProductIds = input.products
+    .filter((product) => !keptIds.has(product.id))
+    .map((product) => product.id);
+  return {
+    products,
+    droppedProductIds,
+    warnings: droppedProductIds.length
+      ? [`answer_products_commercial_shortlist:${droppedProductIds.length}`]
+      : []
+  };
+}
+
 function structuredCompromiseProductIds(toolResults: ToolResult[]) {
   const ids = new Set<string>();
   for (const result of toolResults) {
@@ -1211,7 +1341,12 @@ function filterProductsByStructuredSelectionPolicy(input: {
       warnings: [`answer_products_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementAssessment.blockers.length}`]
     };
   }
-  const derivedNominalPowerMin = strictRequirementAssessment.generatorNominalPowerMinKw;
+  const calculatorNominalPowerMin = generatorLoadRequirementKw(input.toolResults);
+  const derivedNominalPowerMin = strictRequirementAssessment.generatorNominalPowerMinKw === undefined
+    ? calculatorNominalPowerMin
+    : calculatorNominalPowerMin === undefined
+      ? strictRequirementAssessment.generatorNominalPowerMinKw
+      : Math.max(strictRequirementAssessment.generatorNominalPowerMinKw, calculatorNominalPowerMin);
   const exactTargetNames = (input.intent.productMentions ?? [])
     .filter((mention) => mention.role === 'target_product')
     .map((mention) => mention.name);
@@ -1258,14 +1393,22 @@ function filterProductsByStructuredSelectionPolicy(input: {
     if (!productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass)) return false;
     return true;
   });
-  const kept = new Set(products.map((product) => product.id));
+  const commercialShortlist = shortlistStructuredSelectionProducts({
+    products,
+    intent: input.intent,
+    toolResults: input.toolResults
+  });
+  const kept = new Set(commercialShortlist.products.map((product) => product.id));
   const droppedProductIds = input.products.filter((product) => !kept.has(product.id)).map((product) => product.id);
   return {
-    products,
+    products: commercialShortlist.products,
     droppedProductIds,
-    warnings: droppedProductIds.length
-      ? [`answer_products_filtered_by_structured_hard_constraints:${droppedProductIds.length}`]
-      : []
+    warnings: uniqueStrings([
+      ...(input.products.length !== products.length
+        ? [`answer_products_filtered_by_structured_hard_constraints:${input.products.length - products.length}`]
+        : []),
+      ...commercialShortlist.warnings
+    ])
   };
 }
 
@@ -1933,6 +2076,100 @@ function previousVisibleCardProducts(input: {
     if (productsById.size >= 8) break;
   }
   return [...productsById.values()].slice(0, 8);
+}
+
+const reusableSelectionEvidenceTools = new Set<ToolResult['tool']>([
+  'catalog.search',
+  'catalog.getProductDetails',
+  'calculator.generatorLoad'
+]);
+
+function calculatorRequirementSignature(intent: AgentIntentContract) {
+  return (intent.selectionPolicy?.requirements ?? [])
+    .filter((requirement) =>
+      requirement.verification?.mode === 'typed_tool' &&
+      requirement.verification.tool === 'calculator.generatorLoad' &&
+      requirement.verification.verifier === 'generator_load_profile'
+    )
+    .map((requirement) => JSON.stringify({
+      kind: requirement.kind,
+      value: requirement.value,
+      unit: requirement.unit,
+      evidence: compactModelText(requirement.evidence)
+    }))
+    .sort();
+}
+
+function calculatorEvidenceCompatibleWithCurrentIntent(
+  currentIntent: AgentIntentContract,
+  previousIntent: AgentIntentContract
+) {
+  const currentSignature = calculatorRequirementSignature(currentIntent);
+  const previousSignature = calculatorRequirementSignature(previousIntent);
+  return currentSignature.length > 0 &&
+    currentSignature.length === previousSignature.length &&
+    currentSignature.every((item, index) => item === previousSignature[index]);
+}
+
+function previousSelectionToolResults(input: {
+  history: Message[];
+  intent: AgentIntentContract;
+}) {
+  const policy = input.intent.selectionPolicy;
+  if (!policy?.reusePreviousCards) return [] as ToolResult[];
+  if (
+    input.intent.grounding?.taskType !== 'comparison' &&
+    input.intent.grounding?.taskType !== 'product_selection'
+  ) return [] as ToolResult[];
+
+  const currentClass = canonicalProductClassFromIntent(input.intent);
+  if (currentClass === 'unknown') return [] as ToolResult[];
+  const resultsByKey = new Map<string, ToolResult>();
+  for (const message of input.history) {
+    if (message.role !== 'assistant') continue;
+    const metadata = message.metadata as {
+      intentContract?: unknown;
+      effectiveIntentContract?: unknown;
+      toolResults?: unknown;
+    };
+    const previousIntent = AgentIntentContractSchema.safeParse(
+      metadata.effectiveIntentContract ?? metadata.intentContract
+    );
+    if (!previousIntent.success) continue;
+    if (canonicalProductClassFromIntent(previousIntent.data) !== currentClass) continue;
+    if (!Array.isArray(metadata.toolResults)) continue;
+    for (const rawResult of metadata.toolResults) {
+      const parsed = ToolResultSchema.safeParse(rawResult);
+      if (!parsed.success || parsed.data.status !== 'ok') continue;
+      if (!reusableSelectionEvidenceTools.has(parsed.data.tool)) continue;
+      if (
+        parsed.data.tool === 'calculator.generatorLoad' &&
+        (
+          !isGeneratorProductClass(currentClass) ||
+          !calculatorEvidenceCompatibleWithCurrentIntent(input.intent, previousIntent.data)
+        )
+      ) continue;
+      if (parsed.data.tool === 'catalog.search' || parsed.data.tool === 'catalog.getProductDetails') {
+        const products = (parsed.data.payload as { products?: unknown }).products;
+        if (
+          !Array.isArray(products) ||
+          !products.some((product) =>
+            Boolean(product && typeof product === 'object' && productMatchesIntent(product as Product, currentClass))
+          )
+        ) continue;
+      }
+      resultsByKey.set(`${parsed.data.tool}:${parsed.data.requestId}`, parsed.data);
+    }
+  }
+  return [...resultsByKey.values()].slice(-16);
+}
+
+function mergeSelectionToolResults(historical: ToolResult[], current: ToolResult[]) {
+  const resultsByKey = new Map<string, ToolResult>();
+  for (const result of [...historical, ...current]) {
+    resultsByKey.set(`${result.tool}:${result.requestId}`, result);
+  }
+  return [...resultsByKey.values()];
 }
 
 function currentNeedSelectedProductIds(needState: CustomerNeedState) {
@@ -4084,13 +4321,17 @@ export class AgentManagerOrchestrator {
             : undefined
         })
       : [];
+    const historicalSelectionTools = selectionTurnMayUseHistory
+      ? previousSelectionToolResults({ history, intent })
+      : [];
+    let selectionToolResults = mergeSelectionToolResults(historicalSelectionTools, toolResults);
     const rawAnswerProducts = [...new Map(
       [...products, ...historicalProducts].map((product) => [product.id, product])
     ).values()];
     const structuredPolicyEvidence = filterProductsByStructuredSelectionPolicy({
       products: rawAnswerProducts,
       intent,
-      toolResults
+      toolResults: selectionToolResults
     });
     const budgetAnswerProductEvidence = structuredSemanticPlan
       ? {
@@ -4119,7 +4360,18 @@ export class AgentManagerOrchestrator {
         };
     let replacementProductEvidence: ReplacementProductEvidence | null = null;
     let effectiveIntent = intent;
-    const candidateTiers = structuredCandidateTierEvidence(toolResults);
+    const currentCandidateTiers = structuredCandidateTierEvidence(selectionToolResults);
+    const currentCandidateTierIds = new Set(currentCandidateTiers.map((candidate) => candidate.productId));
+    const candidateTiers = [
+      ...currentCandidateTiers,
+      ...plateAnswerProductEvidence.products
+        .filter((product) => !currentCandidateTierIds.has(product.id))
+        .map((product) => ({
+          productId: product.id,
+          tier: visibleSelectionTier(intent),
+          tradeoffs: [] as string[]
+        }))
+    ];
     let answerProductEvidence = {
       products: plateAnswerProductEvidence.products,
       droppedProductIds: uniqueStrings([
@@ -4185,6 +4437,7 @@ export class AgentManagerOrchestrator {
           });
       turnBudget.consumeToolResult(assertToolResultBounds(replacement.toolResult));
       toolResults = [...toolResults, replacement.toolResult];
+      selectionToolResults = mergeSelectionToolResults(historicalSelectionTools, toolResults);
       replacementProductEvidence = replacement.evidence;
       if (replacement.products.length) {
         effectiveIntent = {
@@ -4263,6 +4516,7 @@ export class AgentManagerOrchestrator {
           });
       turnBudget.consumeToolResult(assertToolResultBounds(replacement.toolResult));
       toolResults = [...toolResults, replacement.toolResult];
+      selectionToolResults = mergeSelectionToolResults(historicalSelectionTools, toolResults);
       replacementProductEvidence = replacement.evidence;
       effectiveIntent = {
         ...intent,
@@ -4330,6 +4584,12 @@ export class AgentManagerOrchestrator {
         policy: plateAnswerProductEvidence.policy,
         replacementProductIds: replacementProductEvidence?.productIds
       })),
+      ...(usingHistoricalProducts ? [{
+        code: 'revalidated_historical_products_are_current_evidence',
+        sourceRequestId: 'dialogue_history',
+        instruction: `Every model in the top-level products array has been revalidated against the current structured constraints, including products carried from earlier visible cards. They are all authoritative current recommendation evidence. Do not treat only the newest catalog.search payload as valid, and do not remove a closer or cheaper revalidated product merely because it came from an earlier turn. Current product evidence: ${JSON.stringify(answerProducts.map((product) => ({ id: product.id, name: product.name, price: product.price ?? null, nominalKw: extractConfirmedGeneratorNominalPowerKw(product) ?? null })))}`,
+        catalogProductNames: answerProducts.map((product) => product.name)
+      } satisfies RequiredResponseClause] : []),
       ...requiredResponseClausesForToolResults(toolResults)
     ];
     const repairContext = failedReviewRepairContext(persistedExecution.checkpoints);
@@ -4352,14 +4612,14 @@ export class AgentManagerOrchestrator {
           ledgerEvents: effectiveLedgerEvents,
           ledgerState,
           intent: effectiveIntent,
-          toolResults,
+          toolResults: selectionToolResults,
           products: answerProducts,
           requiredResponseClauses,
           repairContext,
           signal: input.signal
         }),
         ledgerState,
-        toolResults
+        toolResults: selectionToolResults
       });
     }
     if (!savedAnswer.found) {
@@ -4400,7 +4660,7 @@ export class AgentManagerOrchestrator {
           ledgerEvents: effectiveLedgerEvents,
           ledgerState,
           intent: effectiveIntent,
-          toolResults,
+          toolResults: selectionToolResults,
           products: answerProducts,
           requiredResponseClauses,
           repairContext,
@@ -4450,7 +4710,7 @@ export class AgentManagerOrchestrator {
       issue.code === 'failed_tool_result_used_as_fact_source' || issue.code === 'failed_tool_result_referenced'
     );
     const failedToolSourceIds = reviewInvalidatedFactSources
-      ? nonOkToolResultIds(toolResults)
+      ? nonOkToolResultIds(selectionToolResults)
       : new Set<string>();
     const finalToolResultIds = answer.toolResultIds.filter((toolResultId) => !failedToolSourceIds.has(toolResultId));
     const finalFactsUsed = reviewInvalidatedFactSources
@@ -4496,7 +4756,7 @@ export class AgentManagerOrchestrator {
       answerText: finalText,
       selectedProductIds: initialAnswerContract.selectedProductIds,
       needState: needStateSnapshot,
-      toolResults,
+      toolResults: selectionToolResults,
       allowHistoricalProducts: usingHistoricalProducts
     });
     if (usingHistoricalProducts && initialCardSelection.products.length) {
@@ -4511,7 +4771,7 @@ export class AgentManagerOrchestrator {
     const selectionReadiness = assessVisibleCardReadiness({
       cardSelection: initialCardSelection,
       answer: initialAnswerContract,
-      toolResults,
+      toolResults: selectionToolResults,
       userMessage,
       intent: effectiveIntent
     });
@@ -4544,7 +4804,7 @@ export class AgentManagerOrchestrator {
             answerText: finalText,
             selectedProductIds: initialAnswerContract.selectedProductIds,
             needState: needStateSnapshot,
-            toolResults,
+            toolResults: selectionToolResults,
           allowHistoricalProducts: true
         });
         const previousSelectionBlockedByPlateTask = narrowedPreviousSelection.warnings.some((warning) =>
@@ -4691,7 +4951,7 @@ export class AgentManagerOrchestrator {
         packHash: SALES_MANAGER_POLICY_PACK_HASH,
         selectedByPlanner: intent.policyRuleIds ?? [],
         reviewMode: config.AI_MANAGER_REVIEW_MODE,
-        reviewReason: llmReviewPolicy({ intent: effectiveIntent, answer, toolResults, products: answerProducts, userMessage }).reasons.join(','),
+        reviewReason: llmReviewPolicy({ intent: effectiveIntent, answer, toolResults: selectionToolResults, products: answerProducts, userMessage }).reasons.join(','),
         answer: answerPolicyTrace,
         reviewer: reviewerPolicyTrace
       },
@@ -4704,6 +4964,11 @@ export class AgentManagerOrchestrator {
       answerContract: finalAnswerContract,
       preSendReview: review,
       toolResults,
+      historicalSelectionEvidence: {
+        reused: historicalSelectionTools.length > 0,
+        toolResultIds: historicalSelectionTools.map((result) => result.requestId),
+        tools: historicalSelectionTools.map((result) => result.tool)
+      },
       cardSelection,
       selectionReadiness,
       answerProductEvidence,
@@ -4713,6 +4978,7 @@ export class AgentManagerOrchestrator {
       warnings: [
         ...ledgerState.warnings,
         ...toolResults.flatMap((result) => result.warnings),
+        ...(historicalSelectionTools.length ? ['historical_selection_evidence_reused'] : []),
         ...answerProductEvidence.warnings,
         ...cardSelection.warnings,
         ...selectionReadiness.warnings
@@ -5726,9 +5992,13 @@ export class AgentManagerOrchestrator {
       ? visibleSelectionTier(input.intent)
       : 'preliminary_match';
     const candidateTradeoffs = new Map<string, string[]>();
+    const desiredStructuredCandidateCount = Math.max(
+      1,
+      Math.min(limit, input.intent?.selectionPolicy?.maxCards ?? Math.min(limit, 3))
+    );
     if (
       structuredCatalogSelection &&
-      !structuredEvidence.products.length &&
+      structuredEvidence.products.length < desiredStructuredCandidateCount &&
       !firstError &&
       input.allowStructuredRecovery !== false
     ) {
@@ -5737,6 +6007,7 @@ export class AgentManagerOrchestrator {
         input.intent?.selectionPolicy?.targetProductClass
       );
       try {
+        const initialStructuredEvidence = structuredEvidence;
         const recoveryPool = await this.products.searchProducts(recoveryQuery, 1_000);
         const matchingRecoveryPool = recoveryPool
           .filter((product) => productMatchesIntent(product, productIntent))
@@ -5744,11 +6015,32 @@ export class AgentManagerOrchestrator {
             product,
             input.intent?.selectionPolicy?.powerSource
           ));
-        structuredEvidence = filterProductsByStructuredSelectionPolicy({
+        const recoveredEvidence = filterProductsByStructuredSelectionPolicy({
           products: matchingRecoveryPool,
           intent: input.intent!,
           toolResults: input.toolResults ?? []
         });
+        const mergedEvidence = filterProductsByStructuredSelectionPolicy({
+          products: [...new Map(
+            [...initialStructuredEvidence.products, ...recoveredEvidence.products]
+              .map((product) => [product.id, product])
+          ).values()],
+          intent: input.intent!,
+          toolResults: input.toolResults ?? []
+        });
+        structuredEvidence = {
+          products: mergedEvidence.products,
+          droppedProductIds: uniqueStrings([
+            ...initialStructuredEvidence.droppedProductIds,
+            ...recoveredEvidence.droppedProductIds,
+            ...mergedEvidence.droppedProductIds
+          ]),
+          warnings: uniqueStrings([
+            ...initialStructuredEvidence.warnings,
+            ...recoveredEvidence.warnings,
+            ...mergedEvidence.warnings
+          ])
+        };
         if (!structuredEvidence.products.length) {
           const compromises = structuredCompromiseProducts({
             products: matchingRecoveryPool,

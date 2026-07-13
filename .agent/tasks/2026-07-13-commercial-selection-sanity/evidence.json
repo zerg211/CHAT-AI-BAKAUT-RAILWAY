@@ -1,0 +1,28 @@
+{
+  "taskId": "2026-07-13-commercial-selection-sanity",
+  "status": "in_progress",
+  "baseline": {
+    "productionCommit": "b92baf7d635ee3a8b93a93ebdce1c3b3010783a4",
+    "sessionId": "18a8f799-8325-43d2-a236-c2e0531078a2",
+    "verdict": "FAIL"
+  },
+  "acceptanceCriteria": {
+    "AC1": "PASS_LOCAL",
+    "AC2": "PASS_LOCAL",
+    "AC3": "PASS_LOCAL",
+    "AC4": "PASS_LOCAL",
+    "AC5": "PASS_LOCAL",
+    "AC6": "PASS_LOCAL",
+    "AC7": "PASS_LOCAL",
+    "AC8": "PASS_LOCAL",
+    "AC9": "PASS_LOCAL",
+    "AC10": "PASS_LOCAL",
+    "AC11": "PASS_LOCAL",
+    "AC12": "PASS_LOCAL",
+    "AC13": "PENDING",
+    "AC14": "PASS",
+    "AC15": "PENDING",
+    "AC16": "PENDING",
+    "AC17": "PENDING"
+  }
+}
