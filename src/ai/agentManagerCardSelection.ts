@@ -9,6 +9,7 @@ import {
   extractModelTokens,
   extractWeightKg,
   fromEscaped,
+  generatorAutoStartProfile,
   generatorPhaseProfile,
   inferProductIntent,
   isBatteryPowerStation,
@@ -478,6 +479,8 @@ const supportedStrictNumericRequirementUnits: Record<string, Set<string>> = {
 
 const supportedCeramicMaterialValues = new Set(['ceramic', 'porcelain_tile', 'ceramic_tile']);
 const generatorLoadDerivedRequirementKind = 'generator_load_scenario';
+const generatorLoadDerivedMinimumRequirementKinds = new Set(['nominal_power_min_kw', 'power_min_kw']);
+const generatorAutoStartRequirementKinds = new Set(['auto_start_required', 'autostart_required']);
 
 export interface StrictSelectionRequirementBlocker {
   id: string;
@@ -522,10 +525,20 @@ function typedToolRequirementProof(input: {
     verification.verifier === 'generator_load_profile' &&
     verification.bindAs === 'nominal_power_min_kw'
   ) {
-    if (input.requirement.kind !== generatorLoadDerivedRequirementKind) {
+    const normalizedUnit = input.requirement.unit?.trim().toLocaleLowerCase('ru-RU');
+    const scenarioShape = input.requirement.kind === generatorLoadDerivedRequirementKind &&
+      input.requirement.value === true &&
+      input.requirement.unit === null;
+    const derivedMinimumShape = generatorLoadDerivedMinimumRequirementKinds.has(input.requirement.kind) &&
+      input.requirement.value === null &&
+      Boolean(normalizedUnit && supportedStrictNumericRequirementUnits[input.requirement.kind]?.has(normalizedUnit));
+    if (
+      input.requirement.kind !== generatorLoadDerivedRequirementKind &&
+      !generatorLoadDerivedMinimumRequirementKinds.has(input.requirement.kind)
+    ) {
       return { blocker: blocker('generator_load_requirement_kind_mismatch') };
     }
-    if (input.requirement.value !== true || input.requirement.unit !== null) {
+    if (!scenarioShape && !derivedMinimumShape) {
       return { blocker: blocker('generator_load_requirement_shape_mismatch') };
     }
     if (!isGeneratorProductClass(input.productClass)) {
@@ -555,6 +568,7 @@ export function assessStrictSelectionRequirements(
 
   const blockers: StrictSelectionRequirementBlocker[] = [];
   let generatorNominalPowerMinKw: number | undefined;
+  let generatorAutoStartRequirement: boolean | undefined;
   const addBlocker = (
     requirement: NonNullable<AgentIntentContract['selectionPolicy']>['requirements'][number],
     reason: string
@@ -621,6 +635,24 @@ export function assessStrictSelectionRequirements(
       continue;
     }
 
+    if (generatorAutoStartRequirementKinds.has(requirement.kind)) {
+      if (
+        requirement.unit !== null ||
+        typeof requirement.value !== 'boolean' ||
+        !isGeneratorProductClass(productClass)
+      ) {
+        addBlocker(requirement, 'autostart_requirement_shape_or_product_class_mismatch');
+      } else if (
+        generatorAutoStartRequirement !== undefined &&
+        generatorAutoStartRequirement !== requirement.value
+      ) {
+        addBlocker(requirement, 'conflicting_autostart_requirements');
+      } else {
+        generatorAutoStartRequirement = requirement.value;
+      }
+      continue;
+    }
+
     if (requirement.kind === 'quantity') {
       const value = typeof requirement.value === 'number'
         ? requirement.value
@@ -654,6 +686,35 @@ export function strictSelectionRequirementBlockers(
   toolResults: ToolResult[] = []
 ) {
   return assessStrictSelectionRequirements(intent, productClass, toolResults).blockers;
+}
+
+function structuredGeneratorAutoStartRequirement(intent: AgentIntentContract) {
+  let resolved: boolean | undefined;
+  for (const requirement of intent.selectionPolicy?.requirements ?? []) {
+    if (
+      requirement.role !== 'hard_constraint' ||
+      requirement.strictness !== 'strict' ||
+      !generatorAutoStartRequirementKinds.has(requirement.kind)
+    ) continue;
+    if (requirement.unit !== null || typeof requirement.value !== 'boolean') return 'invalid' as const;
+    if (resolved !== undefined && resolved !== requirement.value) return 'invalid' as const;
+    resolved = requirement.value;
+  }
+  return resolved;
+}
+
+export function productMeetsSupportedStrictAutoStartRequirement(
+  product: Product,
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass
+) {
+  const required = structuredGeneratorAutoStartRequirement(intent);
+  if (required === undefined) return true;
+  if (required === 'invalid') return false;
+  if (!isGeneratorProductClass(productClass)) return false;
+  const profile = generatorAutoStartProfile(product);
+  if (profile === 'unknown' || profile === 'conflict') return false;
+  return required ? profile === 'present' : profile === 'absent';
 }
 
 function structuredBudgetMax(intent: AgentIntentContract) {
@@ -1547,6 +1608,20 @@ export function selectProductsForVisibleCards(input: {
     }
   }
 
+  let generatorAutoStartFilteredCount = 0;
+  let generatorAutoStartNoFit = false;
+  const generatorAutoStartRequirement = input.intent.selectionPolicy && isGeneratorProductClass(cardIntent)
+    ? structuredGeneratorAutoStartRequirement(input.intent)
+    : undefined;
+  if (generatorAutoStartRequirement !== undefined && selected.length) {
+    const autoStartMatchingSelected = selected.filter((product) =>
+      productMeetsSupportedStrictAutoStartRequirement(product, input.intent, cardIntent)
+    );
+    generatorAutoStartFilteredCount = selected.length - autoStartMatchingSelected.length;
+    selected = autoStartMatchingSelected;
+    generatorAutoStartNoFit = selected.length === 0;
+  }
+
   const budgetMax = structuredSelection
     ? structuredBudgetMax(input.intent)
     : effectiveVisibleCardBudgetMax({ needState: input.needState, userMessage: input.userMessage });
@@ -1736,6 +1811,8 @@ export function selectProductsForVisibleCards(input: {
     ...(generatorPowerNoFit ? ['product_cards_suppressed:generator_power_no_fit'] : []),
     ...(generatorPhaseFilteredCount > 0 ? [`product_cards_filtered_by_generator_phase:${generatorPhaseFilteredCount}`] : []),
     ...(generatorPhaseNoFit ? ['product_cards_suppressed:generator_phase_no_fit'] : []),
+    ...(generatorAutoStartFilteredCount > 0 ? [`product_cards_filtered_by_generator_autostart:${generatorAutoStartFilteredCount}`] : []),
+    ...(generatorAutoStartNoFit ? ['product_cards_suppressed:generator_autostart_no_fit'] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
     ...(diamondMaterialFilteredCount > 0 ? [`product_cards_filtered_by_diamond_material:${diamondMaterialFilteredCount}`] : []),

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   extractWeightKg,
+  generatorAutoStartProfile,
   oilViscosities,
   parseLoosePositiveNumber,
   productLiters,
@@ -87,5 +88,62 @@ describe('productClassifier oil and liter parsing without regex', () => {
 
   it('reads product volume through the stable productLiters API', () => {
     expect(productLiters(product('Масло SAE 10W-40 1 л'))).toBe(1);
+  });
+});
+
+describe('productClassifier explicit generator autostart facts', () => {
+  it('recognizes explicit present and absent structured facts', () => {
+    expect(generatorAutoStartProfile(product('Generator no autostart', {
+      specs: { 'Auto start': 'no' }
+    }))).toBe('absent');
+    expect(generatorAutoStartProfile(product('Generator with autostart', {
+      specs: { Autostart: true }
+    }))).toBe('present');
+    expect(generatorAutoStartProfile(product('Generator explicitly without autostart', {
+      specs: { Автозапуск: 'без автозапуска' }
+    }))).toBe('absent');
+    expect(generatorAutoStartProfile(product('Generator explicitly with autostart', {
+      specs: { 'Наличие автозапуска': 'есть' }
+    }))).toBe('present');
+  });
+
+  it('fails closed for missing, ambiguous, and contradictory facts', () => {
+    expect(generatorAutoStartProfile(product('Generator unknown'))).toBe('unknown');
+    expect(generatorAutoStartProfile(product('Generator ambiguous', {
+      specs: { Autostart: 'not determined' }
+    }))).toBe('unknown');
+    expect(generatorAutoStartProfile(product('Generator conflicting', {
+      specs: { 'Auto start': 'yes', Autostart: 'no' }
+    }))).toBe('conflict');
+  });
+
+  it('does not confuse a connector, readiness, option, or unrelated text with installed autostart', () => {
+    expect(generatorAutoStartProfile(product('Generator with connector only', {
+      specs: { 'Auto start connector': 'yes' }
+    }))).toBe('unknown');
+    expect(generatorAutoStartProfile(product('Generator prepared for optional ATS', {
+      specs: { 'Auto start': 'optional connector ready' }
+    }))).toBe('unknown');
+    expect(generatorAutoStartProfile(product('Generator unrelated mode', {
+      specs: { 'Auto start': 'normally open' }
+    }))).toBe('unknown');
+    expect(generatorAutoStartProfile(product('Generator with ATS socket only', {
+      specs: { 'Разъем для автозапуска': 'есть' }
+    }))).toBe('unknown');
+    expect(generatorAutoStartProfile(product('Generator prepared for ATS only', {
+      specs: { 'Подготовка к автозапуску': 'есть' }
+    }))).toBe('unknown');
+  });
+
+  it('gives explicit negation precedence over installed-state words', () => {
+    expect(generatorAutoStartProfile(product('Generator not installed', {
+      specs: { 'Auto start': 'not determined' }
+    }))).toBe('unknown');
+    expect(generatorAutoStartProfile(product('Generator explicitly absent', {
+      specs: { 'Auto start': 'не был установлен' }
+    }))).toBe('absent');
+    expect(generatorAutoStartProfile(product('Generator never provisioned', {
+      specs: { 'Auto start': 'никогда не был предусмотрен' }
+    }))).toBe('absent');
   });
 });

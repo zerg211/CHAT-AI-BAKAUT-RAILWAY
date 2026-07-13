@@ -1026,6 +1026,109 @@ export function generatorPhaseProfile(product: Product): ProductPhaseProfile {
   return 'unknown';
 }
 
+export type GeneratorAutoStartProfile = 'present' | 'absent' | 'conflict' | 'unknown';
+
+const generatorAutoStartSpecKeys = new Set([
+  'автозапуск',
+  'наличие автозапуска',
+  'автоматический запуск',
+  'наличие автоматического запуска',
+  'auto start',
+  'autostart',
+  'automatic start'
+]);
+
+const generatorAutoStartAbsentExactValues = new Set([
+  'нет',
+  'false',
+  'no'
+]);
+
+const generatorAutoStartAbsentPhrases = [
+  'без автозапуска',
+  'не предусмотрен',
+  'не предусмотрено',
+  'не установлен',
+  'не установлено',
+  'отсутствует'
+];
+
+const generatorAutoStartPresentExactValues = new Set([
+  'есть',
+  'true',
+  'yes',
+  'да'
+]);
+
+const generatorAutoStartPresentPhrases = [
+  'с автозапуском',
+  'предусмотрен',
+  'предусмотрено',
+  'установлен'
+];
+
+const generatorAutoStartAmbiguousValueSignals = [
+  'опция',
+  'опцион',
+  'возможность',
+  'подготовка',
+  'разъём',
+  'разъем',
+  'connector',
+  'optional',
+  'ready'
+];
+
+const generatorAutoStartInstalledStateSignals = [
+  'установлен',
+  'установлено',
+  'предусмотрен',
+  'предусмотрено'
+];
+
+function normalizedGeneratorAutoStartFact(value: unknown): 'present' | 'absent' | 'unknown' {
+  if (value === true) return 'present';
+  if (value === false) return 'absent';
+  const normalized = String(value ?? '').trim().toLocaleLowerCase('ru-RU');
+  if (!normalized) return 'unknown';
+  if (generatorAutoStartAmbiguousValueSignals.some((term) => normalized.includes(term))) {
+    return 'unknown';
+  }
+  if (
+    generatorAutoStartAbsentExactValues.has(normalized) ||
+    generatorAutoStartAbsentPhrases.some((term) => normalized.includes(term)) ||
+    (
+      (normalized.includes('не ') || normalized.includes('никогда')) &&
+      generatorAutoStartInstalledStateSignals.some((term) => normalized.includes(term))
+    )
+  ) {
+    return 'absent';
+  }
+  if (
+    generatorAutoStartPresentExactValues.has(normalized) ||
+    generatorAutoStartPresentPhrases.some((term) => normalized.includes(term))
+  ) {
+    return 'present';
+  }
+  return 'unknown';
+}
+
+export function generatorAutoStartProfile(product: Product): GeneratorAutoStartProfile {
+  let present = false;
+  let absent = false;
+  for (const [key, value] of Object.entries(product.specs ?? {})) {
+    const normalizedKey = key.trim().toLocaleLowerCase('ru-RU');
+    if (!generatorAutoStartSpecKeys.has(normalizedKey)) continue;
+    const fact = normalizedGeneratorAutoStartFact(value);
+    if (fact === 'present') present = true;
+    if (fact === 'absent') absent = true;
+  }
+  if (present && absent) return 'conflict';
+  if (present) return 'present';
+  if (absent) return 'absent';
+  return 'unknown';
+}
+
 export function strictExactModelTokens(value: string) {
   const tokens = extractModelTokens(value);
   const strict = new Set<string>();

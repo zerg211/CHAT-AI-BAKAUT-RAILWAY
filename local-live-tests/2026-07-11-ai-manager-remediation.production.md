@@ -114,3 +114,80 @@ Internal audit:
 - Root cause: the strict requirement guard correctly protects recommendations, but it was applied to a non-recommendation clarification answer as though the answer were attempting product selection.
 
 Remediation task: `.agent/tasks/2026-07-12-unresolved-constraint-clarification/spec.md`.
+
+## Post-deploy replay attempt 2 — useful clarification preserved, recovery defect exposed
+
+Date: 2026-07-12 (Europe/Moscow)
+
+Deployed commit and exact health marker: `7ba775f6d5966074cebfef7c10aae3359d858cf9`.
+
+Embedded-widget session: `f69a04c0-e6e6-4ccd-9781-5135be9cca98` on `https://bakautprof.ru/`.
+
+### Turn 1 — broad request
+
+Buyer:
+
+> Нужен генератор для загородного дома: холодильник, насос, котёл и иногда электроинструмент. Какой подойдёт?
+
+Assistant shown in the embedded widget:
+
+> Для такого набора обычно смотрят однофазный генератор 220 В с запасом по пуску, ориентиром примерно от 3–5 кВт. Но тут самое важное — какой именно насос: поверхностный или скважинный, и какая у него мощность на шильдике. Именно насос чаще всего решает, хватит генератора или нет.
+>
+> Если скажешь мощность насоса, я уже нормально сориентирую по нужной мощности генератора без лишних гаданий.
+
+Audit:
+
+- PASS: useful preliminary orientation survived the strict-constraint guard.
+- PASS: one decisive question, no random product cards.
+- PASS: the next buyer turn can naturally answer the question.
+
+### Turn 2 — explicit load, phase, simultaneity, and no autostart need
+
+Buyer:
+
+> Насос скважинный 1,1 кВт, болгарка 1,5 кВт, дом однофазный 220 В. Они могут работать одновременно. Автозапуск не нужен.
+
+Assistant shown in the embedded widget:
+
+> По вашему набору ориентир такой: нужен однофазный генератор 220 В с расчетной номинальной мощностью примерно от 5,5 кВт. Это предварительный расчет по вашим данным и допущениям по холодильнику и котлу, не финальный размер под покупку.
+>
+> Если без болгарки, только дом + насос, ориентир получается около 4 кВт. Но раз насос и болгарка у вас могут работать одновременно, смотреть лучше класс 5,5–6,5 кВт, чтобы не брать впритык.
+>
+> Сейчас точные модели не покажу: в этом подборе не хватило подходящих карточек из нашего каталога после фильтра по расчетной мощности. Для точного добора остался один важный момент — шильдик насоса: модель или его пусковой ток/пусковая мощность. У скважинных насосов это сильно влияет на финальный выбор.
+
+Internal audit:
+
+- Turn: `88422583-6476-4ce7-9e9d-0e946c289a34`.
+- `calculator.generatorLoad`: `ok`; `requiredNominalKw=5.5`, `requiredStartingKw=5.2`, base scenario `4.0`; bounded-assumption confidence `0.82`.
+- Catalog returned three rows, but strict selection exposed no cards because their phase fields contradicted their descriptions/voltage facts.
+- The planner emitted two requirements bound to the same calculator profile. The scenario id was covered by the calculator, while the derived `nominal_power_min_kw` id was incorrectly placed in catalog search coverage. This one-sided proof graph suppressed otherwise useful answer evidence.
+
+Buyer-view verdict:
+
+- PASS: calculation and explanation are useful and materially better than the previous generic refusal.
+- PASS: no unsafe phase-conflicting card was shown.
+- PARTIAL: asking for the pump plate is technically justified, but the explicit preliminary range was already sufficient to continue a bounded preliminary selection request.
+
+### Turn 3 — natural request for preliminary cards
+
+Buyer:
+
+> Шильдик сейчас посмотреть не могу. Покажите хотя бы предварительно 2–3 подходящих однофазных варианта 5,5–6,5 кВт без автозапуска.
+
+Assistant shown in the embedded widget after the failed turn:
+
+> Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.
+
+Internal audit:
+
+- Turn: `e773cb28-5f6a-49f7-b75c-51a37186a4f6`.
+- Final status/stage: `failed` / `recovery_failed`.
+- Error code: `agent_manager_recovery_failed`.
+- The review correctly refused unvalidated cards, but the strict kind `autostart_required` was not mechanically supported.
+- Initial execution, server recovery, and client recovery all reused the same succeeded `answer_contract_created` checkpoint. No fresh answer was composed after review blocked the draft.
+- The same blocked draft was reviewed three times and the widget finally received the generic technical fallback.
+- Raw catalog rows were not safe recommendations: their specs/descriptions contained phase conflicts, and explicit installed/no-autostart facts were incomplete.
+
+Verdict for deployed commit `7ba775f...`: `FAIL_REQUIRES_THIRD_FIX`.
+
+Remediation task: `.agent/tasks/2026-07-12-recovery-and-validated-selection/spec.md`.

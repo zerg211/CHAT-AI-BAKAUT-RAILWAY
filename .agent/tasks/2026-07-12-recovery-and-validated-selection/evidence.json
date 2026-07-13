@@ -1,0 +1,54 @@
+{
+  "taskId": "2026-07-12-recovery-and-validated-selection",
+  "status": "LOCAL_PASS_DEPLOY_PENDING",
+  "baseCommit": "7ba775f6d5966074cebfef7c10aae3359d858cf9",
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS",
+    "AC8": "PASS",
+    "AC9": "PASS",
+    "AC10": "PASS",
+    "AC11": "PASS",
+    "AC12": "PENDING",
+    "AC13": "PENDING",
+    "AC14": "PENDING"
+  },
+  "localChecks": {
+    "focusedTests": {
+      "status": "PASS",
+      "tests": 153
+    },
+    "fullTests": {
+      "status": "PASS",
+      "files": 105,
+      "tests": 957
+    },
+    "agenticEval": {
+      "status": "PASS",
+      "files": 4,
+      "tests": 251
+    },
+    "typecheck": "PASS",
+    "productionBuild": "PASS",
+    "noNewRegex": "PASS",
+    "dependencyAuditLow": {
+      "status": "PASS",
+      "vulnerabilities": 0
+    },
+    "gitDiffCheck": "PASS"
+  },
+  "independentVerifier": {
+    "status": "PASS_AC1_AC11",
+    "focusedTests": 157,
+    "typecheck": "PASS",
+    "gitDiffCheck": "PASS",
+    "noNewRegex": "PASS"
+  },
+  "deployment": null,
+  "productionReplay": null
+}

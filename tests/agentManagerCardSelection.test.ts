@@ -1573,6 +1573,265 @@ describe('AgentManager visible card readiness', () => {
     );
   });
 
+  it('accepts scenario and explicit derived-minimum requirements sharing one covered calculator proof', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    intent.selectionPolicy!.requirements.push({
+      id: 'calculated-nominal-minimum',
+      kind: 'nominal_power_min_kw',
+      value: null,
+      unit: 'kW',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'the nominal minimum is derived by the referenced load calculation',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        verifier: 'generator_load_profile',
+        bindAs: 'nominal_power_min_kw'
+      }
+    });
+    intent.toolRequests[0]!.coversRequirementIds = [
+      'simultaneous-loads',
+      'calculated-nominal-minimum'
+    ];
+
+    expect(assessStrictSelectionRequirements(intent, 'generator', [generatorLoadResult()])).toEqual({
+      blockers: [],
+      generatorNominalPowerMinKw: 5.5
+    });
+  });
+
+  it('accepts the power_min_kw alias with a Russian kW unit for a typed derived minimum', () => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    intent.selectionPolicy!.requirements = [{
+      id: 'calculated-power-minimum',
+      kind: 'power_min_kw',
+      value: null,
+      unit: 'кВт',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'the required minimum comes from the referenced load calculation',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        verifier: 'generator_load_profile',
+        bindAs: 'nominal_power_min_kw'
+      }
+    }];
+    intent.toolRequests[0]!.coversRequirementIds = ['calculated-power-minimum'];
+
+    expect(assessStrictSelectionRequirements(intent, 'generator', [generatorLoadResult()])).toEqual({
+      blockers: [],
+      generatorNominalPowerMinKw: 5.5
+    });
+  });
+
+  it.each([
+    { value: 5.5, unit: 'kW' },
+    { value: null, unit: null },
+    { value: null, unit: 'kVA' }
+  ])('fails closed for malformed typed derived-minimum shape %#', ({ value, unit }) => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    intent.selectionPolicy!.requirements = [{
+      id: 'malformed-derived-minimum',
+      kind: 'nominal_power_min_kw',
+      value,
+      unit,
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'malformed derived constraint must not be laundered through a successful calculation',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        verifier: 'generator_load_profile',
+        bindAs: 'nominal_power_min_kw'
+      }
+    }];
+    intent.toolRequests[0]!.coversRequirementIds = ['malformed-derived-minimum'];
+
+    expect(assessStrictSelectionRequirements(intent, 'generator', [generatorLoadResult()]).blockers).toEqual([
+      expect.objectContaining({ reason: 'generator_load_requirement_shape_mismatch' })
+    ]);
+  });
+
+  it('keeps only products with explicit no-autostart facts for a strict false requirement', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'no-autostart',
+        kind: 'autostart_required',
+        value: false,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the buyer does not need automatic start',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    const withoutAutoStart = {
+      ...generatorWithPower('without-autostart', '6'),
+      name: 'TSS SGG 6000NA generator',
+      specs: { 'Nominal power': '6 kW', Autostart: 'no' }
+    };
+    const withAutoStart = {
+      ...generatorWithPower('with-autostart', '6'),
+      name: 'TSS SGG 6000ATS generator',
+      specs: { 'Nominal power': '6 kW', Autostart: 'yes' }
+    };
+    const unknownAutoStart = {
+      ...generatorWithPower('unknown-autostart', '6'),
+      name: 'TSS SGG 6000U generator'
+    };
+    const conflictingAutoStart = {
+      ...generatorWithPower('conflicting-autostart', '6'),
+      name: 'TSS SGG 6000C generator',
+      specs: { 'Nominal power': '6 kW', 'Auto start': 'yes', Autostart: 'no' }
+    };
+    const products = [withoutAutoStart, withAutoStart, unknownAutoStart, conflictingAutoStart];
+
+    const selection = selectProductsForVisibleCards({
+      products,
+      userMessage: 'Show a generator without automatic start.',
+      history: [],
+      intent,
+      answerText: products.map((item) => item.name).join(', '),
+      selectedProductIds: products.map((item) => item.id),
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([withoutAutoStart.id]);
+    expect(selection.droppedProductIds).toEqual(expect.arrayContaining([
+      withAutoStart.id,
+      unknownAutoStart.id,
+      conflictingAutoStart.id
+    ]));
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_autostart:3');
+
+    const selectionWithoutExplicitIds = selectProductsForVisibleCards({
+      products,
+      userMessage: 'Show a generator without automatic start.',
+      history: [],
+      intent,
+      answerText: products.map((item) => item.name).join(', '),
+      needState: needStateWithBudget()
+    });
+    expect(selectionWithoutExplicitIds.selectedProductIds).toEqual([withoutAutoStart.id]);
+  });
+
+  it('supports the auto_start_required alias in the true direction', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'needs-autostart',
+        kind: 'auto_start_required',
+        value: true,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the buyer explicitly needs automatic start',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    const withAutoStart = {
+      ...generatorWithPower('with-autostart', '6'),
+      name: 'TSS SGG 6000ATS generator',
+      specs: { 'Nominal power': '6 kW', Autostart: true }
+    };
+    const withoutAutoStart = {
+      ...generatorWithPower('without-autostart', '6'),
+      name: 'TSS SGG 6000NA generator',
+      specs: { 'Nominal power': '6 kW', Autostart: false }
+    };
+
+    const selection = selectProductsForVisibleCards({
+      products: [withAutoStart, withoutAutoStart],
+      userMessage: 'Automatic start is required.',
+      history: [],
+      intent,
+      answerText: `${withAutoStart.name}, ${withoutAutoStart.name}`,
+      selectedProductIds: [withAutoStart.id, withoutAutoStart.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([withAutoStart.id]);
+  });
+
+  it('rejects malformed and conflicting strict autostart requirements', () => {
+    const malformed = structuredSelectionIntent({
+      requirements: [{
+        id: 'malformed-autostart',
+        kind: 'autostart_required',
+        value: 'false',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'a string must not be treated as the typed boolean constraint',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    expect(assessStrictSelectionRequirements(malformed, 'generator').blockers).toEqual([
+      expect.objectContaining({ reason: 'autostart_requirement_shape_or_product_class_mismatch' })
+    ]);
+
+    const wrongUnit = structuredSelectionIntent({
+      requirements: [{
+        id: 'unit-bearing-autostart',
+        kind: 'auto_start_required',
+        value: false,
+        unit: 'bool',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the typed boolean constraint must not carry a unit',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    expect(assessStrictSelectionRequirements(wrongUnit, 'generator').blockers).toEqual([
+      expect.objectContaining({ reason: 'autostart_requirement_shape_or_product_class_mismatch' })
+    ]);
+
+    const wrongProductClass = structuredSelectionIntent({
+      requirements: [{
+        id: 'plate-autostart',
+        kind: 'autostart_required',
+        value: false,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'autostart requirement cannot be applied to an unrelated product class',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    expect(assessStrictSelectionRequirements(wrongProductClass, 'plate').blockers).toEqual([
+      expect.objectContaining({ reason: 'autostart_requirement_shape_or_product_class_mismatch' })
+    ]);
+
+    const conflicting = structuredSelectionIntent({
+      requirements: [{
+        id: 'autostart-on',
+        kind: 'auto_start_required',
+        value: true,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'first strict requirement',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'autostart-off',
+        kind: 'autostart_required',
+        value: false,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'contradictory strict requirement',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    expect(assessStrictSelectionRequirements(conflicting, 'generator').blockers).toEqual([
+      expect.objectContaining({ id: 'autostart-off', reason: 'conflicting_autostart_requirements' })
+    ]);
+  });
+
   it.each([
     {
       name: 'failed result',

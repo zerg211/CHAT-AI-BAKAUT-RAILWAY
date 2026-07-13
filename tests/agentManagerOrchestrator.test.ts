@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { AgentManagerOrchestrator, type AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
+import {
+  AgentManagerOrchestrator,
+  repairIntentForTypedToolRequirementCoverage,
+  type AgentManagerModel
+} from '../src/ai/agentManagerOrchestrator.js';
 import {
   normalizeLedgerStateDeltaEvents,
   type AgentIntentContract,
@@ -344,7 +348,126 @@ function structuredGeneratorCatalogIntent(): AgentIntentContract {
   };
 }
 
+function typedGeneratorProofIntent(): AgentIntentContract {
+  const intent = structuredGeneratorCatalogIntent();
+  intent.toolRequests = [{
+    id: 'load-calculation',
+    tool: 'calculator.generatorLoad',
+    args: {
+      loads: [{
+        name: 'borehole pump and angle grinder',
+        count: 1,
+        runningKw: 2.6,
+        startingKw: 5.2,
+        source: 'explicit_user',
+        evidence: 'the pump and grinder can run simultaneously',
+        basisKind: 'exact_power',
+        basisSignals: ['explicit_power', 'simultaneous_operation_known']
+      }],
+      simultaneousStarting: false,
+      simultaneousStartingKinds: [],
+      estimateBasis: 'exact_or_user_provided'
+    },
+    rationale: 'derive the required generator minimum',
+    required: true,
+    coversRequirementIds: ['load-scenario']
+  }, {
+    ...intent.toolRequests[0]!,
+    coversRequirementIds: ['derived-nominal-minimum']
+  }];
+  intent.selectionPolicy!.requirements = [{
+    id: 'load-scenario',
+    kind: 'generator_load_scenario',
+    value: true,
+    unit: null,
+    role: 'hard_constraint',
+    strictness: 'strict',
+    evidence: 'the pump and grinder can run simultaneously',
+    verification: {
+      mode: 'typed_tool',
+      toolRequestId: 'load-calculation',
+      tool: 'calculator.generatorLoad',
+      verifier: 'generator_load_profile',
+      bindAs: 'nominal_power_min_kw'
+    }
+  }, {
+    id: 'derived-nominal-minimum',
+    kind: 'nominal_power_min_kw',
+    value: null,
+    unit: 'kW',
+    role: 'hard_constraint',
+    strictness: 'strict',
+    evidence: 'the minimum is derived from the load profile',
+    verification: {
+      mode: 'typed_tool',
+      toolRequestId: 'load-calculation',
+      tool: 'calculator.generatorLoad',
+      verifier: 'generator_load_profile',
+      bindAs: 'nominal_power_min_kw'
+    }
+  }];
+  return intent;
+}
+
 describe('AgentManagerOrchestrator', () => {
+  it('repairs only the missing reverse coverage link for explicit supported typed proofs', () => {
+    const source = typedGeneratorProofIntent();
+
+    const repaired = repairIntentForTypedToolRequirementCoverage(source);
+
+    expect(repaired.intent.toolRequests[0]?.coversRequirementIds).toEqual([
+      'load-scenario',
+      'derived-nominal-minimum'
+    ]);
+    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual([]);
+    expect(repaired.intent.riskFlags).toContain('planner_repaired_typed_requirement_coverage');
+    expect(repaired.repairs).toEqual(expect.arrayContaining([
+      { requestId: 'load-calculation', requirementIds: ['derived-nominal-minimum'] },
+      { requestId: 'catalog-search', requirementIds: ['derived-nominal-minimum'] }
+    ]));
+  });
+
+  it('does not repair malformed, optional, missing, mismatched, or unsupported typed proofs', () => {
+    const cases: AgentIntentContract[] = [];
+
+    const optionalRequest = typedGeneratorProofIntent();
+    optionalRequest.toolRequests[0]!.required = false;
+    cases.push(optionalRequest);
+
+    const missingRequest = typedGeneratorProofIntent();
+    const missingVerification = missingRequest.selectionPolicy!.requirements[1]!.verification;
+    if (missingVerification?.mode === 'typed_tool') missingVerification.toolRequestId = 'missing-calculation';
+    cases.push(missingRequest);
+
+    const mismatchedRequest = typedGeneratorProofIntent();
+    mismatchedRequest.toolRequests[0] = {
+      id: 'load-calculation',
+      tool: 'catalog.search',
+      args: { query: 'generator' },
+      rationale: 'wrong tool under the referenced request id',
+      required: true,
+      coversRequirementIds: ['load-scenario']
+    };
+    cases.push(mismatchedRequest);
+
+    const unsupportedVerifier = typedGeneratorProofIntent();
+    const unsupportedVerification = unsupportedVerifier.selectionPolicy!.requirements[1]!.verification;
+    if (unsupportedVerification?.mode === 'typed_tool') unsupportedVerification.verifier = 'unsupported_profile';
+    cases.push(unsupportedVerifier);
+
+    const malformedShape = typedGeneratorProofIntent();
+    malformedShape.selectionPolicy!.requirements[1]!.value = 5.5;
+    cases.push(malformedShape);
+
+    const duplicateRequirementId = typedGeneratorProofIntent();
+    duplicateRequirementId.selectionPolicy!.requirements[1]!.id = 'load-scenario';
+    cases.push(duplicateRequirementId);
+
+    for (const intent of cases) {
+      expect(repairIntentForTypedToolRequirementCoverage(intent)).toEqual({ intent, repairs: [] });
+    }
+  });
+
   it('answers two identical buyer actions as distinct sequential turns with their actual context', async () => {
     const secondTurnId = '44444444-4444-4444-8444-444444444444';
     class SequentialConversations extends FakeConversations {
@@ -2937,6 +3060,217 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.warnings).toContain('answer_products_filtered_by_structured_hard_constraints:1');
   });
 
+  it('uses the same strict autostart evidence boundary for answer text and visible cards', async () => {
+    class AutoStartProducts extends FakeProducts {
+      async searchProducts() {
+        return [{
+          ...generatorProductWithPower('generator-no-auto', 'TSS SGG 6000NA generator', 6),
+          specs: { 'Nominal power': '6 kW', Autostart: 'no' }
+        }, {
+          ...generatorProductWithPower('generator-with-auto', 'TSS SGG 6000ATS generator', 6),
+          specs: { 'Nominal power': '6 kW', Autostart: 'yes' }
+        }, {
+          ...generatorProductWithPower('generator-auto-unknown', 'TSS SGG 6000U generator', 6),
+          specs: { 'Nominal power': '6 kW' }
+        }, {
+          ...generatorProductWithPower('generator-auto-conflict', 'TSS SGG 6000C generator', 6),
+          specs: { 'Nominal power': '6 kW', 'Auto start': 'yes', Autostart: 'no' }
+        }];
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const autostartModel = model({
+      async planTurn(): Promise<AgentIntentContract> {
+        return {
+          userMessageSummary: 'buyer requests a generator without automatic start',
+          dialogueUnderstanding: 'autostart is a strict product attribute constraint',
+          nextStepRationale: 'show only catalog products explicitly confirmed without autostart',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog-search',
+            tool: 'catalog.search',
+            args: {
+              query: 'generator 6 kW without autostart',
+              semanticQuery: 'generator with explicit no-autostart product fact',
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              limit: 8
+            },
+            rationale: 'ground the recommendation in current catalog facts',
+            required: true,
+            coversRequirementIds: ['no-autostart']
+          }],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 4,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [{
+              id: 'no-autostart',
+              kind: 'autostart_required',
+              value: false,
+              unit: null,
+              role: 'hard_constraint',
+              strictness: 'strict',
+              evidence: 'automatic start is not needed',
+              verification: { mode: 'product_attribute' }
+            }],
+            rationale: 'the product attribute must be explicit before recommendation'
+          },
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.products.map((item) => item.id)).toEqual(['generator-no-auto']);
+        return {
+          answerText: 'TSS SGG 6000NA generator is the only currently validated no-autostart candidate in this result.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          selectedProductIds: ['generator-no-auto'],
+          leadAction: 'none' as const,
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'generator',
+            status: 'ready_for_exact_cards' as const,
+            canShowProductCards: true,
+            missingFacts: [],
+            rationale: 'The returned product has an explicit no-autostart fact.'
+          }
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new AutoStartProducts() as never,
+      new FakeLeads() as never,
+      autostartModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Show a 6 kW generator without automatic start.'
+    });
+
+    expect(payload.answer).toContain('TSS SGG 6000NA');
+    expect(payload.answer).not.toContain('TSS SGG 6000ATS');
+    expect(payload.productCards.map((card) => card.id)).toEqual(['generator-no-auto']);
+    const metadata = payload.metadata as {
+      answerProductEvidence?: { droppedProductIds?: string[] };
+      warnings?: string[];
+    };
+    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(expect.arrayContaining([
+      'generator-with-auto',
+      'generator-auto-unknown',
+      'generator-auto-conflict'
+    ]));
+    expect(metadata.warnings).toContain('answer_products_filtered_by_structured_hard_constraints:3');
+  });
+
+  it('lets the reviewer pass a useful no-card answer when raw catalog ids have no validated products', async () => {
+    class UnverifiedAutoStartProducts extends FakeProducts {
+      async searchProducts() {
+        return [{
+          ...generatorProductWithPower('raw-auto-unknown', 'TSS SGG 6000U generator', 6),
+          specs: { 'Nominal power': '6 kW' }
+        }, {
+          ...generatorProductWithPower('raw-auto-conflict', 'TSS SGG 6000C generator', 6),
+          specs: { 'Nominal power': '6 kW', 'Auto start': 'yes', Autostart: 'no' }
+        }];
+      }
+    }
+    const intent = structuredGeneratorCatalogIntent();
+    intent.toolRequests[0]!.coversRequirementIds = ['no-autostart'];
+    intent.selectionPolicy!.requirements = [{
+      id: 'no-autostart',
+      kind: 'autostart_required',
+      value: false,
+      unit: null,
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'the requested candidate must be explicitly without autostart',
+      verification: { mode: 'product_attribute' }
+    }];
+    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
+      expect(input.products).toEqual([]);
+      expect(input.toolResults[0]).toMatchObject({
+        requestId: 'catalog-search',
+        status: 'ok',
+        payload: { productIds: ['raw-auto-unknown', 'raw-auto-conflict'] }
+      });
+      return {
+        answerText: 'I found catalog rows, but none has a reliable no-autostart fact, so I will not show misleading cards. The useful next step is to verify that exact specification for the current candidates.',
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['catalog-search'],
+        selectedProductIds: [],
+        leadAction: 'none' as const,
+        riskFlags: [],
+        selectionReadiness: {
+          productClass: 'generator',
+          status: 'needs_more_info' as const,
+          canShowProductCards: false,
+          missingFacts: ['explicit installed autostart status'],
+          rationale: 'Raw catalog rows did not pass the strict product-attribute verifier.'
+        }
+      };
+    });
+    const reviewAnswer = vi.fn(async (input: Parameters<AgentManagerModel['reviewAnswer']>[0]) => {
+      expect(input.products).toEqual([]);
+      expect(input.toolResults[0]).toMatchObject({
+        requestId: 'catalog-search',
+        status: 'ok',
+        payload: { productIds: ['raw-auto-unknown', 'raw-auto-conflict'] }
+      });
+      expect(input.answer.answerText).not.toContain('TSS SGG 6000U');
+      expect(input.answer.answerText).not.toContain('TSS SGG 6000C');
+      return { verdict: 'pass' as const, issues: [] };
+    });
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new UnverifiedAutoStartProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() {
+          return intent;
+        },
+        composeAnswer,
+        reviewAnswer
+      })
+    );
+    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
+    config.AI_MANAGER_REVIEW_MODE = 'always';
+    try {
+      const payload = await orchestrator.generateAnswer({
+        sessionId,
+        turnId,
+        userMessage: 'Show a 6 kW generator explicitly without automatic start.'
+      });
+
+      expect(payload.answer).toContain('none has a reliable no-autostart fact');
+      expect(payload.productCards).toEqual([]);
+      expect(composeAnswer).toHaveBeenCalledTimes(1);
+      expect(reviewAnswer).toHaveBeenCalledTimes(1);
+      const metadata = payload.metadata as {
+        answerProductEvidence?: { droppedProductIds?: string[] };
+      };
+      expect(metadata.answerProductEvidence?.droppedProductIds).toEqual([
+        'raw-auto-unknown',
+        'raw-auto-conflict'
+      ]);
+    } finally {
+      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
+    }
+  });
+
   it('blocks generator catalog cards below the calculated load profile requirement', async () => {
     class WeakGeneratorProducts extends FakeProducts {
       async searchProducts() {
@@ -3901,6 +4235,146 @@ describe('AgentManagerOrchestrator', () => {
     expect(planTurn).not.toHaveBeenCalled();
     expect(composeAnswer).not.toHaveBeenCalled();
     expect(reviewAnswer).not.toHaveBeenCalled();
+  });
+
+  it('invalidates a blocked answer checkpoint and recomposes once with structured review feedback', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'the current request is already explicit',
+      events: []
+    }));
+    const planTurn = vi.fn(async (): Promise<AgentIntentContract> => ({
+      userMessageSummary: 'calculate the generator load and give a useful result',
+      dialogueUnderstanding: 'the buyer expects an answer, not another unnecessary retry request',
+      nextStepRationale: 'reuse the verified calculation when repairing a rejected draft',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        args: {
+          loads: [{
+            name: 'borehole pump and angle grinder',
+            count: 1,
+            runningKw: 2.6,
+            startingKw: 5.2,
+            source: 'explicit_user',
+            evidence: '1.1 kW pump and 1.5 kW grinder can run simultaneously',
+            basisKind: 'exact_power',
+            basisSignals: ['explicit_power', 'simultaneous_operation_known']
+          }],
+          simultaneousStarting: false,
+          simultaneousStartingKinds: [],
+          estimateBasis: 'exact_or_user_provided'
+        },
+        rationale: 'calculate the minimum once and persist the typed result',
+        required: true,
+        coversRequirementIds: []
+      }],
+      selectionPolicy: currentNoProductSelectionPolicy(),
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    }));
+    let composeAttempt = 0;
+    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
+      composeAttempt += 1;
+      if (composeAttempt === 1) {
+        expect(input.repairContext).toBeUndefined();
+        return {
+          answerText: 'Please repeat the same request later.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['load-calculation'],
+          selectedProductIds: [],
+          leadAction: 'none' as const,
+          riskFlags: []
+        };
+      }
+      expect(input.repairContext).toEqual({
+        priorReviewIssues: [{
+          code: 'question_only_instead_of_result',
+          severity: 'high',
+          message: 'Use the completed calculation and give a useful result.'
+        }]
+      });
+      expect(input.toolResults).toHaveLength(1);
+      expect(input.toolResults[0]).toMatchObject({
+        requestId: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        status: 'ok'
+      });
+      return {
+        answerText: 'The completed load calculation is preserved; here is the useful preliminary result.',
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['load-calculation'],
+        selectedProductIds: [],
+        leadAction: 'none' as const,
+        riskFlags: []
+      };
+    });
+    let reviewAttempt = 0;
+    const reviewAnswer = vi.fn(async () => {
+      reviewAttempt += 1;
+      return reviewAttempt === 1
+        ? {
+            verdict: 'block' as const,
+            issues: [{
+              code: 'question_only_instead_of_result',
+              severity: 'high' as const,
+              message: 'Use the completed calculation and give a useful result.',
+              evidence: 'The draft only asks the buyer to repeat the request.'
+            }]
+          }
+        : { verdict: 'pass' as const, issues: [] };
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn, composeAnswer, reviewAnswer })
+    );
+    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
+    config.AI_MANAGER_REVIEW_MODE = 'always';
+    try {
+      await expect(orchestrator.generateAnswer({
+        sessionId,
+        turnId,
+        userMessage: conversations.messages[0]!.content
+      })).rejects.toThrow('Agent manager answer blocked: question_only_instead_of_result');
+
+      expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+        checkpoint: 'answer_contract_created',
+        status: 'failed',
+        errorCode: 'answer_contract_blocked_by_review'
+      }));
+      expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+        checkpoint: 'review_completed',
+        status: 'failed',
+        payload: expect.objectContaining({ verdict: 'block' })
+      }));
+      expect(conversations.answerContracts).toContainEqual(expect.objectContaining({ status: 'rejected' }));
+      const persistedToolArtifactCount = conversations.toolArtifacts.length;
+
+      const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+      expect(payload.answer).toBe('The completed load calculation is preserved; here is the useful preliminary result.');
+      expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+      expect(planTurn).toHaveBeenCalledTimes(1);
+      expect(composeAnswer).toHaveBeenCalledTimes(2);
+      expect(reviewAnswer).toHaveBeenCalledTimes(2);
+      expect(conversations.toolArtifacts).toHaveLength(persistedToolArtifactCount);
+      expect(conversations.traces).toContainEqual(expect.objectContaining({
+        phase: 'recovery',
+        eventType: 'blocked_answer_checkpoint_invalidated'
+      }));
+      expect(conversations.traces).toContainEqual(expect.objectContaining({
+        phase: 'recovery',
+        eventType: 'tool_artifact_reused',
+        payload: expect.objectContaining({ requestId: 'load-calculation' })
+      }));
+    } finally {
+      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
+    }
   });
 
   it('reuses a saved lead tool artifact and never creates the lead twice', async () => {
