@@ -21,4 +21,25 @@ Session `9ad5a646-0f86-4bf5-8df2-1984dcd84538` failed the embedded-widget audit:
 5. The pre-send review returned `pass` despite the direct contradiction with the prior turn.
 6. Turns 2-4 had recovered status; under AC13 that independently fails the release.
 
-The smallest architectural fix is in progress: LLM keeps ownership of interpreting the buyer's fuel preference, while deterministic code validates supported fuel values and filters products by catalog fuel facts. A new exact gasoline regression passes locally. A new commit, deployment marker, and complete fresh widget audit are still required.
+The fuel-type validator was fixed and deployed in commit `5c3f0b2`.
+
+## Production attempt 2 on commit `5c3f0b2`
+
+Session `710f559f-a5cb-415e-9b43-194ea500afd5` was buyer-visible PASS but not accepted as a clean release:
+
+1. The assistant showed three matching gasoline single-phase 5-5.5 kW products with prices and gave a concrete TSS recommendation without overpaying.
+2. Cards and answer text stayed consistent through the comparison turn.
+3. Turn 3 completed through the same-turn durable-checkpoint recovery path rather than normal execution.
+4. Because AC13 rejects recovery/fallback in the proof dialogue, this attempt was not accepted even though the recovered answer itself was correct.
+
+## Production attempt 3 on commit `5c3f0b2`
+
+Session `9ea0d9b6-2cd3-44e3-8d49-f684f3ffb3a2` failed the embedded-widget audit:
+
+1. Turn 1 completed normally and showed four valid 5.0 kW gasoline single-phase generators with prices.
+2. The buyer narrowed the same set to 2-3 products in 5-6 kW and explicitly required prices.
+3. The LLM planner correctly retained `reusePreviousCards=true`, the 5-6 kW range, gasoline, single phase, and `price_visibility=true`.
+4. Historical selection evidence was present, but deterministic strict validation treated `price_visibility` as unsupported and suppressed all four prior products.
+5. The assistant therefore produced the false statement that no verified cards with prices existed; pre-send review again returned `pass`.
+
+The current local fix keeps semantic ownership in the LLM and adds deterministic support for the general catalog fact `price_visibility=true`. It filters only products without a real positive price instead of suppressing the entire selection. A continuity regression proves that prior validated products with prices survive a no-new-result follow-up. The release remains FAIL until the new code is pushed, deployed, and passes a fresh clean widget dialogue plus admin audit.

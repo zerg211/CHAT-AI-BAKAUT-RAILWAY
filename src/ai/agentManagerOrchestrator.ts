@@ -67,6 +67,7 @@ import {
   productMeetsSupportedStrictAutoStartRequirement,
   productMeetsSupportedStrictFuelRequirement,
   productMeetsSupportedStrictMaterialRequirement,
+  productMeetsSupportedStrictPriceVisibilityRequirement,
   rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
   strictSelectionRequirementBlockers,
@@ -1393,6 +1394,7 @@ function filterProductsByStructuredSelectionPolicy(input: {
     if (!productMeetsSupportedStrictAutoStartRequirement(product, input.intent, canonicalClass)) return false;
     if (!productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass)) return false;
     if (!productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass)) return false;
+    if (!productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)) return false;
     return true;
   });
   const commercialShortlist = shortlistStructuredSelectionProducts({

@@ -2296,6 +2296,38 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_generator_fuel:gasoline:1');
   });
 
+  it('accepts strict price visibility and removes cards without a real catalog price', () => {
+    const priced = generatorWithPrice('priced-5', 'TSS SGG 5000N gasoline generator 5 kW', 49281);
+    const unpriced = { ...generatorWithPrice('unpriced-5', 'FIRMAN RD7910 gasoline generator 5 kW', 1), price: null };
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'price-required',
+        kind: 'price_visibility',
+        value: true,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'Buyer explicitly asked to see prices.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(intent, 'generator')).toEqual({ blockers: [] });
+    const selection = selectProductsForVisibleCards({
+      products: [priced, unpriced],
+      userMessage: 'Show generators with prices.',
+      history: [],
+      intent,
+      answerText: `${priced.name} costs 49,281 RUB; ${unpriced.name} has no confirmed price.`,
+      selectedProductIds: [priced.id, unpriced.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual([priced.id]);
+    expect(selection.warnings).toContain('product_cards_filtered_by_price_visibility:1');
+  });
+
   it('binds a strict product type to the canonical product class and fails closed on mismatch', () => {
     const intent = structuredSelectionIntent({
       requirements: [{

@@ -6933,7 +6933,21 @@ describe('AgentManagerOrchestrator', () => {
       ...secondIntent.selectionPolicy!,
       selectionGoal: 'preliminary_fit',
       reusePreviousCards: true,
-      maxCards: 2
+      maxCards: 2,
+      requirements: [
+        ...secondIntent.selectionPolicy!.requirements,
+        {
+          id: 'price-required',
+          kind: 'price_visibility',
+          value: true,
+          unit: null,
+          role: 'hard_constraint',
+          strictness: 'strict',
+          relation: 'must_have',
+          evidence: 'Buyer wants the comparison with prices.',
+          verification: { mode: 'product_attribute' }
+        }
+      ]
     };
     secondIntent.selectionPolicy!.requirements = secondIntent.selectionPolicy!.requirements.map((requirement) => ({
       ...requirement,

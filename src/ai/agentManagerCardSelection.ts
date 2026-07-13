@@ -485,6 +485,7 @@ const supportedCeramicMaterialValues = new Set(['ceramic', 'porcelain_tile', 'ce
 const generatorLoadDerivedRequirementKind = 'generator_load_scenario';
 const generatorLoadDerivedMinimumRequirementKinds = new Set(['nominal_power_min_kw', 'power_min_kw']);
 const generatorAutoStartRequirementKinds = new Set(['auto_start_required', 'autostart_required']);
+const priceVisibilityRequirementKind = 'price_visibility';
 
 export interface StrictSelectionRequirementBlocker {
   id: string;
@@ -719,6 +720,17 @@ export function assessStrictSelectionRequirements(
       continue;
     }
 
+    if (requirement.kind === priceVisibilityRequirementKind) {
+      if (
+        requirement.unit !== null ||
+        requirement.value !== true ||
+        (requirement.relation !== undefined && requirement.relation !== 'must_have')
+      ) {
+        addBlocker(requirement, 'price_visibility_requirement_shape_mismatch');
+      }
+      continue;
+    }
+
     if (requirement.kind === 'quantity') {
       const value = typeof requirement.value === 'number'
         ? requirement.value
@@ -901,6 +913,23 @@ export function productMeetsSupportedStrictFuelRequirement(
   if (requirement === 'fuel') return actual === 'gasoline' || actual === 'diesel';
   if (requirement === 'mains') return false;
   return actual === requirement;
+}
+
+function strictPriceVisibilityRequired(intent: AgentIntentContract) {
+  return (intent.selectionPolicy?.requirements ?? []).some((requirement) =>
+    requirement.kind === priceVisibilityRequirementKind &&
+    requirement.role === 'hard_constraint' &&
+    requirement.strictness === 'strict' &&
+    requirement.value === true
+  );
+}
+
+export function productMeetsSupportedStrictPriceVisibilityRequirement(
+  product: Product,
+  intent: AgentIntentContract
+) {
+  if (!strictPriceVisibilityRequired(intent)) return true;
+  return typeof product.price === 'number' && Number.isFinite(product.price) && product.price > 0;
 }
 
 function requestedPowerRangeKw(text: string) {
@@ -1629,6 +1658,17 @@ export function selectProductsForVisibleCards(input: {
     selected = [];
   }
 
+  let priceVisibilityFilteredCount = 0;
+  let priceVisibilityNoFit = false;
+  if (structuredSelection && strictPriceVisibilityRequired(input.intent) && selected.length) {
+    const priceVisibleSelected = selected.filter((product) =>
+      productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)
+    );
+    priceVisibilityFilteredCount = selected.length - priceVisibleSelected.length;
+    selected = priceVisibleSelected;
+    priceVisibilityNoFit = selected.length === 0;
+  }
+
   let powerSourceFilteredCount = 0;
   let powerSourceNoFit = false;
   const buyerRequirementText = buyerRequirementTextForCardSelection(input);
@@ -1968,6 +2008,10 @@ export function selectProductsForVisibleCards(input: {
       : []),
     ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : []),
     ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
+    ...(priceVisibilityFilteredCount > 0
+      ? [`product_cards_filtered_by_price_visibility:${priceVisibilityFilteredCount}`]
+      : []),
+    ...(priceVisibilityNoFit ? ['product_cards_suppressed:price_visibility_no_fit'] : []),
     ...(powerSourceFilteredCount > 0
       ? [`product_cards_filtered_by_power_source:${structuredPowerSource ?? 'battery'}:${powerSourceFilteredCount}`]
       : []),

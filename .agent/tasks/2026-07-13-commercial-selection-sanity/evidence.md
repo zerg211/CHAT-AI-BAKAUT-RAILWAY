@@ -44,3 +44,22 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Agentic eval: PASS, 251/251.
 - Typecheck, production build, no-new-regex guard, diff check: PASS.
 - Production dependency audit: PASS, 0 vulnerabilities.
+
+## Production attempts 2 and 3
+
+- Attempt 2 / session `710f559f-a5cb-415e-9b43-194ea500afd5`: buyer-visible selection and recommendation were correct, but turn 3 used same-turn recovery. Verdict: NOT CLEAN under AC13.
+- Attempt 3 / session `9ea0d9b6-2cd3-44e3-8d49-f684f3ffb3a2`: turn 1 showed four correct priced 5.0 kW products; turn 2 falsely suppressed them after the buyer required visible prices. Verdict: FAIL.
+- Admin root cause: strict `price_visibility=true` was correctly emitted by the planner but was not implemented in deterministic strict-requirement validation. Historical cards and tool evidence existed; the unsupported-kind blocker erased them.
+- Protocols: `local-live-tests/2026-07-13-commercial-selection-sanity-attempt-2.production.md` and `local-live-tests/2026-07-13-commercial-selection-sanity-attempt-3.production.md`.
+
+## Current local verification after attempt 3
+
+- Strict `price_visibility=true` is accepted only in the supported boolean shape and remains a deterministic catalog fact check.
+- Products without a finite positive catalog price are removed individually; priced products are retained.
+- Historical continuity regression now includes strict price visibility and preserves the prior priced products.
+- Focused selection suites: PASS, 150/150.
+- Full suite: PASS, 971/971.
+- Agentic eval: PASS, 251/251.
+- Typecheck and production build: PASS.
+- `git diff --check`: PASS.
+- Release status remains FAIL pending commit, Railway marker, and fresh embedded production proof.
