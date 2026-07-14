@@ -486,6 +486,8 @@ const generatorLoadDerivedRequirementKind = 'generator_load_scenario';
 const generatorLoadDerivedMinimumRequirementKinds = new Set(['nominal_power_min_kw', 'power_min_kw']);
 const generatorAutoStartRequirementKinds = new Set(['auto_start_required', 'autostart_required']);
 const priceVisibilityRequirementKind = 'price_visibility';
+const generatorVoltageRequirementKind = 'voltage_v';
+const supportedGeneratorVoltageUnits = new Set(['v', 'volt', 'volts', fromEscaped('\\u0432')]);
 
 export interface StrictSelectionRequirementBlocker {
   id: string;
@@ -664,6 +666,30 @@ export function assessStrictSelectionRequirements(
           : undefined;
       if (!expected || policy.phase !== expected) {
         addBlocker(requirement, 'phase_not_bound_to_typed_policy');
+      }
+      continue;
+    }
+
+    if (requirement.kind === generatorVoltageRequirementKind) {
+      const normalizedUnit = requirement.unit?.trim().toLocaleLowerCase('ru-RU');
+      const voltage = typeof requirement.value === 'number'
+        ? requirement.value
+        : typeof requirement.value === 'string'
+          ? Number(requirement.value)
+          : Number.NaN;
+      const expectedPhase = voltage === 220 || voltage === 230
+        ? 'single_phase'
+        : voltage === 380 || voltage === 400
+          ? 'three_phase'
+          : undefined;
+      if (
+        !isGeneratorProductClass(productClass) ||
+        !normalizedUnit ||
+        !supportedGeneratorVoltageUnits.has(normalizedUnit) ||
+        !expectedPhase ||
+        policy.phase !== expectedPhase
+      ) {
+        addBlocker(requirement, 'generator_voltage_not_bound_to_typed_phase_policy');
       }
       continue;
     }
@@ -930,6 +956,43 @@ export function productMeetsSupportedStrictPriceVisibilityRequirement(
 ) {
   if (!strictPriceVisibilityRequired(intent)) return true;
   return typeof product.price === 'number' && Number.isFinite(product.price) && product.price > 0;
+}
+
+function structuredGeneratorVoltageRequirement(intent: AgentIntentContract) {
+  const values = (intent.selectionPolicy?.requirements ?? []).flatMap((requirement) => {
+    if (
+      requirement.kind !== generatorVoltageRequirementKind ||
+      requirement.role !== 'hard_constraint' ||
+      requirement.strictness !== 'strict'
+    ) return [];
+    const value = typeof requirement.value === 'number'
+      ? requirement.value
+      : typeof requirement.value === 'string'
+        ? Number(requirement.value)
+        : Number.NaN;
+    return Number.isFinite(value) ? [value] : [];
+  });
+  const unique = [...new Set(values)];
+  return unique.length === 1 ? unique[0] : unique.length > 1 ? 'invalid' as const : undefined;
+}
+
+export function productMeetsSupportedStrictVoltageRequirement(
+  product: Product,
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass
+) {
+  const voltage = structuredGeneratorVoltageRequirement(intent);
+  if (voltage === undefined) return true;
+  if (voltage === 'invalid' || !isGeneratorProductClass(productClass)) return false;
+  const profile = generatorPhaseProfile(product);
+  if (profile === 'unknown') return false;
+  if (voltage === 220 || voltage === 230) {
+    return profile === 'single_220' || profile === 'mixed_220_380';
+  }
+  if (voltage === 380 || voltage === 400) {
+    return profile === 'three_phase_380' || profile === 'mixed_220_380';
+  }
+  return false;
 }
 
 function requestedPowerRangeKw(text: string) {
@@ -1669,6 +1732,20 @@ export function selectProductsForVisibleCards(input: {
     priceVisibilityNoFit = selected.length === 0;
   }
 
+  let voltageFilteredCount = 0;
+  let voltageNoFit = false;
+  const strictGeneratorVoltage = structuredSelection
+    ? structuredGeneratorVoltageRequirement(input.intent)
+    : undefined;
+  if (strictGeneratorVoltage !== undefined && selected.length) {
+    const voltageMatchingSelected = selected.filter((product) =>
+      productMeetsSupportedStrictVoltageRequirement(product, input.intent, cardIntent)
+    );
+    voltageFilteredCount = selected.length - voltageMatchingSelected.length;
+    selected = voltageMatchingSelected;
+    voltageNoFit = selected.length === 0;
+  }
+
   let powerSourceFilteredCount = 0;
   let powerSourceNoFit = false;
   const buyerRequirementText = buyerRequirementTextForCardSelection(input);
@@ -2012,6 +2089,10 @@ export function selectProductsForVisibleCards(input: {
       ? [`product_cards_filtered_by_price_visibility:${priceVisibilityFilteredCount}`]
       : []),
     ...(priceVisibilityNoFit ? ['product_cards_suppressed:price_visibility_no_fit'] : []),
+    ...(voltageFilteredCount > 0
+      ? [`product_cards_filtered_by_generator_voltage:${strictGeneratorVoltage}:${voltageFilteredCount}`]
+      : []),
+    ...(voltageNoFit ? [`product_cards_suppressed:generator_voltage_no_fit:${strictGeneratorVoltage}`] : []),
     ...(powerSourceFilteredCount > 0
       ? [`product_cards_filtered_by_power_source:${structuredPowerSource ?? 'battery'}:${powerSourceFilteredCount}`]
       : []),

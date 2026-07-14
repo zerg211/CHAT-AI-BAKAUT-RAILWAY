@@ -6737,6 +6737,16 @@ describe('AgentManagerOrchestrator', () => {
         evidence: 'The house is single-phase 220 V.',
         verification: { mode: 'product_attribute' }
       }, {
+        id: 'voltage-220',
+        kind: 'voltage_v',
+        value: 220,
+        unit: 'V',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'The house supply is 220 V.',
+        verification: { mode: 'product_attribute' }
+      }, {
         id: 'gasoline-only',
         kind: 'fuel_type',
         value: 'gasoline',

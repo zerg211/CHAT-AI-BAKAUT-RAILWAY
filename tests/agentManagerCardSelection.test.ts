@@ -2328,6 +2328,45 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_price_visibility:1');
   });
 
+  it('accepts typed 220 V as a generator fact and removes three-phase-only cards', () => {
+    const singlePhase = {
+      ...generatorWithPowerAndVoltage('single-220', '5', '230 V single phase'),
+      name: 'TSS SGG 5000N generator 5 kW 230 V single phase'
+    };
+    const threePhase = {
+      ...generatorWithPowerAndVoltage('three-380', '5', '400 V three phase'),
+      name: 'TSS SGG 5000E3 generator 5 kW 400 V three phase'
+    };
+    const intent = structuredSelectionIntent({
+      phase: 'single_phase',
+      requirements: [{
+        id: 'voltage-required',
+        kind: 'voltage_v',
+        value: 220,
+        unit: 'V',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'The buyer has a 220 V house supply.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(intent, 'generator')).toEqual({ blockers: [] });
+    const selection = selectProductsForVisibleCards({
+      products: [singlePhase, threePhase],
+      userMessage: 'Show a 220 V generator.',
+      history: [],
+      intent,
+      answerText: `${singlePhase.name} fits 220 V; ${threePhase.name} is three-phase only.`,
+      selectedProductIds: [singlePhase.id, threePhase.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual([singlePhase.id]);
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_voltage:220:1');
+  });
+
   it('binds a strict product type to the canonical product class and fails closed on mismatch', () => {
     const intent = structuredSelectionIntent({
       requirements: [{

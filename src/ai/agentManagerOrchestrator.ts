@@ -68,6 +68,7 @@ import {
   productMeetsSupportedStrictFuelRequirement,
   productMeetsSupportedStrictMaterialRequirement,
   productMeetsSupportedStrictPriceVisibilityRequirement,
+  productMeetsSupportedStrictVoltageRequirement,
   rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
   strictSelectionRequirementBlockers,
@@ -1395,6 +1396,7 @@ function filterProductsByStructuredSelectionPolicy(input: {
     if (!productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass)) return false;
     if (!productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass)) return false;
     if (!productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)) return false;
+    if (!productMeetsSupportedStrictVoltageRequirement(product, input.intent, canonicalClass)) return false;
     return true;
   });
   const commercialShortlist = shortlistStructuredSelectionProducts({
@@ -3452,7 +3454,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For that generator-load derived binding, normalize requirement.kind to the stable ontology value "generator_load_scenario", value=true, and unit=null. Keep the concrete loads and operating relationship (including simultaneous running versus simultaneous starting) in evidence and in calculator args; do not invent another typed-derived kind.',
             'Every toolRequest must include coversRequirementIds; use [] when it does not verify a selection requirement.',
             'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Unknown strict product attributes remain fail-closed until product evidence can verify them.',
-            'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
+            'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
             'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',
             'selectionPolicy.reusePreviousCards=true, если прежние карточки могут быть полезны в текущем ходе. Это подсказка для ответа, но не право стереть прежние подтверждённые товары: runtime всё равно добавит их в пул активной потребности и заново проверит против новых требований. maxCards отражает просьбу покупателя о количестве карточек; иначе null. powerSource и phase заполняй только из смысла текущей потребности.',
             'Всегда заполни leadCaptureAuthorization. authorized=true только когда покупатель в текущем контексте явно просит операционный результат или передачу специалисту и либо дал контакт в текущем сообщении, либо явно разрешил использовать сохранённый контакт. Иначе authorized=false, contactSource=none, purpose/evidence=null. Сам факт, что в истории есть телефон, не является согласием на новую заявку.',

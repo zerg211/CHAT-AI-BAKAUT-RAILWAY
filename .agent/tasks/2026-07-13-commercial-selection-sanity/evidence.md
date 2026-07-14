@@ -1,6 +1,6 @@
 # Evidence: commercial selection sanity and evidence continuity
 
-Status: IN PROGRESS
+Status: IN PROGRESS — production attempt 6 failed; voltage verifier is locally verified and awaiting deployment
 
 The specification is frozen before implementation. Production session `18a8f799-8325-43d2-a236-c2e0531078a2` is the authoritative failing baseline.
 
@@ -63,3 +63,22 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Typecheck and production build: PASS.
 - `git diff --check`: PASS.
 - Release status remains FAIL pending commit, Railway marker, and fresh embedded production proof.
+
+## Production attempt 6
+
+- Commit marker: PASS for `31f965d277f0ef9e0377cb2955f4a0990fa22579`.
+- Embedded session: `30b1820f-1c33-47e1-bd19-765ecfa4d1a0`; admin conversation `1753`.
+- Buyer-view audit: FAIL. Turn 1 calculated approximately 5 kW but refused to show cards; turn 2 ended in the public technical fallback after the buyer explicitly requested 2-3 nearby gasoline, single-phase, priced products.
+- Admin audit: FAIL. The LLM correctly emitted strict `voltage_v=220`; deterministic strict validation did not support that requirement kind and suppressed the catalog. Turn 1 recovered; turn 2 exhausted recovery while reusing the same empty product state.
+- Protocol: `local-live-tests/2026-07-14-commercial-selection-sanity-attempt-6.production.md`.
+
+## Current local verification after attempt 6
+
+- Strict generator `voltage_v` is accepted only for supported voltage values and units when it agrees with typed `selectionPolicy.phase`.
+- 220/230 V retains products deterministically classified as single-phase (or mixed-voltage where applicable); 380/400 V retains three-phase or mixed-voltage products; unknown phase remains fail-closed.
+- The orchestrator applies the same voltage verifier to answer products, so response text and visible cards cannot bypass the fact check.
+- Focused selection suites: PASS, 151/151.
+- Full suite: PASS, 972/972.
+- Agentic eval: PASS, 251/251.
+- Typecheck, no-new-regex guard, production dependency audit, build, release gate, and `git diff --check`: PASS.
+- Release status remains FAIL pending commit, exact Railway marker, and a fresh clean embedded-widget dialogue plus admin audit.

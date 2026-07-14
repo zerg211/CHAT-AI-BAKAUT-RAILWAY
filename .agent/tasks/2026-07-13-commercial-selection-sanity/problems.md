@@ -43,3 +43,15 @@ Session `9ea0d9b6-2cd3-44e3-8d49-f684f3ffb3a2` failed the embedded-widget audit:
 5. The assistant therefore produced the false statement that no verified cards with prices existed; pre-send review again returned `pass`.
 
 The current local fix keeps semantic ownership in the LLM and adds deterministic support for the general catalog fact `price_visibility=true`. It filters only products without a real positive price instead of suppressing the entire selection. A continuity regression proves that prior validated products with prices survive a no-new-result follow-up. The release remains FAIL until the new code is pushed, deployed, and passes a fresh clean widget dialogue plus admin audit.
+
+## Production attempt 6 on commit `31f965d`
+
+Session `30b1820f-1c33-47e1-bd19-765ecfa4d1a0` failed the embedded-widget and admin audit:
+
+1. The LLM correctly interpreted the buyer's 220 V house supply as strict `voltage_v=220` and typed single-phase policy.
+2. The load calculator succeeded and produced a 5 kW preliminary nominal target.
+3. Deterministic strict validation did not support `voltage_v`, so it erased all catalog products and the assistant again refused to show preliminary cards.
+4. Turn 1 completed only through recovery; turn 2 failed all recovery attempts and exposed the technical fallback to the buyer.
+5. The turn-2 guard correctly detected missing preliminary cards, but recovery reused the same empty catalog/answer-product state instead of obtaining a repairable product set.
+
+The current local fix adds a general generator-voltage verifier bound to typed phase policy and confirmed product phase/voltage classification. It does not add a special phrase, model, or dialogue branch. The release remains FAIL until deployment and a clean production dialogue with per-turn metadata proof.
