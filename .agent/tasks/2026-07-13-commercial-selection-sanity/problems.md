@@ -67,3 +67,15 @@ Session `696f837d-0082-48ab-856a-50f8f4314fc7` failed from the buyer's perspecti
 5. Client recovery could only start after parsing the SSE `turn` event. A stream that ended before delivering/parsing that event left the client without a turn ID and forced the public fallback.
 
 The current local transport fix duplicates the durable turn ID in the initial HTTP header and consumes it before reading SSE events. Recovery can therefore retrieve the already-saved answer without repeating the buyer message or rerunning semantic planning. The release remains FAIL until deployment and a fresh multi-turn widget plus admin audit passes.
+
+## Production attempt 9 on commit `511de70`
+
+Session `61b981c4-a350-454e-94d8-1cb8f498ce34` failed on a two-product comparison after a successful first selection turn:
+
+1. Turn 1 displayed six coherent priced cards and recommended SUMEC SU8800 as the no-overpayment option.
+2. Turn 2 correctly narrowed the need state to SUMEC SU8800 and BISON BS6250IE.
+3. The LLM planner emitted more than 12 comparison attributes in the second tool request.
+4. Runtime Zod rejected the entire intent contract with `too_big`, and recovery failed with the same structural mismatch.
+5. The OpenAI Structured Outputs JSON Schema did not publish the runtime maximum, so this output was valid under the model-facing contract but invalid under the code-facing contract.
+
+The current local fix aligns all bounded planner/answer arrays and bounded integers between the handwritten JSON Schema and Zod, plus adds a schema-parity regression. Semantic attribute prioritization stays with the LLM. The release remains FAIL until deployment and a fresh multi-turn widget plus admin audit passes.

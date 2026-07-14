@@ -1,0 +1,39 @@
+{
+  "productionCommit": "511de705bb967366d43290ef2cb46dd86c4616d4",
+  "sessionId": "61b981c4-a350-454e-94d8-1cb8f498ce34",
+  "conversationNumber": 1756,
+  "pageUrl": "https://bakautprof.ru/policy/?codex_live_attempt9=511de70",
+  "turns": [
+    {
+      "id": "83e9550b-3df0-4d36-b543-1ea038451b4f",
+      "status": "completed",
+      "stage": "assistant_message_saved",
+      "errorCode": null,
+      "buyerVisibleVerdict": "PASS",
+      "visibleCardCount": 6
+    },
+    {
+      "id": "a1ce09b0-f0b1-4169-bc4f-e251e1da5452",
+      "status": "failed",
+      "stage": "recovery_failed",
+      "errorCode": "agent_manager_recovery_failed",
+      "buyerVisibleVerdict": "FAIL",
+      "buyerVisibleAnswer": "Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.",
+      "selectedProductsInNeedState": [
+        "SUMEC SU8800",
+        "BISON BS6250IE"
+      ],
+      "validationIssue": {
+        "origin": "array",
+        "code": "too_big",
+        "maximum": 12,
+        "path": [
+          "toolRequests",
+          1,
+          "args",
+          "comparisonAttributes"
+        ]
+      }
+    }
+  ]
+}

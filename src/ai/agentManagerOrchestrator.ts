@@ -2868,6 +2868,16 @@ const nullableStringJsonSchema = { type: ['string', 'null'] } as const;
 const nullableNumberJsonSchema = { type: ['number', 'null'] } as const;
 const nullableBooleanJsonSchema = { type: ['boolean', 'null'] } as const;
 const stringArrayJsonSchema = { type: 'array', items: { type: 'string' } } as const;
+const boundedStringArrayJsonSchema = (maxItems: number) => ({
+  type: 'array' as const,
+  items: { type: 'string' as const },
+  maxItems
+});
+const nullableIntegerRangeJsonSchema = (minimum: number, maximum: number) => ({
+  type: ['integer', 'null'] as const,
+  minimum,
+  maximum
+});
 const scalarValueJsonSchema = { type: ['string', 'number', 'boolean', 'null'] } as const;
 
 const ledgerPayloadJsonSchema = {
@@ -2977,7 +2987,8 @@ const loadItemArgsJsonSchema = {
           'catalog_or_web_fact',
           'explicit_power'
         ]
-      }
+      },
+      maxItems: 8
     }
   },
   required: ['kind', 'name', 'count', 'runningKw', 'startingKw', 'source', 'evidence', 'basisKind', 'basisSignals']
@@ -3003,27 +3014,27 @@ const commonCatalogToolArgsJsonProperties = {
 
 const catalogSearchToolArgsJsonSchema = strictJsonObject({
   ...commonCatalogToolArgsJsonProperties,
-  limit: nullableNumberJsonSchema,
-  comparisonAttributes: stringArrayJsonSchema,
+  limit: nullableIntegerRangeJsonSchema(1, 12),
+  comparisonAttributes: boundedStringArrayJsonSchema(12),
   reason: nullableStringJsonSchema,
   notes: nullableStringJsonSchema
 });
 
 const productDetailsToolArgsJsonSchema = strictJsonObject({
   ...commonCatalogToolArgsJsonProperties,
-  productIds: stringArrayJsonSchema,
-  productNames: stringArrayJsonSchema,
-  comparisonAttributes: stringArrayJsonSchema,
-  limit: nullableNumberJsonSchema,
+  productIds: boundedStringArrayJsonSchema(8),
+  productNames: boundedStringArrayJsonSchema(4),
+  comparisonAttributes: boundedStringArrayJsonSchema(12),
+  limit: nullableIntegerRangeJsonSchema(1, 12),
   reason: nullableStringJsonSchema,
   notes: nullableStringJsonSchema
 });
 
 const generatorLoadToolArgsJsonSchema = strictJsonObject({
   ...commonCatalogToolArgsJsonProperties,
-  loads: { type: 'array', items: loadItemArgsJsonSchema },
+  loads: { type: 'array', items: loadItemArgsJsonSchema, maxItems: 24 },
   simultaneousStarting: nullableBooleanJsonSchema,
-  simultaneousStartingKinds: stringArrayJsonSchema,
+  simultaneousStartingKinds: boundedStringArrayJsonSchema(24),
   estimateBasis: {
     type: ['string', 'null'],
     enum: ['exact_or_user_provided', 'catalog_or_web_fact', 'bounded_assumption', 'unbounded_guess', null]
@@ -3034,9 +3045,9 @@ const generatorLoadToolArgsJsonSchema = strictJsonObject({
 
 const webResearchToolArgsJsonSchema = strictJsonObject({
   ...commonCatalogToolArgsJsonProperties,
-  productNames: stringArrayJsonSchema,
-  comparisonAttributes: stringArrayJsonSchema,
-  limit: nullableNumberJsonSchema,
+  productNames: boundedStringArrayJsonSchema(4),
+  comparisonAttributes: boundedStringArrayJsonSchema(12),
+  limit: nullableIntegerRangeJsonSchema(1, 12),
   reason: nullableStringJsonSchema,
   notes: nullableStringJsonSchema
 });
@@ -3074,7 +3085,8 @@ const ledgerDeltaFormat = {
               status: { type: 'string', enum: ['active', 'superseded', 'negated', 'closed', 'rejected'] }
             },
             required: ['eventId', 'eventType', 'scope', 'payload', 'evidence', 'source', 'status']
-          }
+          },
+          maxItems: 40
         }
       },
       required: ['rationale', 'events']
@@ -3089,7 +3101,7 @@ function toolRequestVariantJsonSchema(tool: string, args: Record<string, unknown
     args,
     rationale: { type: 'string' },
     required: { type: 'boolean' },
-    coversRequirementIds: stringArrayJsonSchema
+    coversRequirementIds: boundedStringArrayJsonSchema(40)
   });
 }
 
@@ -3233,10 +3245,10 @@ const selectionPolicyJsonSchema = {
       enum: ['exact_only', 'same_class_only', 'allow_adjacent_with_explanation', 'open_to_alternatives', 'unknown']
     },
     reusePreviousCards: { type: 'boolean' },
-    maxCards: nullableNumberJsonSchema,
+    maxCards: nullableIntegerRangeJsonSchema(0, 8),
     powerSource: { type: ['string', 'null'], enum: ['battery', 'fuel', 'mains', 'any', null] },
     phase: { type: ['string', 'null'], enum: ['single_phase', 'three_phase', 'any', null] },
-    requirements: { type: 'array', items: selectionRequirementJsonSchema },
+    requirements: { type: 'array', items: selectionRequirementJsonSchema, maxItems: 40 },
     rationale: { type: 'string' }
   },
   required: [
@@ -3332,7 +3344,7 @@ const answerContractFormat = {
           }
         },
         toolResultIds: { type: 'array', items: { type: 'string' } },
-        selectedProductIds: { type: 'array', items: { type: 'string' } },
+        selectedProductIds: boundedStringArrayJsonSchema(8),
         leadAction: { type: 'string', enum: ['none', 'offer_form', 'capture_contact', 'confirm_contact_received'] },
         riskFlags: { type: 'array', items: { type: 'string' } },
         selectionReadiness: {
@@ -3453,6 +3465,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Every typed-tool verification must point to a required tool request whose coversRequirementIds contains that exact requirement id. The currently supported derived binding is calculator.generatorLoad with verifier="generator_load_profile" and bindAs="nominal_power_min_kw"; it requires a successful result with a positive payload.profile.requiredNominalKw.',
             'For that generator-load derived binding, normalize requirement.kind to the stable ontology value "generator_load_scenario", value=true, and unit=null. Keep the concrete loads and operating relationship (including simultaneous running versus simultaneous starting) in evidence and in calculator args; do not invent another typed-derived kind.',
             'Every toolRequest must include coversRequirementIds; use [] when it does not verify a selection requirement.',
+            'Keep every tool args.comparisonAttributes list to at most 12 distinct decision-relevant attributes. Prioritize the buyer\'s explicit comparison criteria and omit synonyms or low-value duplicates.',
             'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Unknown strict product attributes remain fail-closed until product evidence can verify them.',
             'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
             'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',

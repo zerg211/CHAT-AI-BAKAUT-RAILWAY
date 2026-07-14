@@ -63,6 +63,34 @@ describe('agent manager contracts', () => {
     expect(result.success).toBe(false);
   });
 
+  it('keeps OpenAI structured-output limits aligned with runtime Zod contracts', () => {
+    const formats = agentManagerStructuredFormats as any;
+    const intent = formats.intentContractFormat.format.schema;
+    const toolVariants = intent.properties.toolRequests.items.anyOf as any[];
+    const toolArgs = (tool: string) => toolVariants.find((variant) =>
+      variant.properties.tool.enum.includes(tool)
+    ).properties.args.properties;
+
+    expect(toolArgs('catalog.search').comparisonAttributes.maxItems).toBe(12);
+    expect(toolArgs('catalog.getProductDetails').productIds.maxItems).toBe(8);
+    expect(toolArgs('catalog.getProductDetails').productNames.maxItems).toBe(4);
+    expect(toolArgs('catalog.getProductDetails').comparisonAttributes.maxItems).toBe(12);
+    expect(toolArgs('calculator.generatorLoad').loads.maxItems).toBe(24);
+    expect(toolArgs('calculator.generatorLoad').loads.items.properties.basisSignals.maxItems).toBe(8);
+    expect(toolArgs('calculator.generatorLoad').simultaneousStartingKinds.maxItems).toBe(24);
+    expect(toolArgs('web.researchProductFacts').productNames.maxItems).toBe(4);
+    expect(toolArgs('web.researchProductFacts').comparisonAttributes.maxItems).toBe(12);
+    expect(toolVariants[0].properties.coversRequirementIds.maxItems).toBe(40);
+    expect(intent.properties.selectionPolicy.properties.maxCards).toMatchObject({
+      type: ['integer', 'null'],
+      minimum: 0,
+      maximum: 8
+    });
+    expect(intent.properties.selectionPolicy.properties.requirements.maxItems).toBe(40);
+    expect(formats.ledgerDeltaFormat.format.schema.properties.events.maxItems).toBe(40);
+    expect(formats.answerContractFormat.format.schema.properties.selectedProductIds.maxItems).toBe(8);
+  });
+
   it('does not require planner-provided turnId to be a trusted UUID', () => {
     const result = AgentIntentContractSchema.safeParse({
       turnId: 'planner-local-turn-id',

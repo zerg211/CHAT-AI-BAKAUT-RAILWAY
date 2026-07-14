@@ -1,6 +1,6 @@
 # Evidence: commercial selection sanity and evidence continuity
 
-Status: IN PROGRESS — production attempt 8 exposed an SSE delivery gap; durable turn-header recovery is locally verified and awaiting deployment
+Status: IN PROGRESS — production attempt 9 exposed Structured Outputs/runtime schema divergence; schema parity is locally verified and awaiting deployment
 
 The specification is frozen before implementation. Production session `18a8f799-8325-43d2-a236-c2e0531078a2` is the authoritative failing baseline.
 
@@ -100,6 +100,29 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Exact regression: an empty primary stream plus the durable header triggers the same-turn recovery endpoint and returns the saved answer and card payload.
 - Focused transport suites: PASS, 22/22.
 - Full suite: PASS, 974/974.
+- Agentic eval: PASS, 251/251.
+- Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
+- Release status remains FAIL pending commit, exact Railway marker, and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
+
+## Deployment and production attempt 9
+
+- Transport recovery commit `511de705bb967366d43290ef2cb46dd86c4616d4` was pushed to GitHub `main`; Railway health reported the exact commit.
+- Attempt 9 / session `61b981c4-a350-454e-94d8-1cb8f498ce34` completed turn 1 normally and displayed six consistent priced 5-6 kW cards.
+- The adaptive turn 2 asked to compare only the visible SUMEC SU8800 / 47,990 RUB and BISON BS6250IE / 61,100 RUB and choose without overpayment.
+- Buyer view: generic technical fallback and no comparison. Verdict: FAIL.
+- Admin turn `a1ce09b0-f0b1-4169-bc4f-e251e1da5452`: `failed`, `recovery_failed`, `agent_manager_recovery_failed`.
+- Need state correctly retained the two selected models and buyer goal, but the planner contract failed on `toolRequests[1].args.comparisonAttributes`: output length exceeded runtime Zod maximum 12.
+- Root cause: handwritten OpenAI JSON Schema had no `maxItems`, while runtime Zod did. Recovery repeated the same hidden-contract failure.
+- Protocol: `local-live-tests/2026-07-14-commercial-selection-sanity-attempt-9.production.md`.
+- Raw admin summary: `.agent/tasks/2026-07-13-commercial-selection-sanity/raw/attempt-9-admin-summary.json`.
+
+## Current local verification after attempt 9
+
+- Structured Outputs now publishes the runtime limits for catalog/web comparison attributes, product IDs/names, generator loads, basis signals, simultaneous-start kinds, requirement coverage, selection requirements, ledger events, selected answer products, card count, and bounded integer tool limits.
+- Planner prompt explicitly limits `comparisonAttributes` to 12 distinct decision-relevant attributes and asks the LLM to prioritize buyer criteria rather than emit synonyms.
+- Schema parity regression inspects all affected exported response formats and prevents the specific hidden-limit class from returning.
+- Focused contract suite: PASS, 11/11.
+- Full suite: PASS, 975/975.
 - Agentic eval: PASS, 251/251.
 - Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
 - Release status remains FAIL pending commit, exact Railway marker, and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
