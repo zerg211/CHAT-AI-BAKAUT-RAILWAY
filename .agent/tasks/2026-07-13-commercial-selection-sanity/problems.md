@@ -79,3 +79,15 @@ Session `61b981c4-a350-454e-94d8-1cb8f498ce34` failed on a two-product compariso
 5. The OpenAI Structured Outputs JSON Schema did not publish the runtime maximum, so this output was valid under the model-facing contract but invalid under the code-facing contract.
 
 The current local fix aligns all bounded planner/answer arrays and bounded integers between the handwritten JSON Schema and Zod, plus adds a schema-parity regression. Semantic attribute prioritization stays with the LLM. The release remains FAIL until deployment and a fresh multi-turn widget plus admin audit passes.
+
+## Production attempt 10 on commit `599378f`
+
+Session `a5253565-aab7-4bbc-b37b-31669a6db423` failed in the embedded widget even though backend work completed successfully:
+
+1. The buyer saw the public technical fallback and no product cards on turn 1.
+2. Admin turn `d57f167c-6567-4cd5-9f7e-468007ba16fd` was `completed` / `assistant_message_saved`, with no error and no recovery.
+3. The saved response correctly calculated a 4.5 kW nominal minimum, named four preliminary products, preserved prices, and passed pre-send review.
+4. Recovery had the durable turn ID, but collided with the original runner's active execution lease and treated `turn_execution_in_progress` as a final recovery failure.
+5. The original runner saved the correct answer after that collision, too late for the iframe that had already rendered fallback.
+
+The current local fix makes recovery wait and retry the same durable turn while the original lease is active. Lease ownership still prevents a concurrent second runner. The release remains FAIL until deployment and a fresh embedded multi-turn dialogue plus per-turn admin audit passes.

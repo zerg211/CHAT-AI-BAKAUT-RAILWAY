@@ -126,3 +126,23 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Agentic eval: PASS, 251/251.
 - Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
 - Release status remains FAIL pending commit, exact Railway marker, and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
+
+## Deployment and production attempt 10
+
+- Schema-parity commit `599378fe8b1461d83052781da851c1ebb6b5bb06` was pushed to GitHub `main`; Railway health reported the exact commit.
+- Attempt 10 / session `a5253565-aab7-4bbc-b37b-31669a6db423`, conversation `1757`, visibly returned the generic technical fallback on turn 1 and no cards. Verdict: FAIL.
+- Admin turn `d57f167c-6567-4cd5-9f7e-468007ba16fd` completed normally in about 42.5 seconds with no error or recovery. It durably saved a grounded answer and four priced cards; review was `pass` and selection readiness was `ready_for_preliminary_cards`.
+- The remaining defect is a recovery/lease race: when the primary SSE transport closes before the original runner finishes, recovery immediately collides with that runner's execution lease and fails instead of waiting for the same turn to finish.
+- Protocol: `local-live-tests/2026-07-14-commercial-selection-sanity-attempt-10.production.md`.
+- Raw admin summary: `.agent/tasks/2026-07-13-commercial-selection-sanity/raw/attempt-10-admin-summary.json`.
+
+## Current local verification after attempt 10
+
+- Recovery now retries the same durable turn while the original execution lease is active.
+- Each retry first reads the completed message/final answer contract; it cannot start a second planner while the first lease is held.
+- If the first runner finishes, the exact saved answer and cards are returned. If it fails and releases the lease, normal checkpoint recovery can resume the same turn.
+- Focused orchestrator and transport suites: PASS, 86/86.
+- Full suite: PASS, 976/976.
+- Agentic eval: PASS, 251/251.
+- Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
+- Release status remains FAIL pending exact deployment and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.

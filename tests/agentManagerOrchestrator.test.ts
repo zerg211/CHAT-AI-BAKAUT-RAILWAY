@@ -4575,6 +4575,51 @@ describe('AgentManagerOrchestrator', () => {
     expect(proposeLedgerDelta).not.toHaveBeenCalled();
   });
 
+  it('waits for the original runner and returns its saved answer when transport recovery collides with the lease', async () => {
+    vi.useFakeTimers();
+    try {
+      const conversations = new FakeConversations() as FakeConversations & {
+        claimTurnExecution: () => Promise<null>;
+      };
+      conversations.claimTurnExecution = vi.fn(async () => null);
+      const proposeLedgerDelta = vi.fn(async () => ({ rationale: 'must not run', events: [] }));
+      const orchestrator = new AgentManagerOrchestrator(
+        conversations as never,
+        new FakeProducts() as never,
+        new FakeLeads() as never,
+        model({ proposeLedgerDelta })
+      );
+
+      const recovery = orchestrator.recoverTurn({ sessionId, turnId });
+      await vi.advanceTimersByTimeAsync(100);
+
+      const saved = message('Saved answer from the original runner.', 'assistant');
+      saved.metadata = {
+        productCards: [{ id: 'generator-5kw', name: 'Generator 5 kW', url: '/generator-5kw' }],
+        usedWebSearch: false,
+        needStateSnapshot: session().needState
+      };
+      conversations.messages.push(saved);
+      conversations.turn = {
+        ...conversations.turn,
+        assistantMessageId: saved.id,
+        status: 'completed'
+      };
+      await vi.advanceTimersByTimeAsync(500);
+
+      await expect(recovery).resolves.toMatchObject({
+        answer: 'Saved answer from the original runner.',
+        assistantMessageId: saved.id,
+        productCards: [{ id: 'generator-5kw' }],
+        metadata: { recoveredFromExistingTurn: true }
+      });
+      expect(proposeLedgerDelta).not.toHaveBeenCalled();
+      expect(conversations.claimTurnExecution).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('resumes from a final answer contract instead of calling the model again', async () => {
     const conversations = new FakeConversations();
     conversations.finalAnswerContract = {

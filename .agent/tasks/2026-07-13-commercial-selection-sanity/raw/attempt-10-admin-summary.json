@@ -1,0 +1,32 @@
+{
+  "productionCommit": "599378fe8b1461d83052781da851c1ebb6b5bb06",
+  "sessionId": "a5253565-aab7-4bbc-b37b-31669a6db423",
+  "conversationNumber": 1757,
+  "pageUrl": "https://bakautprof.ru/policy/?codex_live_attempt10=599378f",
+  "turn": {
+    "id": "d57f167c-6567-4cd5-9f7e-468007ba16fd",
+    "status": "completed",
+    "stage": "assistant_message_saved",
+    "errorCode": null,
+    "recovered": false,
+    "buyerVisibleVerdict": "FAIL",
+    "buyerVisibleAnswer": "Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.",
+    "selectedProducts": [
+      { "id": "a9222ac8-4492-4676-ae35-8de5199fb3cf", "name": "Генератор дизельный EUROPOWER EP 6000 D (4,7 кВт)", "price": 369990 },
+      { "id": "a670e26b-cfde-48db-aec7-164d30a21a75", "name": "Генератор бензиновый SUMEC SU7700 (5,0 кВт) SU7700", "price": 42490 },
+      { "id": "1d58b16e-dd54-4216-8313-b6e3ce26ecaa", "name": "Генератор бензиновый SUMEC SU7700E (5,0 кВт) SU7700E", "price": 46590 },
+      { "id": "98bb3537-19e5-4650-91d7-f2f265b4b10e", "name": "Генератор бензиновый A-iPower LITE AР5500 (5,0 кВт) 20204", "price": 48990 }
+    ],
+    "preSendReview": { "verdict": "pass", "issues": [] },
+    "selectionReadiness": {
+      "status": "ready_for_preliminary_cards",
+      "canShowProductCards": true,
+      "missingFacts": ["fuel_preference"]
+    },
+    "warnings": [
+      "catalog_products_filtered_by_intent:generator:11",
+      "answer_products_filtered_by_structured_hard_constraints:301",
+      "answer_products_commercial_shortlist:65"
+    ]
+  }
+}

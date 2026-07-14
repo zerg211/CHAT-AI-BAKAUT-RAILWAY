@@ -704,6 +704,27 @@ export class TurnExecutionInProgressError extends Error {
   }
 }
 
+const RECOVERY_LEASE_RETRY_INTERVAL_MS = 500;
+const RECOVERY_LEASE_WAIT_LIMIT_MS = 110_000;
+
+async function waitForRecoveryLeaseRetry(signal?: AbortSignal) {
+  if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+  await new Promise<void>((resolve, reject) => {
+    const onTimeout = () => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    };
+    const timeout = setTimeout(onTimeout, RECOVERY_LEASE_RETRY_INTERVAL_MS);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    timeout.unref?.();
+  });
+}
+
 function parseSavedChatResponsePayload(value: unknown): ChatResponsePayload | null {
   if (value === null || value === undefined) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -3697,18 +3718,27 @@ export class AgentManagerOrchestrator {
   }
 
   async recoverTurn(input: AgentManagerRecoverInput): Promise<ChatResponsePayload> {
-    const session = await this.conversations.getSession(input.sessionId);
-    if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
-    return this.executeTurn({
-      sessionId: input.sessionId,
-      userMessage: '',
-      turnId: input.turnId,
-      skipUserMessage: true,
-      onDelta: input.onDelta,
-      signal: input.signal,
-      session,
-      recovered: true
-    });
+    const startedAt = Date.now();
+    while (true) {
+      const session = await this.conversations.getSession(input.sessionId);
+      if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
+      try {
+        return await this.executeTurn({
+          sessionId: input.sessionId,
+          userMessage: '',
+          turnId: input.turnId,
+          skipUserMessage: true,
+          onDelta: input.onDelta,
+          signal: input.signal,
+          session,
+          recovered: true
+        });
+      } catch (error) {
+        if (!(error instanceof TurnExecutionInProgressError)) throw error;
+        if (Date.now() - startedAt >= RECOVERY_LEASE_WAIT_LIMIT_MS) throw error;
+        await waitForRecoveryLeaseRetry(input.signal);
+      }
+    }
   }
 
   private async loadPersistedTurnExecution(sessionId: string, turnId: string) {
