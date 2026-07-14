@@ -2367,6 +2367,61 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_generator_voltage:220:1');
   });
 
+  it('accepts a null unit when the stable voltage_v kind is bound to the typed phase policy', () => {
+    const singlePhase = {
+      ...generatorWithPowerAndVoltage('single-220-null-unit', '5', '230 V single phase'),
+      name: 'SUMEC SU7700 generator 5 kW 230 V single phase'
+    };
+    const intent = structuredSelectionIntent({
+      phase: 'single_phase',
+      requirements: [{
+        id: 'voltage-required-without-duplicate-unit',
+        kind: 'voltage_v',
+        value: 220,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'The buyer has a 220 V house supply.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(intent, 'generator')).toEqual({ blockers: [] });
+    const selection = selectProductsForVisibleCards({
+      products: [singlePhase],
+      userMessage: 'Show a 220 V generator.',
+      history: [],
+      intent,
+      answerText: `${singlePhase.name} fits 220 V.`,
+      selectedProductIds: [singlePhase.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual([singlePhase.id]);
+
+    const wrongUnitIntent = structuredSelectionIntent({
+      phase: 'single_phase',
+      requirements: [{
+        id: 'voltage-with-wrong-unit',
+        kind: 'voltage_v',
+        value: 220,
+        unit: 'kg',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'Malformed typed voltage requirement.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    expect(assessStrictSelectionRequirements(wrongUnitIntent, 'generator').blockers).toEqual([
+      expect.objectContaining({
+        id: 'voltage-with-wrong-unit',
+        reason: 'generator_voltage_not_bound_to_typed_phase_policy'
+      })
+    ]);
+  });
+
   it('binds a strict product type to the canonical product class and fails closed on mismatch', () => {
     const intent = structuredSelectionIntent({
       requirements: [{

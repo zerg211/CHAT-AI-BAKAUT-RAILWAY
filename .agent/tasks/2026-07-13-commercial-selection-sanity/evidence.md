@@ -146,3 +146,23 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Agentic eval: PASS, 251/251.
 - Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
 - Release status remains FAIL pending exact deployment and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
+
+## Deployment and production attempt 11
+
+- Recovery/lease commit `0a976a23bef3fd938bd31c14f3c01c094e79a4ae` was pushed to GitHub `main`; Railway health reported the exact commit.
+- Attempt 11 / session `1d5116e2-81d7-4a93-b216-f1be2ac60709`, conversation `1758`, delivered the actual assistant answer to the iframe without transport fallback, confirming the lease-wait recovery fix in production.
+- Buyer-view verdict still failed: after a correct 4.5 kW calculation the assistant said it would not show exact cards and displayed none.
+- Admin turn `6c2e8ded-f483-4f83-b9a0-11a9e69b18b5` completed normally without recovery. Catalog search and its 1,000-product structured recovery were suppressed by one unsupported strict requirement.
+- Root cause: the typed strict requirement was valid `voltage_v=220` with typed `phase=single_phase`, but `unit` was `null`; deterministic validation redundantly required literal `V` and erased the entire catalog.
+- Protocol: `local-live-tests/2026-07-14-commercial-selection-sanity-attempt-11.production.md`.
+- Raw admin summary: `.agent/tasks/2026-07-13-commercial-selection-sanity/raw/attempt-11-admin-summary.json`.
+
+## Current local verification after attempt 11
+
+- Stable `voltage_v` now supplies the semantic unit when the planner emits `unit: null`; supported voltage and typed phase must still agree.
+- A foreign explicit unit, unsupported voltage, phase mismatch, unknown product phase, and wrong product class remain fail-closed.
+- Focused selection, orchestrator, and transport suites: PASS, 161/161.
+- Full suite: PASS, 977/977.
+- Agentic eval: PASS, 251/251.
+- Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
+- Release status remains FAIL pending exact deployment and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.

@@ -672,6 +672,9 @@ export function assessStrictSelectionRequirements(
 
     if (requirement.kind === generatorVoltageRequirementKind) {
       const normalizedUnit = requirement.unit?.trim().toLocaleLowerCase('ru-RU');
+      const hasSupportedUnit = requirement.unit === null || Boolean(
+        normalizedUnit && supportedGeneratorVoltageUnits.has(normalizedUnit)
+      );
       const voltage = typeof requirement.value === 'number'
         ? requirement.value
         : typeof requirement.value === 'string'
@@ -684,8 +687,7 @@ export function assessStrictSelectionRequirements(
           : undefined;
       if (
         !isGeneratorProductClass(productClass) ||
-        !normalizedUnit ||
-        !supportedGeneratorVoltageUnits.has(normalizedUnit) ||
+        !hasSupportedUnit ||
         !expectedPhase ||
         policy.phase !== expectedPhase
       ) {

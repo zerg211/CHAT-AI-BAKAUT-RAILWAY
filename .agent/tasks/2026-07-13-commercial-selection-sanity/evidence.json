@@ -1,6 +1,6 @@
 {
   "taskId": "2026-07-13-commercial-selection-sanity",
-  "status": "production_attempt_10_failed_recovery_lease_fix_in_local_verification",
+  "status": "production_attempt_11_failed_voltage_unit_fix_in_local_verification",
   "baseline": {
     "productionCommit": "b92baf7d635ee3a8b93a93ebdce1c3b3010783a4",
     "sessionId": "18a8f799-8325-43d2-a236-c2e0531078a2",
@@ -19,10 +19,10 @@
     "AC10": "PASS_LOCAL",
     "AC11": "PASS_LOCAL",
     "AC12": "PASS_LOCAL",
-    "AC13": "PASS_PROCESS_FAIL_RELEASE_ATTEMPT_10",
+    "AC13": "PASS_PROCESS_FAIL_RELEASE_ATTEMPT_11",
     "AC14": "PASS",
-    "AC15": "PASS_ATTEMPT_10_COMMIT_599378F_PENDING_NEW_FIX_DEPLOYMENT",
-    "AC16": "FAIL_ATTEMPT_10",
-    "AC17": "PASS_AUDIT_FAIL_VERDICT_ATTEMPT_10"
+    "AC15": "PASS_ATTEMPT_11_COMMIT_0A976A2_PENDING_NEW_FIX_DEPLOYMENT",
+    "AC16": "FAIL_ATTEMPT_11",
+    "AC17": "PASS_AUDIT_FAIL_VERDICT_ATTEMPT_11"
   }
 }

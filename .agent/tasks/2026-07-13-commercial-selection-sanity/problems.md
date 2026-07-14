@@ -91,3 +91,15 @@ Session `a5253565-aab7-4bbc-b37b-31669a6db423` failed in the embedded widget eve
 5. The original runner saved the correct answer after that collision, too late for the iframe that had already rendered fallback.
 
 The current local fix makes recovery wait and retry the same durable turn while the original lease is active. Lease ownership still prevents a concurrent second runner. The release remains FAIL until deployment and a fresh embedded multi-turn dialogue plus per-turn admin audit passes.
+
+## Production attempt 11 on commit `0a976a2`
+
+Session `1d5116e2-81d7-4a93-b216-f1be2ac60709` proved that transport recovery now delivers the real response, but the commercial behavior still failed:
+
+1. The assistant correctly calculated a 4.5 kW minimum and then refused to show cards.
+2. Catalog search completed, but a single strict-requirement blocker suppressed all candidates and a 1,000-product recovery scan.
+3. The LLM emitted `kind=voltage_v`, `value=220`, `unit=null`, and typed `phase=single_phase`.
+4. Deterministic code required the redundant literal unit `V` even though the stable kind `voltage_v` already defines volts.
+5. Pre-send review did not flag the resulting refusal.
+
+The current local fix accepts a missing duplicate unit only for the stable `voltage_v` kind while retaining all value, phase, class, and product-fact checks. The release remains FAIL until deployment and a fresh embedded multi-turn dialogue plus per-turn admin audit passes.

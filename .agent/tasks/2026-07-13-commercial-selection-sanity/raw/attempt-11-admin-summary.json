@@ -1,0 +1,41 @@
+{
+  "productionCommit": "0a976a23bef3fd938bd31c14f3c01c094e79a4ae",
+  "sessionId": "1d5116e2-81d7-4a93-b216-f1be2ac60709",
+  "conversationNumber": 1758,
+  "pageUrl": "https://bakautprof.ru/policy/?codex_live_attempt11=0a976a2",
+  "turn": {
+    "id": "6c2e8ded-f483-4f83-b9a0-11a9e69b18b5",
+    "status": "completed",
+    "stage": "assistant_message_saved",
+    "errorCode": null,
+    "recovered": false,
+    "buyerVisibleVerdict": "FAIL",
+    "selectionGoal": "preliminary_fit",
+    "strictVoltageRequirement": {
+      "kind": "voltage_v",
+      "value": 220,
+      "unit": null,
+      "typedPhase": "single_phase"
+    },
+    "toolResults": [
+      { "requestId": "calc_gen_load_1", "tool": "calculator.generatorLoad", "status": "ok" },
+      {
+        "requestId": "search_gen_1",
+        "tool": "catalog.search",
+        "status": "ok",
+        "productCount": 0,
+        "warnings": [
+          "catalog_products_filtered_by_intent:generator:36",
+          "catalog_structured_recovery_attempted:1000:0",
+          "answer_products_suppressed:unsupported_or_unverifiable_strict_hard_constraint:1",
+          "catalog_products_filtered_by_intent:generator:4",
+          "catalog_search_retried_with_generator_load_minimum"
+        ]
+      }
+    ],
+    "selectionReadiness": { "status": "needs_more_info", "canShowProductCards": false, "missingFacts": [] },
+    "selectedProductIds": [],
+    "productCards": [],
+    "preSendReview": { "verdict": "pass", "issues": [] }
+  }
+}

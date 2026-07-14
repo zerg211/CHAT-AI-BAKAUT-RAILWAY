@@ -20,3 +20,5 @@ After production attempt 1 exposed unsupported strict `fuel_type`, the final cur
 The first non-networked `npm.cmd run verify` attempt was correctly treated as BLOCKED because the npm audit endpoint was unreachable. It was not counted as a pass. The complete rerun with registry access passed.
 
 After production attempt 10 exposed the recovery/lease transport race, the current-code checks were rerun: focused orchestrator and stream suites 86/86, full suite 976/976, agentic eval 251/251, typecheck/build/regex guard PASS, `git diff --check` PASS, and production dependency audit 0 vulnerabilities.
+
+After production attempt 11 exposed redundant unit validation for typed `voltage_v`, the current-code checks were rerun: focused selection/orchestrator/stream suites 161/161, full suite 977/977, agentic eval 251/251, typecheck/build/regex guard PASS, `git diff --check` PASS, and production dependency audit 0 vulnerabilities.
