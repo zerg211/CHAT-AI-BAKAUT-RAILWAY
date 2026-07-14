@@ -115,3 +115,17 @@ Session `3b3a0351-36c9-4690-ad34-3f9c1dce1794` failed at the recovery transport 
 5. The client treated the first recovery transport interruption as final even though the same recovery call is idempotent and the response was already durable.
 
 The current local fix retries only recoverable transport delivery for the same session/turn ID. Explicit non-recoverable SSE errors remain terminal. The release remains FAIL until deployment and a fresh embedded multi-turn dialogue plus per-turn admin audit passes.
+
+## Production attempt 15 on commit `ecc1806`
+
+Session `9df29bae-34a3-489a-8b4a-46fc947542e4` failed on the exact two-product comparison after a successful first selection turn:
+
+1. Turn 1 completed normally and showed four coherent priced preliminary cards.
+2. Turn 2 asked to compare only TSS SGG 5000N and BISON BS6250IE and recommend the no-overpayment choice.
+3. `catalog.getProductDetails` succeeded and returned both exact products with enough catalog facts for a useful preliminary comparison.
+4. `repairIntentForExactModelEvidence` ignored that exact catalog evidence and injected redundant web research, which failed during fact extraction.
+5. The planner's semantic `comparison_scope` control was treated as an unsupported strict product attribute, suppressing both otherwise valid catalog products.
+6. Failed-web review logic replaced the available catalog-grounded answer with a generic refusal and no cards.
+7. The turn was recovered, so the dialogue also failed the clean-execution acceptance criterion.
+
+The current local fix recognizes exact catalog details as evidence, deterministically binds exact comparison scope to named products, and preserves successful catalog grounding when only a redundant failed-tool reference must be removed. The release remains FAIL until the full gate, deployment, and a fresh clean production dialogue pass.

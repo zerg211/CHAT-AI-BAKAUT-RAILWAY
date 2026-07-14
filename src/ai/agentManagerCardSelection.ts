@@ -189,6 +189,14 @@ function coerceProductSelectionClass(value: unknown): ProductSelectionClass {
     : 'unknown';
 }
 
+function productMatchesExactNamedTarget(product: Product, targetName: string) {
+  const targetTokens = extractModelTokens(targetName).map(compactModelText).filter(Boolean);
+  const productTokens = new Set(extractModelTokens(product.name).map(compactModelText).filter(Boolean));
+  if (targetTokens.length) return targetTokens.every((token) => productTokens.has(token));
+  const normalizedTarget = compactModelText(targetName);
+  return Boolean(normalizedTarget && compactModelText(product.name).includes(normalizedTarget));
+}
+
 export function toolRequestProductIntent(request: ToolRequest, _fallbackText = ''): ProductSelectionClass {
   const args = request.args as Record<string, unknown>;
   const canonical = coerceProductSelectionClass(args.canonicalProductIntent);
@@ -755,6 +763,22 @@ export function assessStrictSelectionRequirements(
         (requirement.relation !== undefined && requirement.relation !== 'must_have')
       ) {
         addBlocker(requirement, 'price_visibility_requirement_shape_mismatch');
+      }
+      continue;
+    }
+
+    if (requirement.kind === 'comparison_scope') {
+      const comparisonSubjects = (intent.productMentions ?? []).filter((mention) =>
+        mention.role === 'comparison_subject' || mention.role === 'target_product'
+      );
+      if (
+        requirement.unit !== null ||
+        typeof requirement.value !== 'string' ||
+        !requirement.value.trim() ||
+        policy.alternativePolicy !== 'exact_only' ||
+        comparisonSubjects.length < 2
+      ) {
+        addBlocker(requirement, 'comparison_scope_not_bound_to_exact_product_mentions');
       }
       continue;
     }
@@ -1676,6 +1700,16 @@ export function selectProductsForVisibleCards(input: {
   if (structuredSelection) {
     const requestedIds = new Set(input.selectedProductIds ?? []);
     selected = unique.filter((product) => requestedIds.has(product.id));
+    if (input.intent.selectionPolicy?.alternativePolicy === 'exact_only') {
+      const exactTargetNames = (input.intent.productMentions ?? [])
+        .filter((mention) => mention.role === 'target_product' || mention.role === 'comparison_subject')
+        .map((mention) => mention.name);
+      if (exactTargetNames.length) {
+        selected = selected.filter((product) =>
+          exactTargetNames.some((targetName) => productMatchesExactNamedTarget(product, targetName))
+        );
+      }
+    }
     const strictProductClass = input.intent.selectionPolicy?.alternativePolicy === 'exact_only' ||
       input.intent.selectionPolicy?.alternativePolicy === 'same_class_only';
     if (strictProductClass && cardIntent !== 'unknown') {

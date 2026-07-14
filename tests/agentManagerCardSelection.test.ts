@@ -2328,6 +2328,52 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_price_visibility:1');
   });
 
+  it('binds an exact comparison scope to named comparison subjects instead of treating it as an unknown product attribute', () => {
+    const first = generatorWithPrice('tss-5000n', 'TSS SGG 5000N gasoline generator 5 kW', 49281);
+    const second = generatorWithPrice('bison-6250ie', 'BISON BS6250IE inverter generator 5 kW', 61100);
+    const unrelated = generatorWithPrice('firman-rd7910', 'FIRMAN RD7910 gasoline generator 5 kW', 57200);
+    const intent = structuredSelectionIntent({
+      alternativePolicy: 'exact_only',
+      maxCards: 2,
+      requirements: [{
+        id: 'compare-only-these-models',
+        kind: 'comparison_scope',
+        value: 'only_tss_sgg_5000n_and_bison_bs6250ie',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'Compare only TSS SGG 5000N and BISON BS6250IE.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    intent.productMentions = [{
+      name: 'TSS SGG 5000N',
+      role: 'comparison_subject',
+      productClass: 'generator',
+      evidence: 'first named comparison product'
+    }, {
+      name: 'BISON BS6250IE',
+      role: 'comparison_subject',
+      productClass: 'generator',
+      evidence: 'second named comparison product'
+    }];
+
+    expect(assessStrictSelectionRequirements(intent, 'generator')).toEqual({ blockers: [] });
+    const selection = selectProductsForVisibleCards({
+      products: [unrelated, first, second],
+      userMessage: 'Compare only TSS SGG 5000N and BISON BS6250IE.',
+      history: [],
+      intent,
+      answerText: `${first.name} costs 49,281 RUB; ${second.name} costs 61,100 RUB.`,
+      selectedProductIds: [unrelated.id, first.id, second.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.products.map((product) => product.id)).toEqual([first.id, second.id]);
+    expect(selection.droppedProductIds).toContain(unrelated.id);
+  });
+
   it('accepts typed 220 V as a generator fact and removes three-phase-only cards', () => {
     const singlePhase = {
       ...generatorWithPowerAndVoltage('single-220', '5', '230 V single phase'),

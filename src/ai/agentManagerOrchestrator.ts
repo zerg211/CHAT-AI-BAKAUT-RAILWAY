@@ -600,7 +600,7 @@ function toolRequestEvidenceText(request: ToolRequest) {
 }
 
 function exactModelEvidenceToolCoversToken(request: ToolRequest, token: string) {
-  if (request.tool !== 'web.researchProductFacts') return false;
+  if (request.tool !== 'web.researchProductFacts' && request.tool !== 'catalog.getProductDetails') return false;
   return modelIdentifierTokens(toolRequestEvidenceText(request)).includes(token);
 }
 
@@ -1372,7 +1372,7 @@ function filterProductsByStructuredSelectionPolicy(input: {
       ? strictRequirementAssessment.generatorNominalPowerMinKw
       : Math.max(strictRequirementAssessment.generatorNominalPowerMinKw, calculatorNominalPowerMin);
   const exactTargetNames = (input.intent.productMentions ?? [])
-    .filter((mention) => mention.role === 'target_product')
+    .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
     .map((mention) => mention.name);
   const products = input.products.filter((product) => {
     const acceptedCompromise = allowCompromises && compromiseProductIds.has(product.id);
@@ -6563,6 +6563,9 @@ export class AgentManagerOrchestrator {
     );
     const failedToolReferenceOnly = mechanicalIssues.some((issue) => issue.code === 'failed_tool_result_referenced') &&
       !mechanicalIssues.some((issue) => issue.code === 'failed_tool_result_used_as_fact_source');
+    if (failedFactSourceRepairIssue && failedToolReferenceOnly && input.products.length > 0) {
+      return finalizeMechanicalRewrite(input.answer.answerText);
+    }
     const failedWebResearchRewrite = failedWebResearchSafeRewrite({
       intent: input.intent,
       toolResults: input.toolResults
@@ -6575,9 +6578,6 @@ export class AgentManagerOrchestrator {
     );
     if (unsupportedCatalogProductMentionIssue && unsupportedCatalogProductMentionRewrite) {
       return finalizeMechanicalRewrite(unsupportedCatalogProductMentionRewrite.revisedAnswerText);
-    }
-    if (failedFactSourceRepairIssue && failedToolReferenceOnly && input.products.length > 0) {
-      return finalizeMechanicalRewrite(input.answer.answerText);
     }
     if (failedFactSourceRepairIssue) {
       return finalizeMechanicalRewrite(failedToolEvidenceSafeRewrite(input.toolResults));

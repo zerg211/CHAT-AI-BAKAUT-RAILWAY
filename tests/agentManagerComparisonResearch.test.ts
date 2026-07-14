@@ -628,6 +628,59 @@ describe('AgentManager comparison research flow', () => {
     expect(metadata.answerContract?.factsUsed).toEqual([]);
   });
 
+  it('preserves a useful catalog-grounded comparison when only the redundant web result reference failed', async () => {
+    researchProductComparisonFacts.mockRejectedValueOnce(
+      new Error('product_comparison_research did not return a JSON object')
+    );
+
+    const catalogGroundedModel: AgentManagerModel = {
+      ...model(),
+      async composeAnswer() {
+        return {
+          answerText: 'Обе модели дают одинаковую номинальную мощность. SUMEC дешевле, поэтому без требования к инверторному выходу я бы не переплачивал; BISON имеет смысл выбирать именно ради инверторного типа.',
+          factsUsed: [{
+            factKey: 'catalog.comparison',
+            sourceEventIds: ['catalog:test'],
+            value: 'same nominal power; different price and generator type'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['catalog:test', 'web:test'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      },
+      async reviewAnswer() {
+        return { verdict: 'pass', issues: [] };
+      }
+    };
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      { async createLead() { return null; } } as never,
+      withStrictToolFixtures(catalogGroundedModel)
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Compare SUMEC and BISON generators by power and noise.'
+    });
+
+    expect(payload.answer).toContain('я бы не переплачивал');
+    expect(payload.answer).toContain('инверторного типа');
+    expect(payload.answer).not.toContain('внешняя проверка не завершилась');
+    expect(payload.metadata?.answerContract).toMatchObject({
+      toolResultIds: ['catalog:test']
+    });
+    expect(payload.metadata?.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'failed_tool_result_referenced' })
+      ])
+    });
+  });
+
   it('answers exact external facts for a named model absent from catalog and exposes nearby catalog models', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
@@ -2033,6 +2086,155 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.answer).not.toContain('По деталям запуска');
     expect(payload.metadata?.intentContract).toMatchObject({
       requiresTools: true,
+      riskFlags: expect.arrayContaining(['planner_repaired_exact_model_evidence'])
+    });
+  });
+
+  it('treats exact catalog product details as current-model evidence without injecting redundant web research', async () => {
+    researchProductComparisonFacts.mockClear();
+    const tss = product('tss-5000n', 'TSS SGG 5000N gasoline generator 5 kW', {
+      nominal_power_kw: 5,
+      voltage_v: 230,
+      phase: 'single_phase',
+      generator_type: 'conventional'
+    });
+    const bison = product('bison-6250ie', 'BISON BS6250IE gasoline inverter generator 5 kW', {
+      nominal_power_kw: 5,
+      voltage_v: 220,
+      phase: 'single_phase',
+      generator_type: 'inverter'
+    });
+    tss.price = 49281;
+    bison.price = 61100;
+
+    class ExactComparisonProducts extends FakeProducts {
+      async getProductsByIds(ids: string[]) {
+        return [tss, bison].filter((item) => ids.includes(item.id));
+      }
+      async searchProducts() {
+        return [tss, bison];
+      }
+    }
+
+    const catalogComparisonModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'compare only TSS SGG 5000N and BISON BS6250IE without overpaying',
+          dialogueUnderstanding: 'the buyer narrowed the current shortlist to two exact catalog products',
+          nextStepRationale: 'load the two exact catalog cards and compare verified facts',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog:exact-comparison',
+            tool: 'catalog.getProductDetails',
+            args: {
+              query: 'TSS SGG 5000N BISON BS6250IE',
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              productIds: [tss.id, bison.id],
+              productNames: ['TSS SGG 5000N', 'BISON BS6250IE'],
+              comparisonAttributes: ['nominal_power_kw', 'voltage_v', 'phase', 'generator_type']
+            },
+            rationale: 'both exact products are present in the current catalog',
+            required: true,
+            coversRequirementIds: ['comparison-scope']
+          }],
+          productMentions: [{
+            name: 'TSS SGG 5000N',
+            role: 'comparison_subject',
+            productClass: 'generator',
+            evidence: 'first exact comparison target'
+          }, {
+            name: 'BISON BS6250IE',
+            role: 'comparison_subject',
+            productClass: 'generator',
+            evidence: 'second exact comparison target'
+          }],
+          selectionPolicy: {
+            targetProductClass: 'gasoline generator for a country house',
+            canonicalProductClass: 'generator',
+            needAction: 'continue',
+            selectionGoal: 'preliminary_fit',
+            alternativePolicy: 'exact_only',
+            reusePreviousCards: true,
+            maxCards: 2,
+            powerSource: 'fuel',
+            phase: 'single_phase',
+            requirements: [{
+              id: 'comparison-scope',
+              kind: 'comparison_scope',
+              value: 'only_tss_sgg_5000n_and_bison_bs6250ie',
+              unit: null,
+              role: 'hard_constraint',
+              strictness: 'strict',
+              relation: 'must_have',
+              evidence: 'compare only the two named models',
+              verification: { mode: 'product_attribute' }
+            }],
+            rationale: 'compare only the two products selected by the buyer'
+          },
+          grounding: {
+            sourcePolicy: 'catalog_required',
+            requiredToolKinds: ['catalog.getProductDetails'],
+            taskType: 'comparison',
+            technicalAttributes: ['nominal power', 'generator type'],
+            webPurpose: 'none',
+            rationale: 'the catalog contains the exact products and the facts needed for this comparison'
+          },
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.toolResults).toEqual([
+          expect.objectContaining({ requestId: 'catalog:exact-comparison', tool: 'catalog.getProductDetails', status: 'ok' })
+        ]);
+        expect(input.products.map((item) => item.id)).toEqual([tss.id, bison.id]);
+        return {
+          answerText: 'Обе модели дают 5 кВт. TSS дешевле; доплата за BISON дает инверторный тип. Для насоса и болгарки без переплаты предварительно выбрал бы TSS.',
+          factsUsed: [{
+            factKey: 'catalog.exact_comparison',
+            sourceEventIds: ['catalog:exact-comparison'],
+            value: 'two verified catalog products'
+          }],
+          questionsAsked: [],
+          toolResultIds: ['catalog:exact-comparison'],
+          selectedProductIds: [tss.id, bison.id],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            productClass: 'generator',
+            missingFacts: [],
+            rationale: 'both exact catalog products have the comparison facts needed for a preliminary recommendation'
+          }
+        };
+      },
+      async reviewAnswer() {
+        return { verdict: 'pass', issues: [] };
+      }
+    };
+
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Compare only TSS SGG 5000N and BISON BS6250IE: what do I get for the extra money?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new ExactComparisonProducts() as never,
+      { async createLead() { return null; } } as never,
+      withStrictToolFixtures(catalogComparisonModel)
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Compare only TSS SGG 5000N and BISON BS6250IE: what do I get for the extra money?'
+    });
+
+    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+    expect(payload.answer).toContain('предварительно выбрал бы TSS');
+    expect(payload.productCards.map((card) => card.id)).toEqual([tss.id, bison.id]);
+    expect(payload.metadata?.intentContract).not.toMatchObject({
       riskFlags: expect.arrayContaining(['planner_repaired_exact_model_evidence'])
     });
   });

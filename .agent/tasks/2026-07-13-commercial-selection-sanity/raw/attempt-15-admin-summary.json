@@ -1,0 +1,50 @@
+{
+  "productionCommit": "ecc18064948547f7f50855bc5af319d8bac0c789",
+  "sessionId": "9df29bae-34a3-489a-8b4a-46fc947542e4",
+  "conversationNumber": 1762,
+  "buyerViewVerdict": "FAIL",
+  "adminVerdict": "FAIL",
+  "turns": [
+    {
+      "index": 1,
+      "turnId": "6a54920e-afd3-4c37-bf30-09e5001dfd2b",
+      "status": "completed",
+      "recovered": false,
+      "toolStatuses": ["calculator.generatorLoad:ok", "catalog.search:ok"],
+      "selectedProductCount": 4,
+      "cardPricesRub": [49281, 57200, 61100, 64990],
+      "reviewVerdict": "pass",
+      "buyerView": "PASS: preliminary 5 kW orientation, four named priced cards, exact pump data deferred only for final confirmation"
+    },
+    {
+      "index": 2,
+      "turnId": "460085ca-8697-4dea-9921-acb5bbe3f7c2",
+      "status": "recovered",
+      "stage": "assistant_message_saved",
+      "errorCode": "agent_manager_recovery_failed",
+      "recovered": true,
+      "toolStatuses": ["catalog.getProductDetails:ok", "web.researchProductFacts:error"],
+      "catalogProductIds": [
+        "aec5c144-2ab0-4395-8dc5-b3f341120c66",
+        "7b3559f6-9ec4-4a5b-a559-9e10dc3db378"
+      ],
+      "selectedProductCount": 0,
+      "cardCount": 0,
+      "reviewVerdict": "rewrite_required",
+      "reviewIssueCodes": ["failed_tool_result_referenced"],
+      "warnings": [
+        "historical_selection_evidence_reused",
+        "answer_products_suppressed:unsupported_or_unverifiable_strict_hard_constraint:1",
+        "product_cards_suppressed:selection_readiness_contract"
+      ],
+      "buyerView": "FAIL: no comparison, no recommendation, no cards; only a refusal caused by incomplete external verification"
+    }
+  ],
+  "rootCause": [
+    "The planner correctly requested catalog.getProductDetails for both exact selected models and the catalog returned both products with prices, power, voltage, phase, type and other specs.",
+    "repairIntentForExactModelEvidence ignored catalog.getProductDetails as exact-model evidence and injected a redundant web.researchProductFacts request.",
+    "The redundant web extraction failed, and failedWebResearchSafeRewrite replaced the useful catalog-grounded answer with a generic refusal.",
+    "The LLM emitted comparison_scope as a strict control constraint; deterministic strict-requirement code treated it as an unsupported product attribute and erased both catalog products.",
+    "The recovery path saved the refusal, so AC13 also failed independently."
+  ]
+}

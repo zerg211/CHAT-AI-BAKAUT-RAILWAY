@@ -187,3 +187,23 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Agentic eval: PASS, 251/251.
 - Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
 - Release status remains FAIL pending exact deployment and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
+
+## Deployment and production attempt 15
+
+- Recovery-transport commit `ecc18064948547f7f50855bc5af319d8bac0c789` was pushed to GitHub `main`; Railway health reported the exact commit.
+- Attempt 15 / session `9df29bae-34a3-489a-8b4a-46fc947542e4`, conversation `1762`, completed a clean first turn with a preliminary 5 kW orientation and four coherent priced cards.
+- The adaptive second turn asked to compare only TSS SGG 5000N / 49,281 RUB and inverter BISON BS6250IE / 61,100 RUB and choose without overpayment.
+- Buyer view failed: the assistant refused to compare because external verification did not complete, although the exact catalog-details tool had succeeded.
+- Admin turn `460085ca-8697-4dea-9921-acb5bbe3f7c2` showed both exact products with sufficient catalog facts, then a redundant auto-injected web research request failed.
+- Deterministic strict validation also misclassified the LLM's `comparison_scope` control as an unsupported product attribute and suppressed both products.
+- The failed-web safety rewrite discarded successful catalog evidence and saved a generic refusal; the turn was recovered, independently failing AC13.
+- Protocol: `local-live-tests/2026-07-14-commercial-selection-sanity-attempt-15.production.md`.
+- Raw admin summary: `.agent/tasks/2026-07-13-commercial-selection-sanity/raw/attempt-15-admin-summary.json`.
+
+## Current local fix after attempt 15
+
+- `catalog.getProductDetails` for the named exact models now satisfies the exact-model evidence guard and does not trigger redundant automatic web research.
+- Strict `comparison_scope` is accepted only when it is bound to `exact_only` plus at least two named comparison/target products; the exact named products are enforced deterministically in answer and card filtering.
+- If a failed tool is only an extraneous result reference while successful catalog products remain, the reviewer preserves and rechecks the catalog-grounded answer before considering a failed-web fallback.
+- Focused exact-comparison and card-selection regressions: PASS, 95/95.
+- Release status remains FAIL pending the full local gate, commit/push, exact Railway marker, and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
