@@ -19,8 +19,8 @@ const sseHeaders = {
   'x-accel-buffering': 'no'
 } as const;
 
-export function openSseReply(reply: SseReply) {
-  reply.raw.writeHead(200, sseHeaders);
+export function openSseReply(reply: SseReply, headers: Record<string, string> = {}) {
+  reply.raw.writeHead(200, { ...sseHeaders, ...headers });
   return createSseSender(reply);
 }
 

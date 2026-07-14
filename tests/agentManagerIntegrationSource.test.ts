@@ -122,7 +122,8 @@ describe('agent manager integration source guards', () => {
     const route = readFileSync('src/routes/chat.ts', 'utf8');
 
     expect(route).toContain("import { closeSseReply, openSseReply, startStatusTimer } from './sse.js';");
-    expect(route).toContain('const send = openSseReply(reply);');
+    expect(route).toContain("const send = openSseReply(reply, { 'x-chat-turn-id': turnId });");
+    expect(route).toContain("const send = openSseReply(reply, { 'x-chat-turn-id': params.turnId });");
     expect(route).toContain('stopStatusTimer = startStatusTimer({');
     expect(route).toContain('closeSseReply(reply);');
     expect(route).not.toContain('reply.raw.writeHead(200');

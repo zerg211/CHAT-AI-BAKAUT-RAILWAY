@@ -45,6 +45,20 @@ describe('chat SSE helpers', () => {
     expect(reply.raw.writableEnded).toBe(true);
   });
 
+  it('adds a durable turn id header without replacing the SSE headers', () => {
+    const { reply, headers } = fakeReply();
+
+    openSseReply(reply, { 'x-chat-turn-id': 'turn-durable' });
+
+    expect(headers[0]).toEqual({
+      statusCode: 200,
+      headers: expect.objectContaining({
+        'content-type': 'text/event-stream; charset=utf-8',
+        'x-chat-turn-id': 'turn-durable'
+      })
+    });
+  });
+
   it('sends the initial status immediately and advances on the timer', async () => {
     vi.useFakeTimers();
     const events: Array<{ event: string; data: unknown }> = [];

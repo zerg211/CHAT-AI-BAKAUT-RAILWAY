@@ -123,7 +123,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
     timeout.unref?.();
 
-    const send = openSseReply(reply);
+    const send = openSseReply(reply, { 'x-chat-turn-id': turnId });
 
     let stopStatusTimer: (() => void) | null = null;
     try {
@@ -234,7 +234,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
     timeout.unref?.();
 
-    const send = openSseReply(reply);
+    const send = openSseReply(reply, { 'x-chat-turn-id': params.turnId });
 
     let stopStatusTimer: (() => void) | null = null;
     let sessionForRecovery: Awaited<ReturnType<ConversationRepository['getSession']>> | null = null;

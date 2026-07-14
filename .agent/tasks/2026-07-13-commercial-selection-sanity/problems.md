@@ -55,3 +55,15 @@ Session `30b1820f-1c33-47e1-bd19-765ecfa4d1a0` failed the embedded-widget and ad
 5. The turn-2 guard correctly detected missing preliminary cards, but recovery reused the same empty catalog/answer-product state instead of obtaining a repairable product set.
 
 The current local fix adds a general generator-voltage verifier bound to typed phase policy and confirmed product phase/voltage classification. It does not add a special phrase, model, or dialogue branch. The release remains FAIL until deployment and a clean production dialogue with per-turn metadata proof.
+
+## Production attempt 8 on commit `45892db`
+
+Session `696f837d-0082-48ab-856a-50f8f4314fc7` failed from the buyer's perspective even though backend processing succeeded:
+
+1. The embedded widget displayed the generic technical fallback and no cards.
+2. Admin turn `881dc369-aadf-4c12-ad7d-40b20a5468dc` completed normally in about 46.6 seconds with no error and no recovery.
+3. Planner semantics, strict `voltage_v=220`, load calculation, catalog selection, pre-send review, saved answer, and four selected cards were all present.
+4. The successful saved answer was not delivered to the widget after the primary SSE transport ended.
+5. Client recovery could only start after parsing the SSE `turn` event. A stream that ended before delivering/parsing that event left the client without a turn ID and forced the public fallback.
+
+The current local transport fix duplicates the durable turn ID in the initial HTTP header and consumes it before reading SSE events. Recovery can therefore retrieve the already-saved answer without repeating the buyer message or rerunning semantic planning. The release remains FAIL until deployment and a fresh multi-turn widget plus admin audit passes.

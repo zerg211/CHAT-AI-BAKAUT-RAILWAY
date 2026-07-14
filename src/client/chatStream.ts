@@ -149,6 +149,7 @@ export async function streamChatMessage(
     throw new Error('Не удалось получить ответ');
   }
   if (!response.body) throw new Error('Не удалось получить ответ');
+  turnId = response.headers.get('x-chat-turn-id')?.trim() || turnId;
 
   try {
     return await consumeSse(response, handlers, signal, idleTimeoutMs, async (event, data) => {

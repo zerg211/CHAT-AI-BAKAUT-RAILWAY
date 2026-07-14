@@ -73,6 +73,47 @@ describe('streamChatMessage watchdog and recovery', () => {
     }
   });
 
+  it('recovers a completed turn when the primary SSE body closes before any event is delivered', async () => {
+    const emptyPrimaryStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      }
+    });
+    const recoveredPayload = {
+      turnId: 'turn-from-header',
+      answer: 'Saved answer delivered after transport interruption',
+      assistantMessageId: 'msg-from-header',
+      productCards: [{ id: 'generator-5kw', name: 'Generator 5 kW', url: '/generator-5kw' }],
+      usedWebSearch: false
+    };
+    const recoveredStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseEvent('done', recoveredPayload)));
+        controller.close();
+      }
+    });
+    const fetcher = vi.fn(async (url: string | URL | Request) => (
+      String(url).includes('/recover')
+        ? new Response(recoveredStream, { status: 200 })
+        : new Response(emptyPrimaryStream, {
+            status: 200,
+            headers: { 'x-chat-turn-id': 'turn-from-header' }
+          })
+    ));
+
+    await expect(streamChatMessage(
+      'http://127.0.0.1:3010',
+      'session-1',
+      'need a generator',
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher }
+    )).resolves.toMatchObject(recoveredPayload);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(String(fetcher.mock.calls[1]?.[0])).toContain('/messages/turn-from-header/recover');
+  });
+
   it('lets recovery outlive the primary stream idle watchdog', async () => {
     vi.useFakeTimers();
     try {

@@ -1,0 +1,39 @@
+{
+  "productionCommit": "45892db7a11417892ae0867fe00aedc4e4856431",
+  "sessionId": "696f837d-0082-48ab-856a-50f8f4314fc7",
+  "conversationNumber": 1755,
+  "turnId": "881dc369-aadf-4c12-ad7d-40b20a5468dc",
+  "pageUrl": "https://bakautprof.ru/policy/?codex_live_attempt8=45892db",
+  "buyerVisible": {
+    "answer": "Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.",
+    "cards": [],
+    "verdict": "FAIL"
+  },
+  "admin": {
+    "status": "completed",
+    "stage": "assistant_message_saved",
+    "errorCode": null,
+    "recovered": false,
+    "createdAt": "2026-07-14T10:02:14.020Z",
+    "updatedAt": "2026-07-14T10:03:00.603Z",
+    "selectionGoal": "preliminary_fit",
+    "requirements": [
+      "generator_load_scenario:strict:typed_tool",
+      "phase=single_phase:strict:product_attribute",
+      "voltage_v=220 V:strict:product_attribute",
+      "auto_start_required=false:informational:not_required"
+    ],
+    "calculatorStatus": "ok",
+    "catalogStatus": "ok",
+    "preliminaryMatches": 6,
+    "selectionReadiness": "ready_for_cards",
+    "answerProductCount": 6,
+    "cardCount": 4,
+    "answerProductWarnings": [],
+    "cardWarnings": [
+      "product_cards_filtered:2"
+    ],
+    "preSendReviewVerdict": "rewrite_required",
+    "savedAnswerDeliveredToBuyer": false
+  }
+}

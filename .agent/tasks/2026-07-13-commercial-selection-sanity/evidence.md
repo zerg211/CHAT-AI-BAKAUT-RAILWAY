@@ -1,6 +1,6 @@
 # Evidence: commercial selection sanity and evidence continuity
 
-Status: IN PROGRESS — production attempt 6 failed; voltage verifier is locally verified and awaiting deployment
+Status: IN PROGRESS — production attempt 8 exposed an SSE delivery gap; durable turn-header recovery is locally verified and awaiting deployment
 
 The specification is frozen before implementation. Production session `18a8f799-8325-43d2-a236-c2e0531078a2` is the authoritative failing baseline.
 
@@ -82,3 +82,24 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Agentic eval: PASS, 251/251.
 - Typecheck, no-new-regex guard, production dependency audit, build, release gate, and `git diff --check`: PASS.
 - Release status remains FAIL pending commit, exact Railway marker, and a fresh clean embedded-widget dialogue plus admin audit.
+
+## Deployment and production attempts 7-8
+
+- Voltage verifier commit `45892db7a11417892ae0867fe00aedc4e4856431` was pushed to GitHub `main`; Railway health reported the exact commit.
+- Attempt 7 produced one clean completed turn with four correct priced cards. Browser control failed before turn 2 was submitted; admin data confirmed that the second message was absent. Reloading reset the iframe session, so this run is recorded as incomplete and not accepted as proof.
+- Attempt 8 / session `696f837d-0082-48ab-856a-50f8f4314fc7` visibly returned the generic technical fallback on turn 1. Verdict: FAIL.
+- Admin conversation `1755` showed that the same turn actually completed normally in about 46.6 seconds: planner, calculator, catalog, voltage validation, preliminary selection, review, answer save, and four card selection all succeeded with `recovered=false`.
+- The persisted answer was not delivered to the buyer. The client had no recovery key when the primary SSE body ended before a parsable `turn` event/done payload.
+- Protocol: `local-live-tests/2026-07-14-commercial-selection-sanity-attempt-8.production.md`.
+- Raw admin summary: `.agent/tasks/2026-07-13-commercial-selection-sanity/raw/attempt-8-admin-summary.json`.
+
+## Current local verification after attempt 8
+
+- The initial SSE response now exposes `x-chat-turn-id` immediately after durable turn creation; the recovery route exposes the same header.
+- The client reads the response header before consuming the body, so it can recover the already-saved answer when the primary SSE body closes before any event is delivered.
+- Exact regression: an empty primary stream plus the durable header triggers the same-turn recovery endpoint and returns the saved answer and card payload.
+- Focused transport suites: PASS, 22/22.
+- Full suite: PASS, 974/974.
+- Agentic eval: PASS, 251/251.
+- Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
+- Release status remains FAIL pending commit, exact Railway marker, and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
