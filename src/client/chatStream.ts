@@ -16,9 +16,18 @@ export type ChatStreamOptions = {
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 150_000;
 const DEFAULT_RECOVERY_IDLE_TIMEOUT_MS = 180_000;
+const MAX_RECOVERY_TRANSPORT_ATTEMPTS = 3;
+const RECOVERY_TRANSPORT_RETRY_DELAY_MS = 250;
 const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя.';
 const RECOVERING_STATUS = 'Ответ оборвался, восстанавливаю...';
 const FRIENDLY_FINAL_ERROR = 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
+
+class ServerSseError extends Error {
+  constructor(message: string, readonly recoverable: boolean) {
+    super(message);
+    this.name = 'ServerSseError';
+  }
+}
 
 function parseSseEvent(rawEvent: string) {
   const lines = rawEvent.split('\n');
@@ -83,7 +92,12 @@ async function consumeSse(
       if (parsed.event === 'delta') handlers.onDelta(parsed.data.delta ?? '');
       if (parsed.event === 'status') handlers.onStatus?.(parsed.data.status ?? '');
       if (parsed.event === 'done') donePayload = parsed.data as ChatResponsePayload;
-      if (parsed.event === 'error') throw new Error(parsed.data.error ?? FRIENDLY_FINAL_ERROR);
+      if (parsed.event === 'error') {
+        throw new ServerSseError(
+          String(parsed.data.error ?? FRIENDLY_FINAL_ERROR),
+          parsed.data.recoverable !== false
+        );
+      }
     }
   }
 
@@ -100,15 +114,44 @@ async function recoverChatMessage(
   fetcher: FetchLike,
   idleTimeoutMs: number
 ) {
-  handlers.onStatus?.(RECOVERING_STATUS);
-  const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages/${turnId}/recover`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({}),
-    signal
-  });
-  if (!response.ok || !response.body) throw new Error(FRIENDLY_FINAL_ERROR);
-  return consumeSse(response, handlers, signal, Math.max(idleTimeoutMs, DEFAULT_RECOVERY_IDLE_TIMEOUT_MS));
+  let lastError: unknown = new Error(FRIENDLY_FINAL_ERROR);
+  for (let attempt = 0; attempt < MAX_RECOVERY_TRANSPORT_ATTEMPTS; attempt += 1) {
+    handlers.onStatus?.(RECOVERING_STATUS);
+    try {
+      const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages/${turnId}/recover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+        signal
+      });
+      if (!response.ok || !response.body) throw new Error(FRIENDLY_FINAL_ERROR);
+      return await consumeSse(
+        response,
+        handlers,
+        signal,
+        Math.max(idleTimeoutMs, DEFAULT_RECOVERY_IDLE_TIMEOUT_MS)
+      );
+    } catch (error) {
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+      if (error instanceof ServerSseError && !error.recoverable) throw error;
+      lastError = error;
+      if (attempt + 1 >= MAX_RECOVERY_TRANSPORT_ATTEMPTS) break;
+      await new Promise<void>((resolve, reject) => {
+        const onTimeout = () => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve();
+        };
+        const timeout = setTimeout(onTimeout, RECOVERY_TRANSPORT_RETRY_DELAY_MS);
+        const onAbort = () => {
+          clearTimeout(timeout);
+          signal?.removeEventListener('abort', onAbort);
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+      });
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(FRIENDLY_FINAL_ERROR);
 }
 
 export async function streamChatMessage(

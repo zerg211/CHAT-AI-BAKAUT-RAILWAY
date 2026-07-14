@@ -103,3 +103,15 @@ Session `1d5116e2-81d7-4a93-b216-f1be2ac60709` proved that transport recovery no
 5. Pre-send review did not flag the resulting refusal.
 
 The current local fix accepts a missing duplicate unit only for the stable `voltage_v` kind while retaining all value, phase, class, and product-fact checks. The release remains FAIL until deployment and a fresh embedded multi-turn dialogue plus per-turn admin audit passes.
+
+## Production attempt 13 on commit `7785f05`
+
+Session `3b3a0351-36c9-4690-ad34-3f9c1dce1794` failed at the recovery transport boundary:
+
+1. The buyer saw the public technical fallback and no cards.
+2. The original/recovery backend path nevertheless produced and saved a grounded five-card answer.
+3. Final turn status was `recovered`; the trace proves `assistant_message_saved_from_answer_contract`.
+4. This confirms that waiting on the active execution lease worked, but the recovery SSE itself closed before `done` reached the iframe.
+5. The client treated the first recovery transport interruption as final even though the same recovery call is idempotent and the response was already durable.
+
+The current local fix retries only recoverable transport delivery for the same session/turn ID. Explicit non-recoverable SSE errors remain terminal. The release remains FAIL until deployment and a fresh embedded multi-turn dialogue plus per-turn admin audit passes.

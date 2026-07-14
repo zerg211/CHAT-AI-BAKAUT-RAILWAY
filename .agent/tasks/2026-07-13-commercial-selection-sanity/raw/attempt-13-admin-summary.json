@@ -1,0 +1,24 @@
+{
+  "productionCommit": "7785f051f99c384410024f643047fda29b210295",
+  "sessionId": "3b3a0351-36c9-4690-ad34-3f9c1dce1794",
+  "conversationNumber": 1760,
+  "pageUrl": "https://bakautprof.ru/policy/?codex_live_attempt13=7785f05",
+  "turn": {
+    "id": "f913f4df-3535-41fc-bd1c-da205554ad10",
+    "status": "recovered",
+    "stage": "assistant_message_saved",
+    "errorCode": null,
+    "buyerVisibleVerdict": "FAIL",
+    "buyerVisibleAnswer": "Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.",
+    "recoveryTrace": "assistant_message_saved_from_answer_contract",
+    "selectionReadiness": { "status": "ready_for_preliminary_cards", "canShowProductCards": true },
+    "selectedProducts": [
+      { "id": "aec5c144-2ab0-4395-8dc5-b3f341120c66", "name": "Генератор бензиновый ТСС SGG 5000N (5,0 кВт) 060007", "price": 49281 },
+      { "id": "5a987d23-0fcc-4712-96dc-da6e626bdcf4", "name": "Генератор бензиновый FIRMAN RD7910 (5,0 кВт) RD7910", "price": 57200 },
+      { "id": "7b3559f6-9ec4-4a5b-a559-9e10dc3db378", "name": "Генератор бензиновый инверторный BISON BS6250IE (5,0 кВт)", "price": 61100 },
+      { "id": "24e6fcc5-e74d-4deb-93c7-a593cfc05f81", "name": "Генератор бензиновый EVOline PB 6000 (5,0 кВт) 1T90DF603EVO", "price": 64990 },
+      { "id": "d98cafdd-7223-4df6-8a33-cfb68b610cd3", "name": "Генератор бензиновый EVOline PB 6000 E (5,0 кВт) 1T90DF604EVO", "price": 74990 }
+    ],
+    "preSendReview": { "verdict": "pass", "issues": [] }
+  }
+}

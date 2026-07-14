@@ -114,6 +114,93 @@ describe('streamChatMessage watchdog and recovery', () => {
     expect(String(fetcher.mock.calls[1]?.[0])).toContain('/messages/turn-from-header/recover');
   });
 
+  it('retries the same durable turn when the first recovery transport closes before done', async () => {
+    vi.useFakeTimers();
+    try {
+      const emptyStream = () => new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        }
+      });
+      const recoveredPayload = {
+        turnId: 'turn-retry-transport',
+        answer: 'Saved answer delivered by the second recovery transport.',
+        assistantMessageId: 'msg-retry-transport',
+        productCards: [{ id: 'generator-5kw', name: 'Generator 5 kW', url: '/generator-5kw' }],
+        usedWebSearch: false
+      };
+      let recoveryCalls = 0;
+      const fetcher = vi.fn(async (url: string | URL | Request) => {
+        if (!String(url).includes('/recover')) {
+          return new Response(emptyStream(), {
+            status: 200,
+            headers: { 'x-chat-turn-id': 'turn-retry-transport' }
+          });
+        }
+        recoveryCalls += 1;
+        if (recoveryCalls === 1) return new Response(emptyStream(), { status: 200 });
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(sseEvent('done', recoveredPayload)));
+            controller.close();
+          }
+        }), { status: 200 });
+      });
+
+      const result = streamChatMessage(
+        'http://127.0.0.1:3010',
+        'session-1',
+        'need a generator',
+        { onDelta: () => undefined },
+        undefined,
+        { fetcher }
+      );
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(result).resolves.toMatchObject(recoveredPayload);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(recoveryCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry a recovery stream after an explicit non-recoverable server error', async () => {
+    const emptyPrimary = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      }
+    });
+    const terminalRecovery = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseEvent('error', {
+          error: 'The saved turn cannot be recovered.',
+          recoverable: false,
+          turnId: 'turn-terminal-recovery'
+        })));
+        controller.close();
+      }
+    });
+    const fetcher = vi.fn(async (url: string | URL | Request) => (
+      String(url).includes('/recover')
+        ? new Response(terminalRecovery, { status: 200 })
+        : new Response(emptyPrimary, {
+            status: 200,
+            headers: { 'x-chat-turn-id': 'turn-terminal-recovery' }
+          })
+    ));
+
+    await expect(streamChatMessage(
+      'http://127.0.0.1:3010',
+      'session-1',
+      'need a generator',
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher }
+    )).rejects.toThrow('The saved turn cannot be recovered.');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
   it('lets recovery outlive the primary stream idle watchdog', async () => {
     vi.useFakeTimers();
     try {

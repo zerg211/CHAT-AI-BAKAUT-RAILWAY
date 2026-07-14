@@ -166,3 +166,24 @@ The release remains unaccepted. The fuel-type validator fix and its exact regres
 - Agentic eval: PASS, 251/251.
 - Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
 - Release status remains FAIL pending exact deployment and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
+
+## Deployment and production attempts 12-13
+
+- Typed-voltage commit `7785f051f99c384410024f643047fda29b210295` was pushed to GitHub `main`; Railway health reported the exact commit.
+- Attempt 12 / conversation `1759` saved a correct four-card answer, but the test controller removed the widget container while closing an unrelated callback popup. It is invalid and not counted as buyer-view proof.
+- Attempt 13 / session `3b3a0351-36c9-4690-ad34-3f9c1dce1794`, conversation `1760`, visibly returned the generic technical fallback and no cards. Verdict: FAIL.
+- Admin turn `f913f4df-3535-41fc-bd1c-da205554ad10` ended `recovered` with no error. Recovery waited for the original lease, restored the final answer contract, saved five priced cards, and reached `ready_for_preliminary_cards`.
+- Root cause: the recovery SSE transport itself ended before `done`; the client allowed only one recovery request even though repeating the same durable `turnId` is idempotent and would immediately return the saved response.
+- Protocol: `local-live-tests/2026-07-14-commercial-selection-sanity-attempt-13.production.md`.
+- Raw admin summary: `.agent/tasks/2026-07-13-commercial-selection-sanity/raw/attempt-13-admin-summary.json`.
+
+## Current local verification after attempt 13
+
+- Recoverable transport closure now retries the same recovery endpoint up to three total transport attempts with the same session and turn ID.
+- Each retry clears partial recovery text through the existing recovery status and returns the exact saved answer/cards; it cannot create a new turn.
+- Explicit SSE `recoverable:false` remains terminal and is not retried.
+- Focused selection, orchestrator, and transport suites: PASS, 163/163.
+- Full suite: PASS, 979/979.
+- Agentic eval: PASS, 251/251.
+- Typecheck, no-new-regex guard, production dependency audit, production build, release gate, and `git diff --check`: PASS.
+- Release status remains FAIL pending exact deployment and a fresh clean multi-turn embedded-widget dialogue plus per-turn admin audit.
