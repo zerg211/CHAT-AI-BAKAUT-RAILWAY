@@ -227,9 +227,11 @@ describe('product comparison research', () => {
     expect(catalogCall.stage).toBe('catalog_product_fact_extraction');
     expect(catalogCall.request.tools).toBeUndefined();
     expect(catalogCall.request.reasoning).toEqual({ effort: 'none' });
+    expect(catalogCall.request.max_output_tokens).toBeGreaterThanOrEqual(1800);
     const webCall = researchCalls()[1];
     expect(webCall.stage).toBe('product_comparison_research');
     expect(webCall.request.reasoning).toEqual({ effort: 'none' });
+    expect(webCall.request.max_output_tokens).toBeGreaterThanOrEqual(1800);
     expect(webCall.request.tools).toEqual([{ type: 'web_search_preview', search_context_size: 'high' }]);
     expect(JSON.stringify(webCall.request.input)).toContain('catalogExtraction');
     expect(webCall.request.input[0].content).toContain('still run exact-target external research');

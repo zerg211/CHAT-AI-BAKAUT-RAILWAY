@@ -470,6 +470,8 @@ function structuredRequirementNumber(intent: AgentIntentContract, kinds: string[
 const supportedStrictNumericRequirementKinds = new Set([
   'budget_max_rub',
   'price_max_rub',
+  'price_lower_than_reference',
+  'price_lower_than_reference_rub',
   'weight_min_kg',
   'weight_max_kg',
   'nominal_power_min_kw',
@@ -481,6 +483,8 @@ const supportedStrictNumericRequirementKinds = new Set([
 const supportedStrictNumericRequirementUnits: Record<string, Set<string>> = {
   budget_max_rub: new Set(['rub', '₽', 'руб', 'руб.']),
   price_max_rub: new Set(['rub', '₽', 'руб', 'руб.']),
+  price_lower_than_reference: new Set(['rub', '₽', 'руб', 'руб.']),
+  price_lower_than_reference_rub: new Set(['rub', '₽', 'руб', 'руб.']),
   weight_min_kg: new Set(['kg', 'кг']),
   weight_max_kg: new Set(['kg', 'кг']),
   nominal_power_min_kw: new Set(['kw', 'квт']),
@@ -925,7 +929,17 @@ export function productMeetsSupportedStrictAutoStartRequirement(
 }
 
 function structuredBudgetMax(intent: AgentIntentContract) {
-  return structuredRequirementNumber(intent, ['budget_max_rub', 'price_max_rub']);
+  const inclusiveMax = structuredRequirementNumber(intent, ['budget_max_rub', 'price_max_rub']);
+  const exclusiveReference = structuredRequirementNumber(intent, [
+    'price_lower_than_reference',
+    'price_lower_than_reference_rub'
+  ]);
+  const exclusiveMax = exclusiveReference === undefined
+    ? undefined
+    : Math.max(0, exclusiveReference - 1);
+  if (inclusiveMax === undefined) return exclusiveMax;
+  if (exclusiveMax === undefined) return inclusiveMax;
+  return Math.min(inclusiveMax, exclusiveMax);
 }
 
 function structuredCompromiseProductIds(toolResults: ToolResult[]) {

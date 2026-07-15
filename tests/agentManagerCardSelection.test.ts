@@ -1542,6 +1542,51 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.selectedProductIds).toEqual([selected.id]);
   });
 
+  it('supports a strict price-lower-than-reference requirement and excludes the reference price itself', () => {
+    const intent = structuredSelectionIntent({
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'lower-than-reference',
+        kind: 'price_lower_than_reference',
+        value: 79_592,
+        unit: 'RUB',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'Нужна модель дешевле ранее показанной',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    intent.toolRequests = [{
+      id: 'plate-price-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'виброплита дешевле ориентира',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate'
+      },
+      rationale: 'Найти более дешёвую виброплиту.',
+      required: true,
+      coversRequirementIds: ['lower-than-reference']
+    }];
+
+    expect(assessStrictSelectionRequirements(intent, 'plate').blockers).toEqual([]);
+    const selection = selectProductsForVisibleCards({
+      products: [plate, overBudgetPlate],
+      userMessage: 'Нужна модель дешевле ранее показанной.',
+      history: [],
+      intent,
+      answerText: `${plate.name} дешевле, ${overBudgetPlate.name} — исходный ориентир.`,
+      selectedProductIds: [plate.id, overBudgetPlate.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([plate.id]);
+    expect(selection.droppedProductIds).toContain(overBudgetPlate.id);
+  });
+
   it('accepts a strict operating condition only through its covered successful typed calculation and filters weak cards', () => {
     const intent = generatorLoadDerivedConstraintIntent();
     const weak = {

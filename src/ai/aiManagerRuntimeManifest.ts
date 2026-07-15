@@ -3,7 +3,7 @@ import {
   SALES_MANAGER_POLICY_PACK_VERSION
 } from './salesManagerBehaviorPolicy.js';
 
-export const AI_MANAGER_RUNTIME_VERSION = '2026-07-15.gpt-5-6-terra-search-first-v10';
+export const AI_MANAGER_RUNTIME_VERSION = '2026-07-15.gpt-5-6-terra-search-first-v11';
 export const AI_MANAGER_CONTRACT_VERSION = '2026-07-10.manager-contract-v1';
 
 export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({
