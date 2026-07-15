@@ -161,7 +161,7 @@ export const agentManagerToolRegistry = {
     resultPayloadSchema: webResearchResult,
     risk: 'external_read',
     sideEffect: false,
-    timeoutMs: 30_000,
+    timeoutMs: 20_000,
     maxResultItems: 32,
     maxResultBytes: 300_000,
     maxAttempts: 1

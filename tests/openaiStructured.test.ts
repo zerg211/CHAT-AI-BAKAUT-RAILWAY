@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseJsonObject,
+  structuredJsonRetryDecision,
   structuredJsonRetryOutputTokenLimit
 } from '../src/ai/openaiStructured.js';
 
@@ -34,5 +35,24 @@ describe('structuredJsonRetryOutputTokenLimit', () => {
   it('uses an explicit cap when the caller reserved a larger retry budget', () => {
     expect(structuredJsonRetryOutputTokenLimit(800, 1800)).toBe(1800);
     expect(structuredJsonRetryOutputTokenLimit(3200, 4000)).toBe(3200);
+  });
+});
+
+describe('structuredJsonRetryDecision', () => {
+  it('skips a structured retry when the stage cannot reserve enough remaining wall time', () => {
+    expect(structuredJsonRetryDecision({
+      deadlineAtMs: 10_000,
+      minRemainingMs: 6_000,
+      nowMs: 5_000
+    })).toEqual({ retry: false, reason: 'insufficient_time_budget', remainingMs: 5_000 });
+  });
+
+  it('allows a retry only when the signal is active and the minimum wall time remains', () => {
+    expect(structuredJsonRetryDecision({
+      deadlineAtMs: 12_000,
+      minRemainingMs: 6_000,
+      nowMs: 5_000
+    })).toEqual({ retry: true, reason: 'retry_allowed', remainingMs: 7_000 });
+    expect(structuredJsonRetryDecision({ signalAborted: true })).toEqual({ retry: false, reason: 'signal_aborted' });
   });
 });

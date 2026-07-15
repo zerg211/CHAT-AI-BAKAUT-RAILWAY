@@ -5374,6 +5374,13 @@ export class AgentManagerOrchestrator {
         attempt += 1;
         try {
         input.budget.consumeToolCall(definition);
+        await this.trace(input.session.id, input.turnId, 'tools', 'tool_started', {
+          requestId: request.id,
+          tool: request.tool,
+          attempt,
+          timeoutMs: definition.timeoutMs,
+          remainingTurnMs: input.budget.remainingWallTimeMs()
+        });
         if (request.tool === 'catalog.search') {
           const { query, semanticQuery } = toolRequestScopedQuery(request, input.userMessage);
           const limit = Math.max(1, Math.min(12, Number(request.args.limit ?? 8)));
@@ -5591,7 +5598,8 @@ export class AgentManagerOrchestrator {
               products: selectedProducts,
               targetProductNames,
               comparisonAttributes,
-              signal: toolSignal
+              signal: toolSignal,
+              deadlineAtMs: startedAt + definition.timeoutMs
             });
             await this.persistVerifiedResearchFacts({
               sessionId: input.session.id,
@@ -5784,7 +5792,14 @@ export class AgentManagerOrchestrator {
           errorCode: safeError(error).code ?? safeError(error).message
         });
       }
-      result = validateToolResultOutput(result);
+      result = validateToolResultOutput({
+        ...result,
+        warnings: uniqueStrings([
+          ...result.warnings,
+          `attempts:${attempt}`,
+          `duration_ms:${Date.now() - startedAt}`
+        ])
+      });
       await this.conversations.saveToolArtifact({
         sessionId: input.session.id,
         turnId: input.turnId,
@@ -5792,12 +5807,19 @@ export class AgentManagerOrchestrator {
         toolRequestId: request.id,
         status: result.status,
         payload: result.payload,
-        warnings: [
-          ...result.warnings,
-          `attempts:${attempt}`,
-          `duration_ms:${Date.now() - startedAt}`
-        ],
+        warnings: result.warnings,
         errorCode: result.errorCode
+      });
+      await this.trace(input.session.id, input.turnId, 'tools', 'tool_completed', {
+        requestId: request.id,
+        tool: request.tool,
+        status: result.status,
+        attemptCount: attempt,
+        durationMs: Date.now() - startedAt,
+        timeoutMs: definition.timeoutMs,
+        remainingTurnMs: input.budget.remainingWallTimeMs(),
+        retryDecisionWarnings: result.warnings.filter((warning) => warning.includes('retry_')),
+        errorCode: result.errorCode ?? null
       });
       if (budgetStopError) {
         toolResults.push(result);

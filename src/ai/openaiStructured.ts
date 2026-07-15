@@ -5,6 +5,38 @@ import { extractResponseText, safeError } from './responseUtils.js';
 
 const JSON_RETRY_OUTPUT_TOKEN_MIN = 1800;
 
+export type StructuredJsonRetryDecision =
+  | { retry: true; reason: 'retry_allowed'; remainingMs?: number }
+  | { retry: false; reason: 'signal_aborted' | 'insufficient_time_budget'; remainingMs?: number };
+
+export function structuredJsonRetryDecision(input: {
+  signalAborted?: boolean;
+  deadlineAtMs?: number;
+  minRemainingMs?: number;
+  nowMs?: number;
+}): StructuredJsonRetryDecision {
+  if (input.signalAborted) return { retry: false, reason: 'signal_aborted' };
+  if (input.deadlineAtMs === undefined) return { retry: true, reason: 'retry_allowed' };
+  const remainingMs = Math.max(0, input.deadlineAtMs - (input.nowMs ?? Date.now()));
+  if (remainingMs < Math.max(1, input.minRemainingMs ?? 1)) {
+    return { retry: false, reason: 'insufficient_time_budget', remainingMs };
+  }
+  return { retry: true, reason: 'retry_allowed', remainingMs };
+}
+
+export class StructuredJsonRetrySkippedError extends Error {
+  readonly code = 'structured_json_retry_skipped';
+
+  constructor(
+    readonly retryReason: Exclude<StructuredJsonRetryDecision['reason'], 'retry_allowed'>,
+    readonly remainingMs: number | undefined,
+    options?: { cause?: unknown }
+  ) {
+    super(`Structured JSON retry skipped: ${retryReason}`, options);
+    this.name = 'StructuredJsonRetrySkippedError';
+  }
+}
+
 export function structuredJsonRetryOutputTokenLimit(currentValue: unknown, configuredCap?: number) {
   const current = Number(currentValue);
   const normalizedCurrent = Number.isFinite(current) && current > 0
@@ -93,18 +125,36 @@ export async function createStructuredJsonResponse(input: {
   stage: string;
   signal?: AbortSignal;
   retryOutputTokenCap?: number;
+  deadlineAtMs?: number;
+  minRetryRemainingMs?: number;
+  transportMaxRetries?: number;
 }) {
   const client = createOpenAIClient();
   if (!client) throw new Error('OpenAI client is not configured');
   const send = (body: Record<string, unknown>) =>
-    withRetry(() => client.responses.create(body as any, input.signal ? { signal: input.signal } : undefined), 2, input.signal);
+    withRetry(
+      () => client.responses.create(body as any, input.signal ? { signal: input.signal } : undefined),
+      input.transportMaxRetries ?? 2,
+      input.signal
+    );
 
   const response = await send(input.request);
   await recordOpenAIUsageOnce(input.stage, String(input.request.model ?? config.OPENAI_MODEL), response);
   try {
     return { response, parsed: parseJsonObject(responseTextForJson(response), input.stage) };
   } catch (error) {
-    if (input.signal?.aborted) throw error;
+    const retryDecision = structuredJsonRetryDecision({
+      signalAborted: input.signal?.aborted,
+      deadlineAtMs: input.deadlineAtMs,
+      minRemainingMs: input.minRetryRemainingMs
+    });
+    if (!retryDecision.retry) {
+      throw new StructuredJsonRetrySkippedError(
+        retryDecision.reason,
+        retryDecision.remainingMs,
+        { cause: error }
+      );
+    }
     console.warn(`[${input.stage}] Structured JSON parse failed; retrying within the configured output budget`, safeError(error));
     const retryRequest: Record<string, unknown> = {
       ...input.request,

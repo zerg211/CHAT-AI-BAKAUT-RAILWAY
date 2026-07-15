@@ -324,7 +324,11 @@ describe('AgentManager comparison research flow', () => {
     const metadata = payload.metadata as { toolResults?: Array<{ status?: string; warnings?: string[] }> };
     expect(metadata.toolResults?.[0]).toMatchObject({
       status: 'error',
-      warnings: ['tool_execution_error']
+      warnings: expect.arrayContaining([
+        'tool_execution_error',
+        'attempts:1',
+        expect.stringContaining('duration_ms:')
+      ])
     });
   });
 
@@ -617,7 +621,11 @@ describe('AgentManager comparison research flow', () => {
     };
     expect(metadata.toolResults?.[0]).toMatchObject({
       status: 'error',
-      warnings: ['tool_execution_error']
+      warnings: expect.arrayContaining([
+        'tool_execution_error',
+        'attempts:1',
+        expect.stringContaining('duration_ms:')
+      ])
     });
     expect(metadata.preSendReview).toMatchObject({
       verdict: 'rewrite_required',

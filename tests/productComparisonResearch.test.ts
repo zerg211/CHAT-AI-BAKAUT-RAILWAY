@@ -232,10 +232,108 @@ describe('product comparison research', () => {
     expect(webCall.stage).toBe('product_comparison_research');
     expect(webCall.request.reasoning).toEqual({ effort: 'none' });
     expect(webCall.request.max_output_tokens).toBeGreaterThanOrEqual(1800);
-    expect(webCall.request.tools).toEqual([{ type: 'web_search_preview', search_context_size: 'high' }]);
+    expect(webCall.request.tools).toEqual([{
+      type: 'web_search',
+      search_context_size: 'medium',
+      return_token_budget: 'default'
+    }]);
+    expect(webCall.request.tool_choice).toEqual({ type: 'web_search' });
+    expect(webCall.request.include).toEqual(['web_search_call.action.sources']);
     expect(JSON.stringify(webCall.request.input)).toContain('catalogExtraction');
     expect(webCall.request.input[0].content).toContain('still run exact-target external research');
     expect(JSON.stringify(catalogCall.request.input)).toContain('поворотом ключа электростартера');
+  });
+
+  it('reserves a production deadline for one modern web pass and verifies an exact source quote without another model call', async () => {
+    const exactQuote = 'FIRMAN RD3910E starting system: ignition key electric starter.';
+    fetchMock.mockResolvedValueOnce(sourceResponse(`<html><body>${exactQuote}</body></html>`));
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          value: 'ignition key electric starter',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: exactQuote,
+          sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
+          sourceTitle: 'FIRMAN RD3910E'
+        }],
+        answerGuidance: {
+          directAnswer: 'RD3910E запускается с ключа через электростартер.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'start control',
+            status: 'confirmed',
+            value: 'ignition key electric starter',
+            evidence: exactQuote,
+            sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
+            sourceTitle: 'FIRMAN RD3910E'
+          }]
+        }
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Firman RD3910E заводится с ключа или кнопки?',
+      products: [product()],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['start control'],
+      deadlineAtMs: Date.now() + 20_000
+    });
+
+    expect(researchCalls()).toHaveLength(1);
+    expect(researchCalls()[0]).toMatchObject({
+      stage: 'product_comparison_research',
+      transportMaxRetries: 0,
+      minRetryRemainingMs: 6_000
+    });
+    expect(researchCalls()[0].request.tools).toEqual([{
+      type: 'web_search',
+      search_context_size: 'medium',
+      return_token_budget: 'default'
+    }]);
+    expect(createStructuredJsonResponse.mock.calls
+      .map((call) => call[0].stage)
+      .filter((stage) => stage === 'source_evidence_semantic_validation')).toHaveLength(0);
+    expect(actual.facts).toHaveLength(1);
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'catalog_fact_extraction_skipped_for_web_deadline',
+      'source_evidence_exact_quote_verified'
+    ]));
+  });
+
+  it('does not start a deep exact-target retry when less than the reserved retry window remains', async () => {
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'start control',
+            status: 'not_found',
+            value: '',
+            evidence: 'No exact-target source found.',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        },
+        warnings: ['exact_target_external_fact_not_found']
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Firman RD3910E заводится с ключа или кнопки?',
+      products: [product()],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['start control'],
+      deadlineAtMs: Date.now() + 5_000
+    });
+
+    expect(researchCalls()).toHaveLength(1);
+    expect(actual.warnings).toContain('exact_target_external_retry_skipped_insufficient_budget');
   });
 
   it('adjudicates catalog conflicts with corroborated exact-target external sources', async () => {
@@ -471,7 +569,11 @@ describe('product comparison research', () => {
     expect(researchCalls()).toHaveLength(2);
     const webCall = researchCalls()[1];
     expect(webCall.stage).toBe('product_comparison_research');
-    expect(webCall.request.tools).toEqual([{ type: 'web_search_preview', search_context_size: 'high' }]);
+    expect(webCall.request.tools).toEqual([{
+      type: 'web_search',
+      search_context_size: 'medium',
+      return_token_budget: 'default'
+    }]);
     expect(JSON.stringify(webCall.request.input)).toContain('catalogExtraction');
   });
 
