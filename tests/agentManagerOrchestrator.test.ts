@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AgentManagerOrchestrator,
+  orderToolRequestsForSelectionDependencies,
   repairIntentForTypedToolRequirementCoverage,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
@@ -410,6 +411,78 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
+  it('runs deterministic calculations before catalog and open-ended web research after catalog', () => {
+    const intent = typedGeneratorProofIntent();
+    const webRequest: ToolRequest = {
+      id: 'web-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'verify the shortlisted generator models',
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        productNames: []
+      },
+      rationale: 'verify facts missing from catalog cards',
+      required: true,
+      coversRequirementIds: []
+    };
+    const requests = [webRequest, intent.toolRequests[1]!, intent.toolRequests[0]!];
+
+    expect(orderToolRequestsForSelectionDependencies(requests, {
+      ...intent,
+      toolRequests: requests
+    }).map((request) => request.tool)).toEqual([
+      'calculator.generatorLoad',
+      'catalog.search',
+      'web.researchProductFacts'
+    ]);
+  });
+
+  it('runs catalog before web research even when the web request is the typed preliminary proof', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    const webRequest: ToolRequest = {
+      id: 'web-material-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'verify application suitability of shortlisted models',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        productNames: []
+      },
+      rationale: 'verify open-ended suitability after catalog retrieval',
+      required: true,
+      coversRequirementIds: ['material-fit']
+    };
+    intent.toolRequests = [webRequest, intent.toolRequests[0]!];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'material-fit',
+        kind: 'material',
+        value: 'щебень',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'для щебня',
+        verification: {
+          mode: 'typed_tool',
+          toolRequestId: webRequest.id,
+          tool: 'web.researchProductFacts',
+          verifier: 'technical_source_review',
+          bindAs: 'material_suitability'
+        }
+      }]
+    };
+
+    expect(orderToolRequestsForSelectionDependencies(intent.toolRequests, intent).map((request) => request.tool)).toEqual([
+      'catalog.search',
+      'web.researchProductFacts'
+    ]);
+  });
+
   it('repairs only the missing reverse coverage link for explicit supported typed proofs', () => {
     const source = typedGeneratorProofIntent();
 

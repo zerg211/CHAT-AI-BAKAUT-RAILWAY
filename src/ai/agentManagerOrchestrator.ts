@@ -344,7 +344,7 @@ function assertUniqueToolRequestIds(requests: ToolRequest[]) {
   return requests;
 }
 
-function orderToolRequestsForSelectionDependencies(
+export function orderToolRequestsForSelectionDependencies(
   requests: ToolRequest[],
   intent: AgentIntentContract
 ) {
@@ -356,10 +356,19 @@ function orderToolRequestsForSelectionDependencies(
       )
       .map((verification) => verification.toolRequestId)
   );
-  if (!proofRequestIds.size) return requests;
+  const hasCatalogToWebDependency =
+    requests.some((request) => request.tool === 'catalog.search') &&
+    requests.some((request) => request.tool === 'web.researchProductFacts');
+  if (!proofRequestIds.size && !hasCatalogToWebDependency) return requests;
+  const priority = (request: ToolRequest) => {
+    if (proofRequestIds.has(request.id) && request.tool !== 'web.researchProductFacts') return 0;
+    if (request.tool === 'catalog.search') return 1;
+    if (request.tool === 'web.researchProductFacts') return 2;
+    return 3;
+  };
   return requests
-    .map((request, index) => ({ request, index, proof: proofRequestIds.has(request.id) }))
-    .sort((left, right) => Number(right.proof) - Number(left.proof) || left.index - right.index)
+    .map((request, index) => ({ request, index, priority: priority(request) }))
+    .sort((left, right) => left.priority - right.priority || left.index - right.index)
     .map(({ request }) => request);
 }
 
@@ -3609,6 +3618,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'If a requiredResponseClause says a generator load basis is unconfirmed, distinguish rough orientation from exact selection: do not present the number as confirmed or purchase-safe, but do not hide a useful tool-calculated orientation when the clause tells you to include or qualify it.',
             'If web.researchProductFacts payload.answerGuidance.directAnswer is present, use that practical direct answer before broader catalog context. Do not convert answerGuidance.coverage status "not_confirmed" into "no" or "does not have".',
             'If web.researchProductFacts has status error, timeout, denied, or not_found, do not write that facts were checked, verified, or confirmed by that research step. Give the best general answer only at the current truthful level and state that exact verification is unavailable in this turn when the buyer asked for verification.',
+            'For selectionGoal=preliminary_fit, a failed or incomplete web.researchProductFacts result is missing confirmation, not a proven product conflict. When products contains catalog candidates that already satisfy deterministic hard constraints, set selectionReadiness.canShowProductCards=true, recommend useful candidates explicitly as preliminary, and list the exact unconfirmed web facts in missingFacts. Do not replace that useful catalog-grounded selection with a generic failed-search answer.',
             styleExamples,
             'Верни только JSON AnswerContract.'
           ].join('\n')
@@ -3677,6 +3687,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
             'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
+            'For selectionGoal=preliminary_fit, require rewrite if products contains candidates that satisfy deterministic hard constraints but the answer hides every candidate solely because web.researchProductFacts failed, timed out, was denied, or did not confirm an open-ended attribute. Preserve the exact missing fact and preliminary caveat; do not convert missing web confirmation into incompatibility. This allowance never applies to final_fit, failed calculators, numeric constraint violations, catalog class conflicts, or a proven source conflict.',
             'Require rewrite if the answer is formally correct but sounds like an internal report: third-person catalog wording, "В каталоге БАКАУТ...", "По деталям запуска...", or similar robotic source labels. Rewrite it as simple conversational Russian from our shop voice.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')

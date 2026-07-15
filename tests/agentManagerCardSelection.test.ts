@@ -2263,7 +2263,13 @@ describe('AgentManager visible card readiness', () => {
         role: 'hard_constraint',
         strictness: 'strict',
         evidence: 'для трамбовки щебня',
-        verification: { mode: 'product_attribute' }
+        verification: {
+          mode: 'typed_tool',
+          toolRequestId: 'plate-web-check',
+          tool: 'web.researchProductFacts',
+          verifier: 'technical_source_review',
+          bindAs: 'material_suitability'
+        }
       }, {
         id: 'layer-by-layer',
         kind: 'compaction_method',
@@ -2310,7 +2316,7 @@ describe('AgentManager visible card readiness', () => {
     }]);
     expect(preliminaryGate.blockers).toEqual([]);
     expect(preliminaryGate.preliminaryUnverified).toEqual([
-      expect.objectContaining({ id: 'material-crushed-stone' }),
+      expect.objectContaining({ id: 'material-crushed-stone', reason: 'typed_tool_result_timeout' }),
       expect.objectContaining({ id: 'layer-by-layer' })
     ]);
 

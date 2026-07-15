@@ -518,6 +518,15 @@ const webVerifiablePreliminaryBlockerReasons = new Set([
   'unsupported_strict_requirement_kind'
 ]);
 
+const failedOrOpenEndedWebProofBlockerReasons = new Set([
+  'typed_tool_result_missing',
+  'typed_tool_result_not_found',
+  'typed_tool_result_denied',
+  'typed_tool_result_error',
+  'typed_tool_result_timeout',
+  'unsupported_typed_tool_verifier'
+]);
+
 function typedToolRequirementProof(input: {
   requirement: NonNullable<AgentIntentContract['selectionPolicy']>['requirements'][number];
   intent: AgentIntentContract;
@@ -841,9 +850,27 @@ export function gateStrictSelectionRequirements(
       ? request.coversRequirementIds ?? []
       : []
   ));
+  const typedWebRequirementIds = new Set(
+    (intent.selectionPolicy?.requirements ?? []).flatMap((requirement) => {
+      const verification = requirement.verification;
+      if (verification?.mode !== 'typed_tool' || verification.tool !== 'web.researchProductFacts') return [];
+      const request = intent.toolRequests.find((item) => item.id === verification.toolRequestId);
+      if (
+        request?.required !== true ||
+        request.tool !== 'web.researchProductFacts' ||
+        !(request.coversRequirementIds ?? []).includes(requirement.id)
+      ) return [];
+      return [requirement.id];
+    })
+  );
   const preliminaryUnverified = assessment.blockers.filter((blocker) =>
-    webVerifiablePreliminaryBlockerReasons.has(blocker.reason) &&
-    webCoveredRequirementIds.has(blocker.id)
+    (
+      webVerifiablePreliminaryBlockerReasons.has(blocker.reason) &&
+      webCoveredRequirementIds.has(blocker.id)
+    ) || (
+      failedOrOpenEndedWebProofBlockerReasons.has(blocker.reason) &&
+      typedWebRequirementIds.has(blocker.id)
+    )
   );
   const preliminaryUnverifiedKeys = new Set(
     preliminaryUnverified.map((blocker) => `${blocker.id}:${blocker.reason}`)
