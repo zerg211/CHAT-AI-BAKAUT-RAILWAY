@@ -2,7 +2,7 @@
 
 Продовый AI-менеджер для сайта БАКАУТ. Он ведёт свободный диалог с покупателем, консультирует по строительному и силовому оборудованию, уточняет задачу, проверяет факты, подбирает товары, показывает согласованные с ответом карточки и передаёт заявку профильному специалисту.
 
-Активный production runtime один: `AgentManagerOrchestrator` + GPT-5.4 через OpenAI Responses API. LLM отвечает за понимание смысла и стратегию разговора; код — за каталог, схемы, доказательства, жёсткие ограничения, безопасность, побочные эффекты и восстановление.
+Активный production runtime один: `AgentManagerOrchestrator` + GPT-5.6 Terra (`gpt-5.6-terra`) через OpenAI Responses API. LLM отвечает за понимание смысла и стратегию разговора; код — за каталог, схемы, доказательства, жёсткие ограничения, безопасность, побочные эффекты и восстановление.
 
 ## Локальный запуск
 
@@ -34,7 +34,7 @@ npm run feedback:export-evals -- --output .private/feedback-candidates.json --ac
 
 ## Конфигурация
 
-См. `.env.example`. Для production обязательны `DATABASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL=gpt-5.4`, `ADMIN_API_KEY`, `PUBLIC_BASE_URL` и HTTP email-настройки. SMTP не используется. Активный production AgentManager fail-safe закрепляет planner, answer и reviewer на `gpt-5.4`, поэтому старые `MODEL`/stage-specific значения не могут незаметно вернуть `gpt-5.4-mini`. `AI_MANAGER_REVIEW_MODE` поддерживает `off | risk | always`; production default — `risk`. `CATALOG_STALE_AFTER_HOURS` по умолчанию равен `48`.
+См. `.env.example`. Для production обязательны `DATABASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL=gpt-5.6-terra`, `ADMIN_API_KEY`, `PUBLIC_BASE_URL` и HTTP email-настройки. SMTP не используется. Активный production AgentManager fail-safe закрепляет planner, answer и reviewer на `gpt-5.6-terra`, поэтому старые `MODEL`/stage-specific значения не могут незаметно вернуть прежнюю модель. `AI_MANAGER_REVIEW_MODE` поддерживает `off | risk | always`; production default — `risk`. `CATALOG_STALE_AFTER_HOURS` по умолчанию равен `48`.
 
 ## Надёжность диалога
 

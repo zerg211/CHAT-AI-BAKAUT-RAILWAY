@@ -27,9 +27,9 @@ describe('production OpenAI runtime preflight', () => {
       fetchImpl: async () => response(200, {
         ok: true,
         class: 'ok',
-        answerModel: 'gpt-5.4',
-        plannerModel: 'gpt-5.4',
-        factModel: 'gpt-5.4',
+        answerModel: 'gpt-5.6-terra',
+        plannerModel: 'gpt-5.6-terra',
+        factModel: 'gpt-5.6-terra',
         outputPresent: true
       })
     });
@@ -37,10 +37,10 @@ describe('production OpenAI runtime preflight', () => {
     expect(result).toMatchObject({
       ok: true,
       class: 'ok',
-      answerModel: 'gpt-5.4',
-      plannerModel: 'gpt-5.4',
-      factModel: 'gpt-5.4',
-      expectedModel: 'gpt-5.4'
+      answerModel: 'gpt-5.6-terra',
+      plannerModel: 'gpt-5.6-terra',
+      factModel: 'gpt-5.6-terra',
+      expectedModel: 'gpt-5.6-terra'
     });
   });
 
@@ -61,19 +61,19 @@ describe('production OpenAI runtime preflight', () => {
       ok: false,
       class: 'model_mismatch',
       code: 'production_manager_model_mismatch',
-      expectedModel: 'gpt-5.4'
+      expectedModel: 'gpt-5.6-terra'
     });
   });
 
-  it('blocks a legacy mini fact/reviewer model even when planner and answer use GPT-5.4', async () => {
+  it('blocks a legacy GPT-5.4 fact/reviewer model even when planner and answer use Terra', async () => {
     const result = await checkProductionOpenAiRuntime({
       token: 'admin',
       fetchImpl: async () => response(200, {
         ok: true,
         class: 'ok',
-        answerModel: 'gpt-5.4',
-        plannerModel: 'gpt-5.4',
-        factModel: 'gpt-5.4-mini',
+        answerModel: 'gpt-5.6-terra',
+        plannerModel: 'gpt-5.6-terra',
+        factModel: 'gpt-5.4',
         outputPresent: true
       })
     });
@@ -82,8 +82,8 @@ describe('production OpenAI runtime preflight', () => {
       ok: false,
       class: 'model_mismatch',
       code: 'production_manager_model_mismatch',
-      factModel: 'gpt-5.4-mini',
-      expectedModel: 'gpt-5.4'
+      factModel: 'gpt-5.4',
+      expectedModel: 'gpt-5.6-terra'
     });
   });
 
@@ -179,9 +179,9 @@ describe('production OpenAI runtime preflight', () => {
           return response(200, {
             ok: true,
             class: 'ok',
-            answerModel: 'gpt-5.4',
-            plannerModel: 'gpt-5.4',
-            factModel: 'gpt-5.4',
+            answerModel: 'gpt-5.6-terra',
+            plannerModel: 'gpt-5.6-terra',
+            factModel: 'gpt-5.6-terra',
             outputPresent: true
           });
         }

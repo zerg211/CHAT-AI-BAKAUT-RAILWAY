@@ -25,9 +25,9 @@ const queueItem = {
     reviewReason: 'visible cards'
   },
   modelEvidence: {
-    plannerModel: 'gpt-5.4',
-    answerModel: 'gpt-5.4',
-    reviewerModel: 'gpt-5.4-mini',
+    plannerModel: 'gpt-5.6-terra',
+    answerModel: 'gpt-5.6-terra',
+    reviewerModel: 'gpt-5.6-terra',
     responseIds: ['resp-private-id']
   },
   toolEvidence: [{
@@ -91,7 +91,7 @@ describe('assistant feedback review/eval queue', () => {
       residualPiiReviewRequired: true
     });
     expect(fixture.runtime.policy.version).toBe('sales-manager-v3');
-    expect(fixture.runtime.model.answerModel).toBe('gpt-5.4');
+    expect(fixture.runtime.model.answerModel).toBe('gpt-5.6-terra');
     expect(fixture.runtime.tools[0]).toMatchObject({ tool: 'catalog.search', status: 'ok' });
     expect(fixture.observed.productCards[0]).toMatchObject({ productId: 'plate-1', name: 'Виброплита 72 кг' });
     expect(fixture.input.buyerMessage).toContain('[PII]');

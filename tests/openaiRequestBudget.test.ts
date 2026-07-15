@@ -12,12 +12,12 @@ function serializedUtf8Bytes(value: unknown) {
 describe('OpenAI request budget estimation', () => {
   it('uses a conservative UTF-8 input estimate for ASCII and Cyrillic requests', () => {
     const asciiRequest = {
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-terra',
       max_output_tokens: 120,
       input: [{ role: 'user', content: 'Select a generator' }]
     };
     const cyrillicRequest = {
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-terra',
       max_output_tokens: 120,
       input: [{ role: 'user', content: 'Подбери генератор' }]
     };
@@ -33,27 +33,30 @@ describe('OpenAI request budget estimation', () => {
       .toBeGreaterThan(serializedUtf8Bytes(cyrillicRequest));
   });
 
-  it('prices GPT-5.4 with the configured ceiling for input and reserved output', () => {
-    const request = {
-      model: 'gpt-5.4',
-      max_output_tokens: 2_000,
-      input: 'Budget this request'
-    };
+  it.each(['gpt-5.6-terra', 'gpt-5.4'])(
+    'prices %s with the configured ceiling for input and reserved output',
+    (model) => {
+      const request = {
+        model,
+        max_output_tokens: 2_000,
+        input: 'Budget this request'
+      };
 
-    const estimate = estimateResponsesProviderCall(request);
-    const expectedCost = (estimate.estimatedInputTokens * 5.5 / 1_000_000) +
-      (2_000 * 33 / 1_000_000);
+      const estimate = estimateResponsesProviderCall(request);
+      const expectedCost = (estimate.estimatedInputTokens * 5.5 / 1_000_000) +
+        (2_000 * 33 / 1_000_000);
 
-    expect(estimate.reservedOutputTokens).toBe(2_000);
-    expect(estimate.estimatedTotalTokens)
-      .toBe(estimate.estimatedInputTokens + estimate.reservedOutputTokens);
-    expect(estimate.hostedToolCostUsd).toBe(0);
-    expect(estimate.estimatedCostUsd).toBeCloseTo(expectedCost, 12);
-  });
+      expect(estimate.reservedOutputTokens).toBe(2_000);
+      expect(estimate.estimatedTotalTokens)
+        .toBe(estimate.estimatedInputTokens + estimate.reservedOutputTokens);
+      expect(estimate.hostedToolCostUsd).toBe(0);
+      expect(estimate.estimatedCostUsd).toBeCloseTo(expectedCost, 12);
+    }
+  );
 
   it('reserves external input tokens and tool cost for web_search_preview', () => {
     const request = {
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-terra',
       max_output_tokens: 600,
       input: 'Verify the current product fact',
       tools: [{ type: 'web_search_preview', search_context_size: 'low' }]
@@ -111,7 +114,7 @@ describe('OpenAI request budget estimation', () => {
     ['infinite', Number.POSITIVE_INFINITY]
   ])('fails closed for a %s max_output_tokens value', (_label, maxOutputTokens) => {
     const request: Record<string, unknown> = {
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-terra',
       input: 'hello'
     };
     if (maxOutputTokens !== undefined) request.max_output_tokens = maxOutputTokens;

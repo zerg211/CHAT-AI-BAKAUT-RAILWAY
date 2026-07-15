@@ -116,7 +116,7 @@ const schema = z.object({
 const parsedConfig = schema.parse(process.env);
 const resendEmailUrl = parsedConfig.RESEND_API_KEY ? 'https://api.resend.com/emails' : undefined;
 const resendAuthHeader = parsedConfig.RESEND_API_KEY ? `Authorization: Bearer ${parsedConfig.RESEND_API_KEY}` : undefined;
-const requiredProductionManagerModel = 'gpt-5.4';
+const requiredProductionManagerModel = 'gpt-5.6-terra';
 const configuredPrimaryModel = parsedConfig.OPENAI_ANSWER_MODEL
   || parsedConfig.OPENAI_MODEL
   || parsedConfig.MODEL
@@ -124,7 +124,9 @@ const configuredPrimaryModel = parsedConfig.OPENAI_ANSWER_MODEL
 const primaryModel = parsedConfig.NODE_ENV === 'production'
   ? requiredProductionManagerModel
   : configuredPrimaryModel;
-const deepReasoningModel = parsedConfig.OPENAI_DEEP_REASONING_MODEL || 'gpt-5.5';
+const deepReasoningModel = parsedConfig.NODE_ENV === 'production'
+  ? requiredProductionManagerModel
+  : parsedConfig.OPENAI_DEEP_REASONING_MODEL || requiredProductionManagerModel;
 const plannerModel = parsedConfig.NODE_ENV === 'production'
   ? requiredProductionManagerModel
   : parsedConfig.OPENAI_PLANNER_MODEL || primaryModel;

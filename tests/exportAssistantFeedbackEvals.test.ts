@@ -26,8 +26,8 @@ function queueItem(overrides: Record<string, unknown> = {}) {
       reviewReason: 'feedback export'
     },
     modelEvidence: {
-      plannerModel: 'gpt-5.4',
-      answerModel: 'gpt-5.4',
+      plannerModel: 'gpt-5.6-terra',
+      answerModel: 'gpt-5.6-terra',
       reviewerModel: null,
       responseIds: ['private-response-id']
     },

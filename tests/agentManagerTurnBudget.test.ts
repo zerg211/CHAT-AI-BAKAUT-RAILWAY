@@ -11,7 +11,7 @@ import {
 describe('agent manager turn budget', () => {
   const providerEstimate = (inputTokens: number, outputTokens: number, costUsd = 0.01) => ({
     kind: 'responses' as const,
-    model: 'gpt-5.4',
+    model: 'gpt-5.6-terra',
     estimatedInputTokens: inputTokens,
     reservedOutputTokens: outputTokens,
     estimatedTotalTokens: inputTokens + outputTokens,
@@ -70,7 +70,7 @@ describe('agent manager turn budget', () => {
     expect(costBudget.snapshot().usage.estimatedCostUsd).toBe(0.03);
   });
 
-  it('keeps default token and cost ceilings internally coherent for GPT-5.4 priority regional pricing', () => {
+  it('keeps default token and cost ceilings internally coherent for GPT-5.6 Terra priority regional pricing', () => {
     const limits = DEFAULT_AGENT_MANAGER_TURN_LIMITS;
     const worstCaseCostAtTokenCeilings =
       limits.maxProviderEstimatedInputTokens * 5.5 / 1_000_000 +
@@ -88,7 +88,7 @@ describe('agent manager turn budget', () => {
     const budget = new AgentManagerTurnBudget(limits);
     budget.consumeProviderCall({
       kind: 'responses',
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-terra',
       estimatedInputTokens: limits.maxProviderEstimatedInputTokens,
       reservedOutputTokens: limits.maxProviderReservedOutputTokens,
       estimatedTotalTokens: limits.maxProviderEstimatedInputTokens + limits.maxProviderReservedOutputTokens,

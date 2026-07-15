@@ -145,7 +145,7 @@ describe('Promptfoo chat app provider', () => {
       receivedPrompt = body.prompt;
       return jsonResponse({
         ok: true,
-        model: 'gpt-5.4-mini',
+        model: 'gpt-5.6-terra',
         result: {
           pass: true,
           score: 0.96,
@@ -184,7 +184,7 @@ describe('Promptfoo chat app provider', () => {
       }
       return jsonResponse({
         ok: true,
-        model: 'gpt-5.4-mini',
+        model: 'gpt-5.6-terra',
         result: {
           pass: true,
           score: 0.94,
@@ -223,7 +223,7 @@ describe('Promptfoo chat app provider', () => {
       }
       return jsonResponse({
         ok: true,
-        model: 'gpt-5.4-mini',
+        model: 'gpt-5.6-terra',
         result: {
           pass: true,
           score: 0.93,
@@ -309,7 +309,7 @@ describe('Promptfoo chat app provider', () => {
       sentPrompt = body.prompt;
       return jsonResponse({
         ok: true,
-        model: 'gpt-5.4-mini',
+        model: 'gpt-5.6-terra',
         result: {
           pass: true,
           score: 0.95,
