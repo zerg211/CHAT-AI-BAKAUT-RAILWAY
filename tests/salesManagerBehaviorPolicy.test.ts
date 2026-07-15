@@ -75,12 +75,28 @@ describe('dynamic sales manager policy routing', () => {
     const prompt = salesManagerPlannerPolicyPromptBlock({
       target: 'planner',
       latestUserMessage: 'Ты ошибся, дай фото и самый дешевый вариант',
-      maxRules: 10
+      maxRules: 11
     });
 
     expect(prompt).toContain('correction.verify_before_apology');
     expect(prompt).toContain('photo.prefer_bakaut_card');
     expect(prompt).toContain('cheap.preliminary_not_final');
+  });
+
+  it('keeps search-before-specialist grounding mandatory across planner, answer, reviewer, and gate', () => {
+    for (const target of ['planner', 'answer', 'reviewer', 'gate'] as const) {
+      const trace = buildSalesManagerPolicyTrace({
+        target,
+        enabled: true,
+        shadowMode: false,
+        maxRules: 0
+      });
+
+      expect(trace.selectedRuleCodes).toContain('grounding.search_before_specialist');
+      expect(trace.promptBlock).toContain('отсутствие данных не равно несовместимости');
+      expect(trace.promptBlock).toContain('официальный сайт');
+      expect(trace.promptBlock).toContain('Специалиста или контакт предлагай только после безрезультатного поиска');
+    }
   });
 
   it('routes ambiguous cutter requests to a material/work clarification policy', () => {

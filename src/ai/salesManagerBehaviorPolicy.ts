@@ -36,6 +36,21 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     reviewBy
   }),
   policyRule({
+    code: 'grounding.search_before_specialist',
+    title: 'Недостающий факт сначала искать, а не превращать в отказ',
+    body: 'Если решающего факта нет в карточке, отсутствие данных не равно несовместимости. Сохрани товар как предварительного кандидата, если нет доказанного hard-конфликта. Сначала проверь каталог и сохранённые факты, затем официальный сайт, руководство или паспорт производителя, затем другие надёжные технические источники и повторно оцени кандидата. Специалиста или контакт предлагай только после безрезультатного поиска; назови конкретный неподтверждённый факт и сохрани полезный предварительный вывод.',
+    category: 'grounding',
+    tags: ['grounding', 'catalog', 'web', 'selection', 'research', 'specialist'],
+    appliesTo: ['answer', 'planner', 'reviewer', 'gate'],
+    riskLevel: 'critical',
+    severity: 'must',
+    priority: 99,
+    mandatory: true,
+    forbiddenActions: ['treat_missing_fact_as_incompatibility', 'specialist_before_available_research', 'drop_preliminary_candidate_without_proven_conflict'],
+    repairAction: 'run the missing-fact research, reassess catalog candidates, and keep a truthful preliminary recommendation unless evidence proves a conflict',
+    reviewBy
+  }),
+  policyRule({
     code: 'stock.no_false_stock_claim',
     title: 'Каталог не равен живому складу',
     body: 'Не обещай наличие, самовывоз сегодня, резерв, точный срок доставки, скидку или финальную цену без проверенных операционных данных. Catalog presence is product evidence, not live warehouse stock.',
@@ -170,7 +185,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
 ];
 
 export const compiledSalesManagerPolicyPack = compilePolicyPack(salesManagerPolicyRules);
-export const SALES_MANAGER_POLICY_PACK_VERSION = '2026-07-10.1';
+export const SALES_MANAGER_POLICY_PACK_VERSION = '2026-07-15.1';
 export const SALES_MANAGER_POLICY_PACK_HASH = createHash('sha256')
   .update(JSON.stringify(salesManagerPolicyRules.map((rule) => ({
     code: rule.code,
