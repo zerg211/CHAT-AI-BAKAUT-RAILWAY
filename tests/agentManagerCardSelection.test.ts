@@ -2451,6 +2451,61 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.warnings).toContain('product_cards_filtered_by_generator_fuel:gasoline:1');
   });
 
+  it('checks a typed gasoline requirement for plate compactors instead of rejecting the class', () => {
+    const gasolinePlate: Product = {
+      ...plate,
+      id: 'plate-gasoline-100',
+      name: 'Виброплита бензиновая CIMAR CPR-550 100 кг',
+      specs: { 'тип топлива': 'бензиновые', 'рабочая масса, кг': '100' }
+    };
+    const dieselPlate: Product = {
+      ...plate,
+      id: 'plate-diesel-100',
+      name: 'Виброплита дизельная TEST DP-100 100 кг',
+      specs: { 'тип топлива': 'дизельные', 'рабочая масса, кг': '100' }
+    };
+    const intent = structuredSelectionIntent({
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      powerSource: 'fuel',
+      requirements: [{
+        id: 'gasoline-plate-only',
+        kind: 'fuel_type',
+        value: 'gasoline',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'Нужна бензиновая виброплита.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        query: 'бензиновая виброплита до 105 кг'
+      }
+    };
+
+    expect(assessStrictSelectionRequirements(intent, 'plate')).toEqual({ blockers: [] });
+    const selection = selectProductsForVisibleCards({
+      products: [dieselPlate, gasolinePlate],
+      userMessage: 'Нужна бензиновая виброплита до 105 кг.',
+      history: [],
+      intent,
+      answerText: `${gasolinePlate.name} подходит; дизельную модель не рассматриваем.`,
+      selectedProductIds: [gasolinePlate.id, dieselPlate.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([gasolinePlate.id]);
+    expect(selection.products.map((product) => product.id)).toEqual([gasolinePlate.id]);
+    expect(selection.warnings).toContain('product_cards_filtered:1');
+  });
+
   it('accepts strict price visibility and removes cards without a real catalog price', () => {
     const priced = generatorWithPrice('priced-5', 'TSS SGG 5000N gasoline generator 5 kW', 49281);
     const unpriced = { ...generatorWithPrice('unpriced-5', 'FIRMAN RD7910 gasoline generator 5 kW', 1), price: null };

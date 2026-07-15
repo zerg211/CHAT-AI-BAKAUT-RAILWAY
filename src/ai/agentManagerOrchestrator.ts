@@ -451,17 +451,20 @@ export function repairIntentForTypedToolRequirementCoverage(intent: AgentIntentC
   return { intent: repairedIntent, repairs };
 }
 
-export function repairIntentForOpenEndedMaterialWebCoverage(intent: AgentIntentContract) {
+export function repairIntentForOpenEndedRequirementWebCoverage(intent: AgentIntentContract) {
   if (intent.selectionPolicy?.selectionGoal !== 'preliminary_fit') {
     return { intent, repairs: [] as Array<{ requestId: string; requirementIds: string[] }> };
   }
   const productClass = canonicalProductClassFromIntent(intent);
-  const materialRequirementIds = new Set(
+  const webVerifiableRequirementIds = new Set(
     assessStrictSelectionRequirements(intent, productClass, []).blockers
-      .filter((blocker) => blocker.reason === 'material_not_mechanically_verifiable')
+      .filter((blocker) =>
+        blocker.reason === 'material_not_mechanically_verifiable' ||
+        blocker.reason === 'unsupported_strict_requirement_kind'
+      )
       .map((blocker) => blocker.id)
   );
-  if (!materialRequirementIds.size) {
+  if (!webVerifiableRequirementIds.size) {
     return { intent, repairs: [] as Array<{ requestId: string; requirementIds: string[] }> };
   }
   const requiredWebRequests = intent.toolRequests.filter((request) =>
@@ -471,9 +474,9 @@ export function repairIntentForOpenEndedMaterialWebCoverage(intent: AgentIntentC
     return { intent, repairs: [] as Array<{ requestId: string; requirementIds: string[] }> };
   }
   const webRequest = requiredWebRequests[0]!;
-  const requirementIds = [...materialRequirementIds];
+  const requirementIds = [...webVerifiableRequirementIds];
   const repairedRequirements = intent.selectionPolicy.requirements.map((requirement) =>
-    materialRequirementIds.has(requirement.id)
+    webVerifiableRequirementIds.has(requirement.id)
       ? {
           ...requirement,
           verification: {
@@ -490,7 +493,7 @@ export function repairIntentForOpenEndedMaterialWebCoverage(intent: AgentIntentC
     ...request,
     coversRequirementIds: request.id === webRequest.id
       ? uniqueStrings([...(request.coversRequirementIds ?? []), ...requirementIds])
-      : (request.coversRequirementIds ?? []).filter((requirementId) => !materialRequirementIds.has(requirementId))
+      : (request.coversRequirementIds ?? []).filter((requirementId) => !webVerifiableRequirementIds.has(requirementId))
   }));
   return {
     intent: {
@@ -500,7 +503,7 @@ export function repairIntentForOpenEndedMaterialWebCoverage(intent: AgentIntentC
         requirements: repairedRequirements
       },
       toolRequests: repairedToolRequests,
-      riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_open_ended_material_web_coverage'])
+      riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_open_ended_requirement_web_coverage'])
     },
     repairs: [{ requestId: webRequest.id, requirementIds }]
   };
@@ -3614,6 +3617,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Every toolRequest must include coversRequirementIds; use [] when it does not verify a selection requirement.',
             'Keep every tool args.comparisonAttributes list to at most 12 distinct decision-relevant attributes. Prioritize the buyer\'s explicit comparison criteria and omit synonyms or low-value duplicates.',
             'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Total job context such as total layer depth, total work area, total runtime, workpiece size, or total material volume is role="context", relation="context", strictness="informational" unless the buyer explicitly requires the product itself to provide that capability or a verified calculator derives a product minimum. The buyer\'s operating procedure — layer-by-layer work, planned number of passes, work sequence, crew size, carrying/loading method, or intended schedule — is also context unless it explicitly demands a product feature or capability.',
+            'When the buyer gives a measurable maximum weight to operationalize loading or carrying by one or more people, use that weight requirement as the product constraint and keep crew size/loading method as context. Do not duplicate it as a boolean hard product_attribute such as loading_suitability unless the buyer explicitly requires a concrete built-in feature such as transport wheels, a lifting eye, or loading without ramps. If the loading method is unspecified, do not assume manual lifting; a compliant-weight candidate may be shown as preliminary with an honest ramp/loading caveat.',
             'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
             'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',
             'selectionPolicy.reusePreviousCards=true, если прежние карточки могут быть полезны в текущем ходе. Это подсказка для ответа, но не право стереть прежние подтверждённые товары: runtime всё равно добавит их в пул активной потребности и заново проверит против новых требований. maxCards отражает просьбу покупателя о количестве карточек; иначе null. powerSource и phase заполняй только из смысла текущей потребности.',
@@ -4412,8 +4416,8 @@ export class AgentManagerOrchestrator {
     const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(groundedIntent, {
       openedNeedThisTurn: newEvents.some((event) => event.eventType === 'need.opened')
     });
-    const materialWebCoverageRepair = repairIntentForOpenEndedMaterialWebCoverage(newNeedFinalFitRepair.intent);
-    const typedCoverageRepair = repairIntentForTypedToolRequirementCoverage(materialWebCoverageRepair.intent);
+    const openEndedWebCoverageRepair = repairIntentForOpenEndedRequirementWebCoverage(newNeedFinalFitRepair.intent);
+    const typedCoverageRepair = repairIntentForTypedToolRequirementCoverage(openEndedWebCoverageRepair.intent);
     const repairedIntent = typedCoverageRepair.intent;
     const validatedToolRequests = assertUniqueToolRequestIds(
       repairedIntent.toolRequests.map(validateToolRequest)
@@ -4452,7 +4456,7 @@ export class AgentManagerOrchestrator {
       !savedIntent.found ||
       legacyIntentUpgraded ||
       newNeedFinalFitRepair.repaired ||
-      materialWebCoverageRepair.repairs.length > 0 ||
+      openEndedWebCoverageRepair.repairs.length > 0 ||
       typedCoverageRepair.repairs.length > 0
     ) {
       await this.conversations.upsertTurnCheckpoint({
@@ -4478,9 +4482,9 @@ export class AgentManagerOrchestrator {
         repairs: typedCoverageRepair.repairs
       });
     }
-    if (materialWebCoverageRepair.repairs.length) {
-      await this.trace(input.sessionId, input.turnId, 'intent', 'open_ended_material_web_coverage_repaired', {
-        repairs: materialWebCoverageRepair.repairs
+    if (openEndedWebCoverageRepair.repairs.length) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'open_ended_requirement_web_coverage_repaired', {
+        repairs: openEndedWebCoverageRepair.repairs
       });
     }
     if (newNeedFinalFitRepair.repaired) {

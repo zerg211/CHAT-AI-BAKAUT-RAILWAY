@@ -3,7 +3,7 @@ import {
   AgentManagerOrchestrator,
   isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
-  repairIntentForOpenEndedMaterialWebCoverage,
+  repairIntentForOpenEndedRequirementWebCoverage,
   repairIntentForNewNeedFinalFit,
   repairIntentForTypedToolRequirementCoverage,
   type AgentManagerModel
@@ -481,11 +481,11 @@ describe('AgentManagerOrchestrator', () => {
     )).toBe(false);
   });
 
-  it('repairs a preliminary open-ended material constraint onto the single required web verifier', () => {
+  it('repairs preliminary open-ended strict constraints onto the single required web verifier', () => {
     const intent = structuredGeneratorCatalogIntent();
     const catalogRequest: ToolRequest = {
       ...intent.toolRequests[0]!,
-      coversRequirementIds: ['material-fit', 'weight-limit']
+      coversRequirementIds: ['material-fit', 'loading-fit', 'weight-limit']
     };
     const webRequest: ToolRequest = {
       id: 'web-material-check',
@@ -516,6 +516,15 @@ describe('AgentManagerOrchestrator', () => {
         evidence: 'для щебня',
         verification: { mode: 'product_attribute' }
       }, {
+        id: 'loading-fit',
+        kind: 'two_person_loading_suitability',
+        value: true,
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'двое смогут погрузить в фургон',
+        verification: { mode: 'product_attribute' }
+      }, {
         id: 'weight-limit',
         kind: 'weight_max_kg',
         value: 100,
@@ -527,11 +536,14 @@ describe('AgentManagerOrchestrator', () => {
       }]
     };
 
-    const repaired = repairIntentForOpenEndedMaterialWebCoverage(intent);
+    const repaired = repairIntentForOpenEndedRequirementWebCoverage(intent);
 
-    expect(repaired.repairs).toEqual([{ requestId: webRequest.id, requirementIds: ['material-fit'] }]);
+    expect(repaired.repairs).toEqual([{
+      requestId: webRequest.id,
+      requirementIds: ['material-fit', 'loading-fit']
+    }]);
     expect(repaired.intent.toolRequests[0]?.coversRequirementIds).toEqual(['weight-limit']);
-    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual(['material-fit']);
+    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual(['material-fit', 'loading-fit']);
     expect(repaired.intent.selectionPolicy?.requirements[0]?.verification).toEqual({
       mode: 'typed_tool',
       toolRequestId: webRequest.id,
@@ -539,10 +551,17 @@ describe('AgentManagerOrchestrator', () => {
       verifier: 'technical_source_review',
       bindAs: 'material'
     });
-    expect(repaired.intent.riskFlags).toContain('planner_repaired_open_ended_material_web_coverage');
+    expect(repaired.intent.selectionPolicy?.requirements[1]?.verification).toEqual({
+      mode: 'typed_tool',
+      toolRequestId: webRequest.id,
+      tool: 'web.researchProductFacts',
+      verifier: 'technical_source_review',
+      bindAs: 'two_person_loading_suitability'
+    });
+    expect(repaired.intent.riskFlags).toContain('planner_repaired_open_ended_requirement_web_coverage');
   });
 
-  it('does not guess an owner when open-ended material research has zero or multiple required web requests', () => {
+  it('does not guess an owner when open-ended requirement research has zero or multiple required web requests', () => {
     const intent = structuredGeneratorCatalogIntent();
     intent.selectionPolicy = {
       ...intent.selectionPolicy!,
@@ -560,7 +579,7 @@ describe('AgentManagerOrchestrator', () => {
         verification: { mode: 'product_attribute' }
       }]
     };
-    expect(repairIntentForOpenEndedMaterialWebCoverage(intent)).toEqual({ intent, repairs: [] });
+    expect(repairIntentForOpenEndedRequirementWebCoverage(intent)).toEqual({ intent, repairs: [] });
 
     const webRequest: ToolRequest = {
       id: 'web-one',
@@ -571,7 +590,7 @@ describe('AgentManagerOrchestrator', () => {
       coversRequirementIds: []
     };
     intent.toolRequests = [intent.toolRequests[0]!, webRequest, { ...webRequest, id: 'web-two' }];
-    expect(repairIntentForOpenEndedMaterialWebCoverage(intent)).toEqual({ intent, repairs: [] });
+    expect(repairIntentForOpenEndedRequirementWebCoverage(intent)).toEqual({ intent, repairs: [] });
   });
 
   it('runs deterministic calculations before catalog and open-ended web research after catalog', () => {

@@ -737,7 +737,6 @@ export function assessStrictSelectionRequirements(
             : undefined;
       if (
         requirement.unit !== null ||
-        !isGeneratorProductClass(productClass) ||
         !expected ||
         policy.powerSource !== expectedPolicyPowerSource
       ) {
@@ -1043,7 +1042,7 @@ export function productMeetsSupportedStrictFuelRequirement(
 ) {
   const requirement = structuredGeneratorFuelRequirement(intent);
   if (!requirement) return true;
-  if (requirement === 'invalid' || !isGeneratorProductClass(productClass)) return false;
+  if (requirement === 'invalid' || productClass === 'unknown') return false;
   const actual = productPowerSource(product);
   if (requirement === 'fuel') return actual === 'gasoline' || actual === 'diesel';
   if (requirement === 'mains') return false;
