@@ -11,6 +11,7 @@ describe('production model configuration', () => {
       'answer: config.OPENAI_ANSWER_MODEL,',
       'planner: config.OPENAI_PLANNER_MODEL,',
       'fact: config.OPENAI_FACT_MODEL,',
+      'factReasoning: config.OPENAI_FACT_REASONING_EFFORT,',
       'deepReasoning: config.OPENAI_DEEP_REASONING_MODEL',
       '}));'
     ].join('');
@@ -30,6 +31,7 @@ describe('production model configuration', () => {
         OPENAI_ANSWER_MODEL: 'gpt-5.4',
         OPENAI_PLANNER_MODEL: 'gpt-5.5',
         OPENAI_FACT_MODEL: 'gpt-5.6-luna',
+        OPENAI_FACT_REASONING_EFFORT: 'xhigh',
         OPENAI_DEEP_REASONING_MODEL: 'gpt-5.6-sol'
       }
     });
@@ -41,6 +43,7 @@ describe('production model configuration', () => {
       answer: 'gpt-5.6-terra',
       planner: 'gpt-5.6-terra',
       fact: 'gpt-5.6-terra',
+      factReasoning: 'none',
       deepReasoning: 'gpt-5.6-terra'
     });
   });

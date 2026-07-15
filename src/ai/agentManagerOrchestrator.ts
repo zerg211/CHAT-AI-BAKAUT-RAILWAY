@@ -3759,6 +3759,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
     }).promptBlock;
     const request = {
       model: config.OPENAI_FACT_MODEL,
+      reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
       max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
       input: [
         {
@@ -3825,6 +3826,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
       console.warn('[agent_pre_send_review] Full structured review failed; retrying with compact evidence context', safeError(error));
       const compactRequest = {
         model: config.OPENAI_FACT_MODEL,
+        reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
         max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
         input: [
           {
