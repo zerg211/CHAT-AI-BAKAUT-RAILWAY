@@ -63,7 +63,7 @@ describe('agent manager strict tool registry', () => {
       sideEffect: true,
       maxAttempts: 1
     });
-    expect(agentManagerToolRegistry['web.researchProductFacts'].timeoutMs).toBe(20_000);
+    expect(agentManagerToolRegistry['web.researchProductFacts'].timeoutMs).toBe(19_500);
   });
 
   it('validates tool-specific result payloads and rejects unknown output fields', () => {
