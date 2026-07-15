@@ -3,7 +3,6 @@ import {
   approvedAnswerStyleExamples,
   approvedAnswerStyleExamplesPromptBlock
 } from '../src/ai/answerStyleExamples.js';
-import { buildSystemPrompt } from '../src/ai/prompts.js';
 
 describe('approved answer style examples', () => {
   it('stores user-approved style examples as annotated style evidence, not templates', () => {
@@ -34,14 +33,5 @@ describe('approved answer style examples', () => {
     expect(block).toContain('не являются источником фактов');
     expect(block).toContain('Используй только тон');
     expect(block).toContain('RD3910E заводится с ключа');
-  });
-
-  it('injects approved style examples into the main assistant prompt', () => {
-    const prompt = buildSystemPrompt();
-
-    expect(prompt).toContain('Пул одобренных примеров стиля');
-    expect(prompt).toContain('явного согласия');
-    expect(prompt).toContain('Ответ в нужном стиле');
-    expect(prompt).toContain('Что нельзя копировать');
   });
 });

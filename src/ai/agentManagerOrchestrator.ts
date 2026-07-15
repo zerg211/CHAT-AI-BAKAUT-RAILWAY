@@ -4981,7 +4981,7 @@ export class AgentManagerOrchestrator {
         : answer.riskFlags
     };
     const cards = productCards(cardSelection.products, ['Найдено в каталоге под текущий запрос.']);
-    const runtimeDecision = getAgentManagerRuntimeDecision(input.session);
+    const runtimeDecision = getAgentManagerRuntimeDecision();
     const metadata = {
       agentManager: true,
       runtimeMode: runtimeDecision.runtimeMode,
@@ -6653,7 +6653,7 @@ export class AgentManagerOrchestrator {
     if (!message?.content?.trim()) return null;
     await onDelta?.(message.content);
     const needState = (message.metadata?.needStateSnapshot as CustomerNeedState | undefined) ?? session.needState ?? emptyNeedState();
-    const runtimeDecision = getAgentManagerRuntimeDecision(session);
+    const runtimeDecision = getAgentManagerRuntimeDecision();
     return {
       turnId,
       answer: message.content,
@@ -6689,7 +6689,7 @@ export class AgentManagerOrchestrator {
       (await this.loadDialogueLedgerContext(session.id)).state,
       session.needState ?? emptyNeedState()
     );
-    const runtimeDecision = getAgentManagerRuntimeDecision(session);
+    const runtimeDecision = getAgentManagerRuntimeDecision();
     const metadata = savedPayload?.metadata ?? {
       agentManager: true,
       runtimeMode: runtimeDecision.runtimeMode,

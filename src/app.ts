@@ -67,9 +67,6 @@ export async function buildApp() {
         version: AI_MANAGER_RUNTIME_MANIFEST.version,
         contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion,
         productionRuntime: AI_MANAGER_RUNTIME_MANIFEST.productionRuntime
-      },
-      remediation: {
-        contractVersion: AI_MANAGER_RUNTIME_MANIFEST.contractVersion
       }
     };
   });

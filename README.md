@@ -56,6 +56,10 @@ Admin endpoints требуют `Authorization: Bearer <ADMIN_API_KEY>`.
 
 Публичный `GET /api/health` содержит только deployment marker: commit и минимальные runtime/contract версии. Модели, полный список runtime artifacts, policy hash и операционные сигналы доступны только в защищённом `/api/admin/health`.
 
+## Документация
+
+Актуальные источники истины и их приоритет перечислены в `docs/RULES_INDEX.md`. Целевая архитектура доменного агента и граница между retrieval и обучением зафиксированы в `docs/DOMAIN_AGENT_BLUEPRINT.md`. Старые планы и отчёты удалены из рабочего дерева и доступны только через Git history, чтобы завершённые задания не воспринимались как действующие инструкции.
+
 ## Деплой и проверка
 
 Изменения уходят только через `git commit` + `git push`; Railway автоматически собирает GitHub-ветку. Ручной `railway up/deploy` не используется. После появления нового commit marker в `/api/health` проводится адаптивный диалог через виджет на `bakautprof.ru`, затем каждый turn сверяется с карточками, trace/metadata и кодом. См. `docs/RAILWAY_DEPLOY.md` и `docs/LOCAL_LIVE_TESTING.md`.

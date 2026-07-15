@@ -92,7 +92,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     const input = messageSchema.parse(request.body ?? {});
     const session = await conversations.getSession(params.id);
     if (!session || session.status !== 'active') return reply.code(404).send({ error: 'Session not found or inactive' });
-    const runtimeDecision = getAgentManagerRuntimeDecision(session);
+    const runtimeDecision = getAgentManagerRuntimeDecision();
     const requestedTurnId = randomUUID();
     const clientMessageId = input.clientMessageId ?? randomUUID();
     let turn: Awaited<ReturnType<ConversationRepository['createTurn']>>;
@@ -156,11 +156,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
       stopStatusTimer = null;
       send('done', payload);
     } catch (error) {
-      const agentManagerHarnessEnabled = runtimeDecision.agentManagerHarnessEnabled;
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
       const recoveryAllowed = !executionInProgress && !budgetStopped;
-      if (!controller.signal.aborted && agentManagerHarnessEnabled && recoveryAllowed) {
+      if (!controller.signal.aborted && recoveryAllowed) {
         try {
           const recoveredPayload = await runWithOpenAIUsageContext({
             sessionId: params.id,
@@ -197,11 +196,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
         ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
         : budgetStopped
           ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
-        : agentManagerHarnessEnabled
-        ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
-        : controller.signal.aborted
-          ? 'Ответ не успел сформироваться. Попробуйте спросить короче или повторите запрос.'
-          : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
+        : 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.';
       if (!controller.signal.aborted) {
         app.log.warn({
           sessionId: params.id,
@@ -238,10 +233,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
 
     let stopStatusTimer: (() => void) | null = null;
     let sessionForRecovery: Awaited<ReturnType<ConversationRepository['getSession']>> | null = null;
-    let runtimeDecision = getAgentManagerRuntimeDecision(null);
+    let runtimeDecision = getAgentManagerRuntimeDecision();
     try {
       sessionForRecovery = await conversations.getSession(params.id);
-      runtimeDecision = getAgentManagerRuntimeDecision(sessionForRecovery);
+      runtimeDecision = getAgentManagerRuntimeDecision();
       send('turn', {
         turnId: params.turnId,
         recovered: true,
@@ -289,10 +284,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
         runtimeModeReason: runtimeDecision.reason,
         error: safeErrorMessage(error)
       }, 'chat recovery failed');
-      const agentManagerHarnessEnabled = runtimeDecision.agentManagerHarnessEnabled;
       send('error', {
         turnId: params.turnId,
-        recoverable: agentManagerHarnessEnabled && recoveryAllowed,
+        recoverable: recoveryAllowed,
         runtimeMode: runtimeDecision.runtimeMode,
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision,
@@ -300,9 +294,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
           ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
           : budgetStopped
             ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
-          : agentManagerHarnessEnabled
-          ? 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
-          : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.'
+          : 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
       });
     } finally {
       stopStatusTimer?.();

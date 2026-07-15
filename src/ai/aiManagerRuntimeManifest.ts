@@ -3,7 +3,7 @@ import {
   SALES_MANAGER_POLICY_PACK_VERSION
 } from './salesManagerBehaviorPolicy.js';
 
-export const AI_MANAGER_RUNTIME_VERSION = '2026-07-10.manager-runtime-v1';
+export const AI_MANAGER_RUNTIME_VERSION = '2026-07-15.sole-agent-runtime-v1';
 export const AI_MANAGER_CONTRACT_VERSION = '2026-07-10.manager-contract-v1';
 
 export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({

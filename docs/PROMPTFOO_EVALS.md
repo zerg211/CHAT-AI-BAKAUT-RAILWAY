@@ -35,7 +35,7 @@ Production baseline against the widget backend embedded on `https://bakautprof.r
 
 ```bash
 PROMPTFOO_CHAT_BASE_URL=https://chat-ai-production-3057.up.railway.app \
-PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/?agentHarness=1 \
+PROMPTFOO_CHAT_PAGE_URL=https://bakautprof.ru/ \
 npm run evals -- --no-cache -j 1
 ```
 
@@ -45,7 +45,7 @@ On Windows PowerShell:
 
 ```powershell
 $env:PROMPTFOO_CHAT_BASE_URL='https://chat-ai-production-3057.up.railway.app'
-$env:PROMPTFOO_CHAT_PAGE_URL='https://bakautprof.ru/?agentHarness=1'
+$env:PROMPTFOO_CHAT_PAGE_URL='https://bakautprof.ru/'
 npm run evals -- --no-cache -j 1
 ```
 
@@ -58,7 +58,7 @@ $env:ALLOW_FIXED_PRODUCTION_REPLAY='1'
 npm run test:live:production
 ```
 
-The live UI check clicks and types in the real iframe on `https://bakautprof.ru/`. The current baseline fails on the first vague generator request because production renders product cards before the generator load profile is ready. The saved protocol is `local-live-tests/2026-05-21-bakautprof-production-agent-cycle-failure.production.md`.
+The live UI check clicks and types in the real iframe on `https://bakautprof.ru/`. Promptfoo remains a secondary regression signal; only the adaptive embedded-widget audit is valid production behavior proof.
 
 Seed cases:
 

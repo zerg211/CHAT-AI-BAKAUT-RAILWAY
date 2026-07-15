@@ -19,12 +19,9 @@ describe('app', () => {
     expect(response.json()).toMatchObject({
       ok: true,
       runtime: {
-        version: '2026-07-10.manager-runtime-v1',
+        version: '2026-07-15.sole-agent-runtime-v1',
         contractVersion: '2026-07-10.manager-contract-v1',
         productionRuntime: 'agent_manager'
-      },
-      remediation: {
-        contractVersion: '2026-07-10.manager-contract-v1'
       }
     });
     expect(response.json()).not.toHaveProperty('answerModel');
@@ -33,7 +30,6 @@ describe('app', () => {
     expect(response.json().runtime).not.toHaveProperty('branch');
     expect(response.json().runtime).not.toHaveProperty('decision');
     expect(response.json().runtime).not.toHaveProperty('manifest');
-    expect(response.json().remediation).not.toHaveProperty('runtimeArtifacts');
   }, 15_000);
 
   it('rejects oversized JSON bodies before public route validation or persistence', async () => {

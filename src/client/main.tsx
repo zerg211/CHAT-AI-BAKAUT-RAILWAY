@@ -173,17 +173,10 @@ function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): AdminDia
   if (!metadata) return [];
   const flags: AdminDiagnosticFlag[] = [];
   const runtimeMode = metadata.runtimeMode ?? (metadata.agentManager ? 'agent_manager' : undefined);
-  if (runtimeMode === 'agent_manager' || runtimeMode === 'legacy') {
-    const runtimeReason = metadata.runtimeModeReason ?? metadata.agentManagerRuntime?.reason ?? metadata.legacyRuntime?.reason ?? 'unknown';
+  if (runtimeMode === 'agent_manager') {
+    const runtimeReason = metadata.runtimeModeReason ?? metadata.agentManagerRuntime?.reason ?? 'unknown';
     flags.push({
-      label: `mode: ${runtimeMode} (${shortDiagnosticReason(runtimeReason)})`,
-      warn: runtimeMode === 'legacy'
-    });
-  }
-  if (metadata.legacyRuntime) {
-    flags.push({
-      label: `legacy path: ${shortDiagnosticReason(metadata.legacyRuntime.path ?? 'unknown')}`,
-      warn: true
+      label: `mode: ${runtimeMode} (${shortDiagnosticReason(runtimeReason)})`
     });
   }
   const execution = metadata.executionContract;

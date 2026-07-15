@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import dotenv from 'dotenv';
-import { assertProductionRemediationMarker } from './remediationProductionMarker.mjs';
+import { assertProductionRuntimeMarker } from './productionRuntimeMarker.mjs';
 import {
   assertNonRepeatingProductionDialogue,
   dialoguePolicyMarkdown
@@ -370,7 +370,7 @@ async function main() {
   let browser = null;
 
   try {
-    await assertProductionRemediationMarker(productionApiBase);
+    await assertProductionRuntimeMarker(productionApiBase);
     await requireProductionOpenAiRuntimeReady({
       productionApiBase,
       requiredRemainingTokens: liveRequiredRemainingTokens
@@ -432,8 +432,7 @@ async function main() {
         protocolPath,
         detailPath,
         failurePath,
-        path.join('local-live-tests', 'remediation-completion-audit.json'),
-        path.join('local-live-tests', 'remediation-postdeploy.json')
+        path.join('local-live-tests', 'production-live-audit.json')
       ]
     });
     const detail = sessionId ? await fetchProductionConversation(sessionId) : null;

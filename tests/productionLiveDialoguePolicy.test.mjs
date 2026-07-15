@@ -10,7 +10,6 @@ import {
   dialogueSignature,
   loadProductionLiveDialogue
 } from './productionLiveDialoguePolicy.mjs';
-import { productionLiveScenarioVariants } from './prepareProductionLiveDialogueScenario.mjs';
 
 const sampleTurns = [
   { phase: 'first_need', user: 'Need a generator for a small house.' },
@@ -48,15 +47,6 @@ describe('production live dialogue policy', () => {
     ], { minTurns: 2, minUserLength: 20 });
 
     expect(quality).toEqual({ ok: true, issues: [] });
-  });
-
-  it('keeps the prepared production scenario portfolio diverse and lead-positive', () => {
-    const quality = analyzeProductionLiveScenarioPortfolio(productionLiveScenarioVariants);
-
-    expect(quality.ok).toBe(true);
-    expect(quality.summary.scenarioCount).toBeGreaterThanOrEqual(4);
-    expect(quality.summary.personaCount).toBeGreaterThanOrEqual(4);
-    expect(quality.summary.leadModes).toContain('contact_ready');
   });
 
   it('rejects a scenario portfolio with no buyer persona variety and no lead-positive path', () => {
@@ -132,9 +122,9 @@ describe('production live dialogue policy', () => {
     expect(policy.priorMatches).toEqual([]);
   });
 
-  it('ignores explicitly excluded completion audit evidence while checking repeats', async () => {
+  it('ignores explicitly excluded live audit evidence while checking repeats', async () => {
     const artifactDir = await tempArtifactDir();
-    const auditPath = path.join(artifactDir, 'remediation-completion-audit.json');
+    const auditPath = path.join(artifactDir, 'production-live-audit.json');
     const signature = dialogueSignature(sampleTurns);
     await fs.writeFile(auditPath, JSON.stringify({
       checks: [

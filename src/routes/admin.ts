@@ -146,7 +146,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
       runtime: {
         commitSha: process.env.RAILWAY_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT_SHA ?? null,
         branch: process.env.RAILWAY_GIT_BRANCH ?? process.env.GIT_BRANCH ?? null,
-        decision: getAgentManagerRuntimeDecision(null),
+        decision: getAgentManagerRuntimeDecision(),
         manifest: AI_MANAGER_RUNTIME_MANIFEST
       },
       operations
