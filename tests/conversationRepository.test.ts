@@ -302,6 +302,29 @@ describe('ConversationRepository turn idempotency', () => {
     expect(query.mock.calls[0]?.[0]).toContain('execution_lease_expires_at < now()');
   });
 
+  it('claims at most one recovery attempt atomically before the database deadline', async () => {
+    const deadlineAt = new Date('2026-07-10T12:01:00.000Z');
+    const row = {
+      ...turnRow('turn-1', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      deadline_at: deadlineAt,
+      recovery_attempts: 1
+    };
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [row] });
+    const repository = new ConversationRepository({ query } as never);
+
+    const claimed = await repository.beginRecoveryAttempt({
+      sessionId: 'session-id',
+      turnId: 'turn-1',
+      maxAttempts: 1
+    });
+
+    expect(claimed).toMatchObject({ recoveryAttempts: 1, deadlineAt: deadlineAt.toISOString() });
+    expect(query.mock.calls[0]?.[0]).toContain('recovery_attempts = coalesce(recovery_attempts, 0) + 1');
+    expect(query.mock.calls[0]?.[0]).toContain('coalesce(recovery_attempts, 0) < $3');
+    expect(query.mock.calls[0]?.[0]).toContain('deadline_at > now()');
+    expect(query.mock.calls[0]?.[1]).toEqual(['session-id', 'turn-1', 1]);
+  });
+
   it('saves the user message and links it to the turn atomically', async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({
@@ -393,57 +416,306 @@ describe('ConversationRepository dialogue ledger compaction', () => {
   });
 });
 
-describe('LeadRepository turn idempotency', () => {
-  it('uses the client lead id and payload hash for public-form idempotency', async () => {
-    const now = new Date('2026-07-10T12:00:00.000Z');
+describe('LeadRepository partial contact drafts', () => {
+  const now = new Date('2026-07-15T12:00:00.000Z');
+  const expires = new Date('2026-07-15T12:30:00.000Z');
+  const draftRow = {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    session_id: '11111111-1111-4111-8111-111111111111',
+    origin_turn_id: '22222222-2222-4222-8222-222222222222',
+    origin_tool_request_id: 'lead.capture:partial',
+    purpose: 'verify generator start method',
+    buyer_question: 'Проверьте, есть ли электростартер',
+    preferred_contact: 'message',
+    name: null,
+    phone: '+7 900 000-00-11',
+    email: null,
+    consent_evidence_hash: 'a'.repeat(64),
+    scope_hash: 'b'.repeat(64),
+    status: 'pending',
+    expires_at: expires,
+    consumed_by_turn_id: null,
+    consumed_lead_id: null,
+    created_at: now,
+    updated_at: now
+  };
+
+  it('persists the partial contact and cancels other pending scopes without exposing it to dialogue state', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [draftRow] });
+    const repository = new LeadRepository({ query } as never);
+
+    const draft = await repository.upsertLeadCaptureDraft({
+      sessionId: draftRow.session_id,
+      originTurnId: draftRow.origin_turn_id,
+      originToolRequestId: draftRow.origin_tool_request_id,
+      purpose: draftRow.purpose,
+      buyerQuestion: draftRow.buyer_question,
+      preferredContact: 'message',
+      phone: draftRow.phone,
+      consentEvidenceHash: draftRow.consent_evidence_hash,
+      scopeHash: draftRow.scope_hash
+    });
+
+    expect(query.mock.calls[0]?.[0]).toContain('INSERT INTO lead_capture_drafts');
+    expect(query.mock.calls[0]?.[0]).toContain('ON CONFLICT (session_id, origin_turn_id, origin_tool_request_id)');
+    expect(query.mock.calls[0]?.[0]).toContain("status = CASE WHEN draft.expires_at <= now() THEN 'expired' ELSE 'cancelled' END");
+    expect(query.mock.calls[0]?.[0]).toContain('phone = NULL');
+    expect(query.mock.calls[0]?.[1]).toContain(draftRow.buyer_question);
+    expect(draft).toMatchObject({
+      id: draftRow.id,
+      buyerQuestion: draftRow.buyer_question,
+      preferredContact: 'message',
+      phone: draftRow.phone,
+      status: 'pending'
+    });
+  });
+
+  it('loads only an unexpired pending draft from the active session and anonymizes expired rows', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [draftRow] });
+    const repository = new LeadRepository({ query } as never);
+
+    const draft = await repository.getPendingLeadCaptureDraft(draftRow.session_id);
+
+    expect(query.mock.calls[0]?.[0]).toContain("SET status = 'expired'");
+    expect(query.mock.calls[0]?.[0]).toContain("session.status = 'active'");
+    expect(query.mock.calls[0]?.[0]).toContain('draft.expires_at > now()');
+    expect(draft?.id).toBe(draftRow.id);
+  });
+
+  it('atomically creates the lead and outbox from the original question before consuming the draft', async () => {
+    const leadRow = {
+      id: 'lead-id',
+      session_id: draftRow.session_id,
+      origin_turn_id: draftRow.origin_turn_id,
+      origin_tool_request_id: draftRow.origin_tool_request_id,
+      name: 'Алексей',
+      phone: draftRow.phone,
+      email: null,
+      question: draftRow.buyer_question,
+      status: 'pending_email',
+      created_at: now
+    };
+    const outboxRow = {
+      id: 'outbox-id',
+      lead_id: 'lead-id',
+      session_id: draftRow.session_id,
+      turn_id: '33333333-3333-4333-8333-333333333333',
+      destination: 'lead_email',
+      payload: {
+        leadId: 'lead-id',
+        purpose: draftRow.purpose,
+        question: draftRow.buyer_question,
+        preferredContact: 'message'
+      },
+      status: 'pending',
+      attempt_count: 0,
+      next_attempt_at: null,
+      last_error: null,
+      created_at: now,
+      updated_at: now
+    };
+    const consumedDraftRow = {
+      ...draftRow,
+      status: 'consumed',
+      name: null,
+      phone: null,
+      consumed_by_turn_id: outboxRow.turn_id,
+      consumed_lead_id: leadRow.id
+    };
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{ draft_row: consumedDraftRow, lead_row: leadRow, outbox_row: outboxRow }]
+    });
+    const repository = new LeadRepository({ query } as never);
+
+    const completed = await repository.completeLeadCaptureDraft({
+      draftId: draftRow.id,
+      sessionId: draftRow.session_id,
+      turnId: outboxRow.turn_id,
+      name: 'Алексей',
+      preferredContact: 'message'
+    });
+
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain('WITH target_draft AS MATERIALIZED');
+    expect(sql).toContain('contact.buyer_question');
+    expect(sql).toContain('INSERT INTO lead_outbox');
+    expect(sql).toContain("outbox.status IN ('pending', 'sending', 'sent', 'failed')");
+    expect(sql).toContain("SET status = 'consumed'");
+    expect(sql).toContain('existing_completion');
+    expect(completed).toMatchObject({
+      draft: { status: 'consumed', consumedLeadId: 'lead-id' },
+      lead: { id: 'lead-id', question: draftRow.buyer_question },
+      outbox: { id: 'outbox-id', status: 'pending' }
+    });
+  });
+
+  it('atomically completes a public form lead with the pending draft context in its outbox', async () => {
+    const leadRow = {
+      id: 'public-lead-id',
+      session_id: draftRow.session_id,
+      client_lead_id: '44444444-4444-4444-8444-444444444444',
+      client_request_hash: 'request-hash',
+      origin_turn_id: null,
+      origin_tool_request_id: null,
+      name: 'Алексей',
+      phone: draftRow.phone,
+      email: null,
+      question: 'Контакт из формы',
+      status: 'pending_email',
+      created_at: now
+    };
+    const outboxRow = {
+      id: 'public-outbox-id',
+      lead_id: leadRow.id,
+      session_id: draftRow.session_id,
+      turn_id: '33333333-3333-4333-8333-333333333333',
+      destination: 'lead_email',
+      payload: {
+        leadId: leadRow.id,
+        purpose: draftRow.purpose,
+        question: draftRow.buyer_question,
+        preferredContact: draftRow.preferred_contact,
+        source: 'lead_form'
+      },
+      status: 'pending',
+      attempt_count: 0,
+      next_attempt_at: null,
+      last_error: null,
+      created_at: now,
+      updated_at: now
+    };
+    const consumedDraftRow = {
+      ...draftRow,
+      status: 'consumed',
+      name: null,
+      phone: null,
+      email: null,
+      consumed_by_turn_id: outboxRow.turn_id,
+      consumed_lead_id: leadRow.id
+    };
     const query = vi.fn().mockResolvedValue({
       rowCount: 1,
       rows: [{
-        id: 'lead-id',
-        session_id: 'session-id',
-        client_lead_id: 'client-lead-id',
-        client_request_hash: 'request-hash',
-        name: 'Алексей',
-        phone: '+79000000000',
-        email: null,
-        question: 'Нужна доставка',
-        status: 'pending_email',
-        created_at: now
+        lead_row: leadRow,
+        outbox_row: outboxRow,
+        draft_row: consumedDraftRow,
+        pending_draft_matched: true
       }]
     });
-    const { LeadRepository } = await import('../src/db/repositories.js');
     const repository = new LeadRepository({ query } as never);
 
-    const lead = await repository.createClientLead({
-      sessionId: 'session-id',
-      clientLeadId: 'client-lead-id',
-      clientRequestHash: 'request-hash',
-      name: 'Алексей',
-      phone: '+79000000000',
-      question: 'Нужна доставка'
+    const completed = await repository.createClientLeadWithOutbox({
+      sessionId: draftRow.session_id,
+      clientLeadId: leadRow.client_lead_id,
+      clientRequestHash: leadRow.client_request_hash,
+      name: leadRow.name,
+      phone: leadRow.phone,
+      question: leadRow.question
     });
 
-    expect(query.mock.calls[0]?.[0]).toContain('ON CONFLICT (session_id, client_lead_id) WHERE client_lead_id IS NOT NULL');
-    expect(query.mock.calls[0]?.[0]).toContain("WHERE id = $1 AND status = 'active'");
-    expect(query.mock.calls[0]?.[0]).toContain('leads.client_request_hash = EXCLUDED.client_request_hash');
-    expect(query.mock.calls[0]?.[1]).toContain('request-hash');
-    expect(lead).toMatchObject({ clientLeadId: 'client-lead-id', clientRequestHash: 'request-hash' });
+    const sql = String(query.mock.calls[0]?.[0]);
+    expect(sql).toContain('WITH active_session AS MATERIALIZED');
+    expect(sql).toContain('ON CONFLICT (session_id, client_lead_id) WHERE client_lead_id IS NOT NULL');
+    expect(sql).toContain('leads.client_request_hash = EXCLUDED.client_request_hash');
+    expect(sql).toContain('FOR UPDATE OF draft');
+    expect(sql).toContain('ORDER BY turn.created_at DESC');
+    expect(sql).toContain("'purpose', draft.purpose");
+    expect(sql).toContain("'question', draft.buyer_question");
+    expect(sql).toContain("'preferredContact', draft.preferred_contact");
+    expect(sql).toContain('payload = lead_outbox.payload || EXCLUDED.payload');
+    expect(sql).toContain("SET status = 'consumed'");
+    expect(sql).toContain('phone = NULL');
+    expect(sql).toContain("outbox.status IN ('pending', 'sending', 'sent', 'failed')");
+    expect(completed).toMatchObject({
+      pendingDraftMatched: true,
+      draft: {
+        status: 'consumed',
+        phone: null,
+        consumedLeadId: leadRow.id
+      },
+      lead: { id: leadRow.id, clientLeadId: leadRow.client_lead_id },
+      outbox: {
+        id: outboxRow.id,
+        payload: {
+          purpose: draftRow.purpose,
+          question: draftRow.buyer_question,
+          preferredContact: 'message'
+        }
+      }
+    });
   });
 
-  it('returns null when the client idempotency key has a different payload hash', async () => {
-    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
-    const { LeadRepository } = await import('../src/db/repositories.js');
+  it('keeps the public form payload compatible when there is no pending draft', async () => {
+    const leadRow = {
+      id: 'public-lead-id',
+      session_id: draftRow.session_id,
+      client_lead_id: '44444444-4444-4444-8444-444444444444',
+      client_request_hash: 'request-hash',
+      name: 'Алексей',
+      phone: draftRow.phone,
+      email: null,
+      question: 'Нужна доставка',
+      status: 'pending_email',
+      created_at: now
+    };
+    const outboxRow = {
+      id: 'public-outbox-id',
+      lead_id: leadRow.id,
+      session_id: draftRow.session_id,
+      turn_id: null,
+      destination: 'lead_email',
+      payload: { leadId: leadRow.id, source: 'lead_form' },
+      status: 'pending',
+      attempt_count: 0,
+      next_attempt_at: null,
+      last_error: null,
+      created_at: now,
+      updated_at: now
+    };
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{
+        lead_row: leadRow,
+        outbox_row: outboxRow,
+        draft_row: null,
+        pending_draft_matched: false
+      }]
+    });
     const repository = new LeadRepository({ query } as never);
 
-    await expect(repository.createClientLead({
-      sessionId: 'session-id',
-      clientLeadId: 'client-lead-id',
+    const completed = await repository.createClientLeadWithOutbox({
+      sessionId: leadRow.session_id,
+      clientLeadId: leadRow.client_lead_id,
+      clientRequestHash: leadRow.client_request_hash,
+      name: leadRow.name,
+      phone: leadRow.phone,
+      question: leadRow.question
+    });
+
+    expect(completed).toMatchObject({
+      pendingDraftMatched: false,
+      draft: null,
+      lead: { id: leadRow.id },
+      outbox: { payload: { leadId: leadRow.id, source: 'lead_form' } }
+    });
+  });
+
+  it('returns null when the public form idempotency key is reused with another payload hash', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new LeadRepository({ query } as never);
+
+    await expect(repository.createClientLeadWithOutbox({
+      sessionId: draftRow.session_id,
+      clientLeadId: '44444444-4444-4444-8444-444444444444',
       clientRequestHash: 'different-request-hash',
       name: 'Алексей',
       phone: '+79000000000'
     })).resolves.toBeNull();
   });
+});
 
+describe('LeadRepository turn idempotency', () => {
   it('uses the originating turn and tool request as the business idempotency key', async () => {
     const now = new Date('2026-07-10T12:00:00.000Z');
     const query = vi.fn().mockResolvedValue({

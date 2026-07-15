@@ -37,8 +37,19 @@ export interface ProductComparisonResearchAnswerGuidance {
   }>;
 }
 
+export type ProductResearchSearchDisposition =
+  | 'completed'
+  | 'memory_hit'
+  | 'not_needed'
+  | 'skipped_budget'
+  | 'timed_out'
+  | 'failed'
+  | 'aborted';
+
 export interface ProductComparisonResearchResult {
   usedWebSearch: boolean;
+  searchDisposition: ProductResearchSearchDisposition;
+  sourcesExhausted: boolean;
   facts: ProductComparisonResearchFact[];
   conflicts: ProductComparisonResearchConflict[];
   answerGuidance: ProductComparisonResearchAnswerGuidance;
@@ -491,9 +502,23 @@ function normalizeAnswerGuidance(value: unknown): ProductComparisonResearchAnswe
   };
 }
 
-function normalizeResearchParsed(parsed: Record<string, unknown>): ProductComparisonResearchResult {
+function responseUsedWebSearch(response: unknown) {
+  const output = (response as { output?: unknown })?.output;
+  return Array.isArray(output) && output.some((item) =>
+    Boolean(item && typeof item === 'object' && (item as { type?: unknown }).type === 'web_search_call')
+  );
+}
+
+function normalizeResearchParsed(
+  parsed: Record<string, unknown>,
+  execution: Pick<ProductComparisonResearchResult, 'usedWebSearch' | 'searchDisposition' | 'sourcesExhausted'> = {
+    usedWebSearch: false,
+    searchDisposition: 'not_needed',
+    sourcesExhausted: false
+  }
+): ProductComparisonResearchResult {
   return {
-    usedWebSearch: parsed.usedWebSearch === true,
+    ...execution,
     facts: Array.isArray(parsed.facts)
       ? (parsed.facts as Array<ProductComparisonResearchFact & { sourceUrl?: string | null; sourceTitle?: string | null }>).map((fact) => ({
           ...fact,
@@ -621,7 +646,8 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
       return source.text
         ? { ...source, sourceKind: 'web' as const }
         : { ok: false, text: '', sourceTitle: source.sourceTitle, warning: 'source_evidence_empty', sourceKind: 'web' as const };
-    } catch {
+    } catch (error) {
+      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
       return { ok: false, text: '', warning: 'source_evidence_fetch_failed', sourceKind: 'web' as const };
     }
   })();
@@ -1395,6 +1421,8 @@ function mergeCatalogAndWebResearch(
   };
   return {
     usedWebSearch: webResult.usedWebSearch,
+    searchDisposition: webResult.searchDisposition,
+    sourcesExhausted: webResult.sourcesExhausted,
     facts: uniqueFacts([...catalogResult.facts, ...webResult.facts]),
     conflicts: [...catalogResult.conflicts, ...webResult.conflicts],
     answerGuidance,
@@ -1435,6 +1463,8 @@ async function extractExactCatalogProductFacts(input: {
   if (!input.products.length || !input.targetProductNames.length) {
     return {
       usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
       facts: [],
       conflicts: [],
       answerGuidance: defaultAnswerGuidance(),
@@ -1488,8 +1518,7 @@ async function extractExactCatalogProductFacts(input: {
   });
   const extracted = augmentCatalogStarterFacts({
     result: {
-      ...normalizeResearchParsed(parsed),
-      usedWebSearch: false
+      ...normalizeResearchParsed(parsed)
     },
     products: input.products,
     userMessage: input.userMessage,
@@ -1523,6 +1552,8 @@ export async function researchProductComparisonFacts(input: {
   if (input.products.length < 2 && !targetProductNames.length) {
     return {
       usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
       facts: [],
       conflicts: [],
       answerGuidance: defaultAnswerGuidance(),
@@ -1687,7 +1718,7 @@ export async function researchProductComparisonFacts(input: {
     }
   };
 
-  const { parsed } = await createStructuredJsonResponse({
+  const { parsed, response } = await createStructuredJsonResponse({
     request,
     stage: 'product_comparison_research',
     signal: input.signal,
@@ -1695,8 +1726,13 @@ export async function researchProductComparisonFacts(input: {
     minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
     transportMaxRetries: 0
   });
+  const primaryUsedWebSearch = responseUsedWebSearch(response);
   const primaryResult = await validateSourceBackedResult({
-    result: normalizeResearchParsed(parsed),
+    result: normalizeResearchParsed(parsed, {
+      usedWebSearch: primaryUsedWebSearch,
+      searchDisposition: primaryUsedWebSearch ? 'completed' : 'failed',
+      sourcesExhausted: false
+    }),
     products: exactCatalogProducts,
     targetProductNames,
     userMessage: input.userMessage,
@@ -1733,6 +1769,8 @@ export async function researchProductComparisonFacts(input: {
   if (exactTargetRetryRequired && webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_RETRY_REMAINING_MS) {
     return {
       ...combinedPrimaryResult,
+      searchDisposition: 'skipped_budget',
+      sourcesExhausted: false,
       warnings: uniqueStrings([
         ...combinedPrimaryResult.warnings,
         'exact_target_external_retry_skipped_insufficient_budget'
@@ -1788,8 +1826,13 @@ export async function researchProductComparisonFacts(input: {
       minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
       transportMaxRetries: 0
     });
+    const retryUsedWebSearch = responseUsedWebSearch(retry.response);
     const retryResult = await validateSourceBackedResult({
-      result: normalizeResearchParsed(retry.parsed),
+      result: normalizeResearchParsed(retry.parsed, {
+        usedWebSearch: retryUsedWebSearch,
+        searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
+        sourcesExhausted: false
+      }),
       products: exactCatalogProducts,
       targetProductNames,
       userMessage: input.userMessage,
@@ -1814,6 +1857,8 @@ export async function researchProductComparisonFacts(input: {
     ) {
       return {
         usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
+        searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
+        sourcesExhausted: false,
         facts: combinedRetryResult.facts,
         conflicts: combinedRetryResult.conflicts.length ? combinedRetryResult.conflicts : combinedPrimaryResult.conflicts,
         answerGuidance: resultHasUsableGuidance(combinedRetryResult)
@@ -1834,6 +1879,8 @@ export async function researchProductComparisonFacts(input: {
     return {
       ...combinedPrimaryResult,
       usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
+      searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
+      sourcesExhausted: retryUsedWebSearch,
       warnings: uniqueStrings([
         ...combinedPrimaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
         ...combinedRetryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
@@ -1846,5 +1893,13 @@ export async function researchProductComparisonFacts(input: {
     };
   }
 
-  return combinedPrimaryResult;
+  const unresolvedAfterCompletedPrimary = needsDeepMissingFactSearch({
+    result: combinedPrimaryResult,
+    userMessage: input.userMessage,
+    comparisonAttributes
+  });
+  return {
+    ...combinedPrimaryResult,
+    sourcesExhausted: combinedPrimaryResult.searchDisposition === 'completed' && unresolvedAfterCompletedPrimary
+  };
 }

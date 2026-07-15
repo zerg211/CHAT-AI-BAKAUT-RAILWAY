@@ -247,7 +247,7 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
 }
 
 describe('AgentManager comparison research flow', () => {
-  it('requires a useful technical handoff after the available web research attempt is exhausted', async () => {
+  it('does not claim sources are exhausted or start a handoff when web execution fails', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
       new Error('product_comparison_research did not return a JSON object')
     );
@@ -316,17 +316,14 @@ describe('AgentManager comparison research flow', () => {
 
     expect(clausesSeen).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        code: 'web_research_unavailable_grounding',
+        code: 'web_research_incomplete_grounding',
         sourceRequestId: 'web:thd'
       })
     ]));
-    expect(clausesSeen[0]?.instruction).toContain('exhausted the available search attempt');
-    expect(clausesSeen[0]?.instruction).toContain('technical specialist');
-    expect(clausesSeen[0]?.instruction).toContain('message or by phone call');
-    expect(clausesSeen[0]?.instruction).toContain('leadAction="offer_form"');
-    expect(payload.answer).toContain('техническому специалисту');
-    expect(payload.answer).toContain('написать или позвонить');
-    expect(payload.leadRequested).toBe(true);
+    expect(clausesSeen[0]?.instruction).toContain('did not complete');
+    expect(clausesSeen[0]?.instruction).toContain('Do not describe sources as exhausted');
+    expect(clausesSeen[0]?.instruction).not.toContain('leadAction="offer_form"');
+    expect(payload.leadRequested).toBe(false);
     const metadata = payload.metadata as {
       toolResults?: Array<{ status?: string; warnings?: string[] }>;
       answerContract?: { leadAction?: string; toolResultIds?: string[] };
@@ -341,10 +338,214 @@ describe('AgentManager comparison research flow', () => {
       ])
     });
     expect(metadata.answerContract).toMatchObject({
-      leadAction: 'offer_form',
+      leadAction: 'none',
       toolResultIds: ['web:thd']
     });
-    expect(metadata.preSendReview).toEqual({ verdict: 'pass', issues: [] });
+    expect(metadata.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'premature_handoff_before_web_exhausted' })
+      ])
+    });
+  });
+
+  it('blocks a technical handoff after a successful but still partial web result', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      facts: [],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'По доступному источнику подтверждена только часть сведений.',
+        completeness: 'partial',
+        coverage: [{
+          attribute: 'совместимость с Hatz 1D42S',
+          status: 'not_confirmed',
+          value: '',
+          evidence: 'Точная совместимость пока не подтверждена.'
+        }]
+      },
+      summaryForAnswer: 'Поиск выполнен частично; решающий факт остаётся неподтверждённым.',
+      warnings: ['missing_fact_deep_search_required']
+    });
+
+    const partialModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks for exact engine compatibility',
+          dialogueUnderstanding: 'compatibility is still only partially researched',
+          nextStepRationale: 'continue autonomous research before any handoff',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:partial-compatibility',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'filter kit Hatz 1D42S compatibility',
+              semanticQuery: 'exact compatibility with Hatz 1D42S',
+              productIntent: 'plateAccessory',
+              productNames: ['Filter kit KA-00042730'],
+              comparisonAttributes: ['совместимость с Hatz 1D42S'],
+              limit: 4
+            },
+            rationale: 'the decisive compatibility fact is still missing',
+            required: true,
+            coversRequirementIds: ['req-partial-compatibility']
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['web_required']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Совместимость пока подтверждена частично. Могу передать вопрос техническому специалисту. Оставьте номер — написать вам или позвонить?',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:partial-compatibility'],
+          leadAction: 'offer_form',
+          riskFlags: ['compatibility_unconfirmed']
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Подойдёт ли комплект к Hatz 1D42S?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      { async createLead() { return null; } } as never,
+      withStrictToolFixtures(partialModel)
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+    const metadata = payload.metadata as {
+      answerContract?: { leadAction?: string };
+      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
+      toolResults?: Array<{ status?: string; payload?: { researchOutcome?: string; sourcesExhausted?: boolean } }>;
+    };
+
+    expect(metadata.toolResults?.[0]).toMatchObject({
+      status: 'ok',
+      payload: { researchOutcome: 'partial', sourcesExhausted: false }
+    });
+    expect(metadata.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'premature_handoff_before_web_exhausted' })
+      ])
+    });
+    expect(metadata.answerContract?.leadAction).toBe('none');
+    expect(payload.leadRequested).toBe(false);
+  });
+
+  it('treats a completed research call with no confirmed answer as exhausted', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: true,
+      facts: [],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Совместимость с Hatz 1D42S по доступным источникам не подтверждена.',
+        completeness: 'not_answered',
+        coverage: [{
+          attribute: 'совместимость комплекта с Hatz 1D42S',
+          status: 'not_confirmed',
+          value: '',
+          evidence: 'В доступных официальных материалах точной привязки комплекта нет.'
+        }]
+      },
+      summaryForAnswer: 'Точный факт не подтверждён.',
+      warnings: ['missing_fact_deep_search_still_unresolved']
+    });
+
+    const clausesSeen: Array<{ code?: string; instruction?: string }> = [];
+    const exhaustedModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks whether a filter kit fits Hatz 1D42S',
+          dialogueUnderstanding: 'compatibility must be verified before recommending the kit',
+          nextStepRationale: 'search official sources before any human handoff',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:compatibility',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'filter kit compatibility Hatz 1D42S',
+              semanticQuery: 'exact filter kit compatibility with Hatz 1D42S engine',
+              productIntent: 'plateAccessory',
+              productNames: ['Filter kit KA-00042730'],
+              comparisonAttributes: ['совместимость комплекта с Hatz 1D42S'],
+              limit: 4
+            },
+            rationale: 'compatibility is decision-critical',
+            required: true,
+            coversRequirementIds: ['req-engine-compatibility']
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['web_required']
+        };
+      },
+      async composeAnswer(input) {
+        clausesSeen.push(...(input.requiredResponseClauses ?? []));
+        return {
+          answerText: 'По каталожной цене комплект выгоднее, но совместимость именно с Hatz 1D42S подтвердить не удалось. Могу уточнить этот конкретный факт у технического специалиста. Оставьте номер и скажите, как удобнее получить результат — сообщением или звонком?',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:compatibility'],
+          leadAction: 'offer_form',
+          riskFlags: ['compatibility_unconfirmed']
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Подойдёт ли комплект фильтров к двигателю Hatz 1D42S?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      { async createLead() { return null; } } as never,
+      withStrictToolFixtures(exhaustedModel)
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+    const metadata = payload.metadata as {
+      toolResults?: Array<{
+        status?: string;
+        payload?: { researchOutcome?: string; sourcesExhausted?: boolean; unconfirmedFacts?: unknown[] };
+      }>;
+    };
+
+    expect(metadata.toolResults?.[0]).toMatchObject({
+      status: 'ok',
+      payload: {
+        researchOutcome: 'exhausted',
+        sourcesExhausted: true,
+        unconfirmedFacts: [expect.objectContaining({
+          requirementIds: ['req-engine-compatibility'],
+          attribute: 'совместимость комплекта с Hatz 1D42S',
+          status: 'not_confirmed'
+        })]
+      }
+    });
+    expect(clausesSeen).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'web_research_exhausted_grounding',
+        instruction: expect.stringContaining('совместимость комплекта с Hatz 1D42S')
+      })
+    ]));
+    expect(clausesSeen.map((clause) => clause.code)).not.toContain('answer_checked_research_guidance');
+    expect(payload.answer).toContain('совместимость именно с Hatz 1D42S');
+    expect(payload.answer).toContain('сообщением или звонком');
+    expect(payload.leadRequested).toBe(true);
   });
 
   it('rewrites failed general THD web research to a useful unverified technical explanation', async () => {
@@ -625,10 +826,10 @@ describe('AgentManager comparison research flow', () => {
     });
 
     expect(payload.answer).toContain('SUNREKA G7000iS остаётся предварительным вариантом');
-    expect(payload.answer).toContain('внешняя проверка не подтвердила решающий факт');
-    expect(payload.answer).toContain('техническому специалисту');
-    expect(payload.answer).toContain('написать или позвонить');
-    expect(payload.leadRequested).toBe(true);
+    expect(payload.answer).toContain('Внешняя проверка в этом ходе не завершилась');
+    expect(payload.answer).not.toContain('техническому специалисту');
+    expect(payload.answer).not.toContain('написать или позвонить');
+    expect(payload.leadRequested).toBe(false);
     expect(payload.answer).not.toContain('запускается ручным стартером');
     expect(payload.answer).not.toContain('Кнопочного запуска для этой модели в данных не вижу');
     expect(payload.answer).not.toContain('есть в каталоге');
@@ -652,7 +853,7 @@ describe('AgentManager comparison research flow', () => {
       ])
     });
     expect(metadata.answerContract?.factsUsed).toEqual([]);
-    expect(metadata.answerContract?.leadAction).toBe('offer_form');
+    expect(metadata.answerContract?.leadAction).toBe('none');
   });
 
   it('preserves a useful catalog-grounded comparison when a failed web result is referenced only as status', async () => {

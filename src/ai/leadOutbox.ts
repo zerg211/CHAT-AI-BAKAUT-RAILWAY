@@ -7,6 +7,23 @@ function nextAttemptAt(attemptCount: number) {
   return new Date(Date.now() + delayMinutes * 60_000).toISOString();
 }
 
+function emailHandoffContext(payload: Record<string, unknown>): {
+  preferredContact: 'message' | 'call' | null;
+  purpose: string | null;
+  buyerQuestion: string | null;
+} {
+  const preferredContact = payload.preferredContact === 'message' || payload.preferredContact === 'call'
+    ? payload.preferredContact
+    : null;
+  const purpose = typeof payload.purpose === 'string' && payload.purpose.trim()
+    ? payload.purpose.trim()
+    : null;
+  const buyerQuestion = typeof payload.question === 'string' && payload.question.trim()
+    ? payload.question.trim()
+    : null;
+  return { preferredContact, purpose, buyerQuestion };
+}
+
 export async function processLeadOutboxItem(input: {
   item: LeadOutboxItem;
   conversations: ConversationRepository;
@@ -24,7 +41,11 @@ export async function processLeadOutboxItem(input: {
   }
 
   const messages = await input.conversations.listMessages(session.id, 80);
-  const emailResult = await sendLeadEmail(lead, { session, messages });
+  const emailResult = await sendLeadEmail(lead, {
+    session,
+    messages,
+    handoff: emailHandoffContext(input.item.payload)
+  });
   if (emailResult.ok) {
     await input.leads.markLeadOutboxSent(input.item.id);
     await input.leads.markEmailResult(lead.id, 'sent_email', emailResult as unknown as Record<string, unknown>);

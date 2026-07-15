@@ -1,6 +1,8 @@
 export type ConversationStatus = 'active' | 'closed' | 'expired';
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 export type LeadStatus = 'pending_email' | 'sent_email' | 'email_failed';
+export type LeadCaptureDraftStatus = 'pending' | 'consumed' | 'cancelled' | 'expired';
+export type LeadPreferredContact = 'message' | 'call';
 
 export interface ConversationSession {
   id: string;
@@ -202,6 +204,27 @@ export interface Lead {
   question?: string | null;
   status: LeadStatus;
   createdAt: string;
+}
+
+export interface LeadCaptureDraft {
+  id: string;
+  sessionId: string;
+  originTurnId: string;
+  originToolRequestId: string;
+  purpose: string;
+  buyerQuestion: string;
+  preferredContact?: LeadPreferredContact | null;
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  consentEvidenceHash: string;
+  scopeHash: string;
+  status: LeadCaptureDraftStatus;
+  expiresAt: string;
+  consumedByTurnId?: string | null;
+  consumedLeadId?: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface NeedItem {
@@ -832,6 +855,8 @@ export interface ConversationTurn {
   activeNeedsAfter?: ActiveCustomerNeed[] | null;
   executionOwner?: string | null;
   executionLeaseExpiresAt?: string | null;
+  deadlineAt?: string | null;
+  recoveryAttempts?: number;
   createdAt: string;
   updatedAt: string;
 }

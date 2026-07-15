@@ -91,6 +91,8 @@ export async function repairRequiredSchema(client: QueryableClient) {
       active_needs_after jsonb,
       execution_owner uuid,
       execution_lease_expires_at timestamptz,
+      deadline_at timestamptz,
+      recovery_attempts integer NOT NULL DEFAULT 0,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now()
     )
@@ -103,9 +105,13 @@ export async function repairRequiredSchema(client: QueryableClient) {
     ALTER TABLE conversation_turns
       ADD COLUMN IF NOT EXISTS client_message_id uuid,
       ADD COLUMN IF NOT EXISTS execution_owner uuid,
-      ADD COLUMN IF NOT EXISTS execution_lease_expires_at timestamptz
+      ADD COLUMN IF NOT EXISTS execution_lease_expires_at timestamptz,
+      ADD COLUMN IF NOT EXISTS deadline_at timestamptz,
+      ADD COLUMN IF NOT EXISTS recovery_attempts integer NOT NULL DEFAULT 0
   `);
   await client.query('UPDATE conversation_turns SET client_message_id = id WHERE client_message_id IS NULL');
+  await client.query("UPDATE conversation_turns SET deadline_at = created_at + interval '60 seconds' WHERE deadline_at IS NULL");
+  await client.query('ALTER TABLE conversation_turns ALTER COLUMN deadline_at SET NOT NULL');
   await client.query(`
     ALTER TABLE conversation_turns
       ALTER COLUMN client_message_id SET DEFAULT gen_random_uuid(),
@@ -407,6 +413,40 @@ async function repairAgentManagerHarnessSchema(client: QueryableClient) {
   await client.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS leads_origin_tool_request_idx
       ON leads(session_id, origin_turn_id, origin_tool_request_id)
+  `);
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS lead_capture_drafts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id uuid NOT NULL REFERENCES conversation_sessions(id) ON DELETE CASCADE,
+      origin_turn_id uuid NOT NULL REFERENCES conversation_turns(id) ON DELETE CASCADE,
+      origin_tool_request_id text NOT NULL,
+      purpose text NOT NULL CHECK (length(trim(purpose)) > 0),
+      buyer_question text NOT NULL CHECK (length(trim(buyer_question)) > 0),
+      preferred_contact text CHECK (preferred_contact IN ('message', 'call')),
+      name text,
+      phone text,
+      email text,
+      consent_evidence_hash text NOT NULL CHECK (length(consent_evidence_hash) = 64),
+      scope_hash text NOT NULL CHECK (length(scope_hash) = 64),
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'consumed', 'cancelled', 'expired')),
+      expires_at timestamptz NOT NULL DEFAULT (now() + interval '30 minutes'),
+      consumed_by_turn_id uuid REFERENCES conversation_turns(id) ON DELETE SET NULL,
+      consumed_lead_id uuid REFERENCES leads(id) ON DELETE SET NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(session_id, origin_turn_id, origin_tool_request_id)
+    )
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS lead_capture_drafts_pending_session_idx
+      ON lead_capture_drafts(session_id, updated_at DESC)
+      WHERE status = 'pending'
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS lead_capture_drafts_expiry_idx
+      ON lead_capture_drafts(expires_at)
+      WHERE status = 'pending'
   `);
 
   await client.query(`

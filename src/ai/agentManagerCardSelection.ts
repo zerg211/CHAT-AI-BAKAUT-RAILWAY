@@ -34,9 +34,40 @@ import {
   selectProductsBySuitability,
   type BuyerRequirementContract
 } from './productSuitability.js';
+import {
+  authoritativeRequirementProofStatus,
+  buildRequirementProofs,
+  combinedRequirementProofStatus,
+  productRequirementProofCaveats,
+  requirementUsesGenericReadProof,
+  requirementProofsFor,
+  type RequirementProof
+} from './requirementProofs.js';
 
-export function productCards(products: Product[], reasons: string[] = []): ProductCard[] {
-  return products.map((product) => ({
+export function normalizedProductIdentity(product: Product) {
+  return matchingModelTextTokens(product.name).join('_') || product.id;
+}
+
+function uniqueVisibleProductsByIdentity(products: Product[]) {
+  const seenIds = new Set<string>();
+  const seenIdentities = new Set<string>();
+  const unique: Product[] = [];
+  for (const product of products) {
+    const identity = normalizedProductIdentity(product);
+    if (seenIds.has(product.id) || seenIdentities.has(identity)) continue;
+    seenIds.add(product.id);
+    seenIdentities.add(identity);
+    unique.push(product);
+  }
+  return unique;
+}
+
+export function productCards(
+  products: Product[],
+  reasons: string[] = [],
+  caveatsByProductId: Record<string, string[]> = {}
+): ProductCard[] {
+  return uniqueVisibleProductsByIdentity(products).map((product) => ({
     id: product.id,
     name: product.name,
     brand: product.brand,
@@ -47,7 +78,7 @@ export function productCards(products: Product[], reasons: string[] = []): Produ
     sourceUrl: product.sourceUrl,
     specs: product.specs ?? {},
     reasons,
-    caveats: []
+    caveats: caveatsByProductId[product.id] ?? []
   }));
 }
 
@@ -536,6 +567,7 @@ function typedToolRequirementProof(input: {
   intent: AgentIntentContract;
   productClass: ProductSelectionClass;
   toolResults: ToolResult[];
+  requirementProofs: RequirementProof[];
 }) {
   const verification = input.requirement.verification;
   if (!verification || verification.mode !== 'typed_tool') return undefined;
@@ -620,17 +652,28 @@ function typedToolRequirementProof(input: {
     return { generatorNominalPowerMinKw: requiredNominalKw };
   }
 
+  if (
+    verification.tool === 'web.researchProductFacts' ||
+    verification.tool === 'catalog.search' ||
+    verification.tool === 'catalog.getProductDetails'
+  ) {
+    const proofs = input.requirementProofs.filter((proof) => proof.requirementId === input.requirement.id);
+    if (proofs.some((proof) => proof.status !== 'unverified')) return {};
+  }
+
   return { blocker: blocker('unsupported_typed_tool_verifier') };
 }
 
 export function assessStrictSelectionRequirements(
   intent: AgentIntentContract,
   productClass: ProductSelectionClass,
-  toolResults: ToolResult[] = []
+  toolResults: ToolResult[] = [],
+  products: Product[] = []
 ): StrictSelectionRequirementAssessment {
   const policy = intent.selectionPolicy;
   if (!policy) return { blockers: [] };
 
+  const requirementProofs = buildRequirementProofs({ intent, products, toolResults });
   const blockers: StrictSelectionRequirementBlocker[] = [];
   let generatorNominalPowerMinKw: number | undefined;
   let generatorAutoStartRequirement: boolean | undefined;
@@ -647,7 +690,13 @@ export function assessStrictSelectionRequirements(
     if (requirement.role !== 'hard_constraint' || requirement.strictness !== 'strict') continue;
 
     if (requirement.verification?.mode === 'typed_tool') {
-      const proof = typedToolRequirementProof({ requirement, intent, productClass, toolResults });
+      const proof = typedToolRequirementProof({
+        requirement,
+        intent,
+        productClass,
+        toolResults,
+        requirementProofs
+      });
       if (proof?.blocker) blockers.push(proof.blocker);
       if (proof?.generatorNominalPowerMinKw !== undefined) {
         generatorNominalPowerMinKw = generatorNominalPowerMinKw === undefined
@@ -826,7 +875,10 @@ export function assessStrictSelectionRequirements(
       continue;
     }
 
-    addBlocker(requirement, 'unsupported_strict_requirement_kind');
+    const genericProofs = requirementProofs.filter((proof) => proof.requirementId === requirement.id);
+    if (!genericProofs.some((proof) => proof.status !== 'unverified')) {
+      addBlocker(requirement, 'unsupported_strict_requirement_kind');
+    }
   }
   return { blockers, generatorNominalPowerMinKw };
 }
@@ -842,9 +894,10 @@ export function strictSelectionRequirementBlockers(
 export function gateStrictSelectionRequirements(
   intent: AgentIntentContract,
   productClass: ProductSelectionClass,
-  toolResults: ToolResult[] = []
+  toolResults: ToolResult[] = [],
+  products: Product[] = []
 ): StrictSelectionRequirementGate {
-  const assessment = assessStrictSelectionRequirements(intent, productClass, toolResults);
+  const assessment = assessStrictSelectionRequirements(intent, productClass, toolResults, products);
   if (intent.selectionPolicy?.selectionGoal !== 'preliminary_fit') {
     return { ...assessment, preliminaryUnverified: [] };
   }
@@ -885,6 +938,62 @@ export function gateStrictSelectionRequirements(
     ),
     preliminaryUnverified
   };
+}
+
+function strictRequirementIdsForKinds(intent: AgentIntentContract, kinds: string[]) {
+  const accepted = new Set(kinds);
+  return (intent.selectionPolicy?.requirements ?? []).flatMap((requirement) =>
+    requirement.role === 'hard_constraint' &&
+    requirement.strictness === 'strict' &&
+    accepted.has(requirement.kind)
+      ? [requirement.id]
+      : []
+  );
+}
+
+function authoritativeProofStatusForKinds(input: {
+  proofs: RequirementProof[];
+  productId: string;
+  intent: AgentIntentContract;
+  kinds: string[];
+}) {
+  return authoritativeRequirementProofStatus(requirementProofsFor(
+    input.proofs,
+    input.productId,
+    strictRequirementIdsForKinds(input.intent, input.kinds)
+  ));
+}
+
+function productsMeetingGenericRequirementProofs(input: {
+  products: Product[];
+  intent: AgentIntentContract;
+  proofs: RequirementProof[];
+}) {
+  const strictRequirements = (input.intent.selectionPolicy?.requirements ?? []).filter((requirement) =>
+    requirement.role === 'hard_constraint' && requirement.strictness === 'strict'
+  );
+  const proofBackedRequirementIds = new Set(input.proofs.flatMap((proof) =>
+    proof.sourceResultIds.length ? [proof.requirementId] : []
+  ));
+  const genericRequirementIds = strictRequirements.flatMap((requirement) => {
+    return requirementUsesGenericReadProof(requirement) && proofBackedRequirementIds.has(requirement.id)
+      ? [requirement.id]
+      : [];
+  });
+  if (!genericRequirementIds.length) return input.products;
+  const finalFit = (input.intent.selectionPolicy?.selectionGoal ?? 'final_fit') === 'final_fit';
+  return input.products.filter((product) => {
+    for (const requirementId of genericRequirementIds) {
+      const status = combinedRequirementProofStatus(requirementProofsFor(
+        input.proofs,
+        product.id,
+        [requirementId]
+      ));
+      if (status === 'violated' || status === 'conflicted') return false;
+      if (finalFit && status !== 'satisfied') return false;
+    }
+    return true;
+  });
 }
 
 function structuredGeneratorAutoStartRequirement(intent: AgentIntentContract) {
@@ -1733,6 +1842,12 @@ export function selectProductsForVisibleCards(input: {
   allowHistoricalProducts?: boolean;
 }) {
   const unique = uniqueProducts(input.products);
+  const requirementProofs = buildRequirementProofs({
+    intent: input.intent,
+    products: unique,
+    toolResults: input.toolResults ?? []
+  });
+  const productCaveatsById = productRequirementProofCaveats(requirementProofs);
   const hasExplicitCardTool = input.intent.toolRequests.some((request) =>
     request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
   ) || input.allowHistoricalProducts === true;
@@ -1753,7 +1868,9 @@ export function selectProductsForVisibleCards(input: {
       selectedProductIds: [],
       answerMentionedProductIds: [],
       droppedProductIds: unique.map((product) => product.id),
-      warnings: unique.length ? ['product_cards_suppressed:no_explicit_catalog_card_tool'] : []
+      warnings: unique.length ? ['product_cards_suppressed:no_explicit_catalog_card_tool'] : [],
+      requirementProofs,
+      productCaveatsById
     };
   }
   const mentioned = answerMentionedProducts(unique, input.answerText);
@@ -1764,7 +1881,8 @@ export function selectProductsForVisibleCards(input: {
   const strictRequirementAssessment = gateStrictSelectionRequirements(
     input.intent,
     cardIntent,
-    input.toolResults ?? []
+    input.toolResults ?? [],
+    unique
   );
   if (strictRequirementAssessment.blockers.length) {
     return {
@@ -1774,7 +1892,9 @@ export function selectProductsForVisibleCards(input: {
       selectedProductIds: [],
       answerMentionedProductIds: mentioned.map((product) => product.id),
       droppedProductIds: unique.map((product) => product.id),
-      warnings: [`product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementAssessment.blockers.length}`]
+      warnings: [`product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementAssessment.blockers.length}`],
+      requirementProofs,
+      productCaveatsById
     };
   }
 
@@ -1839,6 +1959,14 @@ export function selectProductsForVisibleCards(input: {
     selected = [];
   }
 
+  const beforeGenericProofCount = selected.length;
+  selected = productsMeetingGenericRequirementProofs({
+    products: selected,
+    intent: input.intent,
+    proofs: requirementProofs
+  });
+  const genericProofFilteredCount = beforeGenericProofCount - selected.length;
+
   let priceVisibilityFilteredCount = 0;
   let priceVisibilityNoFit = false;
   if (structuredSelection && strictPriceVisibilityRequired(input.intent) && selected.length) {
@@ -1856,9 +1984,17 @@ export function selectProductsForVisibleCards(input: {
     ? structuredGeneratorVoltageRequirement(input.intent)
     : undefined;
   if (strictGeneratorVoltage !== undefined && selected.length) {
-    const voltageMatchingSelected = selected.filter((product) =>
-      productMeetsSupportedStrictVoltageRequirement(product, input.intent, cardIntent)
-    );
+    const voltageMatchingSelected = selected.filter((product) => {
+      const proofStatus = authoritativeProofStatusForKinds({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: [generatorVoltageRequirementKind]
+      });
+      if (proofStatus === 'satisfied') return true;
+      if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
+      return productMeetsSupportedStrictVoltageRequirement(product, input.intent, cardIntent);
+    });
     voltageFilteredCount = selected.length - voltageMatchingSelected.length;
     selected = voltageMatchingSelected;
     voltageNoFit = selected.length === 0;
@@ -1980,9 +2116,17 @@ export function selectProductsForVisibleCards(input: {
       : requestedGeneratorPhaseRequirement(buyerRequirementText)
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPhaseRequirement) {
-    const phaseMatchingSelected = selected.filter((product) =>
-      productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, structuredSelection)
-    );
+    const phaseMatchingSelected = selected.filter((product) => {
+      const proofStatus = authoritativeProofStatusForKinds({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['phase', generatorVoltageRequirementKind]
+      });
+      if (proofStatus === 'satisfied') return true;
+      if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
+      return productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, structuredSelection);
+    });
     if (phaseMatchingSelected.length) {
       generatorPhaseFilteredCount = selected.length - phaseMatchingSelected.length;
       selected = phaseMatchingSelected;
@@ -2186,7 +2330,9 @@ export function selectProductsForVisibleCards(input: {
           input.answerText
         ].filter(Boolean).join('\n')
       });
-  const selectedProducts = uniqueProducts(selected).slice(0, visibleCardLimit ?? 8);
+  const selectedById = uniqueProducts(selected);
+  const selectedProducts = uniqueVisibleProductsByIdentity(selectedById).slice(0, visibleCardLimit ?? 8);
+  const identityDeduplicatedCount = selectedById.length - uniqueVisibleProductsByIdentity(selectedById).length;
   const selectedIds = new Set(selectedProducts.map((product) => product.id));
   const structuredRequestedIds = new Set(input.selectedProductIds ?? []);
   const structuredSuppressedCount = structuredSelection
@@ -2199,6 +2345,12 @@ export function selectProductsForVisibleCards(input: {
   const warnings = [
     ...(strictRequirementAssessment.preliminaryUnverified.length
       ? [`product_cards_preliminary:unverified_web_covered_strict_requirements:${strictRequirementAssessment.preliminaryUnverified.length}`]
+      : []),
+    ...(genericProofFilteredCount > 0
+      ? [`product_cards_filtered_by_requirement_proof:${genericProofFilteredCount}`]
+      : []),
+    ...(identityDeduplicatedCount > 0
+      ? [`product_cards_deduplicated_by_product_identity:${identityDeduplicatedCount}`]
       : []),
     ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
     ...(structuredSuppressedCount > 0
@@ -2247,7 +2399,9 @@ export function selectProductsForVisibleCards(input: {
     selectedProductIds: selectedProducts.map((product) => product.id),
     answerMentionedProductIds: mentioned.map((product) => product.id),
     droppedProductIds,
-    warnings
+    warnings,
+    requirementProofs,
+    productCaveatsById
   };
 }
 
@@ -2268,8 +2422,13 @@ export function ambiguousCutterRequestNeedsMaterialClarification(text: string) {
   return !textContainsAnyFragment(normalized, cutterMaterialOrWorkTerms);
 }
 
-type VisibleCardSelection = Omit<ReturnType<typeof selectProductsForVisibleCards>, 'semanticAuthority'> & {
+type VisibleCardSelection = Omit<
+  ReturnType<typeof selectProductsForVisibleCards>,
+  'semanticAuthority' | 'requirementProofs' | 'productCaveatsById'
+> & {
   semanticAuthority?: 'llm_contract' | 'legacy_fallback';
+  requirementProofs?: RequirementProof[];
+  productCaveatsById?: Record<string, string[]>;
 };
 
 export type VisibleCardReadiness = {

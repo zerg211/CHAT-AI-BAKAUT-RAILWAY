@@ -94,5 +94,28 @@ describe('agent manager strict tool registry', () => {
       payload: { productIds: ['p1'] },
       warnings: []
     })).toThrow();
+
+    expect(validateToolResultOutput({
+      requestId: 'lead-partial',
+      tool: 'lead.capture',
+      status: 'not_found',
+      payload: {
+        missing: 'name',
+        missingFields: ['name'],
+        draftId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        draftSaved: true,
+        contactStored: true,
+        preferredContact: 'message',
+        originalQuestionPreserved: true
+      },
+      warnings: ['lead_name_missing']
+    }).payload).toMatchObject({ draftSaved: true, contactStored: true });
+    expect(() => validateToolResultOutput({
+      requestId: 'lead-partial-unsafe',
+      tool: 'lead.capture',
+      status: 'not_found',
+      payload: { contact: { phone: '+79000000000' } },
+      warnings: []
+    })).toThrow();
   });
 });

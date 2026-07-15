@@ -90,6 +90,8 @@ export function verifiedFactsResearchResult(facts: VerifiedProductFact[]): Produ
   }));
   return {
     usedWebSearch: false,
+    searchDisposition: 'memory_hit',
+    sourcesExhausted: false,
     facts: researchFacts,
     conflicts: [],
     answerGuidance: {

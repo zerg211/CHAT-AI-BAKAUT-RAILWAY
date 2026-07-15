@@ -38,7 +38,7 @@ export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
   maxProviderReservedOutputTokens: 80_000,
   maxProviderEstimatedTotalTokens: 1_350_000,
   maxEstimatedCostUsd: 10,
-  maxWallTimeMs: 110_000
+  maxWallTimeMs: 55_000
 };
 
 export class AgentManagerTurnBudgetExceededError extends Error {
@@ -52,6 +52,7 @@ export class AgentManagerTurnBudgetExceededError extends Error {
 
 export class AgentManagerTurnBudget {
   private readonly startedAt: number;
+  private readonly deadlineAtMs: number;
   private modelCalls = 0;
   private providerCalls = 0;
   private toolCalls = 0;
@@ -65,19 +66,24 @@ export class AgentManagerTurnBudget {
 
   constructor(
     readonly limits: AgentManagerTurnLimits = DEFAULT_AGENT_MANAGER_TURN_LIMITS,
-    private readonly now: () => number = Date.now
+    private readonly now: () => number = Date.now,
+    absoluteDeadlineAtMs?: number
   ) {
     this.startedAt = this.now();
+    const localDeadlineAtMs = this.startedAt + this.limits.maxWallTimeMs;
+    this.deadlineAtMs = Number.isFinite(absoluteDeadlineAtMs)
+      ? Math.min(localDeadlineAtMs, Number(absoluteDeadlineAtMs))
+      : localDeadlineAtMs;
   }
 
   assertWallTime() {
-    if (this.now() - this.startedAt >= this.limits.maxWallTimeMs) {
+    if (this.now() >= this.deadlineAtMs) {
       throw new AgentManagerTurnBudgetExceededError('wall_time_budget_exceeded');
     }
   }
 
   remainingWallTimeMs() {
-    return Math.max(0, this.limits.maxWallTimeMs - (this.now() - this.startedAt));
+    return Math.max(0, this.deadlineAtMs - this.now());
   }
 
   createWallTimeAbortSignal() {
@@ -157,7 +163,8 @@ export class AgentManagerTurnBudget {
         providerEstimatedTotalTokens: this.providerEstimatedTotalTokens,
         estimatedCostUsd: Number(this.estimatedCostUsd.toFixed(6)),
         hostedToolEstimatedCostUsd: Number(this.hostedToolEstimatedCostUsd.toFixed(6)),
-        wallTimeMs: this.now() - this.startedAt
+        wallTimeMs: this.now() - this.startedAt,
+        deadlineAtMs: this.deadlineAtMs
       }
     };
   }

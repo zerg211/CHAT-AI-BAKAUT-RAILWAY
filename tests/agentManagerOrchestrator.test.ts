@@ -19,7 +19,7 @@ import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { assessStrictSelectionRequirements, budgetMaxFromNeedState } from '../src/ai/agentManagerCardSelection.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 import { config } from '../src/config.js';
-import type { ConversationSession, ConversationTurn, Message, Product, ProductCard } from '../src/shared/types.js';
+import type { ConversationSession, ConversationTurn, LeadCaptureDraft, Message, Product, ProductCard } from '../src/shared/types.js';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const turnId = '22222222-2222-4222-8222-222222222222';
@@ -125,6 +125,11 @@ class FakeConversations {
     this.turn = { ...this.turn, ...input, id: this.turn.id, sessionId: this.turn.sessionId } as ConversationTurn;
     return this.turn;
   }
+  async beginRecoveryAttempt() {
+    if (['completed', 'recovered'].includes(this.turn.status) || (this.turn.recoveryAttempts ?? 0) >= 1) return null;
+    this.turn = { ...this.turn, recoveryAttempts: (this.turn.recoveryAttempts ?? 0) + 1 };
+    return this.turn;
+  }
   async upsertTurnCheckpoint(input: unknown) { this.checkpoints.push(input); return input; }
   async listTurnCheckpoints() { return this.checkpoints; }
   async listDialogueLedgerEvents() { return this.ledgerEvents; }
@@ -133,7 +138,11 @@ class FakeConversations {
   async listToolArtifacts() { return this.toolArtifacts; }
   async saveAnswerContract(input: unknown) { this.answerContracts.push(input); return input; }
   async getFinalAnswerContract() { return this.finalAnswerContract; }
-  async enqueueLeadOutbox(input: unknown) { this.outbox.push(input); return input; }
+  async enqueueLeadOutbox(input: unknown) {
+    const saved = { ...(input as Record<string, unknown>), id: `outbox-${this.outbox.length + 1}`, status: 'pending' };
+    this.outbox.push(saved);
+    return saved;
+  }
   async addAgentTrace(input: unknown) { this.traces.push(input); return input; }
   async addAssistantMessageForTurn(input: { content: string; metadata?: Record<string, unknown>; recovered?: boolean }) {
     this.assistantSaves.push(input);
@@ -174,6 +183,15 @@ class HybridProducts extends FakeProducts {
   }
 }
 
+class BrandedGeneratorProducts extends FakeProducts {
+  async searchProducts(): Promise<Product[]> {
+    return [
+      { ...product('p1', 'TEST GX5000 Generator 5 kW'), specs: { 'Nominal power': '5 kW' } },
+      { ...product('p2', 'TEST GX6000 Generator 6 kW'), specs: { 'Nominal power': '6 kW' } }
+    ];
+  }
+}
+
 class PlateProducts extends FakeProducts {
   async searchProducts() {
     return [
@@ -185,6 +203,103 @@ class PlateProducts extends FakeProducts {
 
 class FakeLeads {
   created: unknown[] = [];
+  draftInputs: unknown[] = [];
+  completionInputs: unknown[] = [];
+  pendingDraft: LeadCaptureDraft | null = null;
+  async getPendingLeadCaptureDraft() {
+    return this.pendingDraft;
+  }
+  async upsertLeadCaptureDraft(input: {
+    sessionId: string;
+    originTurnId: string;
+    originToolRequestId: string;
+    purpose: string;
+    buyerQuestion: string;
+    preferredContact?: 'message' | 'call';
+    name?: string;
+    phone?: string;
+    email?: string;
+    consentEvidenceHash: string;
+    scopeHash: string;
+  }) {
+    this.draftInputs.push(input);
+    const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
+    this.pendingDraft = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionId: input.sessionId,
+      originTurnId: input.originTurnId,
+      originToolRequestId: input.originToolRequestId,
+      purpose: input.purpose,
+      buyerQuestion: input.buyerQuestion,
+      preferredContact: input.preferredContact ?? null,
+      name: input.name ?? null,
+      phone: input.phone ?? null,
+      email: input.email ?? null,
+      consentEvidenceHash: input.consentEvidenceHash,
+      scopeHash: input.scopeHash,
+      status: 'pending',
+      expiresAt: new Date('2026-05-19T12:30:00.000Z').toISOString(),
+      consumedByTurnId: null,
+      consumedLeadId: null,
+      createdAt: now,
+      updatedAt: now
+    };
+    return this.pendingDraft;
+  }
+  async completeLeadCaptureDraft(input: {
+    draftId: string;
+    sessionId: string;
+    turnId: string;
+    name?: string;
+    preferredContact?: 'message' | 'call';
+  }) {
+    this.completionInputs.push(input);
+    if (!this.pendingDraft || this.pendingDraft.id !== input.draftId) return null;
+    const createdAt = new Date('2026-05-19T12:00:00.000Z').toISOString();
+    const lead = {
+      id: 'lead-id',
+      sessionId: input.sessionId,
+      name: input.name ?? '',
+      phone: this.pendingDraft.phone,
+      email: this.pendingDraft.email,
+      question: this.pendingDraft.buyerQuestion,
+      status: 'pending_email',
+      createdAt
+    };
+    this.created.push(lead);
+    const completedDraft = {
+      ...this.pendingDraft,
+      status: 'consumed' as const,
+      name: null,
+      phone: null,
+      email: null,
+      preferredContact: input.preferredContact ?? this.pendingDraft.preferredContact,
+      consumedByTurnId: input.turnId,
+      consumedLeadId: lead.id
+    };
+    this.pendingDraft = null;
+    return {
+      draft: completedDraft,
+      lead,
+      outbox: {
+        id: 'outbox-draft',
+        leadId: lead.id,
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        destination: 'lead_email',
+        payload: {
+          leadId: lead.id,
+          purpose: completedDraft.purpose,
+          question: completedDraft.buyerQuestion,
+          preferredContact: completedDraft.preferredContact
+        },
+        status: 'pending',
+        attemptCount: 0,
+        createdAt,
+        updatedAt: createdAt
+      }
+    };
+  }
   async createLead(input: unknown) {
     this.created.push(input);
     return { id: 'lead-id', sessionId, name: 'Alexey', phone: '+7 900 000-00-11', status: 'pending_email', createdAt: new Date().toISOString() };
@@ -2021,8 +2136,10 @@ describe('AgentManagerOrchestrator', () => {
       payload: { summaryForAnswer: 'Недостаточно товаров для сравнения.' }
     });
     expect(payload.productCards).toEqual([]);
-    expect(metadata.cardSelection?.droppedProductIds).toEqual([]);
-    expect(metadata.cardSelection?.warnings).toEqual([]);
+    expect(metadata.cardSelection?.droppedProductIds).toEqual(['bison-inverter']);
+    expect(metadata.cardSelection?.warnings).toEqual([
+      'product_cards_suppressed:no_explicit_catalog_card_tool'
+    ]);
   });
 
   it('filters cross-class catalog noise out of visible product cards', async () => {
@@ -2633,8 +2750,7 @@ describe('AgentManagerOrchestrator', () => {
       'generator_load_bounded_basis_incomplete',
       'generator_load_unbounded_guess'
     ]));
-    expect(metadata.toolResults?.[1]?.status).toBe('denied');
-    expect(metadata.toolResults?.[1]?.warnings).toContain('catalog_search_skipped:generator_load_unconfirmed_basis');
+    expect(metadata.toolResults?.[1]?.status).toBe('ok');
     expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
     expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:generator_load_unconfirmed_basis');
@@ -2738,8 +2854,7 @@ describe('AgentManagerOrchestrator', () => {
       'generator_load_invalid_load_kind',
       'generator_load_structured_args_without_usable_kw'
     ]));
-    expect(metadata.toolResults?.[1]?.status).toBe('denied');
-    expect(metadata.toolResults?.[1]?.warnings).toContain('catalog_search_skipped:generator_load_unconfirmed_basis');
+    expect(metadata.toolResults?.[1]?.status).toBe('ok');
     expect(payload.productCards).toEqual([]);
     expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
@@ -2849,7 +2964,7 @@ describe('AgentManagerOrchestrator', () => {
       'generator_load_bounded_basis_incomplete',
       'generator_load_unbounded_guess'
     ]));
-    expect(metadata.toolResults?.[1]?.status).toBe('denied');
+    expect(metadata.toolResults?.[1]?.status).toBe('ok');
     expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
     expect(payload.productCards).toEqual([]);
@@ -2913,6 +3028,19 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'buyer requested approximate options',
             required: true
           }],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            selectionGoal: 'preliminary_fit',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 4,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [],
+            rationale: 'The buyer explicitly requested approximate minimum and reserve variants.'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: ['bounded_load_assumption', 'exact_pump_power_missing']
         };
@@ -2922,10 +3050,11 @@ describe('AgentManagerOrchestrator', () => {
         expect(input.requiredResponseClauses?.map((clause) => clause.instruction).join('\n')).toContain('preliminary calculated orientation');
         const profile = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } })?.profile;
         return {
-          answerText: `Preliminary calculation is about ${profile?.requiredNominalKw} kW. Generator 5 kW is the minimum orientation, Generator 6 kW is the safer reserve option. Exact pump nameplate is still needed before purchase.`,
+          answerText: `Preliminary calculation is about ${profile?.requiredNominalKw} kW. TEST GX6000 is a preliminary reserve option. Exact pump nameplate is still needed before purchase.`,
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['generator-load', 'catalog-search'],
+          selectedProductIds: ['p2'],
           leadAction: 'none',
           riskFlags: ['bounded_load_assumption'],
           selectionReadiness: {
@@ -2938,7 +3067,7 @@ describe('AgentManagerOrchestrator', () => {
         };
       }
     });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, boundedEstimateModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BrandedGeneratorProducts() as never, new FakeLeads() as never, boundedEstimateModel);
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -2985,7 +3114,7 @@ describe('AgentManagerOrchestrator', () => {
               comparisonAttributes: [],
               loads: [
                 { kind: 'pump', name: 'pump', count: 1, runningKw: 1, startingKw: 3, source: 'explicit_user', evidence: 'pump 1 kW' },
-                { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'one refrigerator' }
+                { kind: 'refrigerator', name: 'refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'one refrigerator', basisKind: 'generic_load_name', basisSignals: ['consumer_type_known', 'simultaneous_operation_known'] }
               ],
               simultaneousStarting: true,
               simultaneousStartingKinds: ['pump', 'refrigerator'],
@@ -3016,16 +3145,30 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'search matching generator products after load calculation',
             required: true
           }],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            selectionGoal: 'preliminary_fit',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 4,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [],
+            rationale: 'The answer is explicitly a preliminary generator shortlist.'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: ['power_requirements_uncertain']
         };
       },
       async composeAnswer() {
         return {
-          answerText: 'After the load calculation, Generator 5 kW and Generator 6 kW are reasonable preliminary options.',
+          answerText: 'After the load calculation, TEST GX5000 and TEST GX6000 are reasonable preliminary options.',
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['generator-load', 'catalog-search'],
+          selectedProductIds: ['p1', 'p2'],
           leadAction: 'none',
           riskFlags: ['power_requirements_uncertain'],
           selectionReadiness: {
@@ -3038,7 +3181,7 @@ describe('AgentManagerOrchestrator', () => {
         };
       }
     });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, readyModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BrandedGeneratorProducts() as never, new FakeLeads() as never, readyModel);
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -3927,6 +4070,268 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.toolResults?.[0]?.payload?.productIds).not.toContain('huge');
   });
 
+  it('persists a phone-only handoff with the original buyer question instead of losing it', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const originalQuestion = 'Please verify whether Firman RD3910E has electric start.';
+    const phoneReply = '+7 900 000-00-11, please message me';
+    conversations.messages = [
+      { ...message(originalQuestion), id: '44444444-4444-4444-8444-444444444444' },
+      { ...message('Leave a phone number and say whether message or call is better.', 'assistant'), id: '55555555-5555-4555-8555-555555555555' },
+      message(phoneReply)
+    ];
+    const leadModel = model({
+      async planTurn(input) {
+        expect(input.pendingLeadCaptureDraft).toBeNull();
+        return {
+          userMessageSummary: 'buyer supplied a phone and chose a message',
+          dialogueUnderstanding: 'this continues the specialist verification handoff',
+          nextStepRationale: 'store the partial contact and ask only for the missing name',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:partial',
+            tool: 'lead.capture',
+            args: { contact: { preferredContact: 'message' } },
+            rationale: 'preserve the phone until the buyer supplies a name',
+            required: true
+          }],
+          productMentions: [],
+          selectionPolicy: currentNoProductSelectionPolicy(),
+          leadCaptureAuthorization: {
+            authorized: true,
+            contactSource: 'current_message',
+            purpose: 'verify generator start method',
+            buyerQuestion: originalQuestion,
+            evidence: phoneReply,
+            pendingDraftId: null
+          },
+          policyRuleIds: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'I have the phone number. Please write your name; I will return the result by message.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:partial'],
+          leadAction: 'offer_form',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      leadModel
+    );
+
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: phoneReply });
+
+    expect(payload.leadCreated).toBe(false);
+    expect(payload.leadRequested).toBe(true);
+    expect(leads.created).toHaveLength(0);
+    expect(leads.draftInputs).toHaveLength(1);
+    expect(leads.pendingDraft).toMatchObject({
+      buyerQuestion: originalQuestion,
+      purpose: 'verify generator start method',
+      phone: '+7 900 000-00-11',
+      preferredContact: 'message',
+      status: 'pending'
+    });
+    const toolPayload = (payload.metadata as {
+      toolResults?: Array<{ payload?: Record<string, unknown> }>;
+    }).toolResults?.[0]?.payload;
+    expect(toolPayload).toMatchObject({
+      draftSaved: true,
+      contactStored: true,
+      originalQuestionPreserved: true
+    });
+    expect(toolPayload).not.toHaveProperty('contact');
+  });
+
+  it('combines a verbatim name with the same-session draft and confirms only after atomic outbox creation', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const originalQuestion = 'Please verify whether Firman RD3910E has electric start.';
+    const nameReply = 'Алексей, лучше напишите';
+    await leads.upsertLeadCaptureDraft({
+      sessionId,
+      originTurnId: '66666666-6666-4666-8666-666666666666',
+      originToolRequestId: 'lead.capture:partial',
+      purpose: 'verify generator start method',
+      buyerQuestion: originalQuestion,
+      phone: '+7 900 000-00-11',
+      consentEvidenceHash: 'a'.repeat(64),
+      scopeHash: 'b'.repeat(64)
+    });
+    const draftId = leads.pendingDraft!.id;
+    conversations.messages = [
+      { ...message(originalQuestion), id: '44444444-4444-4444-8444-444444444444' },
+      { ...message('I have the phone number. Please write your name.', 'assistant'), id: '55555555-5555-4555-8555-555555555555' },
+      message(nameReply)
+    ];
+    const leadModel = model({
+      async planTurn(input) {
+        expect(input.pendingLeadCaptureDraft).toMatchObject({
+          id: draftId,
+          buyerQuestion: originalQuestion,
+          hasPhone: true,
+          missingFields: ['name']
+        });
+        expect(input.pendingLeadCaptureDraft).not.toHaveProperty('phone');
+        return {
+          userMessageSummary: 'buyer supplied the missing name and chose a message',
+          dialogueUnderstanding: 'this completes the same pending specialist handoff',
+          nextStepRationale: 'atomically create the lead and outbox from the draft',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:complete',
+            tool: 'lead.capture',
+            args: { contact: { name: 'Алексей', preferredContact: 'message' } },
+            rationale: 'complete the same pending contact',
+            required: true
+          }],
+          productMentions: [],
+          selectionPolicy: currentNoProductSelectionPolicy(),
+          leadCaptureAuthorization: {
+            authorized: true,
+            contactSource: 'pending_draft',
+            purpose: 'verify generator start method',
+            buyerQuestion: originalQuestion,
+            evidence: nameReply,
+            pendingDraftId: draftId
+          },
+          policyRuleIds: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Спасибо, Алексей. Запрос передан; результат пришлём сообщением.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:complete'],
+          leadAction: 'confirm_contact_received',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      leadModel
+    );
+
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: nameReply });
+
+    expect(payload.leadCreated).toBe(true);
+    expect(payload.answer).toContain('Запрос передан');
+    expect(leads.completionInputs).toEqual([expect.objectContaining({
+      draftId,
+      name: 'Алексей',
+      preferredContact: 'message'
+    })]);
+    expect(leads.created).toContainEqual(expect.objectContaining({
+      name: 'Алексей',
+      phone: '+7 900 000-00-11',
+      question: originalQuestion
+    }));
+    expect((payload.metadata as {
+      toolResults?: Array<{ payload?: Record<string, unknown> }>;
+    }).toolResults?.[0]?.payload).toMatchObject({
+      outbox: true,
+      outboxId: 'outbox-draft',
+      status: 'queued',
+      dispatchStatus: 'pending',
+      preferredContact: 'message',
+      originalQuestionPreserved: true
+    });
+  });
+
+  it('does not trust a planner-supplied name that is absent from current authorization evidence', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const originalQuestion = 'Please verify whether Firman RD3910E has electric start.';
+    const preferenceOnlyReply = 'Лучше напишите';
+    await leads.upsertLeadCaptureDraft({
+      sessionId,
+      originTurnId: '66666666-6666-4666-8666-666666666666',
+      originToolRequestId: 'lead.capture:partial',
+      purpose: 'verify generator start method',
+      buyerQuestion: originalQuestion,
+      phone: '+7 900 000-00-11',
+      consentEvidenceHash: 'a'.repeat(64),
+      scopeHash: 'b'.repeat(64)
+    });
+    const draftId = leads.pendingDraft!.id;
+    conversations.messages = [
+      { ...message(originalQuestion), id: '44444444-4444-4444-8444-444444444444' },
+      message(preferenceOnlyReply)
+    ];
+    const unsafeNameModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer chose message but did not provide a name',
+          dialogueUnderstanding: 'the pending handoff still lacks a name',
+          nextStepRationale: 'do not invent identity',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:forged-name',
+            tool: 'lead.capture',
+            args: { contact: { name: 'Алексей', preferredContact: 'message' } },
+            rationale: 'unsafe planner output under test',
+            required: true
+          }],
+          productMentions: [],
+          selectionPolicy: currentNoProductSelectionPolicy(),
+          leadCaptureAuthorization: {
+            authorized: true,
+            contactSource: 'pending_draft',
+            purpose: 'verify generator start method',
+            buyerQuestion: originalQuestion,
+            evidence: preferenceOnlyReply,
+            pendingDraftId: draftId
+          },
+          policyRuleIds: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Контакт получен, запрос передан.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:forged-name'],
+          leadAction: 'confirm_contact_received',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      unsafeNameModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: preferenceOnlyReply
+    });
+
+    expect(payload.leadCreated).toBe(false);
+    expect(payload.answer).not.toContain('запрос передан');
+    expect(leads.completionInputs).toHaveLength(0);
+    expect(leads.pendingDraft).not.toBeNull();
+  });
+
   it('captures a provided contact through lead outbox before confirming receipt', async () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
@@ -3961,7 +4366,9 @@ describe('AgentManagerOrchestrator', () => {
             authorized: true,
             contactSource: 'current_message',
             purpose: 'check delivery and availability',
-            evidence: 'Alexey, +7 900 000-00-11'
+            buyerQuestion: 'Alexey, +7 900 000-00-11',
+            evidence: 'Alexey, +7 900 000-00-11',
+            pendingDraftId: null
           },
           policyRuleIds: [],
           mustNotAskQuestionIds: [],
@@ -4028,7 +4435,9 @@ describe('AgentManagerOrchestrator', () => {
             authorized: false,
             contactSource: 'none',
             purpose: null,
-            evidence: null
+            buyerQuestion: null,
+            evidence: null,
+            pendingDraftId: null
           },
           policyRuleIds: [],
           mustNotAskQuestionIds: [],
@@ -4456,7 +4865,9 @@ describe('AgentManagerOrchestrator', () => {
             authorized: true,
             contactSource: 'existing_session',
             purpose: 'check delivery to Crimea',
-            evidence: 'Can you check delivery to Crimea?'
+            buyerQuestion: 'Can you check delivery to Crimea?',
+            evidence: 'Can you check delivery to Crimea?',
+            pendingDraftId: null
           },
           policyRuleIds: [],
           mustNotAskQuestionIds: [],
@@ -4484,12 +4895,13 @@ describe('AgentManagerOrchestrator', () => {
     });
 
     expect(payload.answer).toContain('already saved');
-    expect(leads.created).toHaveLength(0);
-    expect(conversations.outbox).toHaveLength(0);
+    expect(leads.created).toHaveLength(1);
+    expect(conversations.outbox).toHaveLength(1);
     expect(payload.leadCreated).toBe(true);
     expect((payload.metadata as { toolResults?: Array<{ payload?: Record<string, unknown> }> }).toolResults?.[0]?.payload).toMatchObject({
-      leadId: 'existing-lead-id',
-      existing: true
+      leadId: 'lead-id',
+      outbox: true,
+      status: 'queued'
     });
   });
 
@@ -4502,6 +4914,25 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.metadata?.recovered).toBe(true);
     expect(conversations.addMessage).not.toHaveBeenCalled();
     expect(conversations.assistantSaves[0]).toMatchObject({ recovered: true });
+  });
+
+  it('allows only one semantic recovery execution for an unfinished turn', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async () => {
+      throw new Error('forced recovery failure');
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta })
+    );
+
+    await expect(orchestrator.recoverTurn({ sessionId, turnId })).rejects.toThrow('forced recovery failure');
+    await expect(orchestrator.recoverTurn({ sessionId, turnId })).rejects.toThrow('recovery_attempt_unavailable');
+
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(conversations.turn.recoveryAttempts).toBe(1);
   });
 
   it('reuses persisted model checkpoints instead of repeating completed model work', async () => {
@@ -4764,7 +5195,7 @@ describe('AgentManagerOrchestrator', () => {
       tool_name: 'lead.capture',
       tool_request_id: 'lead-request',
       status: 'ok',
-      payload: { leadId: 'lead-existing', outbox: true },
+      payload: { leadId: 'lead-existing', outbox: true, outboxId: 'outbox-existing', status: 'queued' },
       warnings: []
     }];
     const leads = new FakeLeads();
@@ -5047,7 +5478,7 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: 'Можно проверить наличие и доставку?'
     });
 
-    expect(payload.answer).toContain('Оставьте имя и телефон');
+    expect(payload.answer).toContain('Оставьте, пожалуйста, имя и номер телефона');
     expect(payload.answer).not.toContain('Contact received');
     expect(payload.leadRequested).toBe(true);
     expect(payload.leadCreated).toBe(false);
@@ -5145,7 +5576,7 @@ describe('AgentManagerOrchestrator', () => {
     });
 
     const metadata = payload.metadata as { answerContract?: { leadAction?: string } };
-    expect(payload.answer).toContain('Оставьте имя и телефон');
+    expect(payload.answer).toContain('Оставьте, пожалуйста, имя и номер телефона');
     expect(payload.leadRequested).toBe(true);
     expect(payload.leadCreated).toBe(false);
     expect(metadata.answerContract?.leadAction).toBe('offer_form');
@@ -5682,7 +6113,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(0);
   });
 
-  it('forces catalog fact review and rechecks a corrected false price and specification even with factsUsed empty', async () => {
+  it('forces one catalog fact review that corrects a false price and specification even with factsUsed empty', async () => {
     const previousMode = config.AI_MANAGER_REVIEW_MODE;
     config.AI_MANAGER_REVIEW_MODE = 'risk';
     class ExactFactProducts extends FakeProducts {
@@ -5755,7 +6186,7 @@ describe('AgentManagerOrchestrator', () => {
         userMessage: 'Посоветуйте TSS SGG 5000A и назовите точную цену и мощность.'
       });
 
-      expect(reviewAnswer).toHaveBeenCalledTimes(2);
+      expect(reviewAnswer).toHaveBeenCalledTimes(1);
       expect(payload.answer).toBe('TSS SGG 5000A стоит 1 000 ₽; его мощность — 5 кВт.');
       expect(payload.answer).not.toContain('99 999');
       expect(payload.answer).not.toContain('девять киловатт');
@@ -5769,6 +6200,69 @@ describe('AgentManagerOrchestrator', () => {
       ).toEqual(['p1']);
       expect((payload.metadata?.managerPolicy as { reviewReason?: string })?.reviewReason)
         .toContain('catalog_product_evidence');
+    } finally {
+      config.AI_MANAGER_REVIEW_MODE = previousMode;
+    }
+  });
+
+  it('blocks an unsafe reviewer rewrite deterministically without another reviewer call', async () => {
+    const previousMode = config.AI_MANAGER_REVIEW_MODE;
+    config.AI_MANAGER_REVIEW_MODE = 'risk';
+    class ExactFactProducts extends FakeProducts {
+      override async searchProducts() {
+        return [product('p1', 'TSS SGG 5000A generator')];
+      }
+    }
+    const conversations = new FakeConversations();
+    const reviewAnswer = vi.fn(async () => ({
+      verdict: 'rewrite_required' as const,
+      issues: [{
+        code: 'style_rewrite',
+        severity: 'low' as const,
+        message: 'Reviewer chose to rephrase the supported answer.',
+        evidence: 'answer'
+      }],
+      revisedAnswerText: 'TSS SGG 7000B costs 99 999 RUB and has 9 kW.'
+    }));
+    const unsafeReviewerModel = model({
+      async planTurn() {
+        return structuredGeneratorCatalogIntent();
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'TSS SGG 5000A costs 1 000 RUB and has 5 kW.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog-search'],
+          selectedProductIds: ['p1'],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            status: 'ready_for_exact_cards' as const,
+            rationale: 'p1 was selected from catalog evidence',
+            missingFacts: [],
+            productClass: 'generator',
+            canShowProductCards: true
+          }
+        };
+      },
+      reviewAnswer
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new ExactFactProducts() as never,
+      new FakeLeads() as never,
+      unsafeReviewerModel
+    );
+
+    try {
+      await expect(orchestrator.generateAnswer({
+        sessionId,
+        turnId,
+        userMessage: 'Give me the exact catalog price and power for TSS SGG 5000A.'
+      })).rejects.toThrow('review_rewrite_unsupported');
+      expect(reviewAnswer).toHaveBeenCalledTimes(1);
+      expect(conversations.assistantSaves).toHaveLength(0);
     } finally {
       config.AI_MANAGER_REVIEW_MODE = previousMode;
     }
@@ -5841,7 +6335,7 @@ describe('AgentManagerOrchestrator', () => {
         userMessage: 'Мой номер +7 900 000-00-11. Сколько стоит TSS SGG 5000A?'
       });
 
-      expect(reviewAnswer).toHaveBeenCalledTimes(2);
+      expect(reviewAnswer).toHaveBeenCalledTimes(1);
       expect(payload.answer).toBe('TSS SGG 5000A стоит 1 000 ₽.');
       expect(payload.answer).not.toContain('99 999');
       expect(payload.answer).not.toContain('Оставьте номер');
@@ -7468,5 +7962,260 @@ describe('AgentManagerOrchestrator', () => {
     } finally {
       timeoutSignal.mockRestore();
     }
+  });
+});
+
+describe('combined turn understanding', () => {
+  function noToolIntent(summary: string): AgentIntentContract {
+    return {
+      userMessageSummary: summary,
+      dialogueUnderstanding: 'the current buyer turn is understood from the updated ledger state',
+      nextStepRationale: 'answer directly without a tool',
+      requiresTools: false,
+      toolRequests: [],
+      productMentions: [],
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        selectionGoal: 'browse_catalog'
+      },
+      leadCaptureAuthorization: {
+        authorized: false,
+        contactSource: 'none',
+        purpose: null,
+        buyerQuestion: null,
+        evidence: null,
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      grounding: {
+        taskType: 'technical_answer',
+        sourcePolicy: 'conversation_only',
+        webPurpose: 'none',
+        requiredToolKinds: [],
+        technicalAttributes: [],
+        rationale: 'the answer is already grounded in the current conversation'
+      },
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+  }
+
+  it('persists the same separate checkpoints while using one optional understanding call', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    leads.pendingDraft = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionId,
+      originTurnId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      originToolRequestId: 'lead.capture:origin',
+      purpose: 'confirm delivery details',
+      buyerQuestion: 'Can you confirm delivery details?',
+      preferredContact: 'message',
+      name: null,
+      phone: '+7 900 000-00-11',
+      email: null,
+      consentEvidenceHash: 'consent-hash',
+      scopeHash: 'scope-hash',
+      status: 'pending',
+      expiresAt: new Date('2026-05-19T12:30:00.000Z').toISOString(),
+      consumedByTurnId: null,
+      consumedLeadId: null,
+      createdAt: new Date('2026-05-19T12:00:00.000Z').toISOString(),
+      updatedAt: new Date('2026-05-19T12:00:00.000Z').toISOString()
+    };
+    const understandTurn = vi.fn(async (input: Parameters<NonNullable<AgentManagerModel['understandTurn']>>[0]) => {
+      expect(input.pendingLeadCaptureDraft).toMatchObject({
+        id: leads.pendingDraft?.id,
+        purpose: 'confirm delivery details',
+        buyerQuestion: 'Can you confirm delivery details?',
+        preferredContact: 'message',
+        hasName: false,
+        hasPhone: true,
+        hasEmail: false,
+        missingFields: ['name']
+      });
+      expect(input.pendingLeadCaptureDraft).not.toHaveProperty('phone');
+      return {
+        ledgerDelta: {
+          rationale: 'the current turn does not add a new durable fact',
+          events: []
+        },
+        intentContract: noToolIntent('combined understanding summary')
+      };
+    });
+    const proposeLedgerDelta = vi.fn(async () => {
+      throw new Error('separate delta call must not run');
+    });
+    const planTurn = vi.fn(async () => {
+      throw new Error('separate planner call must not run');
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      model({ understandTurn, proposeLedgerDelta, planTurn })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(understandTurn).toHaveBeenCalledTimes(1);
+    expect(proposeLedgerDelta).not.toHaveBeenCalled();
+    expect(planTurn).not.toHaveBeenCalled();
+    const checkpointNames = conversations.checkpoints.map((checkpoint) =>
+      (checkpoint as { checkpoint?: string }).checkpoint
+    );
+    expect(checkpointNames.indexOf('ledger_delta_proposed')).toBeLessThan(checkpointNames.indexOf('ledger_delta_applied'));
+    expect(checkpointNames.indexOf('ledger_delta_applied')).toBeLessThan(checkpointNames.indexOf('intent_contract_created'));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'ledger_delta_proposed',
+      payload: expect.objectContaining({ rationale: 'the current turn does not add a new durable fact' })
+    }));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_created',
+      payload: expect.objectContaining({ userMessageSummary: 'combined understanding summary' })
+    }));
+  });
+
+  it('uses the separate planner during recovery when only the delta checkpoint exists', async () => {
+    const conversations = new FakeConversations();
+    conversations.checkpoints = [{
+      checkpoint: 'ledger_delta_proposed',
+      status: 'succeeded',
+      payload: { rationale: 'saved delta from the interrupted first attempt', events: [] }
+    }];
+    const understandTurn = vi.fn(async () => {
+      throw new Error('combined call must not run for a partial checkpoint');
+    });
+    const proposeLedgerDelta = vi.fn(async () => {
+      throw new Error('saved delta must be reused');
+    });
+    const planTurn = vi.fn(async () => noToolIntent('recovered separate planner summary'));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ understandTurn, proposeLedgerDelta, planTurn })
+    );
+
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(understandTurn).not.toHaveBeenCalled();
+    expect(proposeLedgerDelta).not.toHaveBeenCalled();
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_created',
+      payload: expect.objectContaining({ userMessageSummary: 'recovered separate planner summary' })
+    }));
+  });
+
+  it('keeps the validated delta checkpoint and safely replans an invalid combined intent', async () => {
+    const conversations = new FakeConversations();
+    const understandTurn = vi.fn(async () => ({
+      ledgerDelta: {
+        rationale: 'valid delta survives an invalid sibling intent',
+        events: []
+      },
+      intentContract: { invalid: true }
+    }));
+    const proposeLedgerDelta = vi.fn(async () => {
+      throw new Error('combined delta must not be proposed again');
+    });
+    const planTurn = vi.fn(async () => noToolIntent('safe fallback planner summary'));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ understandTurn, proposeLedgerDelta, planTurn })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(understandTurn).toHaveBeenCalledTimes(1);
+    expect(proposeLedgerDelta).not.toHaveBeenCalled();
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'ledger_delta_proposed',
+      payload: expect.objectContaining({ rationale: 'valid delta survives an invalid sibling intent' })
+    }));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'ledger_delta_applied',
+      status: 'succeeded'
+    }));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_created',
+      payload: expect.objectContaining({ userMessageSummary: 'safe fallback planner summary' })
+    }));
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'intent',
+      eventType: 'combined_intent_rejected',
+      payload: expect.objectContaining({ issueCount: expect.any(Number) })
+    }));
+  });
+
+  it('safely reproposes an invalid combined ledger delta and replans against the corrected state', async () => {
+    const conversations = new FakeConversations();
+    const understandTurn = vi.fn(async () => ({
+      ledgerDelta: {
+        rationale: 'invalid delta must not be checkpointed',
+        events: [{ invalid: true }]
+      },
+      intentContract: noToolIntent('valid combined intent survives an invalid sibling delta')
+    }));
+    const proposeLedgerDelta = vi.fn(async () => ({
+      rationale: 'safe fallback delta',
+      events: []
+    }));
+    const planTurn = vi.fn(async () => noToolIntent('safe planner after corrected ledger delta'));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ understandTurn, proposeLedgerDelta, planTurn })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(understandTurn).toHaveBeenCalledTimes(1);
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'ledger_delta_proposed',
+      payload: expect.objectContaining({ rationale: 'safe fallback delta' })
+    }));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'ledger_delta_applied',
+      status: 'succeeded'
+    }));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_created',
+      payload: expect.objectContaining({
+        userMessageSummary: 'safe planner after corrected ledger delta'
+      })
+    }));
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'ledger',
+      eventType: 'combined_ledger_delta_rejected',
+      payload: expect.objectContaining({ issueCount: expect.any(Number) })
+    }));
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'intent',
+      eventType: 'combined_intent_discarded_after_ledger_rejection'
+    }));
   });
 });

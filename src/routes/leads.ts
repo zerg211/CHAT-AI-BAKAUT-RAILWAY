@@ -24,6 +24,24 @@ function requestHash(input: z.infer<typeof leadSchema>) {
   })).digest('hex');
 }
 
+function durableLeadOutboxStatus(row: unknown) {
+  if (!row || typeof row !== 'object') return null;
+  const status = (row as { status?: unknown }).status;
+  return status === 'pending' || status === 'sending' || status === 'sent' || status === 'failed'
+    ? status
+    : null;
+}
+
+function pendingDraftWasPreserved(completion: Awaited<ReturnType<LeadRepository['createClientLeadWithOutbox']>>) {
+  if (!completion || !completion.pendingDraftMatched) return true;
+  const draft = completion.draft;
+  if (!draft || draft.status !== 'consumed' || draft.consumedLeadId !== completion.lead.id) return false;
+  const payload = completion.outbox.payload;
+  return payload.purpose === draft.purpose &&
+    payload.question === draft.buyerQuestion &&
+    (payload.preferredContact ?? null) === (draft.preferredContact ?? null);
+}
+
 export async function registerLeadRoutes(app: FastifyInstance) {
   const leads = new LeadRepository();
   const conversations = new ConversationRepository();
@@ -40,50 +58,40 @@ export async function registerLeadRoutes(app: FastifyInstance) {
     if (!session || session.status !== 'active') {
       return reply.code(404).send({ error: 'Session not found or inactive' });
     }
-    const lead = await leads.createClientLead({
-      ...input,
-      clientRequestHash: requestHash(input)
-    });
-    if (!lead) {
-      const currentSession = await conversations.getSession(input.sessionId);
-      if (!currentSession || currentSession.status !== 'active') {
-        return reply.code(404).send({ error: 'Session not found or inactive' });
-      }
-      return reply.code(409).send({ error: 'clientLeadId already used with different payload' });
-    }
-    let queued = false;
-    let outboxId: string | undefined;
-
+    let capturedLeadId: string | undefined;
     try {
-      const turns = await conversations.listTurns(input.sessionId, 200);
-      const latestTurn = turns.at(-1);
-      const outbox = await conversations.enqueueLeadOutbox({
-        leadId: lead.id,
-        sessionId: input.sessionId,
-        turnId: latestTurn?.id ?? null,
-        destination: 'lead_email',
-        payload: { leadId: lead.id, source: 'lead_form' }
+      const completion = await leads.createClientLeadWithOutbox({
+        ...input,
+        clientRequestHash: requestHash(input)
       });
-      queued = Boolean(outbox);
-      outboxId = typeof outbox?.id === 'string' ? outbox.id : undefined;
+      if (!completion) {
+        const currentSession = await conversations.getSession(input.sessionId);
+        if (!currentSession || currentSession.status !== 'active') {
+          return reply.code(404).send({ error: 'Session not found or inactive' });
+        }
+        return reply.code(409).send({ error: 'clientLeadId already used with different payload' });
+      }
+      capturedLeadId = completion.lead.id;
+      const outboxId = completion.outbox.id.trim() || undefined;
+      const dispatchStatus = durableLeadOutboxStatus(completion.outbox);
+      if (!outboxId || !dispatchStatus || !pendingDraftWasPreserved(completion)) {
+        throw new Error(`lead_outbox_not_dispatchable:${completion.outbox.status}`);
+      }
+      return reply.send({
+        ok: true,
+        status: 'queued',
+        lead: completion.lead,
+        outboxId,
+        dispatchStatus
+      });
     } catch (error) {
-      request.log.warn({ error: safeError(error), leadId: lead.id }, 'lead form outbox enqueue failed');
-      await leads.markEmailResult(lead.id, 'email_failed', {
+      request.log.warn({ error: safeError(error), leadId: capturedLeadId }, 'lead form atomic capture failed');
+      return reply.code(503).send({
         ok: false,
-        queued: false,
         error: 'lead_outbox_enqueue_failed',
-        detail: safeError(error)
+        retryable: true,
+        ...(capturedLeadId ? { leadId: capturedLeadId } : {})
       });
     }
-
-    return reply.send({
-      lead,
-      email: {
-        ok: false,
-        queued,
-        outboxId,
-        status: queued ? 'queued' : 'saved_without_outbox'
-      }
-    });
   });
 }

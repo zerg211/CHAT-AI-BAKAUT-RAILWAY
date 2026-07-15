@@ -137,7 +137,7 @@ export const weldingTerms = ['свароч', fromEscaped('\\u0441\\u0432\\u0430\
 export const oilTerms = ['масло', 'oil', 'sae', '10w', '5w', fromEscaped('\\u043c\\u0430\\u0441\\u043b')];
 export const diamondCoreTerms = ['коронк', 'almaznye_koronki', 'core drill', 'подрозет', 'бурен', 'сверлен', fromEscaped('\\u043a\\u043e\\u0440\\u043e\\u043d\\u043a')];
 export const rollerTerms = ['виброкат', 'каток', 'roller', fromEscaped('\\u0432\\u0438\\u0431\\u0440\\u043e\\u043a\\u0430\\u0442'), fromEscaped('\\u043a\\u0430\\u0442\\u043e\\u043a')];
-export const singlePhaseTerms = ['220', '230', 'однофаз', 'одной фаз', fromEscaped('\\u043e\\u0434\\u043d\\u043e\\u0444\\u0430\\u0437'), fromEscaped('\\u043e\\u0434\\u043d\\u043e\\u0439 \\u0444\\u0430\\u0437')];
+export const singlePhaseTerms = ['однофаз', 'одной фаз', fromEscaped('\\u043e\\u0434\\u043d\\u043e\\u0444\\u0430\\u0437'), fromEscaped('\\u043e\\u0434\\u043d\\u043e\\u0439 \\u0444\\u0430\\u0437')];
 
 export const fourStrokeOilTerms = [
   '4t',
@@ -1251,7 +1251,7 @@ function classifyProductUncached(product: Product) {
     generatorEnclosureConfidence,
     hasOpenFrameSignal,
     hasElectricStart: hasElectricStartSignal(reliableStartText),
-    isSinglePhase220: containsAny(text, singlePhaseTerms)
+    isSinglePhase220: generatorPhaseProfile(product) === 'single_220'
   };
 }
 

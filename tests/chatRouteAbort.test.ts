@@ -8,6 +8,8 @@ describe('chat route SSE abort policy', () => {
     expect(source).not.toMatch(/reply\.raw\.once\(['"]close['"]/);
     expect(source).not.toMatch(/request\.raw\.once\(['"]close['"]/);
     expect(source).not.toMatch(/request\.raw\.once\(['"]aborted['"]/);
-    expect(source).toContain('const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS)');
+    expect(source).toContain('const TURN_DEADLINE_MS = 60_000');
+    expect(source).toContain('remainingTurnDeadlineMs(turn.deadlineAt)');
+    expect(source).toContain('remainingTurnDeadlineMs(persistedTurn?.deadlineAt)');
   });
 });

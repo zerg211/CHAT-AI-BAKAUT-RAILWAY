@@ -12,6 +12,8 @@ import type {
   DataConflict,
   EmbeddingMetadata,
   Lead,
+  LeadCaptureDraft,
+  LeadPreferredContact,
   Message,
   MessageRole,
   Product,
@@ -289,6 +291,8 @@ function mapConversationTurn(row: QueryResultRow): ConversationTurn {
     executionLeaseExpiresAt: row.execution_lease_expires_at
       ? new Date(row.execution_lease_expires_at).toISOString()
       : null,
+    deadlineAt: row.deadline_at ? new Date(row.deadline_at).toISOString() : null,
+    recoveryAttempts: Number(row.recovery_attempts ?? 0),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
   };
@@ -346,6 +350,29 @@ function mapCatalogPage(row: QueryResultRow): CatalogPage {
     sourceContentHash: row.source_content_hash ?? null,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString()
+  };
+}
+
+function mapLeadCaptureDraft(row: QueryResultRow): LeadCaptureDraft {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    originTurnId: row.origin_turn_id,
+    originToolRequestId: row.origin_tool_request_id,
+    purpose: row.purpose,
+    buyerQuestion: row.buyer_question,
+    preferredContact: row.preferred_contact ?? null,
+    name: row.name ?? null,
+    phone: row.phone ?? null,
+    email: row.email ?? null,
+    consentEvidenceHash: row.consent_evidence_hash,
+    scopeHash: row.scope_hash,
+    status: row.status,
+    expiresAt: isoTimestamp(row.expires_at),
+    consumedByTurnId: row.consumed_by_turn_id ?? null,
+    consumedLeadId: row.consumed_lead_id ?? null,
+    createdAt: isoTimestamp(row.created_at),
+    updatedAt: isoTimestamp(row.updated_at)
   };
 }
 
@@ -407,6 +434,15 @@ function isoTimestamp(value: unknown) {
   if (value instanceof Date) return value.toISOString();
   if (typeof value === 'string') return new Date(value).toISOString();
   return new Date(0).toISOString();
+}
+
+function queryRowFromJson(value: unknown): QueryResultRow | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = { ...(value as Record<string, unknown>) } as QueryResultRow;
+  for (const key of ['created_at', 'updated_at', 'expires_at', 'next_attempt_at']) {
+    if (typeof row[key] === 'string') row[key] = new Date(row[key] as string);
+  }
+  return row;
 }
 
 function mapAssistantFeedbackQueueItem(row: QueryResultRow): AssistantFeedbackQueueItem {
@@ -567,6 +603,19 @@ export class ConversationRepository {
        RETURNING *`,
       [id, status]
     );
+    if (result.rowCount) {
+      await this.db.query(
+        `UPDATE lead_capture_drafts
+         SET status = 'expired',
+             name = NULL,
+             phone = NULL,
+             email = NULL,
+             updated_at = now()
+         WHERE session_id = $1
+           AND status = 'pending'`,
+        [id]
+      );
+    }
     return result.rowCount ? mapSession(result.rows[0]) : null;
   }
 
@@ -578,6 +627,22 @@ export class ConversationRepository {
        RETURNING id`,
       [maxInactiveMinutes]
     );
+    const expiredSessionIds = result.rows
+      .map((row) => typeof row.id === 'string' ? row.id : null)
+      .filter((id): id is string => Boolean(id));
+    if (expiredSessionIds.length) {
+      await this.db.query(
+        `UPDATE lead_capture_drafts
+         SET status = 'expired',
+             name = NULL,
+             phone = NULL,
+             email = NULL,
+             updated_at = now()
+         WHERE session_id = ANY($1::uuid[])
+           AND status = 'pending'`,
+        [expiredSessionIds]
+      );
+    }
     return result.rowCount ?? 0;
   }
 
@@ -651,6 +716,7 @@ export class ConversationRepository {
     status?: ConversationTurn['status'];
     stage?: string;
     activeNeedsBefore?: unknown;
+    deadlineAt?: string;
   }) {
     try {
       const result = await this.db.query(
@@ -661,9 +727,19 @@ export class ConversationRepository {
            request_hash,
            status,
            stage,
-           active_needs_before
+           active_needs_before,
+           deadline_at
          )
-         VALUES (coalesce($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7::jsonb)
+         VALUES (
+           coalesce($1::uuid, gen_random_uuid()),
+           $2,
+           $3,
+           $4,
+           $5,
+           $6,
+           $7::jsonb,
+           coalesce($8::timestamptz, now() + interval '60 seconds')
+         )
          ON CONFLICT (session_id, client_message_id) DO UPDATE
          SET updated_at = conversation_turns.updated_at
          WHERE conversation_turns.request_hash = EXCLUDED.request_hash
@@ -675,7 +751,8 @@ export class ConversationRepository {
           input.requestHash,
           input.status ?? 'received',
           input.stage ?? null,
-          jsonbParam(input.activeNeedsBefore)
+          jsonbParam(input.activeNeedsBefore),
+          input.deadlineAt ?? null
         ]
       );
       if (!result.rowCount) throw new ClientMessagePayloadConflictError();
@@ -721,6 +798,27 @@ export class ConversationRepository {
          )
        RETURNING *`,
       [input.sessionId, input.turnId, input.ownerId, leaseMs]
+    );
+    return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
+  }
+
+  async beginRecoveryAttempt(input: {
+    sessionId: string;
+    turnId: string;
+    maxAttempts?: number;
+  }) {
+    const maxAttempts = Math.max(1, Math.min(3, Math.trunc(input.maxAttempts ?? 1)));
+    const result = await this.db.query(
+      `UPDATE conversation_turns
+       SET recovery_attempts = coalesce(recovery_attempts, 0) + 1,
+           updated_at = now()
+       WHERE session_id = $1
+         AND id = $2
+         AND status NOT IN ('completed', 'recovered')
+         AND coalesce(recovery_attempts, 0) < $3
+         AND (deadline_at IS NULL OR deadline_at > now())
+       RETURNING *`,
+      [input.sessionId, input.turnId, maxAttempts]
     );
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
   }
@@ -2674,7 +2772,271 @@ export class ProductRepository {
 export class LeadRepository {
   constructor(private readonly db: Db = pool) {}
 
-  async createClientLead(input: {
+  async getPendingLeadCaptureDraft(sessionId: string) {
+    const result = await this.db.query(
+      `WITH expired AS (
+         UPDATE lead_capture_drafts
+         SET status = 'expired',
+             name = NULL,
+             phone = NULL,
+             email = NULL,
+             updated_at = now()
+         WHERE session_id = $1
+           AND status = 'pending'
+           AND expires_at <= now()
+       )
+       SELECT draft.*
+       FROM lead_capture_drafts draft
+       JOIN conversation_sessions session ON session.id = draft.session_id
+       WHERE draft.session_id = $1
+         AND draft.status = 'pending'
+         AND draft.expires_at > now()
+         AND session.status = 'active'
+       ORDER BY draft.updated_at DESC, draft.created_at DESC
+       LIMIT 1`,
+      [sessionId]
+    );
+    return result.rowCount ? mapLeadCaptureDraft(result.rows[0]) : null;
+  }
+
+  async upsertLeadCaptureDraft(input: {
+    sessionId: string;
+    originTurnId: string;
+    originToolRequestId: string;
+    purpose: string;
+    buyerQuestion: string;
+    preferredContact?: LeadPreferredContact;
+    name?: string;
+    phone?: string;
+    email?: string;
+    consentEvidenceHash: string;
+    scopeHash: string;
+    ttlSeconds?: number;
+  }) {
+    const ttlSeconds = Math.max(60, Math.min(1_800, Math.trunc(input.ttlSeconds ?? 1_800)));
+    const result = await this.db.query(
+      `WITH upserted AS (
+         INSERT INTO lead_capture_drafts(
+           session_id,
+           origin_turn_id,
+           origin_tool_request_id,
+           purpose,
+           buyer_question,
+           preferred_contact,
+           name,
+           phone,
+           email,
+           consent_evidence_hash,
+           scope_hash,
+           expires_at
+         )
+         SELECT
+           session.id,
+           turn.id,
+           $3,
+           $4,
+           $5,
+           $6,
+           $7,
+           $8,
+           $9,
+           $10,
+           $11,
+           now() + ($12::integer * interval '1 second')
+         FROM conversation_sessions session
+         JOIN conversation_turns turn ON turn.id = $2 AND turn.session_id = session.id
+         WHERE session.id = $1
+           AND session.status = 'active'
+         ON CONFLICT (session_id, origin_turn_id, origin_tool_request_id) DO UPDATE
+         SET preferred_contact = coalesce(EXCLUDED.preferred_contact, lead_capture_drafts.preferred_contact),
+             name = coalesce(EXCLUDED.name, lead_capture_drafts.name),
+             phone = coalesce(EXCLUDED.phone, lead_capture_drafts.phone),
+             email = coalesce(EXCLUDED.email, lead_capture_drafts.email),
+             expires_at = greatest(lead_capture_drafts.expires_at, EXCLUDED.expires_at),
+             updated_at = now()
+         WHERE lead_capture_drafts.status = 'pending'
+           AND lead_capture_drafts.expires_at > now()
+         RETURNING *
+       ),
+       cancelled AS (
+         UPDATE lead_capture_drafts draft
+         SET status = CASE WHEN draft.expires_at <= now() THEN 'expired' ELSE 'cancelled' END,
+             name = NULL,
+             phone = NULL,
+             email = NULL,
+             updated_at = now()
+         WHERE draft.session_id = $1
+           AND draft.status = 'pending'
+           AND draft.id <> (SELECT id FROM upserted)
+         RETURNING draft.id
+       )
+       SELECT * FROM upserted`,
+      [
+        input.sessionId,
+        input.originTurnId,
+        input.originToolRequestId,
+        input.purpose,
+        input.buyerQuestion,
+        input.preferredContact ?? null,
+        input.name ?? null,
+        input.phone ?? null,
+        input.email ?? null,
+        input.consentEvidenceHash,
+        input.scopeHash,
+        ttlSeconds
+      ]
+    );
+    return result.rowCount ? mapLeadCaptureDraft(result.rows[0]) : null;
+  }
+
+  async completeLeadCaptureDraft(input: {
+    draftId: string;
+    sessionId: string;
+    turnId: string;
+    name?: string;
+    phone?: string;
+    email?: string;
+    preferredContact?: LeadPreferredContact;
+  }) {
+    const result = await this.db.query(
+      `WITH target_draft AS MATERIALIZED (
+         SELECT draft.*
+         FROM lead_capture_drafts draft
+         JOIN conversation_sessions session ON session.id = draft.session_id
+         WHERE draft.id = $1::uuid
+           AND draft.session_id = $2::uuid
+           AND session.status = 'active'
+           AND (
+             (draft.status = 'pending' AND draft.expires_at > now())
+             OR (draft.status = 'consumed' AND draft.consumed_by_turn_id = $3::uuid)
+           )
+         FOR UPDATE OF draft
+       ),
+       completed_contact AS (
+         SELECT
+           draft.*,
+           coalesce(nullif(trim($4), ''), draft.name) AS resolved_name,
+           coalesce(nullif(trim($5), ''), draft.phone) AS resolved_phone,
+           coalesce(nullif(trim($6), ''), draft.email) AS resolved_email,
+           coalesce($7::text, draft.preferred_contact) AS resolved_preferred_contact
+         FROM target_draft draft
+         WHERE draft.status = 'pending'
+       ),
+       created_lead AS (
+         INSERT INTO leads(
+           session_id,
+           origin_turn_id,
+           origin_tool_request_id,
+           name,
+           phone,
+           email,
+           question
+         )
+         SELECT
+           contact.session_id,
+           contact.origin_turn_id,
+           contact.origin_tool_request_id,
+           contact.resolved_name,
+           contact.resolved_phone,
+           contact.resolved_email,
+           contact.buyer_question
+         FROM completed_contact contact
+         WHERE contact.resolved_name IS NOT NULL
+           AND (contact.resolved_phone IS NOT NULL OR contact.resolved_email IS NOT NULL)
+         ON CONFLICT (session_id, origin_turn_id, origin_tool_request_id) DO UPDATE
+         SET name = leads.name
+         RETURNING *
+       ),
+       queued_outbox AS (
+         INSERT INTO lead_outbox(lead_id, session_id, turn_id, destination, payload, status)
+         SELECT
+           lead.id,
+           lead.session_id,
+           $3::uuid,
+           'lead_email',
+           jsonb_strip_nulls(jsonb_build_object(
+             'leadId', lead.id,
+             'purpose', contact.purpose,
+             'question', contact.buyer_question,
+             'preferredContact', contact.resolved_preferred_contact,
+             'source', 'agent_manager'
+           )),
+           'pending'
+         FROM created_lead lead
+         JOIN completed_contact contact ON contact.session_id = lead.session_id
+         ON CONFLICT (lead_id, destination) DO UPDATE
+         SET payload = EXCLUDED.payload,
+             status = lead_outbox.status,
+             next_attempt_at = lead_outbox.next_attempt_at,
+             updated_at = now()
+         RETURNING *
+       ),
+       consumed_draft AS (
+         UPDATE lead_capture_drafts draft
+         SET status = 'consumed',
+             preferred_contact = contact.resolved_preferred_contact,
+             name = NULL,
+             phone = NULL,
+             email = NULL,
+             consumed_by_turn_id = $3::uuid,
+             consumed_lead_id = lead.id,
+             updated_at = now()
+         FROM completed_contact contact, created_lead lead, queued_outbox outbox
+         WHERE draft.id = contact.id
+           AND outbox.lead_id = lead.id
+           AND outbox.status IN ('pending', 'sending', 'sent', 'failed')
+         RETURNING draft.*
+       ),
+       new_completion AS (
+         SELECT
+           row_to_json(draft) AS draft_row,
+           row_to_json(lead) AS lead_row,
+           row_to_json(outbox) AS outbox_row
+         FROM consumed_draft draft
+         JOIN created_lead lead ON lead.id = draft.consumed_lead_id
+         JOIN queued_outbox outbox ON outbox.lead_id = lead.id
+       ),
+       existing_completion AS (
+         SELECT
+           row_to_json(draft) AS draft_row,
+           row_to_json(lead) AS lead_row,
+           row_to_json(outbox) AS outbox_row
+         FROM target_draft draft
+         JOIN leads lead ON lead.id = draft.consumed_lead_id
+         JOIN lead_outbox outbox ON outbox.lead_id = lead.id AND outbox.destination = 'lead_email'
+         WHERE draft.status = 'consumed'
+           AND draft.consumed_by_turn_id = $3::uuid
+           AND outbox.status IN ('pending', 'sending', 'sent', 'failed')
+       )
+       SELECT * FROM new_completion
+       UNION ALL
+       SELECT * FROM existing_completion
+       WHERE NOT EXISTS (SELECT 1 FROM new_completion)
+       LIMIT 1`,
+      [
+        input.draftId,
+        input.sessionId,
+        input.turnId,
+        input.name ?? null,
+        input.phone ?? null,
+        input.email ?? null,
+        input.preferredContact ?? null
+      ]
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    const draftRow = queryRowFromJson(row.draft_row);
+    const leadRow = queryRowFromJson(row.lead_row);
+    const outboxRow = queryRowFromJson(row.outbox_row);
+    if (!draftRow || !leadRow || !outboxRow) return null;
+    return {
+      draft: mapLeadCaptureDraft(draftRow),
+      lead: mapLead(leadRow),
+      outbox: mapLeadOutboxItem(outboxRow)
+    };
+  }
+
+  async createClientLeadWithOutbox(input: {
     sessionId: string;
     clientLeadId: string;
     clientRequestHash: string;
@@ -2684,22 +3046,95 @@ export class LeadRepository {
     question?: string;
   }) {
     const result = await this.db.query(
-      `INSERT INTO leads(
-         session_id,
-         client_lead_id,
-         client_request_hash,
-         name,
-         phone,
-         email,
-         question
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions session
+         WHERE session.id = $1::uuid
+           AND session.status = 'active'
+         FOR SHARE
+       ),
+       latest_turn AS MATERIALIZED (
+         SELECT turn.id
+         FROM conversation_turns turn
+         JOIN active_session session ON session.id = turn.session_id
+         ORDER BY turn.created_at DESC
+         LIMIT 1
+       ),
+       target_draft AS MATERIALIZED (
+         SELECT draft.*
+         FROM lead_capture_drafts draft
+         JOIN active_session session ON session.id = draft.session_id
+         WHERE draft.status = 'pending'
+           AND draft.expires_at > now()
+         ORDER BY draft.updated_at DESC, draft.created_at DESC
+         LIMIT 1
+         FOR UPDATE OF draft
+       ),
+       created_lead AS (
+         INSERT INTO leads(
+           session_id,
+           client_lead_id,
+           client_request_hash,
+           name,
+           phone,
+           email,
+           question
+         )
+         SELECT session.id, $2::uuid, $3, $4, $5, $6, $7
+         FROM active_session session
+         ON CONFLICT (session_id, client_lead_id) WHERE client_lead_id IS NOT NULL DO UPDATE
+         SET client_request_hash = leads.client_request_hash
+         WHERE leads.client_request_hash = EXCLUDED.client_request_hash
+         RETURNING *
+       ),
+       queued_outbox AS (
+         INSERT INTO lead_outbox(lead_id, session_id, turn_id, destination, payload, status)
+         SELECT
+           lead.id,
+           lead.session_id,
+           (SELECT id FROM latest_turn),
+           'lead_email',
+           jsonb_strip_nulls(jsonb_build_object(
+             'leadId', lead.id,
+             'purpose', draft.purpose,
+             'question', draft.buyer_question,
+             'preferredContact', draft.preferred_contact,
+             'source', 'lead_form'
+           )),
+           'pending'
+         FROM created_lead lead
+         LEFT JOIN target_draft draft ON true
+         ON CONFLICT (lead_id, destination) DO UPDATE
+         SET payload = lead_outbox.payload || EXCLUDED.payload,
+             status = lead_outbox.status,
+             next_attempt_at = lead_outbox.next_attempt_at,
+             updated_at = now()
+         RETURNING *
+       ),
+       consumed_draft AS (
+         UPDATE lead_capture_drafts draft
+         SET status = 'consumed',
+             name = NULL,
+             phone = NULL,
+             email = NULL,
+             consumed_by_turn_id = (SELECT id FROM latest_turn),
+             consumed_lead_id = lead.id,
+             updated_at = now()
+         FROM target_draft target, created_lead lead, queued_outbox outbox
+         WHERE draft.id = target.id
+           AND outbox.lead_id = lead.id
+           AND outbox.status IN ('pending', 'sending', 'sent', 'failed')
+         RETURNING draft.*
        )
-       SELECT $1, $2::uuid, $3, $4, $5, $6, $7
-       FROM conversation_sessions
-       WHERE id = $1 AND status = 'active'
-       ON CONFLICT (session_id, client_lead_id) WHERE client_lead_id IS NOT NULL DO UPDATE
-       SET client_request_hash = leads.client_request_hash
-       WHERE leads.client_request_hash = EXCLUDED.client_request_hash
-       RETURNING *`,
+       SELECT
+         row_to_json(lead) AS lead_row,
+         row_to_json(outbox) AS outbox_row,
+         CASE WHEN draft.id IS NULL THEN NULL ELSE row_to_json(draft) END AS draft_row,
+         EXISTS (SELECT 1 FROM target_draft) AS pending_draft_matched
+       FROM created_lead lead
+       JOIN queued_outbox outbox ON outbox.lead_id = lead.id
+       LEFT JOIN consumed_draft draft ON draft.consumed_lead_id = lead.id
+       LIMIT 1`,
       [
         input.sessionId,
         input.clientLeadId,
@@ -2710,7 +3145,18 @@ export class LeadRepository {
         input.question ?? null
       ]
     );
-    return result.rowCount ? mapLead(result.rows[0]) : null;
+    const row = result.rows[0];
+    if (!row) return null;
+    const leadRow = queryRowFromJson(row.lead_row);
+    const outboxRow = queryRowFromJson(row.outbox_row);
+    const draftRow = queryRowFromJson(row.draft_row);
+    if (!leadRow || !outboxRow) return null;
+    return {
+      lead: mapLead(leadRow),
+      outbox: mapLeadOutboxItem(outboxRow),
+      draft: draftRow ? mapLeadCaptureDraft(draftRow) : null,
+      pendingDraftMatched: row.pending_draft_matched === true
+    };
   }
 
   async createLead(input: {

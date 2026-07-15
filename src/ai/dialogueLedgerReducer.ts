@@ -242,20 +242,42 @@ export function reduceDialogueLedger(
       const openQuestions = optionalStringListPayload(event.payload, 'openQuestions');
       const selectedProductIds = optionalStringListPayload(event.payload, 'selectedProductIds');
       const rejectedProductIds = optionalStringListPayload(event.payload, 'rejectedProductIds');
+      const invalidatedProductIds = optionalStringListPayload(event.payload, 'invalidatedProductIds') ?? [];
+      const rawSelectionUpdateMode = stringPayload(event.payload, 'selectionUpdateMode');
+      const selectionUpdateMode = rawSelectionUpdateMode === 'preserve' ||
+        rawSelectionUpdateMode === 'replace' ||
+        rawSelectionUpdateMode === 'clear'
+        ? rawSelectionUpdateMode
+        : undefined;
+      if (rawSelectionUpdateMode && !selectionUpdateMode) warnings.push('need_selection_update_mode_invalid');
       const effectiveRejectedProductIds = rejectedProductIds ?? previous?.rejectedProductIds ?? [];
+      const excludedProductIds = new Set([...effectiveRejectedProductIds, ...invalidatedProductIds]);
+      const previousSelectedProductIds = (previous?.selectedProductIds ?? [])
+        .filter((productId) => !excludedProductIds.has(productId));
+      const explicitSelectedProductIds = (selectedProductIds ?? [])
+        .filter((productId) => !excludedProductIds.has(productId));
       const selectedProductIdsAfterLlmUpdate = event.eventType === 'need.updated' &&
         event.source === 'llm_state_delta' &&
+        selectionUpdateMode === undefined &&
         selectedProductIds?.length === 0 &&
         (previous?.selectedProductIds.length ?? 0) > 0
-        ? previous!.selectedProductIds.filter((productId) => !effectiveRejectedProductIds.includes(productId))
+        ? previousSelectedProductIds
         : selectedProductIds;
+      const effectiveSelectedProductIds = selectionUpdateMode === 'clear'
+        ? []
+        : selectionUpdateMode === 'replace'
+          ? explicitSelectedProductIds
+          : selectionUpdateMode === 'preserve'
+            ? [...new Set([...previousSelectedProductIds, ...explicitSelectedProductIds])]
+            : (selectedProductIdsAfterLlmUpdate ?? previousSelectedProductIds)
+                .filter((productId) => !excludedProductIds.has(productId));
       needsById[needId] = {
         needId,
         productClass: productClass(event.payload.productClass, previous?.productClass),
         summary: stringPayload(event.payload, 'summary') ?? previous?.summary ?? needId,
         constraints: constraints ?? previous?.constraints ?? [],
         openQuestions: openQuestions ?? previous?.openQuestions ?? [],
-        selectedProductIds: selectedProductIdsAfterLlmUpdate ?? previous?.selectedProductIds ?? [],
+        selectedProductIds: effectiveSelectedProductIds,
         rejectedProductIds: effectiveRejectedProductIds,
         status: needStatus(event.payload.status, activate ? 'open' : previous?.status ?? 'open'),
         eventId: event.eventId,

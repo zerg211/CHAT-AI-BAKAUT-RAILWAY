@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildGeneratorLoadToolPayload, hasUnconfirmedGeneratorLoadBasisResult } from '../src/ai/agentManagerGeneratorLoad.js';
+import {
+  buildGeneratorLoadToolPayload,
+  hasGeneratorLoadBasisThatBlocksPreliminaryFit,
+  hasUnconfirmedGeneratorLoadBasisResult
+} from '../src/ai/agentManagerGeneratorLoad.js';
 import type { ToolRequest, ToolResult } from '../src/ai/agentManagerContracts.js';
 
 function generatorLoadRequest(loads: Array<Record<string, unknown>>): ToolRequest {
@@ -75,8 +79,11 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.profile?.requiredNominalKw).toBeGreaterThanOrEqual(3.5);
     expect(payload.warnings).toContain('generator_load_default_bounded_estimate:pump');
     expect(payload.warnings).toContain('generator_load_bounded_assumption');
+    expect(payload.estimateBasis).toBe('bounded_assumption');
+    expect(payload.warnings).toContain('generator_load_bounded_assumption');
     expect(payload.warnings).not.toContain('generator_load_unbounded_guess');
-    expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(false);
+    expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
+    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(false);
   });
 
   it('keeps generic unknown pump loads unconfirmed', () => {
@@ -100,5 +107,73 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.warnings).toContain('generator_load_bounded_basis_incomplete');
     expect(payload.warnings).toContain('generator_load_unbounded_guess');
     expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
+  });
+
+  it('does not treat buyer-named household loads without kW as explicit power facts', () => {
+    const baseRequest = generatorLoadRequest([]);
+    const payload = buildGeneratorLoadToolPayload({
+      request: {
+        ...baseRequest,
+        args: {
+          ...baseRequest.args,
+          estimateBasis: 'unbounded_guess',
+          simultaneousStarting: false,
+          simultaneousStartingKinds: [],
+          loads: [{
+            kind: 'pump',
+            name: 'borehole pump, 220 V',
+            count: 1,
+            runningKw: 1.1,
+            source: 'explicit_user',
+            evidence: 'The pump nameplate says 1.1 kW and 220 V.',
+            basisKind: 'exact_power',
+            basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'explicit_power']
+          }, {
+            kind: 'refrigerator',
+            name: 'ordinary refrigerator',
+            count: 1,
+            source: 'explicit_user',
+            evidence: 'The buyer named an ordinary refrigerator but gave no wattage.',
+            basisKind: 'generic_load_name',
+            basisSignals: ['consumer_type_known', 'simultaneous_operation_known']
+          }, {
+            kind: 'lighting',
+            name: 'two LED lamps',
+            count: 2,
+            source: 'explicit_user',
+            evidence: 'The buyer named two LED lamps but gave no wattage.',
+            basisKind: 'generic_load_name',
+            basisSignals: ['consumer_type_known', 'simultaneous_operation_known']
+          }, {
+            kind: 'router',
+            name: 'router',
+            count: 1,
+            source: 'explicit_user',
+            evidence: 'The buyer named a router but gave no wattage.',
+            basisKind: 'generic_load_name',
+            basisSignals: ['consumer_type_known', 'simultaneous_operation_known']
+          }]
+        }
+      },
+      userMessage: 'The unchanged loads are a 1.1 kW 220 V pump, refrigerator, two LED lamps and a router.'
+    });
+
+    expect(payload.loads).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'pump', runningKw: 1.1, source: 'explicit_user' }),
+      expect.objectContaining({ kind: 'refrigerator', runningKw: 0.25, source: 'estimated_average' }),
+      expect.objectContaining({ kind: 'lighting', runningKw: 0.3, source: 'estimated_average' }),
+      expect.objectContaining({ kind: 'router', runningKw: 0.05, source: 'estimated_average' })
+    ]));
+    expect(payload.profile?.requiredNominalKw).toBeGreaterThanOrEqual(4);
+    expect(payload.warnings).toEqual(expect.arrayContaining([
+      'generator_load_default_bounded_estimate:refrigerator',
+      'generator_load_default_bounded_estimate:lighting',
+      'generator_load_default_bounded_estimate:router'
+    ]));
+    expect(payload.estimateBasis).toBe('bounded_assumption');
+    expect(payload.warnings).toContain('generator_load_bounded_assumption');
+    expect(payload.warnings).not.toContain('generator_load_unbounded_guess');
+    expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
+    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(false);
   });
 });

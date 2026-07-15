@@ -13,7 +13,7 @@ describe('lead outbox worker', () => {
     sendLeadEmail.mockReset();
   });
 
-  it('marks an outbox item sent after successful email delivery', async () => {
+  it('preserves pending draft context from a public form through email delivery', async () => {
     sendLeadEmail.mockResolvedValue({ ok: true });
     const conversations = {
       getSession: vi.fn(async () => ({ id: 'session-id', status: 'active' })),
@@ -35,7 +35,12 @@ describe('lead outbox worker', () => {
         sessionId: 'session-id',
         turnId: 'turn-id',
         destination: 'lead_email',
-        payload: {},
+        payload: {
+          source: 'lead_form',
+          purpose: 'Уточнить совместимость виброплиты с толщиной слоя 30 см',
+          question: 'Подойдет ли эта виброплита для слоя щебня 30 см?',
+          preferredContact: 'message'
+        },
         status: 'sending',
         attemptCount: 1,
         createdAt: new Date().toISOString(),
@@ -44,6 +49,16 @@ describe('lead outbox worker', () => {
     });
 
     expect(result).toEqual({ ok: true });
+    expect(sendLeadEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'lead-id' }),
+      expect.objectContaining({
+        handoff: {
+          purpose: 'Уточнить совместимость виброплиты с толщиной слоя 30 см',
+          buyerQuestion: 'Подойдет ли эта виброплита для слоя щебня 30 см?',
+          preferredContact: 'message'
+        }
+      })
+    );
     expect(leads.markLeadOutboxSent).toHaveBeenCalledWith('outbox-id');
     expect(leads.markEmailResult).toHaveBeenCalledWith('lead-id', 'sent_email', { ok: true });
   });

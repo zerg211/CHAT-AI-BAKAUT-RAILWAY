@@ -40,18 +40,23 @@ describe('lead review guards', () => {
   });
 
   it('returns the missing-name repair when phone is present but name is absent', () => {
+    const base = 'По каталожным данным модель выглядит подходящей, но совместимость разъёма пока не подтверждена.';
     const text = leadCaptureRepairText({
       contact: { phone: '+7 900 000-00-11' },
-      toolResults: [leadResult(['lead_name_missing'])]
+      toolResults: [leadResult(['lead_name_missing'])],
+      answerText: base
     });
 
-    expect(text).toContain('Телефон получил');
+    expect(text).toContain(base);
+    expect(text).toContain('Телефон вижу');
     expect(text).toContain('Напишите, пожалуйста, имя');
+    expect(text).toContain('сообщением или звонком');
+    expect(text).not.toContain('передам');
   });
 });
 
 describe('lead review fail-closed repair', () => {
-  it('replaces the unreviewed answer with a complete safe form handoff', () => {
+  it('preserves the useful answer and replaces only an unsafe contact sentence', () => {
     const base = fromEscaped('\\u0418\\u0437 \\u043a\\u0430\\u0442\\u0430\\u043b\\u043e\\u0433\\u0430 \\u043f\\u043e\\u0434\\u0445\\u043e\\u0434\\u0438\\u0442 APS 800: \\u044d\\u0442\\u043e \\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u0441\\u0442\\u0430\\u043d\\u0446\\u0438\\u044f \\u043d\\u0430 220 \\u0412.');
     const removedContactSentence = fromEscaped('\\u041e\\u0441\\u0442\\u0430\\u0432\\u044c\\u0442\\u0435 \\u0442\\u0435\\u043b\\u0435\\u0444\\u043e\\u043d \\u0432 \\u0444\\u043e\\u0440\\u043c\\u0435.');
     const text = leadCaptureRepairText({
@@ -60,8 +65,10 @@ describe('lead review fail-closed repair', () => {
       answerText: `${base} ${removedContactSentence}`
     });
 
-    expect(text).not.toContain(base);
-    expect(text).toContain(fromEscaped('\\u0427\\u0442\\u043e\\u0431\\u044b \\u043f\\u0440\\u043e\\u0432\\u0435\\u0440\\u0438\\u0442\\u044c \\u043d\\u0430\\u043b\\u0438\\u0447\\u0438\\u0435'));
+    expect(text).toContain(base);
+    expect(text).toContain('Оставьте, пожалуйста, имя и номер телефона');
+    expect(text).toContain('сообщением или звонком');
     expect(text).not.toContain(removedContactSentence);
+    expect(text).not.toContain('передам');
   });
 });

@@ -144,14 +144,21 @@ function loadsFromArgs(args: { loads?: unknown[] }, fallbackEvidence: string): {
       loads.push(load);
       continue;
     }
-    const boundedDefault = boundedDefaultEstimateForLoad(load);
+    // `source` describes the source of the numeric power, not the source of
+    // the device name. If both kW fields are absent, any value supplied here
+    // is necessarily an estimate even when the buyer named the device.
+    const estimatedLoad: GeneratorLoadToolItem = {
+      ...load,
+      source: 'estimated_average'
+    };
+    const boundedDefault = boundedDefaultEstimateForLoad(estimatedLoad);
     if (boundedDefault) {
       warnings.add(`generator_load_default_bounded_estimate:${boundedDefault.kind}`);
       loads.push({
-        ...load,
+        ...estimatedLoad,
         runningKw: boundedDefault.runningKw,
         startingKw: boundedDefault.startingKw,
-        evidence: `${load.evidence} Preliminary bounded average was used; exact nameplate power is still missing.`
+        evidence: `${estimatedLoad.evidence} Preliminary bounded average was used; exact nameplate power is still missing.`
       });
       continue;
     }
@@ -180,12 +187,17 @@ function hasBoundedEstimatedLoadBasis(load: GeneratorLoadToolItem) {
   if (hasAnyBasisSignal(load, ['explicit_power', 'catalog_or_web_fact'])) return true;
   const kind = canonicalElectricalLoadKind(load.kind);
   if (!kind || kind === 'unknown' || kind === 'unknown_load') return false;
-  if (load.basisKind !== 'specific_type_or_function') return false;
+  if (
+    load.basisKind !== 'specific_type_or_function' &&
+    load.basisKind !== 'generic_load_name'
+  ) return false;
   if (motorLikeLoadKinds.has(kind)) {
+    if (load.basisKind !== 'specific_type_or_function') return false;
     return hasAnyBasisSignal(load, ['consumer_type_known', 'consumer_function_known']) &&
       hasAnyBasisSignal(load, ['voltage_or_phase_known']);
   }
   if (kind === 'handheld_tool') {
+    if (load.basisKind !== 'specific_type_or_function') return false;
     return hasAnyBasisSignal(load, ['consumer_type_known']) &&
       hasAnyBasisSignal(load, ['usage_scope_known', 'simultaneous_operation_known']);
   }
@@ -228,6 +240,7 @@ export function hasEstimateOnlyGeneratorLoadResult(results: ToolResult[]) {
 
 function hasUnconfirmedGeneratorLoadBasisWarning(result: ToolResult) {
   return result.warnings.includes('generator_load_estimate_only') ||
+    result.warnings.includes('generator_load_bounded_assumption') ||
     result.warnings.includes('generator_load_unbounded_guess') ||
     result.warnings.includes('generator_load_bounded_basis_incomplete') ||
     result.warnings.includes('generator_load_invalid_load_kind');
@@ -267,24 +280,23 @@ export function buildGeneratorLoadToolPayload(input: {
 }) {
   const loadEvidence = generatorLoadEvidenceForToolRequest(input.request, input.userMessage);
   const { loads, warnings } = loadsFromArgs(input.request.args, loadEvidence);
-  const estimateBasis = estimateBasisFromToolArg(input.request.args.estimateBasis);
+  const requestedEstimateBasis = estimateBasisFromToolArg(input.request.args.estimateBasis);
+  const hasEstimatedLoads = loads.some((load) => load.source === 'estimated_average');
+  const boundedEstimateBasis = hasEstimatedLoads && hasBoundedAssumptionBasis(loads);
+  const estimateBasis = hasEstimatedLoads
+    ? boundedEstimateBasis ? 'bounded_assumption' : 'unbounded_guess'
+    : requestedEstimateBasis;
   const profile = calculateGeneratorLoadProfile(loads, {
     simultaneousStarting: input.request.args.simultaneousStarting === true,
     simultaneousStartingKinds: Array.isArray(input.request.args.simultaneousStartingKinds)
       ? input.request.args.simultaneousStartingKinds.filter((item): item is string => typeof item === 'string')
       : undefined
   });
-  if (profile && isEstimateOnlyGeneratorLoadPayload({ loads })) {
-    if (estimateBasis === 'bounded_assumption') {
-      if (hasBoundedAssumptionBasis(loads)) {
-        warnings.push('generator_load_bounded_assumption');
-      } else {
-        warnings.push('generator_load_bounded_basis_incomplete', 'generator_load_unbounded_guess');
-      }
+  if (profile && hasEstimatedLoads) {
+    if (boundedEstimateBasis) {
+      warnings.push('generator_load_bounded_assumption');
     } else {
-      warnings.push(estimateBasis === 'unbounded_guess'
-        ? 'generator_load_unbounded_guess'
-        : 'generator_load_estimate_only');
+      warnings.push('generator_load_bounded_basis_incomplete', 'generator_load_unbounded_guess');
     }
   }
   return { loads, profile, estimateBasis: estimateBasis ?? null, warnings };

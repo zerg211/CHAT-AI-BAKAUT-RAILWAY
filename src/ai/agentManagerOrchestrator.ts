@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
-import type { AgentSourcePolicyV2, AgentTaskType, AgentTurnContract, ChatResponsePayload, ConversationSession, CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
+import type { AgentSourcePolicyV2, AgentTaskType, AgentTurnContract, ChatResponsePayload, ConversationSession, CustomerNeedState, LeadCaptureDraft, LeadPreferredContact, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
 import {
   AgentIntentContractSchema,
   AnswerContractSchema,
@@ -99,6 +99,7 @@ import {
 import {
   AgentManagerTurnBudget,
   AgentManagerTurnBudgetExceededError,
+  DEFAULT_AGENT_MANAGER_TURN_LIMITS,
   runWithAgentManagerTurnBudget
 } from './agentManagerTurnBudget.js';
 import {
@@ -118,6 +119,14 @@ import {
   verifiedFactsCoverRequest,
   verifiedFactsResearchResult
 } from './verifiedFactMemory.js';
+import { revalidateReviewerRewrite } from './agentManagerRevisedAnswerGuard.js';
+import {
+  authoritativeRequirementProofStatus,
+  buildRequirementProofs,
+  combinedRequirementProofStatus,
+  requirementUsesGenericReadProof,
+  requirementProofsFor
+} from './requirementProofs.js';
 
 export interface AgentManagerGenerateInput {
   sessionId: string;
@@ -136,6 +145,7 @@ export interface AgentManagerRecoverInput {
 }
 
 export interface AgentManagerModel {
+  understandTurn?(input: AgentManagerModelInput): Promise<AgentManagerTurnUnderstanding>;
   proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta>;
   planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract>;
   composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract>;
@@ -148,7 +158,25 @@ export interface AgentManagerModelInput {
   userMessage: string;
   ledgerEvents: DialogueLedgerEvent[];
   ledgerState?: ReducedDialogueLedgerState;
+  pendingLeadCaptureDraft?: PendingLeadCaptureDraftContext | null;
   signal?: AbortSignal;
+}
+
+export interface AgentManagerTurnUnderstanding {
+  ledgerDelta: unknown;
+  intentContract: unknown;
+}
+
+export interface PendingLeadCaptureDraftContext {
+  id: string;
+  purpose: string;
+  buyerQuestion: string;
+  preferredContact: LeadPreferredContact | null;
+  hasName: boolean;
+  hasPhone: boolean;
+  hasEmail: boolean;
+  missingFields: Array<'name' | 'contact'>;
+  expiresAt: string;
 }
 
 export interface AgentManagerAnswerInput extends AgentManagerModelInput {
@@ -268,6 +296,27 @@ function activeScopedLedgerFacts(ledgerState: ReducedDialogueLedgerState) {
     .find((need) => need.status === 'open' || need.status === 'selected')?.needId
     ?? [...activeFacts].reverse().find((fact) => fact.needId)?.needId;
   return activeFacts.filter((fact) => !fact.needId || fact.needId === currentNeedId);
+}
+
+function pendingLeadCaptureDraftContext(draft: LeadCaptureDraft | null): PendingLeadCaptureDraftContext | null {
+  if (!draft) return null;
+  const hasName = Boolean(draft.name?.trim());
+  const hasPhone = Boolean(draft.phone?.trim());
+  const hasEmail = Boolean(draft.email?.trim());
+  return {
+    id: draft.id,
+    purpose: draft.purpose,
+    buyerQuestion: draft.buyerQuestion,
+    preferredContact: draft.preferredContact ?? null,
+    hasName,
+    hasPhone,
+    hasEmail,
+    missingFields: [
+      ...(!hasName ? ['name' as const] : []),
+      ...(!hasPhone && !hasEmail ? ['contact' as const] : [])
+    ],
+    expiresAt: draft.expiresAt
+  };
 }
 
 function answerEvidenceSourceHints(input: {
@@ -544,6 +593,28 @@ export function repairIntentForNewNeedFinalFit(
   };
 }
 
+function leadCaptureHash(parts: string[]) {
+  return createHash('sha256').update(parts.join('\n')).digest('hex');
+}
+
+function groundedBuyerQuestion(buyerQuestion: string | null | undefined, history: Message[]) {
+  const question = buyerQuestion?.trim() ?? '';
+  if (!question) return null;
+  return history.some((message) => message.role === 'user' && message.content.includes(question))
+    ? question
+    : null;
+}
+
+function currentEvidencePlannerName(request: ToolRequest, evidence: string) {
+  const candidate = request.args.contact?.name?.trim() ?? '';
+  return candidate && evidence.includes(candidate) ? candidate : undefined;
+}
+
+function requestedPreferredContact(request: ToolRequest): LeadPreferredContact | undefined {
+  const preferred = request.args.contact?.preferredContact;
+  return preferred === 'message' || preferred === 'call' ? preferred : undefined;
+}
+
 function reusableSideEffectArtifactsAfterReplan(
   intent: AgentIntentContract,
   persistedResults: Map<string, ToolResult>,
@@ -563,9 +634,7 @@ function reusableSideEffectArtifactsAfterReplan(
     (authorization.contactSource !== 'current_message' || evidenceContact.phone || evidenceContact.email)
   );
   if (!authorizedForReuse) return { results, rebound };
-  const successfulLead = [...persistedResults.values()].find((result) =>
-    result.tool === 'lead.capture' && result.status === 'ok'
-  );
+  const successfulLead = [...persistedResults.values()].find(isDurableLeadCaptureResult);
   if (!successfulLead) return { results, rebound };
   for (const request of intent.toolRequests) {
     if (request.tool !== 'lead.capture') continue;
@@ -579,6 +648,23 @@ function reusableSideEffectArtifactsAfterReplan(
   return { results, rebound };
 }
 
+function isDurableLeadCaptureResult(result: ToolResult) {
+  if (result.tool !== 'lead.capture' || result.status !== 'ok') return false;
+  const payload = result.payload as { outbox?: unknown; outboxId?: unknown; status?: unknown };
+  return payload.outbox === true &&
+    typeof payload.outboxId === 'string' &&
+    payload.outboxId.trim().length > 0 &&
+    payload.status === 'queued';
+}
+
+function durableLeadOutboxStatus(row: unknown) {
+  if (!row || typeof row !== 'object') return null;
+  const status = (row as { status?: unknown }).status;
+  return status === 'pending' || status === 'sending' || status === 'sent' || status === 'failed'
+    ? status
+    : null;
+}
+
 function leadActionAfterReview(input: {
   answer: AnswerContract;
   finalText: string;
@@ -589,7 +675,10 @@ function leadActionAfterReview(input: {
     issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
   );
   if (reviewRequiresOfferForm) return 'offer_form';
-  const leadCaptureOk = input.toolResults.some((result) => result.tool === 'lead.capture' && result.status === 'ok');
+  if (input.review.issues.some((issue) => issue.code === 'premature_handoff_before_web_exhausted')) {
+    return 'none';
+  }
+  const leadCaptureOk = input.toolResults.some(isDurableLeadCaptureResult);
   if (!leadCaptureOk && answerRequestsContactData(input.finalText)) return 'offer_form';
   return input.answer.leadAction;
 }
@@ -825,8 +914,20 @@ export class TurnExecutionInProgressError extends Error {
   }
 }
 
+export class RecoveryAttemptUnavailableError extends Error {
+  readonly code = 'recovery_attempt_unavailable';
+
+  constructor() {
+    super('recovery_attempt_unavailable');
+    this.name = 'RecoveryAttemptUnavailableError';
+  }
+}
+
 const RECOVERY_LEASE_RETRY_INTERVAL_MS = 500;
-const RECOVERY_LEASE_WAIT_LIMIT_MS = 110_000;
+const RECOVERY_LEASE_WAIT_LIMIT_MS = 55_000;
+const TURN_TERMINAL_RESERVE_MS = 5_000;
+const WEB_COMPOSE_REVIEW_RESERVE_MS = 18_000;
+const WEB_MIN_EXECUTION_MS = 6_000;
 
 async function waitForRecoveryLeaseRetry(signal?: AbortSignal) {
   if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
@@ -1474,10 +1575,16 @@ function filterProductsByStructuredSelectionPolicy(input: {
   const compromiseProductIds = structuredCompromiseProductIds(input.toolResults);
   const allowCompromises = policy.alternativePolicy === 'allow_adjacent_with_explanation' ||
     policy.alternativePolicy === 'open_to_alternatives';
+  const requirementProofs = buildRequirementProofs({
+    intent: input.intent,
+    products: input.products,
+    toolResults: input.toolResults
+  });
   const strictRequirementAssessment = gateStrictSelectionRequirements(
     input.intent,
     canonicalClass,
-    input.toolResults
+    input.toolResults,
+    input.products
   );
   if (strictRequirementAssessment.blockers.length) {
     return {
@@ -1495,6 +1602,21 @@ function filterProductsByStructuredSelectionPolicy(input: {
   const exactTargetNames = (input.intent.productMentions ?? [])
     .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
     .map((mention) => mention.name);
+  const strictRequirements = policy.requirements.filter((requirement) =>
+    requirement.role === 'hard_constraint' && requirement.strictness === 'strict'
+  );
+  const proofBackedRequirementIds = new Set(requirementProofs.flatMap((proof) =>
+    proof.sourceResultIds.length ? [proof.requirementId] : []
+  ));
+  const genericRequirementIds = strictRequirements.flatMap((requirement) => {
+    return requirementUsesGenericReadProof(requirement) && proofBackedRequirementIds.has(requirement.id)
+      ? [requirement.id]
+      : [];
+  });
+  const phaseRequirementIds = strictRequirements.flatMap((requirement) =>
+    requirement.kind === 'phase' || requirement.kind === 'voltage_v' ? [requirement.id] : []
+  );
+  const finalFit = (policy.selectionGoal ?? 'final_fit') === 'final_fit';
   const products = input.products.filter((product) => {
     const acceptedCompromise = allowCompromises && compromiseProductIds.has(product.id);
     const strictProductClass = policy.alternativePolicy === 'exact_only' ||
@@ -1505,6 +1627,15 @@ function filterProductsByStructuredSelectionPolicy(input: {
       exactTargetNames.length > 0 &&
       !exactTargetNames.some((targetName) => productMatchesTargetName(product, targetName))
     ) return false;
+    for (const requirementId of genericRequirementIds) {
+      const proofStatus = combinedRequirementProofStatus(requirementProofsFor(
+        requirementProofs,
+        product.id,
+        [requirementId]
+      ));
+      if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
+      if (finalFit && proofStatus !== 'satisfied') return false;
+    }
     if (!acceptedCompromise && budgetMax !== undefined && !priceWithinBudget(product, budgetMax)) return false;
     if (!acceptedCompromise && (weightMin !== undefined || weightMax !== undefined)) {
       const weight = extractWeightKg(product);
@@ -1530,9 +1661,17 @@ function filterProductsByStructuredSelectionPolicy(input: {
       if (policy.powerSource === 'mains') return false;
     }
     if (policy.phase && policy.phase !== 'any') {
-      const phase = generatorPhaseProfile(product);
-      if (policy.phase === 'single_phase' && phase !== 'single_220') return false;
-      if (policy.phase === 'three_phase' && phase !== 'three_phase_380' && phase !== 'mixed_220_380') return false;
+      const authoritativeProofStatus = authoritativeRequirementProofStatus(requirementProofsFor(
+        requirementProofs,
+        product.id,
+        phaseRequirementIds
+      ));
+      if (authoritativeProofStatus === 'violated' || authoritativeProofStatus === 'conflicted') return false;
+      if (authoritativeProofStatus !== 'satisfied') {
+        const phase = generatorPhaseProfile(product);
+        if (policy.phase === 'single_phase' && phase !== 'single_220') return false;
+        if (policy.phase === 'three_phase' && phase !== 'three_phase_380' && phase !== 'mixed_220_380') return false;
+      }
     }
     if (!productMeetsSupportedStrictAutoStartRequirement(product, input.intent, canonicalClass)) return false;
     if (!productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass)) return false;
@@ -2427,15 +2566,6 @@ function generatorLoadRequirementKw(toolResults: ToolResult[]) {
   return undefined;
 }
 
-function generatorLoadBlocksCatalogAccess(intent: AgentIntentContract, toolResults: ToolResult[]) {
-  const selectionGoal = intent.selectionPolicy?.selectionGoal ?? 'final_fit';
-  if (selectionGoal === 'browse_catalog') return false;
-  if (selectionGoal === 'preliminary_fit') {
-    return hasGeneratorLoadBasisThatBlocksPreliminaryFit(toolResults);
-  }
-  return hasUnconfirmedGeneratorLoadBasisResult(toolResults);
-}
-
 function generatorLoadProfileNumbers(result: ToolResult) {
   const profile = (result.payload as {
     profile?: {
@@ -2510,20 +2640,46 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
       }
     }
     if (result.tool !== 'web.researchProductFacts') continue;
-    if (result.status !== 'ok') {
-      clauses.push({
-        code: 'web_research_unavailable_grounding',
-        sourceRequestId: result.requestId,
-        instruction: 'The requested web fact check exhausted the available search attempt without confirming the decisive fact. Do not use this failed result as factual evidence and do not turn missing confirmation into incompatibility. Preserve any useful preliminary product conclusion supported by the dialogue, ledger, or successful catalog results; name the exact fact that remains unconfirmed; say that final confirmation still requires a technical check. Offer to obtain that concrete result from a technical specialist, ask the buyer to leave a phone number, and ask whether they prefer the result by message or by phone call. Set leadAction="offer_form". Do not claim that the request was already transferred or that the specialist is already checking it until lead.capture succeeds.'
-      });
-      continue;
-    }
     const payload = result.payload as {
+      researchOutcome?: 'answered' | 'partial' | 'exhausted';
+      sourcesExhausted?: boolean;
+      unconfirmedFacts?: Array<{
+        requirementIds?: string[];
+        attribute?: string;
+        status?: string;
+        reason?: string;
+      }>;
       catalogPresence?: Array<{ productName?: string; status?: string }>;
       nearbyCatalogProducts?: Array<{ name?: string }>;
       facts?: Array<{ productName?: string; sourceType?: string; confidence?: string }>;
       answerGuidance?: { directAnswer?: string; completeness?: string };
+      comparisonAttributes?: string[];
+      searchDisposition?: 'completed' | 'memory_hit' | 'not_needed' | 'skipped_budget' | 'timed_out' | 'failed' | 'aborted';
     };
+    const unresolvedFacts = (payload.unconfirmedFacts ?? [])
+      .filter((fact) => typeof fact.attribute === 'string' && fact.attribute.trim())
+      .map((fact) => ({
+        requirementIds: fact.requirementIds ?? [],
+        attribute: fact.attribute!.trim(),
+        status: fact.status ?? 'not_confirmed',
+        reason: fact.reason ?? ''
+      }));
+    if (payload.sourcesExhausted === true && payload.researchOutcome === 'exhausted') {
+      clauses.push({
+        code: 'web_research_exhausted_grounding',
+        sourceRequestId: result.requestId,
+        instruction: `The requested web fact check exhausted the available search attempt without confirming the decisive fact. Do not use the unresolved attributes as factual evidence and do not turn missing confirmation into incompatibility. Confirmed facts with exact source evidence remain usable as preliminary evidence. Preserve any useful preliminary product conclusion supported by those confirmed facts, the dialogue, ledger, or successful catalog results; name the exact fact that remains unconfirmed; say that final confirmation still requires a technical check. Unconfirmed facts: ${JSON.stringify(unresolvedFacts.length ? unresolvedFacts : (payload.comparisonAttributes ?? []).map((attribute) => ({ attribute, status: 'not_confirmed' })))}. Offer to obtain that concrete result from a technical specialist, ask the buyer to leave a phone number, and ask whether they prefer the result by message or by phone call. Set leadAction="offer_form". Do not claim that the request was already transferred or that the specialist is already checking it until lead.capture succeeds.`
+      });
+      continue;
+    }
+    if (result.status !== 'ok') {
+      clauses.push({
+        code: 'web_research_incomplete_grounding',
+        sourceRequestId: result.requestId,
+        instruction: `The requested web check did not complete (${payload.searchDisposition ?? result.status}). Do not describe sources as exhausted and do not offer specialist handoff solely because of this execution failure. Preserve any useful preliminary conclusion supported by dialogue, ledger, successful catalog results, or other confirmed facts; name the exact fact that is still unconfirmed; say plainly that the external check did not complete in this turn. Do not use this failed tool as factual evidence.`
+      });
+      continue;
+    }
     const directAnswer = typeof payload.answerGuidance?.directAnswer === 'string'
       ? payload.answerGuidance.directAnswer.trim()
       : '';
@@ -2532,6 +2688,13 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
         code: 'answer_checked_research_guidance',
         sourceRequestId: result.requestId,
         instruction: `Use this checked research guidance to answer the buyer's direct question in simple words, without turning unverified choices into false negatives: ${directAnswer}`
+      });
+    }
+    if (payload.researchOutcome === 'partial' && unresolvedFacts.length) {
+      clauses.push({
+        code: 'web_research_partial_grounding',
+        sourceRequestId: result.requestId,
+        instruction: `Preserve the confirmed part of the checked answer, but do not silently treat unresolved attributes as confirmed or contradicted. Name the exact remaining gap when it affects the decision. Unconfirmed facts: ${JSON.stringify(unresolvedFacts)}. If that gap is decisive and the available research has been exhausted, offer a technical follow-up, ask for a phone number, and offer the result by message or phone without claiming that a request was already transferred.`
       });
     }
     if (result.warnings.includes('verified_product_fact_memory_used')) {
@@ -2942,8 +3105,23 @@ function failedWebResearchSafeRewrite(input: {
   if (!failedWebResult) return null;
   const request = input.intent.toolRequests.find((item) => item.id === failedWebResult.requestId);
   const productName = productNamesFromToolRequest(request)[0];
-  const generalTechnicalRewrite = failedGeneralTechnicalWebResearchSafeRewrite({ intent: input.intent, request });
-  if (!productName && generalTechnicalRewrite) return generalTechnicalRewrite;
+  const failedPayload = failedWebResult.payload as { sourcesExhausted?: unknown; searchDisposition?: unknown };
+  if (failedPayload.sourcesExhausted !== true) {
+    const generalTechnicalRewrite = failedGeneralTechnicalWebResearchSafeRewrite({ intent: input.intent, request });
+    if (!productName && generalTechnicalRewrite) {
+      const handoffParagraphStart = generalTechnicalRewrite.lastIndexOf('\n\n');
+      return handoffParagraphStart > 0
+        ? generalTechnicalRewrite.slice(0, handoffParagraphStart)
+        : generalTechnicalRewrite;
+    }
+    const missingFact = input.intent.userMessageSummary.trim();
+    if (productName) {
+      return `По уже подтверждённым данным ${productName} остаётся предварительным вариантом. Внешняя проверка в этом ходе не завершилась, поэтому решающий факт пока не подтверждаю: ${missingFact} Незавершённый поиск не считаю доказательством отсутствия функции или несовместимости.`;
+    }
+    return `Внешняя проверка в этом ходе не завершилась, поэтому решающий факт пока не подтверждаю: ${missingFact} Уже подтверждённые данные и предварительный вывод сохраняю; незавершённый поиск не считаю доказательством отсутствия функции или несовместимости.`;
+  }
+  const exhaustedGeneralTechnicalRewrite = failedGeneralTechnicalWebResearchSafeRewrite({ intent: input.intent, request });
+  if (!productName && exhaustedGeneralTechnicalRewrite) return exhaustedGeneralTechnicalRewrite;
   const missingFact = input.intent.userMessageSummary.trim();
   if (productName) {
     return `По уже подтверждённым данным ${productName} остаётся предварительным вариантом, но внешняя проверка не подтвердила решающий факт: ${missingFact} Поэтому окончательно утверждать не буду. Могу передать именно этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?`;
@@ -2963,11 +3141,13 @@ function researchGuidanceSafeRewrite(input: {
       targetProductNames?: unknown;
       catalogPresence?: Array<{ productName?: string; status?: string }>;
       nearbyCatalogProducts?: Array<{ name?: string }>;
+      researchOutcome?: 'answered' | 'partial' | 'exhausted';
       answerGuidance?: {
         directAnswer?: unknown;
         coverage?: unknown;
       };
     };
+    if (payload.researchOutcome === 'exhausted') continue;
     const targetNames = Array.isArray(payload.targetProductNames)
       ? payload.targetProductNames.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
       : [];
@@ -3052,6 +3232,11 @@ const ledgerPayloadJsonSchema = {
     openQuestions: stringArrayJsonSchema,
     selectedProductIds: stringArrayJsonSchema,
     rejectedProductIds: stringArrayJsonSchema,
+    selectionUpdateMode: {
+      type: ['string', 'null'],
+      enum: ['preserve', 'replace', 'clear', null]
+    },
+    invalidatedProductIds: stringArrayJsonSchema,
     status: { type: ['string', 'null'], enum: ['open', 'selected', 'paused', 'closed', null] },
     activate: nullableBooleanJsonSchema,
     productId: nullableStringJsonSchema,
@@ -3082,6 +3267,8 @@ const ledgerPayloadJsonSchema = {
     'openQuestions',
     'selectedProductIds',
     'rejectedProductIds',
+    'selectionUpdateMode',
+    'invalidatedProductIds',
     'status',
     'activate',
     'productId',
@@ -3099,7 +3286,7 @@ const contactArgsJsonSchema = {
     name: nullableStringJsonSchema,
     phone: nullableStringJsonSchema,
     email: nullableStringJsonSchema,
-    preferredContact: nullableStringJsonSchema,
+    preferredContact: { type: ['string', 'null'], enum: ['message', 'call', null] },
     comment: nullableStringJsonSchema
   },
   required: ['name', 'phone', 'email', 'preferredContact', 'comment']
@@ -3420,12 +3607,14 @@ const leadCaptureAuthorizationJsonSchema = {
     authorized: { type: 'boolean' },
     contactSource: {
       type: 'string',
-      enum: ['current_message', 'existing_session', 'none']
+      enum: ['current_message', 'existing_session', 'pending_draft', 'none']
     },
     purpose: nullableStringJsonSchema,
-    evidence: nullableStringJsonSchema
+    buyerQuestion: nullableStringJsonSchema,
+    evidence: nullableStringJsonSchema,
+    pendingDraftId: nullableStringJsonSchema
   },
-  required: ['authorized', 'contactSource', 'purpose', 'evidence']
+  required: ['authorized', 'contactSource', 'purpose', 'buyerQuestion', 'evidence', 'pendingDraftId']
 } as const;
 
 const intentContractFormat = {
@@ -3451,6 +3640,22 @@ const intentContractFormat = {
         riskFlags: { type: 'array', items: { type: 'string' } }
       },
       required: ['turnId', 'userMessageSummary', 'dialogueUnderstanding', 'nextStepRationale', 'requiresTools', 'toolRequests', 'productMentions', 'selectionPolicy', 'leadCaptureAuthorization', 'policyRuleIds', 'grounding', 'mustNotAskQuestionIds', 'riskFlags']
+    }
+  }
+} as const;
+
+const combinedUnderstandingFormat = {
+  format: {
+    type: 'json_schema',
+    name: 'agent_turn_understanding',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        ledgerDelta: ledgerDeltaFormat.format.schema,
+        intentContract: intentContractFormat.format.schema
+      },
+      required: ['ledgerDelta', 'intentContract']
     }
   }
 } as const;
@@ -3548,11 +3753,139 @@ const preSendReviewFormat = {
 export const agentManagerStructuredFormats = {
   ledgerDeltaFormat,
   intentContractFormat,
+  combinedUnderstandingFormat,
   answerContractFormat,
   preSendReviewFormat
 } as const;
 
-class OpenAIAgentManagerModel implements AgentManagerModel {
+function ledgerReducerPolicyPromptBlock() {
+  return [
+    'Не переносишь контекст из других диалогов. Не добавляешь выдуманные факты.',
+    'Веди несколько потребностей явно. Для новой темы создай need.opened с payload needId, productClass, summary, constraints, openQuestions, selectedProductIds, rejectedProductIds, selectionUpdateMode, invalidatedProductIds, status и activate=true. Для продолжения, исправления или возврата к теме используй need.updated с тем же needId; activate=true ставит эту потребность текущей, а прежнюю reducer поставит на паузу.',
+    'В need.opened и need.updated всегда задавай selectionUpdateMode: preserve, если прежний выбор остаётся уместен; replace, если selectedProductIds полностью заменяют прежние; clear, если смена вводных аннулирует весь прежний выбор. В invalidatedProductIds перечисляй известные ID, которые больше не подходят. Не используй пустой selectedProductIds как неявную команду preserve.',
+    'Для закрытой потребности создай need.closed с needId. Не смешивай факты разных needId.',
+    'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass и role: hard_requirement, preference, context или commercial. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
+    'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
+    'Если покупатель изменил вводные, создай новый fact.confirmed и укажи supersedesEventIds для старого факта, если он известен.'
+  ].join('\n');
+}
+
+function plannerSystemPromptBlock() {
+  const managerPolicy = salesManagerPlannerPolicyPromptBlock();
+  return [
+    'Ты планировщик AI менеджера БАКАУТ.',
+    untrustedEvidenceBoundary,
+    managerPolicy,
+    'LLM решает смысл хода без фиксированного списка сценариев.',
+    'Код только исполнит typed tools, но не будет подменять твой смысл.',
+    'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, requiredToolKinds, technicalAttributes и rationale. Затем toolRequests должны исполнять эту grounding-политику.',
+    'Всегда заполни selectionPolicy семантически. targetProductClass — свободное человеческое название класса товара, поэтому незнакомый класс не своди к unknown. canonicalProductClass укажи только когда он точно входит в известную кодовую онтологию; иначе null.',
+    'Known canonicalProductClass values are generator, weldingGenerator, generatorOil, engineOil, generatorAccessory, plateAccessory, plate, rammer, roller, cutter, diamondBlade, diamondCore, trowel, and unknown. Use plate for a vibration plate / виброплита; use unknown only for a genuinely unfamiliar class, and use null only when the free target class is outside this ontology.',
+    'Всегда задай selectionPolicy.selectionGoal: browse_catalog — показать ассортимент/цены без обещания совместимости; preliminary_fit — предварительно подобрать под известные вводные с оговорками; final_fit — подтвердить окончательную пригодность для покупки.',
+    'В selectionPolicy.requirements вынеси каждое число и ограничение отдельно: kind описывает смысл числа, value/unit — нормализованное значение, relation — must_have, must_not_have, preferred, not_required или context, role — hard_constraint, preference, context или mentioned_only, strictness — strict/preferred/informational, evidence — точная опора в диалоге. Код не будет угадывать роль числа по словам.',
+    'Не путай отсутствие необходимости с запретом. "Автозапуск не нужен" означает relation="not_required" и не исключает модели с автозапуском. Только явный запрет вроде "только без автозапуска" означает relation="must_not_have", role="hard_constraint", strictness="strict" и value=false.',
+    'For every selectionPolicy requirement set verification explicitly. Use {mode:"product_attribute"} when each recommended product itself must expose and satisfy the attribute. Use {mode:"typed_tool",toolRequestId,tool,verifier,bindAs} only when a required typed tool consumes the requirement and produces the deterministic selection constraint.',
+    'Every typed-tool verification must point to a required tool request whose coversRequirementIds contains that exact requirement id. The currently supported derived binding is calculator.generatorLoad with verifier="generator_load_profile" and bindAs="nominal_power_min_kw"; it requires a successful result with a positive payload.profile.requiredNominalKw.',
+    'For that generator-load derived binding, normalize requirement.kind to the stable ontology value "generator_load_scenario", value=true, and unit=null. Keep the concrete loads and operating relationship (including simultaneous running versus simultaneous starting) in evidence and in calculator args; do not invent another typed-derived kind.',
+    'Every toolRequest must include coversRequirementIds; use [] when it does not verify a selection requirement.',
+    'Keep every tool args.comparisonAttributes list to at most 12 distinct decision-relevant attributes. Prioritize the buyer\'s explicit comparison criteria and omit synonyms or low-value duplicates.',
+    'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Total job context such as total layer depth, total work area, total runtime, workpiece size, or total material volume is role="context", relation="context", strictness="informational" unless the buyer explicitly requires the product itself to provide that capability or a verified calculator derives a product minimum. The buyer\'s operating procedure — layer-by-layer work, planned number of passes, work sequence, crew size, carrying/loading method, or intended schedule — is also context unless it explicitly demands a product feature or capability.',
+    'When the buyer gives a measurable maximum weight to operationalize loading or carrying by one or more people, use that weight requirement as the product constraint and keep crew size/loading method as context. Do not duplicate it as a boolean hard product_attribute such as loading_suitability unless the buyer explicitly requires a concrete built-in feature such as transport wheels, a lifting eye, or loading without ramps. If the loading method is unspecified, do not assume manual lifting; a compliant-weight candidate may be shown as preliminary with an honest ramp/loading caveat.',
+    'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
+    'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',
+    'selectionPolicy.reusePreviousCards=true, если прежние карточки могут быть полезны в текущем ходе. Это подсказка для ответа, но не право стереть прежние подтверждённые товары: runtime всё равно добавит их в пул активной потребности и заново проверит против новых требований. maxCards отражает просьбу покупателя о количестве карточек; иначе null. powerSource и phase заполняй только из смысла текущей потребности.',
+    'Всегда заполни leadCaptureAuthorization. authorized=true только когда покупатель в текущем контексте явно просит операционный результат или передачу специалисту и либо дал контакт в текущем сообщении, либо явно разрешил использовать сохранённый контакт. Иначе authorized=false, contactSource=none, purpose/evidence=null. Сам факт, что в истории есть телефон, не является согласием на новую заявку.',
+    'Always return every leadCaptureAuthorization field. When unauthorized, use contactSource="none" and set purpose, buyerQuestion, evidence, and pendingDraftId to null.',
+    'When leadCaptureAuthorization.authorized=true, buyerQuestion must be an exact contiguous quote copied from a buyer message in history that states the technical or commercial result being requested. Do not replace it with a contact-only reply such as a phone number or a name when an earlier business question is available.',
+    'If pendingLeadCaptureDraft is present and the current reply semantically continues that same handoff by providing a missing name/contact detail or contact preference, use contactSource="pending_draft", copy its id to pendingDraftId, preserve its purpose and buyerQuestion exactly, and plan lead.capture. Copy a supplied name verbatim into args.contact.name and normalize the preferred method only as "message" or "call". Do not consume a pending draft when the buyer changes topic, declines the handoff, or starts a different request.',
+    'A proven hard-constraint conflict remains fail-closed and must not be shown as a match. Missing catalog evidence is not a conflict: do not downgrade a real hard constraint, but plan web.researchProductFacts before suppressing a plausible catalog candidate or escalating to a specialist. For preliminary_fit, preserve candidates without a proven conflict and describe the exact unconfirmed fact truthfully.',
+    'When leadCaptureAuthorization.authorized=true, evidence must be an exact contiguous quote copied from the current buyer message. For contactSource=current_message the quote must contain the actual phone/email; for existing_session it must contain the buyer’s current permission/request to reuse the saved contact. Never put contact data into tool args as a substitute for this authorization evidence.',
+    'Для каждого catalog/calculator/web tool продублируй свободный productIntent и, когда применимо, canonicalProductIntent, powerSource и phase из selectionPolicy. Не подменяй незнакомый класс ближайшим известным классом.',
+    'Выбери policyRuleIds по смыслу текущего хода только из кодов правил в SALES POLICY выше. Обязательные правила применяются всегда и могут не дублироваться в policyRuleIds.',
+    'Если grounding.sourcePolicy="web_required" или requiredToolKinds содержит web.researchProductFacts, toolRequests обязан содержать web.researchProductFacts. Если named model нет, это все равно общий technical web grounding: productNames=[], query/semanticQuery = смысл вопроса, comparisonAttributes = запрошенные технические факты.',
+    'Для доставки, наличия, скидок, сроков и индивидуальных условий не обещай точный результат: планируй lead.capture/offer form, если нужен контакт.',
+    'Для сравнения товаров и нехватки важных фактов планируй web.researchProductFacts.',
+    'Для подбора товара планируй catalog.search.',
+    'For product_selection that depends on technical suitability not fully guaranteed by ordinary catalog fields, plan catalog.search first and web.researchProductFacts second in the same turn. Keep productNames empty when candidates are not known yet: the web tool will research products discovered by the preceding catalog tool. Do not choose specialist_required while catalog or web research can still answer the question.',
+    'If previous visible product cards become unsuitable after the buyer narrows or corrects the need, plan a fresh catalog.search in the same product class instead of only explaining that the old cards do not fit. The answer should reject the old cards by reason and use the new catalog results as replacement cards when available.',
+    'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
+    'Set calculator.generatorLoad args.simultaneousStarting=true only when the loads may start at the same moment. Loads that merely run simultaneously must still be included in the same calculation, but do not imply simultaneousStarting=true.',
+    'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
+    'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
+    'Fill productMentions for every named product, model, brand-model, or equipment item in the current buyer turn. Classify its semantic role: target_product when the buyer wants to buy/check that exact product; catalog_candidate for a product alternative being considered; comparison_subject for products being compared; context_load_device when it is only a consumer/load/device used to size or apply another product; compatibility_context when it is only equipment that the target product must work with; mentioned_only when no action is needed.',
+    'Do not put context_load_device or compatibility_context names into web.researchProductFacts args.productNames. Example: in "нужен генератор для котла Baxi 24 и насоса 1,1 кВт", Baxi 24 is context_load_device, not a BAKAUT catalog target, so do not report that Baxi 24 is absent from our catalog. The target product class is the generator.',
+    'Only target_product, catalog_candidate, and comparison_subject roles should drive exact target catalog presence, exact model web research, or nearby catalog alternatives.',
+    'For a general technical question, answer from engineering knowledge only when the buyer did not ask for verification. When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding, set grounding.sourcePolicy="web_required", grounding.taskType="technical_answer", grounding.webPurpose="technical_specs", add "web.researchProductFacts" to grounding.requiredToolKinds, and plan web.researchProductFacts even without a named model: keep args.productNames empty, put the buyer question in query and semanticQuery, and put the requested technical attributes in comparisonAttributes.',
+    'When the buyer names a different exact model in the current turn, do not reuse technical facts from a previous model even if the buyer says "same". Plan current-turn evidence for the newly named model unless ledger/tool evidence is already scoped to that exact same model identifier.',
+    'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search for browse_catalog, preliminary_fit, or final_fit whenever the buyer asks to see products or prices. Missing final-fit evidence may lower confidence but is not permission to hide the catalog.',
+    'For multi-turn generator selection, do not run catalog.search alone when history contains a previous load estimate, a prior generator sizing answer, or enough load facts to calculate. Re-run calculator.generatorLoad in the current turn before catalog.search so the current tool results carry payload.profile.requiredNominalKw and weak products can be filtered.',
+    'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit, checked, or bounded estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
+    'For calculator.generatorLoad, set args.estimateBasis: "exact_or_user_provided" for explicit powers, "catalog_or_web_fact" for checked facts, "bounded_assumption" when the buyer wants an approximate selection and the unknown load is bounded by type/function/scenario, or "unbounded_guess" when only vague load names are known.',
+    'For calculator.generatorLoad, do not omit a known relevant consumer just because its exact power is missing. If the consumer is important and only its broad name is known, include it with null kW and an incomplete basis; if its concrete type/function plus voltage or phase is known and the buyer asks for preliminary variants, include a conservative numeric bounded_assumption instead of pretending the remaining explicit loads are the whole system.',
+    'For every calculator.generatorLoad load item, set basisKind: exact_power for explicit nameplate or user kW, checked_fact for catalog or web facts, specific_type_or_function when an estimated load is bounded by a concrete type, function, or scenario, generic_load_name when only a broad name such as pump, compressor, or tool is known, and unknown when the load source itself is unclear.',
+    'For every calculator.generatorLoad load item, set basisSignals from dialogue/tool facts only. Do not set basisKind=specific_type_or_function merely because a broad load class is named; "pump" alone is generic_load_name, while a borehole pump, drainage pump, circulation pump, irrigation pump, or a pump function/scenario can be specific_type_or_function.',
+    'For a motor load estimate such as a pump/compressor/pressure washer, bounded_assumption requires basisKind=specific_type_or_function plus consumer_type_known or consumer_function_known and voltage_or_phase_known; otherwise use unbounded_guess and ask one minimal question.',
+    'For bounded_assumption, every estimated_average load that should affect the generator calculation must include numeric runningKw or startingKw. A load with null kW is only a missing fact and will not be counted by the calculator.',
+    'For a bounded unknown load, use source="estimated_average" with numeric runningKw and startingKw; do not use source="explicit_user" for a load whose kW was not explicitly provided.',
+    'When the buyer asks for preliminary generator variants and the context identifies a specific motor/function plus voltage or phase, supply conservative numeric estimates for that bounded load and preserve the exact nameplate/model as a missing fact.',
+    'When the buyer asks for preliminary generator variants after naming a borehole/deep-well/circulation/drainage pump plus voltage or phase, treat that pump as a bounded motor load for preliminary sizing. Do not return estimateBasis="exact_or_user_provided" unless every relevant load that affects sizing has exact or checked power.',
+    'Use canonical load kinds in args.loads.kind such as pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop, or unknown_load; put descriptive wording in name/evidence, not in kind.',
+    'For unknown load sources, ask the minimum useful question before exact selection: identify what the consumer does, its type/class, voltage/phase, and simultaneous operation only as needed for the current calculation.',
+    'For preliminary_fit, do not claim technical fit when the only load basis is an unbounded guess; ask for the missing type/function/scenario. For browse_catalog, however, an unbounded load calculation must not block a buyer request to see a stated power range, models, or prices—show catalog candidates without claiming final compatibility.',
+    'If the buyer asks for preliminary minimum/reserve variants after enough load context exists for a bounded estimate, plan both calculator.generatorLoad and catalog.search; if the load context is too vague for any useful selection, plan clarification instead of catalog.search.',
+    'Не задавай вопрос, ответ на который уже есть в ledger.'
+  ].join('\n');
+}
+
+export class OpenAIAgentManagerModel implements AgentManagerModel {
+  async understandTurn(input: AgentManagerModelInput): Promise<AgentManagerTurnUnderstanding> {
+    const request = {
+      model: config.OPENAI_PLANNER_MODEL,
+      reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
+      max_output_tokens: config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
+      input: [
+        {
+          role: 'system',
+          content: [
+            'Ты одновременно state-reducer и планировщик AI менеджера БАКАУТ.',
+            untrustedEvidenceBoundary,
+            'Верни один JSON agent_turn_understanding с двумя независимыми полями: ledgerDelta и intentContract.',
+            'Сначала семантически вычисли ledgerDelta по правилам reducer. Затем мысленно примени этот delta к existingState и планируй intentContract уже по обновлённому состоянию.',
+            'Правила ledgerDelta:',
+            ledgerReducerPolicyPromptBlock(),
+            'Правила intentContract:',
+            plannerSystemPromptBlock(),
+            'Не смешивай два контракта: ledgerDelta содержит только события памяти, intentContract содержит только план, grounding и typed tool requests. Не пиши ответ покупателю.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            userMessage: input.userMessage,
+            history: compactHistory(input.history),
+            existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
+            existingLedger: input.ledgerEvents.slice(-80),
+            pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null
+          })
+        }
+      ],
+      text: combinedUnderstandingFormat
+    };
+    const { parsed } = await createStructuredJsonResponse({
+      request,
+      stage: 'agent_turn_understanding',
+      signal: input.signal
+    });
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('agent_turn_understanding_invalid_wrapper');
+    }
+    const understanding = parsed as Record<string, unknown>;
+    return {
+      ledgerDelta: understanding.ledgerDelta,
+      intentContract: understanding.intentContract
+    };
+  }
+
   async proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta> {
     const request = {
       model: config.OPENAI_PLANNER_MODEL,
@@ -3565,12 +3898,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Ты state-reducer AI менеджера БАКАУТ.',
             untrustedEvidenceBoundary,
             'Твоя задача: понять текущую реплику покупателя и историю, затем вернуть только JSON LedgerStateDelta.',
-            'Не переносишь контекст из других диалогов. Не добавляешь выдуманные факты.',
-            'Веди несколько потребностей явно. Для новой темы создай need.opened с payload needId, productClass, summary, constraints, openQuestions, selectedProductIds, rejectedProductIds, status и activate=true. Для продолжения, исправления или возврата к теме используй need.updated с тем же needId; activate=true ставит эту потребность текущей, а прежнюю reducer поставит на паузу.',
-            'Для закрытой потребности создай need.closed с needId. Не смешивай факты разных needId.',
-            'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass и role: hard_requirement, preference, context или commercial. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
-            'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
-            'Если покупатель изменил вводные, создай новый fact.confirmed и укажи supersedesEventIds для старого факта, если он известен.',
+            ledgerReducerPolicyPromptBlock(),
             'Не пиши ответ покупателю.'
           ].join('\n')
         },
@@ -3591,7 +3919,6 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
   }
 
   async planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract> {
-    const managerPolicy = salesManagerPlannerPolicyPromptBlock();
     const request = {
       model: config.OPENAI_PLANNER_MODEL,
       reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
@@ -3599,73 +3926,15 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
       input: [
         {
           role: 'system',
-          content: [
-            'Ты планировщик AI менеджера БАКАУТ.',
-            untrustedEvidenceBoundary,
-            managerPolicy,
-            'LLM решает смысл хода без фиксированного списка сценариев.',
-            'Код только исполнит typed tools, но не будет подменять твой смысл.',
-            'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, requiredToolKinds, technicalAttributes и rationale. Затем toolRequests должны исполнять эту grounding-политику.',
-            'Всегда заполни selectionPolicy семантически. targetProductClass — свободное человеческое название класса товара, поэтому незнакомый класс не своди к unknown. canonicalProductClass укажи только когда он точно входит в известную кодовую онтологию; иначе null.',
-            'Known canonicalProductClass values are generator, weldingGenerator, generatorOil, engineOil, generatorAccessory, plateAccessory, plate, rammer, roller, cutter, diamondBlade, diamondCore, trowel, and unknown. Use plate for a vibration plate / виброплита; use unknown only for a genuinely unfamiliar class, and use null only when the free target class is outside this ontology.',
-            'Всегда задай selectionPolicy.selectionGoal: browse_catalog — показать ассортимент/цены без обещания совместимости; preliminary_fit — предварительно подобрать под известные вводные с оговорками; final_fit — подтвердить окончательную пригодность для покупки.',
-            'В selectionPolicy.requirements вынеси каждое число и ограничение отдельно: kind описывает смысл числа, value/unit — нормализованное значение, relation — must_have, must_not_have, preferred, not_required или context, role — hard_constraint, preference, context или mentioned_only, strictness — strict/preferred/informational, evidence — точная опора в диалоге. Код не будет угадывать роль числа по словам.',
-            'Не путай отсутствие необходимости с запретом. "Автозапуск не нужен" означает relation="not_required" и не исключает модели с автозапуском. Только явный запрет вроде "только без автозапуска" означает relation="must_not_have", role="hard_constraint", strictness="strict" и value=false.',
-            'For every selectionPolicy requirement set verification explicitly. Use {mode:"product_attribute"} when each recommended product itself must expose and satisfy the attribute. Use {mode:"typed_tool",toolRequestId,tool,verifier,bindAs} only when a required typed tool consumes the requirement and produces the deterministic selection constraint.',
-            'Every typed-tool verification must point to a required tool request whose coversRequirementIds contains that exact requirement id. The currently supported derived binding is calculator.generatorLoad with verifier="generator_load_profile" and bindAs="nominal_power_min_kw"; it requires a successful result with a positive payload.profile.requiredNominalKw.',
-            'For that generator-load derived binding, normalize requirement.kind to the stable ontology value "generator_load_scenario", value=true, and unit=null. Keep the concrete loads and operating relationship (including simultaneous running versus simultaneous starting) in evidence and in calculator args; do not invent another typed-derived kind.',
-            'Every toolRequest must include coversRequirementIds; use [] when it does not verify a selection requirement.',
-            'Keep every tool args.comparisonAttributes list to at most 12 distinct decision-relevant attributes. Prioritize the buyer\'s explicit comparison criteria and omit synonyms or low-value duplicates.',
-            'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Total job context such as total layer depth, total work area, total runtime, workpiece size, or total material volume is role="context", relation="context", strictness="informational" unless the buyer explicitly requires the product itself to provide that capability or a verified calculator derives a product minimum. The buyer\'s operating procedure — layer-by-layer work, planned number of passes, work sequence, crew size, carrying/loading method, or intended schedule — is also context unless it explicitly demands a product feature or capability.',
-            'When the buyer gives a measurable maximum weight to operationalize loading or carrying by one or more people, use that weight requirement as the product constraint and keep crew size/loading method as context. Do not duplicate it as a boolean hard product_attribute such as loading_suitability unless the buyer explicitly requires a concrete built-in feature such as transport wheels, a lifting eye, or loading without ramps. If the loading method is unspecified, do not assume manual lifting; a compliant-weight candidate may be shown as preliminary with an honest ramp/loading caveat.',
-            'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
-            'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',
-            'selectionPolicy.reusePreviousCards=true, если прежние карточки могут быть полезны в текущем ходе. Это подсказка для ответа, но не право стереть прежние подтверждённые товары: runtime всё равно добавит их в пул активной потребности и заново проверит против новых требований. maxCards отражает просьбу покупателя о количестве карточек; иначе null. powerSource и phase заполняй только из смысла текущей потребности.',
-            'Всегда заполни leadCaptureAuthorization. authorized=true только когда покупатель в текущем контексте явно просит операционный результат или передачу специалисту и либо дал контакт в текущем сообщении, либо явно разрешил использовать сохранённый контакт. Иначе authorized=false, contactSource=none, purpose/evidence=null. Сам факт, что в истории есть телефон, не является согласием на новую заявку.',
-            'A proven hard-constraint conflict remains fail-closed and must not be shown as a match. Missing catalog evidence is not a conflict: do not downgrade a real hard constraint, but plan web.researchProductFacts before suppressing a plausible catalog candidate or escalating to a specialist. For preliminary_fit, preserve candidates without a proven conflict and describe the exact unconfirmed fact truthfully.',
-            'When leadCaptureAuthorization.authorized=true, evidence must be an exact contiguous quote copied from the current buyer message. For contactSource=current_message the quote must contain the actual phone/email; for existing_session it must contain the buyer’s current permission/request to reuse the saved contact. Never put contact data into tool args as a substitute for this authorization evidence.',
-            'Для каждого catalog/calculator/web tool продублируй свободный productIntent и, когда применимо, canonicalProductIntent, powerSource и phase из selectionPolicy. Не подменяй незнакомый класс ближайшим известным классом.',
-            'Выбери policyRuleIds по смыслу текущего хода только из кодов правил в SALES POLICY выше. Обязательные правила применяются всегда и могут не дублироваться в policyRuleIds.',
-            'Если grounding.sourcePolicy="web_required" или requiredToolKinds содержит web.researchProductFacts, toolRequests обязан содержать web.researchProductFacts. Если named model нет, это все равно общий technical web grounding: productNames=[], query/semanticQuery = смысл вопроса, comparisonAttributes = запрошенные технические факты.',
-            'Для доставки, наличия, скидок, сроков и индивидуальных условий не обещай точный результат: планируй lead.capture/offer form, если нужен контакт.',
-            'Для сравнения товаров и нехватки важных фактов планируй web.researchProductFacts.',
-            'Для подбора товара планируй catalog.search.',
-            'For product_selection that depends on technical suitability not fully guaranteed by ordinary catalog fields, plan catalog.search first and web.researchProductFacts second in the same turn. Keep productNames empty when candidates are not known yet: the web tool will research products discovered by the preceding catalog tool. Do not choose specialist_required while catalog or web research can still answer the question.',
-            'If previous visible product cards become unsuitable after the buyer narrows or corrects the need, plan a fresh catalog.search in the same product class instead of only explaining that the old cards do not fit. The answer should reject the old cards by reason and use the new catalog results as replacement cards when available.',
-            'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
-            'Set calculator.generatorLoad args.simultaneousStarting=true only when the loads may start at the same moment. Loads that merely run simultaneously must still be included in the same calculation, but do not imply simultaneousStarting=true.',
-            'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
-            'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
-            'Fill productMentions for every named product, model, brand-model, or equipment item in the current buyer turn. Classify its semantic role: target_product when the buyer wants to buy/check that exact product; catalog_candidate for a product alternative being considered; comparison_subject for products being compared; context_load_device when it is only a consumer/load/device used to size or apply another product; compatibility_context when it is only equipment that the target product must work with; mentioned_only when no action is needed.',
-            'Do not put context_load_device or compatibility_context names into web.researchProductFacts args.productNames. Example: in "нужен генератор для котла Baxi 24 и насоса 1,1 кВт", Baxi 24 is context_load_device, not a BAKAUT catalog target, so do not report that Baxi 24 is absent from our catalog. The target product class is the generator.',
-            'Only target_product, catalog_candidate, and comparison_subject roles should drive exact target catalog presence, exact model web research, or nearby catalog alternatives.',
-            'For a general technical question, answer from engineering knowledge only when the buyer did not ask for verification. When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding, set grounding.sourcePolicy="web_required", grounding.taskType="technical_answer", grounding.webPurpose="technical_specs", add "web.researchProductFacts" to grounding.requiredToolKinds, and plan web.researchProductFacts even without a named model: keep args.productNames empty, put the buyer question in query and semanticQuery, and put the requested technical attributes in comparisonAttributes.',
-            'When the buyer names a different exact model in the current turn, do not reuse technical facts from a previous model even if the buyer says "same". Plan current-turn evidence for the newly named model unless ledger/tool evidence is already scoped to that exact same model identifier.',
-            'For generator selection, decide tool order semantically: use calculator.generatorLoad when load sizing is needed, and add catalog.search for browse_catalog, preliminary_fit, or final_fit whenever the buyer asks to see products or prices. Missing final-fit evidence may lower confidence but is not permission to hide the catalog.',
-            'For multi-turn generator selection, do not run catalog.search alone when history contains a previous load estimate, a prior generator sizing answer, or enough load facts to calculate. Re-run calculator.generatorLoad in the current turn before catalog.search so the current tool results carry payload.profile.requiredNominalKw and weak products can be filtered.',
-            'For calculator.generatorLoad, fill args.loads with structured load items only when the dialogue gives a defensible explicit, checked, or bounded estimated basis; the runtime will not infer pump/fridge/tool loads from raw text.',
-            'For calculator.generatorLoad, set args.estimateBasis: "exact_or_user_provided" for explicit powers, "catalog_or_web_fact" for checked facts, "bounded_assumption" when the buyer wants an approximate selection and the unknown load is bounded by type/function/scenario, or "unbounded_guess" when only vague load names are known.',
-            'For calculator.generatorLoad, do not omit a known relevant consumer just because its exact power is missing. If the consumer is important and only its broad name is known, include it with null kW and an incomplete basis; if its concrete type/function plus voltage or phase is known and the buyer asks for preliminary variants, include a conservative numeric bounded_assumption instead of pretending the remaining explicit loads are the whole system.',
-            'For every calculator.generatorLoad load item, set basisKind: exact_power for explicit nameplate or user kW, checked_fact for catalog or web facts, specific_type_or_function when an estimated load is bounded by a concrete type, function, or scenario, generic_load_name when only a broad name such as pump, compressor, or tool is known, and unknown when the load source itself is unclear.',
-            'For every calculator.generatorLoad load item, set basisSignals from dialogue/tool facts only. Do not set basisKind=specific_type_or_function merely because a broad load class is named; "pump" alone is generic_load_name, while a borehole pump, drainage pump, circulation pump, irrigation pump, or a pump function/scenario can be specific_type_or_function.',
-            'For a motor load estimate such as a pump/compressor/pressure washer, bounded_assumption requires basisKind=specific_type_or_function plus consumer_type_known or consumer_function_known and voltage_or_phase_known; otherwise use unbounded_guess and ask one minimal question.',
-            'For bounded_assumption, every estimated_average load that should affect the generator calculation must include numeric runningKw or startingKw. A load with null kW is only a missing fact and will not be counted by the calculator.',
-            'For a bounded unknown load, use source="estimated_average" with numeric runningKw and startingKw; do not use source="explicit_user" for a load whose kW was not explicitly provided.',
-            'When the buyer asks for preliminary generator variants and the context identifies a specific motor/function plus voltage or phase, supply conservative numeric estimates for that bounded load and preserve the exact nameplate/model as a missing fact.',
-            'When the buyer asks for preliminary generator variants after naming a borehole/deep-well/circulation/drainage pump plus voltage or phase, treat that pump as a bounded motor load for preliminary sizing. Do not return estimateBasis="exact_or_user_provided" unless every relevant load that affects sizing has exact or checked power.',
-            'Use canonical load kinds in args.loads.kind such as pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop, or unknown_load; put descriptive wording in name/evidence, not in kind.',
-            'For unknown load sources, ask the minimum useful question before exact selection: identify what the consumer does, its type/class, voltage/phase, and simultaneous operation only as needed for the current calculation.',
-            'For preliminary_fit, do not claim technical fit when the only load basis is an unbounded guess; ask for the missing type/function/scenario. For browse_catalog, however, an unbounded load calculation must not block a buyer request to see a stated power range, models, or prices—show catalog candidates without claiming final compatibility.',
-            'If the buyer asks for preliminary minimum/reserve variants after enough load context exists for a bounded estimate, plan both calculator.generatorLoad and catalog.search; if the load context is too vague for any useful selection, plan clarification instead of catalog.search.',
-            'Не задавай вопрос, ответ на который уже есть в ledger.'
-          ].join('\n')
+          content: plannerSystemPromptBlock()
         },
         {
           role: 'user',
           content: JSON.stringify({
             userMessage: input.userMessage,
             history: compactHistory(input.history),
-            ledger: compactLedger(input.ledgerState)
+            ledger: compactLedger(input.ledgerState),
+            pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null
           })
         }
       ],
@@ -3785,7 +4054,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Проверь только по фактам ledger/toolResults/products.',
             'Блокируй или требуй rewrite, если ответ спрашивает уже известное, обещает непроверенное наличие/доставку/скидку/срок, противоречит текущему диалогу или просит повторить контакт, который уже есть.',
             'Interpret contact requests and lead/commercial confirmations semantically, not by a phrase list. If currentUserMessage already contains the requested phone/email/name, rewrite any unnecessary request to provide it again. A missing name may still be requested when only a phone/email was provided.',
-            'A claim that a request, callback, or lead was registered is allowed only when lead.capture has status=ok. A claim that stock, delivery, discount, deadline, or special terms are confirmed is allowed only with an exact successful evidence source; otherwise rewrite as a verification/handoff offer.',
+            'A claim that a request, callback, or lead was registered is allowed only when lead.capture has status=ok and its payload proves durable dispatch with outbox=true, status="queued", and a non-empty outboxId. A claim that stock, delivery, discount, deadline, or special terms are confirmed is allowed only with an exact successful evidence source; otherwise rewrite as a verification/handoff offer.',
             'For every catalog product named or recommended in answerText, independently compare every stated price, power, weight, dimension, capacity, noise value, phase and other specification against the exact products payload. factsUsed=[] is not an exemption. If any value is absent or differs, require a rewrite that uses the exact supported value or removes the unsupported claim.',
             'For calculator.generatorLoad, block or rewrite any answer that states a calculated minimum inconsistent with payload.profile.requiredNominalKw/requiredStartingKw.',
             'For generator answers, require rewrite if products are presented as preliminary/final technical fits while tool results include generator_load_estimate_only, generator_load_unbounded_guess, or generator_load_invalid_load_kind. Do not reject validated catalog browsing or prices for selectionGoal=browse_catalog merely because load fit is still unknown.',
@@ -3803,7 +4072,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For catalog selection answers, require rewrite if answerText names a catalog recommendation or brand-model that is absent from products[].name, or if it names a returned product that is not strong enough to be a visible recommendation candidate.',
             'For a catalog narrowing continuation where products are available from current or previous visible cards, require rewrite if the answer claims it cannot show concrete models due to missing fresh catalog data or asks for a lead form instead of using those product facts.',
             'For a catalog-selection or grounded recommendation turn, the top-level products array is the authoritative mechanically validated recommendation set. Raw catalog tool success or raw productIds do not make a product safe. Missing evidence must not be rewritten as incompatibility. If catalog evidence is incomplete, require web research before a no-card or specialist answer; when no hard conflict is proven and the checked evidence supports orientation, allow a clearly preliminary recommendation with the exact remaining uncertainty. Only after research is exhausted may a no-card answer preserve verified facts, name the concrete unconfirmed fact, and offer technical follow-up without re-asking known facts.',
-            'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion. This prohibition does not apply to the exact technical follow-up required by web_research_unavailable_grounding after a required search attempt fails: in that case require the useful preliminary conclusion, exact unconfirmed fact, technical follow-up offer, phone request, message-or-call choice, leadAction="offer_form", and no false claim that handoff already happened.',
+            'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion. Only web_research_exhausted_grounding with sourcesExhausted=true permits the technical follow-up offer, phone request, message-or-call choice, and leadAction="offer_form". A failed, timed-out, aborted, or budget-skipped search must not be described as exhausted and must not trigger handoff by itself.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
             'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
@@ -3905,6 +4174,30 @@ export class AgentManagerOrchestrator {
   }
 
   async recoverTurn(input: AgentManagerRecoverInput): Promise<ChatResponsePayload> {
+    const initialSession = await this.conversations.getSession(input.sessionId);
+    if (!initialSession || initialSession.status !== 'active') throw new Error('Conversation session is not active');
+    const alreadyCompleted = await this.completedPayload(initialSession, input.turnId, input.onDelta);
+    if (alreadyCompleted) return alreadyCompleted;
+    const alreadyCommitted = await this.completedFromFinalAnswerContract(
+      initialSession,
+      input.turnId,
+      true,
+      input.onDelta
+    );
+    if (alreadyCommitted) return alreadyCommitted;
+
+    const repository = this.conversations as ConversationRepository & {
+      beginRecoveryAttempt?: ConversationRepository['beginRecoveryAttempt'];
+    };
+    if (typeof repository.beginRecoveryAttempt === 'function') {
+      const claimed = await repository.beginRecoveryAttempt.call(this.conversations, {
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        maxAttempts: 1
+      });
+      if (!claimed) throw new RecoveryAttemptUnavailableError();
+    }
+
     const startedAt = Date.now();
     while (true) {
       const session = await this.conversations.getSession(input.sessionId);
@@ -4022,6 +4315,15 @@ export class AgentManagerOrchestrator {
       upsertVerifiedWebFact?: ProductRepository['upsertVerifiedWebFact'];
     };
     return repo;
+  }
+
+  private async loadPendingLeadCaptureDraft(sessionId: string) {
+    const repository = this.leads as LeadRepository & {
+      getPendingLeadCaptureDraft?: LeadRepository['getPendingLeadCaptureDraft'];
+    };
+    return typeof repository.getPendingLeadCaptureDraft === 'function'
+      ? repository.getPendingLeadCaptureDraft.call(this.leads, sessionId)
+      : null;
   }
 
   private async researchFromVerifiedFactMemory(input: {
@@ -4148,6 +4450,12 @@ export class AgentManagerOrchestrator {
     if (completed) return completed;
 
     const ownerId = randomUUID();
+    const persistedTurn = await this.conversations.getTurn(input.sessionId, input.turnId);
+    if (!persistedTurn) throw new Error('Conversation turn not found');
+    const persistedDeadlineAtMs = persistedTurn.deadlineAt ? Date.parse(persistedTurn.deadlineAt) : Number.NaN;
+    const leaseMs = Number.isFinite(persistedDeadlineAtMs)
+      ? Math.max(1_000, persistedDeadlineAtMs - Date.now())
+      : DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs + TURN_TERMINAL_RESERVE_MS;
     const leaseRepository = this.conversations as ConversationRepository & {
       claimTurnExecution?: ConversationRepository['claimTurnExecution'];
       releaseTurnExecution?: ConversationRepository['releaseTurnExecution'];
@@ -4158,7 +4466,7 @@ export class AgentManagerOrchestrator {
           sessionId: input.sessionId,
           turnId: input.turnId,
           ownerId,
-          leaseMs: 150_000
+          leaseMs
         }));
     if (!leaseClaimed) {
       const completedAfterCollision = await this.completedPayload(input.session, input.turnId, input.onDelta);
@@ -4201,8 +4509,32 @@ export class AgentManagerOrchestrator {
     turnId: string;
     recovered: boolean;
   }): Promise<ChatResponsePayload> {
-    const turnBudget = new AgentManagerTurnBudget();
-    const wallTimeSignal = turnBudget.createWallTimeAbortSignal();
+    const persistedTurn = await this.conversations.getTurn(input.sessionId, input.turnId);
+    const persistedDeadlineAtMs = persistedTurn?.deadlineAt ? Date.parse(persistedTurn.deadlineAt) : Number.NaN;
+    const absoluteWorkDeadlineAtMs = Number.isFinite(persistedDeadlineAtMs)
+      ? persistedDeadlineAtMs - TURN_TERMINAL_RESERVE_MS
+      : undefined;
+    const turnBudget = new AgentManagerTurnBudget(
+      DEFAULT_AGENT_MANAGER_TURN_LIMITS,
+      Date.now,
+      absoluteWorkDeadlineAtMs
+    );
+    let wallTimeSignal: AbortSignal;
+    try {
+      wallTimeSignal = turnBudget.createWallTimeAbortSignal();
+    } catch (error) {
+      if (error instanceof AgentManagerTurnBudgetExceededError) {
+        return this.completeTerminalTurn({
+          session: input.session,
+          turnId: input.turnId,
+          recovered: input.recovered,
+          onDelta: input.onDelta,
+          reason: 'turn_work_deadline_exhausted_before_execution',
+          deadlineAt: persistedTurn?.deadlineAt ?? null
+        });
+      }
+      throw error;
+    }
     const signal = input.signal
       ? AbortSignal.any([input.signal, wallTimeSignal])
       : wallTimeSignal;
@@ -4227,7 +4559,14 @@ export class AgentManagerOrchestrator {
           return null;
         });
         if (committed) return committed;
-        throw new AgentManagerTurnBudgetExceededError('wall_time_budget_exceeded');
+        return this.completeTerminalTurn({
+          session: input.session,
+          turnId: input.turnId,
+          recovered: input.recovered,
+          onDelta: input.onDelta,
+          reason: 'turn_work_deadline_exhausted',
+          deadlineAt: persistedTurn?.deadlineAt ?? null
+        });
       }
       throw error;
     }
@@ -4292,14 +4631,61 @@ export class AgentManagerOrchestrator {
     }
     if (!userMessage.trim()) throw new Error('Cannot recover turn without saved user message');
 
+    const pendingLeadCaptureDraft = await this.loadPendingLeadCaptureDraft(input.sessionId);
+    const pendingLeadDraftContext = pendingLeadCaptureDraftContext(pendingLeadCaptureDraft);
+    if (pendingLeadCaptureDraft) {
+      await this.trace(input.sessionId, input.turnId, 'lead', 'lead_capture_draft_loaded', {
+        draftId: pendingLeadCaptureDraft.id,
+        scopeHash: pendingLeadCaptureDraft.scopeHash,
+        hasName: Boolean(pendingLeadCaptureDraft.name),
+        hasPhone: Boolean(pendingLeadCaptureDraft.phone),
+        hasEmail: Boolean(pendingLeadCaptureDraft.email),
+        preferredContact: pendingLeadCaptureDraft.preferredContact ?? null,
+        expiresAt: pendingLeadCaptureDraft.expiresAt
+      });
+    }
+
     const ledgerContext = await this.loadDialogueLedgerContext(input.sessionId);
     const ledgerEvents = ledgerContext.events;
 
     const savedDelta = succeededCheckpoint(persistedExecution.checkpoints, 'ledger_delta_proposed');
+    const intentCheckpoint = succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_created');
+    const savedIntent = intentCheckpoint.found
+      ? intentCheckpoint
+      : turn?.plannerContract
+        ? { found: true, payload: turn.plannerContract }
+        : { found: false, payload: undefined };
+    let combinedUnderstanding: AgentManagerTurnUnderstanding | undefined;
+    if (!savedDelta.found && !savedIntent.found && typeof this.model.understandTurn === 'function') {
+      turnBudget.consumeModelCall();
+      combinedUnderstanding = await this.model.understandTurn({
+        session: input.session,
+        history,
+        userMessage,
+        ledgerEvents,
+        ledgerState: ledgerContext.state,
+        pendingLeadCaptureDraft: pendingLeadDraftContext,
+        signal: input.signal
+      });
+      await this.trace(input.sessionId, input.turnId, 'intent', 'combined_understanding_created', {
+        pendingLeadCaptureDraft: Boolean(pendingLeadDraftContext)
+      });
+    }
+    const combinedDeltaParse = combinedUnderstanding
+      ? LedgerStateDeltaSchema.safeParse(combinedUnderstanding.ledgerDelta)
+      : undefined;
+    const parsedCombinedDelta = combinedDeltaParse?.success ? combinedDeltaParse.data : undefined;
     let delta: LedgerStateDelta;
     if (savedDelta.found) {
       delta = LedgerStateDeltaSchema.parse(savedDelta.payload);
+    } else if (parsedCombinedDelta) {
+      delta = parsedCombinedDelta;
     } else {
+      if (combinedDeltaParse?.success === false) {
+        await this.trace(input.sessionId, input.turnId, 'ledger', 'combined_ledger_delta_rejected', {
+          issueCount: combinedDeltaParse.error.issues.length
+        });
+      }
       turnBudget.consumeModelCall();
       delta = await this.model.proposeLedgerDelta({
         session: input.session,
@@ -4307,6 +4693,7 @@ export class AgentManagerOrchestrator {
         userMessage,
         ledgerEvents,
         ledgerState: ledgerContext.state,
+        pendingLeadCaptureDraft: pendingLeadDraftContext,
         signal: input.signal
       });
     }
@@ -4369,16 +4756,14 @@ export class AgentManagerOrchestrator {
       recentEvents: effectiveLedgerEvents,
       needState: needStateSnapshot
     });
-    const intentCheckpoint = succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_created');
-    const savedIntent = intentCheckpoint.found
-      ? intentCheckpoint
-      : turn?.plannerContract
-        ? { found: true, payload: turn.plannerContract }
-        : { found: false, payload: undefined };
     const savedIntentParse = savedIntent.found
       ? AgentIntentContractSchema.safeParse(savedIntent.payload)
       : undefined;
     const parsedSavedIntent = savedIntentParse?.success ? savedIntentParse.data : undefined;
+    const combinedIntentParse = combinedUnderstanding && combinedDeltaParse?.success !== false
+      ? AgentIntentContractSchema.safeParse(combinedUnderstanding.intentContract)
+      : undefined;
+    const parsedCombinedIntent = combinedIntentParse?.success ? combinedIntentParse.data : undefined;
     const legacyIntentUpgraded = Boolean(savedIntent.found && (
       savedIntentParse?.success === false || !parsedSavedIntent?.selectionPolicy
     ));
@@ -4386,7 +4771,12 @@ export class AgentManagerOrchestrator {
     let plannedIntent: AgentIntentContract;
     if (parsedSavedIntent && !legacyIntentUpgraded) {
       plannedIntent = parsedSavedIntent;
+    } else if (parsedCombinedIntent) {
+      plannedIntent = parsedCombinedIntent;
     } else {
+      if (combinedUnderstanding && combinedDeltaParse?.success === false) {
+        await this.trace(input.sessionId, input.turnId, 'intent', 'combined_intent_discarded_after_ledger_rejection', {});
+      }
       turnBudget.consumeModelCall();
       plannedIntent = await this.model.planTurn({
         session: input.session,
@@ -4394,8 +4784,14 @@ export class AgentManagerOrchestrator {
         userMessage,
         ledgerEvents: effectiveLedgerEvents,
         ledgerState,
+        pendingLeadCaptureDraft: pendingLeadDraftContext,
         signal: input.signal
       });
+      if (combinedIntentParse?.success === false) {
+        await this.trace(input.sessionId, input.turnId, 'intent', 'combined_intent_rejected', {
+          issueCount: combinedIntentParse.error.issues.length
+        });
+      }
     }
     const plannedReuseProductIds = currentNeedSelectedProductIds(needStateSnapshot);
     const plannedReuseIntent = coerceVisibleCardIntent(plannedIntent.selectionPolicy?.canonicalProductClass);
@@ -4539,6 +4935,7 @@ export class AgentManagerOrchestrator {
       history,
       intent,
       needState: needStateSnapshot,
+      pendingLeadCaptureDraft,
       toolRequests: intent.toolRequests,
       persistedToolResults: reusablePersistedToolResults,
       budget: turnBudget,
@@ -4868,6 +5265,7 @@ export class AgentManagerOrchestrator {
           userMessage,
           ledgerEvents: effectiveLedgerEvents,
           ledgerState,
+          pendingLeadCaptureDraft: pendingLeadDraftContext,
           intent: effectiveIntent,
           toolResults: selectionToolResults,
           products: answerProducts,
@@ -4916,6 +5314,7 @@ export class AgentManagerOrchestrator {
           userMessage,
           ledgerEvents: effectiveLedgerEvents,
           ledgerState,
+          pendingLeadCaptureDraft: pendingLeadDraftContext,
           intent: effectiveIntent,
           toolResults: selectionToolResults,
           products: answerProducts,
@@ -4924,6 +5323,21 @@ export class AgentManagerOrchestrator {
           answer,
           signal: input.signal
         }, turnBudget);
+    }
+    if (review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()) {
+      const rewriteIssues = revalidateReviewerRewrite({
+        revisedAnswerText: review.revisedAnswerText,
+        userMessage,
+        products: answerProducts,
+        toolResults: selectionToolResults,
+        durableLeadCaptureSucceeded: selectionToolResults.some(isDurableLeadCaptureResult)
+      });
+      if (rewriteIssues.length) {
+        review = {
+          verdict: 'block',
+          issues: uniqueReviewIssues([...review.issues, ...rewriteIssues])
+        };
+      }
     }
     let finalText = review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()
       ? review.revisedAnswerText.trim()
@@ -5107,12 +5521,12 @@ export class AgentManagerOrchestrator {
       const currentNeedId = currentLedgerNeed?.needId ?? currentSnapshotNeed?.id;
       if (currentNeedId) {
         const visiblySelectedProductIds = cardSelection.products.map((product) => product.id);
-        const deterministicallyInvalidatedIds = new Set(answerProductEvidence.droppedProductIds);
-        const selectedProductIds = uniqueStrings([
-          ...(currentLedgerNeed?.selectedProductIds ?? currentSnapshotNeed?.selectedProductIds ?? [])
-            .filter((productId) => !deterministicallyInvalidatedIds.has(productId)),
-          ...visiblySelectedProductIds
-        ]).slice(0, 24);
+        const previousSelectedProductIds = currentLedgerNeed?.selectedProductIds ?? currentSnapshotNeed?.selectedProductIds ?? [];
+        const selectedProductIds = uniqueStrings(visiblySelectedProductIds).slice(0, 24);
+        const invalidatedProductIds = uniqueStrings([
+          ...answerProductEvidence.droppedProductIds,
+          ...previousSelectedProductIds.filter((productId) => !selectedProductIds.includes(productId))
+        ]);
         const eventWithoutId = {
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -5126,6 +5540,8 @@ export class AgentManagerOrchestrator {
             constraints: currentLedgerNeed?.constraints ?? currentSnapshotNeed?.constraints ?? [],
             openQuestions: currentLedgerNeed?.openQuestions ?? currentSnapshotNeed?.openQuestions ?? [],
             selectedProductIds,
+            selectionUpdateMode: 'replace',
+            invalidatedProductIds,
             status: selectedProductIds.length ? 'selected' : 'open',
             activate: true
           },
@@ -5169,7 +5585,7 @@ export class AgentManagerOrchestrator {
           needId: currentNeedId,
           selectedProductIds,
           visiblySelectedProductIds,
-          deterministicallyInvalidatedProductIds: [...deterministicallyInvalidatedIds],
+          deterministicallyInvalidatedProductIds: invalidatedProductIds,
           eventId: selectionEvent.eventId
         });
       }
@@ -5188,7 +5604,11 @@ export class AgentManagerOrchestrator {
         ? uniqueStrings([...answer.riskFlags, 'selection_readiness_blocked_cards'])
         : answer.riskFlags
     };
-    const cards = productCards(cardSelection.products, ['Найдено в каталоге под текущий запрос.']);
+    const cards = productCards(
+      cardSelection.products,
+      ['Найдено в каталоге под текущий запрос.'],
+      cardSelection.productCaveatsById
+    );
     const runtimeDecision = getAgentManagerRuntimeDecision();
     const metadata = {
       agentManager: true,
@@ -5253,7 +5673,7 @@ export class AgentManagerOrchestrator {
         (result.payload as { usedWebSearch?: unknown }).usedWebSearch === true
       ),
       leadRequested: finalLeadAction === 'offer_form',
-      leadCreated: toolResults.some((result) => result.tool === 'lead.capture' && result.status === 'ok'),
+      leadCreated: toolResults.some(isDurableLeadCaptureResult),
       metadata
     };
     await this.conversations.saveAnswerContract({
@@ -5301,6 +5721,7 @@ export class AgentManagerOrchestrator {
     intent: AgentIntentContract;
     toolRequests: ToolRequest[];
     needState: CustomerNeedState;
+    pendingLeadCaptureDraft: LeadCaptureDraft | null;
     persistedToolResults: Map<string, ToolResult>;
     budget: AgentManagerTurnBudget;
     signal?: AbortSignal;
@@ -5347,36 +5768,69 @@ export class AgentManagerOrchestrator {
         }
       };
       const persistedResult = input.persistedToolResults.get(request.id);
-      if (persistedResult) {
-        if (persistedResult.tool !== request.tool) {
+      const reusablePersistedResult = persistedResult && (
+        request.tool !== 'lead.capture' || isDurableLeadCaptureResult(persistedResult)
+      ) ? persistedResult : undefined;
+      if (reusablePersistedResult) {
+        if (reusablePersistedResult.tool !== request.tool) {
           throw new Error(`saved_tool_artifact_tool_mismatch:${request.id}`);
         }
-        productsFromPersistedToolResult(persistedResult)
+        productsFromPersistedToolResult(reusablePersistedResult)
           .forEach((product) => productsById.set(product.id, product));
         try {
-          input.budget.consumeToolResult(assertToolResultBounds(persistedResult));
+          input.budget.consumeToolResult(assertToolResultBounds(reusablePersistedResult));
         } catch (error) {
           if (error instanceof AgentManagerTurnBudgetExceededError) {
             await persistBudgetStoppedRemainder(requestIndex + 1, error);
           }
           throw error;
         }
-        toolResults.push(persistedResult);
+        toolResults.push(reusablePersistedResult);
         await this.trace(input.session.id, input.turnId, 'recovery', 'tool_artifact_reused', {
           requestId: request.id,
           tool: request.tool,
-          status: persistedResult.status
+          status: reusablePersistedResult.status
         });
         continue;
       }
+      if (persistedResult?.tool === 'lead.capture') {
+        await this.trace(input.session.id, input.turnId, 'recovery', 'non_durable_lead_artifact_ignored', {
+          requestId: request.id,
+          status: persistedResult.status,
+          warnings: persistedResult.warnings
+        });
+      }
       const startedAt = Date.now();
-      const timeoutSignal = AbortSignal.timeout(definition.timeoutMs);
+      const effectiveTimeoutMs = request.tool === 'web.researchProductFacts'
+        ? Math.min(
+            definition.timeoutMs,
+            Math.max(0, input.budget.remainingWallTimeMs() - WEB_COMPOSE_REVIEW_RESERVE_MS)
+          )
+        : definition.timeoutMs;
+      const timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
       const toolSignal = input.signal
         ? AbortSignal.any([input.signal, timeoutSignal])
         : timeoutSignal;
       let result: ToolResult | undefined;
       let attempt = 0;
       let budgetStopError: AgentManagerTurnBudgetExceededError | undefined;
+      if (request.tool === 'web.researchProductFacts' && effectiveTimeoutMs < WEB_MIN_EXECUTION_MS) {
+        result = ToolResultSchema.parse({
+          requestId: request.id,
+          tool: request.tool,
+          status: 'error',
+          payload: {
+            usedWebSearch: false,
+            searchDisposition: 'skipped_budget',
+            sourcesExhausted: false,
+            researchOutcome: 'partial',
+            unconfirmedFacts: [],
+            error: { code: 'web_research_skipped_budget', effectiveTimeoutMs }
+          },
+          warnings: ['web_research_skipped:compose_review_reserve'],
+          errorCode: 'web_research_skipped_budget'
+        });
+      }
       while (!result && attempt < definition.maxAttempts) {
         attempt += 1;
         try {
@@ -5385,27 +5839,16 @@ export class AgentManagerOrchestrator {
           requestId: request.id,
           tool: request.tool,
           attempt,
-          timeoutMs: definition.timeoutMs,
+          timeoutMs: effectiveTimeoutMs,
+          configuredTimeoutMs: definition.timeoutMs,
+          postWebReserveMs: request.tool === 'web.researchProductFacts' ? WEB_COMPOSE_REVIEW_RESERVE_MS : 0,
           remainingTurnMs: input.budget.remainingWallTimeMs()
         });
         if (request.tool === 'catalog.search') {
           const { query, semanticQuery } = toolRequestScopedQuery(request, input.userMessage);
           const limit = Math.max(1, Math.min(12, Number(request.args.limit ?? 8)));
           const productIntent = resolvedToolProductIntent(request, input.intent);
-          if (isGeneratorProductClass(productIntent) && generatorLoadBlocksCatalogAccess(input.intent, toolResults)) {
-            result = ToolResultSchema.parse({
-              requestId: request.id,
-              tool: request.tool,
-              status: 'denied',
-              payload: {
-                query,
-                productIntent,
-                reason: 'generator_load_unconfirmed_basis'
-              },
-              warnings: ['catalog_search_skipped:generator_load_unconfirmed_basis']
-            });
-          } else {
-            let search = await this.searchCatalogProducts({
+          let search = await this.searchCatalogProducts({
               query,
               limit,
               signal: toolSignal,
@@ -5464,7 +5907,7 @@ export class AgentManagerOrchestrator {
             const warnings = [...search.warnings, ...loadFit.warnings];
             const catalogSearchGrounded = products.length > 0 || search.candidateTiers.length > 0;
             products.forEach((product) => productsById.set(product.id, product));
-            result = ToolResultSchema.parse({
+          result = ToolResultSchema.parse({
               requestId: request.id,
               tool: request.tool,
               status: catalogSearchGrounded ? 'ok' : 'not_found',
@@ -5491,8 +5934,7 @@ export class AgentManagerOrchestrator {
                 }
               },
               warnings: catalogSearchGrounded ? warnings : [...warnings, 'catalog_search_no_matches']
-            });
-          }
+          });
         } else if (request.tool === 'catalog.getProductDetails') {
           const requestedProductIds = Array.isArray(request.args.productIds)
             ? request.args.productIds.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
@@ -5505,19 +5947,7 @@ export class AgentManagerOrchestrator {
             : [typeof request.args.query === 'string' && request.args.query.trim() ? request.args.query : input.userMessage];
           const productIntent = resolvedToolProductIntent(request, input.intent);
           const semanticQuery = toolRequestScopedQuery(request, input.userMessage).semanticQuery;
-          if (isGeneratorProductClass(productIntent) && generatorLoadBlocksCatalogAccess(input.intent, toolResults)) {
-            result = ToolResultSchema.parse({
-              requestId: request.id,
-              tool: request.tool,
-              status: 'denied',
-              payload: {
-                productIntent,
-                reason: 'generator_load_unconfirmed_basis'
-              },
-              warnings: ['product_details_skipped:generator_load_unconfirmed_basis']
-            });
-          } else {
-            const requestProductsById = new Map<string, Product>();
+          const requestProductsById = new Map<string, Product>();
             const getProductsByIds = (this.products as ProductRepository & {
               getProductsByIds?: ProductRepository['getProductsByIds'];
             }).getProductsByIds;
@@ -5545,7 +5975,7 @@ export class AgentManagerOrchestrator {
               found.products.forEach((product) => requestProductsById.set(product.id, product));
             }
             requestProductsById.forEach((product) => productsById.set(product.id, product));
-            result = ToolResultSchema.parse({
+          result = ToolResultSchema.parse({
               requestId: request.id,
               tool: request.tool,
               status: requestProductsById.size ? 'ok' : 'not_found',
@@ -5554,8 +5984,7 @@ export class AgentManagerOrchestrator {
                 products: [...requestProductsById.values()]
               },
               warnings: requestProductsById.size ? [] : ['product_details_no_matches']
-            });
-          }
+          });
         } else if (request.tool === 'calculator.generatorLoad') {
           const { loads, profile, estimateBasis, warnings } = buildGeneratorLoadToolPayload({
             request,
@@ -5569,10 +5998,26 @@ export class AgentManagerOrchestrator {
             warnings: profile ? warnings : [...warnings, 'no_usable_loads_for_generator_calculation']
           });
         } else if (request.tool === 'web.researchProductFacts') {
-          const targetProductNames = targetProductNamesForRequest(request, input.intent);
+          let targetProductNames = targetProductNamesForRequest(request, input.intent);
           const suppressedTargetProductNames = suppressedContextTargetProductNamesForRequest(request, input.intent);
           const comparisonAttributes = comparisonAttributesForRequest(request);
-          if (productsById.size < 2 || targetProductNames.length) {
+          const catalogCandidatesBeforeWeb = [...productsById.values()];
+          const precedingCatalogSucceeded = toolResults.some((result) =>
+            (result.tool === 'catalog.search' || result.tool === 'catalog.getProductDetails') &&
+            result.status === 'ok'
+          );
+          if (!targetProductNames.length && precedingCatalogSucceeded && catalogCandidatesBeforeWeb.length) {
+            targetProductNames = catalogCandidatesBeforeWeb.slice(0, 4).map((product) => product.name);
+          }
+          const allExplicitTargetsPresent = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
+            catalogCandidatesBeforeWeb.some((product) => productMatchesTargetName(product, targetName))
+          );
+          const needsCatalogLookup = productsById.size === 0 || (
+            targetProductNames.length > 0
+              ? !allExplicitTargetsPresent
+              : productsById.size < 2
+          );
+          if (needsCatalogLookup) {
             const scopedQuery = toolRequestScopedQuery(request, input.userMessage);
             const lookupQuery = targetProductNames.length
               ? targetProductNames.join(' ')
@@ -5591,7 +6036,13 @@ export class AgentManagerOrchestrator {
             });
             found.products.forEach((product) => productsById.set(product.id, product));
           }
-          const selectedProducts = [...productsById.values()].slice(0, 4);
+          const allSelectedProducts = [...productsById.values()];
+          const exactTargetProducts = targetProductNames.length
+            ? allSelectedProducts.filter((product) =>
+                targetProductNames.some((targetName) => productMatchesTargetName(product, targetName))
+              )
+            : [];
+          const selectedProducts = (exactTargetProducts.length ? exactTargetProducts : allSelectedProducts).slice(0, 4);
           let research = await this.researchFromVerifiedFactMemory({
             sessionId: input.session.id,
             turnId: input.turnId,
@@ -5606,7 +6057,7 @@ export class AgentManagerOrchestrator {
               targetProductNames,
               comparisonAttributes,
               signal: toolSignal,
-              deadlineAtMs: startedAt + definition.timeoutMs
+              deadlineAtMs: startedAt + effectiveTimeoutMs
             });
             await this.persistVerifiedResearchFacts({
               sessionId: input.session.id,
@@ -5628,12 +6079,43 @@ export class AgentManagerOrchestrator {
               evidence: [conflict.resolution]
             }).catch((error) => console.warn('Data quality issue write failed', safeError(error)));
           }
+          // The production research contract always contains answerGuidance,
+          // but persisted/legacy tool artifacts and test doubles may predate it.
+          // Only an explicit `not_answered` result is treated as exhausted;
+          // missing legacy guidance must not erase otherwise useful facts.
+          const answerGuidance = research.answerGuidance ?? {
+            directAnswer: '',
+            completeness: research.facts.length ? 'answered' as const : 'partially_answered' as const,
+            coverage: []
+          };
+          const researchOutcome = answerGuidance.completeness === 'answered'
+            ? 'answered' as const
+            : research.sourcesExhausted
+              ? 'exhausted' as const
+              : 'partial' as const;
+          const unconfirmedFacts = answerGuidance.coverage
+            .filter((coverage) => coverage.status !== 'confirmed')
+            .map((coverage) => ({
+              requirementIds: request.coversRequirementIds ?? [],
+              attribute: coverage.attribute,
+              status: coverage.status,
+              reason: coverage.evidence
+            }));
           result = ToolResultSchema.parse({
             requestId: request.id,
             tool: request.tool,
-            status: research.warnings.includes('not_enough_products_for_comparison') && !targetProductNames.length ? 'not_found' : 'ok',
+            status: research.warnings.includes('not_enough_products_for_comparison') &&
+              !targetProductNames.length &&
+              researchOutcome === 'exhausted'
+              ? 'not_found'
+              : 'ok',
             payload: {
               ...research,
+              answerGuidance,
+              researchOutcome,
+              searchDisposition: research.searchDisposition,
+              sourcesExhausted: research.sourcesExhausted,
+              unconfirmedFacts,
               targetProductNames,
               comparisonAttributes,
               catalogPresence,
@@ -5657,14 +6139,41 @@ export class AgentManagerOrchestrator {
           const extractedContact = evidenceIsCurrent
             ? extractContact(authorizationEvidence)
             : {};
-          const contact = { ...extractedContact };
-          const currentTurnHasContact = Boolean(contact.phone || contact.email);
+          const plannerName = evidenceIsCurrent
+            ? currentEvidencePlannerName(request, authorizationEvidence)
+            : undefined;
+          const preferredContact = evidenceIsCurrent
+            ? requestedPreferredContact(request)
+            : undefined;
+          const pendingDraftAuthorized = authorization?.contactSource === 'pending_draft';
+          const pendingDraft = pendingDraftAuthorized &&
+            authorization.pendingDraftId === input.pendingLeadCaptureDraft?.id
+            ? input.pendingLeadCaptureDraft
+            : null;
+          const groundedQuestion = pendingDraft
+            ? pendingDraft.buyerQuestion
+            : groundedBuyerQuestion(authorization?.buyerQuestion, input.history);
+          const purpose = pendingDraft
+            ? pendingDraft.purpose
+            : authorization?.purpose?.trim();
+          const contact = {
+            name: plannerName ?? extractedContact.name ?? pendingDraft?.name ?? undefined,
+            phone: extractedContact.phone ?? pendingDraft?.phone ?? undefined,
+            email: extractedContact.email ?? pendingDraft?.email ?? undefined
+          };
+          const currentTurnHasContact = Boolean(extractedContact.phone || extractedContact.email);
+          const currentTurnContributesToPendingDraft = Boolean(
+            plannerName || currentTurnHasContact || preferredContact
+          );
           const authorizationDenied = (
             !authorization?.authorized ||
             authorization.contactSource === 'none' ||
-            !authorization.purpose?.trim() ||
+            !purpose ||
+            !groundedQuestion ||
             !evidenceIsCurrent ||
-            (authorization.contactSource === 'current_message' && !currentTurnHasContact)
+            (authorization.contactSource === 'current_message' && !currentTurnHasContact) ||
+            (pendingDraftAuthorized && (!pendingDraft || !currentTurnContributesToPendingDraft)) ||
+            (!pendingDraftAuthorized && authorization.pendingDraftId != null)
           );
           if (authorizationDenied) {
             result = ToolResultSchema.parse({
@@ -5679,72 +6188,150 @@ export class AgentManagerOrchestrator {
               warnings: ['lead_capture_denied:current_intent_or_contact_not_authorized']
             });
           } else {
-          const latestLeadForSession = (this.leads as unknown as {
-            latestLeadForSession?: (sessionId: string) => Promise<{
-              id: string;
-              name?: string | null;
-              phone?: string | null;
-              email?: string | null;
-            } | null>;
-          }).latestLeadForSession;
-          const existingLead = latestLeadForSession
-            ? await latestLeadForSession.call(this.leads, input.session.id)
-            : null;
-          const existingContactAuthorized = authorization?.contactSource === 'existing_session';
-          if (existingLead && existingContactAuthorized && !currentTurnHasContact) {
-            contact.name ??= existingLead.name ?? undefined;
-            contact.phone ??= existingLead.phone ?? undefined;
-            contact.email ??= existingLead.email ?? undefined;
-          }
-          if (existingLead && existingContactAuthorized && !currentTurnHasContact && contact.name && (contact.phone || contact.email)) {
-            result = ToolResultSchema.parse({
-              requestId: request.id,
-              tool: request.tool,
-              status: 'ok',
-              payload: { leadId: existingLead.id, existing: true },
-              warnings: ['lead_existing_session_contact_used']
-            });
-          } else if (!contact.phone && !contact.email) {
-            result = ToolResultSchema.parse({
-              requestId: request.id,
-              tool: request.tool,
-              status: 'not_found',
-              payload: { missing: 'contact' },
-              warnings: ['lead_contact_missing']
-            });
-          } else if (!contact.name) {
-            result = ToolResultSchema.parse({
-              requestId: request.id,
-              tool: request.tool,
-              status: 'not_found',
-              payload: { missing: 'name', contact },
-              warnings: ['lead_name_missing']
-            });
-          } else {
-            const lead = await this.leads.createLead({
-              sessionId: input.session.id,
-              originTurnId: input.turnId,
-              originToolRequestId: request.id,
-              name: String(contact.name),
-              phone: typeof contact.phone === 'string' ? contact.phone : undefined,
-              email: typeof contact.email === 'string' ? contact.email : undefined,
-              question: input.userMessage
-            });
-            await this.conversations.enqueueLeadOutbox({
-              leadId: lead.id,
-              sessionId: input.session.id,
-              turnId: input.turnId,
-              destination: 'lead_email',
-              payload: { leadId: lead.id }
-            });
-            result = ToolResultSchema.parse({
-              requestId: request.id,
-              tool: request.tool,
-              status: 'ok',
-              payload: { leadId: lead.id, outbox: true },
-              warnings: []
-            });
-          }
+            const leadPurpose = purpose as string;
+            const leadBuyerQuestion = groundedQuestion as string;
+            const latestLeadForSession = (this.leads as unknown as {
+              latestLeadForSession?: (sessionId: string) => Promise<{
+                id: string;
+                name?: string | null;
+                phone?: string | null;
+                email?: string | null;
+              } | null>;
+            }).latestLeadForSession;
+            const existingLead = latestLeadForSession
+              ? await latestLeadForSession.call(this.leads, input.session.id)
+              : null;
+            const existingContactAuthorized = authorization.contactSource === 'existing_session';
+            if (existingLead && existingContactAuthorized && !currentTurnHasContact) {
+              contact.name ??= existingLead.name ?? undefined;
+              contact.phone ??= existingLead.phone ?? undefined;
+              contact.email ??= existingLead.email ?? undefined;
+            }
+            if (!contact.phone && !contact.email) {
+              result = ToolResultSchema.parse({
+                requestId: request.id,
+                tool: request.tool,
+                status: 'not_found',
+                payload: { missing: 'contact', missingFields: ['contact'] },
+                warnings: ['lead_contact_missing']
+              });
+            } else if (!contact.name) {
+              const draft = pendingDraft ?? await this.leads.upsertLeadCaptureDraft({
+                sessionId: input.session.id,
+                originTurnId: input.turnId,
+                originToolRequestId: request.id,
+                purpose: leadPurpose,
+                buyerQuestion: leadBuyerQuestion,
+                preferredContact,
+                phone: contact.phone,
+                email: contact.email,
+                consentEvidenceHash: leadCaptureHash([input.session.id, authorizationEvidence]),
+                scopeHash: leadCaptureHash([input.session.id, leadPurpose, leadBuyerQuestion])
+              });
+              if (!draft) throw new Error('lead_capture_draft_not_persisted');
+              if (!pendingDraft) {
+                await this.trace(input.session.id, input.turnId, 'lead', 'lead_capture_draft_saved', {
+                  draftId: draft.id,
+                  scopeHash: draft.scopeHash,
+                  hasPhone: Boolean(draft.phone),
+                  hasEmail: Boolean(draft.email),
+                  preferredContact: draft.preferredContact ?? null,
+                  expiresAt: draft.expiresAt
+                });
+              }
+              result = ToolResultSchema.parse({
+                requestId: request.id,
+                tool: request.tool,
+                status: 'not_found',
+                payload: {
+                  missing: 'name',
+                  missingFields: ['name'],
+                  draftId: draft.id,
+                  draftSaved: true,
+                  contactStored: true,
+                  ...(draft.preferredContact ? { preferredContact: draft.preferredContact } : {}),
+                  originalQuestionPreserved: true
+                },
+                warnings: ['lead_name_missing', 'lead_capture_partial_contact_persisted']
+              });
+            } else {
+              let lead: { id: string };
+              let outbox: unknown;
+              const warnings: string[] = [];
+              if (pendingDraft) {
+                const completion = await this.leads.completeLeadCaptureDraft({
+                  draftId: pendingDraft.id,
+                  sessionId: input.session.id,
+                  turnId: input.turnId,
+                  name: String(contact.name),
+                  phone: extractedContact.phone,
+                  email: extractedContact.email,
+                  preferredContact
+                });
+                if (!completion) throw new Error('lead_capture_draft_completion_failed');
+                lead = completion.lead;
+                outbox = completion.outbox;
+                warnings.push('lead_capture_pending_draft_consumed');
+                await this.trace(input.session.id, input.turnId, 'lead', 'lead_capture_draft_consumed', {
+                  draftId: pendingDraft.id,
+                  leadId: completion.lead.id,
+                  outboxId: completion.outbox.id,
+                  dispatchStatus: completion.outbox.status,
+                  scopeHash: pendingDraft.scopeHash
+                });
+              } else {
+                lead = await this.leads.createLead({
+                  sessionId: input.session.id,
+                  originTurnId: input.turnId,
+                  originToolRequestId: request.id,
+                  name: String(contact.name),
+                  phone: typeof contact.phone === 'string' ? contact.phone : undefined,
+                  email: typeof contact.email === 'string' ? contact.email : undefined,
+                  question: leadBuyerQuestion
+                });
+                outbox = await this.conversations.enqueueLeadOutbox({
+                  leadId: lead.id,
+                  sessionId: input.session.id,
+                  turnId: input.turnId,
+                  destination: 'lead_email',
+                  payload: {
+                    leadId: lead.id,
+                    purpose: leadPurpose,
+                    question: leadBuyerQuestion,
+                    preferredContact: preferredContact ?? null,
+                    source: 'agent_manager'
+                  }
+                });
+                if (existingLead && existingContactAuthorized && !currentTurnHasContact) {
+                  warnings.push('lead_existing_session_contact_used');
+                }
+              }
+              const outboxId = typeof (outbox as { id?: unknown } | null)?.id === 'string' &&
+                String((outbox as { id: string }).id).trim()
+                ? String((outbox as { id: string }).id)
+                : undefined;
+              const dispatchStatus = durableLeadOutboxStatus(outbox);
+              if (!outboxId || !dispatchStatus) {
+                throw new Error(`lead_outbox_not_dispatchable:${String((outbox as { status?: unknown } | null)?.status ?? 'missing')}`);
+              }
+              result = ToolResultSchema.parse({
+                requestId: request.id,
+                tool: request.tool,
+                status: 'ok',
+                payload: {
+                  leadId: lead.id,
+                  outbox: true,
+                  outboxId,
+                  status: 'queued',
+                  dispatchStatus,
+                  ...(preferredContact || pendingDraft?.preferredContact
+                    ? { preferredContact: preferredContact ?? pendingDraft?.preferredContact ?? undefined }
+                    : {}),
+                  originalQuestionPreserved: true
+                },
+                warnings
+              });
+            }
           }
         } else {
           result = ToolResultSchema.parse({
@@ -5773,11 +6360,22 @@ export class AgentManagerOrchestrator {
             !timeoutSignal.aborted &&
             !input.signal?.aborted;
           if (retryable) continue;
+          const timedOut = timeoutSignal.aborted && !input.signal?.aborted;
+          const webFailurePayload = request.tool === 'web.researchProductFacts'
+            ? {
+                usedWebSearch: false,
+                searchDisposition: timedOut ? 'timed_out' : input.signal?.aborted ? 'aborted' : 'failed',
+                sourcesExhausted: false,
+                researchOutcome: 'partial',
+                unconfirmedFacts: [],
+                error: safeError(error)
+              }
+            : { error: safeError(error) };
           result = ToolResultSchema.parse({
             requestId: request.id,
             tool: request.tool,
-            status: timeoutSignal.aborted && !input.signal?.aborted ? 'timeout' : 'error',
-            payload: { error: safeError(error) },
+            status: timedOut ? 'timeout' : 'error',
+            payload: webFailurePayload,
             warnings: ['tool_execution_error'],
             errorCode: safeError(error).code ?? safeError(error).message
           });
@@ -5823,7 +6421,8 @@ export class AgentManagerOrchestrator {
         status: result.status,
         attemptCount: attempt,
         durationMs: Date.now() - startedAt,
-        timeoutMs: definition.timeoutMs,
+        timeoutMs: effectiveTimeoutMs,
+        configuredTimeoutMs: definition.timeoutMs,
         remainingTurnMs: input.budget.remainingWallTimeMs(),
         retryDecisionWarnings: result.warnings.filter((warning) => warning.includes('retry_')),
         errorCode: result.errorCode ?? null
@@ -6487,7 +7086,7 @@ export class AgentManagerOrchestrator {
         evidence: unknownSelectedProductIds.join(', ')
       });
     }
-    const leadCaptureOk = input.toolResults.some((result) => result.tool === 'lead.capture' && result.status === 'ok');
+    const leadCaptureOk = input.toolResults.some(isDurableLeadCaptureResult);
     const leadCaptureFailed = input.toolResults.some((result) => result.tool === 'lead.capture' && result.status !== 'ok');
     if ((input.answer.leadAction === 'capture_contact' || input.answer.leadAction === 'confirm_contact_received') && !leadCaptureOk) {
       const contactMissing = leadCaptureMissingContact(input.toolResults);
@@ -6568,6 +7167,33 @@ export class AgentManagerOrchestrator {
         evidence: unsupportedCatalogProductMentionRewrite.unsupportedDisplayTokens.join(', ')
       });
     }
+    const incompleteWebWithoutExhaustion = input.toolResults.some((result) => {
+      if (result.tool !== 'web.researchProductFacts') return false;
+      const payload = result.payload as {
+        sourcesExhausted?: unknown;
+        researchOutcome?: unknown;
+        searchDisposition?: unknown;
+      };
+      const explicitlyIncomplete = payload.researchOutcome === 'partial' ||
+        payload.researchOutcome === 'exhausted';
+      const executionIncomplete = payload.searchDisposition === 'skipped_budget' ||
+        payload.searchDisposition === 'timed_out' ||
+        payload.searchDisposition === 'failed' ||
+        payload.searchDisposition === 'aborted';
+      return payload.sourcesExhausted !== true &&
+        (result.status !== 'ok' || explicitlyIncomplete || executionIncomplete);
+    });
+    if (
+      incompleteWebWithoutExhaustion &&
+      (input.answer.leadAction === 'offer_form' || answerRequestsContactData(input.answer.answerText))
+    ) {
+      mechanicalIssues.push({
+        code: 'premature_handoff_before_web_exhausted',
+        severity: 'high',
+        message: 'A failed, partial, timed-out, aborted, or budget-skipped web check is not proof that available sources were exhausted.',
+        evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'web.researchProductFacts'))
+      });
+    }
     const plateTaskMismatchClause = (input.requiredResponseClauses ?? []).find((clause) =>
       clause.code === 'plate_previous_cards_unsuitable_for_current_task'
     );
@@ -6611,7 +7237,10 @@ export class AgentManagerOrchestrator {
         issues: blockingIssues
       };
     }
-    const finalizeMechanicalRewrite = async (candidateText: string): Promise<PreSendReview> => {
+    const finalizeMechanicalRewrite = async (
+      candidateText: string,
+      forceSemanticReview = false
+    ): Promise<PreSendReview> => {
       const revisedAnswerText = candidateText.trim();
       if (!revisedAnswerText) {
         return {
@@ -6632,10 +7261,10 @@ export class AgentManagerOrchestrator {
         answer: { ...input.answer, answerText: revisedAnswerText }
       };
       const policy = llmReviewPolicy(candidateInput);
-      const productReviewRequired = policy.mode !== 'off' &&
-        policy.llmRequired &&
-        candidateInput.products.length > 0;
-      if (!productReviewRequired) {
+      const semanticReviewRequired = forceSemanticReview || (
+        policy.mode !== 'off' && policy.llmRequired && candidateInput.products.length > 0
+      );
+      if (!semanticReviewRequired) {
         return { verdict: 'rewrite_required', issues: mechanicalIssues, revisedAnswerText };
       }
 
@@ -6670,27 +7299,6 @@ export class AgentManagerOrchestrator {
           ])
         };
       }
-      budget?.consumeModelCall();
-      const recheck = await this.model.reviewAnswer({
-        ...candidateInput,
-        answer: { ...candidateInput.answer, answerText: semanticText }
-      });
-      if (recheck.verdict !== 'pass') {
-        return {
-          verdict: 'block',
-          issues: uniqueReviewIssues([
-            ...mechanicalIssues,
-            ...semanticReview.issues,
-            ...recheck.issues,
-            {
-              code: 'catalog_evidence_rewrite_failed_recheck',
-              severity: 'high',
-              message: 'Catalog evidence rewrite did not pass independent recheck.',
-              evidence: semanticText
-            }
-          ])
-        };
-      }
       return {
         verdict: 'rewrite_required',
         issues: uniqueReviewIssues([...mechanicalIssues, ...semanticReview.issues]),
@@ -6710,8 +7318,10 @@ export class AgentManagerOrchestrator {
       return finalizeMechanicalRewrite(leadCaptureRepairText({
         contact: contactInTurn,
         toolResults: input.toolResults,
-        answerText: input.answer.answerText
-      }));
+        answerText: input.answer.answerText,
+        preserveAnswer: input.toolResults.some((result) => result.tool !== 'lead.capture' && result.status === 'ok') ||
+          input.answer.factsUsed.length > 0
+      }), true);
     }
     const closedQuestionIssue = mechanicalIssues.find((issue) => issue.code === 'asks_closed_question');
     if (closedQuestionIssue) {
@@ -6779,6 +7389,11 @@ export class AgentManagerOrchestrator {
     if (researchGuidanceRepairIssue && safeResearchRewrite) {
       return finalizeMechanicalRewrite(safeResearchRewrite);
     }
+    const prematureHandoffIssue = mechanicalIssues.find((issue) => issue.code === 'premature_handoff_before_web_exhausted');
+    if (prematureHandoffIssue) {
+      const incompleteRewrite = failedWebResearchSafeRewrite({ intent: input.intent, toolResults: input.toolResults });
+      return finalizeMechanicalRewrite(incompleteRewrite ?? stripContactRequestSentence(input.answer.answerText));
+    }
     const failedFactSourceRepairIssue = mechanicalIssues.find((issue) =>
       issue.code === 'failed_tool_result_used_as_fact_source'
     );
@@ -6836,25 +7451,117 @@ export class AgentManagerOrchestrator {
         ])
       };
     }
-    budget?.consumeModelCall();
-    const recheck = await this.model.reviewAnswer({
-      ...input,
-      answer: { ...input.answer, answerText: revisedAnswerText }
-    });
-    if (recheck.verdict === 'pass') return semanticReview;
-    return {
-      verdict: 'block',
-      issues: uniqueReviewIssues([
-        ...semanticReview.issues,
-        ...recheck.issues,
-        {
-          code: 'semantic_rewrite_failed_recheck',
-          severity: 'high',
-          message: 'Revised answer did not pass an independent semantic recheck.',
-          evidence: revisedAnswerText
-        }
-      ])
+    return semanticReview;
+  }
+
+  private async completeTerminalTurn(input: {
+    session: ConversationSession;
+    turnId: string;
+    recovered: boolean;
+    onDelta?: (text: string) => void | Promise<void>;
+    reason: string;
+    deadlineAt: string | null;
+  }): Promise<ChatResponsePayload> {
+    const committed = await this.completedFromFinalAnswerContract(
+      input.session,
+      input.turnId,
+      input.recovered,
+      input.onDelta
+    );
+    if (committed) return committed;
+    const existing = await this.completedPayload(input.session, input.turnId, input.onDelta);
+    if (existing) return existing;
+
+    const ledgerContext = await this.loadDialogueLedgerContext(input.session.id);
+    const needStateSnapshot = deriveNeedStateSnapshotFromLedger(
+      ledgerContext.state,
+      input.session.needState ?? emptyNeedState()
+    );
+    const persistedExecution = await this.loadPersistedTurnExecution(input.session.id, input.turnId);
+    const toolStatuses = [...persistedExecution.toolResults.values()].map((result) => ({
+      requestId: result.requestId,
+      tool: result.tool,
+      status: result.status,
+      errorCode: result.errorCode ?? null
+    }));
+    const finalText = 'Не успел надёжно завершить проверку в пределах этого хода, поэтому неподтверждённый результат не выдаю. Уже собранные данные сохранены в истории диалога. Если вы продолжите разговор новым сообщением, использую доступный контекст без повтора уже подтверждённых вводных.';
+    const answerContract: AnswerContract = {
+      answerText: finalText,
+      factsUsed: [],
+      questionsAsked: [],
+      toolResultIds: [],
+      selectedProductIds: [],
+      leadAction: 'none',
+      riskFlags: ['deterministic_terminal_response'],
+      selectionReadiness: {
+        productClass: 'unknown',
+        status: 'not_applicable',
+        canShowProductCards: false,
+        missingFacts: [],
+        rationale: 'The absolute turn deadline was reached before a reviewed answer could be committed.'
+      }
     };
+    const review: PreSendReview = { verdict: 'pass', issues: [] };
+    const runtimeDecision = getAgentManagerRuntimeDecision();
+    const metadata = {
+      agentManager: true,
+      runtimeMode: runtimeDecision.runtimeMode,
+      runtimeModeReason: runtimeDecision.reason,
+      agentManagerRuntime: runtimeDecision,
+      recovered: input.recovered,
+      terminal: true,
+      degraded: true,
+      completionStatus: 'degraded_terminal',
+      substantiveAnswerCompleted: false,
+      terminalReason: input.reason,
+      deadlineAt: input.deadlineAt,
+      toolStatuses,
+      answerContract,
+      preSendReview: review,
+      needStateSnapshot,
+      productCards: []
+    };
+    const responsePayload: ChatResponsePayload = {
+      turnId: input.turnId,
+      answer: finalText,
+      needState: needStateSnapshot,
+      productCards: [],
+      usedWebSearch: false,
+      leadRequested: false,
+      leadCreated: false,
+      metadata
+    };
+    await this.conversations.saveAnswerContract({
+      sessionId: input.session.id,
+      turnId: input.turnId,
+      answerText: finalText,
+      contract: answerContract,
+      review,
+      responsePayload,
+      status: 'final'
+    });
+    await input.onDelta?.(finalText);
+    const assistantMessage = await this.conversations.addAssistantMessageForTurn({
+      sessionId: input.session.id,
+      turnId: input.turnId,
+      content: finalText,
+      metadata,
+      recovered: input.recovered
+    });
+    await this.conversations.upsertTurnCheckpoint({
+      sessionId: input.session.id,
+      turnId: input.turnId,
+      checkpoint: 'assistant_message_saved',
+      status: 'succeeded',
+      artifactRef: assistantMessage.id,
+      payload: { terminal: true, reason: input.reason }
+    });
+    await this.trace(input.session.id, input.turnId, 'turn', 'terminal_response_committed', {
+      reason: input.reason,
+      deadlineAt: input.deadlineAt,
+      toolStatuses
+    });
+    return { ...responsePayload, assistantMessageId: assistantMessage.id };
   }
 
   private async completedPayload(

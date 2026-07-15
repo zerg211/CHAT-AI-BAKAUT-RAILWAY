@@ -99,6 +99,48 @@ describe('agent manager contracts', () => {
     }).success).toBe(false);
   });
 
+  it('requires a scoped draft id before a name-only turn may continue partial lead capture', () => {
+    const baseIntent = {
+      userMessageSummary: 'buyer supplied the missing name',
+      dialogueUnderstanding: 'this continues the pending specialist handoff',
+      nextStepRationale: 'complete the same lead draft',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'lead-capture-name',
+        tool: 'lead.capture',
+        args: { contact: { name: 'Алексей', preferredContact: 'message' } },
+        rationale: 'complete the pending contact',
+        required: true
+      }],
+      leadCaptureAuthorization: {
+        authorized: true,
+        contactSource: 'pending_draft',
+        purpose: 'verify the exact start method',
+        buyerQuestion: 'Проверьте, есть ли электростартер',
+        evidence: 'Алексей, лучше напишите',
+        pendingDraftId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+      },
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+
+    expect(AgentIntentContractSchema.safeParse(baseIntent).success).toBe(true);
+    expect(AgentIntentContractSchema.safeParse({
+      ...baseIntent,
+      leadCaptureAuthorization: {
+        ...baseIntent.leadCaptureAuthorization,
+        pendingDraftId: null
+      }
+    }).success).toBe(false);
+    expect(AgentIntentContractSchema.safeParse({
+      ...baseIntent,
+      leadCaptureAuthorization: {
+        ...baseIntent.leadCaptureAuthorization,
+        contactSource: 'current_message'
+      }
+    }).success).toBe(false);
+  });
+
   it('keeps OpenAI structured-output limits aligned with runtime Zod contracts', () => {
     const formats = agentManagerStructuredFormats as any;
     const intent = formats.intentContractFormat.format.schema;
@@ -123,6 +165,11 @@ describe('agent manager contracts', () => {
       maximum: 8
     });
     expect(intent.properties.selectionPolicy.properties.requirements.maxItems).toBe(40);
+    expect(intent.properties.leadCaptureAuthorization.properties.contactSource.enum).toContain('pending_draft');
+    expect(intent.properties.leadCaptureAuthorization.required).toEqual(expect.arrayContaining([
+      'buyerQuestion',
+      'pendingDraftId'
+    ]));
     expect(formats.ledgerDeltaFormat.format.schema.properties.events.maxItems).toBe(40);
     expect(formats.answerContractFormat.format.schema.properties.selectedProductIds.maxItems).toBe(8);
   });

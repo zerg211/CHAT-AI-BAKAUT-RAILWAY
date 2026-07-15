@@ -21,7 +21,7 @@ vi.mock('node:dns/promises', () => ({
 
 const { researchProductComparisonFacts } = await import('../src/ai/productComparisonResearch.js');
 
-const queuedResearchResponses: Array<{ parsed: ReturnType<typeof result> }> = [];
+const queuedResearchResponses: Array<{ parsed: ReturnType<typeof result>; response?: unknown }> = [];
 
 function sourceResponse(body: string, contentType = 'text/html; charset=utf-8') {
   return new Response(body, { status: 200, headers: { 'content-type': contentType } });
@@ -126,7 +126,7 @@ function researchCalls() {
     .filter((call) => call.stage !== 'source_evidence_semantic_validation');
 }
 
-function queueResearchResponse(response: { parsed: ReturnType<typeof result> }) {
+function queueResearchResponse(response: { parsed: ReturnType<typeof result>; response?: unknown }) {
   queuedResearchResponses.push(response);
 }
 
@@ -140,7 +140,12 @@ describe('product comparison research', () => {
       }
       const next = queuedResearchResponses.shift();
       if (!next) throw new Error(`No queued structured response for stage ${call.stage}`);
-      return next;
+       return {
+         ...next,
+         response: next.response ?? {
+           output: next.parsed.usedWebSearch === true ? [{ type: 'web_search_call' }] : []
+         }
+       };
     });
     createStructuredJsonResponse.mockResolvedValueOnce = ((value: { parsed: ReturnType<typeof result> }) => {
       queueResearchResponse(value);

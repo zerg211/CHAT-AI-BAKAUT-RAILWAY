@@ -25,6 +25,12 @@ interface EmailMessageContext {
   createdAt: string;
 }
 
+interface EmailHandoffContext {
+  purpose?: string | null;
+  buyerQuestion?: string | null;
+  preferredContact?: 'message' | 'call' | null;
+}
+
 function parseRecipients(value?: string) {
   return (value ?? '')
     .split(',')
@@ -145,8 +151,20 @@ function leadSubject(lead: Lead, _conversation: EmailConversationContext | null)
   return `Новый лид из AI-чата: ${lead.name}${contact ? `, ${contact}` : ''}`;
 }
 
-function leadText(lead: Lead, conversation: EmailConversationContext | null, messages: EmailMessageContext[]) {
+function preferredContactLabel(preferredContact?: EmailHandoffContext['preferredContact']) {
+  if (preferredContact === 'message') return 'написать';
+  if (preferredContact === 'call') return 'позвонить';
+  return null;
+}
+
+function leadText(
+  lead: Lead,
+  conversation: EmailConversationContext | null,
+  messages: EmailMessageContext[],
+  handoff?: EmailHandoffContext | null
+) {
   const summary = leadSummary(lead, conversation, messages);
+  const contactPreference = preferredContactLabel(handoff?.preferredContact);
   const lines = [
     'Новый лид из AI-чата',
     '',
@@ -154,6 +172,9 @@ function leadText(lead: Lead, conversation: EmailConversationContext | null, mes
     `Имя: ${lead.name}`,
     `Телефон: ${lead.phone || 'не указан'}`,
     `Email: ${lead.email || 'не указан'}`,
+    contactPreference ? `Предпочтительный способ связи: ${contactPreference}` : null,
+    handoff?.purpose ? `Цель обращения: ${compactText(handoff.purpose, 500)}` : null,
+    handoff?.buyerQuestion ? `Исходный вопрос покупателя: ${compactText(handoff.buyerQuestion, 700)}` : null,
     '',
     `SUMMARY: ${summary}`,
     '',
@@ -172,7 +193,11 @@ function leadText(lead: Lead, conversation: EmailConversationContext | null, mes
 
 export async function sendLeadEmail(
   lead: Lead,
-  context: { session?: ConversationSession | null; messages?: Message[] } = {}
+  context: {
+    session?: ConversationSession | null;
+    messages?: Message[];
+    handoff?: EmailHandoffContext | null;
+  } = {}
 ): Promise<EmailResult> {
   if (!config.EMAIL_HTTP_URL) {
     return { ok: false, skipped: true, error: 'EMAIL_HTTP_URL is not configured' };
@@ -213,7 +238,7 @@ export async function sendLeadEmail(
       createdAt: message.createdAt
     }));
     const subject = leadSubject(lead, conversation);
-    const text = leadText(lead, conversation, messages);
+    const text = leadText(lead, conversation, messages, context.handoff);
     const body = isResendEndpoint(config.EMAIL_HTTP_URL)
       ? {
           from,

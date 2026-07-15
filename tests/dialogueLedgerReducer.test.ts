@@ -344,6 +344,104 @@ describe('dialogue ledger reducer', () => {
     expect(state.needsById.generator?.selectedProductIds).toEqual(['validated-generator']);
   });
 
+  it('applies explicit replace and clear selection modes without preserving stale product ids', () => {
+    const opened = event({
+      eventId: 'validated-selection',
+      eventType: 'need.opened',
+      scope: 'need',
+      source: 'system_reducer',
+      payload: {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'Generator selection',
+        selectedProductIds: ['old-generator'],
+        rejectedProductIds: [],
+        selectionUpdateMode: 'replace',
+        invalidatedProductIds: [],
+        status: 'selected',
+        activate: true
+      }
+    });
+    const replaceUpdate = event({
+      eventId: 'requirements-changed',
+      eventType: 'need.updated',
+      scope: 'need',
+      source: 'llm_state_delta',
+      payload: {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'Generator with changed hard requirements',
+        selectedProductIds: [],
+        rejectedProductIds: [],
+        selectionUpdateMode: 'replace',
+        invalidatedProductIds: ['old-generator'],
+        status: 'open',
+        activate: true
+      }
+    });
+    const clearUpdate = event({
+      eventId: 'selection-cleared',
+      eventType: 'need.updated',
+      scope: 'need',
+      source: 'llm_state_delta',
+      payload: {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'Generator selection reset',
+        selectedProductIds: [],
+        rejectedProductIds: [],
+        selectionUpdateMode: 'clear',
+        invalidatedProductIds: ['old-generator'],
+        status: 'open',
+        activate: true
+      }
+    });
+
+    expect(reduceDialogueLedger([opened, replaceUpdate]).needsById.generator?.selectedProductIds).toEqual([]);
+    expect(reduceDialogueLedger([opened, clearUpdate]).needsById.generator?.selectedProductIds).toEqual([]);
+  });
+
+  it('preserves only non-invalidated products when selection mode is explicit', () => {
+    const state = reduceDialogueLedger([
+      event({
+        eventId: 'validated-selection',
+        eventType: 'need.opened',
+        scope: 'need',
+        source: 'system_reducer',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'Generator selection',
+          selectedProductIds: ['stale-generator', 'still-valid-generator'],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'replace',
+          invalidatedProductIds: [],
+          status: 'selected',
+          activate: true
+        }
+      }),
+      event({
+        eventId: 'preserve-valid-selection',
+        eventType: 'need.updated',
+        scope: 'need',
+        source: 'llm_state_delta',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'Continue selection after one constraint changed',
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'preserve',
+          invalidatedProductIds: ['stale-generator'],
+          status: 'selected',
+          activate: true
+        }
+      })
+    ]);
+
+    expect(state.needsById.generator?.selectedProductIds).toEqual(['still-valid-generator']);
+  });
+
   it('removes a validated product when the LLM records an explicit buyer rejection', () => {
     const state = reduceDialogueLedger([
       event({

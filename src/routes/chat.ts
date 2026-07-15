@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
-import { TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
+import { RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudgetExceededError } from '../ai/agentManagerTurnBudget.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
@@ -34,7 +34,14 @@ const generationStatusMessages = [
   'Собираю короткий ответ с выводом и ценами...'
 ];
 
-const GENERATION_TIMEOUT_MS = 120_000;
+const TURN_DEADLINE_MS = 60_000;
+
+function remainingTurnDeadlineMs(deadlineAt: string | null | undefined) {
+  const parsed = deadlineAt ? Date.parse(deadlineAt) : Number.NaN;
+  return Number.isFinite(parsed)
+    ? Math.max(1, parsed - Date.now())
+    : TURN_DEADLINE_MS;
+}
 
 function requestHash(sessionId: string, message: string) {
   return createHash('sha256').update(`${sessionId}\n${message.trim()}`).digest('hex');
@@ -120,7 +127,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     }
     const turnId = turn.id;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(turn.deadlineAt));
     timeout.unref?.();
 
     const send = openSseReply(reply, { 'x-chat-turn-id': turnId });
@@ -159,7 +166,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
       const recoveryAllowed = !executionInProgress && !budgetStopped;
+      let semanticRecoveryAttempted = false;
       if (!controller.signal.aborted && recoveryAllowed) {
+        semanticRecoveryAttempted = true;
         try {
           const recoveredPayload = await runWithOpenAIUsageContext({
             sessionId: params.id,
@@ -192,11 +201,14 @@ export async function registerChatRoutes(app: FastifyInstance) {
           errorMessage: safeErrorMessage(error)
         }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
       }
+      const clientRecoveryAllowed = recoveryAllowed && !semanticRecoveryAttempted && !controller.signal.aborted;
       const message = executionInProgress
         ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
         : budgetStopped
           ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
-        : 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.';
+          : controller.signal.aborted
+            ? 'Не удалось завершить ответ в пределах времени этого хода. Запрос сохранён, но повторный запуск этого же хода не выполняется.'
+            : 'Не удалось завершить ответ после единственной попытки восстановления. Запрос сохранён, но повторный запуск этого же хода не выполняется.';
       if (!controller.signal.aborted) {
         app.log.warn({
           sessionId: params.id,
@@ -208,7 +220,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       send('error', {
         error: message,
         turnId,
-        recoverable: recoveryAllowed,
+        recoverable: clientRecoveryAllowed,
         runtimeMode: runtimeDecision.runtimeMode,
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision
@@ -225,8 +237,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
       id: z.string().uuid(),
       turnId: z.string().uuid()
     }).parse(request.params);
+    const persistedTurn = await conversations.getTurn(params.id, params.turnId);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), GENERATION_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(persistedTurn?.deadlineAt));
     timeout.unref?.();
 
     const send = openSseReply(reply, { 'x-chat-turn-id': params.turnId });
@@ -264,8 +277,8 @@ export async function registerChatRoutes(app: FastifyInstance) {
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
-      const recoveryAllowed = !executionInProgress && !budgetStopped;
-      if (recoveryAllowed) {
+      const recoveryUnavailable = error instanceof RecoveryAttemptUnavailableError;
+      if (!executionInProgress) {
         await conversations.updateTurn({
           sessionId: params.id,
           turnId: params.turnId,
@@ -286,7 +299,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       }, 'chat recovery failed');
       send('error', {
         turnId: params.turnId,
-        recoverable: recoveryAllowed,
+        recoverable: false,
         runtimeMode: runtimeDecision.runtimeMode,
         runtimeModeReason: runtimeDecision.reason,
         agentManagerRuntime: runtimeDecision,
@@ -294,7 +307,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
           ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
           : budgetStopped
             ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
-          : 'Вопрос сохранен, повторять его не нужно. Восстановлю обработку этого же сообщения.'
+            : recoveryUnavailable
+              ? 'Для этого хода уже использована единственная попытка восстановления. Новый запуск этого же хода не выполняется.'
+              : 'Не удалось завершить восстановление этого хода. Запрос сохранён, но повторный запуск этого же хода не выполняется.'
       });
     } finally {
       stopStatusTimer?.();

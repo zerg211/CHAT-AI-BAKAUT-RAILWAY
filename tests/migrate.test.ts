@@ -28,6 +28,7 @@ describe('database schema migrations', () => {
     expect(queries).toContain('ALTER TABLE leads ADD COLUMN IF NOT EXISTS client_request_hash text');
     expect(queries).toContain('ALTER TABLE lead_outbox ALTER COLUMN turn_id DROP NOT NULL');
     expect(queries.some((query) => query.includes('leads_session_client_lead_id_idx'))).toBe(true);
+    expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS lead_capture_drafts'))).toBe(true);
   });
 
   it('creates history_summary in the fresh database schema', async () => {
@@ -108,5 +109,19 @@ describe('database schema migrations', () => {
     expect(schema).toContain('leads_session_client_lead_id_idx');
     expect(schema).toContain('WHERE client_lead_id IS NOT NULL');
     expect(schema).toContain('ALTER TABLE lead_outbox ALTER COLUMN turn_id DROP NOT NULL');
+  });
+
+  it('adds expiring partial-contact drafts that preserve the original handoff scope', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '018_lead_capture_drafts.sql'), 'utf8');
+
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS lead_capture_drafts');
+    expect(schema).toContain('buyer_question text NOT NULL');
+    expect(schema).toContain('preferred_contact text');
+    expect(schema).toContain("status IN ('pending', 'consumed', 'cancelled', 'expired')");
+    expect(schema).toContain("now() + interval '30 minutes'");
+    expect(schema).toContain('consent_evidence_hash text NOT NULL');
+    expect(schema).toContain('scope_hash text NOT NULL');
+    expect(schema).toContain('lead_capture_drafts_pending_session_idx');
+    expect(schema).toContain('lead_capture_drafts_expiry_idx');
   });
 });

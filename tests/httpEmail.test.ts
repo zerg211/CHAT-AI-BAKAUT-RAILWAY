@@ -127,7 +127,15 @@ describe('sendLeadEmail', () => {
     process.env.LEADS_TO_EMAIL = 'orp5@bakaut.biz';
 
     const { sendLeadEmail } = await import('../src/email/httpEmail.js');
-    const result = await sendLeadEmail(lead(), { session: session(), messages: messages() });
+    const result = await sendLeadEmail(lead(), {
+      session: session(),
+      messages: messages(),
+      handoff: {
+        purpose: 'Уточнить совместимость генератора с насосом',
+        buyerQuestion: 'Подойдет ли этот генератор для насоса?',
+        preferredContact: 'message'
+      }
+    });
 
     expect(result).toMatchObject({ ok: true, status: 200 });
     expect(fetchMock).toHaveBeenCalledWith('https://api.resend.com/emails///', expect.objectContaining({
@@ -148,6 +156,9 @@ describe('sendLeadEmail', () => {
       text: expect.any(String)
     });
     expect(body.text).toContain('Контакт:\nИмя: Иван\nТелефон: +7 900 000-00-00\nEmail: не указан');
+    expect(body.text).toContain('Предпочтительный способ связи: написать');
+    expect(body.text).toContain('Цель обращения: Уточнить совместимость генератора с насосом');
+    expect(body.text).toContain('Исходный вопрос покупателя: Подойдет ли этот генератор для насоса?');
     expect(body.text).toContain('SUMMARY:');
     expect(body.text).toContain('Сводка потребности: нужен бензиновый генератор для дачи, бюджет до 80 тыс.');
     expect(body.text).toContain('Показанные/выбранные позиции: SUMEC SU4500i - 79 000 ₽');
@@ -157,6 +168,33 @@ describe('sendLeadEmail', () => {
     expect(body.text.indexOf('Телефон:')).toBeLessThan(body.text.indexOf('SUMMARY:'));
     expect(body.lead).toBeUndefined();
     expect(body.messages).toBeUndefined();
+  });
+
+  it('renders the call preference and original pending-draft question from a public form outbox', async () => {
+    const fetchMock = vi.fn(async (_url: string, _request: RequestInit & { body: string }) =>
+      new Response(JSON.stringify({ id: 'resend-message-call' }), { status: 200 })
+    );
+    vi.doMock('undici', () => ({ fetch: fetchMock }));
+    clearEmailEnv();
+    process.env.EMAIL_HTTP_URL = 'https://api.resend.com/emails';
+    process.env.EMAIL_FROM = 'Bakaut <orp5@bakaut.biz>';
+    process.env.LEADS_TO_EMAIL = 'orp5@bakaut.biz';
+
+    const { sendLeadEmail } = await import('../src/email/httpEmail.js');
+    await sendLeadEmail(lead(), {
+      handoff: {
+        purpose: 'Уточнить толщину уплотняемого слоя',
+        buyerQuestion: 'Подойдёт ли эта виброплита для слоя щебня 30 см?',
+        preferredContact: 'call'
+      }
+    });
+
+    const request = fetchMock.mock.calls[0]?.[1];
+    expect(request).toBeDefined();
+    const body = JSON.parse(request!.body);
+    expect(body.text).toContain('Предпочтительный способ связи: позвонить');
+    expect(body.text).toContain('Цель обращения: Уточнить толщину уплотняемого слоя');
+    expect(body.text).toContain('Исходный вопрос покупателя: Подойдёт ли эта виброплита для слоя щебня 30 см?');
   });
 
   it('supports legacy Railway Resend variables from the previous deployment', async () => {

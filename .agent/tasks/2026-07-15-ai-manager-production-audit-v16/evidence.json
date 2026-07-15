@@ -1,0 +1,58 @@
+{
+  "taskId": "2026-07-15-ai-manager-production-audit-v16",
+  "verdict": "LOCAL_PASS_PRODUCTION_REVALIDATION_PENDING",
+  "baselineCommit": "f41f99ca015cc63c27696becbf1db41dfdefed66",
+  "branch": "main",
+  "productionBaseline": {
+    "surface": "embedded widget at https://bakautprof.ru/",
+    "runtime": "2026-07-15.gpt-5-6-terra-latency-headroom-v15",
+    "sessionId": "7e531202-dee1-4576-ae88-2aac09b453c0",
+    "conversationId": 1782,
+    "failedTurnId": "00f5d97a-14f4-42d9-980d-71bd81f461de",
+    "status": "failed",
+    "stage": "recovery_failed"
+  },
+  "localVerification": {
+    "releaseGate": "PASS",
+    "testFilesPassed": 66,
+    "testsPassed": 549,
+    "agenticEvalFilesPassed": 4,
+    "agenticEvalTestsPassed": 187,
+    "typecheck": "PASS",
+    "productionBuild": "PASS",
+    "productionDependencyVulnerabilities": 0,
+    "noNewRegex": "PASS",
+    "legacyRegexBaseline": 508,
+    "gitDiffCheck": "PASS",
+    "freshVerifier": {
+      "verdict": "PASS",
+      "modelIndex2200Phase": "unknown",
+      "modelIndex2300Phase": "unknown",
+      "genuineO230Phase": "single_220",
+      "genuineO230Proof": "satisfied"
+    }
+  },
+  "acceptanceCriteria": {
+    "AC1": "PENDING_DEPLOYMENT",
+    "AC2": "PENDING_PRODUCTION_DIALOGUES",
+    "AC3": "LOCAL_PASS",
+    "AC4": "LOCAL_PASS",
+    "AC5": "LOCAL_PASS",
+    "AC6": "LOCAL_PASS",
+    "AC7": "LOCAL_PASS",
+    "AC8": "LOCAL_PASS",
+    "AC9": "PENDING_PRODUCTION_DIALOGUES",
+    "AC10": "PENDING_POSTFIX_PRODUCTION_TRACES",
+    "AC11": "LOCAL_PASS_PRODUCTION_LATENCY_PENDING",
+    "AC12": "PASS",
+    "AC13": "PASS",
+    "AC14": "PENDING_DEPLOYMENT_AND_LIVE_REVALIDATION",
+    "AC15": "PARTIAL_POSTDEPLOY_ARTIFACTS_PENDING"
+  },
+  "externalBlockers": [
+    {
+      "id": "V7",
+      "description": "Production catalog freshness previously reported never_synced with all active products stale; external Railway catalog sync must be configured and observed."
+    }
+  ]
+}

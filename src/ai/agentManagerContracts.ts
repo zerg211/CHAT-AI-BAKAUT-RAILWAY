@@ -139,7 +139,7 @@ const leadContactSchema = z.object({
   name: optionalText,
   phone: optionalText,
   email: optionalText,
-  preferredContact: optionalText,
+  preferredContact: optionalPlaceholder(z.enum(['message', 'call'])),
   comment: optionalText
 }).strict();
 
@@ -212,7 +212,7 @@ export interface ToolRequestArgs {
     name?: string | null;
     phone?: string | null;
     email?: string | null;
-    preferredContact?: string | null;
+    preferredContact?: 'message' | 'call' | null;
     comment?: string | null;
   } | null;
   reason?: string | null;
@@ -297,9 +297,11 @@ export const AgentSelectionPolicySchema = z.object({
 
 export const LeadCaptureAuthorizationSchema = z.object({
   authorized: z.boolean(),
-  contactSource: z.enum(['current_message', 'existing_session', 'none']),
+  contactSource: z.enum(['current_message', 'existing_session', 'pending_draft', 'none']),
   purpose: nonEmptyString.nullable(),
-  evidence: nonEmptyString.nullable()
+  buyerQuestion: nonEmptyString.nullable().optional(),
+  evidence: nonEmptyString.nullable(),
+  pendingDraftId: z.string().uuid().nullable().optional()
 }).strict().superRefine((authorization, context) => {
   if (authorization.authorized) {
     if (authorization.contactSource === 'none') {
@@ -308,11 +310,26 @@ export const LeadCaptureAuthorizationSchema = z.object({
     if (!authorization.purpose) {
       context.addIssue({ code: 'custom', path: ['purpose'], message: 'authorized lead requires a purpose' });
     }
+    if (!authorization.buyerQuestion) {
+      context.addIssue({ code: 'custom', path: ['buyerQuestion'], message: 'authorized lead requires a grounded buyer question' });
+    }
     if (!authorization.evidence) {
       context.addIssue({ code: 'custom', path: ['evidence'], message: 'authorized lead requires current-message evidence' });
     }
-  } else if (authorization.contactSource !== 'none' || authorization.purpose !== null || authorization.evidence !== null) {
-    context.addIssue({ code: 'custom', message: 'unauthorized lead must not carry contact source, purpose, or evidence' });
+    if (authorization.contactSource === 'pending_draft' && !authorization.pendingDraftId) {
+      context.addIssue({ code: 'custom', path: ['pendingDraftId'], message: 'pending draft authorization requires its draft id' });
+    }
+    if (authorization.contactSource !== 'pending_draft' && authorization.pendingDraftId) {
+      context.addIssue({ code: 'custom', path: ['pendingDraftId'], message: 'only pending draft authorization may carry a draft id' });
+    }
+  } else if (
+    authorization.contactSource !== 'none' ||
+    authorization.purpose !== null ||
+    authorization.buyerQuestion != null ||
+    authorization.evidence !== null ||
+    authorization.pendingDraftId != null
+  ) {
+    context.addIssue({ code: 'custom', message: 'unauthorized lead must not carry contact source, purpose, buyer question, evidence, or draft id' });
   }
 });
 

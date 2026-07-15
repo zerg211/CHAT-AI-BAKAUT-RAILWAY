@@ -114,7 +114,7 @@ describe('streamChatMessage watchdog and recovery', () => {
     expect(String(fetcher.mock.calls[1]?.[0])).toContain('/messages/turn-from-header/recover');
   });
 
-  it('retries the same durable turn when the first recovery transport closes before done', async () => {
+  it('does not start a second recovery transport when the only recovery closes before done', async () => {
     vi.useFakeTimers();
     try {
       const emptyStream = () => new ReadableStream<Uint8Array>({
@@ -155,11 +155,9 @@ describe('streamChatMessage watchdog and recovery', () => {
         undefined,
         { fetcher }
       );
-      await vi.advanceTimersByTimeAsync(250);
-
-      await expect(result).resolves.toMatchObject(recoveredPayload);
-      expect(fetcher).toHaveBeenCalledTimes(3);
-      expect(recoveryCalls).toBe(2);
+      await expect(result).rejects.toThrow('Server finished without a done payload');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(recoveryCalls).toBe(1);
     } finally {
       vi.useRealTimers();
     }

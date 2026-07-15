@@ -3,25 +3,21 @@ import rateLimit from '@fastify/rate-limit';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const repoMocks = vi.hoisted(() => ({
-  createClientLead: vi.fn(),
+  createClientLeadWithOutbox: vi.fn(),
   markEmailResult: vi.fn(),
-  getSession: vi.fn(),
-  listTurns: vi.fn(),
-  enqueueLeadOutbox: vi.fn()
+  getSession: vi.fn()
 }));
 
 vi.mock('../src/db/repositories.js', () => ({
   LeadRepository: vi.fn(function LeadRepository() {
     return {
-      createClientLead: repoMocks.createClientLead,
+      createClientLeadWithOutbox: repoMocks.createClientLeadWithOutbox,
       markEmailResult: repoMocks.markEmailResult
     };
   }),
   ConversationRepository: vi.fn(function ConversationRepository() {
     return {
-      getSession: repoMocks.getSession,
-      listTurns: repoMocks.listTurns,
-      enqueueLeadOutbox: repoMocks.enqueueLeadOutbox
+      getSession: repoMocks.getSession
     };
   }),
   ProductRepository: vi.fn()
@@ -49,15 +45,9 @@ function validLeadPayload() {
   };
 }
 
-describe('lead routes', () => {
-  beforeEach(() => {
-    repoMocks.createClientLead.mockReset();
-    repoMocks.markEmailResult.mockReset();
-    repoMocks.getSession.mockReset();
-    repoMocks.listTurns.mockReset();
-    repoMocks.enqueueLeadOutbox.mockReset();
-    repoMocks.getSession.mockResolvedValue({ id: sessionId, status: 'active' });
-    repoMocks.createClientLead.mockResolvedValue({
+function completedLeadCapture() {
+  return {
+    lead: {
       id: 'lead-id',
       sessionId,
       clientLeadId,
@@ -65,11 +55,31 @@ describe('lead routes', () => {
       phone: '+7 900 000-10-03',
       status: 'pending_email',
       createdAt: new Date().toISOString()
-    });
-    repoMocks.listTurns.mockResolvedValue([
-      { id: '00000000-0000-4000-8000-000000000002' }
-    ]);
-    repoMocks.enqueueLeadOutbox.mockResolvedValue({ id: 'outbox-id' });
+    },
+    outbox: {
+      id: 'outbox-id',
+      leadId: 'lead-id',
+      sessionId,
+      turnId: '00000000-0000-4000-8000-000000000002',
+      destination: 'lead_email',
+      payload: { leadId: 'lead-id', source: 'lead_form' },
+      status: 'pending',
+      attemptCount: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    },
+    draft: null,
+    pendingDraftMatched: false
+  };
+}
+
+describe('lead routes', () => {
+  beforeEach(() => {
+    repoMocks.createClientLeadWithOutbox.mockReset();
+    repoMocks.markEmailResult.mockReset();
+    repoMocks.getSession.mockReset();
+    repoMocks.getSession.mockResolvedValue({ id: sessionId, status: 'active' });
+    repoMocks.createClientLeadWithOutbox.mockResolvedValue(completedLeadCapture());
   });
 
   it('saves the lead and queues email delivery without blocking the form response', async () => {
@@ -83,25 +93,21 @@ describe('lead routes', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
+      ok: true,
+      status: 'queued',
       lead: { id: 'lead-id' },
-      email: {
-        ok: false,
-        queued: true,
-        outboxId: 'outbox-id',
-        status: 'queued'
-      }
+      outboxId: 'outbox-id'
     });
-    expect(repoMocks.enqueueLeadOutbox).toHaveBeenCalledWith(expect.objectContaining({
-      leadId: 'lead-id',
+    expect(repoMocks.createClientLeadWithOutbox).toHaveBeenCalledWith(expect.objectContaining({
       sessionId,
-      turnId: '00000000-0000-4000-8000-000000000002',
-      destination: 'lead_email'
+      clientLeadId,
+      question: validLeadPayload().question
     }));
     expect(repoMocks.markEmailResult).not.toHaveBeenCalled();
   });
 
-  it('still returns a saved lead if outbox enqueue fails after local capture', async () => {
-    repoMocks.enqueueLeadOutbox.mockRejectedValueOnce(new Error('outbox unavailable'));
+  it('does not report success if the atomic lead and outbox operation fails', async () => {
+    repoMocks.createClientLeadWithOutbox.mockRejectedValueOnce(new Error('outbox unavailable'));
     const app = await buildTestApp();
     const response = await app.inject({
       method: 'POST',
@@ -115,34 +121,100 @@ describe('lead routes', () => {
     });
     await app.close();
 
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode).toBe(503);
     expect(response.json()).toMatchObject({
-      lead: { id: 'lead-id' },
-      email: {
-        ok: false,
-        queued: false,
-        status: 'saved_without_outbox'
-      }
-    });
-    expect(repoMocks.markEmailResult).toHaveBeenCalledWith('lead-id', 'email_failed', expect.objectContaining({
       ok: false,
-      error: 'lead_outbox_enqueue_failed'
-    }));
+      error: 'lead_outbox_enqueue_failed',
+      retryable: true
+    });
+    expect(repoMocks.markEmailResult).not.toHaveBeenCalled();
   });
 
-  it('queues a form lead even when the session has no chat turn yet', async () => {
-    repoMocks.listTurns.mockResolvedValueOnce([]);
+  it('does not report success when outbox enqueue returns no durable row', async () => {
+    repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce({
+      ...completedLeadCapture(),
+      outbox: { ...completedLeadCapture().outbox, id: '' }
+    });
+    const app = await buildTestApp();
+    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    await app.close();
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      error: 'lead_outbox_enqueue_failed',
+      retryable: true,
+      leadId: 'lead-id'
+    });
+  });
+
+  it('does not report a terminal dead outbox row as queued', async () => {
+    repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce({
+      ...completedLeadCapture(),
+      outbox: { ...completedLeadCapture().outbox, id: 'outbox-dead', status: 'dead' }
+    });
+    const app = await buildTestApp();
+    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    await app.close();
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      error: 'lead_outbox_enqueue_failed',
+      retryable: true,
+      leadId: 'lead-id'
+    });
+  });
+
+  it('accepts a pending chat draft only when its context was atomically preserved and consumed', async () => {
+    const draft = {
+      id: 'draft-id',
+      purpose: 'Уточнить совместимость виброплиты',
+      buyerQuestion: 'Подойдёт ли плита для слоя 30 см?',
+      preferredContact: 'message',
+      status: 'consumed',
+      consumedLeadId: 'lead-id'
+    };
+    repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce({
+      ...completedLeadCapture(),
+      draft,
+      pendingDraftMatched: true,
+      outbox: {
+        ...completedLeadCapture().outbox,
+        payload: {
+          leadId: 'lead-id',
+          source: 'lead_form',
+          purpose: draft.purpose,
+          question: draft.buyerQuestion,
+          preferredContact: draft.preferredContact
+        }
+      }
+    });
     const app = await buildTestApp();
     const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(200);
-    expect(repoMocks.enqueueLeadOutbox).toHaveBeenCalledWith(expect.objectContaining({
-      leadId: 'lead-id',
-      sessionId,
-      turnId: null,
-      destination: 'lead_email'
-    }));
+    expect(response.json()).toMatchObject({ ok: true, status: 'queued', outboxId: 'outbox-id' });
+  });
+
+  it('does not report success when a matched draft was not consumed with its outbox', async () => {
+    repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce({
+      ...completedLeadCapture(),
+      pendingDraftMatched: true,
+      draft: null
+    });
+    const app = await buildTestApp();
+    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    await app.close();
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({
+      ok: false,
+      error: 'lead_outbox_enqueue_failed',
+      retryable: true,
+      leadId: 'lead-id'
+    });
   });
 
   it('uses the same request hash for an identical client retry and returns the same lead', async () => {
@@ -154,9 +226,9 @@ describe('lead routes', () => {
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(first.json().lead.id).toBe(second.json().lead.id);
-    expect(repoMocks.createClientLead).toHaveBeenCalledTimes(2);
-    const firstInput = repoMocks.createClientLead.mock.calls[0]?.[0];
-    const secondInput = repoMocks.createClientLead.mock.calls[1]?.[0];
+    expect(repoMocks.createClientLeadWithOutbox).toHaveBeenCalledTimes(2);
+    const firstInput = repoMocks.createClientLeadWithOutbox.mock.calls[0]?.[0];
+    const secondInput = repoMocks.createClientLeadWithOutbox.mock.calls[1]?.[0];
     const hash = String(firstInput.clientRequestHash);
     const hexadecimal = new Set('0123456789abcdef');
     expect(hash).toHaveLength(64);
@@ -165,27 +237,27 @@ describe('lead routes', () => {
   });
 
   it('returns 409 when a client lead id is reused with a different payload', async () => {
-    repoMocks.createClientLead.mockResolvedValueOnce(null);
+    repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce(null);
     const app = await buildTestApp();
     const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(409);
     expect(response.json()).toEqual({ error: 'clientLeadId already used with different payload' });
-    expect(repoMocks.enqueueLeadOutbox).not.toHaveBeenCalled();
+    expect(repoMocks.createClientLeadWithOutbox).toHaveBeenCalledTimes(1);
   });
 
   it('does not create a lead if the session becomes inactive before insertion', async () => {
     repoMocks.getSession
       .mockResolvedValueOnce({ id: sessionId, status: 'active' })
       .mockResolvedValueOnce({ id: sessionId, status: 'closed' });
-    repoMocks.createClientLead.mockResolvedValueOnce(null);
+    repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce(null);
     const app = await buildTestApp();
     const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(404);
-    expect(repoMocks.enqueueLeadOutbox).not.toHaveBeenCalled();
+    expect(repoMocks.createClientLeadWithOutbox).toHaveBeenCalledTimes(1);
   });
 
   it('rejects missing, inactive, and malformed session-bound submissions', async () => {

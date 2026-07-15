@@ -29,11 +29,20 @@ describe('submitLead watchdog', () => {
       name: 'Иван',
       email: 'buyer@example.com',
       question: 'Нужен генератор'
-    }, { fetcher: async () => new Response(JSON.stringify({ id: 'lead-1' }), { status: 201 }) })).resolves.toBeUndefined();
+    }, { fetcher: async () => new Response(JSON.stringify({
+      ok: true,
+      status: 'queued',
+      outboxId: 'outbox-1',
+      lead: { id: 'lead-1' }
+    }), { status: 201 }) })).resolves.toMatchObject({ status: 'queued', outboxId: 'outbox-1' });
   });
 
   it('sends the client idempotency key with the lead payload', async () => {
-    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response('{}', { status: 200 }));
+    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({
+      ok: true,
+      status: 'queued',
+      outboxId: 'outbox-1'
+    }), { status: 200 }));
     const payload = {
       sessionId: '00000000-0000-4000-8000-000000000001',
       clientLeadId: '00000000-0000-4000-8000-000000000002',
@@ -44,5 +53,30 @@ describe('submitLead watchdog', () => {
     await submitLead('', payload, { fetcher });
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(payload);
+  });
+
+  it('rejects a legacy success-shaped response that has no durable outbox', async () => {
+    await expect(submitLead('', {
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      clientLeadId: '00000000-0000-4000-8000-000000000002',
+      name: 'Иван',
+      phone: '+79990000000'
+    }, {
+      fetcher: async () => new Response(JSON.stringify({
+        lead: { id: 'lead-1' },
+        email: { queued: false, status: 'saved_without_outbox' }
+      }), { status: 200 })
+    })).rejects.toThrow('lead failed');
+  });
+
+  it('rejects a queued response without an outbox id', async () => {
+    await expect(submitLead('', {
+      sessionId: '00000000-0000-4000-8000-000000000001',
+      clientLeadId: '00000000-0000-4000-8000-000000000002',
+      name: 'Иван',
+      phone: '+79990000000'
+    }, {
+      fetcher: async () => new Response(JSON.stringify({ ok: true, status: 'queued' }), { status: 200 })
+    })).rejects.toThrow('lead failed');
   });
 });

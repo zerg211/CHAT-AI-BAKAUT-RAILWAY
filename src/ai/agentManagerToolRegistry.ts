@@ -89,6 +89,15 @@ const generatorLoadResult = z.object({
 
 const webResearchResult = z.object({
   usedWebSearch: z.boolean().optional(),
+  searchDisposition: z.enum(['completed', 'memory_hit', 'not_needed', 'skipped_budget', 'timed_out', 'failed', 'aborted']).optional(),
+  researchOutcome: z.enum(['answered', 'partial', 'exhausted']).optional(),
+  sourcesExhausted: z.boolean().optional(),
+  unconfirmedFacts: z.array(z.object({
+    requirementIds: z.array(z.string()),
+    attribute: z.string(),
+    status: z.string(),
+    reason: z.string()
+  }).strict()).optional(),
   facts: z.array(z.unknown()).optional(),
   conflicts: z.array(z.unknown()).optional(),
   answerGuidance: z.record(z.string(), z.unknown()).optional(),
@@ -106,9 +115,17 @@ const leadCaptureResult = z.object({
   leadId: z.string().optional(),
   existing: z.boolean().optional(),
   outbox: z.boolean().optional(),
+  outboxId: z.string().optional(),
+  status: z.enum(['queued']).optional(),
+  dispatchStatus: z.enum(['pending', 'sending', 'sent', 'failed']).optional(),
   missing: z.enum(['contact', 'name']).optional(),
+  missingFields: z.array(z.enum(['name', 'contact'])).max(2).optional(),
+  draftId: z.string().uuid().optional(),
+  draftSaved: z.boolean().optional(),
+  contactStored: z.boolean().optional(),
+  preferredContact: z.enum(['message', 'call']).optional(),
+  originalQuestionPreserved: z.boolean().optional(),
   reason: z.string().optional(),
-  contact: z.record(z.string(), z.unknown()).optional(),
   error: z.unknown().optional()
 }).strict();
 
