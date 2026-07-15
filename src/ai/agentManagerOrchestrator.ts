@@ -586,7 +586,8 @@ function leadActionAfterReview(input: {
     issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
   );
   if (reviewRequiresOfferForm) return 'offer_form';
-  if (leadCaptureMissingContact(input.toolResults) && answerRequestsContactData(input.finalText)) return 'offer_form';
+  const leadCaptureOk = input.toolResults.some((result) => result.tool === 'lead.capture' && result.status === 'ok');
+  if (!leadCaptureOk && answerRequestsContactData(input.finalText)) return 'offer_form';
   return input.answer.leadAction;
 }
 
@@ -2510,7 +2511,7 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
       clauses.push({
         code: 'web_research_unavailable_grounding',
         sourceRequestId: result.requestId,
-        instruction: 'The requested web fact check did not complete successfully. Answer only at the truthful general engineering level from the current dialogue and already available facts; explicitly separate that from exact/current verification, and do not claim that web facts were checked or verified by this failed tool result.'
+        instruction: 'The requested web fact check exhausted the available search attempt without confirming the decisive fact. Do not use this failed result as factual evidence and do not turn missing confirmation into incompatibility. Preserve any useful preliminary product conclusion supported by the dialogue, ledger, or successful catalog results; name the exact fact that remains unconfirmed; say that final confirmation still requires a technical check. Offer to obtain that concrete result from a technical specialist, ask the buyer to leave a phone number, and ask whether they prefer the result by message or by phone call. Set leadAction="offer_form". Do not claim that the request was already transferred or that the specialist is already checking it until lead.capture succeeds.'
       });
       continue;
     }
@@ -2872,7 +2873,7 @@ function failedToolEvidenceSafeRewrite(toolResults: ToolResult[]) {
     return 'Сейчас не удалось надёжно завершить расчёт требуемой мощности, поэтому я не буду называть неподтверждённую цифру или рекомендовать модели наугад. Повторите данные по нагрузке — мощность, количество и что запускается одновременно — и я пересчитаю.';
   }
   if (failedTools.has('web.researchProductFacts')) {
-    return 'Внешняя проверка источников сейчас не завершилась, поэтому точный факт по модели я не подтверждаю. Можно повторить запрос — я заново сверю характеристику по источнику.';
+    return 'Внешняя проверка источников сейчас не завершилась, поэтому точный факт по модели я не подтверждаю. Могу передать этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?';
   }
   return 'Не удалось надёжно завершить требуемую проверку, поэтому я не буду выдавать неподтверждённый результат. Попробуйте повторить запрос.';
 }
@@ -2923,7 +2924,8 @@ function failedGeneralTechnicalWebResearchSafeRewrite(input: {
     'THD — это уровень гармонических искажений: насколько форма напряжения генератора отличается от ровной синусоиды.',
     loadLine,
     'Практический вывод такой: для чувствительной нагрузки лучше выбирать инверторный генератор или модель, где прямо указаны чистая синусоида, низкий THD или пригодность для электроники.',
-    'Точную цифру THD по конкретной модели в этом ходе не подтверждаю: внешняя проверка не завершилась. Поэтому это общий инженерный ориентир, а точное значение для выбранной модели нужно отдельно подтвердить по источнику или паспорту.'
+    'Точную цифру THD по конкретной модели в этом ходе не подтверждаю: внешняя проверка не завершилась. Поэтому это общий инженерный ориентир, а точное значение для выбранной модели нужно отдельно подтвердить по источнику или паспорту.',
+    'Могу передать этот технический вопрос специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?'
   ].join('\n\n');
 }
 
@@ -2939,10 +2941,11 @@ function failedWebResearchSafeRewrite(input: {
   const productName = productNamesFromToolRequest(request)[0];
   const generalTechnicalRewrite = failedGeneralTechnicalWebResearchSafeRewrite({ intent: input.intent, request });
   if (!productName && generalTechnicalRewrite) return generalTechnicalRewrite;
+  const missingFact = input.intent.userMessageSummary.trim();
   if (productName) {
-    return `Не буду сейчас уверенно утверждать точный факт по ${productName}: внешняя проверка не завершилась. Могу опираться только на уже подтвержденные данные, а спорный параметр нужно добрать по источникам.`;
+    return `По уже подтверждённым данным ${productName} остаётся предварительным вариантом, но внешняя проверка не подтвердила решающий факт: ${missingFact} Поэтому окончательно утверждать не буду. Могу передать именно этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?`;
   }
-  return 'Внешняя проверка не завершилась, поэтому точный факт сейчас не подтверждаю. Могу ответить только на общем уровне, а спорный параметр нужно добрать по источникам.';
+  return `Внешняя проверка не подтвердила решающий факт: ${missingFact} Поэтому точный ответ сейчас не выдам как подтверждённый. Могу передать этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?`;
 }
 
 function researchGuidanceSafeRewrite(input: {
@@ -3711,7 +3714,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For a named model that is absent from the BAKAUT catalog but has checked external facts in web.researchProductFacts: answerText must include all three parts in this order: first answer the buyer direct technical question in simple words, then state that the exact model is not in our catalog, then mention genuinely nearby catalog models from payload.nearbyCatalogProducts when that list is non-empty. Do not omit catalog absence or nearby catalog orientation just because the direct technical fact was answered. Do not say "not found" when catalogPresence.status is "absent"; say the model is not in the catalog.',
             'For catalogPresence.status="present", do not mention "у нас есть в каталоге" in a pure technical answer unless intent.riskFlags contains "answer_policy_catalog_presence_relevant".',
             'Nearby means same brand plus same product class/model family first. If none are present, mention comparable same-class catalog products only as an orientation. Do not present nearby products as proof about the absent target model.',
-            'Do not add availability, delivery, discount, lead form, callback, or price discussion for a pure technical fact question unless the buyer asked for those commercial terms.',
+            'Do not add availability, delivery, discount, callback, or price discussion for a pure technical fact question unless the buyer asked for those commercial terms. Exception: when a required web fact check has exhausted the available attempt without confirming a decisive technical fact, follow the web_research_unavailable_grounding clause: preserve the useful preliminary conclusion, name the exact missing fact, offer technical follow-up, ask for a phone number and whether the buyer prefers a message or phone call, and set leadAction="offer_form" without claiming that the request was already transferred.',
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
             'For a plate compactor mismatch where the buyer asked for around 300-400 kg but the stated job is private yard / paving tile / paths, never say only "lighter class". State a concrete range: roughly 60-120 kg, usually around 60-90/100 kg for a private paving tile job depending on base and area. If products are provided, show and explain those options now instead of asking the buyer to request them again; ask whether to show/select options only when no suitable products are available in products.',
@@ -3796,7 +3799,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For catalog selection answers, require rewrite if answerText names a catalog recommendation or brand-model that is absent from products[].name, or if it names a returned product that is not strong enough to be a visible recommendation candidate.',
             'For a catalog narrowing continuation where products are available from current or previous visible cards, require rewrite if the answer claims it cannot show concrete models due to missing fresh catalog data or asks for a lead form instead of using those product facts.',
             'For a catalog-selection or grounded recommendation turn, the top-level products array is the authoritative mechanically validated recommendation set. Raw catalog tool success or raw productIds do not make a product safe. Missing evidence must not be rewritten as incompatibility. If catalog evidence is incomplete, require web research before a no-card or specialist answer; when no hard conflict is proven and the checked evidence supports orientation, allow a clearly preliminary recommendation with the exact remaining uncertainty. Only after research is exhausted may a no-card answer preserve verified facts, name the concrete unconfirmed fact, and offer technical follow-up without re-asking known facts.',
-            'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion.',
+            'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion. This prohibition does not apply to the exact technical follow-up required by web_research_unavailable_grounding after a required search attempt fails: in that case require the useful preliminary conclusion, exact unconfirmed fact, technical follow-up offer, phone request, message-or-call choice, leadAction="offer_form", and no false claim that handoff already happened.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
             'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
@@ -3843,7 +3846,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
               untrustedEvidenceBoundary,
               'Проверяй ответ только по currentUserMessage, products, toolStatuses, requiredResponseClauses и answer.',
               'Каждая названная модель, цена, масса, размер, мощность, усилие, скорость и эксплуатационное преимущество должны точно поддерживаться соответствующим products item. Иначе верни rewrite_required и удали или исправь неподтверждённое.',
-              'Не используй failed/error/timeout/denied/not_found tool как источник факта. Разрешено честно сказать, что внешняя проверка не завершилась.',
+              'Не используй failed/error/timeout/denied/not_found tool как источник факта. Если обязательный web-поиск исчерпан без подтверждения решающего факта, сохрани полезный предварительный вывод из подтверждённых данных, назови конкретный неподтверждённый факт, предложи техническое уточнение, попроси номер и выбор: написать результат или позвонить. Не утверждай, что запрос уже передан, пока lead.capture не завершён успешно.',
               'Для preliminary_fit разрешай полезное предварительное сравнение по каталожным products, если детерминированные ограничения соблюдены и отсутствующий web-факт назван как неподтверждённый, а не как конфликт.',
               'Не разрешай обещания наличия, доставки, скидки, срока или заявки без успешного точного источника. Не проси уже предоставленный контакт повторно.',
               'Сохрани прямой ответ на вопрос покупателя и простой русский язык. Верни только JSON PreSendReview.'
@@ -4957,7 +4960,7 @@ export class AgentManagerOrchestrator {
       throw new Error(`Agent manager answer blocked: ${reviewErrorMessage}`);
     }
     const reviewInvalidatedFactSources = review.issues.some((issue) =>
-      issue.code === 'failed_tool_result_used_as_fact_source' || issue.code === 'failed_tool_result_referenced'
+      issue.code === 'failed_tool_result_used_as_fact_source'
     );
     const failedToolSourceIds = reviewInvalidatedFactSources
       ? nonOkToolResultIds(selectionToolResults)
@@ -6561,16 +6564,6 @@ export class AgentManagerOrchestrator {
         evidence: unsupportedCatalogProductMentionRewrite.unsupportedDisplayTokens.join(', ')
       });
     }
-    const failedToolResultIds = nonOkToolResultIds(input.toolResults);
-    const failedReferencedToolResultIds = input.answer.toolResultIds.filter((id) => failedToolResultIds.has(id));
-    if (failedReferencedToolResultIds.length) {
-      mechanicalIssues.push({
-        code: 'failed_tool_result_referenced',
-        severity: 'high',
-        message: 'Answer references a failed, denied, timed out, or not-found tool result.',
-        evidence: failedReferencedToolResultIds.join(', ')
-      });
-    }
     const plateTaskMismatchClause = (input.requiredResponseClauses ?? []).find((clause) =>
       clause.code === 'plate_previous_cards_unsuitable_for_current_task'
     );
@@ -6783,13 +6776,8 @@ export class AgentManagerOrchestrator {
       return finalizeMechanicalRewrite(safeResearchRewrite);
     }
     const failedFactSourceRepairIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'failed_tool_result_used_as_fact_source' || issue.code === 'failed_tool_result_referenced'
+      issue.code === 'failed_tool_result_used_as_fact_source'
     );
-    const failedToolReferenceOnly = mechanicalIssues.some((issue) => issue.code === 'failed_tool_result_referenced') &&
-      !mechanicalIssues.some((issue) => issue.code === 'failed_tool_result_used_as_fact_source');
-    if (failedFactSourceRepairIssue && failedToolReferenceOnly && input.products.length > 0) {
-      return finalizeMechanicalRewrite(input.answer.answerText);
-    }
     const failedWebResearchRewrite = failedWebResearchSafeRewrite({
       intent: input.intent,
       toolResults: input.toolResults

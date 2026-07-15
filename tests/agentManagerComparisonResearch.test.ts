@@ -247,7 +247,7 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
 }
 
 describe('AgentManager comparison research flow', () => {
-  it('requires explicit grounding when web research fails before the answer is composed', async () => {
+  it('requires a useful technical handoff after the available web research attempt is exhausted', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
       new Error('product_comparison_research did not return a JSON object')
     );
@@ -289,11 +289,11 @@ describe('AgentManager comparison research flow', () => {
       async composeAnswer(input) {
         clausesSeen.push(...(input.requiredResponseClauses ?? []));
         return {
-          answerText: 'THD matters because lower distortion is generally safer for boiler controls and sensitive electronics. Exact verification did not complete in this turn, so I would check the passport for the chosen model before treating a THD number as confirmed.',
+          answerText: 'THD важен для чувствительной электроники, но точное значение по выбранной модели подтвердить не удалось. Могу передать этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?',
           factsUsed: [],
           questionsAsked: [],
-          toolResultIds: [],
-          leadAction: 'none',
+          toolResultIds: ['web:thd'],
+          leadAction: 'offer_form',
           riskFlags: ['web_research_unavailable']
         };
       }
@@ -320,8 +320,18 @@ describe('AgentManager comparison research flow', () => {
         sourceRequestId: 'web:thd'
       })
     ]));
-    expect(clausesSeen[0]?.instruction).toContain('did not complete successfully');
-    const metadata = payload.metadata as { toolResults?: Array<{ status?: string; warnings?: string[] }> };
+    expect(clausesSeen[0]?.instruction).toContain('exhausted the available search attempt');
+    expect(clausesSeen[0]?.instruction).toContain('technical specialist');
+    expect(clausesSeen[0]?.instruction).toContain('message or by phone call');
+    expect(clausesSeen[0]?.instruction).toContain('leadAction="offer_form"');
+    expect(payload.answer).toContain('техническому специалисту');
+    expect(payload.answer).toContain('написать или позвонить');
+    expect(payload.leadRequested).toBe(true);
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ status?: string; warnings?: string[] }>;
+      answerContract?: { leadAction?: string; toolResultIds?: string[] };
+      preSendReview?: { verdict?: string; issues?: unknown[] };
+    };
     expect(metadata.toolResults?.[0]).toMatchObject({
       status: 'error',
       warnings: expect.arrayContaining([
@@ -330,6 +340,11 @@ describe('AgentManager comparison research flow', () => {
         expect.stringContaining('duration_ms:')
       ])
     });
+    expect(metadata.answerContract).toMatchObject({
+      leadAction: 'offer_form',
+      toolResultIds: ['web:thd']
+    });
+    expect(metadata.preSendReview).toEqual({ verdict: 'pass', issues: [] });
   });
 
   it('rewrites failed general THD web research to a useful unverified technical explanation', async () => {
@@ -609,13 +624,16 @@ describe('AgentManager comparison research flow', () => {
       userMessage: 'SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?'
     });
 
-    expect(payload.answer).toContain('точный факт по SUNREKA G7000iS');
-    expect(payload.answer).toContain('внешняя проверка не завершилась');
+    expect(payload.answer).toContain('SUNREKA G7000iS остаётся предварительным вариантом');
+    expect(payload.answer).toContain('внешняя проверка не подтвердила решающий факт');
+    expect(payload.answer).toContain('техническому специалисту');
+    expect(payload.answer).toContain('написать или позвонить');
+    expect(payload.leadRequested).toBe(true);
     expect(payload.answer).not.toContain('запускается ручным стартером');
     expect(payload.answer).not.toContain('Кнопочного запуска для этой модели в данных не вижу');
     expect(payload.answer).not.toContain('есть в каталоге');
     const metadata = payload.metadata as {
-      answerContract?: { factsUsed?: unknown[] };
+      answerContract?: { factsUsed?: unknown[]; leadAction?: string };
       preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
       toolResults?: Array<{ status?: string; warnings?: string[] }>;
     };
@@ -634,9 +652,10 @@ describe('AgentManager comparison research flow', () => {
       ])
     });
     expect(metadata.answerContract?.factsUsed).toEqual([]);
+    expect(metadata.answerContract?.leadAction).toBe('offer_form');
   });
 
-  it('preserves a useful catalog-grounded comparison when only the redundant web result reference failed', async () => {
+  it('preserves a useful catalog-grounded comparison when a failed web result is referenced only as status', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
       new Error('product_comparison_research did not return a JSON object')
     );
@@ -679,14 +698,9 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.answer).toContain('инверторного типа');
     expect(payload.answer).not.toContain('внешняя проверка не завершилась');
     expect(payload.metadata?.answerContract).toMatchObject({
-      toolResultIds: ['catalog:test']
+      toolResultIds: ['catalog:test', 'web:test']
     });
-    expect(payload.metadata?.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'failed_tool_result_referenced' })
-      ])
-    });
+    expect(payload.metadata?.preSendReview).toEqual({ verdict: 'pass', issues: [] });
   });
 
   it('answers exact external facts for a named model absent from catalog and exposes nearby catalog models', async () => {
