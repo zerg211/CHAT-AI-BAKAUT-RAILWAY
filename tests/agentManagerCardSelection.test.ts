@@ -2256,7 +2256,7 @@ describe('AgentManager visible card readiness', () => {
       selectionGoal: 'preliminary_fit',
       requirements: [{
         id: 'material-crushed-stone',
-        kind: 'compaction_material',
+        kind: 'material',
         value: 'crushed_stone',
         unit: null,
         relation: 'must_have',

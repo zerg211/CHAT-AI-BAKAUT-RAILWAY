@@ -961,7 +961,10 @@ function structuredPlateWeightRange(intent: AgentIntentContract): PlateWeightRan
 
 function structuredMaterialRequirement(intent: AgentIntentContract) {
   const requirement = (intent.selectionPolicy?.requirements ?? []).find((item) =>
-    item.kind === 'material' && item.role === 'hard_constraint' && item.strictness === 'strict'
+    item.kind === 'material' &&
+    item.role === 'hard_constraint' &&
+    item.strictness === 'strict' &&
+    item.verification?.mode !== 'typed_tool'
   );
   return typeof requirement?.value === 'string'
     ? requirement.value.trim().toLocaleLowerCase('ru-RU')
