@@ -506,15 +506,19 @@ export function repairIntentForOpenEndedMaterialWebCoverage(intent: AgentIntentC
   };
 }
 
-export function repairIntentForNewNeedFinalFit(intent: AgentIntentContract) {
+export function repairIntentForNewNeedFinalFit(
+  intent: AgentIntentContract,
+  context: { openedNeedThisTurn?: boolean } = {}
+) {
   const policy = intent.selectionPolicy;
   const hasExactTarget = (intent.productMentions ?? []).some((mention) =>
     exactTargetProductMentionRoles.has(mention.role)
   );
+  const openedNeedThisTurn = context.openedNeedThisTurn ?? policy?.needAction === 'open';
   if (
     !policy ||
     policy.selectionGoal !== 'final_fit' ||
-    policy.needAction !== 'open' ||
+    !openedNeedThisTurn ||
     policy.reusePreviousCards ||
     hasExactTarget
   ) {
@@ -4399,7 +4403,9 @@ export class AgentManagerOrchestrator {
       ),
       userMessage
     );
-    const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(groundedIntent);
+    const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(groundedIntent, {
+      openedNeedThisTurn: newEvents.some((event) => event.eventType === 'need.opened')
+    });
     const materialWebCoverageRepair = repairIntentForOpenEndedMaterialWebCoverage(newNeedFinalFitRepair.intent);
     const typedCoverageRepair = repairIntentForTypedToolRequirementCoverage(materialWebCoverageRepair.intent);
     const repairedIntent = typedCoverageRepair.intent;

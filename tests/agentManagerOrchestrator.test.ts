@@ -454,6 +454,19 @@ describe('AgentManagerOrchestrator', () => {
       intent: continuingIntent,
       repaired: false
     });
+
+    const mislabeledNewNeedIntent: AgentIntentContract = {
+      ...intent,
+      selectionPolicy: {
+        ...intent.selectionPolicy!,
+        needAction: 'continue'
+      }
+    };
+    const repairedFromLedgerLifecycle = repairIntentForNewNeedFinalFit(mislabeledNewNeedIntent, {
+      openedNeedThisTurn: true
+    });
+    expect(repairedFromLedgerLifecycle.repaired).toBe(true);
+    expect(repairedFromLedgerLifecycle.intent.selectionPolicy?.selectionGoal).toBe('preliminary_fit');
   });
 
   it('classifies only pre-send structured JSON failures for compact reviewer recovery', () => {
