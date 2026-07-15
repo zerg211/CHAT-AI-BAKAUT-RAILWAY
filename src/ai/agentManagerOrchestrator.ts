@@ -506,6 +506,37 @@ export function repairIntentForOpenEndedMaterialWebCoverage(intent: AgentIntentC
   };
 }
 
+export function repairIntentForNewNeedFinalFit(intent: AgentIntentContract) {
+  const policy = intent.selectionPolicy;
+  const hasExactTarget = (intent.productMentions ?? []).some((mention) =>
+    exactTargetProductMentionRoles.has(mention.role)
+  );
+  if (
+    !policy ||
+    policy.selectionGoal !== 'final_fit' ||
+    policy.needAction !== 'open' ||
+    policy.reusePreviousCards ||
+    hasExactTarget
+  ) {
+    return { intent, repaired: false };
+  }
+  return {
+    intent: {
+      ...intent,
+      selectionPolicy: {
+        ...policy,
+        selectionGoal: 'preliminary_fit' as const,
+        rationale: [
+          policy.rationale,
+          'Новая потребность без конкретно названной модели и без прежних карточек начинается с предварительного подбора; окончательное подтверждение возможно после появления кандидатов и проверки фактов.'
+        ].filter(Boolean).join(' ')
+      },
+      riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_new_need_final_fit_to_preliminary'])
+    },
+    repaired: true
+  };
+}
+
 function reusableSideEffectArtifactsAfterReplan(
   intent: AgentIntentContract,
   persistedResults: Map<string, ToolResult>,
@@ -4366,7 +4397,8 @@ export class AgentManagerOrchestrator {
       ),
       userMessage
     );
-    const materialWebCoverageRepair = repairIntentForOpenEndedMaterialWebCoverage(groundedIntent);
+    const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(groundedIntent);
+    const materialWebCoverageRepair = repairIntentForOpenEndedMaterialWebCoverage(newNeedFinalFitRepair.intent);
     const typedCoverageRepair = repairIntentForTypedToolRequirementCoverage(materialWebCoverageRepair.intent);
     const repairedIntent = typedCoverageRepair.intent;
     const validatedToolRequests = assertUniqueToolRequestIds(
@@ -4405,6 +4437,7 @@ export class AgentManagerOrchestrator {
     if (
       !savedIntent.found ||
       legacyIntentUpgraded ||
+      newNeedFinalFitRepair.repaired ||
       materialWebCoverageRepair.repairs.length > 0 ||
       typedCoverageRepair.repairs.length > 0
     ) {
@@ -4434,6 +4467,12 @@ export class AgentManagerOrchestrator {
     if (materialWebCoverageRepair.repairs.length) {
       await this.trace(input.sessionId, input.turnId, 'intent', 'open_ended_material_web_coverage_repaired', {
         repairs: materialWebCoverageRepair.repairs
+      });
+    }
+    if (newNeedFinalFitRepair.repaired) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'new_need_final_fit_repaired_to_preliminary', {
+        selectionGoal: intent.selectionPolicy?.selectionGoal ?? null,
+        needAction: intent.selectionPolicy?.needAction ?? null
       });
     }
     await this.trace(input.sessionId, input.turnId, 'intent', 'contract_created', {

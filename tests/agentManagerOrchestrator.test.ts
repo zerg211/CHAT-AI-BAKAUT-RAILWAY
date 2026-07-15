@@ -4,6 +4,7 @@ import {
   isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
   repairIntentForOpenEndedMaterialWebCoverage,
+  repairIntentForNewNeedFinalFit,
   repairIntentForTypedToolRequirementCoverage,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
@@ -413,6 +414,48 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
+  it('downgrades only an unnamed newly opened selection from final fit to preliminary fit', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'final_fit',
+      needAction: 'open',
+      reusePreviousCards: false
+    };
+
+    const repaired = repairIntentForNewNeedFinalFit(intent);
+
+    expect(repaired.repaired).toBe(true);
+    expect(repaired.intent.selectionPolicy?.selectionGoal).toBe('preliminary_fit');
+    expect(repaired.intent.riskFlags).toContain('planner_repaired_new_need_final_fit_to_preliminary');
+
+    const exactModelIntent: AgentIntentContract = {
+      ...intent,
+      productMentions: [{
+        name: 'Husqvarna LFV 100',
+        role: 'target_product',
+        productClass: 'plate',
+        evidence: 'Подтвердите Husqvarna LFV 100'
+      }]
+    };
+    expect(repairIntentForNewNeedFinalFit(exactModelIntent)).toEqual({
+      intent: exactModelIntent,
+      repaired: false
+    });
+
+    const continuingIntent: AgentIntentContract = {
+      ...intent,
+      selectionPolicy: {
+        ...intent.selectionPolicy!,
+        needAction: 'continue'
+      }
+    };
+    expect(repairIntentForNewNeedFinalFit(continuingIntent)).toEqual({
+      intent: continuingIntent,
+      repaired: false
+    });
+  });
+
   it('classifies only pre-send structured JSON failures for compact reviewer recovery', () => {
     expect(isPreSendReviewStructuredOutputError(
       new Error('agent_pre_send_review did not return a JSON object')
