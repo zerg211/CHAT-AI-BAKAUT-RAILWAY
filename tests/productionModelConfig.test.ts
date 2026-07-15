@@ -9,6 +9,7 @@ describe('production model configuration', () => {
       `process.stdout.write('${outputMarker}' + JSON.stringify({`,
       'model: config.OPENAI_MODEL,',
       'answer: config.OPENAI_ANSWER_MODEL,',
+      'answerReasoning: config.OPENAI_ANSWER_REASONING_EFFORT,',
       'planner: config.OPENAI_PLANNER_MODEL,',
       'fact: config.OPENAI_FACT_MODEL,',
       'factReasoning: config.OPENAI_FACT_REASONING_EFFORT,',
@@ -29,6 +30,7 @@ describe('production model configuration', () => {
         NODE_ENV: 'production',
         OPENAI_MODEL: 'gpt-5.4-mini',
         OPENAI_ANSWER_MODEL: 'gpt-5.4',
+        OPENAI_ANSWER_REASONING_EFFORT: 'xhigh',
         OPENAI_PLANNER_MODEL: 'gpt-5.5',
         OPENAI_FACT_MODEL: 'gpt-5.6-luna',
         OPENAI_FACT_REASONING_EFFORT: 'xhigh',
@@ -41,6 +43,7 @@ describe('production model configuration', () => {
     expect(JSON.parse(stdout.slice(markerIndex + outputMarker.length))).toEqual({
       model: 'gpt-5.6-terra',
       answer: 'gpt-5.6-terra',
+      answerReasoning: 'none',
       planner: 'gpt-5.6-terra',
       fact: 'gpt-5.6-terra',
       factReasoning: 'none',

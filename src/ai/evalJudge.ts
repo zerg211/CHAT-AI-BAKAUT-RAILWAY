@@ -34,6 +34,7 @@ const evalLlmRubricJudgeFormat = {
 export function buildEvalLlmRubricJudgeRequest(prompt: string) {
   return {
     model: config.OPENAI_FACT_MODEL,
+    reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
     max_output_tokens: Math.max(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, 700),
     input: [
       {

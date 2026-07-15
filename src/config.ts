@@ -153,7 +153,9 @@ export const config = {
   OPENAI_PLANNER_MODEL: plannerModel,
   OPENAI_FACT_MODEL: factModel,
   OPENAI_DEEP_REASONING_MODEL: deepReasoningModel,
-  OPENAI_ANSWER_REASONING_EFFORT: normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
+  OPENAI_ANSWER_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
+    ? 'none' as const
+    : normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
   OPENAI_PLANNER_REASONING_EFFORT: normalizeReasoningEffort(parsedConfig.OPENAI_PLANNER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
   OPENAI_FACT_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
     ? 'none' as const

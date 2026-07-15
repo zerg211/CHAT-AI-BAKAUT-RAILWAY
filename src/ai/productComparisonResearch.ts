@@ -809,6 +809,7 @@ async function validateSourceEvidenceSemantically(input: {
   const { parsed } = await createStructuredJsonResponse({
     request: {
       model: config.OPENAI_FACT_MODEL,
+      reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
       input: [
         {
           role: 'system',
@@ -1373,6 +1374,7 @@ async function extractExactCatalogProductFacts(input: {
 
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
+    reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
     input: [
       {
         role: 'system',
@@ -1477,6 +1479,7 @@ export async function researchProductComparisonFacts(input: {
 
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
+    reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
     input: [
       {
         role: 'system',

@@ -15,6 +15,7 @@ describe('production LLM eval judge helpers', () => {
       expect.objectContaining({ role: 'user', content: 'Grade this conversation.' })
     ]));
     expect(request.text.format.name).toBe('eval_llm_rubric_judge');
+    expect(request.reasoning).toEqual({ effort: 'none' });
   });
 
   it('validates judge input and normalized result shape', () => {
