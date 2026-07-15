@@ -668,6 +668,24 @@ function exactModelEvidenceToolCoversToken(request: ToolRequest, token: string) 
   return modelIdentifierTokens(toolRequestEvidenceText(request)).includes(token);
 }
 
+function compactReviewerProductContext(product: Product) {
+  return {
+    id: product.id,
+    name: product.name,
+    brand: product.brand,
+    category: product.category,
+    price: product.price,
+    currency: product.currency,
+    specs: product.specs,
+    description: (compactProductDescription(product.description) ?? '').slice(0, 700)
+  };
+}
+
+export function isPreSendReviewStructuredOutputError(error: unknown) {
+  const message = safeError(error).message?.toLocaleLowerCase('en-US') ?? '';
+  return message.includes('agent_pre_send_review') && message.includes('json');
+}
+
 function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
   const targetMentionNames = (intent.productMentions ?? [])
     .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
@@ -3764,8 +3782,59 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
       ],
       text: preSendReviewFormat
     };
-    const { parsed } = await createStructuredJsonResponse({ request, stage: 'agent_pre_send_review', signal: input.signal });
-    return PreSendReviewSchema.parse(parsed);
+    try {
+      const { parsed } = await createStructuredJsonResponse({
+        request,
+        stage: 'agent_pre_send_review',
+        signal: input.signal
+      });
+      return PreSendReviewSchema.parse(parsed);
+    } catch (error) {
+      if (input.signal?.aborted || !isPreSendReviewStructuredOutputError(error)) throw error;
+      console.warn('[agent_pre_send_review] Full structured review failed; retrying with compact evidence context', safeError(error));
+      const compactRequest = {
+        model: config.OPENAI_FACT_MODEL,
+        max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
+        input: [
+          {
+            role: 'system',
+            content: [
+              'Ты компактный evidence-bound reviewer ответа AI менеджера БАКАУТ.',
+              untrustedEvidenceBoundary,
+              'Проверяй ответ только по currentUserMessage, products, toolStatuses, requiredResponseClauses и answer.',
+              'Каждая названная модель, цена, масса, размер, мощность, усилие, скорость и эксплуатационное преимущество должны точно поддерживаться соответствующим products item. Иначе верни rewrite_required и удали или исправь неподтверждённое.',
+              'Не используй failed/error/timeout/denied/not_found tool как источник факта. Разрешено честно сказать, что внешняя проверка не завершилась.',
+              'Для preliminary_fit разрешай полезное предварительное сравнение по каталожным products, если детерминированные ограничения соблюдены и отсутствующий web-факт назван как неподтверждённый, а не как конфликт.',
+              'Не разрешай обещания наличия, доставки, скидки, срока или заявки без успешного точного источника. Не проси уже предоставленный контакт повторно.',
+              'Сохрани прямой ответ на вопрос покупателя и простой русский язык. Верни только JSON PreSendReview.'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              currentUserMessage: input.userMessage,
+              selectionGoal: input.intent.selectionPolicy?.selectionGoal ?? null,
+              toolStatuses: input.toolResults.map((result) => ({
+                requestId: result.requestId,
+                tool: result.tool,
+                status: result.status,
+                warnings: result.warnings
+              })),
+              requiredResponseClauses: input.requiredResponseClauses ?? [],
+              products: input.products.map(compactReviewerProductContext),
+              answer: input.answer
+            })
+          }
+        ],
+        text: preSendReviewFormat
+      };
+      const { parsed } = await createStructuredJsonResponse({
+        request: compactRequest,
+        stage: 'agent_pre_send_review_compact',
+        signal: input.signal
+      });
+      return PreSendReviewSchema.parse(parsed);
+    }
   }
 }
 

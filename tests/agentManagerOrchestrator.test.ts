@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   AgentManagerOrchestrator,
+  isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
   repairIntentForOpenEndedMaterialWebCoverage,
   repairIntentForTypedToolRequirementCoverage,
@@ -412,6 +413,18 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
+  it('classifies only pre-send structured JSON failures for compact reviewer recovery', () => {
+    expect(isPreSendReviewStructuredOutputError(
+      new Error('agent_pre_send_review did not return a JSON object')
+    )).toBe(true);
+    expect(isPreSendReviewStructuredOutputError(
+      new Error('agent_answer_contract did not return a JSON object')
+    )).toBe(false);
+    expect(isPreSendReviewStructuredOutputError(
+      new Error('OpenAI authentication failed')
+    )).toBe(false);
+  });
+
   it('repairs a preliminary open-ended material constraint onto the single required web verifier', () => {
     const intent = structuredGeneratorCatalogIntent();
     const catalogRequest: ToolRequest = {
