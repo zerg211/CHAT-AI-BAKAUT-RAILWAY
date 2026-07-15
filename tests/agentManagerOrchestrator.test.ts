@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AgentManagerOrchestrator,
   orderToolRequestsForSelectionDependencies,
+  repairIntentForOpenEndedMaterialWebCoverage,
   repairIntentForTypedToolRequirementCoverage,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
@@ -411,6 +412,99 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
+  it('repairs a preliminary open-ended material constraint onto the single required web verifier', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    const catalogRequest: ToolRequest = {
+      ...intent.toolRequests[0]!,
+      coversRequirementIds: ['material-fit', 'weight-limit']
+    };
+    const webRequest: ToolRequest = {
+      id: 'web-material-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'verify crushed-stone suitability of shortlisted plates',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        productNames: []
+      },
+      rationale: 'verify the open-ended material application after catalog search',
+      required: true,
+      coversRequirementIds: []
+    };
+    intent.toolRequests = [catalogRequest, webRequest];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'material-fit',
+        kind: 'material',
+        value: 'щебень',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'для щебня',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'weight-limit',
+        kind: 'weight_max_kg',
+        value: 100,
+        unit: 'kg',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'не тяжелее 100 кг',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+
+    const repaired = repairIntentForOpenEndedMaterialWebCoverage(intent);
+
+    expect(repaired.repairs).toEqual([{ requestId: webRequest.id, requirementIds: ['material-fit'] }]);
+    expect(repaired.intent.toolRequests[0]?.coversRequirementIds).toEqual(['weight-limit']);
+    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual(['material-fit']);
+    expect(repaired.intent.selectionPolicy?.requirements[0]?.verification).toEqual({
+      mode: 'typed_tool',
+      toolRequestId: webRequest.id,
+      tool: 'web.researchProductFacts',
+      verifier: 'technical_source_review',
+      bindAs: 'material'
+    });
+    expect(repaired.intent.riskFlags).toContain('planner_repaired_open_ended_material_web_coverage');
+  });
+
+  it('does not guess an owner when open-ended material research has zero or multiple required web requests', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'material-fit',
+        kind: 'material',
+        value: 'щебень',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'для щебня',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    expect(repairIntentForOpenEndedMaterialWebCoverage(intent)).toEqual({ intent, repairs: [] });
+
+    const webRequest: ToolRequest = {
+      id: 'web-one',
+      tool: 'web.researchProductFacts',
+      args: { query: 'verify material fit', productNames: [] },
+      rationale: 'first possible owner',
+      required: true,
+      coversRequirementIds: []
+    };
+    intent.toolRequests = [intent.toolRequests[0]!, webRequest, { ...webRequest, id: 'web-two' }];
+    expect(repairIntentForOpenEndedMaterialWebCoverage(intent)).toEqual({ intent, repairs: [] });
+  });
+
   it('runs deterministic calculations before catalog and open-ended web research after catalog', () => {
     const intent = typedGeneratorProofIntent();
     const webRequest: ToolRequest = {

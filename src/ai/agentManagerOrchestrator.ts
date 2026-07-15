@@ -56,6 +56,7 @@ import {
 } from './leadReviewGuards.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import {
+  assessStrictSelectionRequirements,
   ambiguousCutterRequestNeedsMaterialClarification,
   assessVisibleCardReadiness,
   budgetMaxFromNeedState,
@@ -448,6 +449,61 @@ export function repairIntentForTypedToolRequirementCoverage(intent: AgentIntentC
     riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_typed_requirement_coverage'])
   };
   return { intent: repairedIntent, repairs };
+}
+
+export function repairIntentForOpenEndedMaterialWebCoverage(intent: AgentIntentContract) {
+  if (intent.selectionPolicy?.selectionGoal !== 'preliminary_fit') {
+    return { intent, repairs: [] as Array<{ requestId: string; requirementIds: string[] }> };
+  }
+  const productClass = canonicalProductClassFromIntent(intent);
+  const materialRequirementIds = new Set(
+    assessStrictSelectionRequirements(intent, productClass, []).blockers
+      .filter((blocker) => blocker.reason === 'material_not_mechanically_verifiable')
+      .map((blocker) => blocker.id)
+  );
+  if (!materialRequirementIds.size) {
+    return { intent, repairs: [] as Array<{ requestId: string; requirementIds: string[] }> };
+  }
+  const requiredWebRequests = intent.toolRequests.filter((request) =>
+    request.required && request.tool === 'web.researchProductFacts'
+  );
+  if (requiredWebRequests.length !== 1) {
+    return { intent, repairs: [] as Array<{ requestId: string; requirementIds: string[] }> };
+  }
+  const webRequest = requiredWebRequests[0]!;
+  const requirementIds = [...materialRequirementIds];
+  const repairedRequirements = intent.selectionPolicy.requirements.map((requirement) =>
+    materialRequirementIds.has(requirement.id)
+      ? {
+          ...requirement,
+          verification: {
+            mode: 'typed_tool' as const,
+            toolRequestId: webRequest.id,
+            tool: 'web.researchProductFacts' as const,
+            verifier: 'technical_source_review',
+            bindAs: requirement.kind
+          }
+        }
+      : requirement
+  );
+  const repairedToolRequests = intent.toolRequests.map((request) => ({
+    ...request,
+    coversRequirementIds: request.id === webRequest.id
+      ? uniqueStrings([...(request.coversRequirementIds ?? []), ...requirementIds])
+      : (request.coversRequirementIds ?? []).filter((requirementId) => !materialRequirementIds.has(requirementId))
+  }));
+  return {
+    intent: {
+      ...intent,
+      selectionPolicy: {
+        ...intent.selectionPolicy,
+        requirements: repairedRequirements
+      },
+      toolRequests: repairedToolRequests,
+      riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_open_ended_material_web_coverage'])
+    },
+    repairs: [{ requestId: webRequest.id, requirementIds }]
+  };
 }
 
 function reusableSideEffectArtifactsAfterReplan(
@@ -4241,7 +4297,8 @@ export class AgentManagerOrchestrator {
       ),
       userMessage
     );
-    const typedCoverageRepair = repairIntentForTypedToolRequirementCoverage(groundedIntent);
+    const materialWebCoverageRepair = repairIntentForOpenEndedMaterialWebCoverage(groundedIntent);
+    const typedCoverageRepair = repairIntentForTypedToolRequirementCoverage(materialWebCoverageRepair.intent);
     const repairedIntent = typedCoverageRepair.intent;
     const validatedToolRequests = assertUniqueToolRequestIds(
       repairedIntent.toolRequests.map(validateToolRequest)
@@ -4276,7 +4333,12 @@ export class AgentManagerOrchestrator {
       plannerContract: intent,
       activeNeedsAfter: needStateSnapshot.activeNeeds
     });
-    if (!savedIntent.found || legacyIntentUpgraded || typedCoverageRepair.repairs.length > 0) {
+    if (
+      !savedIntent.found ||
+      legacyIntentUpgraded ||
+      materialWebCoverageRepair.repairs.length > 0 ||
+      typedCoverageRepair.repairs.length > 0
+    ) {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
@@ -4298,6 +4360,11 @@ export class AgentManagerOrchestrator {
     if (typedCoverageRepair.repairs.length) {
       await this.trace(input.sessionId, input.turnId, 'intent', 'typed_requirement_coverage_repaired', {
         repairs: typedCoverageRepair.repairs
+      });
+    }
+    if (materialWebCoverageRepair.repairs.length) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'open_ended_material_web_coverage_repaired', {
+        repairs: materialWebCoverageRepair.repairs
       });
     }
     await this.trace(input.sessionId, input.turnId, 'intent', 'contract_created', {
