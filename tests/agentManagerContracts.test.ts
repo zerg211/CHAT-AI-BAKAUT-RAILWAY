@@ -63,6 +63,42 @@ describe('agent manager contracts', () => {
     expect(result.success).toBe(false);
   });
 
+  it('restricts canonical product classes to the runtime ontology', () => {
+    const baseIntent = {
+      userMessageSummary: 'select a vibration plate',
+      dialogueUnderstanding: 'the buyer needs a plate compactor',
+      nextStepRationale: 'search the matching catalog class',
+      requiresTools: false,
+      toolRequests: [],
+      productMentions: [],
+      selectionPolicy: {
+        targetProductClass: 'виброплита',
+        canonicalProductClass: 'plate',
+        selectionGoal: 'preliminary_fit',
+        needAction: 'continue',
+        alternativePolicy: 'same_class_only',
+        reusePreviousCards: false,
+        maxCards: 4,
+        powerSource: 'any',
+        phase: 'any',
+        requirements: [],
+        rationale: 'plate is a known canonical class'
+      },
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+
+    expect(AgentIntentContractSchema.safeParse(baseIntent).success).toBe(true);
+    expect(AgentIntentContractSchema.safeParse({
+      ...baseIntent,
+      selectionPolicy: {
+        ...baseIntent.selectionPolicy,
+        canonicalProductClass: 'виброплита'
+      }
+    }).success).toBe(false);
+  });
+
   it('keeps OpenAI structured-output limits aligned with runtime Zod contracts', () => {
     const formats = agentManagerStructuredFormats as any;
     const intent = formats.intentContractFormat.format.schema;

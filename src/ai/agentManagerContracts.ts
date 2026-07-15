@@ -277,7 +277,7 @@ export const SelectionRequirementSchema = z.object({
 
 export const AgentSelectionPolicySchema = z.object({
   targetProductClass: nonEmptyString.nullable(),
-  canonicalProductClass: nonEmptyString.nullable(),
+  canonicalProductClass: canonicalProductClassSchema.nullable(),
   selectionGoal: z.enum(['browse_catalog', 'preliminary_fit', 'final_fit']).optional(),
   needAction: z.enum(['continue', 'open', 'switch', 'resume', 'close', 'none']),
   alternativePolicy: z.enum([

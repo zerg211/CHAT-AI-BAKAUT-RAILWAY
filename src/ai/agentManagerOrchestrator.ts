@@ -56,12 +56,12 @@ import {
 } from './leadReviewGuards.js';
 import { hasAdjudicationRisk, hasUnsupportedClaimRisk } from './riskReviewGuards.js';
 import {
-  assessStrictSelectionRequirements,
   ambiguousCutterRequestNeedsMaterialClarification,
   assessVisibleCardReadiness,
   budgetMaxFromNeedState,
   filterGeneratorProductsByLoadProfile,
   filterPlateProductsByCurrentTask,
+  gateStrictSelectionRequirements,
   productSelectionClasses,
   productCards,
   productMeetsSupportedStrictAutoStartRequirement,
@@ -71,7 +71,6 @@ import {
   productMeetsSupportedStrictVoltageRequirement,
   rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
-  strictSelectionRequirementBlockers,
   suppressVisibleCardsForReadiness,
   toolRequestProductIntent,
   toolRequestScopedQuery,
@@ -1353,7 +1352,7 @@ function filterProductsByStructuredSelectionPolicy(input: {
   const compromiseProductIds = structuredCompromiseProductIds(input.toolResults);
   const allowCompromises = policy.alternativePolicy === 'allow_adjacent_with_explanation' ||
     policy.alternativePolicy === 'open_to_alternatives';
-  const strictRequirementAssessment = assessStrictSelectionRequirements(
+  const strictRequirementAssessment = gateStrictSelectionRequirements(
     input.intent,
     canonicalClass,
     input.toolResults
@@ -1431,6 +1430,9 @@ function filterProductsByStructuredSelectionPolicy(input: {
     products: commercialShortlist.products,
     droppedProductIds,
     warnings: uniqueStrings([
+      ...(strictRequirementAssessment.preliminaryUnverified.length
+        ? [`answer_products_preliminary:unverified_web_covered_strict_requirements:${strictRequirementAssessment.preliminaryUnverified.length}`]
+        : []),
       ...(input.products.length !== products.length
         ? [`answer_products_filtered_by_structured_hard_constraints:${input.products.length - products.length}`]
         : []),
@@ -3479,6 +3481,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'Код только исполнит typed tools, но не будет подменять твой смысл.',
             'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, requiredToolKinds, technicalAttributes и rationale. Затем toolRequests должны исполнять эту grounding-политику.',
             'Всегда заполни selectionPolicy семантически. targetProductClass — свободное человеческое название класса товара, поэтому незнакомый класс не своди к unknown. canonicalProductClass укажи только когда он точно входит в известную кодовую онтологию; иначе null.',
+            'Known canonicalProductClass values are generator, weldingGenerator, generatorOil, engineOil, generatorAccessory, plateAccessory, plate, rammer, roller, cutter, diamondBlade, diamondCore, trowel, and unknown. Use plate for a vibration plate / виброплита; use unknown only for a genuinely unfamiliar class, and use null only when the free target class is outside this ontology.',
             'Всегда задай selectionPolicy.selectionGoal: browse_catalog — показать ассортимент/цены без обещания совместимости; preliminary_fit — предварительно подобрать под известные вводные с оговорками; final_fit — подтвердить окончательную пригодность для покупки.',
             'В selectionPolicy.requirements вынеси каждое число и ограничение отдельно: kind описывает смысл числа, value/unit — нормализованное значение, relation — must_have, must_not_have, preferred, not_required или context, role — hard_constraint, preference, context или mentioned_only, strictness — strict/preferred/informational, evidence — точная опора в диалоге. Код не будет угадывать роль числа по словам.',
             'Не путай отсутствие необходимости с запретом. "Автозапуск не нужен" означает relation="not_required" и не исключает модели с автозапуском. Только явный запрет вроде "только без автозапуска" означает relation="must_not_have", role="hard_constraint", strictness="strict" и value=false.',
@@ -3487,7 +3490,7 @@ class OpenAIAgentManagerModel implements AgentManagerModel {
             'For that generator-load derived binding, normalize requirement.kind to the stable ontology value "generator_load_scenario", value=true, and unit=null. Keep the concrete loads and operating relationship (including simultaneous running versus simultaneous starting) in evidence and in calculator args; do not invent another typed-derived kind.',
             'Every toolRequest must include coversRequirementIds; use [] when it does not verify a selection requirement.',
             'Keep every tool args.comparisonAttributes list to at most 12 distinct decision-relevant attributes. Prioritize the buyer\'s explicit comparison criteria and omit synonyms or low-value duplicates.',
-            'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Total job context such as total layer depth, total work area, total runtime, workpiece size, or total material volume is role="context", relation="context", strictness="informational" unless the buyer explicitly requires the product itself to provide that capability or a verified calculator derives a product minimum.',
+            'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Total job context such as total layer depth, total work area, total runtime, workpiece size, or total material volume is role="context", relation="context", strictness="informational" unless the buyer explicitly requires the product itself to provide that capability or a verified calculator derives a product minimum. The buyer\'s operating procedure — layer-by-layer work, planned number of passes, work sequence, crew size, carrying/loading method, or intended schedule — is also context unless it explicitly demands a product feature or capability.',
             'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
             'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',
             'selectionPolicy.reusePreviousCards=true, если прежние карточки могут быть полезны в текущем ходе. Это подсказка для ответа, но не право стереть прежние подтверждённые товары: runtime всё равно добавит их в пул активной потребности и заново проверит против новых требований. maxCards отражает просьбу покупателя о количестве карточек; иначе null. powerSource и phase заполняй только из смысла текущей потребности.',
@@ -6170,11 +6173,12 @@ export class AgentManagerOrchestrator {
   ): Promise<PreSendReview> {
     const mechanicalIssues: PreSendReview['issues'] = [];
     const contactInTurn = extractContact(input.userMessage);
-    const strictRequirementBlockers = strictSelectionRequirementBlockers(
+    const strictRequirementGate = gateStrictSelectionRequirements(
       input.intent,
       canonicalProductClassFromIntent(input.intent),
       input.toolResults
     );
+    const strictRequirementBlockers = strictRequirementGate.blockers;
     const answerAttemptsConcreteSelection = (
       (input.answer.selectedProductIds?.length ?? 0) > 0 ||
       input.answer.selectionReadiness?.canShowProductCards === true

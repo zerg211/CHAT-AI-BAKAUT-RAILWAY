@@ -4,6 +4,7 @@ import {
   assessStrictSelectionRequirements,
   assessVisibleCardReadiness,
   filterGeneratorProductsByLoadProfile,
+  gateStrictSelectionRequirements,
   rankCatalogProductsByNumericFit,
   selectProductsForVisibleCards,
   suppressVisibleCardsForReadiness,
@@ -2246,6 +2247,109 @@ describe('AgentManager visible card readiness', () => {
         reason: 'unsupported_strict_requirement_kind'
       })
     ]);
+  });
+
+  it('keeps web-covered unverified attributes as preliminary plate candidates but remains fail-closed for final fit', () => {
+    const intent = structuredSelectionIntent({
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'material-crushed-stone',
+        kind: 'compaction_material',
+        value: 'crushed_stone',
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'для трамбовки щебня',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'layer-by-layer',
+        kind: 'compaction_method',
+        value: 'layer_by_layer',
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'будем делать послойно',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    intent.toolRequests = [{
+      id: 'plate-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'виброплита для щебня',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate'
+      },
+      rationale: 'find plate candidates',
+      required: true,
+      coversRequirementIds: []
+    }, {
+      id: 'plate-web-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'verify plate suitability for crushed stone',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        productNames: []
+      },
+      rationale: 'verify facts missing from catalog cards',
+      required: true,
+      coversRequirementIds: ['material-crushed-stone', 'layer-by-layer']
+    }];
+
+    const preliminaryGate = gateStrictSelectionRequirements(intent, 'plate', [{
+      requestId: 'plate-web-check',
+      tool: 'web.researchProductFacts',
+      status: 'timeout',
+      payload: { error: 'timeout' },
+      warnings: ['tool_execution_error']
+    }]);
+    expect(preliminaryGate.blockers).toEqual([]);
+    expect(preliminaryGate.preliminaryUnverified).toEqual([
+      expect.objectContaining({ id: 'material-crushed-stone' }),
+      expect.objectContaining({ id: 'layer-by-layer' })
+    ]);
+
+    const preliminarySelection = selectProductsForVisibleCards({
+      products: [plate],
+      userMessage: 'Нужна виброплита для щебня, работаем послойно.',
+      history: [],
+      intent,
+      answerText: `${plate.name} — предварительный вариант; применение по щебню ещё проверяется.`,
+      selectedProductIds: [plate.id],
+      needState: needStateWithBudget(),
+      toolResults: [{
+        requestId: 'plate-web-check',
+        tool: 'web.researchProductFacts',
+        status: 'timeout',
+        payload: { error: 'timeout' },
+        warnings: ['tool_execution_error']
+      }]
+    });
+    expect(preliminarySelection.selectedProductIds).toEqual([plate.id]);
+    expect(preliminarySelection.warnings).toContain(
+      'product_cards_preliminary:unverified_web_covered_strict_requirements:2'
+    );
+
+    intent.selectionPolicy!.selectionGoal = 'final_fit';
+    const finalSelection = selectProductsForVisibleCards({
+      products: [plate],
+      userMessage: 'Подтвердите окончательную совместимость.',
+      history: [],
+      intent,
+      answerText: `${plate.name} точно подходит.`,
+      selectedProductIds: [plate.id],
+      needState: needStateWithBudget(),
+      toolResults: []
+    });
+    expect(finalSelection.selectedProductIds).toEqual([]);
+    expect(finalSelection.warnings).toContain(
+      'product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:2'
+    );
   });
 
   it('accepts a typed strict gasoline requirement and removes diesel generator cards', () => {

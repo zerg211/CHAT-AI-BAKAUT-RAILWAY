@@ -509,6 +509,15 @@ export interface StrictSelectionRequirementAssessment {
   generatorNominalPowerMinKw?: number;
 }
 
+export interface StrictSelectionRequirementGate extends StrictSelectionRequirementAssessment {
+  preliminaryUnverified: StrictSelectionRequirementBlocker[];
+}
+
+const webVerifiablePreliminaryBlockerReasons = new Set([
+  'material_not_mechanically_verifiable',
+  'unsupported_strict_requirement_kind'
+]);
+
 function typedToolRequirementProof(input: {
   requirement: NonNullable<AgentIntentContract['selectionPolicy']>['requirements'][number];
   intent: AgentIntentContract;
@@ -816,6 +825,36 @@ export function strictSelectionRequirementBlockers(
   toolResults: ToolResult[] = []
 ) {
   return assessStrictSelectionRequirements(intent, productClass, toolResults).blockers;
+}
+
+export function gateStrictSelectionRequirements(
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass,
+  toolResults: ToolResult[] = []
+): StrictSelectionRequirementGate {
+  const assessment = assessStrictSelectionRequirements(intent, productClass, toolResults);
+  if (intent.selectionPolicy?.selectionGoal !== 'preliminary_fit') {
+    return { ...assessment, preliminaryUnverified: [] };
+  }
+  const webCoveredRequirementIds = new Set(intent.toolRequests.flatMap((request) =>
+    request.tool === 'web.researchProductFacts' && request.required
+      ? request.coversRequirementIds ?? []
+      : []
+  ));
+  const preliminaryUnverified = assessment.blockers.filter((blocker) =>
+    webVerifiablePreliminaryBlockerReasons.has(blocker.reason) &&
+    webCoveredRequirementIds.has(blocker.id)
+  );
+  const preliminaryUnverifiedKeys = new Set(
+    preliminaryUnverified.map((blocker) => `${blocker.id}:${blocker.reason}`)
+  );
+  return {
+    ...assessment,
+    blockers: assessment.blockers.filter((blocker) =>
+      !preliminaryUnverifiedKeys.has(`${blocker.id}:${blocker.reason}`)
+    ),
+    preliminaryUnverified
+  };
 }
 
 function structuredGeneratorAutoStartRequirement(intent: AgentIntentContract) {
@@ -1679,7 +1718,7 @@ export function selectProductsForVisibleCards(input: {
     ? mentioned
     : mentioned.filter((product) => productMatchesIntent(product, cardIntent));
   const sameIntentPool = sameIntentProducts(unique, cardIntent);
-  const strictRequirementAssessment = assessStrictSelectionRequirements(
+  const strictRequirementAssessment = gateStrictSelectionRequirements(
     input.intent,
     cardIntent,
     input.toolResults ?? []
@@ -2115,6 +2154,9 @@ export function selectProductsForVisibleCards(input: {
     .map((product) => product.id);
   const visibleCompromiseCount = selectedProducts.filter((product) => compromiseProductIds.has(product.id)).length;
   const warnings = [
+    ...(strictRequirementAssessment.preliminaryUnverified.length
+      ? [`product_cards_preliminary:unverified_web_covered_strict_requirements:${strictRequirementAssessment.preliminaryUnverified.length}`]
+      : []),
     ...(droppedProductIds.length ? [`product_cards_filtered:${droppedProductIds.length}`] : []),
     ...(structuredSuppressedCount > 0
       ? [`product_cards_suppressed:selected_id_not_grounded_mentioned_or_fit:${structuredSuppressedCount}`]
