@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseJsonObject,
+  structuredJsonOutputLimitExhausted,
   structuredJsonRetryDecision,
   structuredJsonRetryOutputTokenLimit
 } from '../src/ai/openaiStructured.js';
@@ -34,7 +35,21 @@ describe('structuredJsonRetryOutputTokenLimit', () => {
 
   it('uses an explicit cap when the caller reserved a larger retry budget', () => {
     expect(structuredJsonRetryOutputTokenLimit(800, 1800)).toBe(1800);
-    expect(structuredJsonRetryOutputTokenLimit(3200, 4000)).toBe(3200);
+    expect(structuredJsonRetryOutputTokenLimit(3200, 4000)).toBe(4000);
+  });
+});
+
+describe('structuredJsonOutputLimitExhausted', () => {
+  it('detects an incomplete structured response that exhausted its output cap', () => {
+    expect(structuredJsonOutputLimitExhausted({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      usage: { output_tokens: 3200 }
+    }, 3200)).toBe(true);
+    expect(structuredJsonOutputLimitExhausted({
+      status: 'completed',
+      usage: { output_tokens: 3200 }
+    }, 3200)).toBe(false);
   });
 });
 

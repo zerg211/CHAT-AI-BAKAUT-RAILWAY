@@ -145,7 +145,6 @@ export interface AgentManagerRecoverInput {
 }
 
 export interface AgentManagerModel {
-  understandTurn?(input: AgentManagerModelInput): Promise<AgentManagerTurnUnderstanding>;
   proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta>;
   planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract>;
   composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract>;
@@ -159,12 +158,9 @@ export interface AgentManagerModelInput {
   ledgerEvents: DialogueLedgerEvent[];
   ledgerState?: ReducedDialogueLedgerState;
   pendingLeadCaptureDraft?: PendingLeadCaptureDraftContext | null;
+  structuredOutputTokenCap?: number;
+  structuredDeadlineAtMs?: number;
   signal?: AbortSignal;
-}
-
-export interface AgentManagerTurnUnderstanding {
-  ledgerDelta: unknown;
-  intentContract: unknown;
 }
 
 export interface PendingLeadCaptureDraftContext {
@@ -296,6 +292,43 @@ function activeScopedLedgerFacts(ledgerState: ReducedDialogueLedgerState) {
     .find((need) => need.status === 'open' || need.status === 'selected')?.needId
     ?? [...activeFacts].reverse().find((fact) => fact.needId)?.needId;
   return activeFacts.filter((fact) => !fact.needId || fact.needId === currentNeedId);
+}
+
+function parallelIntentLedgerConflicts(input: {
+  intent: AgentIntentContract;
+  ledgerState: ReducedDialogueLedgerState;
+  turnEvents: DialogueLedgerEvent[];
+}) {
+  const conflicts: string[] = [];
+  const activeNeed = [...Object.values(input.ledgerState.needsById)]
+    .reverse()
+    .find((need) => need.status === 'open' || need.status === 'selected');
+  const ledgerClass = coerceVisibleCardIntent(activeNeed?.productClass);
+  const intentClass = coerceVisibleCardIntent(
+    input.intent.selectionPolicy?.canonicalProductClass ?? input.intent.selectionPolicy?.targetProductClass
+  );
+  if (ledgerClass !== 'unknown' && intentClass !== 'unknown' && ledgerClass !== intentClass) {
+    conflicts.push(`active_product_class_mismatch:${ledgerClass}:${intentClass}`);
+  }
+
+  const activeNeedTurnEvents = activeNeed
+    ? input.turnEvents.filter((event) => event.payload.needId === activeNeed.needId)
+    : [];
+  const openedNeed = activeNeedTurnEvents.some((event) => event.eventType === 'need.opened');
+  const needAction = input.intent.selectionPolicy?.needAction;
+  if (openedNeed && needAction !== 'open' && needAction !== 'switch') {
+    conflicts.push(`opened_need_action_mismatch:${needAction ?? 'missing'}`);
+  }
+
+  const selectionWasReset = activeNeedTurnEvents.some((event) => {
+    if (event.eventType !== 'need.opened' && event.eventType !== 'need.updated') return false;
+    const mode = event.payload.selectionUpdateMode;
+    return mode === 'replace' || mode === 'clear';
+  });
+  if (selectionWasReset && activeNeed?.selectedProductIds.length === 0 && input.intent.selectionPolicy?.reusePreviousCards) {
+    conflicts.push('cleared_selection_cannot_reuse_previous_cards');
+  }
+  return conflicts;
 }
 
 function pendingLeadCaptureDraftContext(draft: LeadCaptureDraft | null): PendingLeadCaptureDraftContext | null {
@@ -1002,6 +1035,32 @@ function succeededCheckpoint(rows: unknown[], checkpoint: string) {
   const row = latestCheckpoint(rows, checkpoint);
   if (row?.status !== 'succeeded') return { found: false as const, payload: undefined };
   return row ? { found: true, payload: row.payload } : { found: false, payload: undefined };
+}
+
+function semanticCheckpointError(error: unknown) {
+  const details = safeError(error);
+  const retryReason = typeof details.retryReason === 'string' ? details.retryReason : undefined;
+  return {
+    details,
+    retryReason,
+    errorCode: retryReason === 'output_limit_exhausted'
+      ? 'structured_json_output_limit_exhausted'
+      : (details.code ?? details.message ?? 'semantic_stage_failed')
+  };
+}
+
+function semanticRecoveryOutputTokenCap(rows: unknown[], checkpoint: string) {
+  const row = latestCheckpoint(rows, checkpoint);
+  if (row?.status !== 'failed') return undefined;
+  const errorCode = String(row.error_code ?? row.errorCode ?? '');
+  const payload = row.payload && typeof row.payload === 'object'
+    ? row.payload as { retryReason?: unknown }
+    : undefined;
+  if (
+    errorCode !== 'structured_json_output_limit_exhausted' &&
+    payload?.retryReason !== 'output_limit_exhausted'
+  ) return undefined;
+  return Math.ceil(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS * 1.5);
 }
 
 const maxRecoveryReviewIssues = 12;
@@ -3644,22 +3703,6 @@ const intentContractFormat = {
   }
 } as const;
 
-const combinedUnderstandingFormat = {
-  format: {
-    type: 'json_schema',
-    name: 'agent_turn_understanding',
-    schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        ledgerDelta: ledgerDeltaFormat.format.schema,
-        intentContract: intentContractFormat.format.schema
-      },
-      required: ['ledgerDelta', 'intentContract']
-    }
-  }
-} as const;
-
 const answerContractFormat = {
   format: {
     type: 'json_schema',
@@ -3753,7 +3796,6 @@ const preSendReviewFormat = {
 export const agentManagerStructuredFormats = {
   ledgerDeltaFormat,
   intentContractFormat,
-  combinedUnderstandingFormat,
   answerContractFormat,
   preSendReviewFormat
 } as const;
@@ -3776,6 +3818,7 @@ function plannerSystemPromptBlock() {
     'Ты планировщик AI менеджера БАКАУТ.',
     untrustedEvidenceBoundary,
     managerPolicy,
+    'Планируй по existing ledger вместе с current userMessage: текущая реплика ещё не применена к ledger и может семантически заменить, отменить, уточнить или открыть требования. Более новая явная вводная покупателя имеет приоритет над конфликтующей старой; не смешивай их.',
     'LLM решает смысл хода без фиксированного списка сценариев.',
     'Код только исполнит typed tools, но не будет подменять твой смысл.',
     'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, requiredToolKinds, technicalAttributes и rationale. Затем toolRequests должны исполнять эту grounding-политику.',
@@ -3838,59 +3881,11 @@ function plannerSystemPromptBlock() {
 }
 
 export class OpenAIAgentManagerModel implements AgentManagerModel {
-  async understandTurn(input: AgentManagerModelInput): Promise<AgentManagerTurnUnderstanding> {
-    const request = {
-      model: config.OPENAI_PLANNER_MODEL,
-      reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
-      max_output_tokens: config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
-      input: [
-        {
-          role: 'system',
-          content: [
-            'Ты одновременно state-reducer и планировщик AI менеджера БАКАУТ.',
-            untrustedEvidenceBoundary,
-            'Верни один JSON agent_turn_understanding с двумя независимыми полями: ledgerDelta и intentContract.',
-            'Сначала семантически вычисли ledgerDelta по правилам reducer. Затем мысленно примени этот delta к existingState и планируй intentContract уже по обновлённому состоянию.',
-            'Правила ledgerDelta:',
-            ledgerReducerPolicyPromptBlock(),
-            'Правила intentContract:',
-            plannerSystemPromptBlock(),
-            'Не смешивай два контракта: ledgerDelta содержит только события памяти, intentContract содержит только план, grounding и typed tool requests. Не пиши ответ покупателю.'
-          ].join('\n')
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            userMessage: input.userMessage,
-            history: compactHistory(input.history),
-            existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
-            existingLedger: input.ledgerEvents.slice(-80),
-            pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null
-          })
-        }
-      ],
-      text: combinedUnderstandingFormat
-    };
-    const { parsed } = await createStructuredJsonResponse({
-      request,
-      stage: 'agent_turn_understanding',
-      signal: input.signal
-    });
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('agent_turn_understanding_invalid_wrapper');
-    }
-    const understanding = parsed as Record<string, unknown>;
-    return {
-      ledgerDelta: understanding.ledgerDelta,
-      intentContract: understanding.intentContract
-    };
-  }
-
   async proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta> {
     const request = {
       model: config.OPENAI_PLANNER_MODEL,
       reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
-      max_output_tokens: config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
+      max_output_tokens: input.structuredOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
       input: [
         {
           role: 'system',
@@ -3904,17 +3899,24 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         },
         {
           role: 'user',
-          content: JSON.stringify({
-            userMessage: input.userMessage,
-            history: compactHistory(input.history),
-            existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
-            existingLedger: input.ledgerEvents.slice(-80)
-          })
+           content: JSON.stringify({
+             userMessage: input.userMessage,
+             history: compactHistory(input.history),
+             existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
+             existingLedger: input.ledgerEvents.slice(-80),
+             pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null
+           })
         }
       ],
       text: ledgerDeltaFormat
     };
-    const { parsed } = await createStructuredJsonResponse({ request, stage: 'agent_ledger_delta', signal: input.signal });
+    const { parsed } = await createStructuredJsonResponse({
+      request,
+      stage: 'agent_ledger_delta',
+      signal: input.signal,
+      deadlineAtMs: input.structuredDeadlineAtMs,
+      minRetryRemainingMs: 25_000
+    });
     return LedgerStateDeltaSchema.parse(parsed);
   }
 
@@ -3922,7 +3924,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     const request = {
       model: config.OPENAI_PLANNER_MODEL,
       reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
-      max_output_tokens: config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
+      max_output_tokens: input.structuredOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
       input: [
         {
           role: 'system',
@@ -3940,7 +3942,13 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       ],
       text: intentContractFormat
     };
-    const { parsed } = await createStructuredJsonResponse({ request, stage: 'agent_intent_contract', signal: input.signal });
+    const { parsed } = await createStructuredJsonResponse({
+      request,
+      stage: 'agent_intent_contract',
+      signal: input.signal,
+      deadlineAtMs: input.structuredDeadlineAtMs,
+      minRetryRemainingMs: 25_000
+    });
     return AgentIntentContractSchema.parse(parsed);
   }
 
@@ -4650,42 +4658,157 @@ export class AgentManagerOrchestrator {
 
     const savedDelta = succeededCheckpoint(persistedExecution.checkpoints, 'ledger_delta_proposed');
     const intentCheckpoint = succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_created');
+    const intentProposalCheckpoint = succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_proposed');
+    const turnPlannerIntent = turn?.plannerContract
+      ? { found: true as const, payload: turn.plannerContract }
+      : { found: false as const, payload: undefined };
     const savedIntent = intentCheckpoint.found
       ? intentCheckpoint
-      : turn?.plannerContract
-        ? { found: true, payload: turn.plannerContract }
-        : { found: false, payload: undefined };
-    let combinedUnderstanding: AgentManagerTurnUnderstanding | undefined;
-    if (!savedDelta.found && !savedIntent.found && typeof this.model.understandTurn === 'function') {
+      : turnPlannerIntent.found
+        ? turnPlannerIntent
+        : intentProposalCheckpoint;
+    const savedIntentWasPreDeltaProposal = !intentCheckpoint.found &&
+      !turnPlannerIntent.found &&
+      intentProposalCheckpoint.found;
+    let parallelDelta: LedgerStateDelta | undefined;
+    let parallelIntent: AgentIntentContract | undefined;
+    let parallelDeltaCheckpointed = false;
+    if (!savedDelta.found && !savedIntent.found) {
+      const semanticStartedAt = Date.now();
+      const structuredDeadlineAtMs = turnBudget.snapshot().usage.deadlineAtMs;
+      const deltaOutputTokenCap = semanticRecoveryOutputTokenCap(
+        persistedExecution.checkpoints,
+        'ledger_delta_proposed'
+      );
+      const intentOutputTokenCap = semanticRecoveryOutputTokenCap(
+        persistedExecution.checkpoints,
+        'intent_contract_proposed'
+      );
       turnBudget.consumeModelCall();
-      combinedUnderstanding = await this.model.understandTurn({
+      turnBudget.consumeModelCall();
+      await this.trace(input.sessionId, input.turnId, 'intent', 'parallel_semantic_calls_started', {
+        pendingLeadCaptureDraft: Boolean(pendingLeadDraftContext),
+        deltaOutputTokenCap: deltaOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
+        intentOutputTokenCap: intentOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
+        remainingTurnMs: turnBudget.remainingWallTimeMs()
+      });
+      const sharedModelInput = {
         session: input.session,
         history,
         userMessage,
         ledgerEvents,
         ledgerState: ledgerContext.state,
         pendingLeadCaptureDraft: pendingLeadDraftContext,
+        structuredDeadlineAtMs,
         signal: input.signal
+      };
+      const [deltaOutcome, intentOutcome] = await Promise.allSettled([
+        this.model.proposeLedgerDelta({
+          ...sharedModelInput,
+          structuredOutputTokenCap: deltaOutputTokenCap
+        }),
+        this.model.planTurn({
+          ...sharedModelInput,
+          ledgerState: ledgerContext.state,
+          structuredOutputTokenCap: intentOutputTokenCap
+        })
+      ]);
+      const persistFailedSemanticCheckpoint = async (
+        checkpoint: 'ledger_delta_proposed' | 'intent_contract_proposed',
+        error: unknown,
+        attemptedOutputTokenCap: number
+      ) => {
+        const failure = semanticCheckpointError(error);
+        await this.conversations.upsertTurnCheckpoint({
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          checkpoint,
+          status: 'failed',
+          payload: {
+            retryReason: failure.retryReason ?? null,
+            attemptedOutputTokenCap
+          },
+          errorCode: failure.errorCode,
+          errorMessage: failure.details.message
+        });
+      };
+      const persistDeltaOutcome = async () => {
+        try {
+          if (deltaOutcome.status === 'rejected') throw deltaOutcome.reason;
+          const parsed = LedgerStateDeltaSchema.safeParse(deltaOutcome.value);
+          if (!parsed.success) throw new Error(`parallel_ledger_delta_invalid:${parsed.error.issues.length}`);
+          await this.conversations.upsertTurnCheckpoint({
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            checkpoint: 'ledger_delta_proposed',
+            status: 'succeeded',
+            payload: parsed.data
+          });
+          return parsed.data;
+        } catch (error) {
+          await persistFailedSemanticCheckpoint(
+            'ledger_delta_proposed',
+            error,
+            deltaOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS
+          ).catch(() => undefined);
+          throw error;
+        }
+      };
+      const persistIntentOutcome = async () => {
+        try {
+          if (intentOutcome.status === 'rejected') throw intentOutcome.reason;
+          const parsed = AgentIntentContractSchema.safeParse(intentOutcome.value);
+          if (!parsed.success) throw new Error(`parallel_intent_contract_invalid:${parsed.error.issues.length}`);
+          await this.conversations.upsertTurnCheckpoint({
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            checkpoint: 'intent_contract_proposed',
+            status: 'succeeded',
+            payload: parsed.data
+          });
+          return parsed.data;
+        } catch (error) {
+          await persistFailedSemanticCheckpoint(
+            'intent_contract_proposed',
+            error,
+            intentOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS
+          ).catch(() => undefined);
+          throw error;
+        }
+      };
+      const [deltaCheckpointOutcome, intentCheckpointOutcome] = await Promise.allSettled([
+        persistDeltaOutcome(),
+        persistIntentOutcome()
+      ]);
+      const failures: unknown[] = [];
+      if (deltaCheckpointOutcome.status === 'fulfilled') {
+        parallelDelta = deltaCheckpointOutcome.value;
+        parallelDeltaCheckpointed = true;
+      } else {
+        failures.push(deltaCheckpointOutcome.reason);
+      }
+      if (intentCheckpointOutcome.status === 'fulfilled') {
+        parallelIntent = intentCheckpointOutcome.value;
+      } else {
+        failures.push(intentCheckpointOutcome.reason);
+      }
+      await this.trace(input.sessionId, input.turnId, 'intent', failures.length
+        ? 'parallel_semantic_calls_partially_failed'
+        : 'parallel_semantic_calls_completed', {
+        deltaCompleted: Boolean(parallelDelta),
+        intentCompleted: Boolean(parallelIntent),
+        durationMs: Date.now() - semanticStartedAt,
+        remainingTurnMs: turnBudget.remainingWallTimeMs(),
+        failures: failures.map((error) => safeError(error))
       });
-      await this.trace(input.sessionId, input.turnId, 'intent', 'combined_understanding_created', {
-        pendingLeadCaptureDraft: Boolean(pendingLeadDraftContext)
-      });
+      if (failures.length) throw failures[0];
     }
-    const combinedDeltaParse = combinedUnderstanding
-      ? LedgerStateDeltaSchema.safeParse(combinedUnderstanding.ledgerDelta)
-      : undefined;
-    const parsedCombinedDelta = combinedDeltaParse?.success ? combinedDeltaParse.data : undefined;
     let delta: LedgerStateDelta;
     if (savedDelta.found) {
       delta = LedgerStateDeltaSchema.parse(savedDelta.payload);
-    } else if (parsedCombinedDelta) {
-      delta = parsedCombinedDelta;
+    } else if (parallelDelta) {
+      delta = parallelDelta;
     } else {
-      if (combinedDeltaParse?.success === false) {
-        await this.trace(input.sessionId, input.turnId, 'ledger', 'combined_ledger_delta_rejected', {
-          issueCount: combinedDeltaParse.error.issues.length
-        });
-      }
       turnBudget.consumeModelCall();
       delta = await this.model.proposeLedgerDelta({
         session: input.session,
@@ -4694,10 +4817,15 @@ export class AgentManagerOrchestrator {
         ledgerEvents,
         ledgerState: ledgerContext.state,
         pendingLeadCaptureDraft: pendingLeadDraftContext,
+        structuredOutputTokenCap: semanticRecoveryOutputTokenCap(
+          persistedExecution.checkpoints,
+          'ledger_delta_proposed'
+        ),
+        structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
         signal: input.signal
       });
     }
-    if (!savedDelta.found) {
+    if (!savedDelta.found && !parallelDeltaCheckpointed) {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
@@ -4760,23 +4888,18 @@ export class AgentManagerOrchestrator {
       ? AgentIntentContractSchema.safeParse(savedIntent.payload)
       : undefined;
     const parsedSavedIntent = savedIntentParse?.success ? savedIntentParse.data : undefined;
-    const combinedIntentParse = combinedUnderstanding && combinedDeltaParse?.success !== false
-      ? AgentIntentContractSchema.safeParse(combinedUnderstanding.intentContract)
-      : undefined;
-    const parsedCombinedIntent = combinedIntentParse?.success ? combinedIntentParse.data : undefined;
     const legacyIntentUpgraded = Boolean(savedIntent.found && (
       savedIntentParse?.success === false || !parsedSavedIntent?.selectionPolicy
     ));
-    const intentWasReplanned = !parsedSavedIntent || legacyIntentUpgraded;
+    let intentWasReplanned = !parsedSavedIntent || legacyIntentUpgraded;
+    let plannedAgainstPreDelta = savedIntentWasPreDeltaProposal;
     let plannedIntent: AgentIntentContract;
     if (parsedSavedIntent && !legacyIntentUpgraded) {
       plannedIntent = parsedSavedIntent;
-    } else if (parsedCombinedIntent) {
-      plannedIntent = parsedCombinedIntent;
+    } else if (parallelIntent) {
+      plannedIntent = parallelIntent;
+      plannedAgainstPreDelta = true;
     } else {
-      if (combinedUnderstanding && combinedDeltaParse?.success === false) {
-        await this.trace(input.sessionId, input.turnId, 'intent', 'combined_intent_discarded_after_ledger_rejection', {});
-      }
       turnBudget.consumeModelCall();
       plannedIntent = await this.model.planTurn({
         session: input.session,
@@ -4785,12 +4908,38 @@ export class AgentManagerOrchestrator {
         ledgerEvents: effectiveLedgerEvents,
         ledgerState,
         pendingLeadCaptureDraft: pendingLeadDraftContext,
+        structuredOutputTokenCap: semanticRecoveryOutputTokenCap(
+          persistedExecution.checkpoints,
+          'intent_contract_proposed'
+        ),
+        structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
         signal: input.signal
       });
-      if (combinedIntentParse?.success === false) {
-        await this.trace(input.sessionId, input.turnId, 'intent', 'combined_intent_rejected', {
-          issueCount: combinedIntentParse.error.issues.length
+    }
+    if (plannedAgainstPreDelta) {
+      const conflicts = parallelIntentLedgerConflicts({
+        intent: plannedIntent,
+        ledgerState,
+        turnEvents: newEvents
+      });
+      if (conflicts.length) {
+        await this.trace(input.sessionId, input.turnId, 'intent', 'parallel_intent_replan_required', {
+          conflicts,
+          remainingTurnMs: turnBudget.remainingWallTimeMs()
         });
+        turnBudget.consumeModelCall();
+        plannedIntent = await this.model.planTurn({
+          session: input.session,
+          history,
+          userMessage,
+          ledgerEvents: effectiveLedgerEvents,
+          ledgerState,
+          pendingLeadCaptureDraft: pendingLeadDraftContext,
+          structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
+          signal: input.signal
+        });
+        intentWasReplanned = true;
+        plannedAgainstPreDelta = false;
       }
     }
     const plannedReuseProductIds = currentNeedSelectedProductIds(needStateSnapshot);
@@ -4849,7 +4998,7 @@ export class AgentManagerOrchestrator {
       activeNeedsAfter: needStateSnapshot.activeNeeds
     });
     if (
-      !savedIntent.found ||
+      !intentCheckpoint.found ||
       legacyIntentUpgraded ||
       newNeedFinalFitRepair.repaired ||
       openEndedWebCoverageRepair.repairs.length > 0 ||

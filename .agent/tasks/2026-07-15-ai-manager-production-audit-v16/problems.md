@@ -136,6 +136,42 @@ This file records failures against the frozen specification. A problem is not cl
 - Local evidence: focused combined-understanding regressions and final release gate `549/549` PASS.
 - Status: locally fixed; production latency/recovery proof remains pending AC11/AC14.
 
+## V13 — combined understanding exhausts the first-turn output and time budget
+
+- Severity: P0.
+- Acceptance criteria: AC3, AC5, AC9, AC10, AC11, AC12, AC14.
+- Production session: `dc5957d9-32e7-4f6e-8d87-b69ddc9b3868` (`conversationNumber=1783`).
+- Failed turn: `a46caa83-cf55-4438-b586-6442cdbc8562`.
+- Buyer message: `Нужен дизельный генератор для небольшой мастерской: трёхфазный 380 В, постоянная нагрузка около 8 кВт, нужен автозапуск при отключении сети. Что можете подобрать?`
+- Buyer-visible result after 55 seconds: a deterministic terminal timeout with no recommendation, cards, planner contract, ledger update, or tool result.
+- Runtime traces contain only `turn.started(recovered=false)`, `turn.started(recovered=true)`, and `terminal_response_committed(reason=turn_work_deadline_exhausted)`.
+- Railway logs prove that `agent_turn_understanding` reached the structured-output limit without a balanced JSON object and then launched the same futile JSON retry. Usage records show 8,280 input tokens and exactly 3,200 output tokens for both the original and retry calls.
+
+### Root cause and LLM/code boundary
+
+- LLM responsibility remains semantic: understand the current message and prior state, emit the memory delta, changed-requirement policy, typed tool requests, and grounding plan.
+- Deterministic responsibility: enforce a single deadline, checkpoint independent valid model results, execute typed tools, and never repeat a structurally identical call after it has exhausted its output budget.
+- Incorrect orchestration: one combined strict schema requires both the ledger delta and the full intent/tool contract in one bounded output. When it truncates, `createStructuredJsonResponse()` repeats the same request at the same cap. The retry consumes the remaining turn budget before either semantic result can be checkpointed.
+- Required structured execution outcome: obtain the two semantic contracts through independently bounded Terra outputs, make both available to the planner/runtime without phrase-specific parsing, and preserve whichever valid contract completes first for recovery.
+
+### Required fix
+
+- Remove the over-sized combined structured output from the critical production path; keep Terra for both semantic operations.
+- Run the independent reducer and intent planning work with bounded latency and checkpoint valid results independently.
+- Do not perform a same-cap structured retry when the response already exhausted the output limit or when the remaining turn budget cannot support a useful retry.
+- Add regressions for first-turn concurrent understanding, partial completion/recovery, and no duplicate combined retry.
+- Repeat the affected generator dialogue through the embedded production widget after GitHub/Railway deployment.
+
+### Local resolution
+
+- The combined `agent_turn_understanding` path and schema were removed.
+- Separate Terra reducer and planner calls start concurrently, serialize the same current message/state/pending-draft context, and checkpoint independently.
+- Partial model or checkpoint failure preserves the successful sibling; recovery calls only the missing stage.
+- Output-limit exhaustion persists `retryReason=output_limit_exhausted`, skips an identical internal retry, and uses a bounded larger cap on recovery.
+- Active-need conflict checks can request one post-delta replan without reacting to resets on a paused sibling need.
+- Local release gate after the final implementation: 67 files and 557 tests PASS; agentic eval 191 PASS; typecheck, build, dependency audit, no-new-regex, and `git diff --check` PASS.
+- Status: locally fixed; the exact generator dialogue and latency remain pending AC11/AC14 production revalidation.
+
 ## Requires clarification or external work
 
 - The application cannot create the external Railway cron described by `docs/CATALOG_PIPELINE.md`. Production catalog freshness remains unproven until that schedule is configured and a full sync run is observed.

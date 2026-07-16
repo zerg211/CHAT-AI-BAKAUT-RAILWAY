@@ -6,18 +6,19 @@
   "productionBaseline": {
     "surface": "embedded widget at https://bakautprof.ru/",
     "runtime": "2026-07-15.gpt-5-6-terra-latency-headroom-v15",
-    "sessionId": "7e531202-dee1-4576-ae88-2aac09b453c0",
-    "conversationId": 1782,
-    "failedTurnId": "00f5d97a-14f4-42d9-980d-71bd81f461de",
-    "status": "failed",
-    "stage": "recovery_failed"
+    "sessionId": "dc5957d9-32e7-4f6e-8d87-b69ddc9b3868",
+    "conversationId": 1783,
+    "failedTurnId": "a46caa83-cf55-4438-b586-6442cdbc8562",
+    "status": "degraded_terminal",
+    "stage": "turn_work_deadline_exhausted",
+    "deployedCommitAtFailure": "59f8377e8a14e9f4ef47e87bf794d0a50349c853"
   },
   "localVerification": {
     "releaseGate": "PASS",
-    "testFilesPassed": 66,
-    "testsPassed": 549,
+    "testFilesPassed": 67,
+    "testsPassed": 557,
     "agenticEvalFilesPassed": 4,
-    "agenticEvalTestsPassed": 187,
+    "agenticEvalTestsPassed": 191,
     "typecheck": "PASS",
     "productionBuild": "PASS",
     "productionDependencyVulnerabilities": 0,
@@ -29,7 +30,10 @@
       "modelIndex2200Phase": "unknown",
       "modelIndex2300Phase": "unknown",
       "genuineO230Phase": "single_220",
-      "genuineO230Proof": "satisfied"
+      "genuineO230Proof": "satisfied",
+      "v13Verdict": "PASS",
+      "v13TargetedTestsPassed": 117,
+      "v13ResidualP0P1P2": 0
     }
   },
   "acceptanceCriteria": {

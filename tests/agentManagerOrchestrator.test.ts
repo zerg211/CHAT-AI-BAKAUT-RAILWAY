@@ -335,6 +335,28 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
         nextStepRationale: 'calculate and answer',
         requiresTools: false,
         toolRequests: [],
+        productMentions: [],
+        selectionPolicy: {
+          ...currentNoProductSelectionPolicy(),
+          selectionGoal: 'browse_catalog'
+        },
+        leadCaptureAuthorization: {
+          authorized: false,
+          contactSource: 'none',
+          purpose: null,
+          buyerQuestion: null,
+          evidence: null,
+          pendingDraftId: null
+        },
+        policyRuleIds: [],
+        grounding: {
+          taskType: 'technical_answer',
+          sourcePolicy: 'conversation_only',
+          webPurpose: 'none',
+          requiredToolKinds: [],
+          technicalAttributes: [],
+          rationale: 'the answer is grounded in the current conversation'
+        },
         mustNotAskQuestionIds: ['q.coffee_power'],
         riskFlags: []
       };
@@ -902,13 +924,20 @@ describe('AgentManagerOrchestrator', () => {
           };
         },
         async planTurn(input) {
-          plannedBuyerTurnCounts.push(input.history.filter((item) => item.role === 'user').length);
+          const buyerTurnCount = input.history.filter((item) => item.role === 'user').length;
+          plannedBuyerTurnCounts.push(buyerTurnCount);
           return {
             userMessageSummary: `confirmation number ${plannedBuyerTurnCounts.at(-1)}`,
             dialogueUnderstanding: 'the same surface text is a new action in later context',
             nextStepRationale: 'answer this exact turn in sequence',
             requiresTools: false,
             toolRequests: [],
+            selectionPolicy: {
+              ...currentNoProductSelectionPolicy(),
+              targetProductClass: 'generator',
+              canonicalProductClass: 'generator',
+              needAction: buyerTurnCount === 1 ? 'open' : 'continue'
+            },
             mustNotAskQuestionIds: [],
             riskFlags: []
           };
@@ -7965,7 +7994,7 @@ describe('AgentManagerOrchestrator', () => {
   });
 });
 
-describe('combined turn understanding', () => {
+describe('parallel semantic turn contracts', () => {
   function noToolIntent(summary: string): AgentIntentContract {
     return {
       userMessageSummary: summary,
@@ -8000,7 +8029,7 @@ describe('combined turn understanding', () => {
     };
   }
 
-  it('persists the same separate checkpoints while using one optional understanding call', async () => {
+  it('starts reducer and planner concurrently and persists their independent checkpoints', async () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
     leads.pendingDraft = {
@@ -8023,7 +8052,15 @@ describe('combined turn understanding', () => {
       createdAt: new Date('2026-05-19T12:00:00.000Z').toISOString(),
       updatedAt: new Date('2026-05-19T12:00:00.000Z').toISOString()
     };
-    const understandTurn = vi.fn(async (input: Parameters<NonNullable<AgentManagerModel['understandTurn']>>[0]) => {
+    let startedCalls = 0;
+    let releaseBoth!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { releaseBoth = resolve; });
+    const markStarted = () => {
+      startedCalls += 1;
+      if (startedCalls === 2) releaseBoth();
+      return bothStarted;
+    };
+    const assertPendingDraftContext = (input: Parameters<AgentManagerModel['proposeLedgerDelta']>[0]) => {
       expect(input.pendingLeadCaptureDraft).toMatchObject({
         id: leads.pendingDraft?.id,
         purpose: 'confirm delivery details',
@@ -8035,25 +8072,25 @@ describe('combined turn understanding', () => {
         missingFields: ['name']
       });
       expect(input.pendingLeadCaptureDraft).not.toHaveProperty('phone');
+    };
+    const proposeLedgerDelta = vi.fn(async (input: Parameters<AgentManagerModel['proposeLedgerDelta']>[0]) => {
+      assertPendingDraftContext(input);
+      await markStarted();
       return {
-        ledgerDelta: {
-          rationale: 'the current turn does not add a new durable fact',
-          events: []
-        },
-        intentContract: noToolIntent('combined understanding summary')
+        rationale: 'the current turn does not add a new durable fact',
+        events: []
       };
     });
-    const proposeLedgerDelta = vi.fn(async () => {
-      throw new Error('separate delta call must not run');
-    });
-    const planTurn = vi.fn(async () => {
-      throw new Error('separate planner call must not run');
+    const planTurn = vi.fn(async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
+      assertPendingDraftContext(input);
+      await markStarted();
+      return noToolIntent('parallel planner summary');
     });
     const orchestrator = new AgentManagerOrchestrator(
       conversations as never,
       new FakeProducts() as never,
       leads as never,
-      model({ understandTurn, proposeLedgerDelta, planTurn })
+      model({ proposeLedgerDelta, planTurn })
     );
 
     const payload = await orchestrator.generateAnswer({
@@ -8063,9 +8100,9 @@ describe('combined turn understanding', () => {
     });
 
     expect(payload.answer).toContain('5 kW');
-    expect(understandTurn).toHaveBeenCalledTimes(1);
-    expect(proposeLedgerDelta).not.toHaveBeenCalled();
-    expect(planTurn).not.toHaveBeenCalled();
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(startedCalls).toBe(2);
     const checkpointNames = conversations.checkpoints.map((checkpoint) =>
       (checkpoint as { checkpoint?: string }).checkpoint
     );
@@ -8076,8 +8113,51 @@ describe('combined turn understanding', () => {
       payload: expect.objectContaining({ rationale: 'the current turn does not add a new durable fact' })
     }));
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_proposed',
+      payload: expect.objectContaining({ userMessageSummary: 'parallel planner summary' })
+    }));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
       checkpoint: 'intent_contract_created',
-      payload: expect.objectContaining({ userMessageSummary: 'combined understanding summary' })
+      payload: expect.objectContaining({ userMessageSummary: 'parallel planner summary' })
+    }));
+  });
+
+  it('still checkpoints the valid intent when persistence of the sibling delta fails', async () => {
+    class DeltaCheckpointFailureConversations extends FakeConversations {
+      override async upsertTurnCheckpoint(input: unknown) {
+        if ((input as { checkpoint?: string }).checkpoint === 'ledger_delta_proposed') {
+          throw new Error('delta checkpoint storage failed');
+        }
+        return super.upsertTurnCheckpoint(input);
+      }
+    }
+    const conversations = new DeltaCheckpointFailureConversations();
+    const proposeLedgerDelta = vi.fn(async () => ({
+      rationale: 'valid delta whose checkpoint storage fails',
+      events: []
+    }));
+    const planTurn = vi.fn(async () => noToolIntent('intent persisted independently of the delta checkpoint'));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await expect(orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    })).rejects.toThrow('delta checkpoint storage failed');
+
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_proposed',
+      status: 'succeeded',
+      payload: expect.objectContaining({
+        userMessageSummary: 'intent persisted independently of the delta checkpoint'
+      })
     }));
   });
 
@@ -8088,9 +8168,6 @@ describe('combined turn understanding', () => {
       status: 'succeeded',
       payload: { rationale: 'saved delta from the interrupted first attempt', events: [] }
     }];
-    const understandTurn = vi.fn(async () => {
-      throw new Error('combined call must not run for a partial checkpoint');
-    });
     const proposeLedgerDelta = vi.fn(async () => {
       throw new Error('saved delta must be reused');
     });
@@ -8099,13 +8176,12 @@ describe('combined turn understanding', () => {
       conversations as never,
       new FakeProducts() as never,
       new FakeLeads() as never,
-      model({ understandTurn, proposeLedgerDelta, planTurn })
+      model({ proposeLedgerDelta, planTurn })
     );
 
     const payload = await orchestrator.recoverTurn({ sessionId, turnId });
 
     expect(payload.answer).toContain('5 kW');
-    expect(understandTurn).not.toHaveBeenCalled();
     expect(proposeLedgerDelta).not.toHaveBeenCalled();
     expect(planTurn).toHaveBeenCalledTimes(1);
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
@@ -8114,108 +8190,345 @@ describe('combined turn understanding', () => {
     }));
   });
 
-  it('keeps the validated delta checkpoint and safely replans an invalid combined intent', async () => {
+  it('records an exhausted semantic output cap and recovery retries only that stage with a larger bounded cap', async () => {
     const conversations = new FakeConversations();
-    const understandTurn = vi.fn(async () => ({
-      ledgerDelta: {
-        rationale: 'valid delta survives an invalid sibling intent',
-        events: []
-      },
-      intentContract: { invalid: true }
-    }));
-    const proposeLedgerDelta = vi.fn(async () => {
-      throw new Error('combined delta must not be proposed again');
+    const attemptedCaps: Array<number | undefined> = [];
+    const exhausted = Object.assign(new Error('Structured JSON retry skipped: output_limit_exhausted'), {
+      code: 'structured_json_retry_skipped',
+      retryReason: 'output_limit_exhausted'
     });
-    const planTurn = vi.fn(async () => noToolIntent('safe fallback planner summary'));
+    const proposeLedgerDelta = vi.fn(async (input: Parameters<AgentManagerModel['proposeLedgerDelta']>[0]) => {
+      attemptedCaps.push(input.structuredOutputTokenCap);
+      if (attemptedCaps.length === 1) throw exhausted;
+      return { rationale: 'expanded recovery cap completed the reducer', events: [] };
+    });
+    const planTurn = vi.fn(async () => noToolIntent('planner survives reducer output exhaustion'));
     const orchestrator = new AgentManagerOrchestrator(
       conversations as never,
       new FakeProducts() as never,
       new FakeLeads() as never,
-      model({ understandTurn, proposeLedgerDelta, planTurn })
+      model({ proposeLedgerDelta, planTurn })
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: conversations.messages[0]!.content
-    });
+    })).rejects.toThrow('output_limit_exhausted');
 
-    expect(payload.answer).toContain('5 kW');
-    expect(understandTurn).toHaveBeenCalledTimes(1);
-    expect(proposeLedgerDelta).not.toHaveBeenCalled();
-    expect(planTurn).toHaveBeenCalledTimes(1);
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
       checkpoint: 'ledger_delta_proposed',
-      payload: expect.objectContaining({ rationale: 'valid delta survives an invalid sibling intent' })
-    }));
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'ledger_delta_applied',
-      status: 'succeeded'
-    }));
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_created',
-      payload: expect.objectContaining({ userMessageSummary: 'safe fallback planner summary' })
+      status: 'failed',
+      errorCode: 'structured_json_output_limit_exhausted',
+      payload: expect.objectContaining({
+        retryReason: 'output_limit_exhausted',
+        attemptedOutputTokenCap: config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS
+      })
     }));
     expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'intent',
-      eventType: 'combined_intent_rejected',
-      payload: expect.objectContaining({ issueCount: expect.any(Number) })
+      eventType: 'parallel_semantic_calls_partially_failed',
+      payload: expect.objectContaining({
+        failures: expect.arrayContaining([
+          expect.objectContaining({ retryReason: 'output_limit_exhausted' })
+        ])
+      })
     }));
+
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(attemptedCaps).toEqual([
+      undefined,
+      Math.ceil(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS * 1.5)
+    ]);
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(2);
+    expect(planTurn).toHaveBeenCalledTimes(1);
   });
 
-  it('safely reproposes an invalid combined ledger delta and replans against the corrected state', async () => {
+  it('keeps a valid parallel delta when the planner fails and recovery runs only the missing planner stage', async () => {
     const conversations = new FakeConversations();
-    const understandTurn = vi.fn(async () => ({
-      ledgerDelta: {
-        rationale: 'invalid delta must not be checkpointed',
-        events: [{ invalid: true }]
-      },
-      intentContract: noToolIntent('valid combined intent survives an invalid sibling delta')
-    }));
     const proposeLedgerDelta = vi.fn(async () => ({
-      rationale: 'safe fallback delta',
+      rationale: 'valid parallel delta survives the sibling planner failure',
       events: []
     }));
-    const planTurn = vi.fn(async () => noToolIntent('safe planner after corrected ledger delta'));
+    const planTurn = vi.fn()
+      .mockRejectedValueOnce(new Error('parallel planner failed'))
+      .mockResolvedValueOnce(noToolIntent('recovered planner summary'));
     const orchestrator = new AgentManagerOrchestrator(
       conversations as never,
       new FakeProducts() as never,
       new FakeLeads() as never,
-      model({ understandTurn, proposeLedgerDelta, planTurn })
+      model({ proposeLedgerDelta, planTurn })
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: conversations.messages[0]!.content
-    });
+    })).rejects.toThrow('parallel planner failed');
 
-    expect(payload.answer).toContain('5 kW');
-    expect(understandTurn).toHaveBeenCalledTimes(1);
     expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
     expect(planTurn).toHaveBeenCalledTimes(1);
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
       checkpoint: 'ledger_delta_proposed',
-      payload: expect.objectContaining({ rationale: 'safe fallback delta' })
+      payload: expect.objectContaining({
+        rationale: 'valid parallel delta survives the sibling planner failure'
+      })
     }));
+    expect(conversations.checkpoints).not.toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_proposed',
+      status: 'succeeded'
+    }));
+
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(planTurn).toHaveBeenCalledTimes(2);
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
       checkpoint: 'ledger_delta_applied',
       status: 'succeeded'
     }));
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
       checkpoint: 'intent_contract_created',
+      payload: expect.objectContaining({ userMessageSummary: 'recovered planner summary' })
+    }));
+  });
+
+  it('keeps a valid parallel intent when the reducer fails and recovery runs only the missing reducer stage', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn()
+      .mockRejectedValueOnce(new Error('parallel reducer failed'))
+      .mockResolvedValueOnce({
+        rationale: 'recovered reducer delta',
+        events: []
+      });
+    const planTurn = vi.fn(async () => noToolIntent('valid parallel intent survives the sibling reducer failure'));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await expect(orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    })).rejects.toThrow('parallel reducer failed');
+
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_proposed',
       payload: expect.objectContaining({
-        userMessageSummary: 'safe planner after corrected ledger delta'
+        userMessageSummary: 'valid parallel intent survives the sibling reducer failure'
       })
     }));
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'ledger',
-      eventType: 'combined_ledger_delta_rejected',
-      payload: expect.objectContaining({ issueCount: expect.any(Number) })
+    expect(conversations.checkpoints).not.toContainEqual(expect.objectContaining({
+      checkpoint: 'ledger_delta_proposed',
+      status: 'succeeded'
     }));
+
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(2);
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'ledger_delta_proposed',
+      payload: expect.objectContaining({ rationale: 'recovered reducer delta' })
+    }));
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'intent_contract_created',
+      payload: expect.objectContaining({
+        userMessageSummary: 'valid parallel intent survives the sibling reducer failure'
+      })
+    }));
+  });
+
+  it('replans once after the parallel reducer opens a product class that conflicts with the pre-delta intent', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'the buyer switched to a plate compactor need',
+      events: [{
+        eventType: 'need.opened',
+        scope: 'need',
+        payload: {
+          needId: 'plate',
+          productClass: 'plate',
+          summary: 'current plate compactor need',
+          constraints: [],
+          openQuestions: [],
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'clear',
+          invalidatedProductIds: [],
+          status: 'open',
+          activate: true
+        },
+        evidence: 'I now need a plate compactor.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const staleGeneratorIntent: AgentIntentContract = {
+      ...noToolIntent('stale pre-delta generator intent'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        selectionGoal: 'browse_catalog',
+        needAction: 'continue'
+      }
+    };
+    const correctedPlateIntent: AgentIntentContract = {
+      ...noToolIntent('corrected post-delta plate intent'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'plate',
+        canonicalProductClass: 'plate',
+        selectionGoal: 'browse_catalog',
+        needAction: 'open'
+      }
+    };
+    const planTurn = vi.fn()
+      .mockResolvedValueOnce(staleGeneratorIntent)
+      .mockImplementationOnce(async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
+        expect(Object.values(input.ledgerState.needsById)).toContainEqual(expect.objectContaining({
+          needId: 'plate',
+          productClass: 'plate',
+          status: 'open'
+        }));
+        return correctedPlateIntent;
+      });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'I now need a plate compactor.'
+    });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(planTurn).toHaveBeenCalledTimes(2);
+    expect(conversations.turn.plannerContract).toMatchObject({
+      userMessageSummary: 'corrected post-delta plate intent',
+      selectionPolicy: expect.objectContaining({ canonicalProductClass: 'plate', needAction: 'open' })
+    });
     expect(conversations.traces).toContainEqual(expect.objectContaining({
       phase: 'intent',
-      eventType: 'combined_intent_discarded_after_ledger_rejection'
+      eventType: 'parallel_intent_replan_required',
+      payload: expect.objectContaining({
+        conflicts: expect.arrayContaining([
+          'active_product_class_mismatch:plate:generator',
+          'opened_need_action_mismatch:continue'
+        ])
+      })
+    }));
+  });
+
+  it('does not replan the active need when a paused sibling need resets its own selection', async () => {
+    const conversations = new FakeConversations();
+    const priorTurnId = '77777777-7777-4777-8777-777777777777';
+    const priorEvent = (eventId: string, eventType: 'need.opened', payload: Record<string, unknown>) => ({
+      session_id: sessionId,
+      turn_id: priorTurnId,
+      event_id: eventId,
+      event_type: eventType,
+      scope: 'need',
+      payload,
+      evidence: String(payload.summary),
+      source: 'llm_state_delta',
+      status: 'active',
+      created_at: new Date('2026-05-19T11:00:00.000Z').toISOString()
+    });
+    conversations.ledgerEvents = [
+      priorEvent('prior-generator-need', 'need.opened', {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'paused generator need',
+        constraints: [],
+        openQuestions: [],
+        selectedProductIds: [],
+        rejectedProductIds: [],
+        selectionUpdateMode: 'preserve',
+        invalidatedProductIds: [],
+        status: 'open',
+        activate: true
+      }),
+      priorEvent('current-plate-need', 'need.opened', {
+        needId: 'plate',
+        productClass: 'plate',
+        summary: 'active plate need',
+        constraints: [],
+        openQuestions: [],
+        selectedProductIds: [],
+        rejectedProductIds: [],
+        selectionUpdateMode: 'preserve',
+        invalidatedProductIds: [],
+        status: 'open',
+        activate: true
+      })
+    ];
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'clear only the paused generator selection without activating it',
+      events: [{
+        eventType: 'need.updated',
+        scope: 'need',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'paused generator need reset',
+          constraints: [],
+          openQuestions: [],
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'clear',
+          invalidatedProductIds: [],
+          status: 'paused',
+          activate: false
+        },
+        evidence: 'Reset the generator variants, but continue with the plate.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const activePlateIntent: AgentIntentContract = {
+      ...noToolIntent('continue the active plate need'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'plate',
+        canonicalProductClass: 'plate',
+        selectionGoal: 'browse_catalog',
+        needAction: 'continue',
+        reusePreviousCards: true
+      }
+    };
+    const planTurn = vi.fn(async () => activePlateIntent);
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Reset the generator variants, but continue with the plate.'
+    });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.traces).not.toContainEqual(expect.objectContaining({
+      eventType: 'parallel_intent_replan_required'
     }));
   });
 });

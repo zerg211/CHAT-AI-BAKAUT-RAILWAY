@@ -29,7 +29,7 @@ export type AgentManagerStopReason =
   | ProviderBudgetEstimationStopReason;
 
 export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
-  maxModelCalls: 5,
+  maxModelCalls: 6,
   maxProviderCalls: 20,
   maxToolCalls: 8,
   maxWebCalls: 2,

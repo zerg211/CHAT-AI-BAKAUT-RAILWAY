@@ -9,14 +9,15 @@ vi.mock('../src/ai/openaiStructured.js', () => ({
 import { OpenAIAgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { emptyNeedState } from '../src/ai/needState.js';
+import type { AgentIntentContract } from '../src/ai/agentManagerContracts.js';
 import type { ConversationSession, Message } from '../src/shared/types.js';
 
-describe('OpenAIAgentManagerModel combined understanding', () => {
+describe('OpenAIAgentManagerModel semantic inputs', () => {
   beforeEach(() => {
     createStructuredJsonResponse.mockReset();
   });
 
-  it('returns both contracts from one structured Responses call and includes redacted pending draft context', async () => {
+  it('serializes the same redacted pending lead draft for the parallel reducer and planner', async () => {
     const now = new Date('2026-07-15T10:00:00.000Z').toISOString();
     const session: ConversationSession = {
       id: '11111111-1111-4111-8111-111111111111',
@@ -36,11 +37,18 @@ describe('OpenAIAgentManagerModel combined understanding', () => {
       metadata: {},
       createdAt: now
     }];
-    const ledgerDelta = {
-      rationale: 'the reply continues the pending handoff',
-      events: []
+    const pendingLeadCaptureDraft = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      purpose: 'confirm a technical fact',
+      buyerQuestion: 'Can you confirm the technical fact?',
+      preferredContact: 'message' as const,
+      hasName: false,
+      hasPhone: true,
+      hasEmail: false,
+      missingFields: ['name' as const],
+      expiresAt: now
     };
-    const intentContract = {
+    const intentContract: AgentIntentContract = {
       turnId: null,
       userMessageSummary: 'buyer supplied the missing name and preferred contact method',
       dialogueUnderstanding: 'continue the same pending technical handoff',
@@ -81,49 +89,42 @@ describe('OpenAIAgentManagerModel combined understanding', () => {
       mustNotAskQuestionIds: [],
       riskFlags: []
     };
-    createStructuredJsonResponse.mockResolvedValueOnce({
-      parsed: { ledgerDelta, intentContract }
-    });
+    createStructuredJsonResponse
+      .mockResolvedValueOnce({ parsed: { rationale: 'continue the pending handoff', events: [] } })
+      .mockResolvedValueOnce({ parsed: intentContract });
     const model = new OpenAIAgentManagerModel();
+    const ledgerState = reduceDialogueLedger([]);
 
-    const result = await model.understandTurn({
+    await model.proposeLedgerDelta({
       session,
       history,
       userMessage: history[0]!.content,
       ledgerEvents: [],
-      ledgerState: reduceDialogueLedger([]),
-      pendingLeadCaptureDraft: {
-        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-        purpose: 'confirm a technical fact',
-        buyerQuestion: 'Can you confirm the technical fact?',
-        preferredContact: 'message',
-        hasName: false,
-        hasPhone: true,
-        hasEmail: false,
-        missingFields: ['name'],
-        expiresAt: now
-      }
+      ledgerState,
+      pendingLeadCaptureDraft
+    });
+    await model.planTurn({
+      session,
+      history,
+      userMessage: history[0]!.content,
+      ledgerEvents: [],
+      ledgerState,
+      pendingLeadCaptureDraft
     });
 
-    expect(result).toEqual({ ledgerDelta, intentContract });
-    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(1);
-    const call = createStructuredJsonResponse.mock.calls[0]![0] as {
-      stage?: string;
-      request?: { input?: Array<{ role?: string; content?: string }>; text?: { format?: { name?: string } } };
-    };
-    expect(call.stage).toBe('agent_turn_understanding');
-    expect(call.request?.text?.format?.name).toBe('agent_turn_understanding');
-    const userInput = JSON.parse(call.request?.input?.find((item) => item.role === 'user')?.content ?? '{}') as {
-      pendingLeadCaptureDraft?: Record<string, unknown>;
-    };
-    expect(userInput.pendingLeadCaptureDraft).toMatchObject({
-      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      purpose: 'confirm a technical fact',
-      buyerQuestion: 'Can you confirm the technical fact?',
-      hasName: false,
-      hasPhone: true,
-      missingFields: ['name']
-    });
-    expect(userInput.pendingLeadCaptureDraft).not.toHaveProperty('phone');
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
+    expect(createStructuredJsonResponse.mock.calls.map((call) => call[0]?.stage)).toEqual([
+      'agent_ledger_delta',
+      'agent_intent_contract'
+    ]);
+    for (const call of createStructuredJsonResponse.mock.calls) {
+      const request = call[0]?.request as { input?: Array<{ role?: string; content?: string }> } | undefined;
+      const userInput = JSON.parse(
+        request?.input?.find((item) => item.role === 'user')?.content ?? '{}'
+      ) as { pendingLeadCaptureDraft?: Record<string, unknown> };
+      expect(userInput.pendingLeadCaptureDraft).toEqual(pendingLeadCaptureDraft);
+      expect(userInput.pendingLeadCaptureDraft).not.toHaveProperty('phone');
+      expect(userInput.pendingLeadCaptureDraft).not.toHaveProperty('email');
+    }
   });
 });

@@ -7,7 +7,7 @@ const JSON_RETRY_OUTPUT_TOKEN_MIN = 1800;
 
 export type StructuredJsonRetryDecision =
   | { retry: true; reason: 'retry_allowed'; remainingMs?: number }
-  | { retry: false; reason: 'signal_aborted' | 'insufficient_time_budget'; remainingMs?: number };
+  | { retry: false; reason: 'signal_aborted' | 'insufficient_time_budget' | 'output_limit_exhausted'; remainingMs?: number };
 
 export function structuredJsonRetryDecision(input: {
   signalAborted?: boolean;
@@ -45,7 +45,27 @@ export function structuredJsonRetryOutputTokenLimit(currentValue: unknown, confi
   const normalizedCap = Number.isFinite(configuredCap) && Number(configuredCap) > 0
     ? Math.floor(Number(configuredCap))
     : normalizedCurrent;
-  return Math.min(Math.max(normalizedCurrent, JSON_RETRY_OUTPUT_TOKEN_MIN), normalizedCap);
+  if (normalizedCap <= normalizedCurrent) return normalizedCurrent;
+  return Math.min(
+    Math.max(JSON_RETRY_OUTPUT_TOKEN_MIN, Math.ceil(normalizedCurrent * 1.5)),
+    normalizedCap
+  );
+}
+
+export function structuredJsonOutputLimitExhausted(response: unknown, requestedMaxOutputTokens: unknown) {
+  const value = response && typeof response === 'object'
+    ? response as {
+        status?: unknown;
+        incomplete_details?: { reason?: unknown } | null;
+        usage?: { output_tokens?: unknown } | null;
+      }
+    : {};
+  if (value.incomplete_details?.reason === 'max_output_tokens') return true;
+  const requested = Number(requestedMaxOutputTokens);
+  const used = Number(value.usage?.output_tokens);
+  return value.status === 'incomplete' &&
+    Number.isFinite(requested) && requested > 0 &&
+    Number.isFinite(used) && used >= requested;
 }
 
 function stripMarkdownJsonFence(text: string) {
@@ -143,6 +163,17 @@ export async function createStructuredJsonResponse(input: {
   try {
     return { response, parsed: parseJsonObject(responseTextForJson(response), input.stage) };
   } catch (error) {
+    const retryOutputTokens = structuredJsonRetryOutputTokenLimit(
+      input.request.max_output_tokens,
+      input.retryOutputTokenCap
+    );
+    const currentOutputTokens = Number(input.request.max_output_tokens);
+    if (
+      structuredJsonOutputLimitExhausted(response, input.request.max_output_tokens) &&
+      (!Number.isFinite(currentOutputTokens) || retryOutputTokens <= currentOutputTokens)
+    ) {
+      throw new StructuredJsonRetrySkippedError('output_limit_exhausted', undefined, { cause: error });
+    }
     const retryDecision = structuredJsonRetryDecision({
       signalAborted: input.signal?.aborted,
       deadlineAtMs: input.deadlineAtMs,
@@ -158,10 +189,7 @@ export async function createStructuredJsonResponse(input: {
     console.warn(`[${input.stage}] Structured JSON parse failed; retrying within the configured output budget`, safeError(error));
     const retryRequest: Record<string, unknown> = {
       ...input.request,
-      max_output_tokens: structuredJsonRetryOutputTokenLimit(
-        input.request.max_output_tokens,
-        input.retryOutputTokenCap
-      )
+      max_output_tokens: retryOutputTokens
     };
     const retryResponse = await send(retryRequest);
     await recordOpenAIUsageOnce(`${input.stage}_retry`, String(retryRequest.model ?? config.OPENAI_MODEL), retryResponse);
