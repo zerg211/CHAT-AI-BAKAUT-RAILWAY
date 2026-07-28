@@ -1,8 +1,31 @@
 import type { ToolResult } from './agentManagerContracts.js';
 import { type ExtractedContact, hasLeadContact } from './contactExtraction.js';
 
-const contactRequestStarts = ['оставьте', 'оставь'];
-const contactRequestTargets = ['телефон', 'номер', 'контакт', 'имя'];
+const contactRequestStarts = [
+  'оставьте', 'оставь', 'оставить',
+  'напишите', 'напиши', 'написать',
+  'укажите', 'укажи', 'указать',
+  'отправьте', 'отправь', 'отправить',
+  'сообщите', 'сообщи', 'сообщить',
+  'пришлите', 'пришли', 'прислать',
+  'продиктуйте', 'продиктуй',
+  'provide', 'send', 'share', 'leave', 'write', 'enter', 'tell me'
+];
+const contactTargetRoots = ['телефон', 'контакт', 'почт'];
+const ambiguousNumberTargets = new Set(['номер', 'number']);
+const ambiguousNameTargets = new Set(['имя', 'name']);
+const contactPossessiveRoots = ['ваш', 'вас', 'покупател', 'your', 'customer', 'buyer'];
+const technicalIdentifierRoots = [
+  'модел', 'серийн', 'артикул', 'товар', 'издел', 'заказ', 'двигател', 'рам',
+  'детал', 'файл', 'каталог', 'продукт', 'производител', 'менеджер', 'договор',
+  'счет', 'счёт', 'накладн', 'документ', 'model', 'serial', 'part', 'product',
+  'item', 'order', 'engine', 'frame', 'file', 'manufacturer', 'manager', 'contract',
+  'account', 'invoice', 'document', 'sku', 'ean', 'id'
+];
+const contactContextRoots = [
+  'связ', 'позвон', 'звон', 'сообщен', 'напис', 'ответ',
+  'call', 'message', 'reach', 'callback', 'contact', 'reply', 'text'
+];
 
 function lowerRu(text: string) {
   return text.toLocaleLowerCase('ru-RU');
@@ -18,6 +41,12 @@ function earliestContactRequestStart(lowerText: string, start: number) {
   for (const phrase of contactRequestStarts) {
     const index = lowerText.indexOf(phrase, start);
     if (index < 0) continue;
+    const before = lowerText.slice(Math.max(0, index - 16), index).trimEnd();
+    const negated = ['не', 'not', 'never', "don't", 'do not'].some((marker) =>
+      before.endsWith(marker) &&
+      (before.length === marker.length || before[before.length - marker.length - 1] === ' ')
+    );
+    if (negated) continue;
     if (!best || index < best.index || (index === best.index && phrase.length > best.phrase.length)) {
       best = { index, phrase };
     }
@@ -25,8 +54,52 @@ function earliestContactRequestStart(lowerText: string, start: number) {
   return best;
 }
 
+function targetWords(text: string) {
+  const words: string[] = [];
+  let current = '';
+  for (const char of text) {
+    const lower = char.toLocaleLowerCase('ru-RU');
+    const upper = char.toLocaleUpperCase('ru-RU');
+    const isDigit = char >= '0' && char <= '9';
+    if (isDigit || lower !== upper) {
+      current += lower;
+      continue;
+    }
+    if (current) words.push(current);
+    current = '';
+  }
+  if (current) words.push(current);
+  return words;
+}
+
+function wordHasRoot(word: string | undefined, roots: string[]) {
+  return Boolean(word && roots.some((root) => word.startsWith(root)));
+}
+
+function hasTechnicalIdentifierNear(words: string[], index: number) {
+  const start = Math.max(0, index - 2);
+  return words
+    .slice(start, Math.min(words.length, index + 3))
+    .some((word, nearbyIndex) =>
+      start + nearbyIndex !== index && wordHasRoot(word, technicalIdentifierRoots)
+    );
+}
+
 function containsContactRequestTarget(text: string) {
-  return contactRequestTargets.some((target) => text.includes(target));
+  const words = targetWords(text);
+  if (words.some((word) => word === 'phone' || word === 'email' || wordHasRoot(word, contactTargetRoots))) {
+    return true;
+  }
+  if (words.some((word, index) => word === 'e' && words[index + 1] === 'mail')) return true;
+  const hasContactContext = words.some((word) => wordHasRoot(word, contactContextRoots));
+
+  for (let index = 0; index < words.length; index += 1) {
+    const word = words[index]!;
+    if (!ambiguousNumberTargets.has(word) && !ambiguousNameTargets.has(word)) continue;
+    if (hasTechnicalIdentifierNear(words, index)) continue;
+    if (wordHasRoot(words[index - 1], contactPossessiveRoots) || hasContactContext) return true;
+  }
+  return false;
 }
 
 export function answerRequestsContactData(answerText: string) {
@@ -37,7 +110,7 @@ export function answerRequestsContactData(answerText: string) {
     if (!start) return false;
 
     const segmentStart = start.index + start.phrase.length;
-    const segmentEnd = Math.min(segmentStart + 40, nextLineBreak(lower, segmentStart));
+    const segmentEnd = Math.min(segmentStart + 100, nextLineBreak(lower, segmentStart));
     if (containsContactRequestTarget(lower.slice(segmentStart, segmentEnd))) return true;
 
     cursor = start.index + 1;

@@ -19,7 +19,7 @@ describe('app', () => {
     expect(response.json()).toMatchObject({
       ok: true,
       runtime: {
-        version: '2026-07-15.gpt-5-6-terra-latency-headroom-v15',
+        version: '2026-07-17.gpt-5-6-terra-search-first-v16',
         contractVersion: '2026-07-10.manager-contract-v1',
         productionRuntime: 'agent_manager'
       }

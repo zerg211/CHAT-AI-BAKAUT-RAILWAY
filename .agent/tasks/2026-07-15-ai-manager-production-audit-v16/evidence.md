@@ -2,7 +2,7 @@
 
 Current verdict: **LOCAL PASS / PRODUCTION REVALIDATION PENDING**.
 
-The production audit proved both the earlier changed-requirement defects and a later first-turn timeout caused by the oversized combined semantic contract. The current worktree now passes the complete local release gate after replacing that contract with two independent parallel Terra stages. Because behavior changed, the result is not complete until GitHub/Railway deployment and fresh embedded-widget dialogues pass.
+The production audit proved the earlier changed-requirement defects, a first-turn timeout caused by the oversized combined semantic contract, and then a second deployed failure where redundant web research plus a rejected reviewer rewrite consumed the remaining turn budget. The current worktree now passes the complete local release gate after replacing the combined contract, making web execution evidence-aware, and enforcing search-first behavior at runtime. Because behavior changed, the result is not complete until GitHub/Railway deployment and fresh embedded-widget dialogues pass.
 
 ## Implemented universal fixes
 
@@ -14,11 +14,15 @@ The production audit proved both the earlier changed-requirement defects and a l
 6. Reviewer rewrites are revalidated deterministically for unsupported identifiers, numbers, commercial commitments, and false lead confirmation. General delivery availability remains allowed; exact unsupported delivery promises remain blocked.
 7. Lead success requires a durable dispatchable outbox. Cross-turn partial contacts live in a scoped 30-minute server draft, are redacted before the model, and preserve the original question. Public form completion atomically creates/reuses the lead, queues draft context, consumes the draft, and clears PII.
 8. Structured JSON output exhaustion never causes an identical same-cap retry. A failed semantic-stage disposition is persisted; same-turn recovery repeats only the missing stage with a bounded 1.5x cap. The six-stage exceptional path now fits the logical model-call budget, while the persisted wall deadline remains authoritative.
+9. Conditional web research is skipped only when preliminary catalog evidence already proves every covered per-product requirement and no otherwise suitable candidate still needs that fact. The persisted `not_needed` artifact records zero attempts and cannot be cited as external evidence.
+10. Technical, selection, and comparison plans cannot jump directly to a specialist: runtime repairs them into independent web grounding and permits contact only after real exhausted research. General technical research runs without catalog candidates or an exact model.
+11. Official PDF manuals are fetched through the outbound security boundary, bounded to 8 MiB/80 pages, parsed with evaluation disabled, and source-validated. Fetch, parse, empty-text, truncation, timeout, and abort states are not source exhaustion.
+12. Reviewer recovery preserves numeric attribution: calculator thresholds precede product names; exact product specs follow only that product's evidence. Catalog values with units in spec keys are recognized, and one new unknown active need is safely reconciled with the planner's canonical class.
 
 ## Local verification
 
 - `npm run verify`: PASS.
-- Full repository: 67 files, **557/557** tests PASS.
+- Full repository: 69 files, **589/589** tests PASS.
 - Agentic eval: 4 files, **191/191** tests PASS.
 - TypeScript: PASS.
 - Production build: PASS.
@@ -39,6 +43,12 @@ Fresh V13 independent verifier:
 - full release gate independently repeated: **557/557** tests and **191/191** agentic evals PASS;
 - confirmed removal of `agent_turn_understanding`, parallel semantic execution, independent sibling checkpoints, redacted pending-draft serialization, bounded expanded-cap recovery, active-need-scoped conflict checks, and the six-call exceptional budget;
 - residual local V13 P0/P1/P2: none; AC14 production proof remains mandatory.
+
+V14/V15 focused verification before the full gate:
+
+- 6 focused files, **172/172** tests PASS;
+- conditional short-circuit, synthetic non-fact-bearing artifact, search-before-specialist repair, PDF evidence, general no-product research, numeric reviewer attribution, and active-need reconciliation all have regressions;
+- full gate independently recomputed current TypeScript/build/audit/no-new-regex state after those changes.
 
 ## Acceptance status before deployment
 

@@ -108,6 +108,27 @@ function phoneDigitCount(candidate: string) {
   return count;
 }
 
+function phoneDigits(candidate: string) {
+  let output = '';
+  for (const char of candidate) if (isAsciiDigit(char)) output += char;
+  return output;
+}
+
+const phoneContextMarkers = ['телефон', 'тел.', 'номер телефона', 'phone', 'mobile'];
+const technicalNumberMarkers = ['артикул', 'код', 'sku', 'модель', 'серийный', 'ean', 'штрихкод'];
+
+function plausiblePhoneCandidate(normalized: string, start: number, candidate: string, startsWithPlus: boolean) {
+  const lowerPrefix = normalized.slice(Math.max(0, start - 48), start).toLocaleLowerCase('ru-RU');
+  const latestPhoneMarker = Math.max(...phoneContextMarkers.map((marker) => lowerPrefix.lastIndexOf(marker)));
+  const latestTechnicalMarker = Math.max(...technicalNumberMarkers.map((marker) => lowerPrefix.lastIndexOf(marker)));
+  if (latestTechnicalMarker > latestPhoneMarker) return false;
+  if (startsWithPlus || latestPhoneMarker >= 0) return true;
+  if ([...candidate].some((char) => char === '(' || char === ')' || char === '-' || char === '.')) return true;
+  const digits = phoneDigits(candidate);
+  return (digits.length === 11 && (digits.startsWith('7') || digits.startsWith('8'))) ||
+    (digits.length === 10 && digits.startsWith('9'));
+}
+
 function extractPhone(normalized: string) {
   for (let index = 0; index < normalized.length; index += 1) {
     if (index > 0 && isAsciiDigit(normalized[index - 1])) continue;
@@ -124,7 +145,11 @@ function extractPhone(normalized: string) {
 
     const candidate = normalized.slice(start, end);
     const digitCount = phoneDigitCount(candidate);
-    if (digitCount >= 10 && digitCount <= 15) return compactPhone(candidate);
+    if (
+      digitCount >= 10 &&
+      digitCount <= 15 &&
+      plausiblePhoneCandidate(normalized, start, candidate, startsWithPlus)
+    ) return compactPhone(candidate);
   }
   return undefined;
 }
@@ -166,7 +191,7 @@ function readName(text: string, index: number) {
 
 function extractExplicitName(normalized: string) {
   const lower = normalized.toLocaleLowerCase('ru-RU');
-  const phrases = ['меня зовут', 'зовут', 'имя', 'я'];
+  const phrases = ['меня зовут', 'мое имя', 'моё имя', 'имя:', 'my name is', 'name:'];
   for (const phrase of phrases) {
     for (let index = 0; index < lower.length; index += 1) {
       if (!phraseAt(lower, phrase, index)) continue;
@@ -175,6 +200,66 @@ function extractExplicitName(normalized: string) {
     }
   }
   return undefined;
+}
+
+function isUppercaseNameToken(value: string) {
+  const parsed = readNameToken(value, 0);
+  if (!parsed || parsed.end !== value.length) return false;
+  const first = value[0] ?? '';
+  return first.toLocaleUpperCase('ru-RU') === first &&
+    first.toLocaleLowerCase('ru-RU') !== first;
+}
+
+const nonNamePrefixTokens = new Set([
+  'хочу',
+  'ищу',
+  'могу',
+  'нужен',
+  'нужна',
+  'нужно',
+  'позвоните',
+  'напишите',
+  'телефон',
+  'номер',
+  'почта',
+  'email',
+  'артикул',
+  'код',
+  'sku',
+  'модель',
+  'серийный',
+  'ean',
+  'товар'
+]);
+
+function extractPronounName(normalized: string) {
+  const lower = normalized.toLocaleLowerCase('ru-RU');
+  for (let index = 0; index < lower.length; index += 1) {
+    if (!phraseAt(lower, 'я', index)) continue;
+    const first = readNameToken(normalized, skipSpaces(normalized, index + 1));
+    if (!first || !isUppercaseNameToken(first.value)) continue;
+    const firstLower = first.value.toLocaleLowerCase('ru-RU');
+    if (nonNamePrefixTokens.has(firstLower)) continue;
+    const secondStart = skipSpaces(normalized, first.end);
+    const second = secondStart > first.end ? readNameToken(normalized, secondStart) : null;
+    const hasSecondName = Boolean(
+      second &&
+      isUppercaseNameToken(second.value) &&
+      !nonNamePrefixTokens.has(second.value.toLocaleLowerCase('ru-RU'))
+    );
+    const end = hasSecondName ? second!.end : first.end;
+    const next = normalized[end] ?? '';
+    if (next && next !== ',' && next !== ';' && next !== ':' && next !== '-' && next !== '.' && next !== '!' && next !== '?') {
+      continue;
+    }
+    return hasSecondName ? `${first.value} ${second!.value}` : first.value;
+  }
+  return undefined;
+}
+
+export function containsExplicitContactName(text: string) {
+  const normalized = normalizeWhitespace(text);
+  return Boolean(extractExplicitName(normalized) || extractPronounName(normalized));
 }
 
 function trimTrailingNameSeparators(text: string) {
@@ -192,14 +277,14 @@ function extractPrefixName(normalized: string, contactIndex: number | undefined)
   const prefix = trimTrailingNameSeparators(normalized.slice(0, contactIndex));
   if (!prefix) return undefined;
   const parts = prefix.split(' ').filter(Boolean);
-  const last = parts[parts.length - 1];
-  if (!last || !readNameToken(last, 0) || readNameToken(last, 0)?.end !== last.length) return undefined;
-
-  const beforeLast = parts[parts.length - 2];
-  if (beforeLast && readNameToken(beforeLast, 0)?.end === beforeLast.length) {
-    return `${beforeLast} ${last}`;
+  if (parts.length === 2 && parts[0]?.toLocaleLowerCase('ru-RU') === 'я') {
+    return isUppercaseNameToken(parts[1] ?? '') ? parts[1] : undefined;
   }
-  return last;
+  if (parts.length < 1 || parts.length > 2) return undefined;
+  if (parts.some((part) =>
+    nonNamePrefixTokens.has(part.toLocaleLowerCase('ru-RU')) || !isUppercaseNameToken(part)
+  )) return undefined;
+  return parts.join(' ');
 }
 
 export function extractContact(text: string): ExtractedContact {
@@ -210,7 +295,11 @@ export function extractContact(text: string): ExtractedContact {
     .filter((index) => index >= 0)
     .sort((left, right) => left - right);
   const contactIndex = contactIndexes[0];
-  const name = (extractExplicitName(normalized) ?? extractPrefixName(normalized, contactIndex))?.trim();
+  const name = (
+    extractExplicitName(normalized) ??
+    extractPronounName(normalized) ??
+    extractPrefixName(normalized, contactIndex)
+  )?.trim();
   return {
     name: name && name.length >= 2 ? name : undefined,
     phone,

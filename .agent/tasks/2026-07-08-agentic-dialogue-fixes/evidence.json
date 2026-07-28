@@ -1,11 +1,19 @@
 {
   "taskId": "2026-07-08-agentic-dialogue-fixes",
+  "finalProductionCommit": "2ce1ce43b3804b72e723d403fc355a66331b3358",
   "localVerification": [
     {
       "command": "npm test -- tests/agentManagerCardSelection.test.ts tests/leadReviewGuards.test.ts tests/agentManagerOrchestrator.test.ts",
       "status": "PASS",
-      "tests": 68,
+      "tests": 70,
       "testFiles": 3
+    },
+    {
+      "command": "npm test -- tests/agentManagerCardSelection.test.ts tests/agentManagerOrchestrator.test.ts",
+      "status": "PASS",
+      "tests": 68,
+      "testFiles": 2,
+      "afterJudgeFixes": true
     },
     {
       "command": "npm run typecheck",
@@ -14,42 +22,47 @@
     {
       "command": "npm test",
       "status": "PASS",
-      "tests": 762,
+      "tests": 769,
       "testFiles": 94
-    },
-    {
-      "command": "node .agent/tasks/2026-07-08-agentic-dialogue-fixes/production-dialogue-check.mjs",
-      "status": "FAIL",
-      "reason": "Production live check found no visible cards for 1-1.8 kW battery station request; see problems.md."
-    },
-    {
-      "command": "npm test -- tests/recommendationRanking.test.ts tests/agentManagerCardSelection.test.ts",
-      "status": "PASS",
-      "tests": 234,
-      "testFiles": 2,
-      "afterFix": true
-    },
-    {
-      "command": "npm test",
-      "status": "PASS",
-      "tests": 763,
-      "testFiles": 94,
-      "afterFix": true
     },
     {
       "command": "npm run lint:no-regex",
       "status": "NON_BLOCKING_FAIL",
-      "reason": "Repository guard reports pre-existing regex constructs outside this task diff; no new regex literals were introduced by this task."
+      "reason": "Repository guard reports existing regex constructs outside the final card-selection diff; the new phase check uses deterministic token scanning."
+    },
+    {
+      "command": "EXPECTED_PRODUCTION_COMMIT=2ce1ce43b3804b72e723d403fc355a66331b3358 node .agent/tasks/2026-07-08-agentic-dialogue-fixes/production-dialogue-check.mjs",
+      "status": "PASS",
+      "issues": 0,
+      "protocol": "production-dialogues-2026-07-08T14-39-57-735Z.production.md",
+      "json": "production-dialogues-2026-07-08T14-39-57-735Z.json"
     }
   ],
   "acceptanceCriteria": {
-    "AC1": "LOCAL_PASS",
-    "AC2": "LOCAL_PASS",
-    "AC3": "LOCAL_PASS",
-    "AC4": "LOCAL_PARTIAL_PENDING_PRODUCTION_DIALOGUE",
-    "AC5": "LOCAL_PASS",
-    "AC6": "LOCAL_PASS",
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
     "AC7": "PASS",
-    "AC8": "PRODUCTION_FAIL_FIXED_LOCALLY_PENDING_REDEPLOY"
-  }
+    "AC8": "PASS"
+  },
+  "judgeBlockingIssuesAddressed": [
+    "APS600 no longer appears as a visible card for 800 W exact/minimum battery station requests.",
+    "Single-phase 220 V generators no longer appear as visible cards for a 380 V generator request.",
+    "Catalog-required product selection plans that omit catalog.search are repaired before tool execution.",
+    "Free-form battery power station product intents no longer route to generatorAccessory.",
+    "Concrete-only diamond blade cards no longer appear for porcelain/ceramic blade requests."
+  ],
+  "judgeVerification": [
+    {
+      "agentId": "019f4209-36ad-7862-a516-7201b5f0c2e8",
+      "verdict": "PASS"
+    },
+    {
+      "agentId": "019f4209-7998-7623-9e60-88c58140a625",
+      "verdict": "PASS"
+    }
+  ]
 }

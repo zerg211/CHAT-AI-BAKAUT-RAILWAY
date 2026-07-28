@@ -12,6 +12,7 @@ import {
   ClientMessagePayloadConflictError,
   ConversationRepository
 } from '../db/repositories.js';
+import { limitPublicHistoryResponse, normalizePublicHistoryMessage } from '../shared/publicChatHistory.js';
 import { closeSseReply, openSseReply, startStatusTimer } from './sse.js';
 
 const createSessionSchema = z.object({
@@ -51,9 +52,43 @@ function safeErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function registerChatRoutes(app: FastifyInstance) {
-  const conversations = new ConversationRepository();
-  const assistant = new AssistantService(conversations);
+interface ChatRouteDependencies {
+  conversations?: ConversationRepository;
+  assistant?: AssistantService;
+}
+
+function publicHistoryMessage(message: Awaited<ReturnType<ConversationRepository['listMessages']>>[number]) {
+  const metadata = message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata)
+    ? message.metadata as Record<string, unknown>
+    : {};
+  const candidate: Record<string, unknown> = {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt
+  };
+  if (message.role === 'assistant') {
+    candidate.products = metadata.productCards;
+    candidate.cardDisplay = metadata.cardDisplay;
+    const answerContract = metadata.answerContract;
+    if (
+      answerContract &&
+      typeof answerContract === 'object' &&
+      !Array.isArray(answerContract) &&
+      (answerContract as Record<string, unknown>).leadAction === 'offer_form'
+    ) {
+      candidate.leadRequested = true;
+    }
+  }
+  return normalizePublicHistoryMessage(candidate);
+}
+
+export async function registerChatRoutes(
+  app: FastifyInstance,
+  dependencies: ChatRouteDependencies = {}
+) {
+  const conversations = dependencies.conversations ?? new ConversationRepository();
+  const assistant = dependencies.assistant ?? new AssistantService(conversations);
 
   app.post('/api/chat/sessions', async (request, reply) => {
     const input = createSessionSchema.parse(request.body ?? {});
@@ -65,11 +100,34 @@ export async function registerChatRoutes(app: FastifyInstance) {
     return reply.send({ session });
   });
 
+  app.get('/api/chat/sessions/:id/messages', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const visitorCapability = request.headers['x-bakaut-visitor-id'];
+    reply.header('cache-control', 'no-store');
+    reply.header('vary', 'x-bakaut-visitor-id');
+    if (typeof visitorCapability !== 'string') {
+      return reply.code(404).send({ error: 'Session not found' });
+    }
+    const session = await conversations.restoreSession(params.id, visitorCapability);
+    if (!session) return reply.code(404).send({ error: 'Session not found' });
+    const messages = await conversations.listMessages(params.id);
+    return reply.send({
+      messages: limitPublicHistoryResponse(messages
+        .filter((message) => message.role === 'user' || message.role === 'assistant')
+        .map(publicHistoryMessage)
+        .filter((message) => message !== null))
+    });
+  });
+
   app.post('/api/chat/sessions/:id/heartbeat', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const session = await conversations.touchSession(params.id);
+    const visitorCapability = request.headers['x-bakaut-visitor-id'];
+    if (typeof visitorCapability !== 'string') {
+      return reply.code(404).send({ error: 'Session not found or inactive' });
+    }
+    const session = await conversations.touchSession(params.id, visitorCapability);
     if (!session) return reply.code(404).send({ error: 'Session not found or inactive' });
-    return reply.send({ session });
+    return reply.send({ ok: true });
   });
 
   app.post('/api/chat/sessions/:id/close', async (request, reply) => {

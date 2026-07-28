@@ -50,6 +50,12 @@ export type SafeOutboundFetchOptions = {
   signal?: AbortSignal;
   resolver?: typeof dnsLookup;
   fetcher?: typeof fetch;
+  responseMaxBytes?: (response: {
+    url: string;
+    status: number;
+    headers: Headers;
+    prefix: Uint8Array;
+  }) => number;
 };
 
 function ipv4Number(address: string) {
@@ -125,21 +131,58 @@ function validatedUrl(value: string, allowedOrigin?: string) {
 
 export async function resolveSafeOutboundUrl(
   value: string,
-  options: { allowedOrigin?: string; resolver?: typeof dnsLookup } = {}
+  options: { allowedOrigin?: string; resolver?: typeof dnsLookup; signal?: AbortSignal } = {}
 ) {
   const url = validatedUrl(value, options.allowedOrigin);
   const literalHostname = stripIpv6Brackets(url.hostname);
   const literalFamily = isIP(literalHostname);
   const addresses = literalFamily
     ? [{ address: literalHostname, family: literalFamily }]
-    : await (options.resolver ?? dnsLookup)(url.hostname, { all: true, verbatim: true });
+    : await abortableDnsLookup(
+        Promise.resolve().then(() => (options.resolver ?? dnsLookup)(url.hostname, { all: true, verbatim: true })),
+        options.signal
+      );
+  options.signal?.throwIfAborted();
   if (!addresses.length || addresses.some((item) => isPrivateOrReservedIp(item.address))) {
     throw new UnsafeOutboundUrlError('Outbound hostname resolves to a private or reserved address');
   }
   return { url, address: addresses[0].address, family: addresses[0].family };
 }
 
-export async function readBoundedResponseBytes(response: Response, maxBytes: number) {
+async function abortableDnsLookup<T>(lookup: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return lookup;
+  signal.throwIfAborted();
+  let abortListener: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abortListener = () => reject(signal.reason ?? new DOMException('The operation was aborted.', 'AbortError'));
+    signal.addEventListener('abort', abortListener, { once: true });
+  });
+  try {
+    const result = await Promise.race([lookup, aborted]);
+    signal.throwIfAborted();
+    return result;
+  } finally {
+    if (abortListener) signal.removeEventListener('abort', abortListener);
+  }
+}
+
+export function createPinnedOutboundAgent(address: string, family: number) {
+  return new Agent({
+    connect: {
+      lookup: (_hostname, lookupOptions, callback) => {
+        const pinnedAddress = { address, family };
+        if (lookupOptions.all) callback(null, [pinnedAddress]);
+        else callback(null, address, family);
+      }
+    }
+  });
+}
+
+export async function readBoundedResponseBytes(
+  response: Response,
+  maxBytes: number,
+  selectMaxBytes?: (prefix: Uint8Array) => number
+) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('maxBytes must be a positive safe integer');
   const declaredLength = Number(response.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
@@ -150,17 +193,49 @@ export async function readBoundedResponseBytes(response: Response, maxBytes: num
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let effectiveMaxBytes = maxBytes;
+  let effectiveLimitSelected = !selectMaxBytes;
+  const responsePrefix = new Uint8Array(1024);
+  let responsePrefixLength = 0;
+  const selectEffectiveLimit = (prefix: Uint8Array) => {
+    if (effectiveLimitSelected || !selectMaxBytes) return;
+    const selected = selectMaxBytes(prefix);
+    if (!Number.isSafeInteger(selected) || selected <= 0 || selected > maxBytes) {
+      throw new Error('selected maxBytes must be a positive safe integer within maxBytes');
+    }
+    effectiveMaxBytes = selected;
+    effectiveLimitSelected = true;
+    if (Number.isFinite(declaredLength) && declaredLength > effectiveMaxBytes) {
+      throw new OutboundResponseTooLargeError(effectiveMaxBytes);
+    }
+    if (total > effectiveMaxBytes) throw new OutboundResponseTooLargeError(effectiveMaxBytes);
+  };
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        selectEffectiveLimit(responsePrefix.slice(0, responsePrefixLength));
+        break;
+      }
+      if (!effectiveLimitSelected && value.byteLength > 0 && responsePrefixLength < responsePrefix.byteLength) {
+        const prefixBytesRemaining = responsePrefix.byteLength - responsePrefixLength;
+        const prefixPart = value.subarray(0, Math.min(value.byteLength, prefixBytesRemaining));
+        responsePrefix.set(prefixPart, responsePrefixLength);
+        responsePrefixLength += prefixPart.byteLength;
+        if (responsePrefixLength === responsePrefix.byteLength) {
+          selectEffectiveLimit(responsePrefix);
+        }
+      }
       total += value.byteLength;
-      if (total > maxBytes) {
+      if (total > effectiveMaxBytes) {
         await reader.cancel().catch(() => undefined);
-        throw new OutboundResponseTooLargeError(maxBytes);
+        throw new OutboundResponseTooLargeError(effectiveMaxBytes);
       }
       chunks.push(value);
     }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }
@@ -183,13 +258,10 @@ export async function safeFetchBytes(value: string, options: SafeOutboundFetchOp
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
     const resolved = await resolveSafeOutboundUrl(current, {
       allowedOrigin: options.allowedOrigin,
-      resolver: options.resolver
+      resolver: options.resolver,
+      signal
     });
-    const dispatcher = new Agent({
-      connect: {
-        lookup: (_hostname, _lookupOptions, callback) => callback(null, resolved.address, resolved.family)
-      }
-    });
+    const dispatcher = createPinnedOutboundAgent(resolved.address, resolved.family);
     try {
       const response = await (options.fetcher ?? fetch)(resolved.url, {
         method: 'GET',
@@ -206,11 +278,24 @@ export async function safeFetchBytes(value: string, options: SafeOutboundFetchOp
         current = new URL(location, resolved.url).toString();
         continue;
       }
-      const bytes = await readBoundedResponseBytes(response as unknown as Response, options.maxBytes);
+      const responseHeaders = response.headers as unknown as Headers;
+      const responseUrl = resolved.url.toString();
+      const bytes = await readBoundedResponseBytes(
+        response as unknown as Response,
+        options.maxBytes,
+        options.responseMaxBytes
+          ? (prefix) => options.responseMaxBytes!({
+              url: responseUrl,
+              status: response.status,
+              headers: responseHeaders,
+              prefix
+            })
+          : undefined
+      );
       return {
-        url: resolved.url.toString(),
+        url: responseUrl,
         status: response.status,
-        headers: response.headers as unknown as Headers,
+        headers: responseHeaders,
         bytes
       };
     } finally {

@@ -172,6 +172,100 @@ This file records failures against the frozen specification. A problem is not cl
 - Local release gate after the final implementation: 67 files and 557 tests PASS; agentic eval 191 PASS; typecheck, build, dependency audit, no-new-regex, and `git diff --check` PASS.
 - Status: locally fixed; the exact generator dialogue and latency remain pending AC11/AC14 production revalidation.
 
+## V14 — redundant web verification and blocked rewrite discard a useful generator selection
+
+- Severity: P0.
+- Acceptance criteria: AC3, AC4, AC5, AC6, AC9, AC10, AC11, AC12, AC14.
+- Production session: `877a5c9b-dd36-47b8-8e3c-f17a794106eb` (`conversationNumber=1784`).
+- Failed turn: `736c4b01-edc0-41ab-ace0-de5debe94e4c`.
+- Deployed commit: `3e98ff40cfd8dfc1f7c2796998eb0ac3082282e3`.
+- Buyer message: `Нужен дизельный генератор для небольшой мастерской: трёхфазный 380 В, постоянная нагрузка около 8 кВт, нужен автозапуск при отключении сети. Что можете подобрать?`
+- Buyer-visible result after 55 seconds: `Не успел надёжно завершить проверку в пределах этого хода...` No recommendation or cards were shown.
+
+### Trace evidence
+
+1. The separate Terra reducer and planner completed successfully in parallel in 16,664 ms, leaving 38,271 ms. This proves the V13 combined-output bottleneck was removed.
+2. `calculator.generatorLoad` completed in 11 ms and `catalog.search` completed successfully in 5,548 ms with preliminary catalog candidates.
+3. The planner requested `web.researchProductFacts` only for `req_autostart_1`, while that same requirement was explicitly bound to `verification.mode=product_attribute`; the catalog candidate set was already the deterministic source used to verify automatic start for preliminary selection.
+4. The executor nevertheless ran the web request sequentially. It consumed 14,641 ms and timed out, leaving 17,988 ms.
+5. A useful answer contract was created at `06:21:55.039Z`. The semantic reviewer then requested a rewrite for `generator_final_fit_at_exact_minimum`; the deterministic rewrite guard correctly rejected the rewritten text because it introduced `review_rewrite_unsupported_numeric_product_claim`.
+6. Recovery reused the ledger, intent, calculator, catalog and timed-out web artifacts, but only about nine seconds remained. It could not recompose and review a corrected answer, so the terminal timeout was committed at `06:22:05.016Z`.
+7. The planner correctly returned `canonicalProductClass=generator`, but the parallel ledger reducer stored the newly opened active need as `productClass=unknown`. The current conflict check ignores an unknown/known pair, so the weaker class was persisted into the next-turn memory.
+
+### Root cause and LLM/code boundary
+
+- LLM responsibility: understand the generator request, distinguish preliminary from final fit, decide which missing facts are decision-critical, and produce the requirement/source plan. The planner correctly returned `selectionGoal=preliminary_fit`, `canonicalProductClass=generator`, and typed requirements.
+- Deterministic responsibility: verify catalog attributes and calculator output, decide whether a planned external read is still necessary after preceding evidence arrives, enforce the absolute deadline, reject unsupported reviewer rewrites, and persist coherent structured state.
+- Incorrect deterministic behavior: tool execution treats every planned web request as unconditionally necessary even when a successful catalog result has already satisfied every requirement the web request covers through the requirement's declared `product_attribute` verifier.
+- Correct deterministic behavior to preserve: the revised-answer guard must continue blocking invented product identifiers, specifications, prices, and unsupported commercial promises. The fix must not send either the unsafe reviewer rewrite or the original final-fit overclaim.
+- Incorrect structured reconciliation: an active need with `productClass=unknown` is allowed to override the parallel planner's known canonical class, even though both outputs describe the same newly opened active need.
+
+### Required fix
+
+- Add an evidence-aware `not_needed` disposition for a supplemental web request in `preliminary_fit` only when successful catalog evidence leaves at least one mechanically valid candidate and every requirement covered by that web request is already verified as a per-product catalog attribute. Do not skip typed web verification, exact-model verification requested by the buyer, final-fit research, conflicts, or an unresolved requirement.
+- Persist and trace the `not_needed` tool artifact so recovery remains deterministic and does not rerun the same supplemental web request.
+- Keep the semantic reviewer and the deterministic rewrite guard fail-closed; use the recovered answer path with the saved review feedback while enough wall time remains.
+- Reconcile `unknown` product class on the newly opened active need from the planner's known `canonicalProductClass`, without changing known conflicting classes or a paused sibling need.
+- Add regressions for the conditional web disposition, non-skippable web cases, safe recovery after a blocked rewrite, and active-versus-paused need class reconciliation.
+- Repeat the exact generator request through a fresh embedded production widget session after GitHub/Railway deployment.
+
+### Local resolution
+
+- Planner grounding now classifies web evidence as `buyer_requested`, `conditional_on_catalog_gap`, `independent_required`, or `none`.
+- The executor records `searchDisposition=not_needed`, `usedWebSearch=false`, `sourcesExhausted=false`, zero attempts, and a dedicated trace only for a preliminary conditional request whose covered per-product attributes are fully proved by catalog evidence.
+- Short-circuit is forbidden when another otherwise suitable candidate still has an unverified covered attribute, so a missing catalog field cannot silently remove a plausible product.
+- The synthetic web artifact is non-fact-bearing and cannot be cited as checked external evidence. Recovery reuses it without rerunning research.
+- One newly opened active `unknown` need is reconciled to the planner's known canonical class; ambiguous/multiple need changes remain untouched.
+- Reviewer prompts now keep calculator thresholds in a separate sentence before product names, while the deterministic numeric guard remains fail-closed. Recovery feedback now includes bounded issue evidence.
+- Focused V14 suite: 172/172 PASS; full release verification and production widget repetition remain pending.
+
+## V15 — written search-first policy was not fully enforced by runtime research
+
+- Severity: P0 for technical support and sales completeness.
+- Acceptance criteria: AC5, AC6, AC8, AC9, AC12, AC14.
+- The planner could emit `sourcePolicy=specialist_required` for a technical answer, product selection, or comparison without any web request. The prior premature-handoff guard only worked when a web result already existed.
+- General technical research with no exact model and fewer than two catalog products returned `not_needed` before calling web search.
+- Official PDF manuals were rejected as unsupported evidence, yet a later retry could still mark the source set exhausted.
+- A reviewer rewrite could place a calculator threshold after a product name in the same sentence, causing the correct numeric guard to attribute the calculator number to that product and block the turn.
+
+### Required fix and LLM/code boundary
+
+- LLM remains responsible for interpreting the buyer's technical need and describing the research target.
+- Deterministic runtime must convert premature technical `specialist_required` plans into independent web grounding, remove an unexecuted lead side effect, and permit handoff only after an actual `sourcesExhausted=true`/`researchOutcome=exhausted` result. An explicitly authorized continuation of an already offered lead handoff remains operational and is not restarted.
+- General technical web grounding must execute even without catalog candidates or a named model.
+- Source validation must parse bounded PDF text safely; fetch/parse failure, unread text, truncation, timeout, or abort must never count as source exhaustion.
+- Reviewer wording must preserve source attribution: calculator thresholds and buyer requirements precede product names; product numbers follow only their exact product evidence. The deterministic guard must not globally trust calculator numbers as product specifications.
+
+### Local resolution
+
+- Runtime repairs premature specialist plans for `technical_answer`, `product_selection`, and `comparison` into `web_required` plus `independent_required`, removes premature `lead.capture`, and auto-adds the typed web request.
+- Pre-send review blocks technical contact/handoff when no genuinely exhausted web artifact exists, including missing, successful-but-answered, partial, failed, timed-out, aborted, and budget-skipped research.
+- The one-product/no-target early return was removed; general technical questions now reach web research.
+- Official PDF evidence is fetched through outbound URL protections, bounded to 8 MiB and 80 pages, parsed with evaluation disabled, and source-validated like HTML. Unread source warnings force `sourcesExhausted=false`.
+- The revised-answer guard now also recognizes catalog numerics stored as a bare value with the unit in the specification key.
+- Focused search/PDF/reviewer/orchestrator suite: 172/172 PASS; full release verification and production widget proof remain pending.
+
+## V16 — fresh verification found unsafe proof gaps in the V14/V15 implementation
+
+- Severity: P0/P1 across search-first enforcement, recovery consistency, and runtime isolation.
+- Acceptance criteria: AC3–AC6, AC8–AC12, AC14.
+- A saved reducer delta could open an active `unknown` need when the sibling planner failed; the recovered planner ran only after the delta was applied, and no second reconciliation repaired the persisted class.
+- Any authorized `lead.capture` was incorrectly treated as a continuation, so a first technical message containing a phone number could bypass search-first behavior without proof of a previous exhausted handoff.
+- Conditional web skipping compared only the number of attributes and requirements. An unrelated equal-count attribute could replace the covered attribute and still skip research. Mixed web execution metadata also became catalog-only when only one of several web requests was `not_needed`.
+- Generic technical research could mark sources exhausted after one unresolved web pass. It did not prove the ordered catalog → official page → official manual → reliable secondary attempts required by policy.
+- Numeric rewrite evidence preserved only dimension/value, so maximum power could support a false nominal-power claim.
+- In-process PDF parsing was not hard-cancellable and could retain CPU/memory after the turn deadline; a malformed PDF could crash the Node process through the parser's native/runtime path.
+
+### Local resolution
+
+- A deterministic post-plan `need.updated` correction now repairs exactly one newly opened active `unknown` need after partial recovery and persists a stable audit event/checkpoint.
+- Technical lead continuation requires prior assistant metadata proving a completed exhausted research result with the same original buyer question, or a matching pending draft. A phone number in the current technical request is not proof.
+- Every conditional comparison attribute now has a typed `comparisonAttributeBindings` entry tied to a covered `product_attribute` requirement, and runtime also validates semantic attribute compatibility. Catalog-only source metadata is emitted only when every web artifact is fact-free `not_needed`.
+- Research records structured source-tier attempts. Exhaustion requires catalog plus three distinct actually executed web queries for official page, official manual, and another reliable source; missing, duplicate, unread, failed, timed-out, or budget-skipped tiers cannot authorize handoff.
+- Product numeric facts and claims carry nominal/maximum qualifiers. A qualified claim matches only the same qualified catalog/web attribute; an unqualified power value cannot be promoted into nominal or maximum power.
+- PDF parsing is isolated in a bounded child process with hard kill on timeout/abort, a 256 MiB heap cap, one active parser, a bounded queue matching the four-source research cap, an 8 MiB/80-page/250k-character limit, and content-type/magic-byte routing. Parser crash/OOM cannot execute in the chat server process.
+- Focused regressions pass; the final full gate and production widget proof are recorded below after the implementation stabilizes.
+
 ## Requires clarification or external work
 
 - The application cannot create the external Railway cron described by `docs/CATALOG_PIPELINE.md`. Production catalog freshness remains unproven until that schedule is configured and a full sync run is observed.

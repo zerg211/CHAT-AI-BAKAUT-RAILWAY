@@ -1,19 +1,26 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   AgentManagerOrchestrator,
+  enforceSearchBeforeTechnicalSpecialist,
   isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
+  pendingLeadCaptureDraftMatchesAuthorizationScope,
   repairIntentForOpenEndedRequirementWebCoverage,
   repairIntentForNewNeedFinalFit,
   repairIntentForTypedToolRequirementCoverage,
+  trustedPendingExhaustedTechnicalHandoffs,
+  webResearchResultProvesSourceExhaustion,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
 import {
+  AgentIntentContractSchema,
   normalizeLedgerStateDeltaEvents,
   type AgentIntentContract,
   type DialogueLedgerEvent,
   type LedgerStateDelta,
-  type ToolRequest
+  type ToolRequest,
+  type ToolResult
 } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { assessStrictSelectionRequirements, budgetMaxFromNeedState } from '../src/ai/agentManagerCardSelection.js';
@@ -24,6 +31,54 @@ import type { ConversationSession, ConversationTurn, LeadCaptureDraft, Message, 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const turnId = '22222222-2222-4222-8222-222222222222';
 const userMessageId = '33333333-3333-4333-8333-333333333333';
+const exhaustedTechnicalHandoffOfferId = '55555555-5555-4555-8555-555555555555';
+
+function technicalHandoffScopeHash(
+  purpose: string,
+  buyerQuestion: string,
+  handoffOfferMessageId = exhaustedTechnicalHandoffOfferId
+) {
+  return createHash('sha256')
+    .update(JSON.stringify([
+      sessionId,
+      purpose,
+      buyerQuestion,
+      `technical_handoff_offer:${handoffOfferMessageId}`
+    ]))
+    .digest('hex');
+}
+
+function leadActionFingerprintFixture(input: {
+  turnId: string;
+  userMessage: string;
+  contactSource: 'current_message' | 'pending_draft' | 'existing_session';
+  handoffKind: 'technical_followup' | 'commercial_followup' | 'purchase_request';
+  handoffOfferMessageId?: string;
+  pendingDraftId?: string;
+  purpose: string;
+  buyerQuestion: string;
+  evidence: string;
+  evidencedName?: string;
+  preferredContact?: 'message' | 'call';
+}) {
+  return createHash('sha256').update(JSON.stringify([
+    'lead.capture:v1',
+    sessionId,
+    input.turnId,
+    input.userMessage,
+    'lead.capture',
+    'authorized',
+    input.contactSource,
+    input.handoffKind,
+    input.handoffOfferMessageId ?? '',
+    input.pendingDraftId ?? '',
+    input.purpose,
+    input.buyerQuestion,
+    input.evidence,
+    input.evidencedName ?? '',
+    input.preferredContact ?? ''
+  ])).digest('hex');
+}
 
 function session(): ConversationSession {
   const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
@@ -182,6 +237,489 @@ class HybridProducts extends FakeProducts {
     return [product('vector-product', 'Generator vector match 7 kW')];
   }
 }
+
+function exhaustedTechnicalHandoffHistory(originalQuestion: string): Message[] {
+  const previousIntent: AgentIntentContract = {
+    userMessageSummary: 'technical research exhausted',
+    dialogueUnderstanding: 'the decisive exact fact remains unconfirmed after all source tiers',
+    nextStepRationale: 'offer to return the specialist result',
+    requiresTools: true,
+    toolRequests: [{
+      id: 'prior-web-research',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: originalQuestion,
+        productNames: [],
+        comparisonAttributes: ['technical fact'],
+        comparisonAttributeBindings: []
+      },
+      rationale: 'exhaust available sources before handoff',
+      required: true
+    }],
+    grounding: {
+      taskType: 'technical_answer',
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: ['web.researchProductFacts'],
+      technicalAttributes: ['technical fact'],
+      buyerQuestion: originalQuestion,
+      rationale: 'verify the technical fact before handoff'
+    },
+    productMentions: [],
+    selectionPolicy: currentNoProductSelectionPolicy(),
+    leadCaptureAuthorization: {
+      authorized: false,
+      contactSource: 'none',
+      handoffKind: 'none',
+      purpose: null,
+      buyerQuestion: null,
+      evidence: null,
+      pendingDraftId: null
+    },
+    policyRuleIds: [],
+    mustNotAskQuestionIds: [],
+    riskFlags: []
+  };
+  const assistant = message('Оставьте номер телефона и скажите, как удобнее получить результат: сообщением или звонком.', 'assistant');
+  assistant.id = exhaustedTechnicalHandoffOfferId;
+  assistant.metadata = {
+    effectiveIntentContract: previousIntent,
+    answerContract: {
+      answerText: assistant.content,
+      factsUsed: [],
+      questionsAsked: [],
+      toolResultIds: ['prior-web-research'],
+      selectedProductIds: [],
+      leadAction: 'offer_form',
+      riskFlags: []
+    },
+    toolResults: [{
+      requestId: 'prior-web-research',
+      tool: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        sourcesExhausted: true,
+        researchOutcome: 'exhausted',
+        sourceAttempts: [
+          { tier: 'catalog', outcome: 'not_found' },
+          { tier: 'official_page', outcome: 'not_found', query: 'official product page technical fact' },
+          { tier: 'official_manual', outcome: 'not_found', query: 'official manual technical fact PDF' },
+          { tier: 'reliable_secondary', outcome: 'not_found', query: 'reliable distributor technical fact' }
+        ]
+      },
+      warnings: []
+    }]
+  };
+  return [
+    { ...message(originalQuestion), id: '44444444-4444-4444-8444-444444444444' },
+    { ...message('What voltage and nominal power do you need?', 'assistant'), id: '44444444-4444-4444-8444-444444444445' },
+    { ...message('380 V and about 8 kW nominal.', 'user'), id: '44444444-4444-4444-8444-444444444446' },
+    assistant
+  ];
+}
+
+function exhaustedWebResearchResult(warnings: string[] = [], errorCode?: string): ToolResult {
+  return {
+    requestId: 'exhausted-web-research',
+    tool: 'web.researchProductFacts',
+    status: 'ok',
+    payload: {
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: true,
+      researchOutcome: 'exhausted',
+      sourceAttempts: [
+        { tier: 'catalog', outcome: 'not_found' },
+        { tier: 'official_page', outcome: 'not_found', query: 'official product page technical fact' },
+        { tier: 'official_manual', outcome: 'not_found', query: 'official manual technical fact PDF' },
+        { tier: 'reliable_secondary', outcome: 'not_found', query: 'reliable distributor technical fact' }
+      ]
+    },
+    warnings,
+    ...(errorCode ? { errorCode } : {})
+  };
+}
+
+describe('trusted exhausted technical handoff provenance', () => {
+  it('defers any lead side effect when the planner omitted explicit grounding', () => {
+    const buyerQuestion = 'Please verify the generator start method.';
+    const parsed = AgentIntentContractSchema.parse({
+      userMessageSummary: 'technical question mislabeled as a commercial follow-up',
+      dialogueUnderstanding: 'legacy planner output omitted grounding',
+      nextStepRationale: 'unsafe lead attempt under test',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'lead.capture:omitted-grounding',
+        tool: 'lead.capture',
+        args: { contact: { name: 'Alexey' } },
+        rationale: 'unsafe omitted-grounding lead',
+        required: true
+      }],
+      selectionPolicy: currentNoProductSelectionPolicy(),
+      leadCaptureAuthorization: {
+        authorized: true,
+        contactSource: 'current_message',
+        handoffKind: 'commercial_followup',
+        purpose: 'verify the generator start method',
+        buyerQuestion,
+        evidence: 'Alexey, +7 900 000-00-11',
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    });
+
+    const repaired = enforceSearchBeforeTechnicalSpecialist(parsed);
+
+    expect(repaired.toolRequests.some((request) => request.tool === 'lead.capture')).toBe(false);
+    expect(repaired.riskFlags).toContain('planner_deferred_lead_until_explicit_grounding');
+  });
+
+  it('does not let a technical offer-bound draft be consumed under a commercial label', () => {
+    const buyerQuestion = 'Please verify the exact start method.';
+    const purpose = 'verify the exact start method';
+    const draft = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sessionId,
+      purpose,
+      buyerQuestion,
+      scopeHash: technicalHandoffScopeHash(purpose, buyerQuestion)
+    };
+    expect(pendingLeadCaptureDraftMatchesAuthorizationScope(draft, {
+      authorized: true,
+      contactSource: 'current_message',
+      handoffKind: 'commercial_followup',
+      purpose,
+      buyerQuestion,
+      evidence: 'Alexey',
+      pendingDraftId: draft.id
+    })).toBe(false);
+    expect(pendingLeadCaptureDraftMatchesAuthorizationScope(draft, {
+      authorized: true,
+      contactSource: 'pending_draft',
+      handoffKind: 'commercial_followup',
+      purpose,
+      buyerQuestion,
+      evidence: 'Alexey',
+      pendingDraftId: draft.id
+    })).toBe(false);
+    expect(pendingLeadCaptureDraftMatchesAuthorizationScope(draft, {
+      authorized: true,
+      contactSource: 'pending_draft',
+      handoffKind: 'technical_followup',
+      handoffOfferMessageId: exhaustedTechnicalHandoffOfferId,
+      purpose,
+      buyerQuestion,
+      evidence: 'Alexey',
+      pendingDraftId: draft.id
+    })).toBe(true);
+  });
+
+  it.each([
+    'source_evidence_fetch_failed',
+    'source_evidence_empty',
+    'source_evidence_unsupported_binary',
+    'source_evidence_pdf_parse_failed',
+    'source_evidence_pdf_parse_timed_out',
+    'source_evidence_pdf_parser_busy',
+    'source_evidence_pdf_too_large',
+    'source_evidence_pdf_text_empty',
+    'source_evidence_pdf_truncated_to_safe_page_limit',
+    'source_evidence_pdf_source_cap_reached'
+  ])('does not accept contradictory source exhaustion with unread evidence: %s', (warning) => {
+    expect(webResearchResultProvesSourceExhaustion(exhaustedWebResearchResult([warning]))).toBe(false);
+  });
+
+  it('does not accept source exhaustion after a budget skip or tool error', () => {
+    expect(webResearchResultProvesSourceExhaustion(exhaustedWebResearchResult([
+      'exact_target_external_retry_skipped_insufficient_budget'
+    ]))).toBe(false);
+    expect(webResearchResultProvesSourceExhaustion(exhaustedWebResearchResult([], 'turn_budget_exceeded'))).toBe(false);
+  });
+
+  it.each([
+    'source_tier_attempts_incomplete_after_retry',
+    'tool_execution_error',
+    'tool_result_rejected_by_local_bounds',
+    'tool_not_implemented',
+    'web_research_not_needed:catalog_requirements_satisfied'
+  ])('does not accept contradictory source exhaustion with an execution warning: %s', (warning) => {
+    expect(webResearchResultProvesSourceExhaustion(exhaustedWebResearchResult([warning]))).toBe(false);
+  });
+
+  it('checks payload warnings and payload errors as well as the ToolResult envelope', () => {
+    const payloadWarning = exhaustedWebResearchResult();
+    (payloadWarning.payload as Record<string, unknown>).warnings = ['source_evidence_pdf_parse_failed'];
+    expect(webResearchResultProvesSourceExhaustion(payloadWarning)).toBe(false);
+
+    const payloadError = exhaustedWebResearchResult();
+    (payloadError.payload as Record<string, unknown>).error = { code: 'source_fetch_failed' };
+    expect(webResearchResultProvesSourceExhaustion(payloadError)).toBe(false);
+  });
+
+  it('does not accept duplicate source tiers or cosmetically duplicated web queries', () => {
+    const duplicateTier = exhaustedWebResearchResult();
+    const duplicateTierPayload = duplicateTier.payload as { sourceAttempts: Array<Record<string, unknown>> };
+    duplicateTierPayload.sourceAttempts.push({
+      tier: 'official_manual',
+      outcome: 'unreadable',
+      query: 'another manual query'
+    });
+    expect(webResearchResultProvesSourceExhaustion(duplicateTier)).toBe(false);
+
+    const duplicateQueries = exhaustedWebResearchResult();
+    const duplicateQueryPayload = duplicateQueries.payload as { sourceAttempts: Array<Record<string, unknown>> };
+    duplicateQueryPayload.sourceAttempts = [
+      { tier: 'catalog', outcome: 'not_found' },
+      { tier: 'official_page', outcome: 'not_found', query: 'same query!' },
+      { tier: 'official_manual', outcome: 'not_found', query: ' same   query ? ' },
+      { tier: 'reliable_secondary', outcome: 'not_found', query: 'same query.' }
+    ];
+    expect(webResearchResultProvesSourceExhaustion(duplicateQueries)).toBe(false);
+
+    const punctuationOnly = exhaustedWebResearchResult();
+    const punctuationPayload = punctuationOnly.payload as { sourceAttempts: Array<Record<string, unknown>> };
+    punctuationPayload.sourceAttempts[1]!.query = '?!...';
+    expect(webResearchResultProvesSourceExhaustion(punctuationOnly)).toBe(false);
+  });
+
+  it('still accepts clean completed source exhaustion after unsupported claims were rejected', () => {
+    expect(webResearchResultProvesSourceExhaustion(exhaustedWebResearchResult([
+      'source_evidence_validation_failed:semantic'
+    ]))).toBe(true);
+  });
+
+  it('does not trust a metadata-only contact offer that was not visible to the buyer', () => {
+    const history = exhaustedTechnicalHandoffHistory('Please verify the exact start method.');
+    history.at(-1)!.content = 'I am still checking the available sources.';
+
+    expect(trustedPendingExhaustedTechnicalHandoffs(history)).toEqual([]);
+  });
+
+  it('does not replay a buyerQuestion that contains contact PII', () => {
+    const questionWithPhone = 'Please verify the exact start method; my phone is +7 900 000-00-11.';
+    const history = exhaustedTechnicalHandoffHistory(questionWithPhone);
+
+    expect(trustedPendingExhaustedTechnicalHandoffs(history)).toEqual([]);
+  });
+
+  it('does not replay a buyerQuestion that contains an explicitly supplied name', () => {
+    const questionWithName = 'Меня зовут Алексей, проверьте точный способ запуска.';
+    const history = exhaustedTechnicalHandoffHistory(questionWithName);
+
+    expect(trustedPendingExhaustedTechnicalHandoffs(history)).toEqual([]);
+  });
+
+  it('does not replay a pronoun-name buyer question or a technical attribute containing PII', () => {
+    const namedQuestion = 'Я Алексей, проверьте точный способ запуска.';
+    expect(trustedPendingExhaustedTechnicalHandoffs(
+      exhaustedTechnicalHandoffHistory(namedQuestion)
+    )).toEqual([]);
+
+    const history = exhaustedTechnicalHandoffHistory('Please verify the exact start method.');
+    const assistant = history.at(-1)!;
+    const intent = (assistant.metadata as { effectiveIntentContract: AgentIntentContract })
+      .effectiveIntentContract;
+    intent.grounding = {
+      ...intent.grounding!,
+      technicalAttributes: ['start method for +7 900 000-00-11']
+    };
+    expect(trustedPendingExhaustedTechnicalHandoffs(history)).toEqual([]);
+  });
+
+  it.each([
+    'Я хочу узнать точный способ запуска.',
+    'Я ищу генератор для мастерской.',
+    'Подскажите, я могу подключить АВР?'
+  ])('does not mistake an ordinary first-person business question for name PII: %s', (buyerQuestion) => {
+    const history = exhaustedTechnicalHandoffHistory(buyerQuestion);
+
+    expect(trustedPendingExhaustedTechnicalHandoffs(history)).toEqual([
+      expect.objectContaining({ buyerQuestion })
+    ]);
+  });
+
+  it('consumes an exhausted handoff after durable lead confirmation', () => {
+    const originalQuestion = 'Please verify the exact start method.';
+    const history = exhaustedTechnicalHandoffHistory(originalQuestion);
+    const handoffOfferMessageId = history.at(-1)!.id;
+    const confirmationTurnId = '66666666-6666-4666-8666-666666666660';
+    const contactMessageText = 'Alexey, +7 900 000-00-11';
+    const contactMessage = {
+      ...message(contactMessageText),
+      id: '66666666-6666-4666-8666-666666666661'
+    };
+    const priorIntent = (history.at(-1)!.metadata as { effectiveIntentContract: AgentIntentContract })
+      .effectiveIntentContract;
+    const confirmationIntent: AgentIntentContract = {
+      ...priorIntent,
+      toolRequests: [{
+        id: 'lead-confirmed',
+        tool: 'lead.capture',
+        args: { contact: { name: 'Alexey', phone: '+7 900 000-00-11' } },
+        rationale: 'complete the exact exhausted technical handoff',
+        required: true
+      }],
+      grounding: {
+        ...priorIntent.grounding!,
+        taskType: 'lead_handoff',
+        sourcePolicy: 'specialist_required',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['lead.capture']
+      },
+      leadCaptureAuthorization: {
+        authorized: true,
+        contactSource: 'current_message',
+        handoffKind: 'technical_followup',
+        handoffOfferMessageId,
+        purpose: 'verify the exact start method',
+        buyerQuestion: originalQuestion,
+        evidence: contactMessageText,
+        pendingDraftId: null
+      }
+    };
+    const confirmation = message('Спасибо, запрос передан.', 'assistant');
+    confirmation.id = '77777777-7777-4777-8777-777777777777';
+    confirmation.metadata = {
+      turnId: confirmationTurnId,
+      effectiveIntentContract: confirmationIntent,
+      answerContract: {
+        answerText: confirmation.content,
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['lead-confirmed'],
+        selectedProductIds: [],
+        leadAction: 'confirm_contact_received',
+        riskFlags: []
+      },
+      toolResults: [{
+        requestId: 'lead-confirmed',
+        tool: 'lead.capture',
+        status: 'ok',
+        payload: {
+          leadId: '88888888-8888-4888-8888-888888888888',
+          outbox: true,
+          outboxId: '99999999-9999-4999-8999-999999999999',
+          status: 'queued',
+          actionFingerprint: leadActionFingerprintFixture({
+            turnId: confirmationTurnId,
+            userMessage: contactMessageText,
+            contactSource: 'current_message',
+            handoffKind: 'technical_followup',
+            handoffOfferMessageId,
+            purpose: 'verify the exact start method',
+            buyerQuestion: originalQuestion,
+            evidence: contactMessageText,
+            evidencedName: 'Alexey'
+          })
+        },
+        warnings: []
+      }]
+    };
+
+    expect(trustedPendingExhaustedTechnicalHandoffs([...history, contactMessage, confirmation])).toEqual([]);
+  });
+
+  it('does not resurrect an older identical handoff after a newer offer is durably completed', () => {
+    const originalQuestion = 'Please verify the exact start method.';
+    const history = exhaustedTechnicalHandoffHistory(originalQuestion);
+    const olderOffer = history.at(-1)!;
+    const newerOfferId = '55555555-5555-4555-8555-555555555556';
+    const confirmationTurnId = '66666666-6666-4666-8666-666666666662';
+    const contactMessageText = 'Alexey, +7 900 000-00-11';
+    const contactMessage = {
+      ...message(contactMessageText),
+      id: '66666666-6666-4666-8666-666666666663'
+    };
+    const newerOffer: Message = {
+      ...olderOffer,
+      id: newerOfferId,
+      createdAt: new Date('2026-05-19T12:05:00.000Z').toISOString(),
+      metadata: structuredClone(olderOffer.metadata)
+    };
+    const priorIntent = (newerOffer.metadata as { effectiveIntentContract: AgentIntentContract })
+      .effectiveIntentContract;
+    const confirmationIntent: AgentIntentContract = {
+      ...priorIntent,
+      toolRequests: [{
+        id: 'lead-confirmed-newer-offer',
+        tool: 'lead.capture',
+        args: { contact: { name: 'Alexey', phone: '+7 900 000-00-11' } },
+        rationale: 'complete the newer exhausted technical handoff',
+        required: true
+      }],
+      grounding: {
+        ...priorIntent.grounding!,
+        taskType: 'lead_handoff',
+        sourcePolicy: 'specialist_required',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['lead.capture']
+      },
+      leadCaptureAuthorization: {
+        authorized: true,
+        contactSource: 'current_message',
+        handoffKind: 'technical_followup',
+        handoffOfferMessageId: newerOfferId,
+        purpose: 'verify the exact start method',
+        buyerQuestion: originalQuestion,
+        evidence: contactMessageText,
+        pendingDraftId: null
+      }
+    };
+    const confirmation = message('The request was durably queued.', 'assistant');
+    confirmation.id = '77777777-7777-4777-8777-777777777778';
+    confirmation.createdAt = new Date('2026-05-19T12:06:00.000Z').toISOString();
+    confirmation.metadata = {
+      turnId: confirmationTurnId,
+      effectiveIntentContract: confirmationIntent,
+      answerContract: {
+        answerText: confirmation.content,
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['lead-confirmed-newer-offer'],
+        selectedProductIds: [],
+        leadAction: 'confirm_contact_received',
+        riskFlags: []
+      },
+      toolResults: [{
+        requestId: 'lead-confirmed-newer-offer',
+        tool: 'lead.capture',
+        status: 'ok',
+        payload: {
+          leadId: '88888888-8888-4888-8888-888888888889',
+          outbox: true,
+          outboxId: '99999999-9999-4999-8999-999999999990',
+          status: 'queued',
+          actionFingerprint: leadActionFingerprintFixture({
+            turnId: confirmationTurnId,
+            userMessage: contactMessageText,
+            contactSource: 'current_message',
+            handoffKind: 'technical_followup',
+            handoffOfferMessageId: newerOfferId,
+            purpose: 'verify the exact start method',
+            buyerQuestion: originalQuestion,
+            evidence: contactMessageText,
+            evidencedName: 'Alexey'
+          })
+        },
+        warnings: []
+      }]
+    };
+
+    expect(trustedPendingExhaustedTechnicalHandoffs([
+      ...history,
+      newerOffer,
+      contactMessage,
+      confirmation
+    ])).toEqual([]);
+  });
+});
 
 class BrandedGeneratorProducts extends FakeProducts {
   async searchProducts(): Promise<Product[]> {
@@ -343,6 +881,7 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
         leadCaptureAuthorization: {
           authorized: false,
           contactSource: 'none',
+          handoffKind: 'none',
           purpose: null,
           buyerQuestion: null,
           evidence: null,
@@ -404,7 +943,7 @@ const allowedToolArgKeys: Record<ToolRequest['tool'], Set<string>> = {
   ]),
   'web.researchProductFacts': new Set([
     'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
-    'productNames', 'comparisonAttributes', 'limit', 'reason', 'notes'
+    'productNames', 'comparisonAttributes', 'comparisonAttributeBindings', 'limit', 'reason', 'notes'
   ]),
   'lead.capture': new Set(['contact', 'reason', 'notes'])
 };
@@ -2157,18 +2696,22 @@ describe('AgentManagerOrchestrator', () => {
     });
 
     const metadata = payload.metadata as {
-      toolResults?: Array<{ tool?: string; payload?: { summaryForAnswer?: string } }>;
-      cardSelection?: { warnings?: string[]; droppedProductIds?: string[] };
+      toolResults?: Array<{
+        tool?: string;
+        status?: string;
+        payload?: { usedWebSearch?: boolean; searchDisposition?: string; sourcesExhausted?: boolean };
+      }>;
     };
     expect(metadata.toolResults?.[0]).toMatchObject({
       tool: 'web.researchProductFacts',
-      payload: { summaryForAnswer: 'Недостаточно товаров для сравнения.' }
+      status: 'error',
+      payload: {
+        usedWebSearch: false,
+        searchDisposition: 'failed',
+        sourcesExhausted: false
+      }
     });
     expect(payload.productCards).toEqual([]);
-    expect(metadata.cardSelection?.droppedProductIds).toEqual(['bison-inverter']);
-    expect(metadata.cardSelection?.warnings).toEqual([
-      'product_cards_suppressed:no_explicit_catalog_card_tool'
-    ]);
   });
 
   it('filters cross-class catalog noise out of visible product cards', async () => {
@@ -4104,9 +4647,85 @@ describe('AgentManagerOrchestrator', () => {
     const leads = new FakeLeads();
     const originalQuestion = 'Please verify whether Firman RD3910E has electric start.';
     const phoneReply = '+7 900 000-00-11, please message me';
+    const previousIntent: AgentIntentContract = {
+      userMessageSummary: 'research exhausted for the original technical question',
+      dialogueUnderstanding: 'the exact technical fact remains unconfirmed after the available source tiers',
+      nextStepRationale: 'offer to return the concrete specialist result',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'prior-web-research',
+        tool: 'web.researchProductFacts',
+        args: {
+          query: originalQuestion,
+          productNames: ['Firman RD3910E'],
+          comparisonAttributes: ['electric start']
+        },
+        rationale: 'verify the exact technical fact before offering a specialist',
+        required: true,
+        coversRequirementIds: []
+      }],
+      grounding: {
+        taskType: 'technical_answer',
+        sourcePolicy: 'web_required',
+        webPurpose: 'technical_specs',
+        webRequirement: 'independent_required',
+        requiredToolKinds: ['web.researchProductFacts'],
+        technicalAttributes: ['electric start'],
+        buyerQuestion: originalQuestion,
+        rationale: 'research the exact model before handoff'
+      },
+      productMentions: [],
+      selectionPolicy: currentNoProductSelectionPolicy(),
+      leadCaptureAuthorization: {
+        authorized: false,
+        contactSource: 'none',
+        handoffKind: 'none',
+        purpose: null,
+        buyerQuestion: null,
+        evidence: null,
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+    const priorAssistant = {
+      ...message('Оставьте номер телефона и скажите, как удобнее получить результат: сообщением или звонком.', 'assistant'),
+      id: '55555555-5555-4555-8555-555555555555',
+      metadata: {
+        intentContract: previousIntent,
+        answerContract: {
+          answerText: 'Оставьте номер телефона и скажите, как удобнее получить результат: сообщением или звонком.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['prior-web-research'],
+          selectedProductIds: [],
+          leadAction: 'offer_form',
+          riskFlags: []
+        },
+        toolResults: [{
+          requestId: 'prior-web-research',
+          tool: 'web.researchProductFacts',
+          status: 'ok',
+          payload: {
+            usedWebSearch: true,
+            searchDisposition: 'completed',
+            sourcesExhausted: true,
+            researchOutcome: 'exhausted',
+            sourceAttempts: [
+              { tier: 'catalog', outcome: 'not_found' },
+              { tier: 'official_page', outcome: 'not_found', query: 'Firman RD3910E official product page electric start' },
+              { tier: 'official_manual', outcome: 'not_found', query: 'Firman RD3910E official manual electric start PDF' },
+              { tier: 'reliable_secondary', outcome: 'not_found', query: 'Firman RD3910E reliable distributor electric start' }
+            ]
+          },
+          warnings: []
+        }]
+      }
+    };
     conversations.messages = [
       { ...message(originalQuestion), id: '44444444-4444-4444-8444-444444444444' },
-      { ...message('Leave a phone number and say whether message or call is better.', 'assistant'), id: '55555555-5555-4555-8555-555555555555' },
+      priorAssistant,
       message(phoneReply)
     ];
     const leadModel = model({
@@ -4124,11 +4743,22 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'preserve the phone until the buyer supplies a name',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'specialist_required',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            rationale: 'continue the already exhausted technical handoff'
+          },
           productMentions: [],
           selectionPolicy: currentNoProductSelectionPolicy(),
           leadCaptureAuthorization: {
             authorized: true,
             contactSource: 'current_message',
+            handoffKind: 'technical_followup',
+            handoffOfferMessageId: '55555555-5555-4555-8555-555555555555',
             purpose: 'verify generator start method',
             buyerQuestion: originalQuestion,
             evidence: phoneReply,
@@ -4194,11 +4824,12 @@ describe('AgentManagerOrchestrator', () => {
       buyerQuestion: originalQuestion,
       phone: '+7 900 000-00-11',
       consentEvidenceHash: 'a'.repeat(64),
-      scopeHash: 'b'.repeat(64)
+      scopeHash: technicalHandoffScopeHash('verify generator start method', originalQuestion)
     });
     const draftId = leads.pendingDraft!.id;
     conversations.messages = [
-      { ...message(originalQuestion), id: '44444444-4444-4444-8444-444444444444' },
+      ...exhaustedTechnicalHandoffHistory(originalQuestion),
+      { ...message('+7 900 000-00-11, please message me'), id: '66666666-6666-4666-8666-666666666661' },
       { ...message('I have the phone number. Please write your name.', 'assistant'), id: '55555555-5555-4555-8555-555555555555' },
       message(nameReply)
     ];
@@ -4211,6 +4842,14 @@ describe('AgentManagerOrchestrator', () => {
           missingFields: ['name']
         });
         expect(input.pendingLeadCaptureDraft).not.toHaveProperty('phone');
+        expect(input.pendingExhaustedTechnicalHandoffs).toEqual([
+          expect.objectContaining({
+            handoffOfferMessageId: '55555555-5555-4555-8555-555555555555',
+            buyerQuestion: originalQuestion,
+            technicalAttributes: ['technical fact'],
+            sourceAttemptTiers: ['catalog', 'official_page', 'official_manual', 'reliable_secondary']
+          })
+        ]);
         return {
           userMessageSummary: 'buyer supplied the missing name and chose a message',
           dialogueUnderstanding: 'this completes the same pending specialist handoff',
@@ -4223,11 +4862,23 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'complete the same pending contact',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'specialist_required',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: originalQuestion,
+            rationale: 'continue the already exhausted technical handoff'
+          },
           productMentions: [],
           selectionPolicy: currentNoProductSelectionPolicy(),
           leadCaptureAuthorization: {
             authorized: true,
             contactSource: 'pending_draft',
+            handoffKind: 'technical_followup',
+            handoffOfferMessageId: '55555555-5555-4555-8555-555555555555',
             purpose: 'verify generator start method',
             buyerQuestion: originalQuestion,
             evidence: nameReply,
@@ -4295,11 +4946,13 @@ describe('AgentManagerOrchestrator', () => {
       buyerQuestion: originalQuestion,
       phone: '+7 900 000-00-11',
       consentEvidenceHash: 'a'.repeat(64),
-      scopeHash: 'b'.repeat(64)
+      scopeHash: technicalHandoffScopeHash('verify generator start method', originalQuestion)
     });
     const draftId = leads.pendingDraft!.id;
     conversations.messages = [
-      { ...message(originalQuestion), id: '44444444-4444-4444-8444-444444444444' },
+      ...exhaustedTechnicalHandoffHistory(originalQuestion),
+      { ...message('+7 900 000-00-11'), id: '66666666-6666-4666-8666-666666666662' },
+      { ...message('I have the phone number. Please write your name.', 'assistant'), id: '55555555-5555-4555-8555-555555555556' },
       message(preferenceOnlyReply)
     ];
     const unsafeNameModel = model({
@@ -4316,11 +4969,23 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'unsafe planner output under test',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'specialist_required',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: originalQuestion,
+            rationale: 'continue the already exhausted technical handoff without inventing identity'
+          },
           productMentions: [],
           selectionPolicy: currentNoProductSelectionPolicy(),
           leadCaptureAuthorization: {
             authorized: true,
             contactSource: 'pending_draft',
+            handoffKind: 'technical_followup',
+            handoffOfferMessageId: '55555555-5555-4555-8555-555555555555',
             purpose: 'verify generator start method',
             buyerQuestion: originalQuestion,
             evidence: preferenceOnlyReply,
@@ -4378,6 +5043,16 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'buyer provided name and phone',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'Please check delivery and availability.',
+            rationale: 'capture contact for the explicit commercial availability and delivery follow-up'
+          },
           productMentions: [],
           selectionPolicy: {
             targetProductClass: null,
@@ -4394,8 +5069,9 @@ describe('AgentManagerOrchestrator', () => {
           leadCaptureAuthorization: {
             authorized: true,
             contactSource: 'current_message',
+            handoffKind: 'commercial_followup',
             purpose: 'check delivery and availability',
-            buyerQuestion: 'Alexey, +7 900 000-00-11',
+            buyerQuestion: 'Please check delivery and availability.',
             evidence: 'Alexey, +7 900 000-00-11',
             pendingDraftId: null
           },
@@ -4415,7 +5091,11 @@ describe('AgentManagerOrchestrator', () => {
         };
       }
     });
-    conversations.messages = [message('Alexey, +7 900 000-00-11')];
+    conversations.messages = [
+      message('Please check delivery and availability.'),
+      message('Please leave your contact so we can return the exact result.', 'assistant'),
+      message('Alexey, +7 900 000-00-11')
+    ];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, leadModel);
 
     const payload = await orchestrator.generateAnswer({
@@ -4428,6 +5108,80 @@ describe('AgentManagerOrchestrator', () => {
     expect(leads.created).toHaveLength(1);
     expect(conversations.outbox).toHaveLength(1);
     expect(payload.leadCreated).toBe(true);
+  });
+
+  it('denies lead capture when buyerQuestion itself contains contact PII', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const unsafeBuyerQuestion = 'Alexey, +7 900 000-00-11';
+    conversations.messages = [message(unsafeBuyerQuestion)];
+    const leadModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer supplied contact without a separate business question',
+          dialogueUnderstanding: 'unsafe authorization under test',
+          nextStepRationale: 'runtime must reject contact PII as the lead subject',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:pii-question',
+            tool: 'lead.capture',
+            args: {},
+            rationale: 'unsafe lead subject',
+            required: true
+          }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: unsafeBuyerQuestion,
+            rationale: 'exercise commercial lead validation without treating contact PII as the business question'
+          },
+          productMentions: [],
+          selectionPolicy: currentNoProductSelectionPolicy(),
+          leadCaptureAuthorization: {
+            authorized: true,
+            contactSource: 'current_message',
+            handoffKind: 'commercial_followup',
+            purpose: 'unspecified commercial follow-up',
+            buyerQuestion: unsafeBuyerQuestion,
+            evidence: unsafeBuyerQuestion,
+            pendingDraftId: null
+          },
+          policyRuleIds: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Уточните, пожалуйста, какой именно вопрос нужно проверить.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:pii-question'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      leadModel
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: unsafeBuyerQuestion
+    });
+
+    expect(leads.created).toHaveLength(0);
+    expect((payload.metadata as { toolResults?: Array<{ status?: string }> }).toolResults?.[0]?.status).toBe('denied');
+    expect(payload.leadCreated).toBe(false);
   });
 
   it('denies structured lead capture when current intent does not authorize a handoff', async () => {
@@ -4447,6 +5201,16 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'planner output is intentionally unsafe for the regression test',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'А почему генератор глохнет?',
+            rationale: 'exercise the lead authorization boundary for an explicitly unauthorized side effect'
+          },
           productMentions: [],
           selectionPolicy: {
             targetProductClass: null,
@@ -4463,6 +5227,7 @@ describe('AgentManagerOrchestrator', () => {
           leadCaptureAuthorization: {
             authorized: false,
             contactSource: 'none',
+            handoffKind: 'none',
             purpose: null,
             buyerQuestion: null,
             evidence: null,
@@ -4521,6 +5286,16 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'unsafe legacy payload',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'Нужен насос 1234567890',
+            rationale: 'exercise legacy lead-payload rejection without treating a product code as consent'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: []
         };
@@ -4877,6 +5652,16 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'delivery check needs a saved contact',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'Can you check delivery to Crimea?',
+            rationale: 'continue an explicit commercial delivery follow-up with the existing session contact'
+          },
           productMentions: [],
           selectionPolicy: {
             targetProductClass: null,
@@ -4893,6 +5678,7 @@ describe('AgentManagerOrchestrator', () => {
           leadCaptureAuthorization: {
             authorized: true,
             contactSource: 'existing_session',
+            handoffKind: 'commercial_followup',
             purpose: 'check delivery to Crimea',
             buyerQuestion: 'Can you check delivery to Crimea?',
             evidence: 'Can you check delivery to Crimea?',
@@ -5090,7 +5876,8 @@ describe('AgentManagerOrchestrator', () => {
         priorReviewIssues: [{
           code: 'question_only_instead_of_result',
           severity: 'high',
-          message: 'Use the completed calculation and give a useful result.'
+          message: 'Use the completed calculation and give a useful result.',
+          evidence: 'The draft only asks the buyer to repeat the request.'
         }]
       });
       expect(input.toolResults).toHaveLength(1);
@@ -5174,7 +5961,7 @@ describe('AgentManagerOrchestrator', () => {
     }
   });
 
-  it('reuses a saved lead tool artifact and never creates the lead twice', async () => {
+  it('does not confirm or recreate a legacy saved lead artifact without authorization fingerprint', async () => {
     const conversations = new FakeConversations();
     conversations.checkpoints = [
       {
@@ -5243,9 +6030,256 @@ describe('AgentManagerOrchestrator', () => {
 
     const payload = await orchestrator.recoverTurn({ sessionId, turnId });
 
+    expect(payload.leadCreated).toBe(false);
+    expect(leads.created).toHaveLength(0);
+    expect(conversations.outbox).toHaveLength(0);
+  });
+
+  it('rebinds a durable lead after replan only when the semantic action fingerprint matches', async () => {
+    const conversations = new FakeConversations();
+    const buyerQuestion = 'Please arrange delivery for generator A.';
+    const currentMessage = 'Alexey, +7 900 000-00-11, please call.';
+    const purpose = 'arrange delivery for generator A';
+    const oldRequestId = 'lead-request-before-replan';
+    const newRequestId = 'lead-request-after-replan';
+    conversations.messages = [
+      { ...message(buyerQuestion), id: '41111111-1111-4111-8111-111111111111' },
+      { ...message('Please leave your phone number and say whether a call or message is more convenient.', 'assistant'), id: '42222222-2222-4222-8222-222222222222' },
+      message(currentMessage)
+    ];
+    conversations.checkpoints = [{
+      checkpoint: 'ledger_delta_proposed',
+      status: 'succeeded',
+      payload: { rationale: 'saved contact state', events: [] }
+    }, {
+      checkpoint: 'intent_contract_created',
+      status: 'succeeded',
+      payload: {
+        userMessageSummary: 'legacy lead intent',
+        dialogueUnderstanding: 'legacy schema must be replanned',
+        nextStepRationale: 'legacy side effect already happened',
+        requiresTools: true,
+        toolRequests: [],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      }
+    }];
+    conversations.toolArtifacts = [{
+      tool_name: 'lead.capture',
+      tool_request_id: oldRequestId,
+      status: 'ok',
+      payload: {
+        leadId: 'lead-existing',
+        outbox: true,
+        outboxId: 'outbox-existing',
+        status: 'queued',
+        actionFingerprint: leadActionFingerprintFixture({
+          turnId,
+          userMessage: currentMessage,
+          contactSource: 'current_message',
+          handoffKind: 'commercial_followup',
+          purpose,
+          buyerQuestion,
+          evidence: currentMessage,
+          evidencedName: 'Alexey',
+          preferredContact: 'call'
+        })
+      },
+      warnings: []
+    }];
+    const currentIntent: AgentIntentContract = {
+      userMessageSummary: 'buyer supplied contact for delivery follow-up',
+      dialogueUnderstanding: 'this is the same commercial handoff already persisted before recovery',
+      nextStepRationale: 'reuse only the exact durable side effect',
+      requiresTools: true,
+      toolRequests: [{
+        id: newRequestId,
+        tool: 'lead.capture',
+        args: { contact: { name: 'Alexey', preferredContact: 'call' } },
+        rationale: 'complete the exact commercial handoff',
+        required: true
+      }],
+      grounding: {
+        taskType: 'lead_handoff',
+        sourcePolicy: 'conversation_only',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['lead.capture'],
+        technicalAttributes: [],
+        buyerQuestion,
+        rationale: 'commercial delivery follow-up'
+      },
+      productMentions: [],
+      selectionPolicy: currentNoProductSelectionPolicy(),
+      leadCaptureAuthorization: {
+        authorized: true,
+        contactSource: 'current_message',
+        handoffKind: 'commercial_followup',
+        purpose,
+        buyerQuestion,
+        evidence: currentMessage,
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: ['lead']
+    };
+    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
+      expect(input.toolResults).toContainEqual(expect.objectContaining({
+        requestId: newRequestId,
+        tool: 'lead.capture',
+        status: 'ok',
+        payload: expect.objectContaining({ leadId: 'lead-existing', outboxId: 'outbox-existing' })
+      }));
+      return {
+        answerText: 'Thank you. The delivery request was recorded and queued for a call.',
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: [newRequestId],
+        selectedProductIds: [],
+        leadAction: 'confirm_contact_received' as const,
+        riskFlags: []
+      };
+    });
+    const leads = new FakeLeads();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      model({ planTurn: vi.fn(async () => currentIntent), composeAnswer })
+    );
+
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
     expect(payload.leadCreated).toBe(true);
     expect(leads.created).toHaveLength(0);
     expect(conversations.outbox).toHaveLength(0);
+    expect(conversations.toolArtifacts).toContainEqual(expect.objectContaining({
+      toolRequestId: newRequestId,
+      warnings: expect.arrayContaining(['rebound_after_intent_replan'])
+    }));
+  });
+
+  it('blocks a mismatched durable lead after replan without creating a second lead', async () => {
+    const conversations = new FakeConversations();
+    const currentQuestion = 'Please arrange delivery for generator B.';
+    const priorQuestion = 'Please arrange delivery for generator A.';
+    const currentMessage = 'Alexey, +7 900 000-00-11, please call.';
+    const purpose = 'arrange delivery for generator B';
+    const requestId = 'lead-request-same-id';
+    conversations.messages = [
+      { ...message(currentQuestion), id: '43333333-3333-4333-8333-333333333333' },
+      { ...message('Please leave your phone number and preferred contact method.', 'assistant'), id: '44444444-4444-4444-8444-444444444449' },
+      message(currentMessage)
+    ];
+    conversations.checkpoints = [{
+      checkpoint: 'ledger_delta_proposed',
+      status: 'succeeded',
+      payload: { rationale: 'saved contact state', events: [] }
+    }, {
+      checkpoint: 'intent_contract_created',
+      status: 'succeeded',
+      payload: {
+        userMessageSummary: 'legacy lead intent',
+        dialogueUnderstanding: 'legacy schema must be replanned',
+        nextStepRationale: 'legacy side effect already happened for another subject',
+        requiresTools: true,
+        toolRequests: [],
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      }
+    }];
+    conversations.toolArtifacts = [{
+      tool_name: 'lead.capture',
+      tool_request_id: requestId,
+      status: 'ok',
+      payload: {
+        leadId: 'lead-for-question-a',
+        outbox: true,
+        outboxId: 'outbox-for-question-a',
+        status: 'queued',
+        actionFingerprint: leadActionFingerprintFixture({
+          turnId,
+          userMessage: currentMessage,
+          contactSource: 'current_message',
+          handoffKind: 'commercial_followup',
+          purpose: 'arrange delivery for generator A',
+          buyerQuestion: priorQuestion,
+          evidence: currentMessage,
+          evidencedName: 'Alexey',
+          preferredContact: 'call'
+        })
+      },
+      warnings: []
+    }];
+    const currentIntent: AgentIntentContract = {
+      userMessageSummary: 'buyer supplied contact for generator B delivery',
+      dialogueUnderstanding: 'the current action has a different subject from the persisted side effect',
+      nextStepRationale: 'fail closed instead of rebinding or duplicating the lead',
+      requiresTools: true,
+      toolRequests: [{
+        id: requestId,
+        tool: 'lead.capture',
+        args: { contact: { name: 'Alexey', preferredContact: 'call' } },
+        rationale: 'attempt the current commercial handoff',
+        required: true
+      }],
+      grounding: {
+        taskType: 'lead_handoff',
+        sourcePolicy: 'conversation_only',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['lead.capture'],
+        technicalAttributes: [],
+        buyerQuestion: currentQuestion,
+        rationale: 'commercial delivery follow-up'
+      },
+      productMentions: [],
+      selectionPolicy: currentNoProductSelectionPolicy(),
+      leadCaptureAuthorization: {
+        authorized: true,
+        contactSource: 'current_message',
+        handoffKind: 'commercial_followup',
+        purpose,
+        buyerQuestion: currentQuestion,
+        evidence: currentMessage,
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: ['lead']
+    };
+    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
+      expect(input.toolResults).toContainEqual(expect.objectContaining({
+        requestId,
+        tool: 'lead.capture',
+        status: 'denied',
+        warnings: expect.arrayContaining(['lead_capture_reexecution_blocked_unverifiable_side_effect'])
+      }));
+      return {
+        answerText: 'I could not safely match this contact to the current request, so I did not create or confirm another request.',
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: [requestId],
+        selectedProductIds: [],
+        leadAction: 'none' as const,
+        riskFlags: []
+      };
+    });
+    const leads = new FakeLeads();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      model({ planTurn: vi.fn(async () => currentIntent), composeAnswer })
+    );
+
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+    expect(payload.leadCreated).toBe(false);
+    expect(leads.created).toHaveLength(0);
+    expect(conversations.outbox).toHaveLength(0);
+    expect(payload.answer).not.toContain('recorded and queued');
   });
 
   it('fails closed when a persisted tool artifact cannot be validated', async () => {
@@ -5474,6 +6508,16 @@ describe('AgentManagerOrchestrator', () => {
       async planTurn() {
         return {
           userMessageSummary: 'buyer asks delivery availability without contact',
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'Можно проверить наличие и доставку?',
+            rationale: 'offer contact capture for an explicit commercial availability and delivery follow-up'
+          },
           dialogueUnderstanding: 'delivery and stock require specialist verification, but no contact is present',
           nextStepRationale: 'offer contact form',
           requiresTools: true,
@@ -5581,6 +6625,16 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'buyer has not provided contact yet',
             required: true
           }],
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'Доставка есть? И можно ли получить скидку, если сразу забрать генератор?',
+            rationale: 'offer contact capture for explicit delivery, pickup, and discount terms'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: ['lead']
         };
@@ -5619,6 +6673,16 @@ describe('AgentManagerOrchestrator', () => {
       async planTurn() {
         return {
           userMessageSummary: 'buyer asks for delivery and discount terms without contact',
+          grounding: {
+            taskType: 'lead_handoff',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'Доставка есть? И можно ли получить скидку, если сразу забрать генератор?',
+            rationale: 'offer contact capture for explicit delivery, pickup, and discount terms'
+          },
           dialogueUnderstanding: 'commercial terms require specialist verification and contact handoff',
           nextStepRationale: 'offer contact form because no contact is present',
           requiresTools: true,
@@ -8010,6 +9074,7 @@ describe('parallel semantic turn contracts', () => {
       leadCaptureAuthorization: {
         authorized: false,
         contactSource: 'none',
+        handoffKind: 'none',
         purpose: null,
         buyerQuestion: null,
         evidence: null,
@@ -8292,6 +9357,78 @@ describe('parallel semantic turn contracts', () => {
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
       checkpoint: 'intent_contract_created',
       payload: expect.objectContaining({ userMessageSummary: 'recovered planner summary' })
+    }));
+  });
+
+  it('reconciles an unknown active need after recovery plans the missing intent stage', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'open a need before the sibling planner fails',
+      events: [{
+        eventType: 'need.opened',
+        scope: 'need',
+        payload: {
+          needId: 'recovered-generator-need',
+          productClass: 'unknown',
+          summary: 'diesel generator selection',
+          constraints: ['three phase'],
+          openQuestions: [],
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'clear',
+          invalidatedProductIds: [],
+          status: 'open',
+          activate: true
+        },
+        evidence: 'buyer needs a diesel generator',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const recoveredIntent: AgentIntentContract = {
+      ...noToolIntent('recovered generator planner intent'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        selectionGoal: 'browse_catalog',
+        needAction: 'open'
+      }
+    };
+    const planTurn = vi.fn()
+      .mockRejectedValueOnce(new Error('parallel planner failed before intent checkpoint'))
+      .mockResolvedValueOnce(recoveredIntent);
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await expect(orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'I need a three-phase diesel generator.'
+    })).rejects.toThrow('parallel planner failed before intent checkpoint');
+
+    await orchestrator.recoverTurn({ sessionId, turnId });
+
+    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
+    expect(planTurn).toHaveBeenCalledTimes(2);
+    expect(conversations.ledgerEvents).toContainEqual(expect.objectContaining({
+      eventType: 'need.updated',
+      source: 'system_reducer',
+      payload: expect.objectContaining({
+        needId: 'recovered-generator-need',
+        productClass: 'generator'
+      })
+    }));
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      eventType: 'post_plan_active_need_product_class_reconciled',
+      payload: expect.objectContaining({
+        needId: 'recovered-generator-need',
+        canonicalProductClass: 'generator'
+      })
     }));
   });
 

@@ -105,15 +105,33 @@ function hasAnyWords(words: Set<string>, values: string[]) {
   ));
 }
 
+function hasOnlyConceptWords(words: Set<string>, values: string[]) {
+  return [...words].every((word) =>
+    attributeStopWords.has(word) || hasAnyWords(new Set([word]), values)
+  );
+}
+
 function canonicalAttribute(value: unknown) {
   const words = new Set(normalizedWords(value));
   const has = (...values: string[]) => hasAnyWords(words, values);
   if (has('phase', 'phases', 'фаза', 'фазность')) return 'phase';
   if (has('voltage', 'volt', 'напряжение', 'вольтаж')) return 'voltage';
   if (has('noise', 'sound', 'шум') && !has('insulation', 'изоляция')) return 'noise';
-  if (has('engine', 'motor', 'двигатель', 'мотор')) return 'engine_model';
+  if (
+    has('engine', 'motor', 'двигатель', 'мотор') &&
+    hasOnlyConceptWords(words, [
+      'engine', 'motor', 'двигатель', 'мотор',
+      'model', 'модель', 'name', 'название'
+    ])
+  ) return 'engine_model';
   if (has('tank', 'бак') && has('volume', 'capacity', 'объем', 'ёмкость', 'емкость')) return 'fuel_tank_volume';
-  if (has('wheel', 'wheels', 'колесо', 'колеса', 'колёса')) return 'wheel_kit';
+  if (
+    has('wheel', 'wheels', 'колесо', 'колеса', 'колёса') &&
+    hasOnlyConceptWords(words, [
+      'wheel', 'wheels', 'колесо', 'колеса', 'колёса',
+      'kit', 'set', 'комплект', 'набор', 'presence', 'наличие', 'included'
+    ])
+  ) return 'wheel_kit';
   if (has('compatible', 'compatibility', 'совместимость', 'совместим', 'подходит')) return 'compatibility';
   if (has('autostart', 'auto start', 'automatic start', 'автозапуск')) return 'auto_start';
   if (has('material', 'материал')) return 'material';
@@ -141,6 +159,88 @@ function attributeMatches(left: unknown, right: unknown) {
   const rightWords = new Set(rightAttribute.split('_'));
   return [...leftWords].every((word) => rightWords.has(word)) ||
     [...rightWords].every((word) => leftWords.has(word));
+}
+
+const strictBindingWordsByAttribute: Record<string, string[]> = {
+  phase: ['phase', 'phases', 'фаза', 'фазность', 'single', 'three', 'однофазный', 'трехфазный', 'трёхфазный'],
+  voltage: ['voltage', 'volt', 'напряжение', 'вольтаж', 'output', 'выходной'],
+  noise: ['noise', 'sound', 'шум', 'level', 'уровень', 'pressure', 'давление', 'acoustic', 'акустический'],
+  engine_model: [
+    'engine', 'motor', 'двигатель', 'мотор', 'model', 'модель', 'name', 'название'
+  ],
+  fuel_tank_volume: [
+    'fuel', 'топливо', 'tank', 'бак', 'volume', 'capacity', 'объем', 'объём', 'ёмкость', 'емкость'
+  ],
+  wheel_kit: [
+    'wheel', 'wheels', 'колесо', 'колеса', 'колёса', 'kit', 'set', 'комплект', 'набор',
+    'presence', 'наличие', 'included'
+  ],
+  compatibility: ['compatible', 'compatibility', 'совместимость', 'совместим', 'подходит'],
+  auto_start: [
+    'autostart', 'auto', 'automatic', 'start', 'авто', 'автоматический', 'запуск',
+    'presence', 'наличие', 'support', 'поддержка', 'function', 'функция', 'capability', 'возможность'
+  ],
+  material: ['material', 'материал'],
+  weight: [
+    'weight', 'mass', 'вес', 'масса', 'operating', 'working', 'рабочий', 'эксплуатационный'
+  ],
+  power: [
+    'power', 'мощность', 'output', 'выходной', 'nominal', 'rated', 'continuous', 'номинальный',
+    'maximum', 'max', 'максимальный', 'макс', 'peak', 'surge', 'пиковый', 'предельный'
+  ],
+  price: ['price', 'cost', 'цена', 'стоимость', 'budget', 'бюджет']
+};
+
+const strictBindingIgnoredWords = new Set([
+  'the', 'of', 'for', 'product', 'товар', 'для', 'при', 'по'
+].flatMap((value) => normalizedWords(value)));
+
+const strictBindingUnitWords = new Set(
+  unitAliases.flatMap((entry) => entry.aliases.flatMap(normalizedWords))
+);
+
+function strictBindingHasOnlyExpectedWords(value: unknown, attribute: string) {
+  const allowed = strictBindingWordsByAttribute[attribute];
+  if (!allowed) return canonicalAttribute(value) === attribute;
+  const allowedWords = new Set(allowed.flatMap(normalizedWords));
+  return normalizedWords(value).every((word) =>
+    attributeStopWords.has(word) ||
+    strictBindingIgnoredWords.has(word) ||
+    strictBindingUnitWords.has(word) ||
+    [...word].every((char) => char >= '0' && char <= '9') ||
+    hasAnyWords(new Set([word]), [...allowedWords])
+  );
+}
+
+function powerQualifierForBindingAttribute(value: unknown): 'nominal' | 'maximum' | undefined {
+  const words = new Set(normalizedWords(value));
+  if (hasAnyWords(words, ['nominal', 'rated', 'continuous', 'номинальный'])) return 'nominal';
+  if (hasAnyWords(words, ['maximum', 'max', 'максимальный', 'макс', 'peak', 'surge', 'пиковый', 'предельный'])) {
+    return 'maximum';
+  }
+  return undefined;
+}
+
+function powerQualifierForRequirementKind(value: unknown): 'nominal' | 'maximum' | undefined {
+  const words = normalizedWords(value);
+  const wordSet = new Set(words);
+  if (hasAnyWords(wordSet, ['nominal', 'rated', 'continuous', 'номинальный'])) return 'nominal';
+  const firstWord = words[0];
+  if (firstWord && hasAnyWords(new Set([firstWord]), [
+    'maximum', 'max', 'максимальный', 'макс', 'peak', 'surge', 'пиковый', 'предельный'
+  ])) return 'maximum';
+  return undefined;
+}
+
+export function selectionRequirementAttributeMatches(left: unknown, right: unknown) {
+  const leftAttribute = canonicalAttribute(left);
+  const rightAttribute = canonicalAttribute(right);
+  if (!leftAttribute || leftAttribute !== rightAttribute) return false;
+  if (!strictBindingHasOnlyExpectedWords(left, leftAttribute)) return false;
+  if (leftAttribute === 'power') {
+    return powerQualifierForBindingAttribute(left) === powerQualifierForRequirementKind(right);
+  }
+  return true;
 }
 
 function canonicalUnit(...values: unknown[]) {
@@ -299,16 +399,19 @@ function productLookupText(product: Product) {
 
 function productForFact(products: Product[], fact: { productName?: unknown; sourceUrl?: unknown; sourceTitle?: unknown }) {
   const sourceUrl = typeof fact.sourceUrl === 'string' ? fact.sourceUrl.trim().toLocaleLowerCase('en-US') : '';
+  let hasExplicitIdentity = false;
   if (sourceUrl) {
+    hasExplicitIdentity = true;
     const byUrl = products.find((product) => product.sourceUrl?.trim().toLocaleLowerCase('en-US') === sourceUrl);
     if (byUrl) return byUrl;
   }
   for (const value of [fact.productName, fact.sourceTitle]) {
     if (typeof value !== 'string' || !value.trim()) continue;
+    hasExplicitIdentity = true;
     const byName = products.find((product) => textMatchesTargetName(productLookupText(product), value));
     if (byName) return byName;
   }
-  return products.length === 1 ? products[0] : undefined;
+  return !hasExplicitIdentity && products.length === 1 ? products[0] : undefined;
 }
 
 function resultProducts(result: ToolResult): Product[] {

@@ -6,9 +6,13 @@ import type { ConversationSession, ConversationTurn, Message, Product, VerifiedP
 
 const researchProductComparisonFacts = vi.hoisted(() => vi.fn());
 
-vi.mock('../src/ai/productComparisonResearch.js', () => ({
-  researchProductComparisonFacts
-}));
+vi.mock('../src/ai/productComparisonResearch.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/ai/productComparisonResearch.js')>();
+  return {
+    ...actual,
+    researchProductComparisonFacts
+  };
+});
 
 const { AgentManagerOrchestrator } = await import('../src/ai/agentManagerOrchestrator.js');
 
@@ -447,6 +451,12 @@ describe('AgentManager comparison research flow', () => {
       usedWebSearch: true,
       searchDisposition: 'completed',
       sourcesExhausted: true,
+      sourceAttempts: [
+        { tier: 'catalog', outcome: 'not_found' },
+        { tier: 'official_page', outcome: 'not_found', query: 'Hatz 1D42S filter kit official product page' },
+        { tier: 'official_manual', outcome: 'not_found', query: 'Hatz 1D42S official manual filter compatibility PDF' },
+        { tier: 'reliable_secondary', outcome: 'not_found', query: 'Hatz 1D42S filter kit reliable distributor compatibility' }
+      ],
       facts: [],
       conflicts: [],
       answerGuidance: {

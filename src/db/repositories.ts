@@ -579,18 +579,78 @@ export class ConversationRepository {
     return result.rowCount ? mapSession(result.rows[0]) : null;
   }
 
+  async restoreSession(id: string, visitorCapability: string, maxInactiveMinutes = 30) {
+    const result = await this.db.query(
+      `WITH candidate AS MATERIALIZED (
+         SELECT *
+         FROM conversation_sessions
+         WHERE id = $1 AND status = 'active'
+         FOR UPDATE
+       ), updated AS (
+         UPDATE conversation_sessions AS session
+         SET last_heartbeat_at = CASE
+               WHEN candidate.visitor_id = $2
+                AND candidate.last_heartbeat_at >= now() - ($3 || ' minutes')::interval
+               THEN now()
+               ELSE session.last_heartbeat_at
+             END,
+             status = CASE
+               WHEN candidate.last_heartbeat_at < now() - ($3 || ' minutes')::interval
+               THEN 'expired'
+               ELSE session.status
+             END,
+             closed_at = CASE
+               WHEN candidate.last_heartbeat_at < now() - ($3 || ' minutes')::interval
+               THEN coalesce(session.closed_at, now())
+               ELSE session.closed_at
+             END,
+             updated_at = CASE
+               WHEN candidate.visitor_id = $2
+                 OR candidate.last_heartbeat_at < now() - ($3 || ' minutes')::interval
+               THEN now()
+               ELSE session.updated_at
+             END
+         FROM candidate
+         WHERE session.id = candidate.id
+         RETURNING session.*,
+           candidate.visitor_id = $2
+             AND candidate.last_heartbeat_at >= now() - ($3 || ' minutes')::interval
+             AS restoration_authorized
+           ), expired_draft AS (
+           UPDATE lead_capture_drafts
+           SET status = 'expired',
+              name = NULL,
+              phone = NULL,
+              email = NULL,
+              updated_at = now()
+           WHERE session_id = $1
+            AND status = 'pending'
+            AND EXISTS (SELECT 1 FROM updated WHERE status = 'expired')
+           RETURNING 1
+           )
+           SELECT updated.* FROM updated`,
+           [id, visitorCapability, maxInactiveMinutes]
+           );
+           const row = result.rows[0];
+           if (!row || row.restoration_authorized !== true) return null;
+           return mapSession(row);
+           }
+
   async deleteSession(id: string) {
     const result = await this.db.query('DELETE FROM conversation_sessions WHERE id = $1 RETURNING *', [id]);
     return result.rowCount ? mapSession(result.rows[0]) : null;
   }
 
-  async touchSession(id: string) {
+  async touchSession(id: string, visitorCapability: string, maxInactiveMinutes = 30) {
     const result = await this.db.query(
       `UPDATE conversation_sessions
        SET last_heartbeat_at = now()
-       WHERE id = $1 AND status = 'active'
+       WHERE id = $1
+         AND visitor_id = $2
+         AND status = 'active'
+         AND last_heartbeat_at >= now() - ($3 || ' minutes')::interval
        RETURNING *`,
-      [id]
+      [id, visitorCapability, maxInactiveMinutes]
     );
     return result.rowCount ? mapSession(result.rows[0]) : null;
   }

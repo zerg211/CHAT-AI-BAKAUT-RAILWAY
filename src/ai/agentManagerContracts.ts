@@ -130,6 +130,10 @@ export const WebResearchToolArgsSchema = z.object({
   phase: optionalPhase,
   productNames: stringList(4),
   comparisonAttributes: stringList(12),
+  comparisonAttributeBindings: z.array(z.object({
+    attribute: nonEmptyString,
+    requirementId: nonEmptyString
+  }).strict()).max(12).optional(),
   limit: optionalPositiveLimit(12),
   reason: optionalText,
   notes: optionalText
@@ -204,6 +208,10 @@ export interface ToolRequestArgs {
   productIds?: string[];
   productNames?: string[];
   comparisonAttributes?: string[];
+  comparisonAttributeBindings?: Array<{
+    attribute: string;
+    requirementId: string;
+  }>;
   loads?: unknown[];
   simultaneousStarting?: boolean | null;
   simultaneousStartingKinds?: string[];
@@ -298,12 +306,17 @@ export const AgentSelectionPolicySchema = z.object({
 export const LeadCaptureAuthorizationSchema = z.object({
   authorized: z.boolean(),
   contactSource: z.enum(['current_message', 'existing_session', 'pending_draft', 'none']),
+  handoffKind: z.enum(['technical_followup', 'commercial_followup', 'purchase_request', 'none']),
+  handoffOfferMessageId: z.string().uuid().nullable().optional(),
   purpose: nonEmptyString.nullable(),
   buyerQuestion: nonEmptyString.nullable().optional(),
   evidence: nonEmptyString.nullable(),
   pendingDraftId: z.string().uuid().nullable().optional()
 }).strict().superRefine((authorization, context) => {
   if (authorization.authorized) {
+    if (authorization.handoffKind === 'none') {
+      context.addIssue({ code: 'custom', path: ['handoffKind'], message: 'authorized lead requires a concrete handoff kind' });
+    }
     if (authorization.contactSource === 'none') {
       context.addIssue({ code: 'custom', path: ['contactSource'], message: 'authorized lead requires a contact source' });
     }
@@ -324,12 +337,14 @@ export const LeadCaptureAuthorizationSchema = z.object({
     }
   } else if (
     authorization.contactSource !== 'none' ||
+    (authorization.handoffKind !== undefined && authorization.handoffKind !== 'none') ||
+    authorization.handoffOfferMessageId != null ||
     authorization.purpose !== null ||
     authorization.buyerQuestion != null ||
     authorization.evidence !== null ||
     authorization.pendingDraftId != null
   ) {
-    context.addIssue({ code: 'custom', message: 'unauthorized lead must not carry contact source, purpose, buyer question, evidence, or draft id' });
+    context.addIssue({ code: 'custom', message: 'unauthorized lead must not carry handoff kind, handoff offer id, contact source, purpose, buyer question, evidence, or draft id' });
   }
 });
 
@@ -354,18 +369,29 @@ export const AgentIntentGroundingSchema = z.object({
     'current_lineup',
     'none'
   ]),
+  webRequirement: z.enum([
+    'none',
+    'buyer_requested',
+    'conditional_on_catalog_gap',
+    'independent_required'
+  ]).optional(),
   requiredToolKinds: z.array(AgentManagerToolNameSchema).default([]),
   technicalAttributes: z.array(nonEmptyString).default([]),
+  buyerQuestion: nonEmptyString.nullable().optional(),
   rationale: nonEmptyString
 }).strict();
 
+export const DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE =
+  'Planner did not provide an explicit grounding policy; preserve legacy toolRequests behavior.';
+
 const defaultAgentIntentGrounding: z.infer<typeof AgentIntentGroundingSchema> = {
-  taskType: 'technical_answer',
+  taskType: 'lead_handoff',
   sourcePolicy: 'conversation_only',
   webPurpose: 'none',
+  webRequirement: 'none',
   requiredToolKinds: [],
   technicalAttributes: [],
-  rationale: 'Planner did not provide an explicit grounding policy; preserve legacy toolRequests behavior.'
+  rationale: DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE
 };
 
 export const AgentIntentContractSchema = z.object({
@@ -415,6 +441,31 @@ export const AnswerContractSchema = z.object({
   riskFlags: z.array(z.string()).default([]),
   selectionReadiness: AnswerSelectionReadinessSchema.optional()
 }).strict();
+
+export function parseAnswerContractModelOutput(value: unknown) {
+  let normalized = value;
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const contract = value as Record<string, unknown>;
+    const readiness = contract.selectionReadiness;
+    if (readiness && typeof readiness === 'object' && !Array.isArray(readiness)) {
+      const fields = readiness as Record<string, unknown>;
+      if (
+        fields.status === 'not_applicable' &&
+        typeof fields.productClass === 'string' &&
+        fields.productClass.trim().length === 0
+      ) {
+        normalized = {
+          ...contract,
+          selectionReadiness: {
+            ...fields,
+            productClass: 'unknown'
+          }
+        };
+      }
+    }
+  }
+  return AnswerContractSchema.parse(normalized);
+}
 
 export const PreSendReviewSchema = z.object({
   verdict: z.enum(['pass', 'rewrite_required', 'block']),

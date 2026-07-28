@@ -2,7 +2,7 @@
 
 Verified worktree base: `f41f99ca015cc63c27696becbf1db41dfdefed66` on `main`.
 
-Latest verification timestamp: `2026-07-16T09:11:00+03:00`.
+Latest verification timestamp: `2026-07-16T10:29:00+03:00`.
 
 No local OpenAI call, localhost behavior test, direct chat API test, or manual Railway deployment was used.
 
@@ -23,8 +23,8 @@ No new regex constructs. Legacy baseline: 508.
 found 0 vulnerabilities
 [release-gate] PASS production dependency audit (high severity)
 [release-gate] PASS TypeScript typecheck
-Test Files 67 passed (67)
-Tests 557 passed (557)
+Test Files 69 passed (69)
+Tests 589 passed (589)
 [release-gate] PASS full test suite
 Test Files 4 passed (4)
 Tests 191 passed (191)
@@ -33,6 +33,8 @@ vite production build: 30 modules transformed
 [release-gate] PASS production build
 [release-gate] PASS: all local release checks succeeded.
 ```
+
+This latest gate includes the V14/V15 conditional-web, search-before-specialist, PDF-manual, active-need reconciliation, and reviewer-attribution changes. The focused pre-gate suite passed 6 files and 172/172 tests. The full gate then passed 69 files and 589/589 tests plus 191/191 agentic evals.
 
 ## Independent repeated checks
 
@@ -85,6 +87,13 @@ Fresh independent V13 verifier repeated the focused suite (117/117), typecheck, 
 - authoritative product proof can override a lower-authority catalog conflict while preserving a caveat;
 - visible cards deduplicate semantically identical model entries;
 - the reproduced first-turn generator timeout has targeted concurrency, partial-recovery, output-cap, and deadline regressions.
+- a conditional preliminary web request short-circuits only when catalog evidence proves every covered per-product requirement for all otherwise suitable candidates;
+- the synthetic `not_needed` artifact records zero attempts, is reusable by recovery, and cannot ground factual claims;
+- premature technical/product/comparison specialist plans are repaired into independent web research, while an explicitly authorized handoff continuation remains operational;
+- general technical research executes without a named model or two catalog products;
+- bounded official PDF text is source-validated, and unread/failed/truncated evidence cannot set `sourcesExhausted=true`;
+- calculator thresholds remain separate from product specifications during reviewer rewrites, while exact catalog values with units in spec keys are recognized by the numeric guard;
+- exactly one newly opened active unknown need can inherit the planner's known canonical product class without overwriting ambiguous or known state.
 
 ## Remaining mandatory proof
 

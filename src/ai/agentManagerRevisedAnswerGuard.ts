@@ -1,5 +1,6 @@
 import type { Product } from '../shared/types.js';
 import type { PreSendReview, ToolResult } from './agentManagerContracts.js';
+import { extractStructuredProductAttributes } from './productAttributeExtraction.js';
 import {
   compactModelText,
   modelIdentifierDisplayTokens,
@@ -19,9 +20,12 @@ export interface ReviewerRewriteGuardInput {
   durableLeadCaptureSucceeded: boolean;
 }
 
+type NumericQualifier = 'nominal' | 'maximum';
+
 interface NumericFact {
   dimension: string;
   value: number;
+  qualifier?: NumericQualifier;
 }
 
 interface NumericClaim extends NumericFact {
@@ -161,6 +165,43 @@ function unitAfterNumber(value: string, numberEnd: number) {
   return null;
 }
 
+const nominalPowerAbbreviations = new Set(['nom', 'ном'].map(compactModelText));
+
+function powerQualifierToken(token: string): NumericQualifier | null {
+  const compact = compactModelText(token);
+  if (nominalPowerAbbreviations.has(compact)) return 'nominal';
+  if (tokenStartsWithAny(token, ['номин', 'rated', 'nominal', 'continuous'])) return 'nominal';
+  if (tokenStartsWithAny(token, ['макс', 'maximum', 'max', 'пиков', 'peak', 'surge', 'предель'])) return 'maximum';
+  return null;
+}
+
+function powerQualifierAbbreviationBeforePeriod(value: string, periodIndex: number) {
+  const tokens = modelTextTokens(value.slice(Math.max(0, periodIndex - 16), periodIndex));
+  const token = tokens[tokens.length - 1];
+  return token ? powerQualifierToken(token) !== null : false;
+}
+
+function powerQualifierFromAttribute(value: string) {
+  const qualifiers = new Set(
+    modelTextTokens(value)
+      .map(powerQualifierToken)
+      .filter((qualifier): qualifier is NumericQualifier => qualifier !== null)
+  );
+  return qualifiers.size === 1 ? [...qualifiers][0] : undefined;
+}
+
+function powerQualifierAroundClaim(value: string, start: number, end: number) {
+  const prefixTokens = modelTextTokens(value.slice(Math.max(0, start - 80), start));
+  for (let index = prefixTokens.length - 1; index >= 0; index -= 1) {
+    const token = prefixTokens[index];
+    const qualifier = powerQualifierToken(token);
+    if (qualifier) return qualifier;
+    if (tokenHasDigit(token)) break;
+  }
+  const suffixToken = modelTextTokens(value.slice(end, Math.min(value.length, end + 24)))[0];
+  return suffixToken ? powerQualifierToken(suffixToken) ?? undefined : undefined;
+}
+
 function extractTypedNumericClaims(value: string) {
   const claims: NumericClaim[] = [];
   for (const span of numberSpans(value)) {
@@ -170,6 +211,9 @@ function extractTypedNumericClaims(value: string) {
     claims.push({
       dimension: unit.definition.dimension,
       value: numeric * unit.definition.multiplier,
+      ...(unit.definition.dimension === 'power_kw'
+        ? { qualifier: powerQualifierAroundClaim(value, span.start, unit.end) }
+        : {}),
       raw: value.slice(span.start, unit.end),
       start: span.start,
       end: unit.end
@@ -223,6 +267,45 @@ function scalarEntries(value: unknown, path = ''): Array<{ path: string; value: 
   return [];
 }
 
+function unitDefinitionFromSpecPath(path: string) {
+  const tokens = modelTextTokens(path);
+  const compactPath = compactModelText(path);
+  for (const candidate of sortedUnitAliases) {
+    const aliasTokens = modelTextTokens(candidate.alias);
+    if (containsSequence(tokens, aliasTokens)) return candidate.definition;
+    const compactAlias = compactModelText(candidate.alias);
+    if (compactAlias.length >= 2 && compactPath.endsWith(compactAlias)) return candidate.definition;
+  }
+  return null;
+}
+
+function numericFactsFromSpecEntry(entry: { path: string; value: string }) {
+  const text = `${entry.path} ${entry.value}`;
+  const qualifier = powerQualifierFromAttribute(entry.path);
+  const typed = extractTypedNumericClaims(text).map(({ dimension, value, qualifier: claimQualifier }) => ({
+    dimension,
+    value,
+    ...(dimension === 'power_kw' && (qualifier ?? claimQualifier)
+      ? { qualifier: qualifier ?? claimQualifier }
+      : {})
+  }));
+  const unit = unitDefinitionFromSpecPath(entry.path);
+  const span = numberSpans(entry.value)[0];
+  const numeric = span ? normalizedNumber(span.raw) : null;
+  if (!unit || numeric === null) return typed;
+  const pathUnitFact = {
+    dimension: unit.dimension,
+    value: numeric * unit.multiplier,
+    ...(unit.dimension === 'power_kw' && qualifier ? { qualifier } : {})
+  };
+  if (!typed.some((fact) =>
+    fact.dimension === pathUnitFact.dimension &&
+    Math.abs(fact.value - pathUnitFact.value) < 1e-9 &&
+    fact.qualifier === pathUnitFact.qualifier
+  )) typed.push(pathUnitFact);
+  return typed;
+}
+
 function productKey(product: Pick<Product, 'id' | 'name'>) {
   return product.id?.trim() || compactModelText(product.name);
 }
@@ -239,12 +322,27 @@ function newProductEvidence(product: Product): ProductEvidence {
   if (typeof product.price === 'number' && Number.isFinite(product.price)) {
     numericFacts.push({ dimension: 'price_rub', value: product.price });
   }
-  for (const text of [
-    product.name,
-    ...scalarEntries(product.specs ?? {}).map((entry) => `${entry.path} ${entry.value}`),
-    product.description ?? ''
-  ]) {
-    numericFacts.push(...extractTypedNumericClaims(text).map(({ dimension, value }) => ({ dimension, value })));
+  for (const text of [product.name, product.description ?? '']) {
+    numericFacts.push(...extractTypedNumericClaims(text).map(({ dimension, value, qualifier }) => ({
+      dimension,
+      value,
+      ...(qualifier ? { qualifier } : {})
+    })));
+  }
+  for (const entry of scalarEntries(product.specs ?? {})) {
+    numericFacts.push(...numericFactsFromSpecEntry(entry));
+  }
+  const structuredAttributes = extractStructuredProductAttributes(product);
+  for (const [attribute, dimension] of [
+    ['powerKw', 'power_kw'],
+    ['voltageV', 'voltage_v'],
+    ['weightKg', 'mass_kg']
+  ] as const) {
+    const value = structuredAttributes[attribute]?.value;
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      if (dimension === 'power_kw' && numericFacts.some((fact) => fact.dimension === dimension)) continue;
+      numericFacts.push({ dimension, value });
+    }
   }
   return {
     key: productKey(product),
@@ -298,9 +396,10 @@ function addWebFactEvidence(evidence: ProductEvidence[], toolResults: ToolResult
       };
       if (!evidence.includes(target)) evidence.push(target);
       const factText = `${typeof fact.attribute === 'string' ? fact.attribute : ''} ${fact.value}`;
-      target.numericFacts.push(...extractTypedNumericClaims(factText).map(({ dimension, value: numeric }) => ({
+      target.numericFacts.push(...extractTypedNumericClaims(factText).map(({ dimension, value: numeric, qualifier }) => ({
         dimension,
-        value: numeric
+        value: numeric,
+        ...(qualifier ? { qualifier } : {})
       })));
     }
   }
@@ -344,6 +443,7 @@ function splitSegments(value: string) {
       value[index - 1] >= '0' && value[index - 1] <= '9' &&
       value[index + 1] >= '0' && value[index + 1] <= '9'
     ) continue;
+    if (value[index] === '.' && powerQualifierAbbreviationBeforePeriod(value, index)) continue;
     if (text.trim()) segments.push({ text, start });
     text = '';
     start = index + 1;
@@ -376,6 +476,9 @@ function productsForClaim(segment: string, claim: NumericClaim, evidence: Produc
 
 function sameNumericFact(claim: NumericFact, fact: NumericFact) {
   if (claim.dimension !== fact.dimension) return false;
+  if (claim.dimension === 'power_kw' && claim.qualifier && fact.qualifier !== claim.qualifier) {
+    return false;
+  }
   const tolerance = claim.dimension === 'price_rub'
     ? 0.5
     : Math.max(0.01, Math.abs(fact.value) * 0.001);

@@ -1,5 +1,16 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import {
+  abandonSavedChat,
+  initialChatHydrationState,
+  restoreSavedChatSession,
+  safeBrowserStorage,
+  safeStorageGet,
+  safeStorageRemove,
+  safeStorageSet,
+  savedSessionHeartbeatOutcome,
+  runSessionCreationSingleFlight
+} from './chatHistory';
 import { streamChatMessage } from './chatStream';
 import { submitLead } from './leadSubmit';
 import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
@@ -562,28 +573,44 @@ function createClientId() {
 }
 
 async function createSession(createIfMissing = false) {
-  const existing = sessionStorage.getItem('bakaut_session_id');
+  const chatSessionStorage = safeBrowserStorage('sessionStorage');
+  const visitorStorage = safeBrowserStorage('localStorage');
+  const existing = safeStorageGet(chatSessionStorage, 'bakaut_session_id');
   if (existing) {
-    const heartbeat = await fetch(`${apiBase}/api/chat/sessions/${existing}/heartbeat`, { method: 'POST' }).catch(() => null);
-    if (heartbeat?.ok) return existing;
-    sessionStorage.removeItem('bakaut_session_id');
+    const visitorCapability = safeStorageGet(visitorStorage, 'bakaut_visitor_id');
+    const heartbeat = visitorCapability
+      ? await fetch(`${apiBase}/api/chat/sessions/${existing}/heartbeat`, {
+          method: 'POST',
+          headers: { 'x-bakaut-visitor-id': visitorCapability }
+        }).catch(() => null)
+      : { ok: false, status: 404 };
+    const heartbeatOutcome = savedSessionHeartbeatOutcome(heartbeat);
+    if (heartbeatOutcome === 'reuse') return existing;
+    if (heartbeatOutcome === 'retry') throw new Error('Не удалось проверить сохранённую сессию');
+    const current = safeStorageGet(chatSessionStorage, 'bakaut_session_id');
+    if (current && current !== existing) return current;
+    safeStorageRemove(chatSessionStorage, 'bakaut_session_id');
   }
 
   if (!createIfMissing) return null;
 
-  const response = await fetch(`${apiBase}/api/chat/sessions`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      visitorId: localStorage.getItem('bakaut_visitor_id') ?? createClientId(),
-      pageUrl: getPageUrl()
-    })
+  return runSessionCreationSingleFlight(async () => {
+    const current = safeStorageGet(chatSessionStorage, 'bakaut_session_id');
+    if (current) return current;
+    const response = await fetch(`${apiBase}/api/chat/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        visitorId: safeStorageGet(visitorStorage, 'bakaut_visitor_id') ?? createClientId(),
+        pageUrl: getPageUrl()
+      })
+    });
+    if (!response.ok) throw new Error('Не удалось создать сессию');
+    const data = (await response.json()) as { session: ConversationSession };
+    safeStorageSet(visitorStorage, 'bakaut_visitor_id', data.session.visitorId ?? createClientId());
+    safeStorageSet(chatSessionStorage, 'bakaut_session_id', data.session.id);
+    return data.session.id;
   });
-  if (!response.ok) throw new Error('Не удалось создать сессию');
-  const data = (await response.json()) as { session: ConversationSession };
-  localStorage.setItem('bakaut_visitor_id', data.session.visitorId ?? createClientId());
-  sessionStorage.setItem('bakaut_session_id', data.session.id);
-  return data.session.id;
 }
 
 async function sendAssistantFeedback(sessionId: string, messageId: string, rating: FeedbackRating) {
@@ -646,7 +673,11 @@ function ProductCards({ cards, initialVisibleCount }: { cards: ProductCard[]; in
   );
 }
 
-function LeadPanel({ latestQuestion, autoOpenKey }: { latestQuestion: string; autoOpenKey: number }) {
+function LeadPanel({ latestQuestion, autoOpenKey, disabled = false }: {
+  latestQuestion: string;
+  autoOpenKey: number;
+  disabled?: boolean;
+}) {
   const [form, setForm] = useState<LeadForm>({ name: '', phone: '', email: '', question: latestQuestion });
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [expanded, setExpanded] = useState(false);
@@ -667,6 +698,7 @@ function LeadPanel({ latestQuestion, autoOpenKey }: { latestQuestion: string; au
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (disabled) return;
     setStatus('sending');
     const clientLeadId = clientLeadIdRef.current ?? crypto.randomUUID();
     clientLeadIdRef.current = clientLeadId;
@@ -730,12 +762,12 @@ function LeadPanel({ latestQuestion, autoOpenKey }: { latestQuestion: string; au
             value={form.question}
             onChange={(event) => setForm({ ...form, question: event.target.value })}
           />
-          <button type="submit" disabled={status === 'sending' || !form.name || (!form.phone && !form.email)}>
+          <button type="submit" disabled={disabled || status === 'sending' || !form.name || (!form.phone && !form.email)}>
             {status === 'sending' ? 'Отправляю...' : 'Отправить заявку'}
           </button>
         </>
       ) : (
-        <button className="lead-toggle" type="button" onClick={() => setExpanded(true)}>
+        <button className="lead-toggle" type="button" onClick={() => setExpanded(true)} disabled={disabled}>
           Оставить контакт
         </button>
       )}
@@ -1148,6 +1180,11 @@ function App() {
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const initialSessionIdRef = useRef(safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id'));
+  const [chatHydrationState, setChatHydrationState] = useState(() => initialChatHydrationState(initialSessionIdRef.current));
+  const [chatRestoreAttempt, setChatRestoreAttempt] = useState(0);
+  const restoringChat = chatHydrationState === 'restoring';
+  const chatInteractionDisabled = chatHydrationState !== 'ready';
   const latestQuestion = useMemo(() => [...messages].reverse().find((message) => message.role === 'user')?.content ?? '', [messages]);
   const isStart = messages.length <= 1;
   const quickPrompts = [
@@ -1157,8 +1194,80 @@ function App() {
   ];
 
   useEffect(() => {
-    createSession().then(setSessionId).catch(() => setError('Не удалось открыть чат'));
-  }, []);
+    let cancelled = false;
+    const initialSessionId = initialSessionIdRef.current;
+    if (!initialSessionId) {
+      setChatHydrationState('ready');
+      return () => {
+        cancelled = true;
+      };
+    }
+    const chatSessionStorage = safeBrowserStorage('sessionStorage');
+    const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+    if (!visitorId) {
+      abandonSavedChat(chatSessionStorage, initialSessionId);
+      initialSessionIdRef.current = null;
+      setSessionId(null);
+      setChatHydrationState('ready');
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    restoreSavedChatSession(apiBase, initialSessionId, visitorId, chatSessionStorage).then((restoration) => {
+      if (cancelled) return;
+      if (restoration.kind === 'restored') {
+        setSessionId(restoration.sessionId);
+        if (restoration.messages.length > 0) {
+          const restoredMessages: ChatMessage[] = restoration.messages.map((message) => ({
+            id: message.id ?? id(),
+            serverId: message.role === 'assistant' ? message.id : undefined,
+            role: message.role,
+            content: message.content,
+            createdAt: message.createdAt ?? nowIso(),
+            cards: message.products,
+            cardDisplay: message.cardDisplay,
+            leadRequested: message.leadRequested,
+            status: 'done'
+          }));
+          setMessages(restoredMessages);
+        }
+        if (restoration.leadRequested) setLeadAutoOpenKey((value) => value + 1);
+        setChatHydrationState('ready');
+        return;
+      }
+      if (restoration.kind === 'stale') {
+        initialSessionIdRef.current = null;
+        setSessionId(null);
+        setChatHydrationState('ready');
+        return;
+      }
+      setError('Сессия чата изменилась. Можно начать новый чат.');
+      setChatHydrationState('error');
+    }).catch(() => {
+      if (cancelled) return;
+      setError('Не удалось восстановить историю чата. Попробуйте ещё раз или начните новый чат.');
+      setChatHydrationState('error');
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [chatRestoreAttempt]);
+
+  function retryChatRestoration() {
+    setError('');
+    setChatHydrationState('restoring');
+    setChatRestoreAttempt((value) => value + 1);
+  }
+
+  function startNewChatAfterRestoreFailure() {
+    const initialSessionId = initialSessionIdRef.current;
+    if (initialSessionId) abandonSavedChat(safeBrowserStorage('sessionStorage'), initialSessionId);
+    initialSessionIdRef.current = null;
+    setSessionId(null);
+    setError('');
+    setChatHydrationState('ready');
+  }
 
   useEffect(() => {
     const preventZoomGesture = (event: Event) => event.preventDefault();
@@ -1178,17 +1287,21 @@ function App() {
     const interval = window.setInterval(async () => {
       if (cancelled) return;
       try {
-        const response = await fetch(`${apiBase}/api/chat/sessions/${sessionId}/heartbeat`, { method: 'POST' });
+        const visitorCapability = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+        const response = await fetch(`${apiBase}/api/chat/sessions/${sessionId}/heartbeat`, {
+          method: 'POST',
+          headers: visitorCapability ? { 'x-bakaut-visitor-id': visitorCapability } : undefined
+        });
         if (cancelled) return;
         // Session no longer exists on the server (deleted, expired, or DB reset).
         // Stop the interval, drop the stale id, and let createSession() spin up a fresh one.
         if (response.status === 404) {
           window.clearInterval(interval);
-          sessionStorage.removeItem('bakaut_session_id');
-          setSessionId(null);
-          createSession().then((next) => {
-            if (!cancelled) setSessionId(next);
-          }).catch(() => undefined);
+          const chatSessionStorage = safeBrowserStorage('sessionStorage');
+          if (safeStorageGet(chatSessionStorage, 'bakaut_session_id') === sessionId) {
+            safeStorageRemove(chatSessionStorage, 'bakaut_session_id');
+            setSessionId((current) => current === sessionId ? null : current);
+          }
         }
       } catch {
         /* network blip — keep trying */
@@ -1205,7 +1318,7 @@ function App() {
   }, [messages, busy]);
 
   async function submitText(text: string, options: { clearInput?: boolean } = { clearInput: true }) {
-    if (!text.trim() || busy) return;
+    if (!text.trim() || busy || chatInteractionDisabled) return;
     const userText = text.trim();
     if (options.clearInput !== false) setInput('');
     setError('');
@@ -1334,7 +1447,9 @@ function App() {
           <h1>AI-консультант</h1>
           <p className="header-subtitle">Подбор строительного и силового оборудования</p>
         </div>
-        <span className={busy ? 'status busy' : 'status'}>{busy ? 'Отвечаю' : 'Онлайн'}</span>
+        <span className={busy || restoringChat ? 'status busy' : 'status'}>
+          {restoringChat ? 'Восстанавливаю' : busy ? 'Отвечаю' : 'Онлайн'}
+        </span>
       </header>
 
       <section className="messages" aria-live="polite">
@@ -1355,10 +1470,10 @@ function App() {
             {message.role === 'assistant' ? <AiDiagnosticsBadge metadata={message.metadata} /> : null}
             {message.role === 'user' ? (
               <div className="message-actions">
-                <button type="button" onClick={() => editMessage(message.content)} disabled={busy}>
+                <button type="button" onClick={() => editMessage(message.content)} disabled={busy || chatInteractionDisabled}>
                   Исправить
                 </button>
-                <button type="button" onClick={() => submitText(message.content, { clearInput: false })} disabled={busy}>
+                <button type="button" onClick={() => submitText(message.content, { clearInput: false })} disabled={busy || chatInteractionDisabled}>
                   Спросить снова
                 </button>
               </div>
@@ -1389,13 +1504,23 @@ function App() {
         <div ref={endRef} />
       </section>
 
-      {error ? <div className="error">{error}</div> : null}
+      {error ? (
+        <div className="error">
+          <span>{error}</span>
+          {chatHydrationState === 'error' ? (
+            <div className="history-recovery-actions">
+              <button type="button" onClick={retryChatRestoration}>Попробовать ещё раз</button>
+              <button type="button" onClick={startNewChatAfterRestoreFailure}>Начать новый чат</button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <form className="composer" onSubmit={submit}>
         {isStart ? (
           <div className="quick-actions" aria-label="Быстрые запросы">
             {quickPrompts.map((prompt) => (
-              <button key={prompt} type="button" onClick={() => setInput(prompt)} disabled={busy}>
+              <button key={prompt} type="button" onClick={() => setInput(prompt)} disabled={busy || chatInteractionDisabled}>
                 {prompt}
               </button>
             ))}
@@ -1410,17 +1535,23 @@ function App() {
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) submit(event);
           }}
-          disabled={busy}
+          disabled={busy || chatInteractionDisabled}
         />
         {busy ? (
           <button className="stop-button" type="button" onClick={stopGeneration}>
             Остановить
           </button>
         ) : null}
-        <button type="submit" disabled={busy || !input.trim()}>{busy ? '...' : 'Отправить'}</button>
+        <button type="submit" disabled={busy || chatInteractionDisabled || !input.trim()}>
+          {restoringChat ? '...' : busy ? '...' : 'Отправить'}
+        </button>
       </form>
 
-      <LeadPanel latestQuestion={latestQuestion} autoOpenKey={leadAutoOpenKey} />
+      <LeadPanel
+        latestQuestion={latestQuestion}
+        autoOpenKey={leadAutoOpenKey}
+        disabled={chatInteractionDisabled}
+      />
     </main>
   );
 }

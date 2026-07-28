@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
+import { extractPdfText, PdfTextExtractionError } from './pdfTextExtraction.js';
 
 export interface ProductComparisonResearchFact {
   productName: string;
@@ -46,10 +47,23 @@ export type ProductResearchSearchDisposition =
   | 'failed'
   | 'aborted';
 
+export type ProductResearchSourceTier =
+  | 'catalog'
+  | 'official_page'
+  | 'official_manual'
+  | 'reliable_secondary';
+
+export interface ProductResearchSourceAttempt {
+  tier: ProductResearchSourceTier;
+  outcome: 'confirmed' | 'not_found' | 'unreadable' | 'skipped_budget';
+  query?: string;
+}
+
 export interface ProductComparisonResearchResult {
   usedWebSearch: boolean;
   searchDisposition: ProductResearchSearchDisposition;
   sourcesExhausted: boolean;
+  sourceAttempts?: ProductResearchSourceAttempt[];
   facts: ProductComparisonResearchFact[];
   conflicts: ProductComparisonResearchConflict[];
   answerGuidance: ProductComparisonResearchAnswerGuidance;
@@ -505,7 +519,133 @@ function normalizeAnswerGuidance(value: unknown): ProductComparisonResearchAnswe
 function responseUsedWebSearch(response: unknown) {
   const output = (response as { output?: unknown })?.output;
   return Array.isArray(output) && output.some((item) =>
-    Boolean(item && typeof item === 'object' && (item as { type?: unknown }).type === 'web_search_call')
+    Boolean(
+      item &&
+      typeof item === 'object' &&
+      (item as { type?: unknown }).type === 'web_search_call' &&
+      (item as { status?: unknown }).status === 'completed'
+    )
+  );
+}
+
+function responseWebSearchQueries(response: unknown) {
+  const output = (response as { output?: unknown })?.output;
+  if (!Array.isArray(output)) return [];
+  const queries: string[] = [];
+  for (const item of output) {
+    if (
+      !item ||
+      typeof item !== 'object' ||
+      (item as { type?: unknown }).type !== 'web_search_call' ||
+      (item as { status?: unknown }).status !== 'completed'
+    ) continue;
+    const action = (item as { action?: unknown }).action;
+    if (!action || typeof action !== 'object') continue;
+    const query = (action as { query?: unknown }).query;
+    if (typeof query === 'string' && query.trim()) queries.push(query.trim());
+    const actionQueries = (action as { queries?: unknown }).queries;
+    if (Array.isArray(actionQueries)) {
+      queries.push(...actionQueries.filter((value): value is string => typeof value === 'string' && value.trim().length > 0));
+    }
+  }
+  return uniqueStrings(queries);
+}
+
+const webSourceTiers = new Set<ProductResearchSourceTier>([
+  'official_page',
+  'official_manual',
+  'reliable_secondary'
+]);
+
+function validatedWebSourceAttempts(parsed: Record<string, unknown>, response: unknown) {
+  const actualQueries = new Set(responseWebSearchQueries(response).map((query) => compactExactTargetText(query)));
+  const rawAttempts = parsed.sourceAttempts;
+  if (!Array.isArray(rawAttempts) || !actualQueries.size) return [] as ProductResearchSourceAttempt[];
+  const allowedOutcomes = new Set<ProductResearchSourceAttempt['outcome']>([
+    'confirmed',
+    'not_found',
+    'unreadable'
+  ]);
+  const byTier = new Map<ProductResearchSourceTier, ProductResearchSourceAttempt>();
+  for (const rawAttempt of rawAttempts) {
+    if (!rawAttempt || typeof rawAttempt !== 'object') continue;
+    const tier = (rawAttempt as { tier?: unknown }).tier;
+    const outcome = (rawAttempt as { outcome?: unknown }).outcome;
+    const query = (rawAttempt as { query?: unknown }).query;
+    if (
+      typeof tier !== 'string' ||
+      !webSourceTiers.has(tier as ProductResearchSourceTier) ||
+      typeof outcome !== 'string' ||
+      !allowedOutcomes.has(outcome as ProductResearchSourceAttempt['outcome']) ||
+      typeof query !== 'string' ||
+      !actualQueries.has(compactExactTargetText(query)) ||
+      byTier.has(tier as ProductResearchSourceTier)
+    ) continue;
+    byTier.set(tier as ProductResearchSourceTier, {
+      tier: tier as ProductResearchSourceTier,
+      outcome: outcome as ProductResearchSourceAttempt['outcome'],
+      query: query.trim()
+    });
+  }
+  return [...byTier.values()];
+}
+
+function mergeSourceAttempts(...groups: Array<ProductResearchSourceAttempt[] | undefined>) {
+  const byTier = new Map<ProductResearchSourceTier, ProductResearchSourceAttempt>();
+  for (const attempt of groups.flatMap((group) => group ?? [])) {
+    const existing = byTier.get(attempt.tier);
+    if (!existing || attempt.outcome !== 'skipped_budget' || existing.outcome === 'skipped_budget') {
+      byTier.set(attempt.tier, attempt);
+    }
+  }
+  return [...byTier.values()];
+}
+
+function sourceTierAttemptsComplete(attempts: ProductResearchSourceAttempt[] | undefined) {
+  if (!attempts) return false;
+  const requiredTiers: ProductResearchSourceTier[] = [
+    'catalog',
+    'official_page',
+    'official_manual',
+    'reliable_secondary'
+  ];
+  const byTier = new Map(attempts.map((attempt) => [attempt.tier, attempt]));
+  const webQueries = requiredTiers.slice(1).map((tier) => byTier.get(tier)?.query?.trim() ?? '');
+  return requiredTiers.every((tier) => {
+    const attempt = byTier.get(tier);
+    return Boolean(attempt && (attempt.outcome === 'confirmed' || attempt.outcome === 'not_found'));
+  }) && webQueries.every(Boolean) && new Set(webQueries.map(compactExactTargetText)).size === webQueries.length;
+}
+
+export const unreadSourceEvidenceWarnings = new Set([
+  'source_evidence_fetch_failed',
+  'source_evidence_empty',
+  'source_evidence_unsupported_binary',
+  'source_evidence_pdf_parse_failed',
+  'source_evidence_pdf_parse_timed_out',
+  'source_evidence_pdf_parser_busy',
+  'source_evidence_pdf_too_large',
+  'source_evidence_pdf_text_empty',
+  'source_evidence_pdf_truncated_to_safe_page_limit',
+  'source_evidence_pdf_source_cap_reached',
+  'source_evidence_text_truncated_to_safe_limit',
+  'source_evidence_semantic_text_truncated_to_safe_limit'
+]);
+
+export function hasUnreadSourceEvidence(warnings: string[]) {
+  return warnings.some((warning) => unreadSourceEvidenceWarnings.has(warning));
+}
+
+export function researchWarningsPreventSourceExhaustion(warnings: string[]) {
+  return hasUnreadSourceEvidence(warnings) || warnings.some((warning) =>
+    warning.includes('skipped_insufficient_budget') ||
+    warning.startsWith('tool_not_executed:') ||
+    warning.startsWith('web_research_skipped:') ||
+    warning.startsWith('web_research_not_needed:') ||
+    warning === 'tool_execution_error' ||
+    warning === 'tool_result_rejected_by_local_bounds' ||
+    warning === 'tool_not_implemented' ||
+    warning === 'source_tier_attempts_incomplete_after_retry'
   );
 }
 
@@ -541,6 +681,13 @@ function normalizeResearchParsed(
 const sourceTextLimit = 250000;
 const semanticSourceTextLimit = 18000;
 const sourceHtmlMaxBytes = 2 * 1024 * 1024;
+const sourcePdfMaxBytes = 8 * 1024 * 1024;
+const sourcePdfMaxPages = 80;
+const sourcePdfMaxSources = 4;
+const sourceEvidenceMaxFacts = 12;
+const sourceEvidenceMaxCoverage = 12;
+const sourceEvidenceMaxSources = 12;
+const sourceEvidenceValidationConcurrency = 4;
 const sourceEvidenceFetchTimeoutMs = 4_000;
 
 type SourceDocument = {
@@ -551,7 +698,27 @@ type SourceDocument = {
   sourceKind?: 'catalog' | 'web';
 };
 
-type SourceTextCache = Map<string, Promise<SourceDocument>>;
+type SourceTextCache = {
+  documents: Map<string, Promise<SourceDocument>>;
+  pdfSourceUrls: Set<string>;
+};
+
+function canonicalSourceUrl(value: string) {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    return url.href;
+  } catch {
+    return value.trim();
+  }
+}
+
+function createSourceTextCache(): SourceTextCache {
+  return {
+    documents: new Map(),
+    pdfSourceUrls: new Set()
+  };
+}
 
 function isWhitespaceChar(char: string) {
   return char.trim() === '';
@@ -579,9 +746,22 @@ function limitSourceText(value: unknown) {
   return text.length > sourceTextLimit ? text.slice(0, sourceTextLimit) : text;
 }
 
-function limitSemanticSourceText(value: unknown) {
+function boundedSourceText(value: unknown) {
   const text = collapseWhitespace(value);
-  return text.length > semanticSourceTextLimit ? text.slice(0, semanticSourceTextLimit) : text;
+  return {
+    text: text.length > sourceTextLimit ? text.slice(0, sourceTextLimit) : text,
+    ...(text.length > sourceTextLimit
+      ? { warning: 'source_evidence_text_truncated_to_safe_limit' }
+      : {})
+  };
+}
+
+function boundedSemanticSourceText(value: unknown) {
+  const text = collapseWhitespace(value);
+  return {
+    text: text.length > semanticSourceTextLimit ? text.slice(0, semanticSourceTextLimit) : text,
+    truncated: text.length > semanticSourceTextLimit
+  };
 }
 
 function sourceUrlIsHttp(value: unknown): value is string {
@@ -611,23 +791,116 @@ function htmlToSourceDocument(html: string): SourceDocument {
   const $ = cheerio.load(html);
   const sourceTitle = sourceTitleFromHtml($);
   $('script, style, noscript, svg').remove();
+  const bounded = boundedSourceText($('body').text() || $.root().text() || html);
   return {
     ok: true,
-    text: limitSourceText($('body').text() || $.root().text() || html),
+    ...bounded,
     sourceTitle: sourceTitle || undefined
   };
 }
 
+function textToSourceDocument(text: string): SourceDocument {
+  return {
+    ok: true,
+    ...boundedSourceText(text)
+  };
+}
+
+async function pdfToSourceDocument(bytes: Uint8Array, signal?: AbortSignal): Promise<SourceDocument> {
+  try {
+    const parsed = await extractPdfText(bytes, {
+      signal,
+      maxPages: sourcePdfMaxPages,
+      maxTextChars: sourceTextLimit
+    });
+    const text = limitSourceText(parsed.text);
+    if (!text) {
+      return { ok: false, text: '', warning: 'source_evidence_pdf_text_empty', sourceKind: 'web' };
+    }
+    return {
+      ok: true,
+      text,
+      sourceKind: 'web',
+      ...(parsed.truncated
+        ? { warning: 'source_evidence_pdf_truncated_to_safe_page_limit' }
+        : {})
+    };
+  } catch (error) {
+    if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+    const warning = error instanceof PdfTextExtractionError
+      ? error.code === 'timed_out'
+        ? 'source_evidence_pdf_parse_timed_out'
+        : error.code === 'busy'
+          ? 'source_evidence_pdf_parser_busy'
+          : error.code === 'too_large'
+            ? 'source_evidence_pdf_too_large'
+            : 'source_evidence_pdf_parse_failed'
+      : 'source_evidence_pdf_parse_failed';
+    return {
+      ok: false,
+      text: '',
+      warning,
+      sourceKind: 'web'
+    };
+  }
+}
+
+function sourceBytesLookLikePdf(bytes: Uint8Array) {
+  let prefix = '';
+  const limit = Math.min(bytes.byteLength, 1024);
+  for (let index = 0; index < limit; index += 1) {
+    prefix += String.fromCharCode(bytes[index]);
+  }
+  return prefix.includes('%PDF-');
+}
+
+function sourceEvidenceResponseMaxBytes(input: {
+  url: string;
+  headers: Headers;
+  prefix: Uint8Array;
+}) {
+  const contentType = input.headers.get('content-type') ?? '';
+  return sourceLooksLikePdf(input.url, contentType) || sourceBytesLookLikePdf(input.prefix)
+    ? sourcePdfMaxBytes
+    : sourceHtmlMaxBytes;
+}
+
+function sourceContentKind(contentType: string): 'html' | 'text' | 'binary' {
+  const normalized = normalizedText(contentType).split(';')[0].trim();
+  if (normalized === 'text/html' || normalized === 'application/xhtml+xml') return 'html';
+  if (normalized.startsWith('text/') || normalized.includes('json') || normalized.includes('xml')) return 'text';
+  return 'binary';
+}
+
 async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal?: AbortSignal) {
-  const cached = cache.get(sourceUrl);
+  const cacheKey = canonicalSourceUrl(sourceUrl);
+  const cached = cache.documents.get(cacheKey);
   if (cached) return cached;
+  if (cache.documents.size >= sourceEvidenceMaxSources) {
+    return {
+      ok: false,
+      text: '',
+      warning: 'source_evidence_source_cap_reached',
+      sourceKind: 'web' as const
+    };
+  }
   const promise = (async () => {
     try {
-      if (sourceLooksLikePdf(sourceUrl, '')) {
-        return { ok: false, text: '', warning: 'source_evidence_pdf_unsupported', sourceKind: 'web' as const };
+      const sourceUrlLooksLikePdf = sourceLooksLikePdf(sourceUrl, '');
+      if (sourceUrlLooksLikePdf && !cache.pdfSourceUrls.has(cacheKey)) {
+        if (cache.pdfSourceUrls.size >= sourcePdfMaxSources) {
+          return {
+            ok: false,
+            text: '',
+            warning: 'source_evidence_pdf_source_cap_reached',
+            sourceKind: 'web' as const
+          };
+        }
+        cache.pdfSourceUrls.add(cacheKey);
       }
       const preview = await safeFetchBytes(sourceUrl, {
-        maxBytes: sourceHtmlMaxBytes,
+        maxBytes: sourcePdfMaxBytes,
+        responseMaxBytes: sourceEvidenceResponseMaxBytes,
         timeoutMs: sourceEvidenceFetchTimeoutMs,
         maxRedirects: 3,
         signal,
@@ -639,10 +912,32 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
         return { ok: false, text: '', warning: 'source_evidence_fetch_failed', sourceKind: 'web' as const };
       }
       const contentType = preview.headers.get('content-type') ?? '';
-      if (sourceLooksLikePdf(preview.url, contentType)) {
-        return { ok: false, text: '', warning: 'source_evidence_pdf_unsupported', sourceKind: 'web' as const };
+      if (sourceLooksLikePdf(preview.url, contentType) || sourceBytesLookLikePdf(preview.bytes)) {
+        if (!cache.pdfSourceUrls.has(cacheKey)) {
+          if (cache.pdfSourceUrls.size >= sourcePdfMaxSources) {
+            return {
+              ok: false,
+              text: '',
+              warning: 'source_evidence_pdf_source_cap_reached',
+              sourceKind: 'web' as const
+            };
+          }
+          cache.pdfSourceUrls.add(cacheKey);
+        }
+        return pdfToSourceDocument(preview.bytes, signal);
       }
-      const source = htmlToSourceDocument(outboundText(preview));
+      const contentKind = sourceContentKind(contentType);
+      if (contentKind === 'binary') {
+        return {
+          ok: false,
+          text: '',
+          warning: 'source_evidence_unsupported_binary',
+          sourceKind: 'web' as const
+        };
+      }
+      const source = contentKind === 'html'
+        ? htmlToSourceDocument(outboundText(preview))
+        : textToSourceDocument(outboundText(preview));
       return source.text
         ? { ...source, sourceKind: 'web' as const }
         : { ok: false, text: '', sourceTitle: source.sourceTitle, warning: 'source_evidence_empty', sourceKind: 'web' as const };
@@ -651,7 +946,7 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
       return { ok: false, text: '', warning: 'source_evidence_fetch_failed', sourceKind: 'web' as const };
     }
   })();
-  cache.set(sourceUrl, promise);
+  cache.documents.set(cacheKey, promise);
   return promise;
 }
 
@@ -789,6 +1084,47 @@ function sourceEvidenceExactQuoteValidation(item: SourceEvidenceItem, sourceText
   };
 }
 
+function textContainsExactTargetIdentity(value: unknown, targetProductNames: string[]) {
+  const compact = compactExactTargetText(value);
+  return targetProductNames.some((targetName) => {
+    const modelAliases = exactTargetAliases(targetName)
+      .map(compactExactTargetText)
+      .filter((alias) => alias.length >= 4 && tokenHasDigit(alias));
+    return modelAliases.length
+      ? modelAliases.some((alias) => compact.includes(alias))
+      : compact.includes(compactExactTargetText(targetName));
+  });
+}
+
+function textContainsOnlyExactTargetModels(value: unknown, targetProductNames: string[]) {
+  if (!textContainsExactTargetIdentity(value, targetProductNames)) return false;
+  const targetAliases = targetProductNames.flatMap((targetName) =>
+    exactTargetAliases(targetName)
+      .map(compactExactTargetText)
+      .filter((alias) => alias.length >= 4 && tokenHasDigit(alias) && tokenHasLetter(alias))
+  );
+  const valueModelTokens = exactTargetTokens(value)
+    .filter((token) => token.length >= 4 && tokenHasDigit(token) && tokenHasLetter(token));
+  return valueModelTokens.every((token) =>
+    targetAliases.some((alias) => alias.includes(token) || token.includes(alias))
+  );
+}
+
+function sourceUrlIsDedicatedToExactTarget(sourceUrl: string | undefined, targetProductNames: string[]) {
+  return Boolean(sourceUrl && textContainsOnlyExactTargetModels(sourceUrl, targetProductNames));
+}
+
+function exactQuoteIsBoundToTarget(input: {
+  item: SourceEvidenceItem;
+  sourceKind?: 'catalog' | 'web';
+  targetProductNames: string[];
+}) {
+  if (!input.sourceKind) return false;
+  if (!input.targetProductNames.length || input.sourceKind === 'catalog') return true;
+  return textContainsOnlyExactTargetModels(input.item.evidence, input.targetProductNames) ||
+    sourceUrlIsDedicatedToExactTarget(input.item.sourceUrl, input.targetProductNames);
+}
+
 function sourceTextMatchesTarget(input: {
   sourceText: string;
   item: SourceEvidenceItem;
@@ -866,6 +1202,7 @@ async function validateSourceEvidenceSemantically(input: {
   signal?: AbortSignal;
   deadlineAtMs?: number;
 }) {
+  const boundedSource = boundedSemanticSourceText(input.sourceText);
   const { parsed } = await createStructuredJsonResponse({
     request: {
       model: config.OPENAI_FACT_MODEL,
@@ -902,7 +1239,7 @@ async function validateSourceEvidenceSemantically(input: {
               sourceUrl: input.item.sourceUrl ?? null,
               sourceTitle: input.item.sourceTitle ?? null
             },
-            sourceText: limitSemanticSourceText(input.sourceText)
+            sourceText: boundedSource.text
           })
         }
       ],
@@ -915,7 +1252,14 @@ async function validateSourceEvidenceSemantically(input: {
     minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
     transportMaxRetries: 0
   });
-  return normalizeSourceEvidenceValidation(parsed);
+  const normalized = normalizeSourceEvidenceValidation(parsed);
+  return {
+    ...normalized,
+    warnings: uniqueStrings([
+      ...normalized.warnings,
+      boundedSource.truncated ? 'source_evidence_semantic_text_truncated_to_safe_limit' : ''
+    ])
+  };
 }
 
 async function validateEvidenceItem(input: {
@@ -969,7 +1313,13 @@ async function validateEvidenceItem(input: {
     };
   }
 
-  const exactQuoteValidation = sourceEvidenceExactQuoteValidation(input.item, source.text);
+  const exactQuoteValidation = exactQuoteIsBoundToTarget({
+    item: input.item,
+    sourceKind: source.sourceKind,
+    targetProductNames: input.targetProductNames
+  })
+    ? sourceEvidenceExactQuoteValidation(input.item, source.text)
+    : null;
   if (exactQuoteValidation) {
     return {
       ...exactQuoteValidation,
@@ -1064,23 +1414,55 @@ function sourceBackedStartCompleteness(result: ProductComparisonResearchResult) 
   return 'not_answered';
 }
 
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  async function runWorker() {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
 async function validateSourceBackedResult(input: {
   result: ProductComparisonResearchResult;
   products: Product[];
   targetProductNames: string[];
   userMessage: string;
   comparisonAttributes: string[];
+  cache?: SourceTextCache;
   signal?: AbortSignal;
   deadlineAtMs?: number;
 }) {
-  const cache: SourceTextCache = new Map();
+  const cache = input.cache ?? createSourceTextCache();
   const warnings = [...input.result.warnings];
+  const factsToValidate = input.result.facts.slice(0, sourceEvidenceMaxFacts);
+  const coverageToValidate = input.result.answerGuidance.coverage.slice(0, sourceEvidenceMaxCoverage);
+  if (
+    input.result.facts.length > factsToValidate.length ||
+    input.result.answerGuidance.coverage.length > coverageToValidate.length
+  ) {
+    warnings.push('source_evidence_item_cap_reached');
+  }
   const invalidKinds = new Set<SourceBackedStartKind>();
   const facts: ProductComparisonResearchFact[] = [];
   const semanticValidation = true;
   let invalidatedEvidence = false;
 
-  const factValidations = await Promise.all(input.result.facts.map(async (fact) => {
+  const factValidations = await mapWithConcurrency(
+    factsToValidate,
+    sourceEvidenceValidationConcurrency,
+    async (fact) => {
     if (fact.sourceType === 'conflict') {
       return { fact, accepted: true, warnings: [] as string[], invalidKinds: [] as SourceBackedStartKind[] };
     }
@@ -1107,7 +1489,7 @@ async function validateSourceBackedResult(input: {
       warnings: validation.warnings,
       invalidKinds: validation.invalidKinds
     };
-  }));
+  });
   for (const validation of factValidations) {
     warnings.push(...validation.warnings);
     if (!validation.accepted) {
@@ -1119,7 +1501,10 @@ async function validateSourceBackedResult(input: {
   }
 
   const coverage: ResearchCoverageItem[] = [];
-  const coverageValidations = await Promise.all(input.result.answerGuidance.coverage.map(async (item) => {
+  const coverageValidations = await mapWithConcurrency(
+    coverageToValidate,
+    sourceEvidenceValidationConcurrency,
+    async (item) => {
     if (item.status !== 'confirmed') return { item, validation: null };
     const validation = await validateEvidenceItem({
       item,
@@ -1131,7 +1516,7 @@ async function validateSourceBackedResult(input: {
       deadlineAtMs: input.deadlineAtMs
     });
     return { item, validation };
-  }));
+  });
   for (const { item, validation } of coverageValidations) {
     if (!validation) {
       coverage.push(item);
@@ -1276,6 +1661,7 @@ function productComparisonResearchJsonFormat(name: string) {
           usedWebSearch: { type: 'boolean' },
           facts: {
             type: 'array',
+            maxItems: sourceEvidenceMaxFacts,
             items: {
               type: 'object',
               additionalProperties: false,
@@ -1315,6 +1701,7 @@ function productComparisonResearchJsonFormat(name: string) {
               completeness: { type: 'string', enum: ['answered', 'partially_answered', 'not_answered'] },
               coverage: {
                 type: 'array',
+                maxItems: sourceEvidenceMaxCoverage,
                 items: {
                   type: 'object',
                   additionalProperties: false,
@@ -1423,6 +1810,7 @@ function mergeCatalogAndWebResearch(
     usedWebSearch: webResult.usedWebSearch,
     searchDisposition: webResult.searchDisposition,
     sourcesExhausted: webResult.sourcesExhausted,
+    sourceAttempts: mergeSourceAttempts(catalogResult.sourceAttempts, webResult.sourceAttempts),
     facts: uniqueFacts([...catalogResult.facts, ...webResult.facts]),
     conflicts: [...catalogResult.conflicts, ...webResult.conflicts],
     answerGuidance,
@@ -1436,6 +1824,30 @@ function mergeCatalogAndWebResearch(
       'catalog_fact_extraction_used',
       'catalog_fact_extraction_needed_web_research'
     ])
+  };
+}
+
+function mergeWebResearchPasses(
+  primary: ProductComparisonResearchResult,
+  retry: ProductComparisonResearchResult
+): ProductComparisonResearchResult {
+  const preferredGuidance = resultHasUsableGuidance(retry) ? retry.answerGuidance : primary.answerGuidance;
+  return {
+    usedWebSearch: primary.usedWebSearch || retry.usedWebSearch,
+    searchDisposition: retry.searchDisposition,
+    sourcesExhausted: false,
+    sourceAttempts: mergeSourceAttempts(primary.sourceAttempts, retry.sourceAttempts),
+    facts: uniqueFacts([...primary.facts, ...retry.facts]),
+    conflicts: [...primary.conflicts, ...retry.conflicts],
+    answerGuidance: {
+      ...preferredGuidance,
+      coverage: uniqueCoverage([
+        ...primary.answerGuidance.coverage,
+        ...retry.answerGuidance.coverage
+      ])
+    },
+    summaryForAnswer: uniqueStrings([primary.summaryForAnswer, retry.summaryForAnswer]).join('\n'),
+    warnings: uniqueStrings([...primary.warnings, ...retry.warnings])
   };
 }
 
@@ -1457,6 +1869,7 @@ async function extractExactCatalogProductFacts(input: {
   products: Product[];
   targetProductNames: string[];
   comparisonAttributes: string[];
+  cache?: SourceTextCache;
   signal?: AbortSignal;
   deadlineAtMs?: number;
 }): Promise<ProductComparisonResearchResult> {
@@ -1530,6 +1943,7 @@ async function extractExactCatalogProductFacts(input: {
     targetProductNames: input.targetProductNames,
     userMessage: input.userMessage,
     comparisonAttributes: input.comparisonAttributes,
+    cache: input.cache,
     signal: input.signal,
     deadlineAtMs: input.deadlineAtMs
   });
@@ -1540,28 +1954,25 @@ export async function researchProductComparisonFacts(input: {
   products: Product[];
   targetProductNames?: string[];
   comparisonAttributes?: string[];
+  catalogSearchAttempted?: boolean;
+  catalogProductsFound?: boolean;
   signal?: AbortSignal;
   deadlineAtMs?: number;
 }): Promise<ProductComparisonResearchResult> {
+  const sourceTextCache = createSourceTextCache();
   const targetProductNames = (input.targetProductNames ?? [])
     .map((name) => name.trim())
     .filter(Boolean);
   const comparisonAttributes = (input.comparisonAttributes ?? [])
     .map((name) => name.trim())
     .filter(Boolean);
-  if (input.products.length < 2 && !targetProductNames.length) {
-    return {
-      usedWebSearch: false,
-      searchDisposition: 'not_needed',
-      sourcesExhausted: false,
-      facts: [],
-      conflicts: [],
-      answerGuidance: defaultAnswerGuidance(),
-      summaryForAnswer: 'Недостаточно товаров для сравнения.',
-      warnings: ['not_enough_products_for_comparison']
-    };
-  }
   const styleExamples = approvedAnswerStyleExamplesPromptBlock();
+  const catalogSourceAttempts: ProductResearchSourceAttempt[] = input.catalogSearchAttempted === true
+    ? [{
+        tier: 'catalog',
+        outcome: (input.catalogProductsFound ?? input.products.length > 0) ? 'confirmed' : 'not_found'
+      }]
+    : [];
 
   const exactCatalogProducts = exactCatalogProductsForTargets(input.products, targetProductNames);
   const catalogExtractionSkippedForDeadline = exactCatalogProducts.length > 0 && input.deadlineAtMs !== undefined;
@@ -1571,6 +1982,7 @@ export async function researchProductComparisonFacts(input: {
         products: exactCatalogProducts,
         targetProductNames,
         comparisonAttributes,
+        cache: sourceTextCache,
         signal: input.signal,
         deadlineAtMs: input.deadlineAtMs
       })
@@ -1619,7 +2031,8 @@ export async function researchProductComparisonFacts(input: {
           'Use nearby catalog products only as catalog alternatives/orientation in summaryForAnswer; never as the technical fact for an absent exact target.',
           'If exact target facts cannot be found externally, return no target fact and add warning exact_target_external_fact_not_found instead of returning nearby-model facts.',
           'For every web fact and confirmed coverage item, fill sourceUrl/sourceTitle and put a short verbatim excerpt from that exact source in evidence. Keep value in the source wording and make sure the complete value appears inside evidence. Do not paraphrase evidence or prefix it with report wording. This exact quote is required for the fast local source verifier.',
-          'If the exact quote is unavailable, return not_confirmed instead of inventing evidence.'
+          'If the exact quote is unavailable, return not_confirmed instead of inventing evidence.',
+          'For every actual web search query, add sourceAttempts with tier=official_page, official_manual, or reliable_secondary, the exact query sent to web search, and outcome. Never report a query that was not actually executed.'
         ].join('\n')
       },
       {
@@ -1653,6 +2066,7 @@ export async function researchProductComparisonFacts(input: {
             usedWebSearch: { type: 'boolean' },
             facts: {
               type: 'array',
+              maxItems: sourceEvidenceMaxFacts,
               items: {
                 type: 'object',
                 additionalProperties: false,
@@ -1692,6 +2106,7 @@ export async function researchProductComparisonFacts(input: {
                 completeness: { type: 'string', enum: ['answered', 'partially_answered', 'not_answered'] },
                 coverage: {
                   type: 'array',
+                  maxItems: sourceEvidenceMaxCoverage,
                   items: {
                     type: 'object',
                     additionalProperties: false,
@@ -1709,10 +2124,24 @@ export async function researchProductComparisonFacts(input: {
               },
               required: ['directAnswer', 'completeness', 'coverage']
             },
+            sourceAttempts: {
+              type: 'array',
+              maxItems: 12,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  tier: { type: 'string', enum: ['official_page', 'official_manual', 'reliable_secondary'] },
+                  query: { type: 'string' },
+                  outcome: { type: 'string', enum: ['confirmed', 'not_found', 'unreadable'] }
+                },
+                required: ['tier', 'query', 'outcome']
+              }
+            },
             summaryForAnswer: { type: 'string' },
             warnings: { type: 'array', items: { type: 'string' } }
           },
-          required: ['usedWebSearch', 'facts', 'conflicts', 'answerGuidance', 'summaryForAnswer', 'warnings']
+          required: ['usedWebSearch', 'facts', 'conflicts', 'answerGuidance', 'sourceAttempts', 'summaryForAnswer', 'warnings']
         }
       }
     }
@@ -1727,16 +2156,22 @@ export async function researchProductComparisonFacts(input: {
     transportMaxRetries: 0
   });
   const primaryUsedWebSearch = responseUsedWebSearch(response);
-  const primaryResult = await validateSourceBackedResult({
-    result: normalizeResearchParsed(parsed, {
+  const normalizedPrimaryResult = normalizeResearchParsed(parsed, {
       usedWebSearch: primaryUsedWebSearch,
       searchDisposition: primaryUsedWebSearch ? 'completed' : 'failed',
       sourcesExhausted: false
-    }),
+    });
+  normalizedPrimaryResult.sourceAttempts = mergeSourceAttempts(
+    catalogSourceAttempts,
+    validatedWebSourceAttempts(parsed, response)
+  );
+  const primaryResult = await validateSourceBackedResult({
+    result: normalizedPrimaryResult,
     products: exactCatalogProducts,
     targetProductNames,
     userMessage: input.userMessage,
     comparisonAttributes,
+    cache: sourceTextCache,
     signal: input.signal,
     deadlineAtMs: input.deadlineAtMs
   });
@@ -1789,7 +2224,8 @@ export async function researchProductComparisonFacts(input: {
             'You are a second-pass exact-model web research module for a sales assistant.',
             'The first pass did not fully answer the exact-target question. Treat every missing, not_confirmed, ambiguous, or contradicted coverage item as a semantic missing-fact slot.',
             'For each missing-fact slot, reason about what information would make the buyer answer useful, then search deeper exact-model sources for that information. Do not reduce the task to a fixed phrase list.',
-            'Search public HTML pages, official manufacturer pages, distributor pages, HTML manuals/specification pages, text-only marketplace listings, cached listings, forums, and classified/product-description pages that mention the exact model/code. Do not rely on PDF-only evidence because this runtime rejects PDF parsing.',
+            'Search public HTML pages, official manufacturer pages, distributor pages, official PDF or HTML manuals/specification pages, text-only marketplace listings, cached listings, forums, and classified/product-description pages that mention the exact model/code. Prefer manufacturer/manual evidence; the runtime validates bounded PDF text as well as HTML source text.',
+            'Execute three distinct search queries before declaring exhaustion: one aimed at an official manufacturer product page, one aimed at an official manual/specification PDF or HTML document, and one aimed at another reliable exact-model source. Report each actually executed query in sourceAttempts with the matching tier. If any tier was not searched, do not imply exhaustion.',
             'Use exactTargetSearchQueries only as starting hints. Generate additional source-language search wording from the buyer question, the missing-fact slot, and what the current sources failed to answer.',
             'Extract useful facts from the deeper sources, then decide which facts are needed in answerGuidance.directAnswer and which are only supporting context for summaryForAnswer.',
             'Use non-official pages as medium-confidence evidence only when they name the exact model/code and semantically answer the missing-fact slot.',
@@ -1827,16 +2263,22 @@ export async function researchProductComparisonFacts(input: {
       transportMaxRetries: 0
     });
     const retryUsedWebSearch = responseUsedWebSearch(retry.response);
-    const retryResult = await validateSourceBackedResult({
-      result: normalizeResearchParsed(retry.parsed, {
+    const normalizedRetryResult = normalizeResearchParsed(retry.parsed, {
         usedWebSearch: retryUsedWebSearch,
         searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
         sourcesExhausted: false
-      }),
+      });
+    normalizedRetryResult.sourceAttempts = mergeSourceAttempts(
+      combinedPrimaryResult.sourceAttempts,
+      validatedWebSourceAttempts(retry.parsed, retry.response)
+    );
+    const retryResult = await validateSourceBackedResult({
+      result: normalizedRetryResult,
       products: exactCatalogProducts,
       targetProductNames,
       userMessage: input.userMessage,
       comparisonAttributes,
+      cache: sourceTextCache,
       signal: input.signal,
       deadlineAtMs: input.deadlineAtMs
     });
@@ -1859,6 +2301,7 @@ export async function researchProductComparisonFacts(input: {
         usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
         searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
         sourcesExhausted: false,
+        sourceAttempts: combinedRetryResult.sourceAttempts,
         facts: combinedRetryResult.facts,
         conflicts: combinedRetryResult.conflicts.length ? combinedRetryResult.conflicts : combinedPrimaryResult.conflicts,
         answerGuidance: resultHasUsableGuidance(combinedRetryResult)
@@ -1880,7 +2323,13 @@ export async function researchProductComparisonFacts(input: {
       ...combinedPrimaryResult,
       usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
       searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
-      sourcesExhausted: retryUsedWebSearch,
+      sourcesExhausted: retryUsedWebSearch &&
+        sourceTierAttemptsComplete(combinedRetryResult.sourceAttempts) &&
+        !researchWarningsPreventSourceExhaustion([
+          ...combinedPrimaryResult.warnings,
+          ...combinedRetryResult.warnings
+        ]),
+      sourceAttempts: combinedRetryResult.sourceAttempts,
       warnings: uniqueStrings([
         ...combinedPrimaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
         ...combinedRetryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
@@ -1888,7 +2337,10 @@ export async function researchProductComparisonFacts(input: {
         deepMissingFactRetryRequired ? 'missing_fact_deep_search_retry_used' : '',
         electricControlRetryRequired ? 'electric_start_control_retry_used' : '',
         electricControlRetryRequired ? 'electric_start_control_not_confirmed_after_retry' : '',
-        deepMissingFactRetryRequired ? 'missing_fact_deep_search_still_unresolved' : ''
+        deepMissingFactRetryRequired ? 'missing_fact_deep_search_still_unresolved' : '',
+        !sourceTierAttemptsComplete(combinedRetryResult.sourceAttempts)
+          ? 'source_tier_attempts_incomplete_after_retry'
+          : ''
       ])
     };
   }
@@ -1898,8 +2350,106 @@ export async function researchProductComparisonFacts(input: {
     userMessage: input.userMessage,
     comparisonAttributes
   });
+  const genericRetryRequired = targetProductNames.length === 0 && unresolvedAfterCompletedPrimary;
+  if (genericRetryRequired && webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_RETRY_REMAINING_MS) {
+    const skippedAttempts: ProductResearchSourceAttempt[] = ([
+      'official_page',
+      'official_manual',
+      'reliable_secondary'
+    ] as ProductResearchSourceTier[]).map((tier) => ({ tier, outcome: 'skipped_budget' }));
+    return {
+      ...combinedPrimaryResult,
+      searchDisposition: 'skipped_budget',
+      sourcesExhausted: false,
+      sourceAttempts: mergeSourceAttempts(combinedPrimaryResult.sourceAttempts, skippedAttempts),
+      warnings: uniqueStrings([
+        ...combinedPrimaryResult.warnings,
+        'generic_source_tier_retry_skipped_insufficient_budget'
+      ])
+    };
+  }
+
+  if (genericRetryRequired) {
+    const genericRetryRequest: Record<string, unknown> = {
+      ...request,
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are the final source-tier research pass for a technical sales assistant.',
+            'The first pass did not confirm a decision-relevant technical fact. Do not hand the question to a specialist yet.',
+            'Execute three distinct web search queries: first for an official manufacturer product/support page, second for an official manual/specification PDF or HTML document, and third for another reliable technical or distributor source.',
+            'Each actual query must be reported in sourceAttempts with its matching tier: official_page, official_manual, reliable_secondary. Never report an unexecuted query and do not reuse one query for multiple tiers.',
+            'Read the resulting sources and return only source-backed facts. If a source cannot be read, report outcome=unreadable and do not claim exhaustion.',
+            'For every confirmed fact, include sourceUrl, sourceTitle, and a short exact excerpt containing the value. If no tier confirms the fact after all three searches, return not_found/not_confirmed coverage and no invented value.',
+            'Return only JSON.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            buyerQuestion: input.userMessage,
+            comparisonAttributes,
+            firstPass: combinedPrimaryResult,
+            catalogProducts: productResearchContext(input.products)
+          })
+        }
+      ],
+      tools: [{ type: 'web_search', search_context_size: 'medium', return_token_budget: 'default' }],
+      tool_choice: { type: 'web_search' }
+    };
+    const genericRetry = await createStructuredJsonResponse({
+      request: genericRetryRequest,
+      stage: 'product_comparison_research_generic_source_tier_retry',
+      signal: input.signal,
+      deadlineAtMs: input.deadlineAtMs,
+      minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
+      transportMaxRetries: 0
+    });
+    const retryUsedWebSearch = responseUsedWebSearch(genericRetry.response);
+    const normalizedGenericRetry = normalizeResearchParsed(genericRetry.parsed, {
+      usedWebSearch: retryUsedWebSearch,
+      searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
+      sourcesExhausted: false
+    });
+    normalizedGenericRetry.sourceAttempts = mergeSourceAttempts(
+      combinedPrimaryResult.sourceAttempts,
+      validatedWebSourceAttempts(genericRetry.parsed, genericRetry.response)
+    );
+    const validatedGenericRetry = await validateSourceBackedResult({
+      result: normalizedGenericRetry,
+      products: input.products,
+      targetProductNames,
+      userMessage: input.userMessage,
+      comparisonAttributes,
+      cache: sourceTextCache,
+      signal: input.signal,
+      deadlineAtMs: input.deadlineAtMs
+    });
+    const combinedGenericResult = mergeWebResearchPasses(combinedPrimaryResult, validatedGenericRetry);
+    const unresolvedAfterGenericRetry = needsDeepMissingFactSearch({
+      result: combinedGenericResult,
+      userMessage: input.userMessage,
+      comparisonAttributes
+    });
+    const completeTierAttempts = sourceTierAttemptsComplete(combinedGenericResult.sourceAttempts);
+    return {
+      ...combinedGenericResult,
+      searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
+      sourcesExhausted: retryUsedWebSearch &&
+        unresolvedAfterGenericRetry &&
+        completeTierAttempts &&
+        !researchWarningsPreventSourceExhaustion(combinedGenericResult.warnings),
+      warnings: uniqueStrings([
+        ...combinedGenericResult.warnings,
+        'generic_source_tier_retry_used',
+        !completeTierAttempts ? 'source_tier_attempts_incomplete_after_retry' : ''
+      ])
+    };
+  }
+
   return {
     ...combinedPrimaryResult,
-    sourcesExhausted: combinedPrimaryResult.searchDisposition === 'completed' && unresolvedAfterCompletedPrimary
+    sourcesExhausted: false
   };
 }

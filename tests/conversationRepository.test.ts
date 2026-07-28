@@ -43,6 +43,56 @@ describe('ConversationRepository.deleteSession', () => {
   });
 });
 
+describe('ConversationRepository.restoreSession', () => {
+  it('atomically authenticates, rejects inactivity, and touches only a restorable session', async () => {
+    const row = {
+      ...sessionRow(),
+      id: 'session-id',
+      status: 'active',
+      visitor_id: 'visitor-capability',
+      restoration_authorized: true
+    };
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [row] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.restoreSession('session-id', 'visitor-capability')).resolves.toMatchObject({
+      id: 'session-id',
+      visitorId: 'visitor-capability'
+    });
+
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toContain('FOR UPDATE');
+    expect(sql).toContain('visitor_id = $2');
+    expect(sql).toContain('last_heartbeat_at >=');
+    expect(sql).toContain("THEN 'expired'");
+    expect(params).toEqual(['session-id', 'visitor-capability', 30]);
+  });
+
+  it('returns null when the capability is wrong or the session is stale', async () => {
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{ ...sessionRow(), restoration_authorized: false }]
+    });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.restoreSession('session-id', 'wrong-capability')).resolves.toBeNull();
+  });
+
+  it('expires a stale session and anonymizes its pending contact draft atomically', async () => {
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{ ...sessionRow(), status: 'expired', restoration_authorized: false }]
+    });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.restoreSession('session-id', 'visitor-capability')).resolves.toBeNull();
+
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0][0]).toContain('lead_capture_drafts');
+    expect(query.mock.calls[0][0]).toContain('name = NULL');
+  });
+});
+
 describe('ConversationRepository.updateAssistantFeedback', () => {
   it('stores feedback in assistant message metadata', async () => {
     const now = new Date('2026-04-27T08:00:00.000Z');

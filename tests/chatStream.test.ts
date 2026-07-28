@@ -10,7 +10,8 @@ describe('streamChatMessage watchdog and recovery', () => {
   it('preserves the session across reloads and same-tab catalog navigation', () => {
     const source = readFileSync('src/client/main.tsx', 'utf8');
 
-    expect(source).toContain("sessionStorage.getItem('bakaut_session_id')");
+    expect(source).toContain("safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id')");
+    expect(source).toContain("safeStorageSet(chatSessionStorage, 'bakaut_session_id', data.session.id)");
     expect(source).not.toContain("addEventListener('pagehide'");
     expect(source).not.toContain('navigator.sendBeacon');
   });

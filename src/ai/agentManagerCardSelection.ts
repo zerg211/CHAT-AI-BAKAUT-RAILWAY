@@ -964,6 +964,19 @@ function authoritativeProofStatusForKinds(input: {
   ));
 }
 
+function productPassesNativeConstraintOrAuthoritativeProof(input: {
+  proofs: RequirementProof[];
+  productId: string;
+  intent: AgentIntentContract;
+  kinds: string[];
+  nativeMatch: boolean;
+}) {
+  const proofStatus = authoritativeProofStatusForKinds(input);
+  if (proofStatus === 'satisfied') return true;
+  if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
+  return input.nativeMatch;
+}
+
 function productsMeetingGenericRequirementProofs(input: {
   products: Product[];
   intent: AgentIntentContract;
@@ -2031,7 +2044,13 @@ export function selectProductsForVisibleCards(input: {
     (batteryPowerSourceRequired || hasStructuredPowerSource)
   ) {
     const sourceMatchingSelected = structuredSelection
-      ? selected.filter((product) => productMeetsStructuredPowerSource(product, structuredPowerSource))
+      ? selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+          proofs: requirementProofs,
+          productId: product.id,
+          intent: input.intent,
+          kinds: ['power_source'],
+          nativeMatch: productMeetsStructuredPowerSource(product, structuredPowerSource)
+        }))
       : selected.filter(isBatteryPowerStation);
     if (sourceMatchingSelected.length) {
       powerSourceFilteredCount = selected.length - sourceMatchingSelected.length;
@@ -2052,9 +2071,13 @@ export function selectProductsForVisibleCards(input: {
   let generatorFuelFilteredCount = 0;
   let generatorFuelNoFit = false;
   if (strictGeneratorFuelRequirement && selected.length) {
-    const fuelMatchingSelected = selected.filter((product) =>
-      productMeetsSupportedStrictFuelRequirement(product, input.intent, cardIntent)
-    );
+    const fuelMatchingSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+      proofs: requirementProofs,
+      productId: product.id,
+      intent: input.intent,
+      kinds: ['fuel_type', 'power_source'],
+      nativeMatch: productMeetsSupportedStrictFuelRequirement(product, input.intent, cardIntent)
+    }));
     generatorFuelFilteredCount = selected.length - fuelMatchingSelected.length;
     selected = fuelMatchingSelected;
     generatorFuelNoFit = selected.length === 0;
@@ -2080,9 +2103,13 @@ export function selectProductsForVisibleCards(input: {
       : generatorPowerRequirementForCardSelection(buyerRequirementText)
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPowerRequirement) {
-    const powerMatchingSelected = selected.filter((product) =>
-      productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement, structuredSelection)
-    );
+    const powerMatchingSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+      proofs: requirementProofs,
+      productId: product.id,
+      intent: input.intent,
+      kinds: ['nominal_power_min_kw', 'power_min_kw', 'nominal_power_max_kw', 'power_max_kw'],
+      nativeMatch: productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement, structuredSelection)
+    }));
     if (powerMatchingSelected.length) {
       generatorPowerFilteredCount = selected.length - powerMatchingSelected.length;
       selected = powerMatchingSelected;
@@ -2151,9 +2178,13 @@ export function selectProductsForVisibleCards(input: {
     ? structuredGeneratorAutoStartRequirement(input.intent)
     : undefined;
   if (generatorAutoStartRequirement !== undefined && selected.length) {
-    const autoStartMatchingSelected = selected.filter((product) =>
-      productMeetsSupportedStrictAutoStartRequirement(product, input.intent, cardIntent)
-    );
+    const autoStartMatchingSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+      proofs: requirementProofs,
+      productId: product.id,
+      intent: input.intent,
+      kinds: [...generatorAutoStartRequirementKinds],
+      nativeMatch: productMeetsSupportedStrictAutoStartRequirement(product, input.intent, cardIntent)
+    }));
     generatorAutoStartFilteredCount = selected.length - autoStartMatchingSelected.length;
     selected = autoStartMatchingSelected;
     generatorAutoStartNoFit = selected.length === 0;
@@ -2230,7 +2261,17 @@ export function selectProductsForVisibleCards(input: {
         })
     : undefined;
   if (plateWeightRange && selected.length) {
-    const selectedWithinRange = productsWithinPlateWeightRange(selected, plateWeightRange)
+    const nativeWeightMatches = new Set(
+      productsWithinPlateWeightRange(selected, plateWeightRange).map((product) => product.id)
+    );
+    const selectedWithinRange = selected
+      .filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['weight_min_kg', 'weight_max_kg'],
+        nativeMatch: nativeWeightMatches.has(product.id)
+      }))
       .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
     const heavierTradeoffAllowed = structuredSelection
       ? input.intent.selectionPolicy?.alternativePolicy === 'allow_adjacent_with_explanation' ||
@@ -2302,7 +2343,15 @@ export function selectProductsForVisibleCards(input: {
     ? structuredMaterial === 'ceramic' || structuredMaterial === 'porcelain_tile' || structuredMaterial === 'ceramic_tile'
     : requiresCeramicDiamondBlade(buyerRequirementText);
   if (cardIntent === 'diamondBlade' && selected.length && requiresCeramic) {
-    const ceramicSelected = selected.filter(diamondBladeSupportsCeramic);
+    const ceramicSelected = selected.filter((product) => structuredSelection
+      ? productPassesNativeConstraintOrAuthoritativeProof({
+          proofs: requirementProofs,
+          productId: product.id,
+          intent: input.intent,
+          kinds: ['material'],
+          nativeMatch: diamondBladeSupportsCeramic(product)
+        })
+      : diamondBladeSupportsCeramic(product));
     if (ceramicSelected.length) {
       diamondMaterialFilteredCount = selected.length - ceramicSelected.length;
       selected = ceramicSelected;

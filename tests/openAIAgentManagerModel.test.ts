@@ -48,6 +48,13 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       missingFields: ['name' as const],
       expiresAt: now
     };
+    const pendingExhaustedTechnicalHandoffs = [{
+      handoffOfferMessageId: '33333333-3333-4333-8333-333333333333',
+      buyerQuestion: 'Can you confirm the technical fact?',
+      technicalAttributes: ['electric start'],
+      sourceAttemptTiers: ['catalog', 'official_page', 'official_manual', 'reliable_secondary'] as const,
+      offeredAt: now
+    }];
     const intentContract: AgentIntentContract = {
       turnId: null,
       userMessageSummary: 'buyer supplied the missing name and preferred contact method',
@@ -72,6 +79,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       leadCaptureAuthorization: {
         authorized: false,
         contactSource: 'none',
+        handoffKind: 'none',
         purpose: null,
         buyerQuestion: null,
         evidence: null,
@@ -101,7 +109,11 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       userMessage: history[0]!.content,
       ledgerEvents: [],
       ledgerState,
-      pendingLeadCaptureDraft
+      pendingLeadCaptureDraft,
+      pendingExhaustedTechnicalHandoffs: pendingExhaustedTechnicalHandoffs.map((context) => ({
+        ...context,
+        sourceAttemptTiers: [...context.sourceAttemptTiers]
+      }))
     });
     await model.planTurn({
       session,
@@ -109,7 +121,11 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       userMessage: history[0]!.content,
       ledgerEvents: [],
       ledgerState,
-      pendingLeadCaptureDraft
+      pendingLeadCaptureDraft,
+      pendingExhaustedTechnicalHandoffs: pendingExhaustedTechnicalHandoffs.map((context) => ({
+        ...context,
+        sourceAttemptTiers: [...context.sourceAttemptTiers]
+      }))
     });
 
     expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
@@ -121,10 +137,16 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       const request = call[0]?.request as { input?: Array<{ role?: string; content?: string }> } | undefined;
       const userInput = JSON.parse(
         request?.input?.find((item) => item.role === 'user')?.content ?? '{}'
-      ) as { pendingLeadCaptureDraft?: Record<string, unknown> };
+      ) as {
+        pendingLeadCaptureDraft?: Record<string, unknown>;
+        pendingExhaustedTechnicalHandoffs?: unknown;
+      };
       expect(userInput.pendingLeadCaptureDraft).toEqual(pendingLeadCaptureDraft);
       expect(userInput.pendingLeadCaptureDraft).not.toHaveProperty('phone');
       expect(userInput.pendingLeadCaptureDraft).not.toHaveProperty('email');
+      if (call[0]?.stage === 'agent_intent_contract') {
+        expect(userInput.pendingExhaustedTechnicalHandoffs).toEqual(pendingExhaustedTechnicalHandoffs);
+      }
     }
   });
 });

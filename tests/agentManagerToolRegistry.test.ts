@@ -80,6 +80,31 @@ describe('agent manager strict tool registry', () => {
     });
     expect(valid.payload).toMatchObject({ productIds: ['p1'] });
 
+    expect(validateToolResultOutput({
+      requestId: 'web-source-tiers',
+      tool: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        sourcesExhausted: true,
+        researchOutcome: 'exhausted',
+        sourceAttempts: [{
+          tier: 'catalog',
+          outcome: 'not_found'
+        }, {
+          tier: 'official_manual',
+          outcome: 'not_found',
+          query: 'exact model official manual PDF'
+        }]
+      },
+      warnings: []
+    }).payload).toMatchObject({
+      sourceAttempts: expect.arrayContaining([
+        expect.objectContaining({ tier: 'official_manual' })
+      ])
+    });
+
     expect(() => validateToolResultOutput({
       requestId: 'search-1',
       tool: 'catalog.search',

@@ -3,9 +3,19 @@ import type { Product } from '../src/shared/types.js';
 
 const createStructuredJsonResponse = vi.hoisted(() => vi.fn());
 const fetchMock = vi.hoisted(() => vi.fn());
+const extractPdfTextMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../src/ai/openaiStructured.js', () => ({
   createStructuredJsonResponse
+}));
+
+vi.mock('../src/ai/pdfTextExtraction.js', () => ({
+  extractPdfText: extractPdfTextMock,
+  PdfTextExtractionError: class extends Error {
+    constructor(public readonly code: string) {
+      super(code);
+    }
+  }
 }));
 
 vi.mock('undici', () => ({
@@ -52,6 +62,7 @@ function result(overrides: Record<string, unknown>) {
       completeness: 'not_answered',
       coverage: []
     },
+    sourceAttempts: [],
     summaryForAnswer: '',
     warnings: [],
     ...overrides
@@ -141,10 +152,10 @@ describe('product comparison research', () => {
       const next = queuedResearchResponses.shift();
       if (!next) throw new Error(`No queued structured response for stage ${call.stage}`);
        return {
-         ...next,
-         response: next.response ?? {
-           output: next.parsed.usedWebSearch === true ? [{ type: 'web_search_call' }] : []
-         }
+          ...next,
+          response: next.response ?? {
+            output: next.parsed.usedWebSearch === true ? [{ type: 'web_search_call', status: 'completed' }] : []
+          }
        };
     });
     createStructuredJsonResponse.mockResolvedValueOnce = ((value: { parsed: ReturnType<typeof result> }) => {
@@ -152,6 +163,405 @@ describe('product comparison research', () => {
       return createStructuredJsonResponse;
     }) as typeof createStructuredJsonResponse.mockResolvedValueOnce;
     fetchMock.mockReset();
+    extractPdfTextMock.mockReset();
+    extractPdfTextMock.mockRejectedValue(new Error('invalid test PDF'));
+  });
+
+  it('runs web research for a general technical question without catalog products or an exact model', async () => {
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'generator THD recommendation for sensitive electronics',
+            status: 'not_found',
+            value: '',
+            evidence: 'no sufficiently specific source found',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        }
+      })
+    });
+    const sourceTierQueries = {
+      official_page: 'generator THD official manufacturer guidance',
+      official_manual: 'generator THD official manual PDF',
+      reliable_secondary: 'generator THD reliable technical distributor guidance'
+    };
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        sourceAttempts: Object.entries(sourceTierQueries).map(([tier, query]) => ({
+          tier,
+          query,
+          outcome: 'not_found'
+        })),
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'generator THD recommendation for sensitive electronics',
+            status: 'not_found',
+            value: '',
+            evidence: 'the requested fact was not confirmed after all source tiers',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        }
+      }),
+      response: {
+        output: Object.values(sourceTierQueries).map((query) => ({
+          type: 'web_search_call',
+          status: 'completed',
+          action: { query }
+        }))
+      }
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой THD допустим для питания чувствительной электроники от генератора?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['generator THD recommendation for sensitive electronics'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(researchCalls()).toHaveLength(2);
+    expect(actual.usedWebSearch).toBe(true);
+    expect(actual.searchDisposition).toBe('completed');
+    expect(actual.sourcesExhausted).toBe(true);
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).toEqual([
+      'catalog',
+      'official_page',
+      'official_manual',
+      'reliable_secondary'
+    ]);
+    expect(actual.warnings).not.toContain('not_enough_products_for_comparison');
+  });
+
+  it('keeps sources unexhausted when decisive HTML evidence is beyond the safe text limit', async () => {
+    const decisiveEvidence = 'GENERATOR TEST 1000 service interval is 100 hours';
+    fetchMock.mockResolvedValueOnce(sourceResponse(
+      `<html><body>${'padding '.repeat(32_000)}${decisiveEvidence}</body></html>`
+    ));
+    const unresolved = result({
+      usedWebSearch: true,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [{
+          attribute: 'service interval',
+          status: 'not_found',
+          value: '',
+          evidence: 'not confirmed',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: unresolved });
+    const sourceTierQueries = {
+      official_page: 'GENERATOR TEST 1000 official service interval',
+      official_manual: 'GENERATOR TEST 1000 official manual service interval PDF',
+      reliable_secondary: 'GENERATOR TEST 1000 reliable service interval'
+    };
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        sourceAttempts: Object.entries(sourceTierQueries).map(([tier, query]) => ({
+          tier,
+          query,
+          outcome: 'not_found'
+        })),
+        facts: [{
+          productName: 'GENERATOR TEST 1000',
+          attribute: 'service interval',
+          value: '100 hours',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: decisiveEvidence,
+          sourceUrl: 'https://example.test/generator-test-1000-service',
+          sourceTitle: 'GENERATOR TEST 1000 service information'
+        }],
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: []
+        }
+      }),
+      response: {
+        output: Object.values(sourceTierQueries).map((query) => ({
+          type: 'web_search_call',
+          status: 'completed',
+          action: { query }
+        }))
+      }
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the service interval for GENERATOR TEST 1000?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['service interval'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(actual.facts).toEqual([]);
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.warnings).toContain('source_evidence_text_truncated_to_safe_limit');
+  });
+
+  it('keeps sources unexhausted when semantic review sees only a capped prefix', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse(
+      `<html><body>${'padding '.repeat(2_500)}GENERATOR TEST 2000 maintenance must be completed every 100 hours</body></html>`
+    ));
+    const unresolved = result({
+      usedWebSearch: true,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [{
+          attribute: 'service interval',
+          status: 'not_found',
+          value: '',
+          evidence: 'not confirmed',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: unresolved });
+    const sourceTierQueries = {
+      official_page: 'GENERATOR TEST 2000 official service interval',
+      official_manual: 'GENERATOR TEST 2000 official manual service interval PDF',
+      reliable_secondary: 'GENERATOR TEST 2000 reliable service interval'
+    };
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        sourceAttempts: Object.entries(sourceTierQueries).map(([tier, query]) => ({
+          tier,
+          query,
+          outcome: 'not_found'
+        })),
+        facts: [{
+          productName: 'GENERATOR TEST 2000',
+          attribute: 'service interval',
+          value: '100 hours',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'GENERATOR TEST 2000 service interval is 100 hours',
+          sourceUrl: 'https://example.test/generator-test-2000-service',
+          sourceTitle: 'GENERATOR TEST 2000 service information'
+        }],
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: []
+        }
+      }),
+      response: {
+        output: Object.values(sourceTierQueries).map((query) => ({
+          type: 'web_search_call',
+          status: 'completed',
+          action: { query }
+        }))
+      }
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the service interval for GENERATOR TEST 2000?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['service interval'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(createStructuredJsonResponse.mock.calls.some(([call]) =>
+      call.stage === 'source_evidence_semantic_validation'
+    )).toBe(true);
+    expect(actual.facts).toEqual([]);
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.warnings).toContain('source_evidence_semantic_text_truncated_to_safe_limit');
+    expect(actual.warnings).not.toContain('source_evidence_text_truncated_to_safe_limit');
+  });
+
+  it('does not declare generic sources exhausted when the retry did not execute every source tier', async () => {
+    const unresolved = result({
+      usedWebSearch: true,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [{
+          attribute: 'service interval',
+          status: 'not_found',
+          value: '',
+          evidence: 'not confirmed',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: unresolved });
+    queueResearchResponse({
+      parsed: result({
+        ...unresolved,
+        sourceAttempts: [{
+          tier: 'official_page',
+          query: 'official generator service interval',
+          outcome: 'not_found'
+        }, {
+          tier: 'official_manual',
+          query: 'official generator manual service interval PDF',
+          outcome: 'not_found'
+        }, {
+          tier: 'reliable_secondary',
+          query: 'reliable generator service interval',
+          outcome: 'not_found'
+        }]
+      }),
+      response: {
+        output: [{
+          type: 'web_search_call',
+          status: 'completed',
+          action: { query: 'official generator service interval' }
+        }]
+      }
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the service interval?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['service interval'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.warnings).toContain('source_tier_attempts_incomplete_after_retry');
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).toEqual([
+      'catalog',
+      'official_page'
+    ]);
+  });
+
+  it('does not count failed web search calls or their reported queries toward exhaustion', async () => {
+    const sourceAttempts = [{
+      tier: 'official_page',
+      query: 'official generator service interval',
+      outcome: 'not_found'
+    }, {
+      tier: 'official_manual',
+      query: 'official generator manual service interval PDF',
+      outcome: 'not_found'
+    }, {
+      tier: 'reliable_secondary',
+      query: 'reliable generator service interval',
+      outcome: 'not_found'
+    }];
+    const failedResponse = {
+      output: sourceAttempts.map((attempt) => ({
+        type: 'web_search_call',
+        status: 'failed',
+        action: { query: attempt.query }
+      }))
+    };
+    const unresolved = result({
+      usedWebSearch: true,
+      sourceAttempts,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [{
+          attribute: 'service interval',
+          status: 'not_found',
+          value: '',
+          evidence: 'not confirmed',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: unresolved, response: failedResponse });
+    queueResearchResponse({ parsed: unresolved, response: failedResponse });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the service interval?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['service interval'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(actual.usedWebSearch).toBe(false);
+    expect(actual.searchDisposition).toBe('failed');
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.sourceAttempts).toEqual([{ tier: 'catalog', outcome: 'not_found' }]);
+  });
+
+  it('does not declare exhaustion without a completed catalog lookup tier', async () => {
+    const sourceAttempts = [{
+      tier: 'official_page',
+      query: 'official generator service interval',
+      outcome: 'not_found'
+    }, {
+      tier: 'official_manual',
+      query: 'official generator manual service interval PDF',
+      outcome: 'not_found'
+    }, {
+      tier: 'reliable_secondary',
+      query: 'reliable generator service interval',
+      outcome: 'not_found'
+    }];
+    const completedResponse = {
+      output: sourceAttempts.map((attempt) => ({
+        type: 'web_search_call',
+        status: 'completed',
+        action: { query: attempt.query }
+      }))
+    };
+    const unresolved = result({
+      usedWebSearch: true,
+      sourceAttempts,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [{
+          attribute: 'service interval',
+          status: 'not_found',
+          value: '',
+          evidence: 'not confirmed',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: unresolved, response: completedResponse });
+    queueResearchResponse({ parsed: unresolved, response: completedResponse });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the service interval?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['service interval'],
+      catalogSearchAttempted: false,
+      catalogProductsFound: false
+    });
+
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).toEqual([
+      'official_page',
+      'official_manual',
+      'reliable_secondary'
+    ]);
   });
 
   it('checks exact catalog description with external exact-target research', async () => {
@@ -698,9 +1108,11 @@ describe('product comparison research', () => {
   });
 
   it('rejects invented key-start evidence when the cited source only proves electric starter', async () => {
-    fetchMock.mockResolvedValueOnce(
-      sourceResponse('FIRMAN RD4910E. Starting system: manual starter, electric starter. Kit: spark plug wrench.')
-    );
+    fetchMock
+      .mockResolvedValueOnce(
+        sourceResponse('FIRMAN RD4910E. Starting system: manual starter, electric starter. Kit: spark plug wrench.')
+      )
+      .mockResolvedValueOnce(sourceResponse('%PDF-1.7', 'application/pdf'));
     createStructuredJsonResponse
       .mockResolvedValueOnce({
         parsed: result({
@@ -797,15 +1209,16 @@ describe('product comparison research', () => {
     });
 
     expect(researchCalls()).toHaveLength(2);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(actual.answerGuidance.coverage.some((item) =>
       item.attribute === 'key start' && item.status === 'confirmed'
     )).toBe(false);
     expect(actual.answerGuidance.directAnswer).not.toContain('starts with a key');
     expect(actual.answerGuidance.directAnswer).toContain('источники');
+    expect(actual.sourcesExhausted).toBe(false);
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'source_evidence_validation_failed:key_start',
-      'source_evidence_pdf_unsupported',
+      'source_evidence_pdf_parse_failed',
       'answer_guidance_rewritten_after_source_validation',
       'electric_start_control_not_confirmed_after_retry'
     ]));
@@ -865,9 +1278,15 @@ describe('product comparison research', () => {
     ]));
   });
 
-  it('rejects PDF evidence without invoking a PDF parser', async () => {
-    fetchMock.mockResolvedValueOnce(sourceResponse('%PDF-1.7', 'application/pdf'));
-    const unsupportedPdfResult = (sourceUrl: string) => result({
+  it('parses PDF-magic evidence in isolation even when the endpoint is mislabeled as text', async () => {
+    fetchMock.mockImplementation(async () => sourceResponse('%PDF-1.7', 'text/plain'));
+    extractPdfTextMock.mockResolvedValue({
+      text: 'FIRMAN RD4910E fuel tank capacity 15 liters PDF allegedly states a 15 liter tank',
+      totalPages: 1,
+      parsedPages: 1,
+      truncated: false
+    });
+    const supportedPdfResult = (sourceUrl: string) => result({
       usedWebSearch: true,
       facts: [{
         productName: 'FIRMAN RD4910E',
@@ -892,8 +1311,8 @@ describe('product comparison research', () => {
         }]
       }
     });
-    queueResearchResponse({ parsed: unsupportedPdfResult('https://example.test/firman-rd4910e.pdf') });
-    queueResearchResponse({ parsed: unsupportedPdfResult('https://example.test/firman-rd4910e-download') });
+    queueResearchResponse({ parsed: supportedPdfResult('https://example.test/firman-rd4910e.pdf') });
+    queueResearchResponse({ parsed: supportedPdfResult('https://example.test/firman-rd4910e-download') });
 
     const actual = await researchProductComparisonFacts({
       userMessage: 'Какой объем топливного бака у FIRMAN RD4910E?',
@@ -902,15 +1321,194 @@ describe('product comparison research', () => {
       comparisonAttributes: ['fuel tank capacity']
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(extractPdfTextMock).toHaveBeenCalledTimes(2);
+    expect(extractPdfTextMock).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      expect.objectContaining({ maxPages: 80, maxTextChars: 250000 })
+    );
+    expect(actual.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'FIRMAN RD4910E', value: '15 liters' })
+    ]));
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.completeness).toBe('partially_answered');
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.summaryForAnswer).toBe('');
+    expect(actual.warnings).not.toContain('source_evidence_pdf_unsupported');
+    expect(actual.warnings).not.toContain('source_evidence_pdf_parse_failed');
+  });
+
+  it('does not bind an exact quote for another model on a multi-model page', async () => {
+    const sourceText = 'FIRMAN RD3910E overview; FIRMAN RD4910E fuel tank capacity: 15 liters.';
+    fetchMock.mockImplementation(async () => sourceResponse(sourceText));
+    const wrongModelQuote = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD3910E',
+        attribute: 'fuel tank capacity',
+        value: '15 liters',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'FIRMAN RD3910E overview; FIRMAN RD4910E fuel tank capacity: 15 liters',
+        sourceUrl: 'https://example.test/generator-comparison',
+        sourceTitle: 'FIRMAN RD3910E and RD4910E comparison'
+      }],
+      answerGuidance: {
+        directAnswer: 'FIRMAN RD3910E has a 15 liter tank.',
+        completeness: 'answered',
+        coverage: []
+      }
+    });
+    queueResearchResponse({ parsed: wrongModelQuote });
+    queueResearchResponse({ parsed: wrongModelQuote });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the fuel tank capacity of FIRMAN RD3910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(createStructuredJsonResponse.mock.calls.some(([call]) =>
+      call.stage === 'source_evidence_semantic_validation'
+    )).toBe(true);
     expect(actual.facts).toEqual([]);
     expect(actual.answerGuidance.directAnswer).toBe('');
-    expect(actual.answerGuidance.completeness).toBe('not_answered');
-    expect(actual.summaryForAnswer).toBe('');
-    expect(actual.warnings).toEqual(expect.arrayContaining([
-      'source_evidence_pdf_unsupported',
-      'answer_guidance_invalidated_after_source_validation'
-    ]));
+    expect(actual.warnings).toContain('source_evidence_validation_failed:semantic');
+  });
+
+  it('rejects non-PDF binary evidence without sending it through the HTML parser', async () => {
+    fetchMock.mockImplementation(async () => sourceResponse('binary payload', 'application/octet-stream'));
+    const binaryResult = (sourceUrl: string) => result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD4910E',
+        attribute: 'fuel tank capacity',
+        value: '15 liters',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'binary payload allegedly confirms 15 liters',
+        sourceUrl,
+        sourceTitle: 'FIRMAN RD4910E binary download'
+      }],
+      answerGuidance: {
+        directAnswer: 'FIRMAN RD4910E has a 15 liter fuel tank.',
+        completeness: 'answered',
+        coverage: []
+      }
+    });
+    queueResearchResponse({ parsed: binaryResult('https://example.test/download?id=one') });
+    queueResearchResponse({ parsed: binaryResult('https://example.test/download?id=two') });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the fuel tank capacity of FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(extractPdfTextMock).not.toHaveBeenCalled();
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.warnings).toContain('source_evidence_unsupported_binary');
+  });
+
+  it('caps distinct PDF evidence sources per research and keeps exhaustion false', async () => {
+    fetchMock.mockImplementation(async () => sourceResponse('%PDF-1.7', 'application/pdf'));
+    extractPdfTextMock.mockResolvedValue({
+      text: 'FIRMAN RD4910E fuel tank capacity source confirms 15 liters for this model',
+      totalPages: 1,
+      parsedPages: 1,
+      truncated: false
+    });
+    const facts = Array.from({ length: 5 }, (_item, index) => ({
+      productName: 'FIRMAN RD4910E',
+      attribute: 'fuel tank capacity',
+      value: '15 liters',
+      sourceType: 'web',
+      confidence: 'high',
+      evidence: 'fuel tank capacity source confirms 15 liters',
+      sourceUrl: `https://example.test/firman-rd4910e-${index + 1}.pdf`,
+      sourceTitle: 'FIRMAN RD4910E PDF'
+    }));
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts: facts.slice(0, 4),
+        answerGuidance: {
+          directAnswer: 'FIRMAN RD4910E has a 15 liter fuel tank.',
+          completeness: 'answered',
+          coverage: []
+        }
+      })
+    });
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts: facts.slice(4),
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: []
+        }
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the fuel tank capacity of FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity']
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(extractPdfTextMock).toHaveBeenCalledTimes(4);
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.warnings).toContain('source_evidence_pdf_source_cap_reached');
+  });
+
+  it('aborts bounded PDF parsing with the enclosing research signal', async () => {
+    fetchMock.mockResolvedValueOnce(sourceResponse('%PDF-1.7', 'application/pdf'));
+    extractPdfTextMock.mockImplementationOnce((_bytes, options: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        const rejectAbort = () => reject(new DOMException('The operation was aborted.', 'AbortError'));
+        if (options.signal?.aborted) rejectAbort();
+        else options.signal?.addEventListener('abort', rejectAbort, { once: true });
+      })
+    );
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD4910E',
+          attribute: 'fuel tank capacity',
+          value: '15 liters',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'official PDF states 15 liters',
+          sourceUrl: 'https://example.test/firman-rd4910e.pdf',
+          sourceTitle: 'FIRMAN RD4910E manual'
+        }],
+        answerGuidance: {
+          directAnswer: 'У FIRMAN RD4910E бак 15 литров.',
+          completeness: 'answered',
+          coverage: []
+        }
+      })
+    });
+    const controller = new AbortController();
+    const research = researchProductComparisonFacts({
+      userMessage: 'Какой объем бака у FIRMAN RD4910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['fuel tank capacity'],
+      signal: controller.signal
+    });
+
+    await vi.waitFor(() => expect(extractPdfTextMock).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    await expect(research).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   it('invalidates generic direct answers that contain no validated evidence', async () => {
@@ -1203,5 +1801,218 @@ describe('product comparison research', () => {
     expect(actual.answerGuidance.directAnswer).toContain('ручной запуск тоже есть');
     expect(actual.answerGuidance.directAnswer).toContain('источники не подтвердили');
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:electric_start');
+  });
+
+  it('applies warning-based source-exhaustion blockers in the exact-target retry flow', async () => {
+    const unresolved = result({
+      usedWebSearch: true,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [{
+          attribute: 'start control',
+          status: 'not_found',
+          value: '',
+          evidence: 'not confirmed',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      },
+      warnings: ['exact_target_external_fact_not_found']
+    });
+    queueResearchResponse({ parsed: unresolved });
+    const attempts = [
+      { tier: 'official_page', query: 'FIRMAN RD4910E official page start control', outcome: 'not_found' },
+      { tier: 'official_manual', query: 'FIRMAN RD4910E official manual start control', outcome: 'not_found' },
+      { tier: 'reliable_secondary', query: 'FIRMAN RD4910E reliable start control', outcome: 'not_found' }
+    ];
+    queueResearchResponse({
+      parsed: result({
+        ...unresolved,
+        sourceAttempts: attempts,
+        warnings: ['exact_target_external_fact_not_found', 'tool_not_executed:source_reader']
+      }),
+      response: {
+        output: attempts.map((attempt) => ({
+          type: 'web_search_call',
+          status: 'completed',
+          action: { query: attempt.query }
+        }))
+      }
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Does FIRMAN RD4910E start with a key or a button?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['start control'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).toEqual([
+      'catalog',
+      'official_page',
+      'official_manual',
+      'reliable_secondary'
+    ]);
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.warnings).toContain('tool_not_executed:source_reader');
+  });
+
+  it('enforces schema/runtime fact, coverage, and distinct source URL caps', async () => {
+    fetchMock.mockImplementation(async () => sourceResponse(
+      'FIRMAN RD4910E starts with an ignition key and has an electric starter.'
+    ));
+    const facts = Array.from({ length: 20 }, (_item, index) => ({
+      productName: 'FIRMAN RD4910E',
+      attribute: `key start evidence ${index}`,
+      value: 'ignition key',
+      sourceType: 'web',
+      confidence: 'high',
+      evidence: 'FIRMAN RD4910E starts with an ignition key',
+      sourceUrl: `https://example.test/firman-rd4910e/fact-${index}`,
+      sourceTitle: 'FIRMAN RD4910E specification'
+    }));
+    const coverage = Array.from({ length: 20 }, (_item, index) => ({
+      attribute: `key start coverage ${index}`,
+      status: 'confirmed',
+      value: 'ignition key',
+      evidence: 'FIRMAN RD4910E starts with an ignition key',
+      sourceUrl: `https://example.test/firman-rd4910e/coverage-${index}`,
+      sourceTitle: 'FIRMAN RD4910E specification'
+    }));
+    const oversized = result({
+      usedWebSearch: true,
+      facts,
+      answerGuidance: {
+        directAnswer: 'FIRMAN RD4910E starts with an ignition key.',
+        completeness: 'answered',
+        coverage
+      }
+    });
+    queueResearchResponse({ parsed: oversized });
+    queueResearchResponse({ parsed: oversized });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Does FIRMAN RD4910E start with a key?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['key start']
+    });
+
+    const schema = researchCalls()[0].request.text.format.schema;
+    expect(schema.properties.facts.maxItems).toBe(12);
+    expect(schema.properties.answerGuidance.properties.coverage.maxItems).toBe(12);
+    expect(actual.facts.length).toBeLessThanOrEqual(12);
+    expect(actual.answerGuidance.coverage.length).toBeLessThanOrEqual(12);
+    expect(fetchMock).toHaveBeenCalledTimes(12);
+    expect(actual.warnings).toContain('source_evidence_source_cap_reached');
+  });
+
+  it('canonicalizes source cache keys while validating every claim independently', async () => {
+    fetchMock.mockResolvedValue(sourceResponse(
+      'FIRMAN RD4910E starts with an ignition key. Fuel tank capacity is 15 liters.'
+    ));
+    const canonicalizedSourceResult = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD4910E',
+        attribute: 'key start',
+        value: 'ignition key',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'FIRMAN RD4910E starts with an ignition key',
+        sourceUrl: 'https://EXAMPLE.test:443/firman-rd4910e?edition=one#facts',
+        sourceTitle: 'FIRMAN RD4910E specification'
+      }, {
+        productName: 'FIRMAN RD4910E',
+        attribute: 'fuel tank capacity',
+        value: '20 liters',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'FIRMAN RD4910E fuel tank capacity is 20 liters',
+        sourceUrl: 'https://example.test/firman-rd4910e?edition=one#tank',
+        sourceTitle: 'FIRMAN RD4910E specification'
+      }],
+      answerGuidance: {
+        directAnswer: 'FIRMAN RD4910E starts with an ignition key.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'key start',
+          status: 'confirmed',
+          value: 'ignition key',
+          evidence: 'FIRMAN RD4910E starts with an ignition key',
+          sourceUrl: 'https://example.test:443/firman-rd4910e?edition=one#coverage',
+          sourceTitle: 'FIRMAN RD4910E specification'
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: canonicalizedSourceResult });
+    queueResearchResponse({ parsed: canonicalizedSourceResult });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Does FIRMAN RD4910E start with a key?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['key start']
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(actual.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'key start' })
+    ]));
+    expect(actual.facts.some((fact) => fact.value === '20 liters')).toBe(false);
+    expect(actual.warnings).toContain('source_evidence_validation_failed:semantic');
+  });
+
+  it('bounds concurrent source evidence validation work', async () => {
+    let activeFetches = 0;
+    let maxActiveFetches = 0;
+    fetchMock.mockImplementation(async () => {
+      activeFetches += 1;
+      maxActiveFetches = Math.max(maxActiveFetches, activeFetches);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeFetches -= 1;
+      return sourceResponse('FIRMAN RD4910E starts with an ignition key and has an electric starter.');
+    });
+    const facts = Array.from({ length: 12 }, (_item, index) => ({
+      productName: 'FIRMAN RD4910E',
+      attribute: `key start evidence ${index}`,
+      value: 'ignition key',
+      sourceType: 'web',
+      confidence: 'high',
+      evidence: 'FIRMAN RD4910E starts with an ignition key',
+      sourceUrl: `https://example.test/firman-rd4910e/source-${index}`,
+      sourceTitle: 'FIRMAN RD4910E specification'
+    }));
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts,
+        answerGuidance: {
+          directAnswer: 'FIRMAN RD4910E starts with an ignition key.',
+          completeness: 'answered',
+          coverage: facts.map((fact) => ({
+            attribute: fact.attribute,
+            status: 'confirmed',
+            value: fact.value,
+            evidence: fact.evidence,
+            sourceUrl: fact.sourceUrl,
+            sourceTitle: fact.sourceTitle
+          }))
+        }
+      })
+    });
+
+    await researchProductComparisonFacts({
+      userMessage: 'Does FIRMAN RD4910E start with a key?',
+      products: [],
+      targetProductNames: ['FIRMAN RD4910E'],
+      comparisonAttributes: ['key start']
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(12);
+    expect(maxActiveFetches).toBeLessThanOrEqual(4);
   });
 });

@@ -92,6 +92,11 @@ const webResearchResult = z.object({
   searchDisposition: z.enum(['completed', 'memory_hit', 'not_needed', 'skipped_budget', 'timed_out', 'failed', 'aborted']).optional(),
   researchOutcome: z.enum(['answered', 'partial', 'exhausted']).optional(),
   sourcesExhausted: z.boolean().optional(),
+  sourceAttempts: z.array(z.object({
+    tier: z.enum(['catalog', 'official_page', 'official_manual', 'reliable_secondary']),
+    outcome: z.enum(['confirmed', 'not_found', 'unreadable', 'skipped_budget']),
+    query: z.string().optional()
+  }).strict()).optional(),
   unconfirmedFacts: z.array(z.object({
     requirementIds: z.array(z.string()),
     attribute: z.string(),
@@ -125,6 +130,9 @@ const leadCaptureResult = z.object({
   contactStored: z.boolean().optional(),
   preferredContact: z.enum(['message', 'call']).optional(),
   originalQuestionPreserved: z.boolean().optional(),
+  actionFingerprint: z.string().length(64).refine((value) =>
+    [...value].every((character) => '0123456789abcdef'.includes(character)),
+  'actionFingerprint must be lowercase SHA-256 hex').optional(),
   reason: z.string().optional(),
   error: z.unknown().optional()
 }).strict();

@@ -13,10 +13,22 @@
     "stage": "turn_work_deadline_exhausted",
     "deployedCommitAtFailure": "59f8377e8a14e9f4ef47e87bf794d0a50349c853"
   },
+  "productionV14Failure": {
+    "sessionId": "877a5c9b-dd36-47b8-8e3c-f17a794106eb",
+    "conversationId": 1784,
+    "failedTurnId": "736c4b01-edc0-41ab-ace0-de5debe94e4c",
+    "deployedCommitAtFailure": "3e98ff40cfd8dfc1f7c2796998eb0ac3082282e3",
+    "buyerVisibleResult": "turn_work_deadline_exhausted without recommendation or cards",
+    "rootCauses": [
+      "conditional catalog-covered web request still executed and timed out",
+      "reviewer rewrite ambiguously attributed calculator minimum to product",
+      "new active need persisted unknown product class"
+    ]
+  },
   "localVerification": {
     "releaseGate": "PASS",
-    "testFilesPassed": 67,
-    "testsPassed": 557,
+    "testFilesPassed": 69,
+    "testsPassed": 589,
     "agenticEvalFilesPassed": 4,
     "agenticEvalTestsPassed": 191,
     "typecheck": "PASS",
@@ -34,7 +46,13 @@
       "v13Verdict": "PASS",
       "v13TargetedTestsPassed": 117,
       "v13ResidualP0P1P2": 0
-    }
+    },
+    "v14V15FocusedFilesPassed": 6,
+    "v14V15FocusedTestsPassed": 172,
+    "pdfEvidence": "PASS",
+    "conditionalWebNonFactBearing": "PASS",
+    "searchBeforeSpecialist": "PASS",
+    "activeNeedClassReconciliation": "PASS"
   },
   "acceptanceCriteria": {
     "AC1": "PENDING_DEPLOYMENT",

@@ -3,6 +3,7 @@ import {
   AgentIntentContractSchema,
   DialogueLedgerEventSchema,
   createStableLedgerEventId,
+  parseAnswerContractModelOutput,
   normalizeLedgerStateDeltaEvents,
   type LedgerStateDelta
 } from '../src/ai/agentManagerContracts.js';
@@ -32,6 +33,27 @@ function walkJsonSchemaObjects(schema: unknown, visit: (schema: Record<string, u
 }
 
 describe('agent manager contracts', () => {
+  it('normalizes an empty product class for a non-product answer instead of failing the turn', () => {
+    const result = parseAnswerContractModelOutput({
+      answerText: 'КЕДР.',
+      factsUsed: [],
+      questionsAsked: [],
+      toolResultIds: [],
+      selectedProductIds: [],
+      leadAction: 'none',
+      riskFlags: [],
+      selectionReadiness: {
+        productClass: '',
+        status: 'not_applicable',
+        canShowProductCards: false,
+        missingFacts: [],
+        rationale: 'The buyer asked for a fact already present in the conversation.'
+      }
+    });
+
+    expect(result.selectionReadiness?.productClass).toBe('unknown');
+  });
+
   it('uses strict OpenAI response-format schemas without open object payloads', () => {
     for (const [name, format] of Object.entries(agentManagerStructuredFormats)) {
       const schema = format.format.schema;
@@ -84,12 +106,26 @@ describe('agent manager contracts', () => {
         requirements: [],
         rationale: 'plate is a known canonical class'
       },
+      leadCaptureAuthorization: {
+        authorized: false,
+        contactSource: 'none',
+        handoffKind: 'none',
+        purpose: null,
+        buyerQuestion: null,
+        evidence: null,
+        pendingDraftId: null
+      },
       policyRuleIds: [],
       mustNotAskQuestionIds: [],
       riskFlags: []
     };
 
     expect(AgentIntentContractSchema.safeParse(baseIntent).success).toBe(true);
+    const { handoffKind: _handoffKind, ...authorizationWithoutKind } = baseIntent.leadCaptureAuthorization;
+    expect(AgentIntentContractSchema.safeParse({
+      ...baseIntent,
+      leadCaptureAuthorization: authorizationWithoutKind
+    }).success).toBe(false);
     expect(AgentIntentContractSchema.safeParse({
       ...baseIntent,
       selectionPolicy: {
@@ -115,6 +151,8 @@ describe('agent manager contracts', () => {
       leadCaptureAuthorization: {
         authorized: true,
         contactSource: 'pending_draft',
+        handoffKind: 'technical_followup',
+        handoffOfferMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
         purpose: 'verify the exact start method',
         buyerQuestion: 'Проверьте, есть ли электростартер',
         evidence: 'Алексей, лучше напишите',
@@ -166,10 +204,14 @@ describe('agent manager contracts', () => {
     });
     expect(intent.properties.selectionPolicy.properties.requirements.maxItems).toBe(40);
     expect(intent.properties.leadCaptureAuthorization.properties.contactSource.enum).toContain('pending_draft');
+    expect(intent.properties.leadCaptureAuthorization.properties.handoffKind.enum).toContain('technical_followup');
     expect(intent.properties.leadCaptureAuthorization.required).toEqual(expect.arrayContaining([
+      'handoffKind',
+      'handoffOfferMessageId',
       'buyerQuestion',
       'pendingDraftId'
     ]));
+    expect(intent.properties.grounding.required).toContain('buyerQuestion');
     expect(formats.ledgerDeltaFormat.format.schema.properties.events.maxItems).toBe(40);
     expect(formats.answerContractFormat.format.schema.properties.selectedProductIds.maxItems).toBe(8);
   });
@@ -203,7 +245,7 @@ describe('agent manager contracts', () => {
 
     expect(result.productMentions).toEqual([]);
     expect(result.grounding).toMatchObject({
-      taskType: 'technical_answer',
+      taskType: 'lead_handoff',
       sourcePolicy: 'conversation_only',
       webPurpose: 'none',
       requiredToolKinds: [],

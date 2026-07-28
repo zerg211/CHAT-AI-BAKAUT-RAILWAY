@@ -242,6 +242,57 @@ describe('generic requirement proofs', () => {
     }));
   });
 
+  it('does not bind an explicitly different model fact to the sole catalog candidate', () => {
+    const catalogProduct = generator('rd3910e', 'FIRMAN RD3910E', {});
+    const differentProduct = generator('rd4910e', 'FIRMAN RD4910E', {});
+    const requirement: SelectionRequirement = {
+      id: 'noise-limit',
+      kind: 'noise_max_db',
+      value: 60,
+      unit: 'dB',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'the selected generator must be no louder than 60 dB',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'noise-web',
+        tool: 'web.researchProductFacts',
+        verifier: 'technical_source_review',
+        bindAs: 'noise_level_db'
+      }
+    };
+    const request: ToolRequest = {
+      id: 'noise-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'FIRMAN RD3910E noise level',
+        productNames: [catalogProduct.name],
+        comparisonAttributes: ['noise level dB']
+      },
+      rationale: 'verify the strict noise limit for the exact catalog model',
+      required: true,
+      coversRequirementIds: [requirement.id]
+    };
+
+    const result = select({
+      products: [catalogProduct],
+      intent: intentFor({ requirement, request }),
+      toolResults: [webResult({
+        requestId: request.id,
+        product: differentProduct,
+        attribute: 'Noise level',
+        value: '58 dB'
+      })]
+    });
+
+    expect(result.selectedProductIds).toEqual([]);
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: catalogProduct.id,
+      status: 'unverified'
+    }));
+  });
+
   it('deterministically rejects a product when the checked value violates the limit', () => {
     const product = generator('loud-68', 'Генератор ИСТОК АД6-Т400-ВМ131Э', {});
     const requirement: SelectionRequirement = {
@@ -350,6 +401,113 @@ describe('generic requirement proofs', () => {
     expect(proof?.caveats.some((caveat) => caveat.includes('в каталоге есть противоречащее значение'))).toBe(true);
     const cards = productCards(result.products, [], result.productCaveatsById);
     expect(cards[0]?.caveats.some((caveat) => caveat.includes('более авторитетные данные'))).toBe(true);
+  });
+
+  it('keeps a visible generator card when authoritative web proof confirms missing catalog autostart data', () => {
+    const product = generator('web-autostart', 'Generator TEST G7000', {});
+    const requirement: SelectionRequirement = {
+      id: 'autostart-required',
+      kind: 'autostart_required',
+      value: true,
+      unit: null,
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'the buyer requires automatic start',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'autostart-web',
+        tool: 'web.researchProductFacts',
+        verifier: 'technical_source_review',
+        bindAs: 'auto_start'
+      }
+    };
+    const request: ToolRequest = {
+      id: 'autostart-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'Generator TEST G7000 automatic start',
+        productNames: [product.name],
+        comparisonAttributes: ['automatic start']
+      },
+      rationale: 'verify automatic start for the exact catalog model',
+      required: true,
+      coversRequirementIds: [requirement.id]
+    };
+
+    const result = select({
+      products: [product],
+      intent: intentFor({ requirement, request }),
+      toolResults: [webResult({
+        requestId: request.id,
+        product,
+        attribute: 'automatic start',
+        value: 'yes'
+      })]
+    });
+
+    expect(result.selectedProductIds).toEqual([product.id]);
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: product.id,
+      status: 'satisfied',
+      normalizedValue: true,
+      sourceAuthority: 'authoritative_web'
+    }));
+  });
+
+  it('drops a catalog autostart candidate when authoritative web proof establishes a hard conflict', () => {
+    const product = generator('catalog-ats', 'Generator TEST G7000 ATS', {
+      'Automatic start': 'yes'
+    });
+    const requirement: SelectionRequirement = {
+      id: 'autostart-required',
+      kind: 'autostart_required',
+      value: true,
+      unit: null,
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'the buyer requires automatic start',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'autostart-web',
+        tool: 'web.researchProductFacts',
+        verifier: 'technical_source_review',
+        bindAs: 'auto_start'
+      }
+    };
+    const request: ToolRequest = {
+      id: 'autostart-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'Generator TEST G7000 ATS automatic start',
+        productNames: [product.name],
+        comparisonAttributes: ['automatic start']
+      },
+      rationale: 'resolve the automatic-start conflict for the exact model',
+      required: true,
+      coversRequirementIds: [requirement.id]
+    };
+
+    const result = select({
+      products: [product],
+      intent: intentFor({ requirement, request }),
+      toolResults: [webResult({
+        requestId: request.id,
+        product,
+        attribute: 'automatic start',
+        value: 'no'
+      })]
+    });
+
+    expect(result.selectedProductIds).toEqual([]);
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: product.id,
+      status: 'violated',
+      sourceAuthority: 'authoritative_web'
+    }));
   });
 
   it('binds a catalog field through the same proof contract', () => {

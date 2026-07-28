@@ -1,5 +1,9 @@
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
+import { fetch as undiciFetch } from 'undici';
 import {
+  createPinnedOutboundAgent,
   OutboundResponseTooLargeError,
   UnsafeOutboundUrlError,
   isPrivateOrReservedIp,
@@ -9,6 +13,27 @@ import {
 } from '../src/security/outboundHttp.js';
 
 describe('safe outbound HTTP', () => {
+  it('uses the production pinned dispatcher with a real undici request when lookup asks for all addresses', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('pinned lookup ok');
+    });
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Expected a TCP test server address');
+    const dispatcher = createPinnedOutboundAgent('127.0.0.1', 4);
+
+    try {
+      const response = await undiciFetch(`http://pinned-outbound.test:${address.port}`, { dispatcher });
+      expect(await response.text()).toBe('pinned lookup ok');
+    } finally {
+      await dispatcher.close();
+      server.close();
+      await once(server, 'close');
+    }
+  });
+
   it('rejects private, loopback, link-local, documentation, and mapped addresses', () => {
     for (const address of [
       '127.0.0.1',
@@ -48,6 +73,60 @@ describe('safe outbound HTTP', () => {
       .rejects.toBeInstanceOf(OutboundResponseTooLargeError);
   });
 
+  it('selects a stricter response limit from bounded prefix bytes', async () => {
+    const resolver = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
+    const responseMaxBytes = ({ prefix }: { prefix: Uint8Array }) => {
+      const prefixText = new TextDecoder().decode(prefix);
+      return prefixText.includes('%PDF-') ? 16 : 4;
+    };
+
+    const pdf = await safeFetchBytes('https://public.example/download', {
+      maxBytes: 16,
+      responseMaxBytes,
+      resolver: resolver as never,
+      fetcher: vi.fn(async () => new Response('%PDF-12345', {
+        headers: { 'content-type': 'text/plain' }
+      })) as never
+    });
+    expect(new TextDecoder().decode(pdf.bytes)).toBe('%PDF-12345');
+
+    await expect(safeFetchBytes('https://public.example/page', {
+      maxBytes: 16,
+      responseMaxBytes,
+      resolver: resolver as never,
+      fetcher: vi.fn(async () => new Response('12345', {
+        headers: { 'content-type': 'text/html' }
+      })) as never
+    })).rejects.toMatchObject({ maxBytes: 4 });
+  });
+
+  it('detects PDF magic split across response chunks before selecting the limit', async () => {
+    const encoder = new TextEncoder();
+    const htmlLimitBytes = 2 * 1024 * 1024;
+    const pdfLimitBytes = 8 * 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('%P'));
+        controller.enqueue(encoder.encode('DF-'));
+        controller.enqueue(new Uint8Array(htmlLimitBytes));
+        controller.close();
+      }
+    });
+
+    const result = await safeFetchBytes('https://public.example/download', {
+      maxBytes: pdfLimitBytes,
+      responseMaxBytes: ({ prefix }) =>
+        new TextDecoder().decode(prefix).includes('%PDF-') ? pdfLimitBytes : htmlLimitBytes,
+      resolver: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]) as never,
+      fetcher: vi.fn(async () => new Response(body, {
+        headers: { 'content-type': 'text/plain' }
+      })) as never
+    });
+
+    expect(result.bytes.byteLength).toBeGreaterThan(htmlLimitBytes);
+    expect(new TextDecoder().decode(result.bytes.slice(0, 5))).toBe('%PDF-');
+  });
+
   it('revalidates every redirect and blocks a redirect to a private destination', async () => {
     const resolver = vi.fn(async (hostname: string) => hostname === 'public.example'
       ? [{ address: '93.184.216.34', family: 4 }]
@@ -64,5 +143,25 @@ describe('safe outbound HTTP', () => {
     })).rejects.toBeInstanceOf(UnsafeOutboundUrlError);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  it('includes DNS resolution in the overall timeout and ignores a late DNS result', async () => {
+    let resolveDns!: (addresses: Array<{ address: string; family: 4 }>) => void;
+    const resolver = vi.fn(() => new Promise<Array<{ address: string; family: 4 }>>((resolve) => {
+      resolveDns = resolve;
+    }));
+    const fetcher = vi.fn();
+
+    const request = safeFetchBytes('https://slow-dns.example/file', {
+      maxBytes: 1024,
+      timeoutMs: 20,
+      resolver: resolver as never,
+      fetcher: fetcher as never
+    });
+
+    await expect(request).rejects.toMatchObject({ name: 'TimeoutError' });
+    resolveDns([{ address: '93.184.216.34', family: 4 }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

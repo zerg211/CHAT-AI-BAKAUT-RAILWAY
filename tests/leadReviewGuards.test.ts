@@ -23,7 +23,31 @@ function leadResult(warnings: string[]): ToolResult {
 describe('lead review guards', () => {
   it('detects a repeated contact request after contact was already provided', () => {
     expect(answerRequestsContactData('Оставьте телефон в форме, и я передам вопрос менеджеру.')).toBe(true);
+    expect(answerRequestsContactData('Напишите ваш номер телефона, и я сообщу результат.')).toBe(true);
+    expect(answerRequestsContactData('Укажите телефон для обратной связи.')).toBe(true);
+    expect(answerRequestsContactData('Можете отправить номер телефона?')).toBe(true);
+    expect(answerRequestsContactData('Please send your phone number.')).toBe(true);
+    expect(answerRequestsContactData('Не отправляйте номер телефона в открытом чате.')).toBe(false);
     expect(answerRequestsContactData('Телефон получил, теперь нужно только имя.')).toBe(false);
+  });
+
+  it.each([
+    'Напишите номер модели генератора, чтобы я проверил инструкцию.',
+    'Укажите артикул и имя модели.',
+    'Tell me the model name and serial number.',
+    'Напишите имя производителя.',
+    'Укажите имя менеджера.',
+    'Сообщите номер договора.',
+    'Пришлите номер счёта.'
+  ])('does not confuse a technical product identifier with contact data: %s', (answer) => {
+    expect(answerRequestsContactData(answer)).toBe(false);
+    expect(stripContactRequestSentence(answer)).toBe(answer);
+  });
+
+  it('recognizes the approved result-follow-up wording without treating every bare number as contact data', () => {
+    const approved = 'Оставьте номер и скажите, как удобнее связаться — написать или позвонить?';
+    expect(answerRequestsContactData(approved)).toBe(true);
+    expect(answerRequestsContactData('Укажите ваш номер.')).toBe(true);
   });
 
   it('strips repeated contact request sentences without changing other text', () => {

@@ -62,9 +62,154 @@ describe('reviewer revisedAnswerText deterministic guard', () => {
       .toContain('9 kW');
   });
 
+  it('reads exact numeric product evidence when the unit is stored in the catalog spec key', () => {
+    const item = product({
+      id: 'catalog-unit-keys',
+      name: 'TSS DG Unit Keys',
+      price: null,
+      specs: {
+        'Мощность номинальная при 380 В, кВт': '10',
+        'Рабочая масса, кг': '60'
+      }
+    });
+    const grounded = review('TSS DG Unit Keys имеет номинальную мощность 10 kW и массу 60 kg.', {
+      products: [item],
+      toolResults: [catalogResult(item)]
+    });
+    const invented = review('TSS DG Unit Keys имеет номинальную мощность 12 kW и массу 65 kg.', {
+      products: [item],
+      toolResults: [catalogResult(item)]
+    });
+
+    expect(grounded).toEqual([]);
+    expect(invented.map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
+  });
+
+  it('keeps nominal and maximum power evidence attribute-qualified', () => {
+    const item = product({
+      id: 'qualified-power',
+      name: 'TSS DG Qualified Power',
+      price: null,
+      specs: {
+        'Номинальная мощность, кВт': '10',
+        'Максимальная мощность, кВт': '11'
+      }
+    });
+    const input = {
+      products: [item],
+      toolResults: [catalogResult(item)]
+    };
+
+    expect(review('TSS DG Qualified Power имеет номинальную мощность 10 kW.', input)).toEqual([]);
+    expect(review('TSS DG Qualified Power имеет максимальную мощность 11 kW.', input)).toEqual([]);
+    expect(review('TSS DG Qualified Power имеет мощность 11 kW.', input)).toEqual([]);
+    expect(review('TSS DG Qualified Power имеет номинальную мощность 11 kW.', input)
+      .map((issue) => issue.code))
+      .toContain('review_rewrite_unsupported_numeric_product_claim');
+    for (const claim of [
+      'TSS DG Qualified Power has nom power 11 kW.',
+      'TSS DG Qualified Power has nom. power 11 kW.',
+      'TSS DG Qualified Power has nominal. power 11 kW.',
+      'TSS DG Qualified Power имеет ном. мощность 11 kW.',
+      'TSS DG Qualified Power имеет номин. мощность 11 kW.',
+      'TSS DG Qualified Power has maximum. power 10 kW.',
+      'TSS DG Qualified Power has max. power 10 kW.'
+    ]) {
+      expect(review(claim, input).map((issue) => issue.code), claim)
+        .toContain('review_rewrite_unsupported_numeric_product_claim');
+    }
+  });
+
+  it('does not upgrade an unqualified catalog power value into nominal or maximum power', () => {
+    const item = product({
+      id: 'unqualified-power',
+      name: 'TSS DG Unqualified',
+      price: null,
+      specs: { power: '11 kW' }
+    });
+
+    expect(review('TSS DG Unqualified имеет мощность 11 kW.', {
+      products: [item],
+      toolResults: [catalogResult(item)]
+    })).toEqual([]);
+    expect(review('TSS DG Unqualified имеет номинальную мощность 11 kW.', {
+      products: [item],
+      toolResults: [catalogResult(item)]
+    }).map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
+  });
+
   it('does not mistake quantities or calculated requirements for product price/spec claims', () => {
     expect(review('Покажу 2 модели с ценами. По расчету требуется 6 kW; конкретную модель подберу после проверки нагрузки.'))
       .toEqual([]);
+  });
+
+  it('keeps a calculator threshold separate from the exact product specification', () => {
+    const item = product({
+      id: 'tss-dg-11000',
+      name: 'TSS DG 11000',
+      price: null,
+      specs: { 'Nominal power': '11 kW' }
+    });
+    const calculatorResult: ToolResult = {
+      requestId: 'generator-load',
+      tool: 'calculator.generatorLoad',
+      status: 'ok',
+      payload: { profile: { requiredNominalKw: 10 } },
+      warnings: []
+    };
+
+    expect(review('По расчёту требуется минимум 10 kW. TSS DG 11000 имеет номинальную мощность 11 kW, поэтому это только предварительный вариант.', {
+      userMessage: 'Нагрузка около 8 кВт, подберите генератор.',
+      products: [item],
+      toolResults: [catalogResult(item), calculatorResult]
+    })).toEqual([]);
+  });
+
+  it('still blocks an ambiguous calculator number placed after a product name', () => {
+    const item = product({
+      id: 'tss-dg-11000',
+      name: 'TSS DG 11000',
+      price: null,
+      specs: { power: '11 kW' }
+    });
+    const calculatorResult: ToolResult = {
+      requestId: 'generator-load',
+      tool: 'calculator.generatorLoad',
+      status: 'ok',
+      payload: { profile: { requiredNominalKw: 10 } },
+      warnings: []
+    };
+
+    const issues = review('TSS DG 11000 — пограничный вариант: расчётный минимум 10 kW.', {
+      userMessage: 'Нагрузка около 8 кВт, подберите генератор.',
+      products: [item],
+      toolResults: [catalogResult(item), calculatorResult]
+    });
+
+    expect(issues.map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
+  });
+
+  it('still blocks a newly invented product power even when a calculator result exists', () => {
+    const item = product({
+      id: 'tss-dg-11000',
+      name: 'TSS DG 11000',
+      price: null,
+      specs: { power: '11 kW' }
+    });
+
+    const issues = review('По расчёту требуется минимум 10 kW. TSS DG 11000 имеет мощность 12 kW.', {
+      userMessage: 'Нагрузка около 8 кВт, подберите генератор.',
+      products: [item],
+      toolResults: [{
+        requestId: 'generator-load',
+        tool: 'calculator.generatorLoad',
+        status: 'ok',
+        payload: { profile: { requiredNominalKw: 10 } },
+        warnings: []
+      }]
+    });
+
+    expect(issues.map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
   });
 
   it('accepts a numeric technical fact confirmed by a successful web research artifact', () => {
