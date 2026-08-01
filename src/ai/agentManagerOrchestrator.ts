@@ -3574,8 +3574,8 @@ export function repairIntentForCatalogClarificationBeforeTools(
     },
     selectionPolicy: {
       ...selectionPolicy,
-      targetProductClass: selectionPolicy.targetProductClass ?? null,
-      canonicalProductClass: selectionPolicy.canonicalProductClass ?? null,
+      targetProductClass: selectionPolicy.targetProductClass ?? 'unknown',
+      canonicalProductClass: selectionPolicy.canonicalProductClass ?? 'unknown',
       selectionGoal: 'preliminary_fit',
       maxCards: 0,
       rationale: [intent.selectionPolicy.rationale, missingRationale].filter(Boolean).join(' ')

@@ -10157,6 +10157,8 @@ describe('parallel semantic turn contracts', () => {
     expect(repaired.grounding!.sourcePolicy).toBe('conversation_only');
     expect(repaired.selectionPolicy!.maxCards).toBe(0);
     expect(repaired.selectionPolicy!.selectionGoal).toBe('preliminary_fit');
+    expect(repaired.selectionPolicy!.targetProductClass).toBe('оборудование');
+    expect(repaired.selectionPolicy!.canonicalProductClass).toBe('unknown');
   });
 
 });
