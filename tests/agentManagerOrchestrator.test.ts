@@ -5,6 +5,7 @@ import {
   enforceSearchBeforeTechnicalSpecialist,
   isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
+  repairIntentForCatalogClarificationBeforeTools,
   pendingLeadCaptureDraftMatchesAuthorizationScope,
   repairIntentForOpenEndedRequirementWebCoverage,
   repairIntentForNewNeedFinalFit,
@@ -2673,6 +2674,134 @@ describe('AgentManagerOrchestrator', () => {
     expect(products.idsSeen).toEqual([exact.id]);
     expect(products.searchCalls).toBe(0);
     expect(payload.productCards.map((card) => card.id)).toEqual([exact.id]);
+  });
+
+  it('keeps a catalog-confirmed paving-mat plate through strict follow-up selection', async () => {
+    const withPavingMat: Product = {
+      ...product('masalta-mat', 'Виброплита бензиновая Masalta MSR90-4 (83 кг)', 'Виброплиты'),
+      brand: 'Masalta',
+      price: 82_500,
+      specs: {
+        'рабочая масса, кг': '83',
+        'коврик для мощения брусчатки': 'Да',
+        'транспортировочные колеса для легкого перемещения виброплиты': 'Да'
+      }
+    };
+    const withoutPavingMat: Product = {
+      ...product('zitrek-no-mat', 'Виброплита прямоходная Zitrek z3k60 (57 кг)', 'Виброплиты'),
+      brand: 'Zitrek',
+      price: 38_000,
+      specs: {
+        'рабочая масса, кг': '57',
+        'коврик для мощения брусчатки': 'Нет'
+      }
+    };
+    class PlateDetailsProducts extends FakeProducts {
+      idsSeen: string[] = [];
+
+      async getProductsByIds(ids: string[]) {
+        this.idsSeen = ids;
+        return [withPavingMat, withoutPavingMat].filter((item) => ids.includes(item.id));
+      }
+
+      override async searchProducts(): Promise<Product[]> {
+        throw new Error('follow-up must use the exact previously selected catalog IDs');
+      }
+    }
+
+    const products = new PlateDetailsProducts();
+    const intent = structuredGeneratorCatalogIntent();
+    intent.userMessageSummary = 'buyer asks which prior plate is gentler on paving and asks to repeat the catalog price';
+    intent.dialogueUnderstanding = 'the buyer narrows the previous plate candidates to a model with a confirmed paving mat';
+    intent.nextStepRationale = 'rehydrate the exact previous catalog cards and choose only a proven protective-mat model';
+    intent.toolRequests = [{
+      id: 'plate-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productIds: [withPavingMat.id, withoutPavingMat.id],
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        comparisonAttributes: ['price', 'weight', 'protective mat for paving']
+      },
+      rationale: 'confirm current catalog facts for the previously shown plate cards',
+      required: true,
+      coversRequirementIds: ['paving-mat']
+    }];
+    intent.selectionPolicy = {
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'final_fit',
+      needAction: 'resume',
+      alternativePolicy: 'same_class_only',
+      reusePreviousCards: true,
+      maxCards: 1,
+      powerSource: 'any',
+      phase: 'any',
+      requirements: [{
+        id: 'paving-mat',
+        kind: 'protective_mat_for_paving',
+        value: true,
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the buyer asks for gentle work on paving and a confirmed protective mat',
+        verification: { mode: 'product_attribute' }
+      }],
+      rationale: 'only a catalog-confirmed paving mat is sufficient for this final follow-up recommendation'
+    };
+    intent.grounding = {
+      taskType: 'product_selection',
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'none',
+      requiredToolKinds: ['catalog.getProductDetails'],
+      technicalAttributes: ['price', 'weight', 'protective mat for paving'],
+      rationale: 'the current catalog detail cards are sufficient to compare this exact accessory fact'
+    };
+
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((item) => item.id)).toEqual([withPavingMat.id]);
+          return {
+            answerText: `${withPavingMat.name} беру как конкретный вариант: коврик для мощения подтверждён в карточке, цена ${withPavingMat.price} ₽.`,
+            factsUsed: [{
+              factKey: 'protective_mat_for_paving',
+              value: true,
+              sourceEventIds: ['plate-details']
+            }],
+            questionsAsked: [],
+            toolResultIds: ['plate-details'],
+            selectedProductIds: [withPavingMat.id],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'plate',
+              status: 'ready_for_exact_cards',
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'The catalog detail card confirms the protective mat for the selected plate.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Из показанных вариантов мне важна бережная работа по плитке. Какую конкретную модель взять? Повтори цену.'
+    });
+
+    expect(products.idsSeen).toEqual([withPavingMat.id, withoutPavingMat.id]);
+    expect(payload.answer).toContain(withPavingMat.name);
+    expect(payload.productCards.map((card) => card.id)).toEqual([withPavingMat.id]);
+    expect((payload.metadata?.answerProductEvidence as { droppedProductIds?: string[] })?.droppedProductIds)
+      .toContain(withoutPavingMat.id);
   });
 
   it('replaces factual text that cites a failed tool instead of only dropping its citation', async () => {
@@ -9906,4 +10035,128 @@ describe('parallel semantic turn contracts', () => {
       eventType: 'parallel_intent_replan_required'
     }));
   });
+
+  it('repairs ambiguous catalog intent before tool execution instead of running catalog search', () => {
+    const intent: AgentIntentContract = {
+      turnId: null,
+      userMessageSummary: 'buyer asks what cutters are available',
+      dialogueUnderstanding: 'ambiguous cutter browse request',
+      nextStepRationale: 'planner incorrectly treated ambiguous cutter wording as catalog browse',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'catalog-cutters',
+        tool: 'catalog.search',
+        rationale: 'browse cutters',
+        required: true,
+        coversRequirementIds: [],
+        args: {
+          query: 'мне нужен резчик че у вас есть?',
+          productIntent: 'резчик',
+          canonicalProductIntent: 'cutter',
+          powerSource: null,
+          phase: null,
+          limit: 8,
+          reason: 'browse cutters',
+          notes: null
+        }
+      }],
+      productMentions: [{ name: 'резчик', role: 'target_product', productClass: 'cutter', evidence: 'мне нужен резчик' }],
+      selectionPolicy: {
+        targetProductClass: 'резчик',
+        canonicalProductClass: 'cutter',
+        selectionGoal: 'browse_catalog',
+        needAction: 'open',
+        alternativePolicy: 'same_class_only',
+        reusePreviousCards: false,
+        maxCards: 8,
+        powerSource: null,
+        phase: null,
+        requirements: [],
+        rationale: 'browse cutters'
+      },
+      leadCaptureAuthorization: {
+        authorized: false,
+        contactSource: 'none',
+        handoffKind: 'none',
+        purpose: null,
+        buyerQuestion: null,
+        evidence: null,
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      grounding: {
+        taskType: 'product_selection',
+        sourcePolicy: 'conversation_only',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['catalog.search'],
+        technicalAttributes: [],
+        buyerQuestion: 'мне нужен резчик че у вас есть?',
+        rationale: 'browse catalog'
+      },
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+
+    const repaired = repairIntentForCatalogClarificationBeforeTools(intent, 'мне нужен резчик че у вас есть?');
+
+    expect(repaired.requiresTools).toBe(false);
+    expect(repaired.toolRequests).toEqual([]);
+    expect(repaired.grounding!.requiredToolKinds).toEqual([]);
+    expect(repaired.selectionPolicy!.maxCards).toBe(0);
+    expect(repaired.selectionPolicy!.selectionGoal).toBe('preliminary_fit');
+    expect(repaired.policyRuleIds).toContain('selection.cutter_ambiguous_material_question');
+  });
+
+
+  it('repairs broad whole-catalog requests before tool execution', () => {
+    const intent: AgentIntentContract = {
+      ...noToolIntent('buyer asks for broad catalog'),
+      requiresTools: true,
+      toolRequests: [{
+        id: 'catalog-all',
+        tool: 'catalog.search',
+        rationale: 'browse all catalog',
+        required: true,
+        coversRequirementIds: [],
+        args: {
+          query: 'что у вас вообще есть?',
+          productIntent: 'оборудование',
+          canonicalProductIntent: 'unknown',
+          powerSource: null,
+          phase: null,
+          limit: 8,
+          reason: 'browse all catalog',
+          notes: null
+        }
+      }],
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'оборудование',
+        canonicalProductClass: 'unknown',
+        selectionGoal: 'browse_catalog',
+        maxCards: 8
+      },
+      grounding: {
+        taskType: 'product_selection',
+        sourcePolicy: 'conversation_only',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['catalog.search'],
+        technicalAttributes: [],
+        buyerQuestion: 'что у вас вообще есть?',
+        rationale: 'too broad catalog browse'
+      }
+    };
+
+    const repaired = repairIntentForCatalogClarificationBeforeTools(intent, 'что у вас вообще есть?');
+
+    expect(repaired.requiresTools).toBe(false);
+    expect(repaired.toolRequests).toEqual([]);
+    expect(repaired.grounding!.requiredToolKinds).toEqual([]);
+    expect(repaired.grounding!.sourcePolicy).toBe('conversation_only');
+    expect(repaired.selectionPolicy!.maxCards).toBe(0);
+    expect(repaired.selectionPolicy!.selectionGoal).toBe('preliminary_fit');
+  });
+
 });

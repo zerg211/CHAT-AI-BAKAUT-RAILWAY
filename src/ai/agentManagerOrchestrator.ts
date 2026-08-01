@@ -3514,6 +3514,75 @@ function requiredResponseClausesForUserMessage(userMessage: string): RequiredRes
   }];
 }
 
+
+const broadCatalogTargetFragments = [
+  'товар', 'каталог', 'ассортимент', 'оборудован', 'инструмент', 'техник', 'машин', 'агрегат',
+  'что есть', 'что у вас', 'вариант', 'модель', 'позици'
+];
+
+function broadTextContainsAnyFragment(text: string, fragments: string[]) {
+  const normalized = text.toLocaleLowerCase('ru');
+  return fragments.some((fragment) => normalized.includes(fragment));
+}
+
+function exactProductMentionMakesCatalogSearchConcrete(intent: AgentIntentContract) {
+  return (intent.productMentions ?? []).some((mention) =>
+    exactTargetProductMentionRoles.has(mention.role) &&
+    mention.name.trim().length >= 4 &&
+    !broadTextContainsAnyFragment(mention.name, broadCatalogTargetFragments)
+  );
+}
+
+export function catalogSearchNeedsClarificationBeforeTools(intent: AgentIntentContract, userMessage: string) {
+  if (!intent.selectionPolicy || !intent.grounding) return false;
+  if (!intent.toolRequests.some((request) => request.tool === 'catalog.search')) return false;
+  if (ambiguousCutterRequestNeedsMaterialClarification(userMessage)) return true;
+  if (exactProductMentionMakesCatalogSearchConcrete(intent)) return false;
+  const canonicalProductClass = intent.selectionPolicy?.canonicalProductClass ?? null;
+  const canonicalIntent = coerceVisibleCardIntent(canonicalProductClass);
+  if (canonicalProductClass && canonicalIntent !== 'unknown') return false;
+  const targetProductClass = intent.selectionPolicy?.targetProductClass ?? '';
+  if (!targetProductClass.trim()) return true;
+  return broadTextContainsAnyFragment(targetProductClass, broadCatalogTargetFragments);
+}
+
+export function repairIntentForCatalogClarificationBeforeTools(
+  intent: AgentIntentContract,
+  userMessage: string
+): AgentIntentContract {
+  if (!catalogSearchNeedsClarificationBeforeTools(intent, userMessage)) return intent;
+  if (!intent.selectionPolicy || !intent.grounding) return intent;
+  const selectionPolicy = intent.selectionPolicy;
+  const grounding = intent.grounding;
+  const policyRuleIds = ambiguousCutterRequestNeedsMaterialClarification(userMessage)
+    ? uniqueStrings([...(intent.policyRuleIds ?? []), 'selection.cutter_ambiguous_material_question'])
+    : intent.policyRuleIds ?? [];
+  const missingRationale = ambiguousCutterRequestNeedsMaterialClarification(userMessage)
+    ? 'Ambiguous cutter wording requires material/work clarification before catalog tools or product cards.'
+    : 'Catalog search requires a concrete product class, exact product, or buyer task before tools or product cards.';
+  return {
+    ...intent,
+    requiresTools: false,
+    toolRequests: [],
+    policyRuleIds,
+    grounding: {
+      ...intent.grounding,
+      requiredToolKinds: [],
+      sourcePolicy: 'conversation_only',
+      webRequirement: 'none',
+      webPurpose: 'none'
+    },
+    selectionPolicy: {
+      ...selectionPolicy,
+      targetProductClass: selectionPolicy.targetProductClass ?? null,
+      canonicalProductClass: selectionPolicy.canonicalProductClass ?? null,
+      selectionGoal: 'preliminary_fit',
+      maxCards: 0,
+      rationale: [intent.selectionPolicy.rationale, missingRationale].filter(Boolean).join(' ')
+    }
+  };
+}
+
 function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
   const clauses: RequiredResponseClause[] = [];
   for (const result of toolResults) {
@@ -4754,7 +4823,7 @@ function plannerSystemPromptBlock(latestUserMessage?: string) {
     'Если grounding.sourcePolicy="web_required" или requiredToolKinds содержит web.researchProductFacts, toolRequests обязан содержать web.researchProductFacts. Если named model нет, это все равно общий technical web grounding: productNames=[], query/semanticQuery = смысл вопроса, comparisonAttributes = запрошенные технические факты.',
     'Для доставки, наличия, скидок, сроков и индивидуальных условий не обещай точный результат: планируй lead.capture/offer form, если нужен контакт.',
     'Для сравнения товаров и нехватки важных фактов планируй web.researchProductFacts.',
-    'Для подбора товара планируй catalog.search.',
+    'Для подбора товара планируй catalog.search только когда понятен конкретный товарный класс, точная модель или задача покупателя. Если покупатель просит весь каталог, просто “что у вас есть”, “оборудование”, “инструмент” или другой слишком широкий класс без задачи — не планируй catalog.search; сначала задай один главный уточняющий вопрос.',
     'For product_selection that depends on technical suitability not fully guaranteed by ordinary catalog fields, plan catalog.search first and web.researchProductFacts second in the same turn. Keep productNames empty when candidates are not known yet: the web tool will research products discovered by the preceding catalog tool. A generic work surface/material context alone is not that technical dependency. Do not choose specialist_required while catalog or web research can still answer the question.',
     'If previous visible product cards become unsuitable after the buyer narrows or corrects the need, plan a fresh catalog.search in the same product class instead of only explaining that the old cards do not fit. The answer should reject the old cards by reason and use the new catalog results as replacement cards when available.',
     'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
@@ -5963,14 +6032,17 @@ export class AgentManagerOrchestrator {
       intent: plannedIntent,
       pendingLeadCaptureDraft
     });
-    const groundedIntent = repairIntentForExactModelEvidence(
-      repairIntentForCatalogGrounding(
-        repairIntentForGroundingPolicy(
-          enforceSearchBeforeTechnicalSpecialist(plannedIntent, { provenExhaustedHandoffContinuation }),
-          userMessage
+    const groundedIntent = repairIntentForCatalogClarificationBeforeTools(
+      repairIntentForExactModelEvidence(
+        repairIntentForCatalogGrounding(
+          repairIntentForGroundingPolicy(
+            enforceSearchBeforeTechnicalSpecialist(plannedIntent, { provenExhaustedHandoffContinuation }),
+            userMessage
+          ),
+          userMessage,
+          { hasReusableCurrentNeedCards }
         ),
-        userMessage,
-        { hasReusableCurrentNeedCards }
+        userMessage
       ),
       userMessage
     );
@@ -8323,7 +8395,8 @@ export class AgentManagerOrchestrator {
     const strictRequirementGate = gateStrictSelectionRequirements(
       input.intent,
       canonicalProductClassFromIntent(input.intent),
-      input.toolResults
+      input.toolResults,
+      input.products
     );
     const strictRequirementBlockers = strictRequirementGate.blockers;
     const answerAttemptsConcreteSelection = (
