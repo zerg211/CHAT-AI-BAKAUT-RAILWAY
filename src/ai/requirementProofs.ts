@@ -132,6 +132,10 @@ function canonicalAttribute(value: unknown) {
       'kit', 'set', 'комплект', 'набор', 'presence', 'наличие', 'included'
     ])
   ) return 'wheel_kit';
+  if (
+    has('protective', 'protection', 'mat', 'коврик', 'защитный', 'защитная') &&
+    has('paving', 'pave', 'tile', 'slab', 'brick', 'мощение', 'мощения', 'брусчатка', 'плитка')
+  ) return 'protective_mat_for_paving';
   if (has('compatible', 'compatibility', 'совместимость', 'совместим', 'подходит')) return 'compatibility';
   if (has('autostart', 'auto start', 'automatic start', 'автозапуск')) return 'auto_start';
   if (has('material', 'материал')) return 'material';
@@ -174,6 +178,11 @@ const strictBindingWordsByAttribute: Record<string, string[]> = {
   wheel_kit: [
     'wheel', 'wheels', 'колесо', 'колеса', 'колёса', 'kit', 'set', 'комплект', 'набор',
     'presence', 'наличие', 'included'
+  ],
+  protective_mat_for_paving: [
+    'protective', 'protection', 'mat', 'paving', 'pave', 'tile', 'slab', 'brick',
+    'коврик', 'защитный', 'защитная', 'мощение', 'мощения', 'брусчатка', 'плитка',
+    'presence', 'наличие', 'included', 'комплект'
   ],
   compatibility: ['compatible', 'compatibility', 'совместимость', 'совместим', 'подходит'],
   auto_start: [
@@ -324,7 +333,7 @@ function normalizeComparable(input: {
   if (textHasAny(rawText, ['not included', 'not present', 'absent', 'no', 'нет', 'отсутствует', 'несовместим'])) {
     return { value: false, unit: null };
   }
-  if (textHasAny(rawText, ['included', 'present', 'available', 'yes', 'есть', 'в комплекте', 'совместим', 'подходит'])) {
+  if (textHasAny(rawText, ['included', 'present', 'available', 'yes', 'да', 'есть', 'в комплекте', 'совместим', 'подходит'])) {
     return { value: true, unit: null };
   }
   if (textHasAny(rawText, ['diesel', 'дизель'])) return { value: 'diesel', unit: null };

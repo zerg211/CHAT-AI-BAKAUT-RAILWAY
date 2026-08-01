@@ -562,6 +562,85 @@ describe('generic requirement proofs', () => {
     }));
   });
 
+  it('binds a Russian catalog paving-mat field to a strict protective-mat requirement', () => {
+    const withPavingMat = {
+      ...generator('masalta-mat', 'Виброплита бензиновая Masalta MSR90-4 (83 кг)', {
+        'рабочая масса, кг': '83',
+        'коврик для мощения брусчатки': 'Да'
+      }),
+      category: 'Виброплиты'
+    };
+    const withoutPavingMat = {
+      ...generator('plate-without-mat', 'Виброплита прямоходная Zitrek z3k60 (57 кг)', {
+        'рабочая масса, кг': '57',
+        'коврик для мощения брусчатки': 'Нет'
+      }),
+      category: 'Виброплиты'
+    };
+    const requirement: SelectionRequirement = {
+      id: 'protective-mat-for-paving',
+      kind: 'protective_mat_for_paving',
+      value: true,
+      unit: null,
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'для бережной работы по плитке нужен подтверждённый коврик',
+      verification: { mode: 'product_attribute' }
+    };
+    const request: ToolRequest = {
+      id: 'plate-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productIds: [withPavingMat.id, withoutPavingMat.id],
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate'
+      },
+      rationale: 'read the exact catalog paving-mat field',
+      required: true,
+      coversRequirementIds: [requirement.id]
+    };
+    const intent = intentFor({ requirement, request });
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      powerSource: 'any'
+    };
+    const catalogResult: ToolResult = {
+      requestId: request.id,
+      tool: request.tool,
+      status: 'ok',
+      payload: {
+        products: [withPavingMat, withoutPavingMat],
+        productIds: [withPavingMat.id, withoutPavingMat.id]
+      },
+      warnings: []
+    };
+
+    const result = select({
+      products: [withPavingMat, withoutPavingMat],
+      intent,
+      toolResults: [catalogResult]
+    });
+
+    expect(result.selectedProductIds).toEqual([withPavingMat.id]);
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: withPavingMat.id,
+      status: 'satisfied',
+      normalizedValue: true,
+      sourceResultIds: [request.id],
+      sourceAuthority: 'catalog'
+    }));
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: withoutPavingMat.id,
+      status: 'violated',
+      normalizedValue: false
+    }));
+  });
+
   it('does not treat a numeric model index as a conflicting voltage', () => {
     const product = generator('tss-5000a', 'TSS SGG 5000A', {
       'Номинальное напряжение': '220 V'
