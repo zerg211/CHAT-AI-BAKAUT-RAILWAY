@@ -798,7 +798,7 @@ export class ConversationRepository {
            $5,
            $6,
            $7::jsonb,
-           coalesce($8::timestamptz, now() + interval '60 seconds')
+           coalesce($8::timestamptz, now() + interval '85 seconds')
          )
          ON CONFLICT (session_id, client_message_id) DO UPDATE
          SET updated_at = conversation_turns.updated_at

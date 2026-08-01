@@ -899,3 +899,150 @@ describe('catalog-evidence synthetic web artifact', () => {
     expect(finalContract.toolResultIds).not.toContain('web-autostart-check');
   });
 });
+
+describe('open-ended preliminary selection recovery', () => {
+  it('runs the automatic catalog-to-web path and preserves a preliminary card when the planner omitted web research', async () => {
+    researchProductComparisonFactsMock.mockReset();
+    const plate: Product = {
+      id: 'light-plate',
+      name: 'Виброплита бензиновая TEST Compact 60 кг',
+      brand: 'TEST',
+      category: 'Виброплиты',
+      price: 65_000,
+      currency: 'RUB',
+      sourceUrl: 'https://bakautprof.ru/catalog/light-plate',
+      specs: { 'рабочая масса, кг': '60', 'тип топлива': 'бензиновые' }
+    };
+    researchProductComparisonFactsMock.mockResolvedValue({
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      facts: [{
+        productName: plate.name,
+        attribute: 'application suitability',
+        value: 'suitable with a protective mat',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'manufacturer manual',
+        sourceUrl: 'https://manufacturer.example/test-compact-60',
+        sourceTitle: 'TEST Compact 60 manual'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'The manufacturer documentation describes use with a protective mat.',
+        completeness: 'answered',
+        coverage: []
+      },
+      summaryForAnswer: 'The product remains a preliminary candidate for the stated paving job.',
+      warnings: []
+    });
+    class PlateProducts extends HarnessProducts {
+      searchProducts = vi.fn(async () => [plate]);
+    }
+    const userMessage = 'Нужна лёгкая виброплита для тротуарной плитки, буду возить сам.';
+    const conversations = new HarnessConversations(userMessage);
+    const compose = vi.fn(async (input: AgentManagerAnswerInput) => {
+      const webRequest = input.intent.toolRequests.find((request) => request.tool === 'web.researchProductFacts');
+      expect(input.intent.toolRequests.map((request) => request.tool)).toEqual([
+        'catalog.search',
+        'web.researchProductFacts'
+      ]);
+      expect(webRequest?.required).toBe(true);
+      expect(webRequest?.coversRequirementIds).toEqual(['paving-application']);
+      expect(input.products.map((product) => product.id)).toContain(plate.id);
+      expect(input.toolResults.map((result) => result.status)).toEqual(['ok', 'ok']);
+      return {
+        answerText: `${plate.name} — предварительный вариант для вашей задачи.`,
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: input.toolResults.map((result) => result.requestId),
+        selectedProductIds: [plate.id],
+        leadAction: 'none' as const,
+        riskFlags: [],
+        selectionReadiness: {
+          productClass: 'plate',
+          status: 'ready_for_preliminary_cards' as const,
+          canShowProductCards: true,
+          missingFacts: [],
+          rationale: 'Catalog candidate remains visible while the application fact is checked.'
+        }
+      };
+    });
+    const intent: AgentIntentContract = {
+      userMessageSummary: 'buyer needs a light plate compactor for paving tiles and self-transport',
+      dialogueUnderstanding: 'paving material is a job context; catalog cards do not prove every application fact',
+      nextStepRationale: 'find catalog candidates, then verify the open-ended application fact',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'catalog-plate',
+        tool: 'catalog.search',
+        args: {
+          query: 'лёгкая виброплита для тротуарной плитки',
+          productIntent: 'виброплита',
+          canonicalProductIntent: 'plate'
+        },
+        rationale: 'find catalog plate candidates',
+        required: true,
+        coversRequirementIds: ['paving-application']
+      }],
+      grounding: {
+        taskType: 'product_selection',
+        sourcePolicy: 'catalog_required',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['catalog.search'],
+        technicalAttributes: ['weight', 'application suitability'],
+        buyerQuestion: userMessage,
+        rationale: 'catalog candidates are needed for a preliminary product selection'
+      },
+      productMentions: [],
+      selectionPolicy: {
+        targetProductClass: 'виброплита',
+        canonicalProductClass: 'plate',
+        selectionGoal: 'preliminary_fit',
+        needAction: 'open',
+        alternativePolicy: 'same_class_only',
+        reusePreviousCards: false,
+        maxCards: 4,
+        powerSource: 'fuel',
+        phase: 'any',
+        requirements: [{
+          id: 'paving-application',
+          kind: 'material',
+          value: 'тротуарная плитка',
+          unit: null,
+          relation: 'must_have',
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'для тротуарной плитки',
+          verification: { mode: 'product_attribute' }
+        }],
+        rationale: 'show preliminary candidates without treating missing application proof as a conflict'
+      },
+      leadCaptureAuthorization: {
+        authorized: false,
+        contactSource: 'none',
+        handoffKind: 'none',
+        purpose: null,
+        buyerQuestion: null,
+        evidence: null,
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new PlateProducts() as never,
+      new HarnessLeads() as never,
+      harnessModel({ intent, compose })
+    );
+
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+
+    expect(compose).toHaveBeenCalledTimes(1);
+    expect(researchProductComparisonFactsMock).toHaveBeenCalledTimes(1);
+    expect(payload.productCards.map((card) => card.id)).toContain(plate.id);
+  });
+});

@@ -35,7 +35,7 @@ const generationStatusMessages = [
   'Собираю короткий ответ с выводом и ценами...'
 ];
 
-const TURN_DEADLINE_MS = 60_000;
+const TURN_DEADLINE_MS = 85_000;
 
 function remainingTurnDeadlineMs(deadlineAt: string | null | undefined) {
   const parsed = deadlineAt ? Date.parse(deadlineAt) : Number.NaN;

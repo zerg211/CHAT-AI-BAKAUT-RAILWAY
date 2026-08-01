@@ -19,6 +19,10 @@ describe('agent manager turn budget', () => {
     hostedToolCostUsd: 0
   });
 
+  it('reserves an 80-second work budget for a grounded catalog and web turn', () => {
+    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(80_000);
+  });
+
   it('bounds logical model stages independently from provider reservations', () => {
     const budget = new AgentManagerTurnBudget({
       ...DEFAULT_AGENT_MANAGER_TURN_LIMITS,

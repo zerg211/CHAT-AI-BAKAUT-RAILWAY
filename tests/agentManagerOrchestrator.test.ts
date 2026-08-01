@@ -23,7 +23,7 @@ import {
   type ToolResult
 } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
-import { assessStrictSelectionRequirements, budgetMaxFromNeedState } from '../src/ai/agentManagerCardSelection.js';
+import { assessStrictSelectionRequirements, budgetMaxFromNeedState, gateStrictSelectionRequirements } from '../src/ai/agentManagerCardSelection.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 import { config } from '../src/config.js';
 import type { ConversationSession, ConversationTurn, LeadCaptureDraft, Message, Product, ProductCard } from '../src/shared/types.js';
@@ -1157,6 +1157,93 @@ describe('AgentManagerOrchestrator', () => {
     )).toBe(false);
   });
 
+  it('adds missing web research for an open-ended preliminary requirement without discarding catalog candidates', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.userMessageSummary = 'buyer needs a light plate compactor for paving tiles on a small site';
+    intent.dialogueUnderstanding = 'the job application is relevant, but catalog cards do not prove it directly';
+    intent.nextStepRationale = 'find plate candidates first, then verify the unconfirmed application fact';
+    intent.toolRequests = [{
+      ...intent.toolRequests[0]!,
+      args: {
+        query: 'лёгкая виброплита для тротуарной плитки',
+        semanticQuery: 'виброплита для тротуарной плитки, самостоятельная перевозка',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        limit: 6
+      }
+    }];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'paving-application',
+        kind: 'material',
+        value: 'тротуарная плитка',
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'для тротуарной плитки',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.grounding = {
+      ...intent.grounding!,
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'none',
+      webRequirement: 'none',
+      requiredToolKinds: ['catalog.search'],
+      technicalAttributes: ['weight', 'application suitability']
+    };
+
+    const repaired = repairIntentForOpenEndedRequirementWebCoverage(intent);
+    const webRequest = repaired.intent.toolRequests.find((request) => request.tool === 'web.researchProductFacts');
+
+    expect(webRequest).toBeDefined();
+    expect(webRequest).toMatchObject({
+      required: true,
+      coversRequirementIds: ['paving-application'],
+      args: {
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        productNames: [],
+        comparisonAttributes: ['material']
+      }
+    });
+    expect(repaired.repairs).toEqual([{
+      requestId: webRequest!.id,
+      requirementIds: ['paving-application']
+    }]);
+    expect(repaired.intent.grounding).toMatchObject({
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: expect.arrayContaining(['catalog.search', 'web.researchProductFacts'])
+    });
+    expect(repaired.intent.selectionPolicy?.requirements[0]?.verification).toEqual({
+      mode: 'typed_tool',
+      toolRequestId: webRequest!.id,
+      tool: 'web.researchProductFacts',
+      verifier: 'technical_source_review',
+      bindAs: 'material'
+    });
+    expect(orderToolRequestsForSelectionDependencies(repaired.intent.toolRequests, repaired.intent)
+      .map((request) => request.tool)).toEqual(['catalog.search', 'web.researchProductFacts']);
+    expect(gateStrictSelectionRequirements(repaired.intent, 'plate', []).blockers).toEqual([]);
+    expect(gateStrictSelectionRequirements(repaired.intent, 'plate', []).preliminaryUnverified).toEqual([
+      expect.objectContaining({ id: 'paving-application', reason: 'typed_tool_result_missing' })
+    ]);
+
+    const finalFit = structuredClone(intent);
+    finalFit.selectionPolicy!.selectionGoal = 'final_fit';
+    expect(repairIntentForOpenEndedRequirementWebCoverage(finalFit)).toEqual({
+      intent: finalFit,
+      repairs: []
+    });
+  });
+
   it('repairs preliminary open-ended strict constraints onto the single required web verifier', () => {
     const intent = structuredGeneratorCatalogIntent();
     const catalogRequest: ToolRequest = {
@@ -1237,7 +1324,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(repaired.intent.riskFlags).toContain('planner_repaired_open_ended_requirement_web_coverage');
   });
 
-  it('does not guess an owner when open-ended requirement research has zero or multiple required web requests', () => {
+  it('creates one automatic web verifier when none exists but does not guess between multiple verifiers', () => {
     const intent = structuredGeneratorCatalogIntent();
     intent.selectionPolicy = {
       ...intent.selectionPolicy!,
@@ -1255,7 +1342,19 @@ describe('AgentManagerOrchestrator', () => {
         verification: { mode: 'product_attribute' }
       }]
     };
-    expect(repairIntentForOpenEndedRequirementWebCoverage(intent)).toEqual({ intent, repairs: [] });
+
+    const repairedWithoutWeb = repairIntentForOpenEndedRequirementWebCoverage(intent);
+    const automaticWebRequest = repairedWithoutWeb.intent.toolRequests.find((request) =>
+      request.tool === 'web.researchProductFacts'
+    );
+    expect(automaticWebRequest).toMatchObject({
+      required: true,
+      coversRequirementIds: ['material-fit']
+    });
+    expect(repairedWithoutWeb.repairs).toEqual([{
+      requestId: automaticWebRequest!.id,
+      requirementIds: ['material-fit']
+    }]);
 
     const webRequest: ToolRequest = {
       id: 'web-one',
@@ -9055,6 +9154,145 @@ describe('AgentManagerOrchestrator', () => {
     } finally {
       timeoutSignal.mockRestore();
     }
+  });
+
+  it('preserves eligible catalog cards when a preliminary web check reaches the turn deadline', async () => {
+    const conversations = new FakeConversations();
+    const candidate: Product = {
+      ...product('plate-80', 'Виброплита TEST 80 кг', 'Виброплиты'),
+      specs: { 'Рабочий вес': '80 кг' }
+    };
+    const intent = structuredGeneratorCatalogIntent();
+    const webRequest: ToolRequest = {
+      id: 'web-paving-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'проверить совместимость виброплиты с тротуарной плиткой',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        productNames: [],
+        comparisonAttributes: ['совместимость с тротуарной плиткой'],
+        comparisonAttributeBindings: []
+      },
+      rationale: 'проверить неподтверждённый технический факт после каталога',
+      required: true,
+      coversRequirementIds: ['paving-compatibility']
+    };
+    intent.userMessageSummary = 'покупатель просит лёгкую виброплиту до 90 кг для тротуарной плитки';
+    intent.dialogueUnderstanding = 'вес ограничен каталогом, совместимость с покрытием пока не подтверждена';
+    intent.nextStepRationale = 'показать предварительные варианты из каталога и не выдавать совместимость за подтверждённую';
+    intent.toolRequests = [{
+      id: 'catalog-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'лёгкая виброплита до 90 кг',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        limit: 4
+      },
+      rationale: 'найти актуальные карточки виброплит',
+      required: true,
+      coversRequirementIds: ['weight-max']
+    }, webRequest];
+    intent.selectionPolicy = {
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      needAction: 'open',
+      alternativePolicy: 'same_class_only',
+      reusePreviousCards: false,
+      maxCards: 4,
+      powerSource: 'any',
+      phase: 'any',
+      requirements: [{
+        id: 'weight-max',
+        kind: 'weight_max_kg',
+        value: 90,
+        unit: 'kg',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'не тяжелее 90 кг',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'paving-compatibility',
+        kind: 'paving_compatibility',
+        value: true,
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'нужна для тротуарной плитки',
+        verification: {
+          mode: 'typed_tool',
+          toolRequestId: webRequest.id,
+          tool: 'web.researchProductFacts',
+          verifier: 'technical_source_review',
+          bindAs: 'paving_compatibility'
+        }
+      }],
+      rationale: 'подбор по подтверждённому весу с честной оговоркой о незавершённой web-проверке'
+    };
+    intent.grounding = {
+      taskType: 'product_selection',
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: ['catalog.search', 'web.researchProductFacts'],
+      technicalAttributes: ['совместимость с тротуарной плиткой'],
+      rationale: 'внешний источник не успел завершиться, но каталоговый вес подтверждён'
+    };
+    conversations.turn = {
+      ...conversations.turn,
+      deadlineAt: new Date(Date.now() - 1_000).toISOString(),
+      plannerContract: intent
+    };
+    conversations.toolArtifacts = [{
+      tool_request_id: 'catalog-search',
+      tool_name: 'catalog.search',
+      status: 'ok',
+      payload: { products: [candidate] },
+      warnings: []
+    }, {
+      tool_request_id: webRequest.id,
+      tool_name: 'web.researchProductFacts',
+      status: 'timeout',
+      payload: {
+        usedWebSearch: false,
+        searchDisposition: 'timed_out',
+        facts: [],
+        conflicts: [],
+        warnings: ['web research timed out before a source could be confirmed']
+      },
+      warnings: ['web research timed out before a source could be confirmed'],
+      error_code: 'web_research_timeout'
+    }];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model()
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Нужна лёгкая виброплита для тротуарной плитки, не тяжелее 90 кг.'
+    });
+    const metadata = payload.metadata as {
+      answerContract?: { selectedProductIds?: string[]; selectionReadiness?: { status?: string; missingFacts?: string[] } };
+      terminalCatalogRecovery?: { selectedProductIds?: string[]; unfinishedVerification?: string[] };
+    };
+
+    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-80']);
+    expect(payload.answer).toContain('предварительно');
+    expect(payload.answer).toContain('Не успела завершиться');
+    expect(metadata.answerContract?.selectedProductIds).toEqual(['plate-80']);
+    expect(metadata.answerContract?.selectionReadiness).toMatchObject({
+      status: 'ready_for_preliminary_cards',
+      missingFacts: ['совместимость с тротуарной плиткой']
+    });
+    expect(metadata.terminalCatalogRecovery?.selectedProductIds).toEqual(['plate-80']);
   });
 });
 

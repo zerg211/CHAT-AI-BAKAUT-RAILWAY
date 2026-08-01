@@ -38,7 +38,7 @@ export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
   maxProviderReservedOutputTokens: 80_000,
   maxProviderEstimatedTotalTokens: 1_350_000,
   maxEstimatedCostUsd: 10,
-  maxWallTimeMs: 55_000
+  maxWallTimeMs: 80_000
 };
 
 export class AgentManagerTurnBudgetExceededError extends Error {

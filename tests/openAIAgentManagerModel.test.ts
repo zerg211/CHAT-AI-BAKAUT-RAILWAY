@@ -148,5 +148,11 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         expect(userInput.pendingExhaustedTechnicalHandoffs).toEqual(pendingExhaustedTechnicalHandoffs);
       }
     }
+    const plannerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_intent_contract');
+    const plannerRequest = plannerCall?.[0]?.request as { input?: Array<{ role?: string; content?: string }> } | undefined;
+    const plannerPrompt = plannerRequest?.input?.find((item) => item.role === 'system')?.content ?? '';
+    expect(plannerPrompt).toContain('Обычное упоминание поверхности или материала работы');
+    expect(plannerPrompt).toContain('не должно создавать strict hard requirement');
+    expect(plannerPrompt).toContain('выдуманную совместимость/аксессуар');
   });
 });
