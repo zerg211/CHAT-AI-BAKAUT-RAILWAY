@@ -4712,8 +4712,8 @@ function ledgerReducerPolicyPromptBlock() {
   ].join('\n');
 }
 
-function plannerSystemPromptBlock() {
-  const managerPolicy = salesManagerPlannerPolicyPromptBlock();
+function plannerSystemPromptBlock(latestUserMessage?: string) {
+  const managerPolicy = salesManagerPlannerPolicyPromptBlock({ latestUserMessage });
   return [
     'Ты планировщик AI менеджера БАКАУТ.',
     untrustedEvidenceBoundary,
@@ -4834,7 +4834,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       input: [
         {
           role: 'system',
-          content: plannerSystemPromptBlock()
+          content: plannerSystemPromptBlock(input.userMessage)
         },
         {
           role: 'user',
@@ -4864,9 +4864,11 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     const styleExamples = approvedAnswerStyleExamplesPromptBlock();
     const managerPolicy = buildSalesManagerPolicyTrace({
       target: 'answer',
+      latestUserMessage: input.userMessage,
       semanticRuleIds: input.intent.policyRuleIds ?? [],
       riskFlags: input.intent.riskFlags,
       enabled: true,
+      maxRules: 9,
       shadowMode: false
     }).promptBlock;
     const request = {

@@ -66,7 +66,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       selectionPolicy: {
         targetProductClass: null,
         canonicalProductClass: null,
-        selectionGoal: 'browse_catalog',
+        selectionGoal: 'preliminary_fit',
         needAction: 'continue',
         alternativePolicy: 'unknown',
         reusePreviousCards: false,
@@ -155,4 +155,117 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('не должно создавать strict hard requirement');
     expect(plannerPrompt).toContain('выдуманную совместимость/аксессуар');
   });
+
+  it('routes current buyer wording into dynamic sales policy prompts for planner and answer', async () => {
+    const now = new Date('2026-07-15T10:00:00.000Z').toISOString();
+    const session: ConversationSession = {
+      id: '11111111-1111-4111-8111-111111111111',
+      status: 'active',
+      conversationNumber: 1,
+      title: 'Dialog #1',
+      needState: emptyNeedState(),
+      createdAt: now,
+      updatedAt: now,
+      lastHeartbeatAt: now
+    };
+    const history: Message[] = [{
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: session.id,
+      role: 'user',
+      content: 'мне нужен резчик че у вас есть?',
+      metadata: {},
+      createdAt: now
+    }];
+    const ledgerState = reduceDialogueLedger([]);
+    const intentContract: AgentIntentContract = {
+      turnId: null,
+      userMessageSummary: 'buyer asks for a cutter assortment',
+      dialogueUnderstanding: 'ambiguous cutter request',
+      nextStepRationale: 'ask material/work before selection',
+      requiresTools: false,
+      toolRequests: [],
+      productMentions: [{ name: 'резчик', role: 'target_product', productClass: 'cutter', evidence: 'мне нужен резчик' }],
+      selectionPolicy: {
+        targetProductClass: 'резчик',
+        canonicalProductClass: 'cutter',
+        selectionGoal: 'browse_catalog',
+        needAction: 'open',
+        alternativePolicy: 'same_class_only',
+        reusePreviousCards: false,
+        maxCards: 0,
+        powerSource: null,
+        phase: null,
+        requirements: [],
+        rationale: 'ambiguous cutter wording needs material/work clarification'
+      },
+      leadCaptureAuthorization: {
+        authorized: false,
+        contactSource: 'none',
+        handoffKind: 'none',
+        purpose: null,
+        buyerQuestion: null,
+        evidence: null,
+        pendingDraftId: null
+      },
+      policyRuleIds: ['selection.cutter_ambiguous_material_question'],
+      grounding: {
+        taskType: 'product_selection',
+        sourcePolicy: 'conversation_only',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: [],
+        technicalAttributes: [],
+        buyerQuestion: 'мне нужен резчик че у вас есть?',
+        rationale: 'clarification before tools'
+      },
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    };
+    createStructuredJsonResponse
+      .mockResolvedValueOnce({ parsed: intentContract })
+      .mockResolvedValueOnce({ parsed: {
+        answerText: 'Под резчиком могут иметь в виду разное. По какому материалу нужен рез?',
+        factsUsed: [],
+        questionsAsked: [{ questionId: 'cutter-material', text: 'по какому материалу нужен рез', reason: 'резчик is ambiguous without material/work' }],
+        toolResultIds: [],
+        leadAction: 'none',
+        riskFlags: [],
+        selectionReadiness: {
+          productClass: 'cutter',
+          status: 'needs_more_info',
+          canShowProductCards: false,
+          missingFacts: ['material_or_work'],
+          rationale: 'ambiguous cutter wording'
+        }
+      } });
+    const model = new OpenAIAgentManagerModel();
+
+    await model.planTurn({ session, history, userMessage: history[0]!.content, ledgerEvents: [], ledgerState });
+    await model.composeAnswer({
+      session,
+      history,
+      userMessage: history[0]!.content,
+      ledgerEvents: [],
+      ledgerState,
+      intent: intentContract,
+      toolResults: [],
+      products: []
+    });
+
+    const plannerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_intent_contract');
+    const answerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_answer_contract');
+    const plannerPrompt = (plannerCall?.[0]?.request as { input?: Array<{ role?: string; content?: string }> })
+      ?.input?.find((item) => item.role === 'system')?.content ?? '';
+    const answerPrompt = (answerCall?.[0]?.request as { input?: Array<{ role?: string; content?: string }> })
+      ?.input?.find((item) => item.role === 'system')?.content ?? '';
+
+    expect(plannerPrompt).toContain('не планируй catalog.search');
+    for (const prompt of [plannerPrompt, answerPrompt]) {
+      expect(prompt).toContain('selection.cutter_ambiguous_material_question');
+      expect(prompt).toContain('по какому материалу');
+      expect(prompt).toContain('шовнарезчик');
+      expect(prompt).toContain('бензорез');
+    }
+  });
+
 });
