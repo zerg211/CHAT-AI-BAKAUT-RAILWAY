@@ -708,11 +708,19 @@ export function assessStrictSelectionRequirements(
 
     if (requirement.kind === 'product_type' || requirement.kind === 'product_class') {
       const expectedProductClass = coerceProductSelectionClass(requirement.value);
+      const humanProductClass = typeof requirement.value === 'string'
+        ? requirement.value.trim().toLocaleLowerCase('ru-RU')
+        : '';
+      const humanTargetProductClass = policy.targetProductClass?.trim().toLocaleLowerCase('ru-RU') ?? '';
+      const explicitlyBoundHumanClass =
+        expectedProductClass === 'unknown' &&
+        humanProductClass.length > 0 &&
+        humanProductClass === humanTargetProductClass &&
+        policy.canonicalProductClass === productClass;
       if (
         requirement.unit !== null ||
-        expectedProductClass === 'unknown' ||
         productClass === 'unknown' ||
-        expectedProductClass !== productClass
+        (!explicitlyBoundHumanClass && expectedProductClass !== productClass)
       ) {
         addBlocker(requirement, 'product_class_not_bound_to_canonical_policy');
       }

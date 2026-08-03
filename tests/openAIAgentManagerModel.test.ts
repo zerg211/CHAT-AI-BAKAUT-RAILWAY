@@ -154,6 +154,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('Обычное упоминание поверхности или материала работы');
     expect(plannerPrompt).toContain('не должно создавать strict hard requirement');
     expect(plannerPrompt).toContain('выдуманную совместимость/аксессуар');
+    expect(plannerPrompt).toContain('kind="product_class"');
+    expect(plannerPrompt).toContain('value должен в точности совпадать с canonicalProductClass');
   });
 
   it('routes current buyer wording into dynamic sales policy prompts for planner and answer', async () => {

@@ -2701,6 +2701,70 @@ describe('AgentManager visible card readiness', () => {
     ]);
   });
 
+  it('binds a human target product class label to the explicit canonical class without semantic guessing', () => {
+    const intent = structuredSelectionIntent({
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      requirements: [{
+        id: 'required-human-product-class',
+        kind: 'product_class',
+        value: 'виброплита',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: '«Нужна виброплита»',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    intent.toolRequests = [{
+      id: 'catalog-search',
+      tool: 'catalog.search',
+      args: {
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        query: 'лёгкая виброплита'
+      },
+      rationale: 'ground plate candidates',
+      required: true
+    }];
+
+    expect(assessStrictSelectionRequirements(intent, 'plate').blockers).toEqual([]);
+    const selection = selectProductsForVisibleCards({
+      products: [plate],
+      userMessage: 'Нужна лёгкая виброплита, буду возить сам.',
+      history: [],
+      intent,
+      answerText: `${plate.name} — предварительно подходящий лёгкий вариант.`,
+      selectedProductIds: [plate.id],
+      needState: needStateWithBudget()
+    });
+    expect(selection.products.map((product) => product.id)).toEqual([plate.id]);
+
+    const unboundIntent = structuredSelectionIntent({
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      requirements: [{
+        id: 'conflicting-human-product-class',
+        kind: 'product_class',
+        value: 'генератор',
+        unit: null,
+        role: 'hard_constraint',
+        strictness: 'strict',
+        relation: 'must_have',
+        evidence: 'Malformed contradictory requirement.',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+
+    expect(assessStrictSelectionRequirements(unboundIntent, 'plate').blockers).toEqual([
+      expect.objectContaining({
+        id: 'conflicting-human-product-class',
+        reason: 'product_class_not_bound_to_canonical_policy'
+      })
+    ]);
+  });
+
   it('fails closed when a supported strict numeric constraint has an invalid value', () => {
     const selected = generatorWithPrice('g2', 'TSS SGG 6000EH gasoline generator 5 kW', 70000);
     const intent = structuredSelectionIntent({
