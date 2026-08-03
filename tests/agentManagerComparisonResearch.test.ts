@@ -2472,6 +2472,161 @@ describe('AgentManager comparison research flow', () => {
     });
   });
 
+  it('executes catalog details before conditional research when a preliminary exact comparison planned web only', async () => {
+    researchProductComparisonFacts.mockClear();
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
+      sourceAttempts: [{ tier: 'catalog', outcome: 'confirmed' }],
+      facts: [{
+        productName: 'SUMEC FIRMAN 6 kW',
+        attribute: 'nominal power',
+        value: '5.5 kW',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'nominalPowerKw: 5.5',
+        sourceUrl: 'https://example.test/sumec',
+        sourceTitle: 'SUMEC FIRMAN 6 kW'
+      }, {
+        productName: 'BISON 6 kW',
+        attribute: 'nominal power',
+        value: '5.5 kW',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'nominalPowerKw: 5.5',
+        sourceUrl: 'https://example.test/bison',
+        sourceTitle: 'BISON 6 kW'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Both exact catalog models have 5.5 kW nominal power.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'nominal power',
+          status: 'confirmed',
+          value: '5.5 kW',
+          evidence: 'both exact current catalog cards'
+        }]
+      },
+      summaryForAnswer: 'Both exact catalog cards answer the comparison.',
+      warnings: ['catalog_fact_extraction_used', 'web_research_not_needed:catalog_extraction_answered']
+    });
+    const comparisonModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'compare SUMEC FIRMAN 6 kW and BISON 6 kW',
+          dialogueUnderstanding: 'preliminary comparison of two exact named catalog models',
+          nextStepRationale: 'compare exact technical attributes',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:variable-plan',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'SUMEC FIRMAN 6 kW BISON 6 kW nominal power',
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              productNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'],
+              comparisonAttributes: ['nominal power'],
+              limit: 2
+            },
+            rationale: 'planner variably treated exact specs as independent web facts',
+            required: true
+          }],
+          productMentions: [{
+            name: 'SUMEC FIRMAN 6 kW',
+            role: 'comparison_subject',
+            productClass: 'generator',
+            evidence: 'SUMEC FIRMAN 6 kW'
+          }, {
+            name: 'BISON 6 kW',
+            role: 'comparison_subject',
+            productClass: 'generator',
+            evidence: 'BISON 6 kW'
+          }],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            selectionGoal: 'preliminary_fit',
+            needAction: 'continue',
+            alternativePolicy: 'exact_only',
+            reusePreviousCards: false,
+            maxCards: 2,
+            powerSource: 'fuel',
+            phase: 'single_phase',
+            requirements: [],
+            rationale: 'compare only the exact named products'
+          },
+          grounding: {
+            taskType: 'comparison',
+            sourcePolicy: 'web_required',
+            webPurpose: 'technical_specs',
+            webRequirement: 'independent_required',
+            requiredToolKinds: ['web.researchProductFacts'],
+            technicalAttributes: ['nominal power'],
+            rationale: 'planner requested exact-model technical verification'
+          },
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.toolResults.map((result) => result.tool)).toEqual([
+          'catalog.getProductDetails',
+          'web.researchProductFacts'
+        ]);
+        return {
+          answerText: 'Both exact models have 5.5 kW nominal power according to their current catalog cards.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: input.toolResults.map((result) => result.requestId),
+          selectedProductIds: [],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            status: 'ready_for_preliminary_cards',
+            canShowProductCards: true,
+            productClass: 'generator',
+            missingFacts: [],
+            rationale: 'both exact catalog cards support the comparison'
+          }
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Compare SUMEC FIRMAN 6 kW and BISON 6 kW by nominal power.')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      {} as never,
+      withStrictToolFixtures(comparisonModel)
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Compare SUMEC FIRMAN 6 kW and BISON 6 kW by nominal power.'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      allowCatalogOnlyAnswer: true,
+      targetProductNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'],
+      products: expect.arrayContaining([
+        expect.objectContaining({ id: 'sumec' }),
+        expect.objectContaining({ id: 'bison' })
+      ])
+    }));
+    expect(payload.usedWebSearch).toBe(false);
+    expect(payload.metadata?.intentContract).toMatchObject({
+      grounding: {
+        sourcePolicy: 'catalog_required',
+        webRequirement: 'conditional_on_catalog_gap'
+      },
+      riskFlags: expect.arrayContaining(['preliminary_exact_comparison_catalog_first_reconciled'])
+    });
+  });
+
   it('binds visible comparison targets to products, runs web research, and records conflicts', async () => {
     researchProductComparisonFacts.mockResolvedValue({
       usedWebSearch: true,

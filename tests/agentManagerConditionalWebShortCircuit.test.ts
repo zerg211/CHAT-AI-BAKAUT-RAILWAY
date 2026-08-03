@@ -5,6 +5,7 @@ import {
   catalogCandidatesSatisfyingConditionalWebRequest,
   enforceSearchBeforeTechnicalSpecialist,
   reconcileParallelIntentNeedAction,
+  repairPreliminaryExactComparisonCatalogFirst,
   sourcePolicyMetadataFromIntent,
   webResearchResultProvesSourceExhaustion,
   reconcileNewActiveNeedProductClass
@@ -204,6 +205,80 @@ function openedNeed(
 }
 
 describe('conditional catalog-evidence web short-circuit', () => {
+  it('repairs a preliminary exact comparison that variably planned independent web without catalog details', () => {
+    const intent = conditionalWebIntent({
+      webRequirement: 'independent_required',
+      productNames: ['CHAMPION PC5332F', 'REDVERG RD-29140']
+    });
+    intent.grounding = {
+      ...intent.grounding!,
+      taskType: 'comparison',
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      technicalAttributes: ['weight_kg', 'dimensions', 'folding_handle', 'transport_wheels_or_trolley'],
+      requiredToolKinds: ['web.researchProductFacts']
+    };
+    intent.productMentions = [
+      {
+        name: 'CHAMPION PC5332F',
+        role: 'comparison_subject',
+        productClass: 'виброплита',
+        evidence: 'CHAMPION PC5332F'
+      },
+      {
+        name: 'REDVERG RD-29140',
+        role: 'comparison_subject',
+        productClass: 'виброплита',
+        evidence: 'REDVERG RD-29140'
+      }
+    ];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit'
+    };
+    intent.toolRequests = [webRequest(intent)];
+
+    const repaired = repairPreliminaryExactComparisonCatalogFirst(
+      intent,
+      'Сравните CHAMPION PC5332F и REDVERG RD-29140 по массе и колёсам.'
+    );
+
+    expect(repaired.grounding).toEqual(expect.objectContaining({
+      sourcePolicy: 'catalog_required',
+      webRequirement: 'conditional_on_catalog_gap',
+      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts']
+    }));
+    expect(repaired.toolRequests.map((request) => request.tool)).toEqual([
+      'catalog.getProductDetails',
+      'web.researchProductFacts'
+    ]);
+    expect(repaired.toolRequests[0]).toEqual(expect.objectContaining({
+      tool: 'catalog.getProductDetails',
+      args: expect.objectContaining({
+        productNames: ['CHAMPION PC5332F', 'REDVERG RD-29140'],
+        comparisonAttributes: ['weight_kg', 'dimensions', 'folding_handle', 'transport_wheels_or_trolley']
+      })
+    }));
+    expect(repaired.riskFlags).toContain('preliminary_exact_comparison_catalog_first_reconciled');
+  });
+
+  it.each(['buyer_requested', 'none'] as const)(
+    'does not rewrite explicit or absent web policy %s for exact comparisons',
+    (webRequirement) => {
+      const intent = conditionalWebIntent({
+        webRequirement,
+        productNames: ['TEST DG quiet', 'TEST DG loud']
+      });
+      intent.grounding = { ...intent.grounding!, taskType: 'comparison' };
+      expect(repairPreliminaryExactComparisonCatalogFirst(
+        intent,
+        'Compare TEST DG quiet and TEST DG loud.'
+      )).toBe(intent);
+    }
+  );
+
   it('allows catalog-only LLM extraction for conditional preliminary comparisons but not independent or final checks', () => {
     const conditionalComparison = conditionalWebIntent({
       productNames: ['TEST DG quiet'],

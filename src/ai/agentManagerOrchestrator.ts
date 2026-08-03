@@ -1813,6 +1813,101 @@ function intentHasCatalogSearchRequest(intent: AgentIntentContract) {
   );
 }
 
+export function repairPreliminaryExactComparisonCatalogFirst(
+  intent: AgentIntentContract,
+  userMessage: string
+): AgentIntentContract {
+  const grounding = intent.grounding;
+  if (
+    grounding?.taskType !== 'comparison' ||
+    grounding.webRequirement !== 'independent_required' ||
+    grounding.webPurpose !== 'technical_specs' ||
+    intent.selectionPolicy?.selectionGoal !== 'preliminary_fit'
+  ) {
+    return intent;
+  }
+  const webRequestIndex = intent.toolRequests.findIndex((request) =>
+    request.tool === 'web.researchProductFacts'
+  );
+  if (webRequestIndex < 0) return intent;
+  const webRequest = intent.toolRequests[webRequestIndex]!;
+  const requestedWebTargets = requestStringArray(webRequest.args.productNames);
+  const targetProductNames = uniqueStrings([
+    ...exactProductNamesFromIntent(intent, userMessage),
+    ...(intent.productMentions ?? [])
+      .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+      .filter((mention) => requestedWebTargets.some((requestedName) =>
+        productMentionMatchesName(mention.name, requestedName)
+      ))
+      .map((mention) => mention.name)
+  ]);
+  if (targetProductNames.length < 2 || !targetProductNames.every((targetName) =>
+    requestedWebTargets.some((requestedName) => productMentionMatchesName(targetName, requestedName))
+  )) return intent;
+  const comparisonAttributes = grounding.technicalAttributes.length
+    ? grounding.technicalAttributes
+    : requestStringArray(webRequest.args.comparisonAttributes);
+  const existingDetailsRequest = intent.toolRequests.find((request) =>
+    request.tool === 'catalog.getProductDetails' &&
+    targetProductNames.every((targetName) =>
+      requestStringArray(request.args.productNames).some((requestedName) =>
+        productMentionMatchesName(targetName, requestedName)
+      )
+    )
+  );
+  const detailRequest: ToolRequest = existingDetailsRequest ?? {
+    id: uniqueToolRequestId(intent, 'auto:catalog-exact-comparison'),
+    tool: 'catalog.getProductDetails',
+    args: {
+      query: targetProductNames.join(' '),
+      semanticQuery: [
+        intent.userMessageSummary,
+        intent.dialogueUnderstanding,
+        intent.nextStepRationale
+      ].filter(Boolean).join('\n'),
+      productIntent: intent.selectionPolicy.targetProductClass,
+      canonicalProductIntent: intent.selectionPolicy.canonicalProductClass ?? undefined,
+      powerSource: intent.selectionPolicy.powerSource ?? undefined,
+      phase: intent.selectionPolicy.phase ?? undefined,
+      productNames: targetProductNames,
+      comparisonAttributes,
+      limit: targetProductNames.length,
+      reason: 'Read the exact current catalog cards before conditional external research.',
+      notes: 'Reconciled from the semantic preliminary exact-comparison contract; web remains available only for catalog gaps.'
+    },
+    rationale: 'Read both exact catalog cards before researching any unresolved comparison facts.',
+    required: true,
+    coversRequirementIds: webRequest.coversRequirementIds
+  };
+  const toolRequests = existingDetailsRequest
+    ? intent.toolRequests
+    : [
+        ...intent.toolRequests.slice(0, webRequestIndex),
+        detailRequest,
+        ...intent.toolRequests.slice(webRequestIndex)
+      ];
+
+  return {
+    ...intent,
+    requiresTools: true,
+    toolRequests,
+    grounding: {
+      ...grounding,
+      sourcePolicy: 'catalog_required',
+      webRequirement: 'conditional_on_catalog_gap',
+      requiredToolKinds: [
+        'catalog.getProductDetails' as const,
+        ...grounding.requiredToolKinds.filter((tool) => tool !== 'catalog.getProductDetails')
+      ],
+      rationale: `${grounding.rationale} Read exact catalog cards first; use web only for unresolved facts.`
+    },
+    riskFlags: uniqueStrings([
+      ...intent.riskFlags,
+      'preliminary_exact_comparison_catalog_first_reconciled'
+    ])
+  };
+}
+
 function repairIntentForCatalogGrounding(
   intent: AgentIntentContract,
   userMessage: string,
@@ -6137,8 +6232,11 @@ export class AgentManagerOrchestrator {
     const groundedIntent = repairIntentForCatalogClarificationBeforeTools(
       repairIntentForExactModelEvidence(
         repairIntentForCatalogGrounding(
-          repairIntentForGroundingPolicy(
-            enforceSearchBeforeTechnicalSpecialist(plannedIntent, { provenExhaustedHandoffContinuation }),
+          repairPreliminaryExactComparisonCatalogFirst(
+            repairIntentForGroundingPolicy(
+              enforceSearchBeforeTechnicalSpecialist(plannedIntent, { provenExhaustedHandoffContinuation }),
+              userMessage
+            ),
             userMessage
           ),
           userMessage,
