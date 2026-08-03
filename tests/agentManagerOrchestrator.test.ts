@@ -2676,6 +2676,133 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).toEqual([exact.id]);
   });
 
+  it('keeps current catalog details when a same-id historical visible card is lossy', async () => {
+    const exact: Product = {
+      ...product('generator-current-details', 'TSS SGG 5000A generator', 'Generators'),
+      description: 'Current catalog description confirms electric start with a key.',
+      specs: { 'Nominal power': '5 kW' }
+    };
+    const historicalCard: ProductCard = {
+      id: exact.id,
+      name: exact.name,
+      brand: exact.brand,
+      category: exact.category,
+      price: exact.price,
+      currency: exact.currency,
+      sourceUrl: exact.sourceUrl,
+      specs: exact.specs,
+      reasons: ['previous visible recommendation'],
+      caveats: []
+    };
+    const previousAssistant = message('Earlier I showed TSS SGG 5000A.', 'assistant');
+    previousAssistant.metadata = { productCards: [historicalCard] };
+
+    class HistoricalCardConversations extends FakeConversations {
+      currentSession: ConversationSession = {
+        ...session(),
+        needState: {
+          ...emptyNeedState(),
+          activeNeeds: [{
+            id: 'generator',
+            productClass: 'generator',
+            summary: 'selected generator',
+            constraints: [],
+            openQuestions: [],
+            selectedProductIds: [exact.id],
+            status: 'selected' as const,
+            updatedAt: new Date('2026-05-19T12:00:00.000Z').toISOString()
+          }]
+        }
+      };
+      override messages = [
+        message('Show me a generator.'),
+        previousAssistant,
+        message('Confirm the start method again.')
+      ];
+      override async getSession() { return this.currentSession; }
+    }
+
+    class CurrentDetailsProducts extends FakeProducts {
+      async getProductsByIds(ids: string[]) {
+        return ids.includes(exact.id) ? [exact] : [];
+      }
+      override async searchProducts(): Promise<Product[]> {
+        throw new Error('the exact current catalog product must be rehydrated by id');
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.toolRequests = [{
+      id: 'current-product-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productIds: [exact.id],
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        comparisonAttributes: ['start method']
+      },
+      rationale: 'rehydrate the current full catalog description for the prior card',
+      required: true
+    }];
+    intent.selectionPolicy = undefined;
+    intent.grounding = {
+      taskType: 'comparison',
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'none',
+      requiredToolKinds: ['catalog.getProductDetails'],
+      technicalAttributes: ['start method'],
+      rationale: 'the current catalog description is the decisive source'
+    };
+
+    const orchestrator = new AgentManagerOrchestrator(
+      new HistoricalCardConversations() as never,
+      new CurrentDetailsProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products).toHaveLength(1);
+          expect(input.products[0]?.description).toBe(exact.description);
+          return {
+            answerText: `${exact.name}: the current catalog description confirms electric start with a key.`,
+            factsUsed: [{
+              factKey: 'start_method',
+              value: true,
+              sourceEventIds: ['current-product-details']
+            }],
+            questionsAsked: [],
+            toolResultIds: ['current-product-details'],
+            selectedProductIds: [exact.id],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'the current catalog description confirms the requested feature'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Confirm the start method again.'
+    });
+
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ requestId?: string; payload?: { products?: Product[] } }>;
+      cardSelection?: { warnings?: string[] };
+    };
+    expect(metadata.toolResults?.find((result) => result.requestId === 'current-product-details')
+      ?.payload?.products?.[0]?.description).toBe(exact.description);
+    expect(metadata.cardSelection?.warnings).toContain('product_cards_reused_from_previous_turn');
+    expect(payload.productCards.map((card) => card.id)).toEqual([exact.id]);
+  });
+
   it('keeps a catalog-confirmed paving-mat plate through strict follow-up selection', async () => {
     const withPavingMat: Product = {
       ...product('masalta-mat', 'Виброплита бензиновая Masalta MSR90-4 (83 кг)', 'Виброплиты'),

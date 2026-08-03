@@ -6240,7 +6240,7 @@ export class AgentManagerOrchestrator {
       : [];
     let selectionToolResults = mergeSelectionToolResults(historicalSelectionTools, toolResults);
     const rawAnswerProducts = [...new Map(
-      [...products, ...historicalProducts].map((product) => [product.id, product])
+      [...historicalProducts, ...products].map((product) => [product.id, product])
     ).values()];
     const structuredPolicyEvidence = filterProductsByStructuredSelectionPolicy({
       products: rawAnswerProducts,
