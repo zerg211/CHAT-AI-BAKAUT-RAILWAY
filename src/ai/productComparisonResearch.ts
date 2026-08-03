@@ -1976,11 +1976,9 @@ export async function researchProductComparisonFacts(input: {
     : [];
 
   const exactCatalogProducts = exactCatalogProductsForTargets(input.products, targetProductNames);
-  const catalogExtractionAllowedUnderDeadline = input.allowCatalogOnlyAnswer === true &&
-    webResearchRemainingMs(input.deadlineAtMs) >= WEB_RESEARCH_MIN_RETRY_REMAINING_MS;
+  const conditionalCatalogFirstResearch = input.allowCatalogOnlyAnswer === true && exactCatalogProducts.length > 0;
   const catalogExtractionSkippedForDeadline = exactCatalogProducts.length > 0 &&
-    input.deadlineAtMs !== undefined &&
-    !catalogExtractionAllowedUnderDeadline;
+    (conditionalCatalogFirstResearch || input.deadlineAtMs !== undefined);
   const catalogResult = exactCatalogProducts.length && !catalogExtractionSkippedForDeadline
     ? await extractExactCatalogProductFacts({
         userMessage: input.userMessage,
@@ -2023,6 +2021,19 @@ export async function researchProductComparisonFacts(input: {
     };
   }
 
+  const exactTargetResearchInstructions = conditionalCatalogFirstResearch
+    ? [
+        'The products field contains the exact current catalog cards. First interpret their complete specs and descriptions semantically for every requested comparison attribute.',
+        'Do not call web_search when those exact catalog cards fully answer the buyer question with no ambiguity or conflict. Return exact catalog facts with sourceType="catalog" and sourceUrl from the matching card.',
+        'Call web_search in this same response when any decisive requested attribute is missing, ambiguous, contradicted, or the exact target card is absent. Search only for the unresolved exact-target facts.',
+        'A missing catalog attribute is not proof that a feature is absent. If web search also cannot confirm it, keep it not_confirmed.'
+      ]
+    : [
+        'If buyerQuestion asks about targetProductNames and the exact model is absent from products, search the web for that exact target model. Do not infer exact target facts from nearby models.',
+        'If buyerQuestion asks about targetProductNames and catalogExtraction already answered, still run exact-target external research. The catalog answer is evidence to verify/adjudicate, not a terminal answer for this tool.',
+        'When targetProductNames is present, search exact quoted target names on the public web with the requested attributes before using nearby catalog products.'
+      ];
+
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
     reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
@@ -2036,9 +2047,7 @@ export async function researchProductComparisonFacts(input: {
           'Если catalogExtraction уже содержит факты из точной карточки БАКАУТ, считай specs и description полноценным каталожным evidence; web нужен, чтобы добрать недостающие детали или проверить конфликт, а не игнорировать карточку.',
           'Если web и каталог конфликтуют по важному параметру, укажи конфликт и выбери значение только при подтверждении логикой источников.',
           'Не пиши ответ покупателю. Верни только JSON.',
-          'If buyerQuestion asks about targetProductNames and the exact model is absent from products, search the web for that exact target model. Do not infer exact target facts from nearby models.',
-          'If buyerQuestion asks about targetProductNames and catalogExtraction already answered, still run exact-target external research. The catalog answer is evidence to verify/adjudicate, not a terminal answer for this tool.',
-          'When targetProductNames is present, search exact quoted target names on the public web with the requested attributes before using nearby catalog products.',
+          ...exactTargetResearchInstructions,
           'A web fact for a target model is valid only when sourceUrl, sourceTitle, or evidence names the same exact model identifier. Same brand, same family, or nearby model pages are not proof about the target model.',
           'When catalog evidence and public exact-target evidence disagree on a decision-blocking attribute, adjudicate sources instead of defaulting to catalog or saying only that it must be checked later.',
           'For a source conflict, keep searching until at least two additional independent exact-target public sources confirm or refute the disputed value, or until deeper search is exhausted. Manufacturer/manual evidence is strongest, but independent exact-target corroboration should close the buyer need when sources agree.',
@@ -2073,12 +2082,14 @@ export async function researchProductComparisonFacts(input: {
     ],
     tools: [{
       type: 'web_search',
-      search_context_size: targetProductNames.length ? 'medium' : 'low',
+      search_context_size: conditionalCatalogFirstResearch ? 'low' : targetProductNames.length ? 'medium' : 'low',
       return_token_budget: 'default'
     }],
-    tool_choice: { type: 'web_search' },
+    tool_choice: conditionalCatalogFirstResearch ? 'auto' : { type: 'web_search' },
     include: ['web_search_call.action.sources'],
-    max_output_tokens: productComparisonMaxOutputTokens(targetProductNames),
+    max_output_tokens: conditionalCatalogFirstResearch
+      ? Math.max(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, PRODUCT_COMPARISON_MIN_OUTPUT_TOKENS)
+      : productComparisonMaxOutputTokens(targetProductNames),
     text: {
       format: {
         type: 'json_schema',
@@ -2182,7 +2193,9 @@ export async function researchProductComparisonFacts(input: {
   const primaryUsedWebSearch = responseUsedWebSearch(response);
   const normalizedPrimaryResult = normalizeResearchParsed(parsed, {
       usedWebSearch: primaryUsedWebSearch,
-      searchDisposition: primaryUsedWebSearch ? 'completed' : 'failed',
+      searchDisposition: primaryUsedWebSearch
+        ? 'completed'
+        : conditionalCatalogFirstResearch ? 'not_needed' : 'failed',
       sourcesExhausted: false
     });
   normalizedPrimaryResult.sourceAttempts = mergeSourceAttempts(
@@ -2199,12 +2212,37 @@ export async function researchProductComparisonFacts(input: {
     signal: input.signal,
     deadlineAtMs: input.deadlineAtMs
   });
+  if (
+    conditionalCatalogFirstResearch &&
+    !primaryUsedWebSearch &&
+    catalogExtractionAnswersQuestion(primaryResult, targetProductNames)
+  ) {
+    return {
+      ...primaryResult,
+      usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
+      sourceAttempts: mergeSourceAttempts(catalogSourceAttempts, primaryResult.sourceAttempts),
+      warnings: uniqueStrings([
+        ...primaryResult.warnings,
+        'catalog_fact_extraction_used',
+        'exact_catalog_description_extracted',
+        'catalog_fact_extraction_integrated_with_conditional_research',
+        'web_research_not_needed:catalog_extraction_answered'
+      ])
+    };
+  }
   const mergedPrimaryResult = mergeCatalogAndWebResearch(catalogResultForResearch, primaryResult);
   const combinedPrimaryResult = {
     ...mergedPrimaryResult,
     warnings: uniqueStrings([
       ...mergedPrimaryResult.warnings,
-      catalogExtractionSkippedForDeadline ? 'catalog_fact_extraction_skipped_for_web_deadline' : ''
+      catalogExtractionSkippedForDeadline && !conditionalCatalogFirstResearch
+        ? 'catalog_fact_extraction_skipped_for_web_deadline'
+        : '',
+      conditionalCatalogFirstResearch
+        ? 'catalog_fact_extraction_integrated_with_conditional_research'
+        : ''
     ])
   };
   const deepMissingFactRetryRequired = needsDeepMissingFactSearch({

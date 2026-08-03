@@ -697,7 +697,13 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 20_000
     });
 
-    expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction']);
+    expect(researchCalls().map((call) => call.stage)).toEqual(['product_comparison_research']);
+    expect(researchCalls()[0].request.tool_choice).toBe('auto');
+    expect(researchCalls()[0].request.tools).toEqual([{
+      type: 'web_search',
+      search_context_size: 'low',
+      return_token_budget: 'default'
+    }]);
     expect(actual.usedWebSearch).toBe(false);
     expect(actual.searchDisposition).toBe('not_needed');
     expect(actual.answerGuidance.completeness).toBe('answered');
@@ -710,23 +716,6 @@ describe('product comparison research', () => {
 
   it('continues to web when conditional catalog extraction remains incomplete', async () => {
     const exactQuote = 'FIRMAN RD3910E starting system: ignition key electric starter.';
-    queueResearchResponse({
-      parsed: result({
-        answerGuidance: {
-          directAnswer: '',
-          completeness: 'partially_answered',
-          coverage: [{
-            attribute: 'start control',
-            status: 'not_confirmed',
-            value: '',
-            evidence: 'The exact control is not stated in the catalog card.',
-            sourceUrl: null,
-            sourceTitle: null
-          }]
-        },
-        warnings: ['catalog_fact_missing_needs_web_research']
-      })
-    });
     fetchMock.mockResolvedValueOnce(sourceResponse(`<html><body>${exactQuote}</body></html>`));
     queueResearchResponse({
       parsed: result({
@@ -765,10 +754,8 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 20_000
     });
 
-    expect(researchCalls().map((call) => call.stage)).toEqual([
-      'catalog_product_fact_extraction',
-      'product_comparison_research'
-    ]);
+    expect(researchCalls().map((call) => call.stage)).toEqual(['product_comparison_research']);
+    expect(researchCalls()[0].request.tool_choice).toBe('auto');
     expect(actual.usedWebSearch).toBe(true);
     expect(actual.answerGuidance.completeness).toBe('answered');
   });
