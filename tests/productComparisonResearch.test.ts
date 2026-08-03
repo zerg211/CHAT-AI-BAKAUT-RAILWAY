@@ -659,6 +659,120 @@ describe('product comparison research', () => {
     expect(JSON.stringify(catalogCall.request.input)).toContain('поворотом ключа электростартера');
   });
 
+  it('returns a complete exact catalog extraction without starting web when catalog-only is allowed under a deadline', async () => {
+    queueResearchResponse({
+      parsed: result({
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          value: 'запуск поворотом ключа электростартера; также есть ручной стартер',
+          sourceType: 'catalog',
+          confidence: 'high',
+          evidence: 'catalog.description: запуск двигателя осуществляется поворотом ключа электростартера',
+          sourceUrl: 'https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_firman_rd3910e_2_5_kvt/',
+          sourceTitle: 'Генератор бензиновый FIRMAN RD3910E 2.5 кВт'
+        }],
+        answerGuidance: {
+          directAnswer: 'RD3910E запускается с ключа электростартера, плюс есть ручной запуск.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'start control',
+            status: 'confirmed',
+            value: 'поворот ключа электростартера',
+            evidence: 'catalog.description',
+            sourceUrl: 'https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_firman_rd3910e_2_5_kvt/',
+            sourceTitle: 'Генератор бензиновый FIRMAN RD3910E 2.5 кВт'
+          }]
+        },
+        summaryForAnswer: 'Catalog description fully answers the start-control question.'
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Firman RD3910E заводится с ключа или с кнопки?',
+      products: [product()],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['start control'],
+      allowCatalogOnlyAnswer: true,
+      deadlineAtMs: Date.now() + 20_000
+    });
+
+    expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction']);
+    expect(actual.usedWebSearch).toBe(false);
+    expect(actual.searchDisposition).toBe('not_needed');
+    expect(actual.answerGuidance.completeness).toBe('answered');
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'catalog_fact_extraction_used',
+      'exact_catalog_description_extracted',
+      'web_research_not_needed:catalog_extraction_answered'
+    ]));
+  });
+
+  it('continues to web when conditional catalog extraction remains incomplete', async () => {
+    const exactQuote = 'FIRMAN RD3910E starting system: ignition key electric starter.';
+    queueResearchResponse({
+      parsed: result({
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'partially_answered',
+          coverage: [{
+            attribute: 'start control',
+            status: 'not_confirmed',
+            value: '',
+            evidence: 'The exact control is not stated in the catalog card.',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        },
+        warnings: ['catalog_fact_missing_needs_web_research']
+      })
+    });
+    fetchMock.mockResolvedValueOnce(sourceResponse(`<html><body>${exactQuote}</body></html>`));
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          value: 'ignition key electric starter',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: exactQuote,
+          sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
+          sourceTitle: 'FIRMAN RD3910E'
+        }],
+        answerGuidance: {
+          directAnswer: 'RD3910E запускается с ключа через электростартер.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'start control',
+            status: 'confirmed',
+            value: 'ignition key electric starter',
+            evidence: exactQuote,
+            sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
+            sourceTitle: 'FIRMAN RD3910E'
+          }]
+        }
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Firman RD3910E заводится с ключа или с кнопки?',
+      products: [product({ description: 'В карточке указан только электростартер.' })],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['start control'],
+      allowCatalogOnlyAnswer: true,
+      deadlineAtMs: Date.now() + 20_000
+    });
+
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'catalog_product_fact_extraction',
+      'product_comparison_research'
+    ]);
+    expect(actual.usedWebSearch).toBe(true);
+    expect(actual.answerGuidance.completeness).toBe('answered');
+  });
+
   it('reserves a production deadline for one modern web pass and verifies an exact source quote without another model call', async () => {
     const exactQuote = 'FIRMAN RD3910E starting system: ignition key electric starter.';
     fetchMock.mockResolvedValueOnce(sourceResponse(`<html><body>${exactQuote}</body></html>`));
@@ -695,6 +809,7 @@ describe('product comparison research', () => {
       products: [product()],
       targetProductNames: ['FIRMAN RD3910E'],
       comparisonAttributes: ['start control'],
+      allowCatalogOnlyAnswer: false,
       deadlineAtMs: Date.now() + 20_000
     });
 

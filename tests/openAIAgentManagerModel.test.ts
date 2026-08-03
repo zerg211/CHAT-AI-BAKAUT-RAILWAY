@@ -177,6 +177,10 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('rankingObjectives');
     expect(plannerPrompt).toContain('attribute="weight_kg"');
     expect(plannerPrompt).toContain('direction="minimize"');
+    expect(plannerPrompt).toContain('обычного предварительного сравнения точных моделей из текущего каталога');
+    expect(plannerPrompt).toContain('catalog.getProductDetails');
+    expect(plannerPrompt).toContain('полностью ответил без конфликта');
+    expect(plannerPrompt).toContain('явно просит внешнюю проверку');
     const rankingSchema = plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.properties?.rankingObjectives;
     expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
     expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);

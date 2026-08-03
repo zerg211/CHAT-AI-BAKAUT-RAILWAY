@@ -2505,6 +2505,7 @@ describe('AgentManager comparison research flow', () => {
 
     expect(payload.usedWebSearch).toBe(true);
     expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      allowCatalogOnlyAnswer: false,
       products: expect.arrayContaining([
         expect.objectContaining({ name: 'SUMEC FIRMAN 6 kW' }),
         expect.objectContaining({ name: 'BISON 6 kW' })

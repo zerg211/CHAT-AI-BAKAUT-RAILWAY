@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  allowCatalogOnlyResearchForWebRequest,
   catalogCandidatesSatisfyingConditionalWebRequest,
   enforceSearchBeforeTechnicalSpecialist,
   sourcePolicyMetadataFromIntent,
@@ -202,6 +203,52 @@ function openedNeed(
 }
 
 describe('conditional catalog-evidence web short-circuit', () => {
+  it('allows catalog-only LLM extraction for conditional preliminary comparisons but not independent or final checks', () => {
+    const conditionalComparison = conditionalWebIntent({
+      productNames: ['TEST DG quiet'],
+      exactTarget: true
+    });
+    conditionalComparison.grounding = {
+      ...conditionalComparison.grounding!,
+      taskType: 'comparison'
+    };
+    conditionalComparison.toolRequests.splice(1, 0, {
+      id: 'catalog-details',
+      tool: 'catalog.getProductDetails',
+      args: { productNames: ['TEST DG quiet'] },
+      rationale: 'read the full current catalog card before conditional web research',
+      required: true
+    });
+
+    expect(allowCatalogOnlyResearchForWebRequest(
+      conditionalComparison,
+      webRequest(conditionalComparison)
+    )).toBe(true);
+
+    const comparisonWithoutDetails = conditionalWebIntent({
+      productNames: ['TEST DG quiet'],
+      exactTarget: true
+    });
+    comparisonWithoutDetails.grounding = {
+      ...comparisonWithoutDetails.grounding!,
+      taskType: 'comparison'
+    };
+    expect(allowCatalogOnlyResearchForWebRequest(
+      comparisonWithoutDetails,
+      webRequest(comparisonWithoutDetails)
+    )).toBe(false);
+
+    for (const webRequirement of ['buyer_requested', 'independent_required'] as const) {
+      const intent = conditionalWebIntent({ webRequirement });
+      intent.grounding = { ...intent.grounding!, taskType: 'comparison' };
+      expect(allowCatalogOnlyResearchForWebRequest(intent, webRequest(intent))).toBe(false);
+    }
+
+    const finalIntent = conditionalWebIntent({ selectionGoal: 'final_fit' });
+    finalIntent.grounding = { ...finalIntent.grounding!, taskType: 'comparison' };
+    expect(allowCatalogOnlyResearchForWebRequest(finalIntent, webRequest(finalIntent))).toBe(false);
+  });
+
   it('returns a catalog candidate only for conditional preliminary selection with a complete product-attribute proof', () => {
     const quiet = generator('quiet', ['58 dB']);
     const intent = conditionalWebIntent();

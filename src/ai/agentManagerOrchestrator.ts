@@ -2625,6 +2625,30 @@ export function catalogCandidatesSatisfyingConditionalWebRequest(input: {
   ));
 }
 
+export function allowCatalogOnlyResearchForWebRequest(
+  intent: AgentIntentContract,
+  request: ToolRequest
+) {
+  const taskType = intent.grounding?.taskType;
+  const requestIndex = intent.toolRequests.findIndex((candidate) =>
+    candidate.id === request.id && candidate.tool === request.tool
+  );
+  const priorRequests = requestIndex > 0
+    ? intent.toolRequests.slice(0, requestIndex)
+    : [];
+  const hasRequiredCatalogLookup = taskType === 'comparison'
+    ? priorRequests.some((candidate) => candidate.tool === 'catalog.getProductDetails')
+    : priorRequests.some((candidate) =>
+        candidate.tool === 'catalog.search' || candidate.tool === 'catalog.getProductDetails'
+      );
+  return request.tool === 'web.researchProductFacts' &&
+    intent.grounding?.sourcePolicy === 'web_required' &&
+    intent.grounding.webRequirement === 'conditional_on_catalog_gap' &&
+    intent.selectionPolicy?.selectionGoal === 'preliminary_fit' &&
+    (taskType === 'product_selection' || taskType === 'comparison') &&
+    hasRequiredCatalogLookup;
+}
+
 type SelectionCandidateTier = 'exact_match' | 'preliminary_match' | 'compromise' | 'rejected';
 
 function visibleSelectionTier(intent: AgentIntentContract): Exclude<SelectionCandidateTier, 'compromise' | 'rejected'> {
@@ -4806,8 +4830,8 @@ function plannerSystemPromptBlock(latestUserMessage?: string) {
     'LLM решает смысл хода без фиксированного списка сценариев.',
     'Код только исполнит typed tools, но не будет подменять твой смысл.',
     'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, webRequirement, requiredToolKinds, technicalAttributes, buyerQuestion и rationale. Для technical_answer/product_selection/comparison buyerQuestion — точная непрерывная цитата из сообщения покупателя, выражающая активный бизнес-вопрос; не включай в неё телефон, email, имя или фразу о способе связи и сохраняй ту же цитату через ответы на уточнения. Для остальных задач без технического вопроса используй null. Затем toolRequests должны исполнять эту grounding-политику.',
-    'Всегда классифицируй grounding.webRequirement: none — web не нужен; buyer_requested — покупатель явно попросил проверить во внешних источниках; conditional_on_catalog_gap — при предварительном подборе web нужен только если каталог не подтверждает покрываемые характеристики хотя бы у одного иначе подходящего кандидата; independent_required — руководство, общий технический вопрос, актуальная линейка или другой факт требует внешнего источника независимо от карточки каталога.',
-    'Используй conditional_on_catalog_gap только для product_selection с selectionGoal=preliminary_fit, пустым args.productNames и coversRequirementIds, где каждый покрываемый requirement имеет verification.mode="product_attribute". Для каждого args.comparisonAttributes обязательно создай ровно одну запись args.comparisonAttributeBindings={attribute,requirementId}; attribute должен в точности повторять comparisonAttributes, requirementId должен указывать на соответствующий product_attribute requirement из coversRequirementIds. Все решающие характеристики этого web-запроса должны быть представлены отдельными requirements и перечислены в coversRequirementIds; не добавляй в comparisonAttributes другие решающие характеристики. Во всех остальных web-запросах ставь comparisonAttributeBindings=[]. Явная просьба покупателя проверить, точная модель, final_fit, сравнение, руководство или общий technical web research никогда не являются conditional_on_catalog_gap.',
+    'Всегда классифицируй grounding.webRequirement: none — web не нужен; buyer_requested — покупатель явно попросил проверить во внешних источниках; conditional_on_catalog_gap — при предварительном подборе или обычного предварительного сравнения точных моделей из текущего каталога web нужен только если полная карточка каталога не отвечает на решающие характеристики; independent_required — руководство, общий технический вопрос, актуальная линейка или другой факт требует внешнего источника независимо от карточки каталога.',
+    'Используй conditional_on_catalog_gap только при selectionGoal=preliminary_fit. Для product_selection без заранее известных кандидатов оставляй args.productNames пустым. Для обычного предварительного сравнения точных моделей из текущего каталога разрешены exact productNames, но перед web-запросом обязательно планируй catalog.getProductDetails по тем же моделям: LLM catalog fact extractor сначала прочитает полные specs + description и сеть не запускается, только если структурированный catalog extraction полностью ответил без конфликта. Для каждой решающей характеристики conditional web-запроса создай отдельный product_attribute requirement в coversRequirementIds и ровно одну args.comparisonAttributeBindings={attribute,requirementId}; attribute должен в точности повторять comparisonAttributes. Не добавляй туда второстепенные характеристики, которые не нужны для выбора. Во всех остальных web-запросах ставь comparisonAttributeBindings=[]. Если покупатель явно просит внешнюю проверку, точной модели нет в каталоге, нужен final_fit, руководство, актуальные внешние данные или независимый technical fact, используй buyer_requested/independent_required и обязательно выполняй web.',
     'Всегда заполни selectionPolicy семантически. targetProductClass — свободное человеческое название класса товара, поэтому незнакомый класс не своди к unknown. canonicalProductClass укажи только когда он точно входит в известную кодовую онтологию; иначе null.',
     'Known canonicalProductClass values are generator, weldingGenerator, generatorOil, engineOil, generatorAccessory, plateAccessory, plate, rammer, roller, cutter, diamondBlade, diamondCore, trowel, and unknown. Use plate for a vibration plate / виброплита; use unknown only for a genuinely unfamiliar class, and use null only when the free target class is outside this ontology.',
     'Если создаёшь requirement с kind="product_class" или kind="product_type", его value должен в точности совпадать с canonicalProductClass, а не с человеческим targetProductClass. Если canonicalProductClass=null, не создавай strict product_class/product_type requirement: свободное название уже хранится в targetProductClass.',
@@ -7424,6 +7448,7 @@ export class AgentManagerOrchestrator {
               products: selectedProducts,
               targetProductNames,
               comparisonAttributes,
+              allowCatalogOnlyAnswer: allowCatalogOnlyResearchForWebRequest(input.intent, request),
               catalogSearchAttempted: priorCatalogLookupCompleted || inlineCatalogLookupCompleted,
               catalogProductsFound: selectedProducts.length > 0,
               signal: toolSignal,

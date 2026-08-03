@@ -1954,6 +1954,7 @@ export async function researchProductComparisonFacts(input: {
   products: Product[];
   targetProductNames?: string[];
   comparisonAttributes?: string[];
+  allowCatalogOnlyAnswer?: boolean;
   catalogSearchAttempted?: boolean;
   catalogProductsFound?: boolean;
   signal?: AbortSignal;
@@ -1975,7 +1976,11 @@ export async function researchProductComparisonFacts(input: {
     : [];
 
   const exactCatalogProducts = exactCatalogProductsForTargets(input.products, targetProductNames);
-  const catalogExtractionSkippedForDeadline = exactCatalogProducts.length > 0 && input.deadlineAtMs !== undefined;
+  const catalogExtractionAllowedUnderDeadline = input.allowCatalogOnlyAnswer === true &&
+    webResearchRemainingMs(input.deadlineAtMs) >= WEB_RESEARCH_MIN_RETRY_REMAINING_MS;
+  const catalogExtractionSkippedForDeadline = exactCatalogProducts.length > 0 &&
+    input.deadlineAtMs !== undefined &&
+    !catalogExtractionAllowedUnderDeadline;
   const catalogResult = exactCatalogProducts.length && !catalogExtractionSkippedForDeadline
     ? await extractExactCatalogProductFacts({
         userMessage: input.userMessage,
@@ -1987,17 +1992,36 @@ export async function researchProductComparisonFacts(input: {
         deadlineAtMs: input.deadlineAtMs
       })
     : null;
-  const catalogResultForResearch = catalogResult && catalogExtractionAnswersQuestion(catalogResult, targetProductNames)
+  const catalogExtractionAnswered = Boolean(
+    catalogResult && catalogExtractionAnswersQuestion(catalogResult, targetProductNames)
+  );
+  const catalogResultForResearch = catalogResult && catalogExtractionAnswered
     ? {
         ...catalogResult,
         warnings: uniqueStrings([
           ...catalogResult.warnings,
           'catalog_fact_extraction_used',
           'exact_catalog_description_extracted',
-          'exact_catalog_description_requires_external_adjudication'
+          ...(input.allowCatalogOnlyAnswer === true
+            ? []
+            : ['exact_catalog_description_requires_external_adjudication'])
         ])
       }
     : catalogResult;
+
+  if (input.allowCatalogOnlyAnswer === true && catalogResultForResearch && catalogExtractionAnswered) {
+    return {
+      ...catalogResultForResearch,
+      usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
+      sourceAttempts: mergeSourceAttempts(catalogSourceAttempts, catalogResultForResearch.sourceAttempts),
+      warnings: uniqueStrings([
+        ...catalogResultForResearch.warnings,
+        'web_research_not_needed:catalog_extraction_answered'
+      ])
+    };
+  }
 
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
