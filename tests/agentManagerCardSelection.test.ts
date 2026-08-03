@@ -6,7 +6,9 @@ import {
   filterGeneratorProductsByLoadProfile,
   gateStrictSelectionRequirements,
   rankCatalogProductsByNumericFit,
+  rankCatalogProductsByStructuredPreferences,
   selectProductsForVisibleCards,
+  structuredSelectionRankingObjectives,
   suppressVisibleCardsForReadiness,
   toolRequestProductIntent
 } from '../src/ai/agentManagerCardSelection.js';
@@ -1078,6 +1080,87 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(ranked.map((product) => product.id)).toEqual(['five-kw', 'four-kw', 'eight-kw']);
+  });
+
+  it('ranks verified product attributes from typed preference objectives without reading buyer wording', () => {
+    const intent = structuredSelectionIntent({
+      targetProductClass: 'вибрационная плита',
+      canonicalProductClass: 'plate',
+      requirements: [{
+        id: 'prefer-low-weight',
+        kind: 'lightweight_design',
+        value: true,
+        unit: null,
+        relation: 'preferred',
+        role: 'preference',
+        strictness: 'preferred',
+        evidence: 'semantic preference supplied by the planner',
+        verification: { mode: 'product_attribute' }
+      }],
+      rankingObjectives: [{
+        requirementId: 'prefer-low-weight',
+        attribute: 'weight_kg',
+        direction: 'minimize'
+      }]
+    });
+    const heavy = plateWithNameAndWeight('heavy', 'Plate H95', 95);
+    const light = plateWithNameAndWeight('light', 'Plate L56', 56);
+    const medium = plateWithNameAndWeight('medium', 'Plate M72', 72);
+
+    const ranked = rankCatalogProductsByStructuredPreferences({
+      products: [heavy, light, medium],
+      intent
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['light', 'medium', 'heavy']);
+  });
+
+  it('supports a non-weight typed preference and keeps unknown attribute values behind verified values', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'prefer-low-price',
+        kind: 'price_preference',
+        value: true,
+        unit: null,
+        relation: 'preferred',
+        role: 'preference',
+        strictness: 'preferred',
+        evidence: 'buyer prefers the less expensive catalog option',
+        verification: { mode: 'product_attribute' }
+      }],
+      rankingObjectives: [{
+        requirementId: 'prefer-low-price',
+        attribute: 'price_rub',
+        direction: 'minimize'
+      }]
+    });
+    const unknownPrice = { ...generatorWithPower('unknown-price', '5.0'), price: null };
+    const expensive = { ...generatorWithPower('expensive', '5.0'), price: 90000 };
+    const affordable = { ...generatorWithPower('affordable', '5.0'), price: 50000 };
+
+    const ranked = rankCatalogProductsByStructuredPreferences({
+      products: [unknownPrice, expensive, affordable],
+      intent
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['affordable', 'expensive', 'unknown-price']);
+  });
+
+  it('ignores an unbound ranking objective instead of turning it into executable preference logic', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [],
+      rankingObjectives: [{
+        requirementId: 'missing-preference',
+        attribute: 'weight_kg',
+        direction: 'minimize'
+      }]
+    });
+    const first = plateWithNameAndWeight('first', 'Plate H95', 95);
+    const second = plateWithNameAndWeight('second', 'Plate L56', 56);
+
+    expect(structuredSelectionRankingObjectives(intent)).toEqual([]);
+    expect(rankCatalogProductsByStructuredPreferences({ products: [first, second], intent }))
+      .toEqual([first, second]);
   });
 
   it('filters generator cards below the structured load profile requirement', () => {

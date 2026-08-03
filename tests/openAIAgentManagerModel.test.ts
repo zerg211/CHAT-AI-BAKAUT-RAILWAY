@@ -149,13 +149,38 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       }
     }
     const plannerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_intent_contract');
-    const plannerRequest = plannerCall?.[0]?.request as { input?: Array<{ role?: string; content?: string }> } | undefined;
+    const plannerRequest = plannerCall?.[0]?.request as {
+      input?: Array<{ role?: string; content?: string }>;
+      text?: {
+        format?: {
+          schema?: {
+            properties?: {
+              selectionPolicy?: {
+                required?: string[];
+                properties?: {
+                  rankingObjectives?: {
+                    items?: { properties?: { attribute?: { enum?: string[] }; direction?: { enum?: string[] } } };
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
+    } | undefined;
     const plannerPrompt = plannerRequest?.input?.find((item) => item.role === 'system')?.content ?? '';
     expect(plannerPrompt).toContain('Обычное упоминание поверхности или материала работы');
     expect(plannerPrompt).toContain('не должно создавать strict hard requirement');
     expect(plannerPrompt).toContain('выдуманную совместимость/аксессуар');
     expect(plannerPrompt).toContain('kind="product_class"');
     expect(plannerPrompt).toContain('value должен в точности совпадать с canonicalProductClass');
+    expect(plannerPrompt).toContain('rankingObjectives');
+    expect(plannerPrompt).toContain('attribute="weight_kg"');
+    expect(plannerPrompt).toContain('direction="minimize"');
+    const rankingSchema = plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.properties?.rankingObjectives;
+    expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
+    expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);
+    expect(rankingSchema?.items?.properties?.direction?.enum).toEqual(['minimize', 'maximize']);
   });
 
   it('routes current buyer wording into dynamic sales policy prompts for planner and answer', async () => {

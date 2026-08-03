@@ -283,6 +283,12 @@ export const SelectionRequirementSchema = z.object({
   verification: SelectionRequirementVerificationSchema.optional()
 }).strict();
 
+export const SelectionRankingObjectiveSchema = z.object({
+  requirementId: nonEmptyString,
+  attribute: z.enum(['weight_kg', 'price_rub', 'nominal_power_kw']),
+  direction: z.enum(['minimize', 'maximize'])
+}).strict();
+
 export const AgentSelectionPolicySchema = z.object({
   targetProductClass: nonEmptyString.nullable(),
   canonicalProductClass: canonicalProductClassSchema.nullable(),
@@ -300,6 +306,7 @@ export const AgentSelectionPolicySchema = z.object({
   powerSource: z.enum(['battery', 'fuel', 'mains', 'any']).nullable(),
   phase: z.enum(['single_phase', 'three_phase', 'any']).nullable(),
   requirements: z.array(SelectionRequirementSchema).max(40),
+  rankingObjectives: z.array(SelectionRankingObjectiveSchema).max(3).optional(),
   rationale: nonEmptyString
 }).strict();
 
@@ -486,6 +493,7 @@ export type ToolResult = z.infer<typeof ToolResultSchema>;
 export type ProductMentionRole = z.infer<typeof ProductMentionRoleSchema>;
 export type ProductMention = z.infer<typeof ProductMentionSchema>;
 export type SelectionRequirement = z.infer<typeof SelectionRequirementSchema>;
+export type SelectionRankingObjective = z.infer<typeof SelectionRankingObjectiveSchema>;
 export type AgentSelectionPolicy = z.infer<typeof AgentSelectionPolicySchema>;
 export type LeadCaptureAuthorization = z.infer<typeof LeadCaptureAuthorizationSchema>;
 export type AgentIntentGrounding = z.infer<typeof AgentIntentGroundingSchema>;

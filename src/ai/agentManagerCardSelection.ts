@@ -1775,6 +1775,79 @@ export function rankCatalogProductsByNumericFit(input: {
     .map((item) => item.product);
 }
 
+export type ExecutableSelectionRankingObjective = {
+  requirementId: string;
+  attribute: 'weight_kg' | 'price_rub' | 'nominal_power_kw';
+  direction: 'minimize' | 'maximize';
+};
+
+export function structuredSelectionRankingObjectives(
+  intent: AgentIntentContract
+): ExecutableSelectionRankingObjective[] {
+  const policy = intent.selectionPolicy;
+  if (!policy) return [];
+  const requirements = new Map(policy.requirements.map((requirement) => [requirement.id, requirement]));
+  const canonicalClass = policy.canonicalProductClass;
+  const seen = new Set<string>();
+  return (policy.rankingObjectives ?? []).filter((objective) => {
+    const requirement = requirements.get(objective.requirementId);
+    if (
+      !requirement ||
+      requirement.role !== 'preference' ||
+      requirement.strictness !== 'preferred' ||
+      requirement.relation !== 'preferred' ||
+      requirement.verification?.mode !== 'product_attribute'
+    ) return false;
+    if (
+      objective.attribute === 'nominal_power_kw' &&
+      canonicalClass !== 'generator' &&
+      canonicalClass !== 'weldingGenerator'
+    ) return false;
+    const key = `${objective.requirementId}:${objective.attribute}:${objective.direction}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function structuredRankingAttributeValue(
+  product: Product,
+  attribute: ExecutableSelectionRankingObjective['attribute']
+) {
+  if (attribute === 'weight_kg') return extractWeightKg(product);
+  if (attribute === 'price_rub') {
+    return typeof product.price === 'number' && Number.isFinite(product.price)
+      ? product.price
+      : undefined;
+  }
+  return extractConfirmedGeneratorNominalPowerKw(product);
+}
+
+export function rankCatalogProductsByStructuredPreferences(input: {
+  products: Product[];
+  intent: AgentIntentContract;
+}) {
+  const objectives = structuredSelectionRankingObjectives(input.intent);
+  if (!objectives.length || input.products.length <= 1) return input.products;
+  return input.products
+    .map((product, index) => ({ product, index }))
+    .sort((left, right) => {
+      for (const objective of objectives) {
+        const leftValue = structuredRankingAttributeValue(left.product, objective.attribute);
+        const rightValue = structuredRankingAttributeValue(right.product, objective.attribute);
+        const leftKnown = leftValue !== undefined && Number.isFinite(leftValue);
+        const rightKnown = rightValue !== undefined && Number.isFinite(rightValue);
+        if (leftKnown !== rightKnown) return leftKnown ? -1 : 1;
+        if (!leftKnown || !rightKnown || leftValue === rightValue) continue;
+        return objective.direction === 'minimize'
+          ? leftValue - rightValue
+          : rightValue - leftValue;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.product);
+}
+
 function sameIntentProducts(products: Product[], cardIntent: ProductSelectionClass) {
   if (cardIntent === 'unknown') return products.filter((product) => isCoreEquipment(product));
   return products.filter((product) => productMatchesIntent(product, cardIntent));

@@ -78,7 +78,9 @@ import {
   productMeetsSupportedStrictPriceVisibilityRequirement,
   productMeetsSupportedStrictVoltageRequirement,
   rankCatalogProductsByNumericFit,
+  rankCatalogProductsByStructuredPreferences,
   selectProductsForVisibleCards,
+  structuredSelectionRankingObjectives,
   suppressVisibleCardsForReadiness,
   toolRequestProductIntent,
   toolRequestScopedQuery,
@@ -4583,6 +4585,17 @@ const selectionRequirementJsonSchema = {
   required: ['id', 'kind', 'value', 'unit', 'relation', 'role', 'strictness', 'evidence', 'verification']
 } as const;
 
+const selectionRankingObjectiveJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    requirementId: { type: 'string' },
+    attribute: { type: 'string', enum: ['weight_kg', 'price_rub', 'nominal_power_kw'] },
+    direction: { type: 'string', enum: ['minimize', 'maximize'] }
+  },
+  required: ['requirementId', 'attribute', 'direction']
+} as const;
+
 const selectionPolicyJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -4606,6 +4619,7 @@ const selectionPolicyJsonSchema = {
     powerSource: { type: ['string', 'null'], enum: ['battery', 'fuel', 'mains', 'any', null] },
     phase: { type: ['string', 'null'], enum: ['single_phase', 'three_phase', 'any', null] },
     requirements: { type: 'array', items: selectionRequirementJsonSchema, maxItems: 40 },
+    rankingObjectives: { type: 'array', items: selectionRankingObjectiveJsonSchema, maxItems: 3 },
     rationale: { type: 'string' }
   },
   required: [
@@ -4619,6 +4633,7 @@ const selectionPolicyJsonSchema = {
     'powerSource',
     'phase',
     'requirements',
+    'rankingObjectives',
     'rationale'
   ]
 } as const;
@@ -4798,6 +4813,7 @@ function plannerSystemPromptBlock(latestUserMessage?: string) {
     'Если создаёшь requirement с kind="product_class" или kind="product_type", его value должен в точности совпадать с canonicalProductClass, а не с человеческим targetProductClass. Если canonicalProductClass=null, не создавай strict product_class/product_type requirement: свободное название уже хранится в targetProductClass.',
     'Всегда задай selectionPolicy.selectionGoal: browse_catalog — показать ассортимент/цены без обещания совместимости; preliminary_fit — предварительно подобрать под известные вводные с оговорками; final_fit — подтвердить окончательную пригодность для покупки.',
     'В selectionPolicy.requirements вынеси каждое число и ограничение отдельно: kind описывает смысл числа, value/unit — нормализованное значение, relation — must_have, must_not_have, preferred, not_required или context, role — hard_constraint, preference, context или mentioned_only, strictness — strict/preferred/informational, evidence — точная опора в диалоге. Код не будет угадывать роль числа по словам.',
+    'В selectionPolicy.rankingObjectives передай упорядоченные цели оптимизации только для явно выраженных предпочтений, которые можно ранжировать по проверяемому числовому атрибуту товара. Каждый objective обязан ссылаться requirementId на requirement с role="preference", strictness="preferred", relation="preferred" и verification.mode="product_attribute". Доступные атрибуты: weight_kg, price_rub, nominal_power_kw; direction: minimize или maximize. Например, семантическое пожелание малого веса оформи отдельным preference requirement и objective с attribute="weight_kg", direction="minimize"; желание дешевле — price_rub/minimize; желание большей мощности генератора — nominal_power_kw/maximize. Если цели числового ранжирования нет, верни rankingObjectives=[]. Не используй context или hard constraint как ranking objective.',
     'Не путай отсутствие необходимости с запретом. "Автозапуск не нужен" означает relation="not_required" и не исключает модели с автозапуском. Только явный запрет вроде "только без автозапуска" означает relation="must_not_have", role="hard_constraint", strictness="strict" и value=false.',
     'For every selectionPolicy requirement set verification explicitly. Use {mode:"product_attribute"} when each recommended product itself must expose and satisfy the attribute. Use {mode:"typed_tool",toolRequestId,tool,verifier,bindAs} only when a required typed tool consumes the requirement and produces the deterministic selection constraint.',
     'Every typed-tool verification must point to a required tool request whose coversRequirementIds contains that exact requirement id. The currently supported derived binding is calculator.generatorLoad with verifier="generator_load_profile" and bindAs="nominal_power_min_kw"; it requires a successful result with a positive payload.profile.requiredNominalKw.',
@@ -8269,9 +8285,12 @@ export class AgentManagerOrchestrator {
       1,
       Math.min(limit, input.intent?.selectionPolicy?.maxCards ?? Math.min(limit, 3))
     );
+    const structuredRankingObjectives = input.intent
+      ? structuredSelectionRankingObjectives(input.intent)
+      : [];
     if (
       structuredCatalogSelection &&
-      structuredEvidence.products.length < desiredStructuredCandidateCount &&
+      (structuredEvidence.products.length < desiredStructuredCandidateCount || structuredRankingObjectives.length > 0) &&
       !firstError &&
       input.allowStructuredRecovery !== false
     ) {
@@ -8342,6 +8361,9 @@ export class AgentManagerOrchestrator {
           matchedCount: structuredEvidence.products.length
         };
         warnings.push(`catalog_structured_recovery_attempted:${recoveryPool.length}:${structuredEvidence.products.length}`);
+        if (structuredRankingObjectives.length) {
+          warnings.push(`catalog_structured_preference_recovery:${structuredRankingObjectives.length}`);
+        }
       } catch (error) {
         firstError ??= error;
         structuredRecovery = { attempted: true, query: recoveryQuery, scannedCount: 0, matchedCount: 0 };
@@ -8349,10 +8371,16 @@ export class AgentManagerOrchestrator {
       }
     }
     warnings.push(...structuredEvidence.warnings);
-    const rankedProducts = input.useLegacySemanticRanking === false
-      ? structuredEvidence.products
-      : rankCatalogProductsByNumericFit({
+    const preferenceRankedProducts = input.intent
+      ? rankCatalogProductsByStructuredPreferences({
           products: structuredEvidence.products,
+          intent: input.intent
+        })
+      : structuredEvidence.products;
+    const rankedProducts = input.useLegacySemanticRanking === false
+      ? preferenceRankedProducts
+      : rankCatalogProductsByNumericFit({
+          products: preferenceRankedProducts,
           intent: productIntent,
           query,
           semanticContext,

@@ -8602,6 +8602,323 @@ describe('AgentManagerOrchestrator', () => {
     });
   });
 
+  it('broadens and ranks same-class candidates when a typed preference objective is unmet by a full initial pool', async () => {
+    class PreferenceRecoveryProducts extends FakeProducts {
+      calls: Array<{ query: string; limit: number }> = [];
+
+      override async searchProducts(query = '', limit = 8) {
+        this.calls.push({ query, limit });
+        if (this.calls.length === 1) {
+          return [84, 95, 161, 250, 380, 518].map((weight) => ({
+            ...product(`heavy-${weight}`, `Виброплита TEST Heavy-H${weight} (${weight} кг)`, 'Виброплиты'),
+            specs: { weight: `${weight} kg` }
+          }));
+        }
+        return [56, 67, 72, 84, 95].map((weight) => ({
+          ...product(`plate-${weight}`, `Виброплита TEST Light-L${weight} (${weight} кг)`, 'Виброплиты'),
+          specs: { weight: `${weight} kg` }
+        }));
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      targetProductClass: 'вибрационная плита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      needAction: 'open',
+      alternativePolicy: 'same_class_only',
+      reusePreviousCards: false,
+      maxCards: 3,
+      powerSource: 'any',
+      phase: 'any',
+      requirements: [{
+        id: 'prefer-low-weight',
+        kind: 'lightweight_design',
+        value: true,
+        unit: null,
+        relation: 'preferred',
+        role: 'preference',
+        strictness: 'preferred',
+        evidence: 'buyer wants a light machine for solo transport',
+        verification: { mode: 'product_attribute' }
+      }],
+      rankingObjectives: [{
+        requirementId: 'prefer-low-weight',
+        attribute: 'weight_kg',
+        direction: 'minimize'
+      }],
+      rationale: 'Rank plate compactors by the buyer-declared weight preference.'
+    };
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        query: 'лёгкая вибрационная плита для перевозки одним человеком',
+        semanticQuery: 'минимальная масса виброплиты для самостоятельной перевозки',
+        productIntent: 'вибрационная плита',
+        canonicalProductIntent: 'plate',
+        powerSource: 'any',
+        phase: 'any',
+        limit: 3
+      },
+      coversRequirementIds: ['prefer-low-weight']
+    };
+    intent.grounding = {
+      taskType: 'product_selection',
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'none',
+      webRequirement: 'none',
+      requiredToolKinds: ['catalog.search'],
+      technicalAttributes: ['weight'],
+      buyerQuestion: 'Нужна лёгкая вибрационная плита для перевозки одним человеком',
+      rationale: 'Catalog must contain the candidates and their weights.'
+    };
+
+    const products = new PreferenceRecoveryProducts();
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((candidate) => candidate.id)).toEqual(['plate-56', 'plate-67', 'plate-72']);
+          return {
+            answerText: 'Самые лёгкие варианты: TEST Light-L56, TEST Light-L67 и TEST Light-L72.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['catalog-search'],
+            selectedProductIds: ['plate-56', 'plate-67', 'plate-72'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'plate',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'The lightest same-class catalog candidates satisfy the preference.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Нужна лёгкая вибрационная плита, буду перевозить один.'
+    });
+    const metadata = payload.metadata as {
+      toolResults?: Array<{ payload?: { retrieval?: { structuredRecovery?: { attempted?: boolean; matchedCount?: number } } } }>;
+    };
+
+    expect(products.calls).toHaveLength(2);
+    expect(products.calls[0]?.limit).toBeGreaterThanOrEqual(200);
+    expect(products.calls[1]?.limit).toBe(1000);
+    expect(payload.productCards.map((card) => card.id), JSON.stringify({
+      cardSelection: payload.metadata?.cardSelection,
+      selectionReadiness: payload.metadata?.selectionReadiness,
+      warnings: payload.metadata?.warnings
+    })).toEqual(['plate-56', 'plate-67', 'plate-72']);
+    expect(metadata.toolResults?.[0]?.payload?.retrieval?.structuredRecovery).toMatchObject({
+      attempted: true,
+      scannedCount: 5,
+      matchedCount: 11
+    });
+  });
+
+  it('does not broaden or reorder catalog candidates for an unbound preference objective', async () => {
+    class UnboundPreferenceProducts extends FakeProducts {
+      calls = 0;
+
+      override async searchProducts() {
+        this.calls += 1;
+        return [95, 56].map((weight) => ({
+          ...product(`plate-${weight}`, `Виброплита TEST Stable-S${weight} (${weight} кг)`, 'Виброплиты'),
+          specs: { weight: `${weight} kg` }
+        }));
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      needAction: 'open',
+      alternativePolicy: 'same_class_only',
+      reusePreviousCards: false,
+      maxCards: 2,
+      powerSource: 'any',
+      phase: 'any',
+      requirements: [],
+      rankingObjectives: [{
+        requirementId: 'missing-preference',
+        attribute: 'weight_kg',
+        direction: 'minimize'
+      }],
+      rationale: 'The objective is intentionally unbound for fail-safe coverage.'
+    };
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        query: 'виброплита',
+        semanticQuery: 'виброплита',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        limit: 2
+      }
+    };
+
+    const products = new UnboundPreferenceProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((candidate) => candidate.id)).toEqual(['plate-95', 'plate-56']);
+          return {
+            answerText: 'В каталоге есть TEST Stable-S95 и TEST Stable-S56.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['catalog-search'],
+            selectedProductIds: ['plate-95', 'plate-56'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'plate',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'No executable preference objective changed the catalog order.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Покажите виброплиты.'
+    });
+
+    expect(products.calls).toBe(1);
+    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-95', 'plate-56']);
+  });
+
+  it('keeps strict hard constraints after preference-driven broad recovery', async () => {
+    class HardConstraintPreferenceProducts extends FakeProducts {
+      calls = 0;
+
+      override async searchProducts() {
+        this.calls += 1;
+        const weights = this.calls === 1 ? [72, 84] : [56, 67, 95];
+        return weights.map((weight) => ({
+          ...product(`plate-${weight}`, `Виброплита TEST Guard-G${weight} (${weight} кг)`, 'Виброплиты'),
+          specs: { weight: `${weight} kg` }
+        }));
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      targetProductClass: 'виброплита',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      needAction: 'open',
+      alternativePolicy: 'same_class_only',
+      reusePreviousCards: false,
+      maxCards: 2,
+      powerSource: 'any',
+      phase: 'any',
+      requirements: [{
+        id: 'weight-limit',
+        kind: 'weight_max_kg',
+        value: 80,
+        unit: 'kg',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'buyer cannot handle more than 80 kg',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'prefer-low-weight',
+        kind: 'lightweight_design',
+        value: true,
+        unit: null,
+        relation: 'preferred',
+        role: 'preference',
+        strictness: 'preferred',
+        evidence: 'buyer prefers the lightest compliant option',
+        verification: { mode: 'product_attribute' }
+      }],
+      rankingObjectives: [{
+        requirementId: 'prefer-low-weight',
+        attribute: 'weight_kg',
+        direction: 'minimize'
+      }],
+      rationale: 'Respect the strict maximum, then rank compliant products by weight.'
+    };
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        query: 'виброплита до 80 кг',
+        semanticQuery: 'самые лёгкие виброплиты массой не более 80 кг',
+        productIntent: 'виброплита',
+        canonicalProductIntent: 'plate',
+        limit: 2
+      },
+      coversRequirementIds: ['weight-limit', 'prefer-low-weight']
+    };
+
+    const products = new HardConstraintPreferenceProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((candidate) => candidate.id)).toEqual(['plate-56', 'plate-67']);
+          expect(input.products.map((candidate) => candidate.id)).not.toEqual(expect.arrayContaining(['plate-84', 'plate-95']));
+          return {
+            answerText: 'Под ограничение подходят TEST Guard-G56 и TEST Guard-G67.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['catalog-search'],
+            selectedProductIds: ['plate-56', 'plate-67'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'plate',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'Both products satisfy the hard maximum and optimize the preference.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Нужна самая лёгкая виброплита, максимум 80 кг.'
+    });
+
+    expect(products.calls).toBe(2);
+    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-56', 'plate-67']);
+    expect(payload.productCards.map((card) => card.id)).not.toEqual(expect.arrayContaining(['plate-84', 'plate-95']));
+  });
+
   it('returns one labelled nearest compromise after one bounded recovery when exact range is empty', async () => {
     class CompromiseRecoveryProducts extends FakeProducts {
       calls = 0;
