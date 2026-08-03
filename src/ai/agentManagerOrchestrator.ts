@@ -2625,6 +2625,46 @@ export function catalogCandidatesSatisfyingConditionalWebRequest(input: {
   ));
 }
 
+export function reconcileParallelIntentNeedAction(
+  delta: LedgerStateDelta,
+  intent: AgentIntentContract
+) {
+  if (intent.selectionPolicy?.needAction !== 'continue') {
+    return { intent, repairedNeedId: undefined as string | undefined };
+  }
+  const activeOpenedNeeds = delta.events.filter((event) =>
+    event.eventType === 'need.opened' &&
+    event.payload.activate === true &&
+    typeof event.payload.needId === 'string' &&
+    event.payload.needId.trim().length > 0
+  );
+  if (activeOpenedNeeds.length !== 1) {
+    return { intent, repairedNeedId: undefined as string | undefined };
+  }
+  const openedNeed = activeOpenedNeeds[0]!;
+  const openedClass = coerceVisibleCardIntent(openedNeed.payload.productClass);
+  const intentClass = coerceVisibleCardIntent(
+    intent.selectionPolicy.canonicalProductClass ?? intent.selectionPolicy.targetProductClass
+  );
+  if (openedClass === 'unknown' || intentClass === 'unknown' || openedClass !== intentClass) {
+    return { intent, repairedNeedId: undefined as string | undefined };
+  }
+  return {
+    intent: {
+      ...intent,
+      selectionPolicy: {
+        ...intent.selectionPolicy,
+        needAction: 'open' as const
+      },
+      riskFlags: uniqueStrings([
+        ...intent.riskFlags,
+        'parallel_need_action_reconciled_from_reducer'
+      ])
+    },
+    repairedNeedId: String(openedNeed.payload.needId)
+  };
+}
+
 export function allowCatalogOnlyResearchForWebRequest(
   intent: AgentIntentContract,
   request: ToolRequest
@@ -2642,7 +2682,7 @@ export function allowCatalogOnlyResearchForWebRequest(
         candidate.tool === 'catalog.search' || candidate.tool === 'catalog.getProductDetails'
       );
   return request.tool === 'web.researchProductFacts' &&
-    intent.grounding?.sourcePolicy === 'web_required' &&
+    (intent.grounding?.sourcePolicy === 'catalog_required' || intent.grounding?.sourcePolicy === 'web_required') &&
     intent.grounding.webRequirement === 'conditional_on_catalog_gap' &&
     intent.selectionPolicy?.selectionGoal === 'preliminary_fit' &&
     (taskType === 'product_selection' || taskType === 'comparison') &&
@@ -5977,6 +6017,15 @@ export class AgentManagerOrchestrator {
       });
     }
     if (plannedAgainstPreDelta) {
+      const needActionReconciliation = reconcileParallelIntentNeedAction(delta, plannedIntent);
+      if (needActionReconciliation.repairedNeedId) {
+        plannedIntent = needActionReconciliation.intent;
+        await this.trace(input.sessionId, input.turnId, 'intent', 'parallel_intent_need_action_reconciled', {
+          needId: needActionReconciliation.repairedNeedId,
+          needAction: plannedIntent.selectionPolicy?.needAction,
+          remainingTurnMs: turnBudget.remainingWallTimeMs()
+        });
+      }
       const conflicts = parallelIntentLedgerConflicts({
         intent: plannedIntent,
         ledgerState,

@@ -4,6 +4,7 @@ import {
   allowCatalogOnlyResearchForWebRequest,
   catalogCandidatesSatisfyingConditionalWebRequest,
   enforceSearchBeforeTechnicalSpecialist,
+  reconcileParallelIntentNeedAction,
   sourcePolicyMetadataFromIntent,
   webResearchResultProvesSourceExhaustion,
   reconcileNewActiveNeedProductClass
@@ -225,6 +226,18 @@ describe('conditional catalog-evidence web short-circuit', () => {
       webRequest(conditionalComparison)
     )).toBe(true);
 
+    const catalogPrimaryComparison = {
+      ...conditionalComparison,
+      grounding: {
+        ...conditionalComparison.grounding!,
+        sourcePolicy: 'catalog_required' as const
+      }
+    };
+    expect(allowCatalogOnlyResearchForWebRequest(
+      catalogPrimaryComparison,
+      webRequest(catalogPrimaryComparison)
+    )).toBe(true);
+
     const comparisonWithoutDetails = conditionalWebIntent({
       productNames: ['TEST DG quiet'],
       exactTarget: true
@@ -247,6 +260,25 @@ describe('conditional catalog-evidence web short-circuit', () => {
     const finalIntent = conditionalWebIntent({ selectionGoal: 'final_fit' });
     finalIntent.grounding = { ...finalIntent.grounding!, taskType: 'comparison' };
     expect(allowCatalogOnlyResearchForWebRequest(finalIntent, webRequest(finalIntent))).toBe(false);
+  });
+
+  it('reconciles only the mechanical new-need action after same-class parallel semantic decisions', () => {
+    const sameClassIntent = conditionalWebIntent({ needAction: 'continue' });
+    const sameClass = reconcileParallelIntentNeedAction({
+      rationale: 'open the first generator need',
+      events: [openedNeed('generator', { productClass: 'generator' })]
+    }, sameClassIntent);
+
+    expect(sameClass.repairedNeedId).toBe('generator');
+    expect(sameClass.intent.selectionPolicy?.needAction).toBe('open');
+    expect(sameClass.intent.riskFlags).toContain('parallel_need_action_reconciled_from_reducer');
+
+    const differentClass = reconcileParallelIntentNeedAction({
+      rationale: 'open a plate need',
+      events: [openedNeed('plate', { productClass: 'plate' })]
+    }, sameClassIntent);
+    expect(differentClass.repairedNeedId).toBeUndefined();
+    expect(differentClass.intent).toBe(sameClassIntent);
   });
 
   it('returns a catalog candidate only for conditional preliminary selection with a complete product-attribute proof', () => {
