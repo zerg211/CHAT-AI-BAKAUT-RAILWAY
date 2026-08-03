@@ -10382,6 +10382,75 @@ describe('parallel semantic turn contracts', () => {
     }));
   });
 
+  it('reconciles one same-class parallel opened need without a second planner call', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'open the first equipment need',
+      events: [{
+        eventType: 'need.opened',
+        scope: 'need',
+        payload: {
+          needId: 'generator',
+          productClass: 'unknown',
+          summary: 'current generator need',
+          constraints: [],
+          openQuestions: [],
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'clear',
+          invalidatedProductIds: [],
+          status: 'open',
+          activate: true
+        },
+        evidence: 'I need a generator.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const parallelIntent: AgentIntentContract = {
+      ...noToolIntent('parallel planner understood the same generator need'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        selectionGoal: 'browse_catalog',
+        needAction: 'continue'
+      }
+    };
+    const planTurn = vi.fn(async () => parallelIntent);
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'I need a generator.'
+    });
+
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(conversations.turn.plannerContract).toMatchObject({
+      selectionPolicy: expect.objectContaining({
+        canonicalProductClass: 'generator',
+        needAction: 'open'
+      })
+    });
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'ledger',
+      eventType: 'active_need_product_class_reconciled'
+    }));
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'intent',
+      eventType: 'parallel_intent_need_action_reconciled'
+    }));
+    expect(conversations.traces).not.toContainEqual(expect.objectContaining({
+      eventType: 'parallel_intent_replan_required'
+    }));
+  });
+
   it('does not replan the active need when a paused sibling need resets its own selection', async () => {
     const conversations = new FakeConversations();
     const priorTurnId = '77777777-7777-4777-8777-777777777777';

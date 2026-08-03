@@ -360,13 +360,16 @@ function parallelIntentLedgerConflicts(input: {
 
 export function reconcileNewActiveNeedProductClass(
   delta: LedgerStateDelta,
-  intent: AgentIntentContract | undefined
+  intent: AgentIntentContract | undefined,
+  options: { allowParallelContinue?: boolean } = {}
 ) {
   const canonicalProductClass = coerceVisibleCardIntent(intent?.selectionPolicy?.canonicalProductClass);
   const needAction = intent?.selectionPolicy?.needAction;
+  const actionCanOpenNewNeed = needAction === 'open' || needAction === 'switch' ||
+    (options.allowParallelContinue === true && needAction === 'continue');
   if (
     canonicalProductClass === 'unknown' ||
-    (needAction !== 'open' && needAction !== 'switch')
+    !actionCanOpenNewNeed
   ) {
     return { delta, repairedNeedId: undefined as string | undefined };
   }
@@ -5916,7 +5919,10 @@ export class AgentManagerOrchestrator {
         delta,
         parallelIntent ?? (savedIntentForLedgerReconciliation?.success
           ? savedIntentForLedgerReconciliation.data
-          : undefined)
+          : undefined),
+        {
+          allowParallelContinue: Boolean(parallelIntent || savedIntentWasPreDeltaProposal)
+        }
       );
       if (reconciliation.repairedNeedId) {
         delta = reconciliation.delta;

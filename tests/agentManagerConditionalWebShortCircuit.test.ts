@@ -779,6 +779,22 @@ describe('new active need product-class reconciliation', () => {
     }
   );
 
+  it('reconciles one parallel pre-delta continue action with its single opened unknown-class need', () => {
+    const delta: LedgerStateDelta = {
+      rationale: 'parallel reducer opened the same need understood by the planner',
+      events: [openedNeed('new-generator')]
+    };
+
+    const result = reconcileNewActiveNeedProductClass(
+      delta,
+      conditionalWebIntent({ needAction: 'continue' }),
+      { allowParallelContinue: true }
+    );
+
+    expect(result.repairedNeedId).toBe('new-generator');
+    expect(result.delta.events[0]?.payload.productClass).toBe('generator');
+  });
+
   it('does not reconcile an inactive or already-classified need', () => {
     const delta: LedgerStateDelta = {
       rationale: 'neither event is a single active unknown need',
