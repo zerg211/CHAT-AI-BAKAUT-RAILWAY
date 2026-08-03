@@ -4296,6 +4296,65 @@ function failedWebResearchSafeRewrite(input: {
   return `Внешняя проверка не подтвердила решающий факт: ${missingFact} Поэтому точный ответ сейчас не выдам как подтверждённый. Могу передать этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?`;
 }
 
+function incompleteWebResearchSafeRewrite(input: {
+  intent: AgentIntentContract;
+  toolResults: ToolResult[];
+}) {
+  const incompleteResult = input.toolResults.find((result) => {
+    if (result.tool !== 'web.researchProductFacts' || webResearchResultProvesSourceExhaustion(result)) {
+      return false;
+    }
+    const payload = result.payload as {
+      researchOutcome?: unknown;
+      searchDisposition?: unknown;
+    };
+    return result.status !== 'ok' ||
+      payload.researchOutcome === 'partial' ||
+      payload.researchOutcome === 'exhausted' ||
+      payload.searchDisposition === 'skipped_budget' ||
+      payload.searchDisposition === 'timed_out' ||
+      payload.searchDisposition === 'failed' ||
+      payload.searchDisposition === 'aborted';
+  });
+  if (!incompleteResult) return null;
+
+  const payload = incompleteResult.payload as {
+    facts?: Array<{
+      productName?: unknown;
+      attribute?: unknown;
+      value?: unknown;
+    }>;
+    answerGuidance?: {
+      coverage?: Array<{
+        attribute?: unknown;
+        status?: unknown;
+      }>;
+    };
+    comparisonAttributes?: unknown;
+  };
+  const confirmedFactLines = uniqueStrings((payload.facts ?? []).flatMap((fact) => {
+    const productName = typeof fact.productName === 'string' ? fact.productName.trim() : '';
+    const attribute = typeof fact.attribute === 'string' ? fact.attribute.trim() : '';
+    const value = typeof fact.value === 'string' ? fact.value.trim() : '';
+    if (!attribute || !value) return [];
+    const formattedValue = value.endsWith('.') ? value.slice(0, -1).trimEnd() : value;
+    return [`${productName ? `${productName}: ` : ''}${attribute} — ${formattedValue}`];
+  })).slice(0, 3);
+  const unresolvedAttributes = uniqueStrings((payload.answerGuidance?.coverage ?? []).flatMap((item) => {
+    if (item.status !== 'not_confirmed' && item.status !== 'ambiguous' && item.status !== 'not_found') return [];
+    return typeof item.attribute === 'string' && item.attribute.trim() ? [item.attribute.trim()] : [];
+  }));
+  const requestedAttributes = requestStringArray(payload.comparisonAttributes);
+  const missingFact = unresolvedAttributes[0] ?? requestedAttributes[0] ?? input.intent.userMessageSummary.trim();
+  const lines: string[] = [];
+  if (confirmedFactLines.length) {
+    lines.push(`В найденных источниках указано: ${confirmedFactLines.join('; ')}.`);
+  }
+  lines.push(`Но точный ответ по этому пункту остаётся неподтверждённым: ${missingFact}.`);
+  lines.push('Проверка доступных источников в этом ходе не была завершена, поэтому я не считаю этот пробел доказательством отсутствия функции или несовместимости и не буду выдавать окончательный ответ без подтверждения.');
+  return lines.join(' ');
+}
+
 function researchGuidanceSafeRewrite(input: {
   toolResults: ToolResult[];
   intent: AgentIntentContract;
@@ -9016,8 +9075,14 @@ export class AgentManagerOrchestrator {
     }
     const prematureHandoffIssue = mechanicalIssues.find((issue) => issue.code === 'premature_handoff_before_web_exhausted');
     if (prematureHandoffIssue) {
+      const incompleteResearchRewrite = incompleteWebResearchSafeRewrite({
+        intent: input.intent,
+        toolResults: input.toolResults
+      });
       const incompleteRewrite = failedWebResearchSafeRewrite({ intent: input.intent, toolResults: input.toolResults });
-      return finalizeMechanicalRewrite(incompleteRewrite ?? stripContactRequestSentence(input.answer.answerText));
+      return finalizeMechanicalRewrite(
+        incompleteResearchRewrite ?? incompleteRewrite ?? stripContactRequestSentence(input.answer.answerText)
+      );
     }
     const failedFactSourceRepairIssue = mechanicalIssues.find((issue) =>
       issue.code === 'failed_tool_result_used_as_fact_source'

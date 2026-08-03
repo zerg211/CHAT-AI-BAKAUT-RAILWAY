@@ -446,6 +446,114 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.leadRequested).toBe(false);
   });
 
+  it('removes the entire technical handoff when research stopped before source exhaustion', async () => {
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      searchDisposition: 'skipped_budget',
+      sourcesExhausted: false,
+      sourceAttempts: [
+        { tier: 'catalog', outcome: 'confirmed' },
+        { tier: 'official_page', outcome: 'confirmed', query: 'CHAMPION PC5332F transport wheels' }
+      ],
+      facts: [{
+        productName: 'CHAMPION PC5332F',
+        attribute: 'штатные транспортировочные колёса',
+        value: 'Опция; приобретаются отдельно транспортировочные колеса.',
+        sourceType: 'web',
+        confidence: 'medium',
+        evidence: 'Транспортировочные колеса — опция; приобретаются отдельно',
+        sourceUrl: 'https://example.test/champion-pc5332f',
+        sourceTitle: 'CHAMPION PC5332F'
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'partially_answered',
+        coverage: [{
+          attribute: 'штатные транспортировочные колёса',
+          status: 'not_confirmed',
+          value: '',
+          evidence: 'Штатная комплектация не подтверждена.'
+        }]
+      },
+      summaryForAnswer: '',
+      warnings: ['exact_target_external_retry_skipped_insufficient_budget']
+    });
+
+    const incompleteModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'Есть ли у CHAMPION PC5332F штатные транспортировочные колёса?',
+          dialogueUnderstanding: 'Нужен точный факт по комплектации выбранной виброплиты.',
+          nextStepRationale: 'Проверить внешние источники до любого предложения специалиста.',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:champion-wheels',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'CHAMPION PC5332F транспортировочные колёса комплектация',
+              semanticQuery: 'штатные транспортировочные колёса CHAMPION PC5332F',
+              productIntent: 'plate',
+              productNames: ['CHAMPION PC5332F'],
+              comparisonAttributes: ['штатные транспортировочные колёса'],
+              limit: 4
+            },
+            rationale: 'Факт влияет на перевозку одним человеком без трапа.',
+            required: true,
+            coversRequirementIds: ['req-champion-wheels']
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['web_required']
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'В описании колёса указаны как отдельная опция, но штатная комплектация не подтверждена. Можем отдельно уточнить комплектацию вашей поставки. Оставьте номер — написать вам или позвонить?',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:champion-wheels'],
+          leadAction: 'offer_form',
+          riskFlags: ['wheel_kit_unconfirmed']
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('У CHAMPION PC5332F свои транспортировочные колёса есть?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      { async createLead() { return null; } } as never,
+      withStrictToolFixtures(incompleteModel)
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+    const metadata = payload.metadata as {
+      answerContract?: { leadAction?: string };
+      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
+    };
+
+    expect(payload.answer).toContain('Опция; приобретаются отдельно');
+    expect(payload.answer).toContain('точный ответ по этому пункту остаётся неподтверждённым');
+    expect(payload.answer).toContain('штатные транспортировочные колёса');
+    expect(payload.answer).toContain('Проверка доступных источников в этом ходе не была завершена');
+    expect(payload.answer).not.toContain('Можем отдельно уточнить');
+    expect(payload.answer).not.toContain('специалист');
+    expect(payload.answer).not.toContain('Оставьте номер');
+    expect(metadata.answerContract?.leadAction).toBe('none');
+    expect(metadata.preSendReview).toMatchObject({
+      verdict: 'rewrite_required',
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'premature_handoff_before_web_exhausted' })
+      ])
+    });
+    expect(payload.leadRequested).toBe(false);
+  });
+
   it('treats a completed research call with no confirmed answer as exhausted', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
