@@ -470,11 +470,13 @@ function hasConfirmedExactTargetFacts(
   targetProductNames: string[],
   sourceTypes: Array<ProductComparisonResearchFact['sourceType']> = ['web']
 ) {
-  if (!hasConfirmedAnswerCoverage(result)) return false;
-  return result.facts.some((fact) =>
-    sourceTypes.includes(fact.sourceType) &&
-    ['high', 'medium'].includes(fact.confidence) &&
-    targetProductNames.some((targetName) => factMatchesTarget(fact, targetName))
+  if (!targetProductNames.length || !hasConfirmedAnswerCoverage(result)) return false;
+  return targetProductNames.every((targetName) =>
+    result.facts.some((fact) =>
+      sourceTypes.includes(fact.sourceType) &&
+      ['high', 'medium'].includes(fact.confidence) &&
+      factMatchesTarget(fact, targetName)
+    )
   );
 }
 
@@ -1052,10 +1054,14 @@ function startClaimKindsFromText(value: unknown): SourceBackedStartKind[] {
   return sourceBackedStartKinds.filter((kind) => kinds.includes(kind));
 }
 
-function sourceEvidenceExactQuoteValidation(item: SourceEvidenceItem, sourceText: string) {
+function sourceEvidenceExactQuoteValidation(
+  item: SourceEvidenceItem,
+  sourceText: string,
+  minimumEvidenceLength = 24
+) {
   const evidence = collapseWhitespace(item.evidence);
   const value = collapseWhitespace(item.value);
-  if (evidence.length < 24 || value.length < 1) return null;
+  if (evidence.length < minimumEvidenceLength || value.length < 1) return null;
   const normalizedEvidence = normalizedText(evidence);
   if (!normalizedText(sourceText).includes(normalizedEvidence)) return null;
   if (!normalizedEvidence.includes(normalizedText(value))) return null;
@@ -1318,7 +1324,11 @@ async function validateEvidenceItem(input: {
     sourceKind: source.sourceKind,
     targetProductNames: input.targetProductNames
   })
-    ? sourceEvidenceExactQuoteValidation(input.item, source.text)
+    ? sourceEvidenceExactQuoteValidation(
+        input.item,
+        source.text,
+        source.sourceKind === 'catalog' ? 4 : 24
+      )
     : null;
   if (exactQuoteValidation) {
     return {
@@ -1583,20 +1593,34 @@ async function validateSourceBackedResult(input: {
       ]);
     }
   } else {
-    adjusted.answerGuidance = {
-      ...adjusted.answerGuidance,
-      directAnswer: '',
-      completeness: hasValidatedGenericSupport ? 'partially_answered' : 'not_answered'
-    };
-    adjusted.summaryForAnswer = '';
-    adjusted.warnings = uniqueStrings([
-      ...adjusted.warnings,
-      invalidatedEvidence
-        ? 'answer_guidance_invalidated_after_source_validation'
-        : hasValidatedGenericSupport
-          ? 'answer_guidance_direct_answer_removed_for_evidence_coupling'
-          : 'answer_guidance_invalidated_without_validated_support'
-    ]);
+    const hasValidatedCatalogSupportForEveryTarget = Boolean(
+      adjusted.answerGuidance.directAnswer.trim() &&
+      adjusted.facts.length &&
+      adjusted.facts.every((fact) => fact.sourceType === 'catalog') &&
+      hasConfirmedExactTargetFacts(adjusted, input.targetProductNames, ['catalog']) &&
+      !resultHasUnresolvedCatalogConflict(adjusted)
+    );
+    if (!invalidatedEvidence && hasValidatedCatalogSupportForEveryTarget) {
+      adjusted.warnings = uniqueStrings([
+        ...adjusted.warnings,
+        'answer_guidance_preserved_from_validated_catalog_facts'
+      ]);
+    } else {
+      adjusted.answerGuidance = {
+        ...adjusted.answerGuidance,
+        directAnswer: '',
+        completeness: hasValidatedGenericSupport ? 'partially_answered' : 'not_answered'
+      };
+      adjusted.summaryForAnswer = '';
+      adjusted.warnings = uniqueStrings([
+        ...adjusted.warnings,
+        invalidatedEvidence
+          ? 'answer_guidance_invalidated_after_source_validation'
+          : hasValidatedGenericSupport
+            ? 'answer_guidance_direct_answer_removed_for_evidence_coupling'
+            : 'answer_guidance_invalidated_without_validated_support'
+      ]);
+    }
   }
 
   return adjusted;
@@ -1728,6 +1752,91 @@ function productComparisonResearchJsonFormat(name: string) {
   } as const;
 }
 
+interface CompactCatalogFactExtraction {
+  facts: Array<{
+    productName: string;
+    attribute: string;
+    value: string;
+    evidence: string;
+  }>;
+  conflicts: Array<{
+    productName: string;
+    attribute: string;
+    catalogValue: string | null;
+    conflictingValues: string[];
+    resolution: string;
+  }>;
+  missing: Array<{
+    productName: string;
+    attribute: string;
+    reason: string;
+  }>;
+  directAnswer: string;
+  completeness: ProductComparisonResearchAnswerGuidance['completeness'];
+}
+
+function compactCatalogFactExtractionJsonText() {
+  return {
+    verbosity: 'low',
+    format: {
+      type: 'json_schema',
+      name: 'catalog_product_fact_extraction_compact',
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          facts: {
+            type: 'array',
+            maxItems: sourceEvidenceMaxFacts,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                productName: { type: 'string' },
+                attribute: { type: 'string' },
+                value: { type: 'string' },
+                evidence: { type: 'string' }
+              },
+              required: ['productName', 'attribute', 'value', 'evidence']
+            }
+          },
+          conflicts: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                productName: { type: 'string' },
+                attribute: { type: 'string' },
+                catalogValue: { type: ['string', 'null'] },
+                conflictingValues: { type: 'array', items: { type: 'string' } },
+                resolution: { type: 'string' }
+              },
+              required: ['productName', 'attribute', 'catalogValue', 'conflictingValues', 'resolution']
+            }
+          },
+          missing: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                productName: { type: 'string' },
+                attribute: { type: 'string' },
+                reason: { type: 'string' }
+              },
+              required: ['productName', 'attribute', 'reason']
+            }
+          },
+          directAnswer: { type: 'string' },
+          completeness: { type: 'string', enum: ['answered', 'partially_answered', 'not_answered'] }
+        },
+        required: ['facts', 'conflicts', 'missing', 'directAnswer', 'completeness']
+      }
+    }
+  } as const;
+}
+
 function productMatchesExactTarget(product: Product, targetName: string) {
   const targetTokens = exactTargetTokens(targetName).filter((token) =>
     token.length >= 4 && tokenHasDigit(token) && tokenHasLetter(token)
@@ -1852,6 +1961,7 @@ function mergeWebResearchPasses(
 }
 
 const PRODUCT_COMPARISON_MIN_OUTPUT_TOKENS = 1800;
+const COMPACT_CATALOG_EXTRACTION_MAX_OUTPUT_TOKENS = 1500;
 const WEB_RESEARCH_MIN_RETRY_REMAINING_MS = 6_000;
 
 function webResearchRemainingMs(deadlineAtMs: number | undefined) {
@@ -1862,6 +1972,141 @@ function productComparisonMaxOutputTokens(targetProductNames: string[]) {
   return targetProductNames.length
     ? Math.max(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, 2600)
     : Math.max(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, PRODUCT_COMPARISON_MIN_OUTPUT_TOKENS);
+}
+
+function compactCatalogProductForFact(products: Product[], productName: string) {
+  return products.find((product) => productMatchesExactTarget(product, productName)) ??
+    products.find((product) => normalizedText(product.name) === normalizedText(productName));
+}
+
+function compactCatalogExtractionToResearchResult(
+  parsed: CompactCatalogFactExtraction,
+  products: Product[]
+): ProductComparisonResearchResult {
+  const facts = parsed.facts.map((fact): ProductComparisonResearchFact => {
+    const product = compactCatalogProductForFact(products, fact.productName);
+    return {
+      productName: product?.name ?? fact.productName,
+      attribute: fact.attribute,
+      value: fact.value,
+      sourceType: 'catalog',
+      confidence: 'high',
+      evidence: fact.evidence,
+      sourceUrl: product?.sourceUrl ?? undefined,
+      sourceTitle: product?.name ?? fact.productName
+    };
+  });
+  const conflicts = parsed.conflicts.map((conflict): ProductComparisonResearchConflict => ({
+    productName: conflict.productName,
+    attribute: conflict.attribute,
+    catalogValue: conflict.catalogValue ?? undefined,
+    webValues: conflict.conflictingValues,
+    resolution: conflict.resolution
+  }));
+  const confirmedCoverage = facts.map((fact): ResearchCoverageItem => ({
+    attribute: fact.attribute,
+    status: 'confirmed',
+    value: fact.value,
+    evidence: fact.evidence,
+    sourceUrl: fact.sourceUrl,
+    sourceTitle: fact.sourceTitle
+  }));
+  const conflictCoverage = parsed.conflicts.map((conflict): ResearchCoverageItem => ({
+    attribute: conflict.attribute,
+    status: 'ambiguous',
+    value: conflict.catalogValue ?? conflict.conflictingValues.join(' / '),
+    evidence: conflict.resolution,
+    sourceTitle: conflict.productName
+  }));
+  const missingCoverage = parsed.missing.map((missing): ResearchCoverageItem => ({
+    attribute: missing.attribute,
+    status: 'not_confirmed',
+    value: '',
+    evidence: `${missing.productName}: ${missing.reason}`,
+    sourceTitle: missing.productName
+  }));
+
+  return {
+    usedWebSearch: false,
+    searchDisposition: 'not_needed',
+    sourcesExhausted: false,
+    facts,
+    conflicts,
+    answerGuidance: {
+      directAnswer: parsed.directAnswer,
+      completeness: parsed.completeness,
+      coverage: uniqueCoverage([...confirmedCoverage, ...conflictCoverage, ...missingCoverage])
+    },
+    summaryForAnswer: parsed.directAnswer,
+    warnings: parsed.missing.length
+      ? ['catalog_fact_missing_needs_web_research']
+      : []
+  };
+}
+
+async function extractCompactExactCatalogProductFacts(input: {
+  userMessage: string;
+  products: Product[];
+  targetProductNames: string[];
+  comparisonAttributes: string[];
+  cache?: SourceTextCache;
+  signal?: AbortSignal;
+  deadlineAtMs?: number;
+}): Promise<ProductComparisonResearchResult> {
+  const request: Record<string, unknown> = {
+    model: config.OPENAI_FACT_MODEL,
+    reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
+    input: [
+      {
+        role: 'system',
+        content: [
+          'You extract buyer-relevant facts from exact BAKAUT catalog cards.',
+          'Use only the supplied product names, specs, descriptions, and source URLs. Do not use web search.',
+          'Interpret the buyer question and requested attributes semantically; do not depend on literal keyword matching.',
+          'For every target product, extract each requested fact that the card actually supports. Evidence must be a short exact fragment from the supplied card.',
+          'If the card is silent, add the unresolved product and attribute to missing. Silence is not proof that a feature is absent.',
+          'If specs and description disagree, add a conflict. Do not hide or guess through the conflict.',
+          'Set completeness to answered only when the extracted facts fully support a practical comparison for every target product and requested attribute.',
+          'Write directAnswer as a short, natural Russian answer containing only supported conclusions. Return only JSON.'
+        ].join('\n')
+      },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          buyerQuestion: input.userMessage,
+          targetProductNames: input.targetProductNames,
+          comparisonAttributes: input.comparisonAttributes,
+          products: productResearchContext(input.products)
+        })
+      }
+    ],
+    max_output_tokens: COMPACT_CATALOG_EXTRACTION_MAX_OUTPUT_TOKENS,
+    text: compactCatalogFactExtractionJsonText()
+  };
+  const { parsed } = await createStructuredJsonResponse({
+    request,
+    stage: 'catalog_product_fact_extraction_compact',
+    signal: input.signal,
+    deadlineAtMs: input.deadlineAtMs,
+    minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
+    transportMaxRetries: 0
+  });
+  const extracted = augmentCatalogStarterFacts({
+    result: compactCatalogExtractionToResearchResult(parsed as unknown as CompactCatalogFactExtraction, input.products),
+    products: input.products,
+    userMessage: input.userMessage,
+    comparisonAttributes: input.comparisonAttributes
+  });
+  return validateSourceBackedResult({
+    result: extracted,
+    products: input.products,
+    targetProductNames: input.targetProductNames,
+    userMessage: input.userMessage,
+    comparisonAttributes: input.comparisonAttributes,
+    cache: input.cache,
+    signal: input.signal,
+    deadlineAtMs: input.deadlineAtMs
+  });
 }
 
 async function extractExactCatalogProductFacts(input: {
@@ -1978,9 +2223,19 @@ export async function researchProductComparisonFacts(input: {
   const exactCatalogProducts = exactCatalogProductsForTargets(input.products, targetProductNames);
   const conditionalCatalogFirstResearch = input.allowCatalogOnlyAnswer === true && exactCatalogProducts.length > 0;
   const catalogExtractionSkippedForDeadline = exactCatalogProducts.length > 0 &&
-    (conditionalCatalogFirstResearch || input.deadlineAtMs !== undefined);
+    !conditionalCatalogFirstResearch && input.deadlineAtMs !== undefined;
   const catalogResult = exactCatalogProducts.length && !catalogExtractionSkippedForDeadline
-    ? await extractExactCatalogProductFacts({
+    ? await (conditionalCatalogFirstResearch
+      ? extractCompactExactCatalogProductFacts({
+          userMessage: input.userMessage,
+          products: exactCatalogProducts,
+          targetProductNames,
+          comparisonAttributes,
+          cache: sourceTextCache,
+          signal: input.signal,
+          deadlineAtMs: input.deadlineAtMs
+        })
+      : extractExactCatalogProductFacts({
         userMessage: input.userMessage,
         products: exactCatalogProducts,
         targetProductNames,
@@ -1988,7 +2243,7 @@ export async function researchProductComparisonFacts(input: {
         cache: sourceTextCache,
         signal: input.signal,
         deadlineAtMs: input.deadlineAtMs
-      })
+      }))
     : null;
   const catalogExtractionAnswered = Boolean(
     catalogResult && catalogExtractionAnswersQuestion(catalogResult, targetProductNames)
@@ -2023,10 +2278,9 @@ export async function researchProductComparisonFacts(input: {
 
   const exactTargetResearchInstructions = conditionalCatalogFirstResearch
     ? [
-        'The products field contains the exact current catalog cards. First interpret their complete specs and descriptions semantically for every requested comparison attribute.',
-        'Do not call web_search when those exact catalog cards fully answer the buyer question with no ambiguity or conflict. Return exact catalog facts with sourceType="catalog" and sourceUrl from the matching card.',
-        'Call web_search in this same response when any decisive requested attribute is missing, ambiguous, contradicted, or the exact target card is absent. Search only for the unresolved exact-target facts.',
-        'A missing catalog attribute is not proof that a feature is absent. If web search also cannot confirm it, keep it not_confirmed.'
+        'catalogExtraction already contains a compact semantic reading of the exact current catalog cards and identifies the unresolved facts.',
+        'Use web_search now and search only for missing, ambiguous, or contradicted exact-target facts. Preserve the supported catalog facts.',
+        'A missing catalog attribute is not proof that a feature is absent. If web search cannot confirm it, keep it not_confirmed.'
       ]
     : [
         'If buyerQuestion asks about targetProductNames and the exact model is absent from products, search the web for that exact target model. Do not infer exact target facts from nearby models.',
@@ -2076,7 +2330,7 @@ export async function researchProductComparisonFacts(input: {
           comparisonAttributes,
           catalogExtraction: catalogResultForResearch,
           exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes),
-          products: productResearchContext(input.products)
+          products: conditionalCatalogFirstResearch ? [] : productResearchContext(input.products)
         })
       }
     ],
@@ -2085,7 +2339,7 @@ export async function researchProductComparisonFacts(input: {
       search_context_size: conditionalCatalogFirstResearch ? 'low' : targetProductNames.length ? 'medium' : 'low',
       return_token_budget: 'default'
     }],
-    tool_choice: conditionalCatalogFirstResearch ? 'auto' : { type: 'web_search' },
+    tool_choice: { type: 'web_search' },
     include: ['web_search_call.action.sources'],
     max_output_tokens: conditionalCatalogFirstResearch
       ? Math.max(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, PRODUCT_COMPARISON_MIN_OUTPUT_TOKENS)
@@ -2195,7 +2449,7 @@ export async function researchProductComparisonFacts(input: {
       usedWebSearch: primaryUsedWebSearch,
       searchDisposition: primaryUsedWebSearch
         ? 'completed'
-        : conditionalCatalogFirstResearch ? 'not_needed' : 'failed',
+        : 'failed',
       sourcesExhausted: false
     });
   normalizedPrimaryResult.sourceAttempts = mergeSourceAttempts(
@@ -2212,26 +2466,6 @@ export async function researchProductComparisonFacts(input: {
     signal: input.signal,
     deadlineAtMs: input.deadlineAtMs
   });
-  if (
-    conditionalCatalogFirstResearch &&
-    !primaryUsedWebSearch &&
-    catalogExtractionAnswersQuestion(primaryResult, targetProductNames)
-  ) {
-    return {
-      ...primaryResult,
-      usedWebSearch: false,
-      searchDisposition: 'not_needed',
-      sourcesExhausted: false,
-      sourceAttempts: mergeSourceAttempts(catalogSourceAttempts, primaryResult.sourceAttempts),
-      warnings: uniqueStrings([
-        ...primaryResult.warnings,
-        'catalog_fact_extraction_used',
-        'exact_catalog_description_extracted',
-        'catalog_fact_extraction_integrated_with_conditional_research',
-        'web_research_not_needed:catalog_extraction_answered'
-      ])
-    };
-  }
   const mergedPrimaryResult = mergeCatalogAndWebResearch(catalogResultForResearch, primaryResult);
   const combinedPrimaryResult = {
     ...mergedPrimaryResult,
@@ -2239,9 +2473,6 @@ export async function researchProductComparisonFacts(input: {
       ...mergedPrimaryResult.warnings,
       catalogExtractionSkippedForDeadline && !conditionalCatalogFirstResearch
         ? 'catalog_fact_extraction_skipped_for_web_deadline'
-        : '',
-      conditionalCatalogFirstResearch
-        ? 'catalog_fact_extraction_integrated_with_conditional_research'
         : ''
     ])
   };

@@ -31,7 +31,7 @@ vi.mock('node:dns/promises', () => ({
 
 const { researchProductComparisonFacts } = await import('../src/ai/productComparisonResearch.js');
 
-const queuedResearchResponses: Array<{ parsed: ReturnType<typeof result>; response?: unknown }> = [];
+const queuedResearchResponses: Array<{ parsed: Record<string, unknown>; response?: unknown }> = [];
 
 function sourceResponse(body: string, contentType = 'text/html; charset=utf-8') {
   return new Response(body, { status: 200, headers: { 'content-type': contentType } });
@@ -137,7 +137,18 @@ function researchCalls() {
     .filter((call) => call.stage !== 'source_evidence_semantic_validation');
 }
 
-function queueResearchResponse(response: { parsed: ReturnType<typeof result>; response?: unknown }) {
+function compactCatalogResult(overrides: Record<string, unknown> = {}) {
+  return {
+    facts: [],
+    conflicts: [],
+    missing: [],
+    directAnswer: '',
+    completeness: 'not_answered',
+    ...overrides
+  };
+}
+
+function queueResearchResponse(response: { parsed: Record<string, unknown>; response?: unknown }) {
   queuedResearchResponses.push(response);
 }
 
@@ -158,7 +169,7 @@ describe('product comparison research', () => {
           }
        };
     });
-    createStructuredJsonResponse.mockResolvedValueOnce = ((value: { parsed: ReturnType<typeof result> }) => {
+    createStructuredJsonResponse.mockResolvedValueOnce = ((value: { parsed: Record<string, unknown> }) => {
       queueResearchResponse(value);
       return createStructuredJsonResponse;
     }) as typeof createStructuredJsonResponse.mockResolvedValueOnce;
@@ -661,30 +672,15 @@ describe('product comparison research', () => {
 
   it('returns a complete exact catalog extraction without starting web when catalog-only is allowed under a deadline', async () => {
     queueResearchResponse({
-      parsed: result({
+      parsed: compactCatalogResult({
         facts: [{
           productName: 'FIRMAN RD3910E',
           attribute: 'start control',
           value: 'запуск поворотом ключа электростартера; также есть ручной стартер',
-          sourceType: 'catalog',
-          confidence: 'high',
-          evidence: 'catalog.description: запуск двигателя осуществляется поворотом ключа электростартера',
-          sourceUrl: 'https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_firman_rd3910e_2_5_kvt/',
-          sourceTitle: 'Генератор бензиновый FIRMAN RD3910E 2.5 кВт'
+          evidence: 'запуск двигателя осуществляется поворотом ключа электростартера'
         }],
-        answerGuidance: {
-          directAnswer: 'RD3910E запускается с ключа электростартера, плюс есть ручной запуск.',
-          completeness: 'answered',
-          coverage: [{
-            attribute: 'start control',
-            status: 'confirmed',
-            value: 'поворот ключа электростартера',
-            evidence: 'catalog.description',
-            sourceUrl: 'https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_firman_rd3910e_2_5_kvt/',
-            sourceTitle: 'Генератор бензиновый FIRMAN RD3910E 2.5 кВт'
-          }]
-        },
-        summaryForAnswer: 'Catalog description fully answers the start-control question.'
+        directAnswer: 'RD3910E запускается с ключа электростартера, плюс есть ручной запуск.',
+        completeness: 'answered'
       })
     });
 
@@ -697,13 +693,14 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 20_000
     });
 
-    expect(researchCalls().map((call) => call.stage)).toEqual(['product_comparison_research']);
-    expect(researchCalls()[0].request.tool_choice).toBe('auto');
-    expect(researchCalls()[0].request.tools).toEqual([{
-      type: 'web_search',
-      search_context_size: 'low',
-      return_token_budget: 'default'
-    }]);
+    expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction_compact']);
+    const catalogCall = researchCalls()[0];
+    expect(catalogCall.request.tools).toBeUndefined();
+    expect(catalogCall.request.text.verbosity).toBe('low');
+    expect(catalogCall.request.max_output_tokens).toBeLessThanOrEqual(1500);
+    expect(catalogCall.request.text.format.schema.properties).toHaveProperty('missing');
+    expect(catalogCall.request.text.format.schema.properties).not.toHaveProperty('answerGuidance');
+    expect(catalogCall.request.text.format.schema.properties).not.toHaveProperty('sourceAttempts');
     expect(actual.usedWebSearch).toBe(false);
     expect(actual.searchDisposition).toBe('not_needed');
     expect(actual.answerGuidance.completeness).toBe('answered');
@@ -717,6 +714,17 @@ describe('product comparison research', () => {
   it('continues to web when conditional catalog extraction remains incomplete', async () => {
     const exactQuote = 'FIRMAN RD3910E starting system: ignition key electric starter.';
     fetchMock.mockResolvedValueOnce(sourceResponse(`<html><body>${exactQuote}</body></html>`));
+    queueResearchResponse({
+      parsed: compactCatalogResult({
+        missing: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          reason: 'Карточка указывает электростартер, но не описывает орган управления.'
+        }],
+        directAnswer: 'В карточке подтверждён электростартер, но не ключ или кнопка.',
+        completeness: 'partially_answered'
+      })
+    });
     queueResearchResponse({
       parsed: result({
         usedWebSearch: true,
@@ -754,10 +762,131 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 20_000
     });
 
-    expect(researchCalls().map((call) => call.stage)).toEqual(['product_comparison_research']);
-    expect(researchCalls()[0].request.tool_choice).toBe('auto');
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'catalog_product_fact_extraction_compact',
+      'product_comparison_research'
+    ]);
+    expect(researchCalls()[0].request.tools).toBeUndefined();
+    expect(researchCalls()[1].request.tool_choice).toEqual({ type: 'web_search' });
+    expect(JSON.stringify(researchCalls()[1].request.input)).toContain('catalogExtraction');
     expect(actual.usedWebSearch).toBe(true);
     expect(actual.answerGuidance.completeness).toBe('answered');
+  });
+
+  it('keeps a complete generic comparison backed by validated exact catalog facts for every target', async () => {
+    const champion = product({
+      id: 'champion-pc5332f',
+      name: 'Виброплита CHAMPION PC5332F',
+      brand: 'CHAMPION',
+      category: 'Виброплиты',
+      sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/champion-pc5332f/',
+      specs: { mass: '43 кг', transport: 'складная ручка' },
+      description: 'Масса 43 кг. Складная ручка упрощает перевозку.'
+    });
+    const redverg = product({
+      id: 'redverg-rd-29140',
+      name: 'Виброплита REDVERG RD-29140',
+      brand: 'REDVERG',
+      category: 'Виброплиты',
+      sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/redverg-rd-29140/',
+      specs: { mass: '60 кг', transport: 'транспортировочные колёса' },
+      description: 'Масса 60 кг. Есть транспортировочные колёса.'
+    });
+    queueResearchResponse({
+      parsed: compactCatalogResult({
+        facts: [
+          {
+            productName: 'CHAMPION PC5332F',
+            attribute: 'mass',
+            value: '43 кг',
+            evidence: 'Масса 43 кг'
+          },
+          {
+            productName: 'REDVERG RD-29140',
+            attribute: 'mass',
+            value: '60 кг',
+            evidence: 'Масса 60 кг'
+          }
+        ],
+        directAnswer: 'CHAMPION легче на 17 кг, поэтому для погрузки в одиночку он удобнее.',
+        completeness: 'answered'
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Сравните эти две модели по массе: какую проще грузить одному?',
+      products: [champion, redverg],
+      targetProductNames: ['CHAMPION PC5332F', 'REDVERG RD-29140'],
+      comparisonAttributes: ['масса'],
+      allowCatalogOnlyAnswer: true,
+      deadlineAtMs: Date.now() + 20_000
+    });
+
+    expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction_compact']);
+    expect(createStructuredJsonResponse.mock.calls.map((call) => call[0].stage)).toEqual([
+      'catalog_product_fact_extraction_compact'
+    ]);
+    expect(actual.answerGuidance.completeness).toBe('answered');
+    expect(actual.answerGuidance.directAnswer).toContain('17 кг');
+    expect(actual.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: expect.stringContaining('CHAMPION PC5332F'), sourceType: 'catalog' }),
+      expect.objectContaining({ productName: expect.stringContaining('REDVERG RD-29140'), sourceType: 'catalog' })
+    ]));
+    expect(actual.usedWebSearch).toBe(false);
+  });
+
+  it('does not accept an allegedly complete comparison when one exact target has no validated fact', async () => {
+    const champion = product({
+      id: 'champion-pc5332f',
+      name: 'Виброплита CHAMPION PC5332F',
+      brand: 'CHAMPION',
+      category: 'Виброплиты',
+      sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/champion-pc5332f/',
+      specs: { mass: '43 кг' },
+      description: 'Масса 43 кг.'
+    });
+    const redverg = product({
+      id: 'redverg-rd-29140',
+      name: 'Виброплита REDVERG RD-29140',
+      brand: 'REDVERG',
+      category: 'Виброплиты',
+      sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/redverg-rd-29140/',
+      specs: {},
+      description: 'Описание без массы.'
+    });
+    queueResearchResponse({
+      parsed: compactCatalogResult({
+        facts: [{
+          productName: 'CHAMPION PC5332F',
+          attribute: 'mass',
+          value: '43 кг',
+          evidence: 'Масса 43 кг'
+        }],
+        directAnswer: 'CHAMPION весит 43 кг.',
+        completeness: 'answered'
+      })
+    });
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        answerGuidance: { directAnswer: '', completeness: 'not_answered', coverage: [] }
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Сравните массу CHAMPION PC5332F и REDVERG RD-29140.',
+      products: [champion, redverg],
+      targetProductNames: ['CHAMPION PC5332F', 'REDVERG RD-29140'],
+      comparisonAttributes: ['масса'],
+      allowCatalogOnlyAnswer: true,
+      deadlineAtMs: Date.now() + 5_000
+    });
+
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'catalog_product_fact_extraction_compact',
+      'product_comparison_research'
+    ]);
+    expect(actual.searchDisposition).toBe('skipped_budget');
   });
 
   it('reserves a production deadline for one modern web pass and verifies an exact source quote without another model call', async () => {
