@@ -4430,9 +4430,11 @@ const leadCaptureToolArgsJsonSchema = strictJsonObject({
 });
 
 const ledgerDeltaFormat = {
+  verbosity: 'low',
   format: {
     type: 'json_schema',
     name: 'ledger_state_delta',
+    description: 'A concise semantic state delta. Keep free-text values short and non-repetitive while preserving exact evidence.',
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -4685,9 +4687,11 @@ const leadCaptureAuthorizationJsonSchema = {
 } as const;
 
 const intentContractFormat = {
+  verbosity: 'low',
   format: {
     type: 'json_schema',
     name: 'agent_intent_contract',
+    description: 'A concise semantic execution contract. Keep free-text values short and non-repetitive while preserving exact buyer evidence.',
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -4810,6 +4814,7 @@ export const agentManagerStructuredFormats = {
 
 function ledgerReducerPolicyPromptBlock() {
   return [
+    'Return the shortest complete semantic JSON that satisfies the schema. Do not restate the buyer request in rationale or evidence; use only the minimum exact evidence needed to preserve meaning.',
     'Не переносишь контекст из других диалогов. Не добавляешь выдуманные факты.',
     'Веди несколько потребностей явно. Для новой темы создай need.opened с payload needId, productClass, summary, constraints, openQuestions, selectedProductIds, rejectedProductIds, selectionUpdateMode, invalidatedProductIds, status и activate=true. Для продолжения, исправления или возврата к теме используй need.updated с тем же needId; activate=true ставит эту потребность текущей, а прежнюю reducer поставит на паузу.',
     'В need.opened и need.updated всегда задавай selectionUpdateMode: preserve, если прежний выбор остаётся уместен; replace, если selectedProductIds полностью заменяют прежние; clear, если смена вводных аннулирует весь прежний выбор. В invalidatedProductIds перечисляй известные ID, которые больше не подходят. Не используй пустой selectedProductIds как неявную команду preserve.',
@@ -4823,6 +4828,7 @@ function ledgerReducerPolicyPromptBlock() {
 function plannerSystemPromptBlock(latestUserMessage?: string) {
   const managerPolicy = salesManagerPlannerPolicyPromptBlock({ latestUserMessage });
   return [
+    'Return the shortest complete semantic JSON that satisfies the schema. Do not restate the buyer request across summary, rationale, query, semanticQuery, reason, notes, or evidence fields. Preserve exact buyer quotes only where provenance requires them.',
     'Ты планировщик AI менеджера БАКАУТ.',
     untrustedEvidenceBoundary,
     managerPolicy,

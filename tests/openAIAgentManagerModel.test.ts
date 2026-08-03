@@ -152,7 +152,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     const plannerRequest = plannerCall?.[0]?.request as {
       input?: Array<{ role?: string; content?: string }>;
       text?: {
+        verbosity?: string;
         format?: {
+          description?: string;
           schema?: {
             properties?: {
               selectionPolicy?: {
@@ -169,6 +171,10 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       };
     } | undefined;
     const plannerPrompt = plannerRequest?.input?.find((item) => item.role === 'system')?.content ?? '';
+    expect(plannerRequest?.text?.verbosity).toBe('low');
+    expect(plannerRequest?.text?.format?.description).toContain('concise');
+    expect(plannerPrompt).toContain('shortest complete semantic JSON');
+    expect(plannerPrompt).toContain('Do not restate the buyer request');
     expect(plannerPrompt).toContain('Обычное упоминание поверхности или материала работы');
     expect(plannerPrompt).toContain('не должно создавать strict hard requirement');
     expect(plannerPrompt).toContain('выдуманную совместимость/аксессуар');
@@ -185,6 +191,16 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
     expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);
     expect(rankingSchema?.items?.properties?.direction?.enum).toEqual(['minimize', 'maximize']);
+
+    const reducerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_ledger_delta');
+    const reducerRequest = reducerCall?.[0]?.request as {
+      input?: Array<{ role?: string; content?: string }>;
+      text?: { verbosity?: string; format?: { description?: string } };
+    } | undefined;
+    const reducerPrompt = reducerRequest?.input?.find((item) => item.role === 'system')?.content ?? '';
+    expect(reducerRequest?.text?.verbosity).toBe('low');
+    expect(reducerRequest?.text?.format?.description).toContain('concise');
+    expect(reducerPrompt).toContain('shortest complete semantic JSON');
   });
 
   it('routes current buyer wording into dynamic sales policy prompts for planner and answer', async () => {

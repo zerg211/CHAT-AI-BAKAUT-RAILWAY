@@ -11,6 +11,8 @@ describe('production model configuration', () => {
       'answer: config.OPENAI_ANSWER_MODEL,',
       'answerReasoning: config.OPENAI_ANSWER_REASONING_EFFORT,',
       'planner: config.OPENAI_PLANNER_MODEL,',
+      'plannerReasoning: config.OPENAI_PLANNER_REASONING_EFFORT,',
+      'plannerMaxOutputTokens: config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,',
       'fact: config.OPENAI_FACT_MODEL,',
       'factReasoning: config.OPENAI_FACT_REASONING_EFFORT,',
       'deepReasoning: config.OPENAI_DEEP_REASONING_MODEL',
@@ -32,6 +34,8 @@ describe('production model configuration', () => {
         OPENAI_ANSWER_MODEL: 'gpt-5.4',
         OPENAI_ANSWER_REASONING_EFFORT: 'xhigh',
         OPENAI_PLANNER_MODEL: 'gpt-5.5',
+        OPENAI_PLANNER_REASONING_EFFORT: 'xhigh',
+        OPENAI_PLANNER_MAX_OUTPUT_TOKENS: '9000',
         OPENAI_FACT_MODEL: 'gpt-5.6-luna',
         OPENAI_FACT_REASONING_EFFORT: 'xhigh',
         OPENAI_DEEP_REASONING_MODEL: 'gpt-5.6-sol'
@@ -45,6 +49,8 @@ describe('production model configuration', () => {
       answer: 'gpt-5.6-terra',
       answerReasoning: 'none',
       planner: 'gpt-5.6-terra',
+      plannerReasoning: 'none',
+      plannerMaxOutputTokens: 2400,
       fact: 'gpt-5.6-terra',
       factReasoning: 'none',
       deepReasoning: 'gpt-5.6-terra'
