@@ -1,0 +1,165 @@
+{
+  "task_id": "AI-AUDIT-20260809",
+  "verified_at": "2026-08-09",
+  "overall_verdict": "FAIL",
+  "reason": "Current local production code has no remaining confirmed Critical/High finding from H1-H7/M1-M4, the real local PostgreSQL serialization proof passes, and all required local release gates are green. Overall completion still fails because post-fix production dialogues, two-sided live evidence, Railway commit match, and publication are not complete.",
+  "production_code_verdict": {
+    "status": "NO_CONFIRMED_CRITICAL_OR_HIGH",
+    "critical_findings": 0,
+    "high_findings": 0,
+    "medium_findings": 0,
+    "note": "Owning-layer implementations are structurally corrected; targeted/full suites and a real four-connection local PostgreSQL barrier proof are green. Rendered post-fix widget behavior remains part of the missing AC6/AC7 live evidence."
+  },
+  "criteria": [
+    {
+      "id": "AC1",
+      "status": "PASS",
+      "reason": "The updated current-state map links production and directly coupled side/failure paths to owning files/functions, durable boundaries, and buyer-visible outcomes."
+    },
+    {
+      "id": "AC2",
+      "status": "PASS",
+      "reason": "The updated per-finding matrix answers all five required LLM/code questions for H1-H7 and the semantic High findings."
+    },
+    {
+      "id": "AC3",
+      "status": "PASS",
+      "reason": "The catalog path is traced and current exact, fuzzy, hard, soft, comparison, missing-attribute, proven-conflict, snapshot, and page-identity tests are green."
+    },
+    {
+      "id": "AC4",
+      "status": "PASS",
+      "reason": "Current local code and connected tests cover mandatory web routing, exact target/source identity, conflict handling, exhaustion, timeout, and verified-fact repository/tool/consumer boundaries."
+    },
+    {
+      "id": "AC5",
+      "status": "PASS",
+      "reason": "Current session, ledger, history, hydrate, correction/replacement, recovery, navigation and inactive/closed tests are green. Independent real local PostgreSQL reruns prove atomic turn/message readback, both close-vs-create orderings, close-vs-feedback, close-vs-final and owner-takeover-vs-stale-write serialization."
+    },
+    {
+      "id": "AC6",
+      "status": "FAIL",
+      "reason": "No post-fix adaptive production dialogue matrix exists; only the failing baseline protocol is present."
+    },
+    {
+      "id": "AC7",
+      "status": "FAIL",
+      "reason": "There is no post-fix embedded-widget plus admin two-sided evidence, and baseline internal evidence is not complete for every counted dialogue."
+    },
+    {
+      "id": "AC8",
+      "status": "PASS",
+      "reason": "The current evidence maps every behavior change to retained RED-to-GREEN proof, including detached-baseline M4, real-PostgreSQL atomic-create and close-vs-create regressions; coupled paths are green and no narrow regex/keyword route was added."
+    },
+    {
+      "id": "AC9",
+      "status": "PASS",
+      "reason": "The frozen initial dirty set is completely classified path-by-path with KEEP/FIX/DELETE reasoning, targeted proof and final absence/readback. The missing separate immutable raw status is documented as a provenance limitation but is not required by the frozen criterion."
+    },
+    {
+      "id": "AC10",
+      "status": "PASS",
+      "reason": "The updated evidence records a current unified release gate with full 834/834 tests, 249/249 agentic evals, typecheck, build, lint/no-regex, production audit, diff check, and sanitized secret scan all green."
+    },
+    {
+      "id": "AC11",
+      "status": "FAIL",
+      "reason": "Railway evidence is baseline-only, its health probe failed DNS, and the current post-fix commit is not deployed or matched by marker/health readback."
+    },
+    {
+      "id": "AC12",
+      "status": "FAIL",
+      "reason": "The task changes are not committed, pushed, deployed, marker-matched, or post-fix live-verified."
+    },
+    {
+      "id": "AC13",
+      "status": "FAIL",
+      "reason": "Fresh verifier and both evidence artifacts exist, but multiple acceptance criteria remain non-PASS; AC13 explicitly requires every AC to pass."
+    },
+    {
+      "id": "AC14",
+      "status": "PASS",
+      "reason": "The report honestly labels remediation IN PROGRESS and product readiness NOT MET."
+    }
+  ],
+  "resolved_findings": [
+    "H1 stale-owner durable writes are SQL-fenced",
+    "H2 product/source-fact/conflict replacement is transactional",
+    "H3 verified facts have fingerprint/supersession and exact-ID binding",
+    "H4 listing/category false product identity is rejected",
+    "H5 terminal recovery preserves preliminary value and gates handoff on strict source exhaustion",
+    "H6 session close/create/final/feedback mutations are atomically lifecycle-gated",
+    "H7 source tier and proof authority derive from actual source provenance",
+    "M1 definitive 404 rolls back the optimistic client pair",
+    "M2 need projection preserves fact timestamp provenance",
+    "M3 terminal telemetry separates attempted and completed web search",
+    "Consumed lead offers do not reopen after history hydrate",
+    "Atomic turn creation persists and links the user message on real PostgreSQL",
+    "Session close serializes correctly against turn creation in both PostgreSQL lock orderings"
+  ],
+  "commands_run_by_verifier": [
+    {
+      "command": "npm.cmd test -- --run tests/productComparisonResearch.test.ts --testTimeout=20000 --maxWorkers=1 --no-file-parallelism",
+      "result": "PASS: 1 file, 38 tests"
+    },
+    {
+      "command": "npm.cmd test -- --run tests/agentManagerOrchestrator.test.ts -t preserves eligible catalog cards|terminalizes final-fit --testTimeout=20000 --maxWorkers=1 --no-file-parallelism",
+      "result": "PASS: 2 tests, 148 skipped"
+    },
+    {
+      "command": "npm.cmd test -- --run tests/productComparisonResearch.test.ts tests/agentManagerComparisonResearch.test.ts tests/catalogRepositoryFreshness.test.ts tests/conversationRepository.test.ts tests/chatSessionLifecycle.test.ts tests/chatHistory.test.ts --testTimeout=20000 --maxWorkers=1 --no-file-parallelism",
+      "result": "PASS: 6 files, 136 tests"
+    },
+    {
+      "command": "git diff --check",
+      "result": "PASS: exit 0; line-ending warnings only"
+    },
+    {
+      "command": "npm.cmd run build",
+      "result": "PASS: Vite client build and server TypeScript build"
+    },
+    {
+      "command": "reviewed bounded secret-pattern/file-scope scan",
+      "result": "PASS: 716 files, 0 suspicious matches, 1 reviewed localhost placeholder, no values printed"
+    },
+    {
+      "command": "npm.cmd test -- --run tests/conversationRepository.test.ts -t creates the turn and its user message in one statement|returns the same turn when the same client operation is retried|checks active session, live owner, lease and deadline|rejects a stale owner --testTimeout=20000 --maxWorkers=1 --no-file-parallelism",
+      "result": "PASS: 1 file, 4 tests, 35 skipped"
+    },
+    {
+      "command": "npm.cmd test -- --run tests/conversationRepository.test.ts tests/chatSessionLifecycle.test.ts tests/chatHistory.test.ts tests/chatStream.test.ts --testTimeout=20000 --maxWorkers=1 --no-file-parallelism",
+      "result": "PASS: 4 files, 82 tests"
+    },
+    {
+      "command": "DATABASE_URL=<explicit loopback> NODE_ENV=test npx.cmd tsx .agent/tasks/AI-AUDIT-20260809/raw/postgres-session-race-proof.ts",
+      "result": "PASS: atomic turn/message readback and three real PostgreSQL row-lock barrier cases; no connection value was printed"
+    },
+    {
+      "command": "DATABASE_URL=<explicit loopback> NODE_ENV=test npx.cmd tsx .agent/tasks/AI-AUDIT-20260809/raw/postgres-close-create-verifier.ts",
+      "result": "RED before owning fix: session closed while turn remained received/user_message_saved; PASS after pinned-transaction fix for both legal close-vs-create orderings; no connection value was printed"
+    },
+    {
+      "command": "npm.cmd test -- --run tests/conversationRepository.test.ts -t locks the exact live capability before terminalizing turns in a fresh transaction snapshot|creates the turn and its user message in one statement --testTimeout=20000 --maxWorkers=1 --no-file-parallelism",
+      "result": "PASS: 1 file, 2 tests, 37 skipped"
+    }
+  ],
+  "reported_current_root_gates": [
+    "npm test: PASS, 77 files / 834 tests",
+    "typecheck: PASS",
+    "lint:no-regex: PASS"
+  ],
+  "artifacts_used": [
+    ".agent/tasks/AI-AUDIT-20260809/spec.md",
+    ".agent/tasks/AI-AUDIT-20260809/remediation-plan.md",
+    ".agent/tasks/AI-AUDIT-20260809/audit-report.md",
+    ".agent/tasks/AI-AUDIT-20260809/dirty-tree-disposition.md",
+    ".agent/tasks/AI-AUDIT-20260809/evidence.md",
+    ".agent/tasks/AI-AUDIT-20260809/evidence.json",
+    ".agent/tasks/AI-AUDIT-20260809/raw/integrated-local-verifier.md",
+    ".agent/tasks/AI-AUDIT-20260809/raw/final-integrated-verifier-evidence.md",
+    ".agent/tasks/AI-AUDIT-20260809/raw/postgres-session-race-proof.ts",
+    ".agent/tasks/AI-AUDIT-20260809/raw/postgres-close-create-verifier.ts",
+    ".agent/tasks/AI-AUDIT-20260809/raw/railway-audit-sanitized.md",
+    "local-live-tests/2026-08-09-AI-AUDIT-20260809-baseline.production.md"
+  ]
+}

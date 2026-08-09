@@ -35,12 +35,12 @@ import {
   type BuyerRequirementContract
 } from './productSuitability.js';
 import {
-  authoritativeRequirementProofStatus,
   buildRequirementProofs,
-  combinedRequirementProofStatus,
   productRequirementProofCaveats,
   requirementUsesGenericReadProof,
   requirementProofsFor,
+  resolvedRequirementEligibilityStatus,
+  selectionRequirementAttributeMatches,
   type RequirementProof
 } from './requirementProofs.js';
 
@@ -936,6 +936,30 @@ export function gateStrictSelectionRequirements(
       typedWebRequirementIds.has(blocker.id)
     )
   );
+  const representedRequirementIds = new Set(preliminaryUnverified.map((blocker) => blocker.id));
+  const requirementProofs = buildRequirementProofs({ intent, products, toolResults });
+  for (const requirement of intent.selectionPolicy?.requirements ?? []) {
+    if (
+      requirement.role !== 'hard_constraint' ||
+      requirement.strictness !== 'strict' ||
+      representedRequirementIds.has(requirement.id) ||
+      (!webCoveredRequirementIds.has(requirement.id) && !typedWebRequirementIds.has(requirement.id))
+    ) continue;
+    const candidateNeedsEvidence = products.some((product) =>
+      resolvedRequirementEligibilityStatus(requirementProofsFor(
+        requirementProofs,
+        product.id,
+        [requirement.id]
+      )) === 'unknown'
+    );
+    if (!candidateNeedsEvidence) continue;
+    preliminaryUnverified.push({
+      id: requirement.id,
+      kind: requirement.kind,
+      reason: 'catalog_requirement_needs_evidence',
+      evidence: requirement.evidence
+    });
+  }
   const preliminaryUnverifiedKeys = new Set(
     preliminaryUnverified.map((blocker) => `${blocker.id}:${blocker.reason}`)
   );
@@ -959,13 +983,13 @@ function strictRequirementIdsForKinds(intent: AgentIntentContract, kinds: string
   );
 }
 
-function authoritativeProofStatusForKinds(input: {
+function proofEligibilityStatusForKinds(input: {
   proofs: RequirementProof[];
   productId: string;
   intent: AgentIntentContract;
   kinds: string[];
 }) {
-  return authoritativeRequirementProofStatus(requirementProofsFor(
+  return resolvedRequirementEligibilityStatus(requirementProofsFor(
     input.proofs,
     input.productId,
     strictRequirementIdsForKinds(input.intent, input.kinds)
@@ -979,10 +1003,19 @@ function productPassesNativeConstraintOrAuthoritativeProof(input: {
   kinds: string[];
   nativeMatch: boolean;
 }) {
-  const proofStatus = authoritativeProofStatusForKinds(input);
+  const proofs = requirementProofsFor(
+    input.proofs,
+    input.productId,
+    strictRequirementIdsForKinds(input.intent, input.kinds)
+  );
+  const proofStatus = proofEligibilityStatusForKinds(input);
   if (proofStatus === 'satisfied') return true;
-  if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
-  return input.nativeMatch;
+  if (proofStatus === 'violated') return false;
+  if (proofs.some((proof) => proof.status === 'conflicted')) {
+    return input.intent.selectionPolicy?.selectionGoal === 'preliminary_fit';
+  }
+  if (input.nativeMatch) return true;
+  return input.intent.selectionPolicy?.selectionGoal === 'preliminary_fit';
 }
 
 function productsMeetingGenericRequirementProofs(input: {
@@ -1005,12 +1038,12 @@ function productsMeetingGenericRequirementProofs(input: {
   const finalFit = (input.intent.selectionPolicy?.selectionGoal ?? 'final_fit') === 'final_fit';
   return input.products.filter((product) => {
     for (const requirementId of genericRequirementIds) {
-      const status = combinedRequirementProofStatus(requirementProofsFor(
+      const status = resolvedRequirementEligibilityStatus(requirementProofsFor(
         input.proofs,
         product.id,
         [requirementId]
       ));
-      if (status === 'violated' || status === 'conflicted') return false;
+      if (status === 'violated') return false;
       if (finalFit && status !== 'satisfied') return false;
     }
     return true;
@@ -1088,7 +1121,7 @@ function structuredCompromiseProductIds(toolResults: ToolResult[]) {
 function structuredGeneratorPowerRequirement(intent: AgentIntentContract): GeneratorPowerCardRequirement | undefined {
   const minKw = structuredRequirementNumber(intent, ['nominal_power_min_kw', 'power_min_kw']);
   const maxKw = structuredRequirementNumber(intent, ['nominal_power_max_kw', 'power_max_kw']);
-  return minKw === undefined && maxKw === undefined ? undefined : { minKw, maxKw };
+  return minKw === undefined && maxKw === undefined ? undefined : { minKw, maxKw, requireNominal: true };
 }
 
 function structuredPlateWeightRange(intent: AgentIntentContract): PlateWeightRange | undefined {
@@ -1353,6 +1386,19 @@ function generatorPowerFitScore(product: Product, range: { min: number; max: num
   return score;
 }
 
+const nominalActivePowerUnitWords = new Set(
+  ['kw', 'квт', 'w', 'вт'].flatMap((unit) => matchingModelTextTokens(unit))
+);
+
+export function qualifiedNominalActivePowerKw(product: Product) {
+  const hasQualifiedField = Object.entries(product.specs ?? {}).some(([key, value]) => {
+    if (!selectionRequirementAttributeMatches(key, 'nominal_power_min_kw')) return false;
+    return matchingModelTextTokens([key, String(value)].join(' '))
+      .some((word) => nominalActivePowerUnitWords.has(word));
+  });
+  return hasQualifiedField ? extractConfirmedGeneratorNominalPowerKw(product) : undefined;
+}
+
 function productMeetsGeneratorPowerCardRequirement(
   product: Product,
   requirement?: GeneratorPowerCardRequirement,
@@ -1361,7 +1407,7 @@ function productMeetsGeneratorPowerCardRequirement(
   if (!requirement) return true;
   const power = extractGeneratorPowerForHardSelection(product);
   const nominal = requirement.requireNominal
-    ? extractConfirmedGeneratorNominalPowerKw(product)
+    ? qualifiedNominalActivePowerKw(product)
     : power.nominalKw ?? power.maxKw;
   if (nominal === undefined) return !failClosed;
   if (requirement.minKw !== undefined && nominal < requirement.minKw - 0.05) return false;
@@ -1463,7 +1509,7 @@ function diamondBladeSupportsCeramic(product: Product) {
 
 export function generatorMeetsRequiredLoad(product: Product, requiredNominalKw: number) {
   if (!Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) return true;
-  const nominalKw = extractConfirmedGeneratorNominalPowerKw(product);
+  const nominalKw = qualifiedNominalActivePowerKw(product);
   return nominalKw !== undefined && nominalKw >= requiredNominalKw;
 }
 
@@ -1820,7 +1866,7 @@ function structuredRankingAttributeValue(
       ? product.price
       : undefined;
   }
-  return extractConfirmedGeneratorNominalPowerKw(product);
+  return qualifiedNominalActivePowerKw(product);
 }
 
 export function rankCatalogProductsByStructuredPreferences(input: {
@@ -2078,17 +2124,15 @@ export function selectProductsForVisibleCards(input: {
     ? structuredGeneratorVoltageRequirement(input.intent)
     : undefined;
   if (strictGeneratorVoltage !== undefined && selected.length) {
-    const voltageMatchingSelected = selected.filter((product) => {
-      const proofStatus = authoritativeProofStatusForKinds({
+    const voltageMatchingSelected = selected.filter((product) =>
+      productPassesNativeConstraintOrAuthoritativeProof({
         proofs: requirementProofs,
         productId: product.id,
         intent: input.intent,
-        kinds: [generatorVoltageRequirementKind]
-      });
-      if (proofStatus === 'satisfied') return true;
-      if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
-      return productMeetsSupportedStrictVoltageRequirement(product, input.intent, cardIntent);
-    });
+        kinds: [generatorVoltageRequirementKind],
+        nativeMatch: productMeetsSupportedStrictVoltageRequirement(product, input.intent, cardIntent)
+      })
+    );
     voltageFilteredCount = selected.length - voltageMatchingSelected.length;
     selected = voltageMatchingSelected;
     voltageNoFit = selected.length === 0;
@@ -2225,15 +2269,13 @@ export function selectProductsForVisibleCards(input: {
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPhaseRequirement) {
     const phaseMatchingSelected = selected.filter((product) => {
-      const proofStatus = authoritativeProofStatusForKinds({
+      return productPassesNativeConstraintOrAuthoritativeProof({
         proofs: requirementProofs,
         productId: product.id,
         intent: input.intent,
-        kinds: ['phase', generatorVoltageRequirementKind]
+        kinds: ['phase', generatorVoltageRequirementKind],
+        nativeMatch: productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, structuredSelection)
       });
-      if (proofStatus === 'satisfied') return true;
-      if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
-      return productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, structuredSelection);
     });
     if (phaseMatchingSelected.length) {
       generatorPhaseFilteredCount = selected.length - phaseMatchingSelected.length;
@@ -2475,6 +2517,9 @@ export function selectProductsForVisibleCards(input: {
   const warnings = [
     ...(strictRequirementAssessment.preliminaryUnverified.length
       ? [`product_cards_preliminary:unverified_web_covered_strict_requirements:${strictRequirementAssessment.preliminaryUnverified.length}`]
+      : []),
+    ...(strictRequirementAssessment.preliminaryUnverified.length
+      ? [`product_cards_preliminary:needs_evidence:${strictRequirementAssessment.preliminaryUnverified.length}`]
       : []),
     ...(genericProofFilteredCount > 0
       ? [`product_cards_filtered_by_requirement_proof:${genericProofFilteredCount}`]

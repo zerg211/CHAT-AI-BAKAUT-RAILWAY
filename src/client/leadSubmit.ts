@@ -10,6 +10,7 @@ export type LeadSubmitPayload = {
 type FetchLike = typeof fetch;
 
 export type LeadSubmitOptions = {
+  visitorId: string;
   fetcher?: FetchLike;
   timeoutMs?: number;
 };
@@ -24,7 +25,7 @@ export type LeadSubmitReceipt = {
 const DEFAULT_LEAD_TIMEOUT_MS = 20_000;
 const LEAD_TIMEOUT_MESSAGE = 'Заявка не отправилась вовремя. Попробуйте ещё раз или позвоните в БАКАУТ напрямую.';
 
-export async function submitLead(apiBase: string, payload: LeadSubmitPayload, options: LeadSubmitOptions = {}) {
+export async function submitLead(apiBase: string, payload: LeadSubmitPayload, options: LeadSubmitOptions) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_LEAD_TIMEOUT_MS;
   const fetcher = options.fetcher ?? fetch;
   const controller = new AbortController();
@@ -34,7 +35,10 @@ export async function submitLead(apiBase: string, payload: LeadSubmitPayload, op
     const response = await Promise.race([
       fetcher(`${apiBase}/api/leads`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'x-bakaut-visitor-id': options.visitorId
+        },
         body: JSON.stringify(payload),
         signal: controller.signal
       }),

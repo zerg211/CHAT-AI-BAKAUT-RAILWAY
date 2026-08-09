@@ -250,6 +250,8 @@ async function repairVerifiedProductFactsSchema(client: QueryableClient) {
       source_url text,
       source_title text,
       evidence text,
+      catalog_source_hash text,
+      source_fingerprint text,
       confidence text NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
       status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'rejected')),
       first_seen_at timestamptz NOT NULL DEFAULT now(),
@@ -260,8 +262,15 @@ async function repairVerifiedProductFactsSchema(client: QueryableClient) {
     )
   `);
   await client.query(`
-    CREATE UNIQUE INDEX IF NOT EXISTS verified_product_facts_unique_active_idx
-      ON verified_product_facts(product_key, attribute, value, source_type, coalesce(source_url, ''), status)
+    ALTER TABLE verified_product_facts
+      ADD COLUMN IF NOT EXISTS catalog_source_hash text,
+      ADD COLUMN IF NOT EXISTS source_fingerprint text
+  `);
+  await client.query(`DROP INDEX IF EXISTS verified_product_facts_unique_active_idx`);
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS verified_product_facts_unique_active_v2_idx
+      ON verified_product_facts(product_key, attribute, value, source_type, coalesce(source_url, ''))
+      WHERE status = 'active'
   `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS verified_product_facts_key_status_idx
@@ -271,6 +280,11 @@ async function repairVerifiedProductFactsSchema(client: QueryableClient) {
     CREATE INDEX IF NOT EXISTS verified_product_facts_product_status_idx
       ON verified_product_facts(product_id, status, last_verified_at DESC)
       WHERE product_id IS NOT NULL
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS verified_product_facts_catalog_fingerprint_idx
+      ON verified_product_facts(product_id, catalog_source_hash)
+      WHERE product_id IS NOT NULL AND status = 'active'
   `);
 }
 

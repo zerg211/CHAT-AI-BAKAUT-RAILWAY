@@ -1,0 +1,300 @@
+{
+  "schemaVersion": 1,
+  "taskId": "AI-AUDIT-20260809",
+  "snapshotDate": "2026-08-09",
+  "status": "not_met",
+  "statusReason": "Local production code, release gates, atomic turn/message PostgreSQL readback, both close-vs-create orderings, and three additional real row-lock races pass, but post-fix Railway deployment and embedded-widget live evidence are not complete.",
+  "repository": {
+    "baselineCommit": "9bc454c164869c7f1e2c91e2417a50e3ea10b769",
+    "rollbackBranch": "origin/codex/backup-pre-audit-20260809",
+    "workingBranch": "codex/full-ai-audit-remediation-20260809",
+    "featureCommitted": false,
+    "featurePushed": false,
+    "mainMerged": false
+  },
+  "primarySignals": {
+    "baselineEmbeddedWidget": {
+      "run": true,
+      "status": "fail",
+      "site": "https://bakautprof.ru/",
+      "sessions": [1842, 1843, 1844, 1845],
+      "protocol": "local-live-tests/2026-08-09-AI-AUDIT-20260809-baseline.production.md"
+    },
+    "postFixEmbeddedWidget": {
+      "run": false,
+      "status": "not_run"
+    },
+    "twoClientPostgreSqlRace": {
+      "run": true,
+      "status": "pass",
+      "command": "npx.cmd tsx .agent\\tasks\\AI-AUDIT-20260809\\raw\\postgres-session-race-proof.ts",
+      "exitCode": 0,
+      "passedCases": [
+        "idempotent-atomic-turn-message-create-and-separate-readback",
+        "close_first_rejects_without_orphans",
+        "create_first_links_then_close_revokes",
+        "close_vs_feedback",
+        "close_vs_final_answer_commit",
+        "new_owner_vs_stale_durable_write"
+      ],
+      "defenseInDepthNotRun": ["stale-owner race for every durable mutation type"]
+    }
+  },
+  "localChecks": [
+    {
+      "command": "npm.cmd run verify",
+      "status": "pass",
+      "exitCode": 0,
+      "details": "Fresh after the final close-vs-create owning fix: Node 24.14.1; no-regex baseline unchanged; production audit 0; typecheck; 77 files and 834 tests; 4 files and 249 agentic evals; production build. One non-failing Node DEP0190 warning was emitted by the Windows shell invocation."
+    },
+    {
+      "command": "npm.cmd test",
+      "status": "pass",
+      "exitCode": 0,
+      "testFiles": 77,
+      "testsPassed": 834,
+      "testsFailed": 0
+    },
+    {
+      "command": "npm.cmd run test:eval:agentic",
+      "status": "pass",
+      "exitCode": 0,
+      "testFiles": 4,
+      "testsPassed": 249,
+      "testsFailed": 0,
+      "note": "Executed inside the current npm run verify gate."
+    },
+    {
+      "command": "npm.cmd run typecheck",
+      "status": "pass",
+      "exitCode": 0
+    },
+    {
+      "command": "npm.cmd run lint:no-regex",
+      "status": "pass",
+      "exitCode": 0,
+      "legacyBaseline": 508,
+      "newFindings": 0
+    },
+    {
+      "command": "npm.cmd run build",
+      "status": "pass",
+      "exitCode": 0,
+      "note": "Vite client build and server TypeScript emit; executed inside the current npm run verify gate."
+    },
+    {
+      "command": "npm.cmd audit --omit=dev --audit-level=high",
+      "status": "pass",
+      "exitCode": 0,
+      "highVulnerabilities": 0
+    },
+    {
+      "command": "git diff --check",
+      "status": "pass",
+      "exitCode": 0,
+      "note": "Fresh after the close-vs-create fix; only LF-to-CRLF notices, no whitespace errors."
+    },
+    {
+      "command": "npm.cmd test -- --run tests/conversationRepository.test.ts -t \"creates the turn and its user message in one statement\"",
+      "status": "pass_after_red",
+      "exitCode": 0,
+      "testsPassed": 1,
+      "testsSkipped": 38,
+      "redBeforeFix": "exit 1; 1 failed and 38 skipped; message INSERT followed turn INSERT and a sibling updated_turn CTE attempted to update the inserted row"
+    },
+    {
+      "command": "npm.cmd test -- --run tests/conversationRepository.test.ts tests/chatSessionLifecycle.test.ts tests/chatStream.test.ts tests/chatHistory.test.ts tests/leadRoutes.test.ts tests/leadSubmit.test.ts",
+      "status": "pass",
+      "exitCode": 0,
+      "testFiles": 6,
+      "testsPassed": 99,
+      "testsFailed": 0,
+      "note": "An intermediate 98 pass and 1 fail was a stale alias-only assertion; it was updated to the owning alias without weakening production behavior."
+    },
+    {
+      "command": "npx.cmd tsx .agent\\tasks\\AI-AUDIT-20260809\\raw\\postgres-session-race-proof.ts",
+      "status": "pass_after_red",
+      "exitCode": 0,
+      "redBeforeFix": "ConversationSessionUnavailableError during real PostgreSQL createTurnWithUserMessage before the race cases",
+      "readback": "For each race setup, identical operation replay returned the same turn id, exactly one user message remained, user_message_id stayed linked, and a separate message read returned the persisted content.",
+      "cases": [
+        "close_vs_feedback",
+        "close_vs_final_answer_commit",
+        "new_owner_vs_stale_durable_write"
+      ]
+    },
+    {
+      "command": "npm.cmd test -- --run tests/conversationRepository.test.ts -t \"locks the exact live capability before terminalizing turns in a fresh transaction snapshot|creates the turn and its user message in one statement\" --testTimeout=20000 --maxWorkers=1 --no-file-parallelism",
+      "status": "pass_after_real_pg_red",
+      "exitCode": 0,
+      "testFiles": 1,
+      "testsPassed": 2,
+      "testsSkipped": 37,
+      "redBeforeFix": "In create-first ordering, queued close returned a closed session but left the accepted turn received/user_message_saved because the old statement snapshot did not see the committed turn."
+    },
+    {
+      "command": "npx.cmd tsx .agent\\tasks\\AI-AUDIT-20260809\\raw\\postgres-close-create-verifier.ts",
+      "status": "pass_after_red",
+      "exitCode": 0,
+      "databaseScope": "explicit local loopback test database; credential value not recorded",
+      "cases": [
+        "close_first_rejects_without_orphans",
+        "create_first_links_then_close_revokes"
+      ]
+    },
+    {
+      "command": "npm.cmd test -- --run tests/chatHistory.test.ts -t \"does not reopen a consumed latest lead offer after reload\"",
+      "status": "fail_as_expected_on_detached_baseline",
+      "exitCode": 1,
+      "baselineCommit": "9bc454c164869c7f1e2c91e2417a50e3ea10b769",
+      "testsFailed": 1,
+      "testsSkipped": 13,
+      "actual": "leadRequested:true",
+      "expected": "leadRequested:false"
+    },
+    {
+      "command": "npm.cmd test -- --run tests/chatHistory.test.ts -t \"does not reopen the latest lead offer after a durable lead was submitted for it\"",
+      "status": "pass",
+      "exitCode": 0,
+      "testsPassed": 1,
+      "testsSkipped": 18
+    },
+    {
+      "command": "sanitized bounded rg -l secret-content scan",
+      "status": "pass",
+      "exitCode": 0,
+      "matchingFiles": 0,
+      "unexpectedSecretFiles": 0,
+      "targets": [
+        "src",
+        "tests",
+        "evals",
+        "package.json",
+        "package-lock.json",
+        ".gitignore",
+        ".agent/tasks/AI-AUDIT-20260809",
+        "local-live-tests/2026-08-09-AI-AUDIT-20260809-baseline.production.md"
+      ],
+      "excluded": ["node_modules", "dist", ".git", ".scratch"]
+    },
+    {
+      "command": "post-finalization owned audit artifact credential-shaped rg -l scan",
+      "status": "pass",
+      "exitCode": 0,
+      "matchingFiles": 0,
+      "targets": [
+        ".agent/tasks/AI-AUDIT-20260809/dirty-tree-disposition.md",
+        ".agent/tasks/AI-AUDIT-20260809/evidence.md",
+        ".agent/tasks/AI-AUDIT-20260809/evidence.json",
+        ".agent/tasks/AI-AUDIT-20260809/raw/final-gap-fixes-root.md",
+        ".agent/tasks/AI-AUDIT-20260809/raw/postgres-session-race-proof.ts",
+        ".agent/tasks/AI-AUDIT-20260809/raw/postgres-close-create-verifier.ts"
+      ]
+    },
+    {
+      "command": "suspicious filename scope scan",
+      "status": "pass_with_exclusion",
+      "exitCode": 0,
+      "matches": ["local-live-tests/2026-04-27-token-budget-optimization.local.md"],
+      "note": "Historical ignored file; not in the release staging set; content was not printed."
+    }
+  ],
+  "nonZeroResiduals": [
+    {
+      "command": "npm.cmd audit --audit-level=high",
+      "status": "fail",
+      "exitCode": 1,
+      "scope": "development_only",
+      "highFindings": 5,
+      "path": "promptfoo -> @huggingface/transformers -> onnxruntime-node",
+      "packages": ["adm-zip <0.6.0", "sharp <0.35.0"],
+      "decision": "Do not apply npm's forced breaking downgrade to promptfoo@0.120.14; revisit when upstream publishes a compatible dependency tree.",
+      "productionImpact": "Not installed in Railway production because the image uses --omit=dev."
+    }
+  ],
+  "independentVerifier": {
+    "run": true,
+    "status": "fail_before_release",
+    "codeVerdict": "No currently confirmed unresolved Critical or High production-code defect; H1-H7 and M1-M4 are structurally resolved locally.",
+    "checks": [
+      "catalog-memory-source-identity: 99/99 pass",
+      "ledger-session-client: 115/115 pass",
+      "H1-H6-M1: 65/65 pass",
+      "current connected selection-session: 136/136 pass"
+    ],
+    "artifact": ".agent/tasks/AI-AUDIT-20260809/raw/integrated-local-verifier.md"
+  },
+  "acceptanceCriteria": {
+    "AC1": {
+      "status": "pass",
+      "reason": "Current end-to-end and fallback/recovery architecture map contains owning code references."
+    },
+    "AC2": {
+      "status": "pass",
+      "reason": "Each High finding has the required five-part LLM-versus-deterministic-code decision."
+    },
+    "AC3": {
+      "status": "pass",
+      "reason": "Catalog path and exact, fuzzy, hard, soft, comparison, missing-attribute, and proven-conflict regressions are covered."
+    },
+    "AC4": {
+      "status": "pass",
+      "scope": "local_code",
+      "reason": "Mandatory web policy, exact identity, deterministic source authority, strict exhaustion, conflict lifecycle, and verified-memory boundaries are locally consistent."
+    },
+    "AC5": {
+      "status": "pass",
+      "reason": "Session, history, ledger, hydrate, inactive/closed behavior, idempotent atomic turn/message persistence, both close-vs-create orderings, close-vs-feedback, close-vs-final, and stale-owner takeover fencing pass current contract and real PostgreSQL tests. Rendered post-fix behavior remains AC6/AC7."
+    },
+    "AC6": {
+      "status": "fail",
+      "reason": "No post-fix adaptive embedded production dialogues exist yet."
+    },
+    "AC7": {
+      "status": "fail",
+      "reason": "No post-fix two-sided buyer UI and admin turn/tool/card/warning/recovery/latency evidence exists yet."
+    },
+    "AC8": {
+      "status": "pass",
+      "reason": "Every implemented behavior change has retained owning-layer RED-to-GREEN evidence; M4 is independently red on detached baseline 9bc454c and green in the current focused regression."
+    },
+    "AC9": {
+      "status": "pass",
+      "reason": "The disposition lists every initial dirty path with verdict and reasoning, proves unsafe-path absence, and classifies the full current tree. A separate raw initial status was not retained, but the frozen criterion does not require a specific snapshot format."
+    },
+    "AC10": {
+      "status": "pass",
+      "reason": "Current release gate, full tests, agentic eval, typecheck, build, no-regex guard, production audit, diff check, and bounded secret scan exit zero."
+    },
+    "AC11": {
+      "status": "fail",
+      "reason": "Railway baseline is audited, but the post-fix deployed commit, marker, health, and readiness do not exist yet."
+    },
+    "AC12": {
+      "status": "fail",
+      "reason": "Rollback branch exists; feature commit, push, deployment, and merge are not complete."
+    },
+    "AC13": {
+      "status": "fail",
+      "reason": "Fresh verifier artifacts exist, but not every acceptance criterion passes."
+    },
+    "AC14": {
+      "status": "pass",
+      "reason": "The task is explicitly reported as not met because deployment and post-fix live dialogue proof are still missing, while local concurrency proof is complete."
+    }
+  },
+  "artifacts": [
+    ".agent/tasks/AI-AUDIT-20260809/spec.md",
+    ".agent/tasks/AI-AUDIT-20260809/audit-report.md",
+    ".agent/tasks/AI-AUDIT-20260809/remediation-plan.md",
+    ".agent/tasks/AI-AUDIT-20260809/dirty-tree-disposition.md",
+    ".agent/tasks/AI-AUDIT-20260809/evidence.md",
+    ".agent/tasks/AI-AUDIT-20260809/problems.md",
+    ".agent/tasks/AI-AUDIT-20260809/verdict.json",
+    ".agent/tasks/AI-AUDIT-20260809/raw/final-gap-fixes-root.md",
+    ".agent/tasks/AI-AUDIT-20260809/raw/integrated-local-verifier.md",
+    ".agent/tasks/AI-AUDIT-20260809/raw/postgres-session-race-proof.ts",
+    ".agent/tasks/AI-AUDIT-20260809/raw/postgres-close-create-verifier.ts",
+    "local-live-tests/2026-08-09-AI-AUDIT-20260809-baseline.production.md"
+  ]
+}

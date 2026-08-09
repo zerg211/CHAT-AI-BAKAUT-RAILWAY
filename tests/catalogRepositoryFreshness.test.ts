@@ -3,6 +3,175 @@ import { CATALOG_MUTATION_LOCK_IDENTITY } from '../src/catalog/catalogFreshness.
 import { ProductRepository } from '../src/db/repositories.js';
 
 describe('ProductRepository catalog freshness integration', () => {
+  it('replaces a same-source product snapshot instead of retaining removed specs and raw fields', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('INSERT INTO products')) {
+        return {
+        rowCount: 1,
+        rows: [{
+          id: 'product-1',
+          name: 'Current product',
+          specs: { current: 'yes' },
+          raw: { sourceType: 'site', pageType: 'product' },
+          created_at: new Date(),
+          updated_at: new Date()
+        }]
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const release = vi.fn();
+    const repository = new ProductRepository({
+      connect: vi.fn(async () => ({ query, release }))
+    } as never);
+
+    await repository.upsertProduct({
+      sourceUrl: 'https://bakautprof.ru/catalog/generators/current-product/',
+      name: 'Current product',
+      description: undefined,
+      specs: { current: 'yes' },
+      raw: { sourceType: 'site', pageType: 'product' }
+    });
+
+    const upsertSql = String(query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO products'))?.[0]);
+    expect(upsertSql).toContain('specs = EXCLUDED.specs');
+    expect(upsertSql).toContain('raw = EXCLUDED.raw');
+    expect(upsertSql).not.toContain('products.specs || EXCLUDED.specs');
+    expect(upsertSql).not.toContain('products.raw || EXCLUDED.raw');
+    expect(upsertSql).toContain('description = EXCLUDED.description');
+    expect(upsertSql).toContain('price = EXCLUDED.price');
+    expect(upsertSql).toContain('products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash');
+    expect(query.mock.calls[0]?.[0]).toBe('BEGIN');
+    expect(query.mock.calls.at(-1)?.[0]).toBe('COMMIT');
+    expect(release).toHaveBeenCalledOnce();
+    const productWriteIndex = query.mock.calls.findIndex(([sql]) => String(sql).includes('INSERT INTO products'));
+    const factDeleteIndex = query.mock.calls.findIndex(([sql]) => String(sql).includes('DELETE FROM product_facts'));
+    const conflictRefreshIndex = query.mock.calls.findIndex(([sql]) =>
+      String(sql).includes('SELECT attribute') && String(sql).includes('FROM product_facts')
+    );
+    expect(productWriteIndex).toBeGreaterThan(0);
+    expect(factDeleteIndex).toBeGreaterThan(productWriteIndex);
+    expect(conflictRefreshIndex).toBeGreaterThan(factDeleteIndex);
+  });
+
+  it('rolls back the product snapshot when source-fact replacement fails', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('INSERT INTO products')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 'product-rollback',
+            name: 'Rollback product',
+            specs: { power: '5 kW' },
+            raw: { sourceType: 'site', pageType: 'product' },
+            created_at: new Date(),
+            updated_at: new Date()
+          }]
+        };
+      }
+      if (sql.includes('INSERT INTO product_facts')) throw new Error('fact write failed');
+      return { rowCount: 0, rows: [] };
+    });
+    const release = vi.fn();
+    const repository = new ProductRepository({
+      connect: vi.fn(async () => ({ query, release }))
+    } as never);
+
+    await expect(repository.upsertProduct({
+      sourceUrl: 'https://bakautprof.ru/catalog/generators/rollback-product/',
+      name: 'Rollback product',
+      specs: { power: '5 kW' },
+      raw: { sourceType: 'site', pageType: 'product' }
+    })).rejects.toThrow('fact write failed');
+
+    expect(query.mock.calls[0]?.[0]).toBe('BEGIN');
+    expect(query.mock.calls.at(-1)?.[0]).toBe('ROLLBACK');
+    expect(query.mock.calls.some(([sql]) => sql === 'COMMIT')).toBe(false);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('binds verified facts to the current catalog snapshot and supersedes an older value from the same source atomically', async () => {
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('INSERT INTO verified_product_facts')) {
+        return {
+          rowCount: 1,
+          rows: [{
+            id: 'verified-fact-1',
+            product_id: '11111111-1111-4111-8111-111111111111',
+            product_key: 'current product',
+            product_name: 'Current product',
+            attribute: 'nominal power',
+            value: '5 kW',
+            source_type: 'web',
+            source_url: 'https://manufacturer.example/current-product',
+            source_title: 'Official specification',
+            evidence: 'Nominal power 5 kW',
+            confidence: 'high',
+            status: 'active',
+            catalog_source_hash: 'catalog-hash-current',
+            source_fingerprint: 'source-fingerprint-current',
+            first_seen_at: new Date(),
+            last_verified_at: new Date(),
+            hit_count: 0,
+            created_at: new Date(),
+            updated_at: new Date()
+          }]
+        };
+      }
+      return { rowCount: 0, rows: [] };
+    });
+    const release = vi.fn();
+    const repository = new ProductRepository({
+      connect: vi.fn(async () => ({ query, release }))
+    } as never);
+
+    const saved = await repository.upsertVerifiedProductFact({
+      productId: '11111111-1111-4111-8111-111111111111',
+      productName: 'Current product',
+      attribute: 'nominal power',
+      value: '5 kW',
+      sourceType: 'web',
+      sourceUrl: 'https://manufacturer.example/current-product',
+      sourceTitle: 'Official specification',
+      evidence: 'Nominal power 5 kW',
+      confidence: 'high'
+    });
+
+    const writeSql = String(query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO verified_product_facts'))?.[0]);
+    expect(query.mock.calls[0]?.[0]).toBe('BEGIN');
+    expect(writeSql).toContain('source_content_hash');
+    expect(writeSql).toContain('catalog_source_hash');
+    expect(writeSql).toContain('source_fingerprint');
+    expect(writeSql).toContain("status = 'superseded'");
+    expect(writeSql).toContain('coalesce(source_url');
+    expect(query.mock.calls.at(-1)?.[0]).toBe('COMMIT');
+    expect(release).toHaveBeenCalledOnce();
+    expect(saved).toMatchObject({
+      catalogSourceHash: 'catalog-hash-current',
+      sourceFingerprint: 'source-fingerprint-current'
+    });
+  });
+
+  it('does not return a product-bound verified fact after its catalog fingerprint changes', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new ProductRepository({ query } as never);
+
+    await repository.searchVerifiedProductFacts({
+      productIds: ['11111111-1111-4111-8111-111111111111'],
+      sourceTypes: ['web']
+    });
+
+    const lookupSql = String(query.mock.calls[0]?.[0]);
+    expect(lookupSql).toContain('LEFT JOIN products');
+    expect(lookupSql).toContain('catalog_source_hash = product.source_content_hash');
+    const emptyExactIdsGuard = lookupSql.indexOf("$2::uuid[] = '{}'::uuid[]");
+    const nameOnlyFactFallback = lookupSql.indexOf('fact.product_id IS NULL');
+    expect(emptyExactIdsGuard).toBeGreaterThanOrEqual(0);
+    expect(nameOnlyFactFallback).toBeGreaterThan(emptyExactIdsGuard);
+    expect(lookupSql).toContain("$2::uuid[] <> '{}'::uuid[]");
+    expect(lookupSql).toContain('fact.product_id = ANY($2::uuid[])');
+  });
+
   it('excludes inactive products and pages from buyer-facing retrieval', async () => {
     const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
     const repository = new ProductRepository({ query } as never);

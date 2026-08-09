@@ -479,4 +479,252 @@ describe('dialogue ledger reducer', () => {
     expect(state.needsById.generator?.selectedProductIds).toEqual(['still-valid-generator']);
     expect(state.needsById.generator?.rejectedProductIds).toEqual(['rejected-generator']);
   });
+
+  it('preserves product rejections until an explicit typed operation changes them', () => {
+    const opened = event({
+      eventId: 'opened-with-rejections',
+      eventType: 'need.opened',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'Generator selection',
+        rejectedProductIds: ['too-heavy', 'too-expensive'],
+        status: 'open',
+        activate: true
+      }
+    });
+    const mandatoryEmptyUpdate = event({
+      eventId: 'mandatory-empty-rejections',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'Continue the same selection',
+        rejectedProductIds: [],
+        status: 'open',
+        activate: true
+      }
+    });
+    const mergedRejection = event({
+      eventId: 'merge-another-rejection',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        rejectedProductIds: ['too-loud'],
+        rejectedProductIdsUpdateMode: 'merge',
+        status: 'open',
+        activate: true
+      }
+    });
+    const explicitUnreject = event({
+      eventId: 'explicit-unreject-by-replace',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        rejectedProductIds: ['too-heavy', 'too-loud'],
+        rejectedProductIdsUpdateMode: 'replace',
+        status: 'open',
+        activate: true
+      }
+    });
+    const explicitClear = event({
+      eventId: 'explicit-clear-rejections',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        rejectedProductIds: [],
+        rejectedProductIdsUpdateMode: 'clear',
+        status: 'open',
+        activate: true
+      }
+    });
+
+    expect(reduceDialogueLedger([opened, mandatoryEmptyUpdate]).needsById.generator?.rejectedProductIds)
+      .toEqual(['too-heavy', 'too-expensive']);
+    expect(reduceDialogueLedger([opened, mandatoryEmptyUpdate, mergedRejection]).needsById.generator?.rejectedProductIds)
+      .toEqual(['too-heavy', 'too-expensive', 'too-loud']);
+    expect(reduceDialogueLedger([opened, mandatoryEmptyUpdate, mergedRejection, explicitUnreject]).needsById.generator?.rejectedProductIds)
+      .toEqual(['too-heavy', 'too-loud']);
+    expect(reduceDialogueLedger([
+      opened,
+      mandatoryEmptyUpdate,
+      mergedRejection,
+      explicitUnreject,
+      explicitClear
+    ]).needsById.generator?.rejectedProductIds).toEqual([]);
+  });
+
+  it('preserves constraints and open questions until explicit replace or clear operations', () => {
+    const opened = event({
+      eventId: 'opened-with-need-state',
+      eventType: 'need.opened',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'Generator selection',
+        constraints: ['up to 80 kg'],
+        openQuestions: ['Confirm the starting current'],
+        status: 'open',
+        activate: true
+      }
+    });
+    const mandatoryEmptyUpdate = event({
+      eventId: 'mandatory-empty-need-state',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        constraints: [],
+        openQuestions: [],
+        status: 'open',
+        activate: true
+      }
+    });
+    const explicitReplace = event({
+      eventId: 'replace-need-state',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        constraints: ['up to 100000 RUB'],
+        constraintsUpdateMode: 'replace',
+        openQuestions: ['Confirm the phase'],
+        openQuestionsUpdateMode: 'replace',
+        status: 'open',
+        activate: true
+      }
+    });
+    const explicitClear = event({
+      eventId: 'clear-need-state',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        constraints: [],
+        constraintsUpdateMode: 'clear',
+        openQuestions: [],
+        openQuestionsUpdateMode: 'clear',
+        status: 'open',
+        activate: true
+      }
+    });
+
+    expect(reduceDialogueLedger([opened, mandatoryEmptyUpdate]).needsById.generator).toMatchObject({
+      constraints: ['up to 80 kg'],
+      openQuestions: ['Confirm the starting current']
+    });
+    expect(reduceDialogueLedger([opened, mandatoryEmptyUpdate, explicitReplace]).needsById.generator).toMatchObject({
+      constraints: ['up to 100000 RUB'],
+      openQuestions: ['Confirm the phase']
+    });
+    expect(reduceDialogueLedger([opened, mandatoryEmptyUpdate, explicitReplace, explicitClear]).needsById.generator)
+      .toMatchObject({ constraints: [], openQuestions: [] });
+  });
+
+  it('keeps observed facts epistemically distinct and does not displace an active confirmed fact', () => {
+    const state = reduceDialogueLedger([
+      event({
+        eventId: 'confirmed-budget',
+        eventType: 'fact.confirmed',
+        scope: 'need',
+        createdAt: '2026-08-09T10:00:00.000Z',
+        payload: {
+          factKey: 'budget.max_rub',
+          value: 100000,
+          needId: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'Buyer explicitly confirmed the budget.',
+        source: 'llm_state_delta'
+      }),
+      event({
+        eventId: 'observed-budget-conflict',
+        eventType: 'fact.observed',
+        scope: 'need',
+        createdAt: '2026-08-09T10:01:00.000Z',
+        payload: {
+          factKey: 'budget.max_rub',
+          value: 120000,
+          needId: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'A later tool observation suggested another number.',
+        source: 'tool_result'
+      }),
+      event({
+        eventId: 'observed-weight',
+        eventType: 'fact.observed',
+        scope: 'product',
+        createdAt: '2026-08-09T10:02:00.000Z',
+        payload: {
+          factKey: 'product.weight_kg',
+          value: 77,
+          needId: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'Observed in an unconfirmed tool result.',
+        source: 'tool_result'
+      })
+    ]);
+
+    expect(state.factsByKey['generator::budget.max_rub']).toMatchObject({
+      eventId: 'confirmed-budget',
+      eventType: 'fact.confirmed',
+      source: 'llm_state_delta',
+      confidence: 1,
+      createdAt: '2026-08-09T10:00:00.000Z'
+    });
+    expect(state.factsByKey['generator::product.weight_kg']).toMatchObject({
+      eventType: 'fact.observed',
+      source: 'tool_result',
+      confidence: 0.5,
+      createdAt: '2026-08-09T10:02:00.000Z'
+    });
+
+    const compacted = parseReducedDialogueLedgerState(JSON.parse(JSON.stringify(state)));
+    expect(compacted.factsByKey['generator::product.weight_kg']).toMatchObject({
+      eventType: 'fact.observed',
+      source: 'tool_result',
+      confidence: 0.5,
+      createdAt: '2026-08-09T10:02:00.000Z'
+    });
+    const snapshot = deriveNeedStateSnapshotFromLedger(compacted);
+    expect(snapshot.confirmedFacts.map((fact) => fact.value)).toContain('budget.max_rub: 100000');
+    expect(snapshot.confirmedFacts.find((fact) => fact.value === 'budget.max_rub: 100000')?.updatedAt)
+      .toBe('2026-08-09T10:00:00.000Z');
+    expect(snapshot.confirmedFacts.map((fact) => fact.value)).not.toContain('product.weight_kg: 77');
+    expect(snapshot.constraints.map((fact) => fact.value)).not.toContain('product.weight_kg: 77');
+    expect(snapshot.uncertainInferences).toContainEqual(expect.objectContaining({
+      value: 'product.weight_kg: 77',
+      updatedAt: '2026-08-09T10:02:00.000Z',
+      confidence: 0.5
+    }));
+  });
+
+  it('rejects malformed nested snapshot entries instead of trusting unsafe casts', () => {
+    expect(() => parseReducedDialogueLedgerState({
+      eventIds: ['bad-fact'],
+      factsByKey: {
+        bad: {
+          factKey: 'budget.max_rub',
+          value: 100000,
+          eventId: 'bad-fact',
+          status: 'active',
+          evidence: 'missing source and epistemic metadata'
+        }
+      },
+      questionsById: {},
+      needsById: {},
+      warnings: []
+    })).toThrowError('invalid_dialogue_ledger_snapshot');
+  });
 });

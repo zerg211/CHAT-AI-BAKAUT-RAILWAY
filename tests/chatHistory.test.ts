@@ -6,6 +6,7 @@ import {
   clearSavedSessionIfMatches,
   initialChatHydrationState,
   loadChatHistory,
+  loadChatHistoryState,
   restoreSavedChatSession,
   safeStorageGet,
   savedSessionHeartbeatOutcome,
@@ -35,7 +36,10 @@ function memorySessionStorage(initialSessionId: string | null) {
   };
 }
 
-async function publicHistoryApp(messages: Array<Record<string, unknown>>) {
+async function publicHistoryApp(
+  messages: Array<Record<string, unknown>>,
+  pendingTurn: { turn: Record<string, unknown>; resultReady: boolean } | null = null
+) {
   const conversations = {
     restoreSession: vi.fn(async (id: string, capability: string) => id === sessionId && capability === visitorId
       ? { id: sessionId, status: 'active', visitorId }
@@ -43,7 +47,9 @@ async function publicHistoryApp(messages: Array<Record<string, unknown>>) {
     touchSession: vi.fn(async (id: string, capability: string) => id === sessionId && capability === visitorId
       ? { id: sessionId, status: 'active', visitorId }
       : null),
-    listMessages: vi.fn(async () => messages)
+    listMessages: vi.fn(async () => messages),
+    getLatestUnansweredTurn: vi.fn(async () => pendingTurn),
+    getHistorySnapshot: vi.fn(async () => ({ messages, pendingTurn }))
   };
   const app = Fastify();
   openApps.push(app);
@@ -79,7 +85,7 @@ describe('public chat history API', () => {
       expect(response.headers['cache-control']).toBe('no-store');
       expect(response.headers.vary).toContain('x-bakaut-visitor-id');
     }
-    expect(conversations.listMessages).not.toHaveBeenCalled();
+    expect(conversations.getHistorySnapshot).not.toHaveBeenCalled();
   });
 
   it('restores and touches only through the authenticated repository operation', async () => {
@@ -93,6 +99,7 @@ describe('public chat history API', () => {
 
     expect(response.statusCode).toBe(200);
     expect(conversations.restoreSession).toHaveBeenCalledWith(sessionId, visitorId);
+    expect(conversations.getHistorySnapshot).toHaveBeenCalledWith(sessionId);
   });
 
   it('authenticates heartbeat without disclosing the visitor capability or session data', async () => {
@@ -111,7 +118,7 @@ describe('public chat history API', () => {
     expect(authenticated.statusCode).toBe(200);
     expect(authenticated.json()).toEqual({ ok: true });
     expect(JSON.stringify(authenticated.json())).not.toContain(visitorId);
-    expect(conversations.touchSession).toHaveBeenCalledWith(sessionId, visitorId);
+    expect(conversations.restoreSession).toHaveBeenCalledWith(sessionId, visitorId);
   });
 
   it('allowlists user/assistant rows and schema-picks nested public card fields', async () => {
@@ -242,9 +249,70 @@ describe('public chat history API', () => {
     expect(new TextEncoder().encode(response.body).byteLength).toBeLessThanOrEqual(PUBLIC_HISTORY_MAX_RESPONSE_BYTES);
     expect((response.json() as { messages: unknown[] }).messages.length).toBeLessThan(hugeMessages.length);
   });
+
+  it('returns an allowlisted pending turn state without execution or error internals', async () => {
+    const deadlineAt = '2026-08-09T12:30:00.000Z';
+    const { app } = await publicHistoryApp([], {
+      turn: {
+        id: '33333333-3333-4333-8333-333333333333',
+        status: 'answering',
+        stage: 'catalog_search',
+        deadlineAt,
+        requestHash: 'must-not-leak',
+        executionOwner: 'must-not-leak',
+        errorMessage: 'must-not-leak'
+      },
+      resultReady: false
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${sessionId}/messages`,
+      headers: { 'x-bakaut-visitor-id': visitorId }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      pendingTurn: {
+        turnId: '33333333-3333-4333-8333-333333333333',
+        status: 'answering',
+        stage: 'catalog_search',
+        deadlineAt,
+        terminal: false,
+        resultState: 'pending'
+      }
+    });
+    expect(response.body).not.toContain('must-not-leak');
+  });
 });
 
 describe('public chat history client', () => {
+  it('parses a typed pending turn for hydrate recovery', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      messages: [{ id: 'user-1', role: 'user', content: 'Нужен генератор' }],
+      pendingTurn: {
+        turnId: '33333333-3333-4333-8333-333333333333',
+        status: 'answering',
+        stage: 'catalog_search',
+        deadlineAt: '2026-08-09T12:30:00.000Z',
+        terminal: false,
+        resultState: 'pending'
+      }
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    await expect(loadChatHistoryState('', sessionId, visitorId, fetcher)).resolves.toEqual({
+      messages: [{ id: 'user-1', role: 'user', content: 'Нужен генератор' }],
+      pendingTurn: {
+        turnId: '33333333-3333-4333-8333-333333333333',
+        status: 'answering',
+        stage: 'catalog_search',
+        deadlineAt: '2026-08-09T12:30:00.000Z',
+        terminal: false,
+        resultState: 'pending'
+      }
+    });
+  });
+
   it('sends the visitor restoration capability and normalizes malformed legacy cards', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       messages: [
@@ -328,6 +396,76 @@ describe('public chat history client', () => {
     }));
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(String(fetcher.mock.calls[0][0])).toBe(`/api/chat/sessions/${sessionId}/messages`);
+  });
+
+  it('carries pending turn state through saved-session restoration', async () => {
+    const storage = memorySessionStorage(sessionId);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      messages: [{ id: 'user-1', role: 'user', content: 'Нужен генератор' }],
+      pendingTurn: {
+        turnId: '33333333-3333-4333-8333-333333333333',
+        status: 'failed',
+        stage: 'deadline_expired',
+        deadlineAt: '2026-08-09T12:30:00.000Z',
+        terminal: true,
+        resultState: 'ready'
+      }
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const restored = await restoreSavedChatSession('', sessionId, visitorId, storage, fetcher);
+
+    expect(restored).toMatchObject({
+      kind: 'restored',
+      pendingTurn: {
+        turnId: '33333333-3333-4333-8333-333333333333',
+        terminal: true,
+        resultState: 'ready'
+      }
+    });
+  });
+
+  it('does not reopen lead capture from an old assistant offer after a newer assistant response', async () => {
+    const storage = memorySessionStorage(sessionId);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      messages: [
+        { id: 'assistant-old', role: 'assistant', content: 'Оставьте контакты', leadRequested: true },
+        { id: 'user-next', role: 'user', content: 'Не сейчас' },
+        { id: 'assistant-latest', role: 'assistant', content: 'Хорошо, продолжим без заявки', leadRequested: false }
+      ]
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const restored = await restoreSavedChatSession('', sessionId, visitorId, storage, fetcher);
+
+    expect(restored).toMatchObject({ kind: 'restored', leadRequested: false });
+  });
+
+  it('reopens lead capture when the latest assistant response requests it', async () => {
+    const storage = memorySessionStorage(sessionId);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      messages: [
+        { id: 'assistant-old', role: 'assistant', content: 'Продолжим подбор', leadRequested: false },
+        { id: 'user-next', role: 'user', content: 'Передайте специалисту' },
+        { id: 'assistant-latest', role: 'assistant', content: 'Оставьте контакты', leadRequested: true }
+      ]
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const restored = await restoreSavedChatSession('', sessionId, visitorId, storage, fetcher);
+
+    expect(restored).toMatchObject({ kind: 'restored', leadRequested: true });
+  });
+
+  it('does not reopen the latest lead offer after a durable lead was submitted for it', async () => {
+    const storage = memorySessionStorage(sessionId);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      messages: [
+        { id: 'assistant-latest', role: 'assistant', content: 'Оставьте контакты', leadRequested: true }
+      ],
+      leadOfferConsumed: true
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
+    const restored = await restoreSavedChatSession('', sessionId, visitorId, storage, fetcher);
+
+    expect(restored).toMatchObject({ kind: 'restored', leadRequested: false });
   });
 
   it('clears and resets only the matching stale session when authenticated history restoration 404s', async () => {

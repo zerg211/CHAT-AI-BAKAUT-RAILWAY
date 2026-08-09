@@ -105,6 +105,8 @@ export interface VerifiedProductFact {
   sourceUrl?: string | null;
   sourceTitle?: string | null;
   evidence?: string | null;
+  catalogSourceHash?: string | null;
+  sourceFingerprint?: string | null;
   confidence: VerifiedProductFactConfidence;
   status: 'active' | 'superseded' | 'rejected';
   firstSeenAt: string;
@@ -123,6 +125,7 @@ export interface VerifiedProductFactInput {
   sourceUrl?: string | null;
   sourceTitle?: string | null;
   evidence?: string | null;
+  sourceFingerprint?: string | null;
   confidence: VerifiedProductFactConfidence;
 }
 

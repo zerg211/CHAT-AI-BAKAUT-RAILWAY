@@ -41,6 +41,14 @@ import {
 } from '../ai/assistantFeedbackQueue.js';
 
 type Db = Pool | PoolClient;
+
+function isPool(db: Db): db is Pool {
+  const candidate = db as Pool;
+  return typeof candidate.connect === 'function'
+    && typeof candidate.totalCount === 'number'
+    && typeof candidate.idleCount === 'number';
+}
+
 export type EmbeddingCoverageTarget = 'products' | 'catalog_pages' | 'troubleshooting_cases';
 
 export interface EmbeddingCoverage {
@@ -94,6 +102,24 @@ export class ClientMessagePayloadConflictError extends Error {
   constructor() {
     super('The client message id was already used with a different payload');
     this.name = 'ClientMessagePayloadConflictError';
+  }
+}
+
+export class ConversationSessionUnavailableError extends Error {
+  readonly code = 'conversation_session_unavailable';
+
+  constructor() {
+    super('Session not found or inactive');
+    this.name = 'ConversationSessionUnavailableError';
+  }
+}
+
+export class TurnMutationFenceError extends Error {
+  readonly code = 'turn_mutation_not_owner_or_not_live';
+
+  constructor(readonly sessionId: string, readonly turnId: string) {
+    super('Turn mutation rejected because the execution owner or lifecycle fence is no longer live');
+    this.name = 'TurnMutationFenceError';
   }
 }
 
@@ -388,6 +414,8 @@ function mapVerifiedProductFact(row: QueryResultRow): VerifiedProductFact {
     sourceUrl: row.source_url ?? null,
     sourceTitle: row.source_title ?? null,
     evidence: row.evidence ?? null,
+    catalogSourceHash: row.catalog_source_hash ?? null,
+    sourceFingerprint: row.source_fingerprint ?? null,
     confidence: row.confidence as VerifiedProductFactConfidence,
     status: row.status,
     firstSeenAt: row.first_seen_at.toISOString(),
@@ -581,11 +609,11 @@ export class ConversationRepository {
 
   async restoreSession(id: string, visitorCapability: string, maxInactiveMinutes = 30) {
     const result = await this.db.query(
-      `WITH candidate AS MATERIALIZED (
-         SELECT *
-         FROM conversation_sessions
-         WHERE id = $1 AND status = 'active'
-         FOR UPDATE
+       `WITH candidate AS MATERIALIZED (
+          SELECT *
+          FROM conversation_sessions
+          WHERE id = $1 AND visitor_id = $2 AND status = 'active'
+          FOR UPDATE
        ), updated AS (
          UPDATE conversation_sessions AS session
          SET last_heartbeat_at = CASE
@@ -655,28 +683,86 @@ export class ConversationRepository {
     return result.rowCount ? mapSession(result.rows[0]) : null;
   }
 
-  async closeSession(id: string, status: 'closed' | 'expired' = 'closed') {
-    const result = await this.db.query(
-      `UPDATE conversation_sessions
-       SET status = $2, closed_at = coalesce(closed_at, now()), updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [id, status]
+  private async closeSessionOnConnection(input: {
+    id: string;
+    visitorCapability: string;
+    status?: 'closed' | 'expired';
+    maxInactiveMinutes?: number;
+  }, db: Db) {
+    const status = input.status ?? 'closed';
+    const maxInactiveMinutes = input.maxInactiveMinutes ?? 30;
+    const authorized = await db.query(
+      `SELECT session.id
+       FROM conversation_sessions AS session
+       WHERE session.id = $1
+         AND session.visitor_id = $2
+         AND session.status = 'active'
+         AND session.last_heartbeat_at >= now() - ($3 || ' minutes')::interval
+       FOR UPDATE OF session`,
+      [input.id, input.visitorCapability, maxInactiveMinutes]
     );
-    if (result.rowCount) {
-      await this.db.query(
-        `UPDATE lead_capture_drafts
-         SET status = 'expired',
-             name = NULL,
-             phone = NULL,
-             email = NULL,
-             updated_at = now()
-         WHERE session_id = $1
-           AND status = 'pending'`,
-        [id]
-      );
+    if (!authorized.rowCount) return null;
+
+    await db.query(
+      `UPDATE conversation_turns AS turn
+       SET status = 'failed',
+           stage = CASE WHEN $2 = 'expired' THEN 'session_expired' ELSE 'session_closed' END,
+           error_code = CASE WHEN $2 = 'expired' THEN 'session_expired' ELSE 'session_closed' END,
+           error_message = CASE
+             WHEN $2 = 'expired' THEN 'The conversation session expired before the turn completed.'
+             ELSE 'The conversation session was closed before the turn completed.'
+           END,
+           execution_owner = NULL,
+           execution_lease_expires_at = NULL,
+           updated_at = now()
+       WHERE turn.session_id = $1
+         AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')`,
+      [input.id, status]
+    );
+    const closed = await db.query(
+      `UPDATE conversation_sessions AS session
+       SET status = $2,
+           closed_at = coalesce(session.closed_at, now()),
+           updated_at = now()
+       WHERE session.id = $1
+         AND session.status = 'active'
+       RETURNING session.*`,
+      [input.id, status]
+    );
+    await db.query(
+      `UPDATE lead_capture_drafts AS draft
+       SET status = 'expired',
+           name = NULL,
+           phone = NULL,
+           email = NULL,
+           updated_at = now()
+       WHERE draft.session_id = $1
+         AND draft.status = 'pending'`,
+      [input.id]
+    );
+    return closed.rowCount ? mapSession(closed.rows[0]) : null;
+  }
+
+  async closeSession(input: {
+    id: string;
+    visitorCapability: string;
+    status?: 'closed' | 'expired';
+    maxInactiveMinutes?: number;
+  }) {
+    if (!isPool(this.db)) return this.closeSessionOnConnection(input, this.db);
+
+    const client = await this.db.connect();
+    try {
+      await client.query('BEGIN');
+      const session = await this.closeSessionOnConnection(input, client);
+      await client.query('COMMIT');
+      return session;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
-    return result.rowCount ? mapSession(result.rows[0]) : null;
   }
 
   async expireInactiveSessions(maxInactiveMinutes = 30) {
@@ -741,14 +827,40 @@ export class ConversationRepository {
     return mapSession(result.rows[0]);
   }
 
-  async updateNeedState(sessionId: string, needState: CustomerNeedState) {
+  async updateNeedState(
+    sessionId: string,
+    needState: CustomerNeedState,
+    fence: { turnId: string; executionOwner: string }
+  ) {
     const result = await this.db.query(
-      `UPDATE conversation_sessions
-       SET need_state = $2::jsonb, updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [sessionId, jsonbParam(needState)]
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), fenced_turn AS MATERIALIZED (
+         SELECT turn.id
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $3
+           AND turn.execution_owner = $4::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         FOR UPDATE OF turn
+       ), updated_session AS (
+         UPDATE conversation_sessions AS session
+         SET need_state = $2::jsonb,
+             updated_at = now()
+         FROM fenced_turn
+         WHERE session.id = $1
+         RETURNING session.*
+       )
+       SELECT updated_session.* FROM updated_session`,
+      [sessionId, jsonbParam(needState), fence.turnId, fence.executionOwner]
     );
+    if (!result.rowCount) throw new TurnMutationFenceError(sessionId, fence.turnId);
     return mapSession(result.rows[0]);
   }
 
@@ -768,71 +880,190 @@ export class ConversationRepository {
     return mapMessage(result.rows[0]);
   }
 
-  async createTurn(input: {
+  async createTurnWithUserMessage(input: {
     sessionId: string;
+    visitorCapability: string;
     id?: string;
     clientMessageId: string;
     requestHash: string;
-    status?: ConversationTurn['status'];
-    stage?: string;
+    content: string;
+    metadata?: Record<string, unknown>;
     activeNeedsBefore?: unknown;
     deadlineAt?: string;
+    maxInactiveMinutes?: number;
   }) {
-    try {
-      const result = await this.db.query(
-        `INSERT INTO conversation_turns(
-           id,
-           session_id,
-           client_message_id,
-           request_hash,
-           status,
-           stage,
-           active_needs_before,
-           deadline_at
+    const maxInactiveMinutes = input.maxInactiveMinutes ?? 30;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await this.db.query(
+        `WITH authorized_session AS MATERIALIZED (
+           SELECT session.id
+           FROM conversation_sessions AS session
+           WHERE session.id = $2
+             AND session.visitor_id = $9
+             AND session.status = 'active'
+             AND session.last_heartbeat_at >= now() - ($10 || ' minutes')::interval
+           FOR UPDATE OF session
+         ), expired_turns AS (
+           UPDATE conversation_turns
+           SET status = 'failed',
+               stage = 'deadline_expired',
+               error_code = 'turn_deadline_expired',
+               error_message = 'Turn deadline elapsed before a terminal result was persisted.',
+               execution_owner = NULL,
+               execution_lease_expires_at = NULL,
+               updated_at = now()
+           WHERE session_id = $2
+             AND EXISTS (SELECT 1 FROM authorized_session)
+             AND status IN ('received', 'need_extracted', 'planned', 'answering')
+             AND deadline_at <= now()
+           RETURNING id
+         ), expiry_barrier AS (
+           SELECT authorized_session.id AS session_id, count(expired_turns.id) AS expired_count
+           FROM authorized_session
+           LEFT JOIN expired_turns ON true
+           GROUP BY authorized_session.id
+         ), existing_operation AS MATERIALIZED (
+           SELECT turn.*
+           FROM conversation_turns AS turn
+           JOIN expiry_barrier ON expiry_barrier.session_id = turn.session_id
+           WHERE turn.client_message_id = $3
+         ), existing_message AS (
+           SELECT message.*
+           FROM messages AS message
+           JOIN existing_operation AS turn ON turn.user_message_id = message.id
+           WHERE turn.request_hash = $4
+             AND message.role = 'user'
+         ), inserted_message AS (
+           INSERT INTO messages(session_id, role, content, metadata)
+           SELECT expiry_barrier.session_id, 'user', $7, $8::jsonb
+           FROM expiry_barrier
+           WHERE NOT EXISTS (SELECT 1 FROM existing_message)
+             AND NOT EXISTS (
+               SELECT 1
+               FROM existing_operation
+               WHERE existing_operation.request_hash <> $4
+             )
+           RETURNING *
+         ), chosen_message AS (
+           SELECT * FROM existing_message
+           UNION ALL
+           SELECT * FROM inserted_message
+           LIMIT 1
+         ), inserted_turn AS (
+           INSERT INTO conversation_turns(
+             id,
+             session_id,
+             client_message_id,
+             user_message_id,
+             request_hash,
+             status,
+             stage,
+             active_needs_before,
+             deadline_at
+           )
+           SELECT
+             coalesce($1::uuid, gen_random_uuid()),
+             expiry_barrier.session_id,
+             $3,
+             chosen_message.id,
+             $4,
+             'received',
+             'user_message_saved',
+             $5::jsonb,
+             coalesce($6::timestamptz, now() + interval '85 seconds')
+           FROM expiry_barrier
+           JOIN chosen_message ON true
+           ON CONFLICT (session_id, client_message_id) DO UPDATE
+           SET user_message_id = coalesce(conversation_turns.user_message_id, EXCLUDED.user_message_id),
+               stage = CASE
+                 WHEN conversation_turns.user_message_id IS NULL THEN 'user_message_saved'
+                 ELSE conversation_turns.stage
+               END,
+               active_needs_before = CASE
+                 WHEN conversation_turns.user_message_id IS NULL
+                 THEN coalesce(EXCLUDED.active_needs_before, conversation_turns.active_needs_before)
+                 ELSE conversation_turns.active_needs_before
+               END,
+               updated_at = CASE
+                 WHEN conversation_turns.user_message_id IS NULL THEN now()
+                 ELSE conversation_turns.updated_at
+               END
+           WHERE conversation_turns.request_hash = EXCLUDED.request_hash
+           RETURNING *
+         ), touched_session AS (
+           UPDATE conversation_sessions AS session
+           SET last_heartbeat_at = now(),
+               updated_at = now()
+           FROM authorized_session
+           WHERE session.id = authorized_session.id
+             AND session.id = (SELECT session_id FROM inserted_turn)
+           RETURNING session.id
          )
-         VALUES (
-           coalesce($1::uuid, gen_random_uuid()),
-           $2,
-           $3,
-           $4,
-           $5,
-           $6,
-           $7::jsonb,
-           coalesce($8::timestamptz, now() + interval '85 seconds')
-         )
-         ON CONFLICT (session_id, client_message_id) DO UPDATE
-         SET updated_at = conversation_turns.updated_at
-         WHERE conversation_turns.request_hash = EXCLUDED.request_hash
-         RETURNING *`,
+         SELECT inserted_turn.*,
+                authorized_session.id AS authorized_session_id,
+                existing_operation.request_hash AS existing_operation_request_hash
+         FROM authorized_session
+         LEFT JOIN inserted_turn ON inserted_turn.session_id = authorized_session.id
+         LEFT JOIN existing_operation ON existing_operation.session_id = authorized_session.id
+         LEFT JOIN touched_session ON touched_session.id = inserted_turn.session_id
+         LIMIT 1`,
         [
           input.id ?? null,
           input.sessionId,
           input.clientMessageId,
           input.requestHash,
-          input.status ?? 'received',
-          input.stage ?? null,
           jsonbParam(input.activeNeedsBefore),
-          input.deadlineAt ?? null
+          input.deadlineAt ?? null,
+          input.content,
+          jsonbParam(input.metadata ?? {}),
+          input.visitorCapability,
+          maxInactiveMinutes
         ]
       );
-      if (!result.rowCount) throw new ClientMessagePayloadConflictError();
-      return mapConversationTurn(result.rows[0]);
-    } catch (error) {
-      const pgError = error as { code?: string; constraint?: string };
-      if (pgError.code !== '23505' || pgError.constraint !== 'conversation_turns_one_active_per_session_idx') {
-        throw error;
+        const row = result.rows[0];
+        if (!row) throw new ConversationSessionUnavailableError();
+        if (!row.id) {
+          if (
+            typeof row.existing_operation_request_hash === 'string' &&
+            row.existing_operation_request_hash !== input.requestHash
+          ) {
+            throw new ClientMessagePayloadConflictError();
+          }
+          throw new ConversationSessionUnavailableError();
+        }
+        return mapConversationTurn(row);
+      } catch (error) {
+        const pgError = error as { code?: string; constraint?: string };
+        if (pgError.code !== '23505' || pgError.constraint !== 'conversation_turns_one_active_per_session_idx') {
+          throw error;
+        }
+        const active = await this.db.query(
+          `SELECT session.id AS session_id,
+                  active_turn.id AS active_turn_id
+           FROM conversation_sessions AS session
+           LEFT JOIN LATERAL (
+             SELECT turn.id
+             FROM conversation_turns AS turn
+             WHERE turn.session_id = session.id
+               AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+             ORDER BY turn.created_at DESC
+             LIMIT 1
+           ) AS active_turn ON true
+           WHERE session.id = $1
+             AND session.visitor_id = $2
+             AND session.status = 'active'
+             AND session.last_heartbeat_at >= now() - ($3 || ' minutes')::interval`,
+          [input.sessionId, input.visitorCapability, maxInactiveMinutes]
+        );
+        if (!active.rowCount) throw new ConversationSessionUnavailableError();
+        if (active.rows[0]?.active_turn_id) {
+          throw new ActiveConversationTurnError(active.rows[0].active_turn_id);
+        }
+        if (attempt > 0) throw new ActiveConversationTurnError();
       }
-      const active = await this.db.query(
-        `SELECT id
-         FROM conversation_turns
-         WHERE session_id = $1
-           AND status IN ('received', 'need_extracted', 'planned', 'answering')
-         ORDER BY created_at DESC
-         LIMIT 1`,
-        [input.sessionId]
-      );
-      throw new ActiveConversationTurnError(active.rows[0]?.id);
     }
+    throw new ActiveConversationTurnError();
   }
 
   async claimTurnExecution(input: {
@@ -843,20 +1074,41 @@ export class ConversationRepository {
   }) {
     const leaseMs = Math.max(1_000, Math.min(300_000, Math.trunc(input.leaseMs)));
     const result = await this.db.query(
-      `UPDATE conversation_turns
-       SET execution_owner = $3::uuid,
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       )
+       UPDATE conversation_turns AS turn
+       SET status = CASE WHEN turn.status = 'failed' THEN 'answering' ELSE turn.status END,
+           stage = CASE WHEN turn.status = 'failed' THEN 'recovery_execution_claimed' ELSE turn.stage END,
+           execution_owner = $3::uuid,
            execution_lease_expires_at = now() + ($4::text || ' milliseconds')::interval,
            updated_at = now()
-       WHERE session_id = $1
-         AND id = $2
-         AND status NOT IN ('completed', 'recovered')
+       FROM active_session
+       WHERE turn.session_id = active_session.id
+         AND turn.id = $2
+         AND turn.status IN ('received', 'need_extracted', 'planned', 'answering', 'failed')
+         AND turn.deadline_at > now()
          AND (
-           execution_owner IS NULL
-           OR execution_owner = $3::uuid
-           OR execution_lease_expires_at IS NULL
-           OR execution_lease_expires_at < now()
+           turn.status <> 'failed'
+           OR NOT EXISTS (
+             SELECT 1
+             FROM conversation_turns AS other_turn
+             WHERE other_turn.session_id = turn.session_id
+               AND other_turn.id <> turn.id
+               AND other_turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+           )
          )
-       RETURNING *`,
+         AND (
+           turn.execution_owner IS NULL
+           OR turn.execution_owner = $3::uuid
+           OR turn.execution_lease_expires_at IS NULL
+           OR turn.execution_lease_expires_at < now()
+         )
+       RETURNING turn.*`,
       [input.sessionId, input.turnId, input.ownerId, leaseMs]
     );
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
@@ -869,15 +1121,23 @@ export class ConversationRepository {
   }) {
     const maxAttempts = Math.max(1, Math.min(3, Math.trunc(input.maxAttempts ?? 1)));
     const result = await this.db.query(
-      `UPDATE conversation_turns
-       SET recovery_attempts = coalesce(recovery_attempts, 0) + 1,
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       )
+       UPDATE conversation_turns AS turn
+       SET recovery_attempts = coalesce(turn.recovery_attempts, 0) + 1,
            updated_at = now()
-       WHERE session_id = $1
-         AND id = $2
-         AND status NOT IN ('completed', 'recovered')
-         AND coalesce(recovery_attempts, 0) < $3
-         AND (deadline_at IS NULL OR deadline_at > now())
-       RETURNING *`,
+       FROM active_session
+       WHERE turn.session_id = active_session.id
+         AND turn.id = $2
+         AND turn.status NOT IN ('completed', 'recovered')
+         AND coalesce(turn.recovery_attempts, 0) < $3
+         AND (turn.deadline_at IS NULL OR turn.deadline_at > now())
+       RETURNING turn.*`,
       [input.sessionId, input.turnId, maxAttempts]
     );
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
@@ -891,13 +1151,24 @@ export class ConversationRepository {
   }) {
     const leaseMs = Math.max(1_000, Math.min(300_000, Math.trunc(input.leaseMs)));
     const result = await this.db.query(
-      `UPDATE conversation_turns
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       )
+       UPDATE conversation_turns AS turn
        SET execution_lease_expires_at = now() + ($4::text || ' milliseconds')::interval,
            updated_at = now()
-       WHERE session_id = $1
-         AND id = $2
-         AND execution_owner = $3::uuid
-       RETURNING *`,
+       FROM active_session
+       WHERE turn.session_id = active_session.id
+         AND turn.id = $2
+         AND turn.execution_owner = $3::uuid
+         AND turn.execution_lease_expires_at > now()
+         AND turn.deadline_at > now()
+         AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+       RETURNING turn.*`,
       [input.sessionId, input.turnId, input.ownerId, leaseMs]
     );
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
@@ -937,6 +1208,154 @@ export class ConversationRepository {
     return result.rows.map(mapConversationTurn);
   }
 
+  async getLatestUnansweredTurn(sessionId: string) {
+    const result = await this.db.query(
+      `WITH expired_turns AS (
+         UPDATE conversation_turns
+         SET status = 'failed',
+             stage = 'deadline_expired',
+             error_code = 'turn_deadline_expired',
+             error_message = 'Turn deadline elapsed before a terminal result was persisted.',
+             execution_owner = NULL,
+             execution_lease_expires_at = NULL,
+             updated_at = now()
+         WHERE session_id = $1
+           AND status IN ('received', 'need_extracted', 'planned', 'answering')
+           AND deadline_at <= now()
+         RETURNING conversation_turns.*
+       ), current_turns AS (
+         SELECT conversation_turn.*
+         FROM conversation_turns AS conversation_turn
+         WHERE conversation_turn.session_id = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM expired_turns WHERE expired_turns.id = conversation_turn.id
+           )
+         UNION ALL
+         SELECT expired_turns.* FROM expired_turns
+       ), latest_turn AS (
+         SELECT current_turns.*
+         FROM current_turns
+         ORDER BY current_turns.created_at DESC, current_turns.id DESC
+         LIMIT 1
+       )
+       SELECT latest_turn.*,
+              EXISTS (
+                SELECT 1
+                FROM answer_contracts
+                 WHERE answer_contracts.session_id = latest_turn.session_id
+                   AND answer_contracts.turn_id = latest_turn.id
+                   AND answer_contracts.status = 'final'
+                   AND latest_turn.deadline_at > now()
+              ) AS result_ready
+       FROM latest_turn
+       WHERE latest_turn.user_message_id IS NOT NULL
+         AND latest_turn.assistant_message_id IS NULL`,
+      [sessionId]
+    );
+    if (!result.rowCount) return null;
+    return {
+      turn: mapConversationTurn(result.rows[0]),
+      resultReady: result.rows[0].result_ready === true
+    };
+  }
+
+  async getHistorySnapshot(sessionId: string, limit = 80) {
+    const result = await this.db.query(
+      `WITH expired_turns AS (
+         UPDATE conversation_turns
+         SET status = 'failed',
+             stage = 'deadline_expired',
+             error_code = 'turn_deadline_expired',
+             error_message = 'Turn deadline elapsed before a terminal result was persisted.',
+             execution_owner = NULL,
+             execution_lease_expires_at = NULL,
+             updated_at = now()
+         WHERE session_id = $1
+           AND status IN ('received', 'need_extracted', 'planned', 'answering')
+           AND deadline_at <= now()
+         RETURNING conversation_turns.*
+       ), current_turns AS (
+         SELECT conversation_turn.*
+         FROM conversation_turns AS conversation_turn
+         WHERE conversation_turn.session_id = $1
+           AND NOT EXISTS (
+             SELECT 1 FROM expired_turns WHERE expired_turns.id = conversation_turn.id
+           )
+         UNION ALL
+         SELECT expired_turns.* FROM expired_turns
+       ), latest_turn AS (
+         SELECT current_turns.*
+         FROM current_turns
+         ORDER BY current_turns.created_at DESC, current_turns.id DESC
+         LIMIT 1
+       ), pending_turn AS (
+         SELECT latest_turn.*,
+                EXISTS (
+                  SELECT 1
+                  FROM answer_contracts
+                  WHERE answer_contracts.session_id = latest_turn.session_id
+                    AND answer_contracts.turn_id = latest_turn.id
+                    AND answer_contracts.status = 'final'
+                    AND latest_turn.deadline_at > now()
+                ) AS result_ready
+         FROM latest_turn
+         WHERE latest_turn.user_message_id IS NOT NULL
+           AND latest_turn.assistant_message_id IS NULL
+       ), recent_messages AS (
+         SELECT *
+         FROM (
+           SELECT *
+           FROM messages
+           WHERE session_id = $1
+           ORDER BY created_at DESC
+           LIMIT $2
+         ) AS recent
+         ORDER BY created_at ASC
+       ), latest_lead_offer AS (
+         SELECT message.created_at
+         FROM messages AS message
+         WHERE message.session_id = $1
+           AND message.role = 'assistant'
+           AND message.metadata #>> '{answerContract,leadAction}' = 'offer_form'
+         ORDER BY message.created_at DESC, message.id DESC
+         LIMIT 1
+       )
+       SELECT
+         coalesce(
+           (SELECT jsonb_agg(to_jsonb(recent_messages) ORDER BY created_at) FROM recent_messages),
+           '[]'::jsonb
+         ) AS messages,
+         (SELECT to_jsonb(pending_turn) FROM pending_turn) AS pending_turn,
+         EXISTS (
+           SELECT 1
+           FROM latest_lead_offer AS offer
+           JOIN leads AS lead
+             ON lead.session_id = $1
+            AND lead.created_at >= offer.created_at
+         ) AS lead_offer_consumed`,
+      [sessionId, limit]
+    );
+    const row = result.rows[0] ?? {};
+    const messageValues: unknown[] = Array.isArray(row.messages) ? row.messages : [];
+    const messages = messageValues.length
+      ? messageValues
+          .map((value: unknown) => queryRowFromJson(value))
+          .filter((messageRow): messageRow is QueryResultRow => messageRow !== null)
+          .map(mapMessage)
+      : [];
+    const pendingRow = queryRowFromJson(row.pending_turn);
+    return {
+      messages,
+      leadOfferConsumed: row.lead_offer_consumed === true,
+      pendingTurn: pendingRow
+        ? {
+            turn: mapConversationTurn(pendingRow),
+            resultReady: pendingRow.result_ready === true
+          }
+        : null
+    };
+  }
+
   async updateTurn(input: {
     sessionId: string;
     turnId: string;
@@ -949,21 +1368,45 @@ export class ConversationRepository {
     plannerContract?: unknown;
     activeNeedsBefore?: unknown;
     activeNeedsAfter?: unknown;
+    executionOwner?: string;
+    requireUnowned?: boolean;
   }) {
     const result = await this.db.query(
-      `UPDATE conversation_turns
-       SET status = coalesce($3, status),
-           stage = coalesce($4, stage),
-           user_message_id = coalesce($5::uuid, user_message_id),
-           assistant_message_id = coalesce($6::uuid, assistant_message_id),
-           error_code = coalesce($7, error_code),
-           error_message = coalesce($8, error_message),
-           planner_contract = coalesce($9::jsonb, planner_contract),
-           active_needs_before = coalesce($10::jsonb, active_needs_before),
-           active_needs_after = coalesce($11::jsonb, active_needs_after),
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       )
+       UPDATE conversation_turns AS turn
+       SET status = coalesce($3, turn.status),
+           stage = coalesce($4, turn.stage),
+           user_message_id = coalesce($5::uuid, turn.user_message_id),
+           assistant_message_id = coalesce($6::uuid, turn.assistant_message_id),
+           error_code = coalesce($7, turn.error_code),
+           error_message = coalesce($8, turn.error_message),
+           planner_contract = coalesce($9::jsonb, turn.planner_contract),
+           active_needs_before = coalesce($10::jsonb, turn.active_needs_before),
+           active_needs_after = coalesce($11::jsonb, turn.active_needs_after),
+           execution_owner = CASE WHEN $3 = 'failed' THEN NULL ELSE turn.execution_owner END,
+           execution_lease_expires_at = CASE WHEN $3 = 'failed' THEN NULL ELSE turn.execution_lease_expires_at END,
            updated_at = now()
-       WHERE session_id = $1 AND id = $2
-       RETURNING *`,
+       FROM active_session
+       WHERE turn.session_id = active_session.id
+         AND turn.id = $2
+         AND turn.status NOT IN ('completed', 'recovered')
+         AND (
+           $12::uuid IS NULL
+           OR (
+             turn.execution_owner = $12::uuid
+             AND turn.execution_lease_expires_at > now()
+             AND turn.deadline_at > now()
+             AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+           )
+         )
+         AND (NOT $13::boolean OR turn.execution_owner IS NULL)
+       RETURNING turn.*`,
       [
         input.sessionId,
         input.turnId,
@@ -975,15 +1418,21 @@ export class ConversationRepository {
         input.errorMessage ?? null,
         jsonbParam(input.plannerContract),
         jsonbParam(input.activeNeedsBefore),
-        jsonbParam(input.activeNeedsAfter)
+        jsonbParam(input.activeNeedsAfter),
+        input.executionOwner ?? null,
+        input.requireUnowned ?? false
       ]
     );
+    if (!result.rowCount && input.executionOwner) {
+      throw new TurnMutationFenceError(input.sessionId, input.turnId);
+    }
     return result.rowCount ? mapConversationTurn(result.rows[0]) : null;
   }
 
   async upsertDialogueLedgerEvent(input: {
     sessionId: string;
     turnId: string;
+    executionOwner: string;
     eventId: string;
     eventType: string;
     scope: string;
@@ -993,11 +1442,31 @@ export class ConversationRepository {
     status: string;
   }) {
     const result = await this.db.query(
-      `INSERT INTO dialogue_ledger_events(session_id, turn_id, event_id, event_type, scope, payload, evidence, source, status)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)
-       ON CONFLICT (session_id, event_id) DO UPDATE
-       SET event_id = dialogue_ledger_events.event_id
-       RETURNING *`,
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), fenced_turn AS MATERIALIZED (
+         SELECT turn.id
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $2
+           AND turn.execution_owner = $10::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         FOR UPDATE OF turn
+       ), persisted_event AS (
+         INSERT INTO dialogue_ledger_events(session_id, turn_id, event_id, event_type, scope, payload, evidence, source, status)
+         SELECT $1, fenced_turn.id, $3, $4, $5, $6::jsonb, $7, $8, $9
+         FROM fenced_turn
+         ON CONFLICT (session_id, event_id) DO UPDATE
+         SET event_id = dialogue_ledger_events.event_id
+         RETURNING *
+       )
+       SELECT persisted_event.* FROM persisted_event`,
       [
         input.sessionId,
         input.turnId,
@@ -1007,10 +1476,12 @@ export class ConversationRepository {
         jsonbParam(input.payload),
         input.evidence,
         input.source,
-        input.status
+        input.status,
+        input.executionOwner
       ]
     );
-    return result.rows[0] ?? null;
+    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
+    return result.rows[0];
   }
 
   async listDialogueLedgerEvents(sessionId: string, limit = 500) {
@@ -1052,37 +1523,62 @@ export class ConversationRepository {
 
   async saveDialogueLedgerSnapshot(input: {
     sessionId: string;
+    turnId: string;
+    executionOwner: string;
     throughEventSeq: number;
     eventCount: number;
     state: unknown;
     recentEvents: unknown[];
   }) {
     const result = await this.db.query(
-      `INSERT INTO dialogue_ledger_snapshots(
-         session_id,
-         through_event_seq,
-         event_count,
-         state,
-         recent_events
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), fenced_turn AS MATERIALIZED (
+         SELECT turn.id
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $6
+           AND turn.execution_owner = $7::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         FOR UPDATE OF turn
+       ), persisted_snapshot AS (
+         INSERT INTO dialogue_ledger_snapshots(
+           session_id,
+           through_event_seq,
+           event_count,
+           state,
+           recent_events
+         )
+         SELECT $1, $2, $3, $4::jsonb, $5::jsonb
+         FROM fenced_turn
+         ON CONFLICT (session_id) DO UPDATE
+         SET through_event_seq = EXCLUDED.through_event_seq,
+             event_count = EXCLUDED.event_count,
+             state = EXCLUDED.state,
+             recent_events = EXCLUDED.recent_events,
+             updated_at = now()
+         WHERE dialogue_ledger_snapshots.through_event_seq <= EXCLUDED.through_event_seq
+         RETURNING *
        )
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
-       ON CONFLICT (session_id) DO UPDATE
-       SET through_event_seq = EXCLUDED.through_event_seq,
-           event_count = EXCLUDED.event_count,
-           state = EXCLUDED.state,
-           recent_events = EXCLUDED.recent_events,
-           updated_at = now()
-       WHERE dialogue_ledger_snapshots.through_event_seq <= EXCLUDED.through_event_seq
-       RETURNING *`,
+       SELECT persisted_snapshot.* FROM persisted_snapshot`,
       [
         input.sessionId,
         input.throughEventSeq,
         input.eventCount,
         jsonbParam(input.state),
-        jsonbParam(input.recentEvents)
+        jsonbParam(input.recentEvents),
+        input.turnId,
+        input.executionOwner
       ]
     );
-    return result.rows[0] ?? null;
+    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
+    return result.rows[0];
   }
 
   async latestDialogueLedgerEventSeq(sessionId: string) {
@@ -1102,6 +1598,7 @@ export class ConversationRepository {
   async upsertTurnCheckpoint(input: {
     sessionId: string;
     turnId: string;
+    executionOwner: string;
     checkpoint: string;
     status: string;
     artifactRef?: string | null;
@@ -1110,16 +1607,36 @@ export class ConversationRepository {
     errorMessage?: string | null;
   }) {
     const result = await this.db.query(
-      `INSERT INTO turn_checkpoints(session_id, turn_id, checkpoint, status, artifact_ref, payload, error_code, error_message)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
-       ON CONFLICT (session_id, turn_id, checkpoint) DO UPDATE
-       SET status = EXCLUDED.status,
-           artifact_ref = EXCLUDED.artifact_ref,
-           payload = EXCLUDED.payload,
-           error_code = EXCLUDED.error_code,
-           error_message = EXCLUDED.error_message,
-           updated_at = now()
-       RETURNING *`,
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), fenced_turn AS MATERIALIZED (
+         SELECT turn.id
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $2
+           AND turn.execution_owner = $9::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         FOR UPDATE OF turn
+       ), persisted_checkpoint AS (
+         INSERT INTO turn_checkpoints(session_id, turn_id, checkpoint, status, artifact_ref, payload, error_code, error_message)
+         SELECT $1, fenced_turn.id, $3, $4, $5, $6::jsonb, $7, $8
+         FROM fenced_turn
+         ON CONFLICT (session_id, turn_id, checkpoint) DO UPDATE
+         SET status = EXCLUDED.status,
+             artifact_ref = EXCLUDED.artifact_ref,
+             payload = EXCLUDED.payload,
+             error_code = EXCLUDED.error_code,
+             error_message = EXCLUDED.error_message,
+             updated_at = now()
+         RETURNING *
+       )
+       SELECT persisted_checkpoint.* FROM persisted_checkpoint`,
       [
         input.sessionId,
         input.turnId,
@@ -1128,10 +1645,12 @@ export class ConversationRepository {
         input.artifactRef ?? null,
         jsonbParam(input.payload ?? {}),
         input.errorCode ?? null,
-        input.errorMessage ?? null
+        input.errorMessage ?? null,
+        input.executionOwner
       ]
     );
-    return result.rows[0] ?? null;
+    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
+    return result.rows[0];
   }
 
   async listTurnCheckpoints(sessionId: string, turnId: string) {
@@ -1148,6 +1667,7 @@ export class ConversationRepository {
   async saveToolArtifact(input: {
     sessionId: string;
     turnId: string;
+    executionOwner: string;
     toolName: string;
     toolRequestId: string;
     status: string;
@@ -1156,15 +1676,35 @@ export class ConversationRepository {
     errorCode?: string | null;
   }) {
     const result = await this.db.query(
-      `INSERT INTO tool_artifacts(session_id, turn_id, tool_name, tool_request_id, status, payload, warnings, error_code)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)
-       ON CONFLICT (session_id, turn_id, tool_request_id) DO UPDATE
-       SET tool_name = EXCLUDED.tool_name,
-           status = EXCLUDED.status,
-           payload = EXCLUDED.payload,
-           warnings = EXCLUDED.warnings,
-           error_code = EXCLUDED.error_code
-       RETURNING *`,
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), fenced_turn AS MATERIALIZED (
+         SELECT turn.id
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $2
+           AND turn.execution_owner = $9::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         FOR UPDATE OF turn
+       ), persisted_artifact AS (
+         INSERT INTO tool_artifacts(session_id, turn_id, tool_name, tool_request_id, status, payload, warnings, error_code)
+         SELECT $1, fenced_turn.id, $3, $4, $5, $6::jsonb, $7::jsonb, $8
+         FROM fenced_turn
+         ON CONFLICT (session_id, turn_id, tool_request_id) DO UPDATE
+         SET tool_name = EXCLUDED.tool_name,
+             status = EXCLUDED.status,
+             payload = EXCLUDED.payload,
+             warnings = EXCLUDED.warnings,
+             error_code = EXCLUDED.error_code
+         RETURNING *
+       )
+       SELECT persisted_artifact.* FROM persisted_artifact`,
       [
         input.sessionId,
         input.turnId,
@@ -1173,10 +1713,12 @@ export class ConversationRepository {
         input.status,
         jsonbParam(input.payload),
         jsonbParam(input.warnings ?? []),
-        input.errorCode ?? null
+        input.errorCode ?? null,
+        input.executionOwner
       ]
     );
-    return result.rows[0] ?? null;
+    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
+    return result.rows[0];
   }
 
   async listToolArtifacts(sessionId: string, turnId: string) {
@@ -1193,6 +1735,7 @@ export class ConversationRepository {
   async saveAnswerContract(input: {
     sessionId: string;
     turnId: string;
+    executionOwner: string;
     answerText: string;
     contract: unknown;
     review?: unknown;
@@ -1200,14 +1743,34 @@ export class ConversationRepository {
     status: string;
   }) {
     const result = await this.db.query(
-      `INSERT INTO answer_contracts(session_id, turn_id, answer_text, contract, review, response_payload, status)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7)
-       ON CONFLICT (session_id, turn_id) WHERE status = 'final' DO UPDATE
-       SET answer_text = EXCLUDED.answer_text,
-           contract = EXCLUDED.contract,
-           review = EXCLUDED.review,
-           response_payload = EXCLUDED.response_payload
-       RETURNING *`,
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), fenced_turn AS MATERIALIZED (
+         SELECT turn.id
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $2
+           AND turn.execution_owner = $8::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         FOR UPDATE OF turn
+       ), persisted_contract AS (
+         INSERT INTO answer_contracts(session_id, turn_id, answer_text, contract, review, response_payload, status)
+         SELECT $1, fenced_turn.id, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7
+         FROM fenced_turn
+         ON CONFLICT (session_id, turn_id) WHERE status = 'final' DO UPDATE
+         SET answer_text = EXCLUDED.answer_text,
+             contract = EXCLUDED.contract,
+             review = EXCLUDED.review,
+             response_payload = EXCLUDED.response_payload
+         RETURNING *
+       )
+       SELECT persisted_contract.* FROM persisted_contract`,
       [
         input.sessionId,
         input.turnId,
@@ -1215,10 +1778,12 @@ export class ConversationRepository {
         jsonbParam(input.contract),
         jsonbParam(input.review ?? null),
         jsonbParam(input.responsePayload),
-        input.status
+        input.status,
+        input.executionOwner
       ]
     );
-    return result.rows[0] ?? null;
+    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
+    return result.rows[0];
   }
 
   async getFinalAnswerContract(sessionId: string, turnId: string) {
@@ -1241,75 +1806,167 @@ export class ConversationRepository {
     content: string;
     metadata?: Record<string, unknown>;
     recovered?: boolean;
+    executionOwner: string;
+    answerContract: unknown;
+    review?: unknown;
+    responsePayload: unknown;
+    checkpointPayload?: unknown;
   }) {
     const result = await this.db.query(
-      `WITH locked_turn AS (
-         SELECT *
-         FROM conversation_turns
-         WHERE session_id = $1 AND id = $2
-         FOR UPDATE
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), fenced_turn AS MATERIALIZED (
+         SELECT turn.*
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $2
+           AND turn.execution_owner = $3::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+           AND turn.assistant_message_id IS NULL
+         FOR UPDATE OF turn
        ),
-       existing_message AS (
-         SELECT m.*
-         FROM messages m
-         JOIN locked_turn t ON t.assistant_message_id = m.id
-         WHERE m.role = 'assistant'
+       committed_contract AS (
+         INSERT INTO answer_contracts(
+           session_id,
+           turn_id,
+           answer_text,
+           contract,
+           review,
+           response_payload,
+           status
+         )
+         SELECT
+           fenced_turn.session_id,
+           fenced_turn.id,
+           $4,
+           $5::jsonb,
+           $6::jsonb,
+           $7::jsonb,
+           'final'
+         FROM fenced_turn
+         ON CONFLICT (session_id, turn_id) WHERE status = 'final' DO UPDATE
+         SET answer_text = EXCLUDED.answer_text,
+             contract = EXCLUDED.contract,
+             review = EXCLUDED.review,
+             response_payload = EXCLUDED.response_payload
+         RETURNING *
        ),
-       inserted_message AS (
+       committed_message AS (
          INSERT INTO messages(session_id, role, content, metadata)
-         SELECT locked_turn.session_id, 'assistant', $3, $4::jsonb
-         FROM locked_turn
-         WHERE NOT EXISTS (SELECT 1 FROM existing_message)
+         SELECT fenced_turn.session_id, 'assistant', $4, $8::jsonb
+         FROM fenced_turn
+         JOIN committed_contract
+           ON committed_contract.session_id = fenced_turn.session_id
+          AND committed_contract.turn_id = fenced_turn.id
          RETURNING *
        ),
-       chosen_message AS (
-         SELECT * FROM existing_message
-         UNION ALL
-         SELECT * FROM inserted_message
-         LIMIT 1
-       ),
-       updated_turn AS (
-         UPDATE conversation_turns
-         SET assistant_message_id = (SELECT id FROM chosen_message),
-             status = CASE WHEN $5::boolean THEN 'recovered' ELSE 'completed' END,
+       committed_turn AS (
+         UPDATE conversation_turns AS turn
+         SET assistant_message_id = committed_message.id,
+             status = CASE WHEN $9::boolean THEN 'recovered' ELSE 'completed' END,
              stage = 'assistant_message_saved',
+             error_code = NULL,
+             error_message = NULL,
+             execution_owner = NULL,
+             execution_lease_expires_at = NULL,
              updated_at = now()
-         WHERE session_id = $1 AND id = $2
-         RETURNING *
+         FROM committed_message
+         WHERE turn.session_id = $1
+           AND turn.id = $2
+           AND turn.execution_owner = $3::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         RETURNING turn.*
+       ), committed_checkpoint AS (
+         INSERT INTO turn_checkpoints(
+           session_id,
+           turn_id,
+           checkpoint,
+           status,
+           artifact_ref,
+           payload
+         )
+         SELECT
+           committed_turn.session_id,
+           committed_turn.id,
+           'assistant_message_saved',
+           'succeeded',
+           committed_message.id,
+           $10::jsonb
+         FROM committed_turn
+         JOIN committed_message
+           ON committed_message.id = committed_turn.assistant_message_id
+         ON CONFLICT (session_id, turn_id, checkpoint) DO UPDATE
+         SET status = EXCLUDED.status,
+             artifact_ref = EXCLUDED.artifact_ref,
+             payload = EXCLUDED.payload,
+             error_code = NULL,
+             error_message = NULL,
+             updated_at = now()
+         RETURNING turn_id
+       ), touched_session AS (
+         UPDATE conversation_sessions AS session
+         SET updated_at = now()
+         FROM committed_turn, active_session
+         WHERE session.id = committed_turn.session_id
+           AND session.id = active_session.id
+           AND session.status = 'active'
+         RETURNING session.id
        )
-       SELECT *
-       FROM chosen_message`,
+       SELECT committed_message.*
+       FROM committed_message
+       JOIN committed_turn ON committed_turn.assistant_message_id = committed_message.id
+       JOIN committed_checkpoint ON committed_checkpoint.turn_id = committed_turn.id
+       JOIN touched_session ON touched_session.id = committed_turn.session_id`,
       [
         input.sessionId,
         input.turnId,
+        input.executionOwner,
         input.content,
+        jsonbParam(input.answerContract),
+        jsonbParam(input.review ?? null),
+        jsonbParam(input.responsePayload),
         jsonbParam(input.metadata ?? {}),
-        input.recovered ?? false
+        input.recovered ?? false,
+        jsonbParam(input.checkpointPayload ?? { recovered: input.recovered ?? false })
       ]
     );
-    if (!result.rowCount) throw new Error('Unable to save assistant message for turn');
-    await this.db.query(
-      `UPDATE conversation_sessions
-       SET updated_at = now()
-       WHERE id = $1`,
-      [input.sessionId]
-    );
+    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
     return mapMessage(result.rows[0]);
   }
 
   async addUserMessageForTurn(input: {
     sessionId: string;
     turnId: string;
+    executionOwner: string;
     content: string;
     metadata?: Record<string, unknown>;
     activeNeedsBefore?: unknown;
   }) {
     const result = await this.db.query(
-      `WITH locked_turn AS (
-         SELECT *
-         FROM conversation_turns
-         WHERE session_id = $1 AND id = $2
-         FOR UPDATE
+      `WITH active_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $1
+           AND session.status = 'active'
+         FOR UPDATE OF session
+       ), locked_turn AS MATERIALIZED (
+         SELECT turn.*
+         FROM conversation_turns AS turn
+         JOIN active_session ON active_session.id = turn.session_id
+         WHERE turn.id = $2
+           AND turn.execution_owner = $3::uuid
+           AND turn.execution_lease_expires_at > now()
+           AND turn.deadline_at > now()
+           AND turn.status IN ('received', 'need_extracted', 'planned', 'answering')
+         FOR UPDATE OF turn
        ),
        existing_message AS (
          SELECT m.*
@@ -1319,7 +1976,7 @@ export class ConversationRepository {
        ),
        inserted_message AS (
          INSERT INTO messages(session_id, role, content, metadata)
-         SELECT locked_turn.session_id, 'user', $3, $4::jsonb
+         SELECT locked_turn.session_id, 'user', $4, $5::jsonb
          FROM locked_turn
          WHERE NOT EXISTS (SELECT 1 FROM existing_message)
          RETURNING *
@@ -1331,31 +1988,44 @@ export class ConversationRepository {
          LIMIT 1
        ),
        updated_turn AS (
-         UPDATE conversation_turns
+         UPDATE conversation_turns AS turn
          SET user_message_id = (SELECT id FROM chosen_message),
-             stage = 'user_message_saved',
-             active_needs_before = coalesce($5::jsonb, active_needs_before),
+             stage = CASE
+               WHEN turn.user_message_id IS NULL THEN 'user_message_saved'
+               ELSE turn.stage
+             END,
+             active_needs_before = CASE
+               WHEN turn.user_message_id IS NULL THEN coalesce($6::jsonb, turn.active_needs_before)
+               ELSE turn.active_needs_before
+             END,
              updated_at = now()
-         WHERE session_id = $1 AND id = $2
-         RETURNING *
+         FROM locked_turn
+         WHERE turn.session_id = locked_turn.session_id
+           AND turn.id = locked_turn.id
+         RETURNING turn.*
+       ), touched_session AS (
+         UPDATE conversation_sessions AS session
+         SET updated_at = now()
+         FROM updated_turn, active_session
+         WHERE session.id = updated_turn.session_id
+           AND session.id = active_session.id
+           AND session.status = 'active'
+         RETURNING session.id
        )
-       SELECT *
-       FROM chosen_message`,
+       SELECT chosen_message.*
+       FROM chosen_message
+       JOIN updated_turn ON updated_turn.user_message_id = chosen_message.id
+       JOIN touched_session ON touched_session.id = updated_turn.session_id`,
       [
         input.sessionId,
         input.turnId,
+        input.executionOwner,
         input.content,
         jsonbParam(input.metadata ?? {}),
         jsonbParam(input.activeNeedsBefore)
       ]
     );
-    if (!result.rowCount) throw new Error('Unable to save user message for turn');
-    await this.db.query(
-      `UPDATE conversation_sessions
-       SET updated_at = now()
-       WHERE id = $1`,
-      [input.sessionId]
-    );
+    if (!result.rowCount) throw new TurnMutationFenceError(input.sessionId, input.turnId);
     return mapMessage(result.rows[0]);
   }
 
@@ -1433,23 +2103,37 @@ export class ConversationRepository {
   async updateAssistantFeedback(input: {
     sessionId: string;
     messageId: string;
+    visitorCapability: string;
     rating: 'positive' | 'negative' | 'wrong_cards';
+    maxInactiveMinutes?: number;
   }) {
+    const maxInactiveMinutes = input.maxInactiveMinutes ?? 30;
     const feedback = {
       rating: input.rating,
       createdAt: new Date().toISOString()
     };
     const result = await this.db.query(
-      `WITH updated AS (
-         UPDATE messages
+      `WITH authorized_session AS MATERIALIZED (
+         SELECT session.id
+         FROM conversation_sessions AS session
+         WHERE session.id = $2
+           AND session.visitor_id = $5
+           AND session.status = 'active'
+           AND session.last_heartbeat_at >= now() - ($6 || ' minutes')::interval
+         FOR UPDATE OF session
+       ), updated AS (
+         UPDATE messages AS message
          SET metadata = jsonb_set(
-           coalesce(metadata, '{}'::jsonb),
+           coalesce(message.metadata, '{}'::jsonb),
            '{feedback}',
            $3::jsonb,
            true
          )
-         WHERE id = $1 AND session_id = $2 AND role = 'assistant'
-         RETURNING *
+         FROM authorized_session
+         WHERE message.id = $1
+           AND message.session_id = authorized_session.id
+           AND message.role = 'assistant'
+         RETURNING message.*
        ), turn_context AS (
          SELECT t.id AS turn_id, t.user_message_id
          FROM conversation_turns t
@@ -1544,7 +2228,9 @@ export class ConversationRepository {
         input.messageId,
         input.sessionId,
         jsonbParam(feedback),
-        input.rating
+        input.rating,
+        input.visitorCapability,
+        maxInactiveMinutes
       ]
     );
     return result.rowCount ? mapMessage(result.rows[0]) : null;
@@ -1773,6 +2459,27 @@ export class ProductRepository {
   private readonly catalogSyncLocks = new Map<string, { client: PoolClient; lockIdentity: string }>();
 
   constructor(private readonly db: Db = pool) {}
+
+  private async inTransaction<T>(work: (db: Db) => Promise<T>) {
+    let transactionDb: Db = this.db;
+    let release: (() => void) | undefined;
+    if (!('release' in this.db) && 'connect' in this.db && typeof this.db.connect === 'function') {
+      const client = await (this.db as Pool).connect();
+      transactionDb = client;
+      release = () => client.release();
+    }
+    await transactionDb.query('BEGIN');
+    try {
+      const result = await work(transactionDb);
+      await transactionDb.query('COMMIT');
+      return result;
+    } catch (error) {
+      await transactionDb.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      release?.();
+    }
+  }
 
   async getActiveCatalogInventoryCounts() {
     const result = await this.db.query(
@@ -2162,70 +2869,91 @@ export class ProductRepository {
   async upsertProduct(input: CatalogProductInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
     const vector = embedding ? `[${embedding.join(',')}]` : null;
     const sourceContentHash = catalogSourceContentHash(freshnessHashInput(input));
-    const result = await this.db.query(
-      `INSERT INTO products(
-         external_id, source_url, slug, name, brand, category, price, currency, image_url,
-         description, specs, raw, source_priority, embedding, embedding_model, embedding_source_hash, embedding_updated_at,
-         last_seen_at, last_synced_at, is_active, source_content_hash
-       )
-       VALUES (
-         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector, $15, $16,
-         CASE WHEN $14::vector IS NULL THEN NULL ELSE now() END, now(), now(), true, $17
-       )
-       ON CONFLICT (source_url) DO UPDATE SET
-         external_id = coalesce(EXCLUDED.external_id, products.external_id),
-         slug = coalesce(EXCLUDED.slug, products.slug),
-         name = EXCLUDED.name,
-         brand = coalesce(EXCLUDED.brand, products.brand),
-         category = coalesce(EXCLUDED.category, products.category),
-         price = coalesce(EXCLUDED.price, products.price),
-         currency = coalesce(EXCLUDED.currency, products.currency),
-         image_url = coalesce(EXCLUDED.image_url, products.image_url),
-         description = coalesce(EXCLUDED.description, products.description),
-         specs = products.specs || EXCLUDED.specs,
-         raw = products.raw || EXCLUDED.raw,
-         source_priority = LEAST(products.source_priority, EXCLUDED.source_priority),
-         embedding = coalesce(EXCLUDED.embedding, products.embedding),
-         embedding_model = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_model ELSE EXCLUDED.embedding_model END,
-         embedding_source_hash = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_source_hash ELSE EXCLUDED.embedding_source_hash END,
-         embedding_updated_at = CASE WHEN EXCLUDED.embedding IS NULL THEN products.embedding_updated_at ELSE EXCLUDED.embedding_updated_at END,
-         last_seen_at = now(),
-         last_synced_at = now(),
-         is_active = true,
-         source_content_hash = EXCLUDED.source_content_hash,
-         updated_at = now()
-       RETURNING *`,
-      [
-        input.externalId ?? null,
-        input.sourceUrl ?? null,
-        input.slug ?? null,
-        input.name,
-        input.brand ?? null,
-        input.category ?? null,
-        input.price ?? null,
-        input.currency ?? 'RUB',
-        input.imageUrl ?? null,
-        input.description ?? null,
-        input.specs ?? {},
-        input.raw ?? {},
-        input.sourcePriority ?? 50,
-        vector,
-        embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
-        embedding ? embeddingMetadata?.sourceHash ?? null : null,
-        sourceContentHash
-      ]
-    );
-
-    const product = mapProduct(result.rows[0]);
-    await this.upsertFactsFromProduct(product.id, input);
-    return product;
+    return this.inTransaction(async (transactionDb) => {
+      const result = await transactionDb.query(
+        `INSERT INTO products(
+           external_id, source_url, slug, name, brand, category, price, currency, image_url,
+           description, specs, raw, source_priority, embedding, embedding_model, embedding_source_hash, embedding_updated_at,
+           last_seen_at, last_synced_at, is_active, source_content_hash
+         )
+         VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::vector, $15, $16,
+           CASE WHEN $14::vector IS NULL THEN NULL ELSE now() END, now(), now(), true, $17
+         )
+         ON CONFLICT (source_url) DO UPDATE SET
+           external_id = coalesce(EXCLUDED.external_id, products.external_id),
+           slug = coalesce(EXCLUDED.slug, products.slug),
+           name = EXCLUDED.name,
+           brand = EXCLUDED.brand,
+           category = EXCLUDED.category,
+           price = EXCLUDED.price,
+           currency = EXCLUDED.currency,
+           image_url = EXCLUDED.image_url,
+           description = EXCLUDED.description,
+           specs = EXCLUDED.specs,
+           raw = EXCLUDED.raw,
+           source_priority = LEAST(products.source_priority, EXCLUDED.source_priority),
+           embedding = CASE
+             WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding
+             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             ELSE products.embedding
+           END,
+           embedding_model = CASE
+             WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_model
+             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             ELSE products.embedding_model
+           END,
+           embedding_source_hash = CASE
+             WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_source_hash
+             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             ELSE products.embedding_source_hash
+           END,
+           embedding_updated_at = CASE
+             WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_updated_at
+             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             ELSE products.embedding_updated_at
+           END,
+           last_seen_at = now(),
+           last_synced_at = now(),
+           is_active = true,
+           source_content_hash = EXCLUDED.source_content_hash,
+           updated_at = now()
+         RETURNING *`,
+        [
+          input.externalId ?? null,
+          input.sourceUrl ?? null,
+          input.slug ?? null,
+          input.name,
+          input.brand ?? null,
+          input.category ?? null,
+          input.price ?? null,
+          input.currency ?? 'RUB',
+          input.imageUrl ?? null,
+          input.description ?? null,
+          input.specs ?? {},
+          input.raw ?? {},
+          input.sourcePriority ?? 50,
+          vector,
+          embedding ? embeddingMetadata?.model ?? config.OPENAI_EMBEDDING_MODEL : null,
+          embedding ? embeddingMetadata?.sourceHash ?? null : null,
+          sourceContentHash
+        ]
+      );
+      const product = mapProduct(result.rows[0]);
+      await this.replaceSourceFacts(transactionDb, product.id, input);
+      return product;
+    });
   }
 
   async upsertFactsFromProduct(productId: string, product: CatalogProductInput) {
+    return this.inTransaction((transactionDb) => this.replaceSourceFacts(transactionDb, productId, product));
+  }
+
+  private async replaceSourceFacts(transactionDb: Db, productId: string, product: CatalogProductInput) {
     const specs = product.specs ?? {};
     const sourceType = product.raw?.sourceType === 'csv' ? 'csv' : 'site';
     if (product.sourceUrl) {
-      await this.db.query(
+      await transactionDb.query(
         `DELETE FROM product_facts
          WHERE product_id = $1 AND source_type = $2 AND source_url = $3`,
         [productId, sourceType, product.sourceUrl]
@@ -2256,7 +2984,7 @@ export class ProductRepository {
     }
 
     for (const fact of facts) {
-      await this.db.query(
+      await transactionDb.query(
         `INSERT INTO product_facts(product_id, attribute, value, unit, source_type, source_url, confidence)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT DO NOTHING`,
@@ -2272,7 +3000,7 @@ export class ProductRepository {
       );
     }
 
-    await this.refreshConflicts(productId);
+    await this.refreshConflictsWithDb(transactionDb, productId);
   }
 
   async upsertTroubleshootingCase(input: TroubleshootingCaseInput, embedding?: number[], embeddingMetadata?: EmbeddingMetadata) {
@@ -2468,13 +3196,40 @@ export class ProductRepository {
     const attribute = input.attribute.trim();
     const value = input.value.trim();
     if (!productName || !productKey || !attribute || !value) return null;
-    const result = await this.db.query(
-      `WITH inserted AS (
+    const sourceFingerprint = input.sourceFingerprint?.trim() || catalogSourceContentHash({
+      sourceType: input.sourceType,
+      sourceUrl: input.sourceUrl?.trim() || null,
+      sourceTitle: input.sourceTitle?.trim() || null,
+      evidence: input.evidence?.trim() || null,
+      value
+    });
+    return this.inTransaction(async (transactionDb) => {
+      const result = await transactionDb.query(
+        `WITH product_snapshot AS MATERIALIZED (
+         SELECT source_content_hash
+         FROM products
+         WHERE id = $1
+       ), superseded AS (
+         UPDATE verified_product_facts
+         SET status = 'superseded',
+             updated_at = now()
+         WHERE product_key = $2
+           AND attribute = $4
+           AND value <> $5
+           AND source_type = $6
+           AND coalesce(source_url, '') = coalesce($7, '')
+           AND status = 'active'
+         RETURNING id
+       ), supersede_barrier AS (
+         SELECT count(*) AS superseded_count FROM superseded
+       ), inserted AS (
          INSERT INTO verified_product_facts(
            product_id, product_key, product_name, attribute, value, source_type,
-           source_url, source_title, evidence, confidence
+           source_url, source_title, evidence, confidence, catalog_source_hash, source_fingerprint
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                (SELECT source_content_hash FROM product_snapshot), $11
+         FROM supersede_barrier
          ON CONFLICT DO NOTHING
          RETURNING *
        ),
@@ -2485,6 +3240,8 @@ export class ProductRepository {
            product_name = $3,
            source_title = coalesce($8, verified_product_facts.source_title),
            evidence = coalesce($9, verified_product_facts.evidence),
+           catalog_source_hash = (SELECT source_content_hash FROM product_snapshot),
+           source_fingerprint = $11,
            confidence = CASE
              WHEN verified_product_facts.confidence = 'high' THEN verified_product_facts.confidence
              WHEN $10 = 'high' THEN 'high'
@@ -2507,20 +3264,22 @@ export class ProductRepository {
        UNION ALL
        SELECT * FROM updated
        LIMIT 1`,
-      [
-        input.productId ?? null,
-        productKey,
-        productName,
-        attribute,
-        value,
-        input.sourceType,
-        input.sourceUrl ?? null,
-        input.sourceTitle ?? null,
-        input.evidence ?? null,
-        input.confidence
-      ]
-    );
-    return result.rows[0] ? mapVerifiedProductFact(result.rows[0]) : null;
+        [
+          input.productId ?? null,
+          productKey,
+          productName,
+          attribute,
+          value,
+          input.sourceType,
+          input.sourceUrl ?? null,
+          input.sourceTitle ?? null,
+          input.evidence ?? null,
+          input.confidence,
+          sourceFingerprint
+        ]
+      );
+      return result.rows[0] ? mapVerifiedProductFact(result.rows[0]) : null;
+    });
   }
 
   async searchVerifiedProductFacts(input: {
@@ -2536,18 +3295,37 @@ export class ProductRepository {
     if (!productKeys.length && !productIds.length) return [];
     const sourceTypes = input.sourceTypes?.length ? input.sourceTypes : ['web'];
     const result = await this.db.query(
-      `SELECT *
-       FROM verified_product_facts
-       WHERE status = 'active'
-         AND source_type = ANY($3::text[])
+      `SELECT fact.*
+       FROM verified_product_facts AS fact
+       LEFT JOIN products AS product ON product.id = fact.product_id
+       WHERE fact.status = 'active'
+         AND fact.source_type = ANY($3::text[])
          AND (
-           ($1::text[] <> '{}'::text[] AND product_key = ANY($1::text[]))
-           OR ($2::uuid[] <> '{}'::uuid[] AND product_id = ANY($2::uuid[]))
+           (
+             $2::uuid[] <> '{}'::uuid[]
+             AND fact.product_id = ANY($2::uuid[])
+             AND product.is_active IS NOT FALSE
+             AND fact.catalog_source_hash IS NOT NULL
+             AND fact.catalog_source_hash = product.source_content_hash
+           )
+           OR (
+             $2::uuid[] = '{}'::uuid[]
+             AND $1::text[] <> '{}'::text[]
+             AND fact.product_key = ANY($1::text[])
+             AND (
+               fact.product_id IS NULL
+               OR (
+                 product.is_active IS NOT FALSE
+                 AND fact.catalog_source_hash IS NOT NULL
+                 AND fact.catalog_source_hash = product.source_content_hash
+               )
+             )
+           )
          )
        ORDER BY
-         CASE confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
-         last_verified_at DESC,
-         updated_at DESC
+         CASE fact.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
+         fact.last_verified_at DESC,
+         fact.updated_at DESC
        LIMIT $4`,
       [productKeys, productIds, sourceTypes, input.limit ?? 24]
     );
@@ -2800,7 +3578,11 @@ export class ProductRepository {
   }
 
   async refreshConflicts(productId: string) {
-    const result = await this.db.query(
+    return this.refreshConflictsWithDb(this.db, productId);
+  }
+
+  private async refreshConflictsWithDb(transactionDb: Db, productId: string) {
+    const result = await transactionDb.query(
       `SELECT attribute, jsonb_agg(DISTINCT jsonb_build_object(
          'value', value,
          'unit', unit,
@@ -2816,8 +3598,25 @@ export class ProductRepository {
       [productId]
     );
 
+    const conflictingAttributes = result.rows
+      .map((row) => typeof row.attribute === 'string' ? row.attribute : '')
+      .filter(Boolean);
+    await transactionDb.query(
+      `UPDATE data_conflicts
+       SET status = 'resolved',
+           resolved_at = coalesce(resolved_at, now()),
+           resolution = coalesce(resolution, '{}'::jsonb) || jsonb_build_object(
+             'reason', 'source_snapshot_no_longer_conflicts',
+             'resolvedAt', now()
+           )
+       WHERE product_id = $1
+         AND status = 'open'
+         AND NOT (attribute = ANY($2::text[]))`,
+      [productId, conflictingAttributes]
+    );
+
     for (const row of result.rows) {
-      await this.db.query(
+      await transactionDb.query(
         `INSERT INTO data_conflicts(product_id, attribute, values)
          VALUES ($1, $2, $3)
          ON CONFLICT (product_id, attribute, status) DO UPDATE SET

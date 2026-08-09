@@ -112,13 +112,270 @@ export function modelIdentifierDisplayTokens(value: unknown) {
   return displayTokens;
 }
 
-export function textMatchesTargetName(value: unknown, targetName: string) {
-  const targetTokens = modelIdentifierTokens(targetName);
-  if (targetTokens.length) {
-    const valueIdentifierTokens = new Set(modelIdentifierTokens(value));
-    return targetTokens.every((token) => valueIdentifierTokens.has(token));
+function uniqueModelTokens(values: string[]) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function tokenStartsWithLetter(token: string) {
+  const first = token[0] ?? '';
+  return isAsciiLetter(first) || isCyrillicLetter(first);
+}
+
+function exactIdentityIdentifierTokens(value: unknown) {
+  const mixedTokens = uniqueModelTokens(modelTextTokens(value).map(compactModelText)).filter((token) =>
+    token.length >= 2 && tokenHasLetter(token) && tokenHasDigit(token)
+  );
+  const strongTokens = mixedTokens.filter((token) => token.length >= 4);
+  if (!strongTokens.length) return [];
+  return uniqueModelTokens([
+    ...strongTokens,
+    ...mixedTokens.filter((token) => tokenStartsWithLetter(token))
+  ]);
+}
+
+function modelTextTokenLayout(value: unknown) {
+  const tokens: string[] = [];
+  const separators: string[] = [];
+  let current = '';
+  let pendingSeparator = '';
+  for (const char of normalizeModelText(value)) {
+    if (isModelTokenChar(char)) {
+      if (!current && tokens.length > 0) {
+        separators.push(pendingSeparator);
+        pendingSeparator = '';
+      }
+      current += char;
+    } else {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      pendingSeparator += char;
+    }
   }
-  const productText = compactModelText(value);
-  const targetText = compactModelText(targetName);
-  return targetText.length >= 5 && productText.includes(targetText);
+  if (current) tokens.push(current);
+  return { tokens, separators };
+}
+
+function separatorHasWhitespace(value: string) {
+  for (const char of value) {
+    if (char.trim() === '') return true;
+  }
+  return false;
+}
+
+function tokenIsShortModelSuffix(token: string) {
+  return token.length <= 3 && (tokenHasDigit(token) || tokenHasLetter(token));
+}
+
+function tokenOccurrenceIsExtended(layout: ReturnType<typeof modelTextTokenLayout>, index: number) {
+  const nextToken = layout.tokens[index + 1];
+  const nextSeparator = layout.separators[index];
+  return Boolean(
+    nextToken &&
+    nextSeparator &&
+    !separatorHasWhitespace(nextSeparator) &&
+    tokenIsShortModelSuffix(nextToken)
+  );
+}
+
+function targetPartCountForValueToken(
+  valueToken: string,
+  targetTokens: readonly string[],
+  targetIndex: number
+) {
+  let joined = '';
+  for (let index = targetIndex; index < targetTokens.length && index < targetIndex + 4; index += 1) {
+    joined += targetTokens[index];
+    if (joined === valueToken) return index - targetIndex + 1;
+    if (!valueToken.startsWith(joined)) return 0;
+  }
+  return 0;
+}
+
+function layoutContainsIdentifier(layout: ReturnType<typeof modelTextTokenLayout>, identifier: string) {
+  for (let start = 0; start < layout.tokens.length; start += 1) {
+    let joined = '';
+    for (let end = start; end < layout.tokens.length && end < start + 4; end += 1) {
+      joined += layout.tokens[end];
+      if (joined === identifier && !tokenOccurrenceIsExtended(layout, end)) return true;
+      if (!identifier.startsWith(joined)) break;
+    }
+  }
+  return false;
+}
+
+function includesExactTokenSequence(
+  layout: ReturnType<typeof modelTextTokenLayout>,
+  targetTokens: readonly string[]
+) {
+  if (!targetTokens.length) return false;
+  for (let start = 0; start < layout.tokens.length; start += 1) {
+    let valueIndex = start;
+    let targetIndex = 0;
+    while (targetIndex < targetTokens.length && valueIndex < layout.tokens.length) {
+      const matchedParts = targetPartCountForValueToken(layout.tokens[valueIndex], targetTokens, targetIndex);
+      if (!matchedParts) break;
+      targetIndex += matchedParts;
+      valueIndex += 1;
+    }
+    if (targetIndex === targetTokens.length && !tokenOccurrenceIsExtended(layout, valueIndex - 1)) return true;
+  }
+  return false;
+}
+
+function includesOrderedExactTokens(
+  layout: ReturnType<typeof modelTextTokenLayout>,
+  targetTokens: readonly string[]
+) {
+  if (!targetTokens.length) return false;
+  let valueIndex = 0;
+  let targetIndex = 0;
+  while (targetIndex < targetTokens.length) {
+    let matchedParts = 0;
+    while (valueIndex < layout.tokens.length) {
+      matchedParts = targetPartCountForValueToken(layout.tokens[valueIndex], targetTokens, targetIndex);
+      if (matchedParts) break;
+      valueIndex += 1;
+    }
+    if (valueIndex >= layout.tokens.length) return false;
+    targetIndex += matchedParts;
+    if (targetIndex === targetTokens.length && !tokenOccurrenceIsExtended(layout, valueIndex)) return true;
+    valueIndex += 1;
+  }
+  return false;
+}
+
+const modelUnitTokens = new Set([
+  'kw', 'квт', 'w', 'вт', 'kva', 'ква', 'v', 'в', 'kg', 'кг', 'hz', 'гц', 'rpm', 'об'
+]);
+
+function isDigitsOnlyToken(token: string) {
+  return tokenHasDigit(token) && !tokenHasLetter(token);
+}
+
+function isLettersOnlyToken(token: string) {
+  return tokenHasLetter(token) && !tokenHasDigit(token);
+}
+
+function splitModelIdentityTokens(value: unknown) {
+  const layout = modelTextTokenLayout(value);
+  const candidates: string[][] = [];
+  for (let anchor = 0; anchor < layout.tokens.length; anchor += 1) {
+    const anchorToken = layout.tokens[anchor];
+    if (!isDigitsOnlyToken(anchorToken) || anchorToken.length < 3) continue;
+    let start = anchor;
+    while (start > 0) {
+      const previous = layout.tokens[start - 1];
+      const separator = layout.separators[start - 1] ?? '';
+      const shortLetterPart = isLettersOnlyToken(previous) && previous.length <= 4 && !modelUnitTokens.has(previous);
+      const joinedNumericPart = isDigitsOnlyToken(previous) && previous.length <= 4 && !separatorHasWhitespace(separator);
+      if (!shortLetterPart && !joinedNumericPart) break;
+      start -= 1;
+    }
+    let end = anchor;
+    while (end + 1 < layout.tokens.length) {
+      const next = layout.tokens[end + 1];
+      const separator = layout.separators[end] ?? '';
+      const shortLetterPart = isLettersOnlyToken(next) && next.length <= 4 && !modelUnitTokens.has(next);
+      const mixedPart = tokenHasLetter(next) && tokenHasDigit(next) && next.length <= 8;
+      const joinedNumericPart = isDigitsOnlyToken(next) && next.length <= 4 && !separatorHasWhitespace(separator);
+      if (!shortLetterPart && !mixedPart && !joinedNumericPart) break;
+      end += 1;
+    }
+    const candidate = layout.tokens.slice(start, end + 1);
+    if (candidate.some(tokenHasLetter)) candidates.push(candidate);
+  }
+  return candidates.sort((left, right) => right.length - left.length)[0] ?? [];
+}
+
+export interface ExactProductIdentity {
+  targetName: string;
+  decisiveParts: readonly string[];
+  identifierParts: readonly string[];
+  searchAliases: readonly string[];
+  matches(value: unknown): boolean;
+  hasExactMention(value: unknown): boolean;
+}
+
+export function exactProductIdentity(targetName: string): ExactProductIdentity {
+  const targetTokens = modelTextTokens(targetName).map(compactModelText).filter(Boolean);
+  const identifierParts = exactIdentityIdentifierTokens(targetName);
+  const splitIdentifierParts = identifierParts.length ? [] : splitModelIdentityTokens(targetName);
+  const decisiveParts = identifierParts.length
+    ? identifierParts
+    : splitIdentifierParts.length
+      ? splitIdentifierParts
+      : targetTokens;
+  const searchAliases = uniqueModelTokens([
+    `"${targetName}"`,
+    targetName,
+    ...identifierParts,
+    ...identifierParts.map((token) => `"${token}"`)
+  ]);
+  return {
+    targetName,
+    decisiveParts,
+    identifierParts,
+    searchAliases,
+    matches(value: unknown) {
+      if (!decisiveParts.length) return false;
+      const layout = modelTextTokenLayout(value);
+      if (!identifierParts.length) return includesOrderedExactTokens(layout, decisiveParts);
+      return identifierParts.every((identifier) => layoutContainsIdentifier(layout, identifier));
+    },
+    hasExactMention(value: unknown) {
+      if (!decisiveParts.length) return false;
+      const layout = modelTextTokenLayout(value);
+      if (!identifierParts.length) return includesExactTokenSequence(layout, decisiveParts);
+      return identifierParts.every((identifier) => layoutContainsIdentifier(layout, identifier));
+    }
+  };
+}
+
+function sameModelTokenShape(left: string, right: string) {
+  return tokenHasLetter(left) === tokenHasLetter(right) &&
+    tokenHasDigit(left) === tokenHasDigit(right) &&
+    Math.abs(left.length - right.length) <= 2;
+}
+
+function hasUnexpectedMultipartVariant(value: unknown, identities: ExactProductIdentity[]) {
+  const groups = new Map<string, { prefix: string[]; allowedSuffixes: Set<string> }>();
+  for (const identity of identities) {
+    if (identity.identifierParts.length || identity.decisiveParts.length < 2) continue;
+    const prefix = [...identity.decisiveParts.slice(0, -1)];
+    const suffix = identity.decisiveParts.at(-1);
+    if (!suffix) continue;
+    const key = prefix.join('\u0000');
+    const group = groups.get(key) ?? { prefix, allowedSuffixes: new Set<string>() };
+    group.allowedSuffixes.add(suffix);
+    groups.set(key, group);
+  }
+  if (!groups.size) return false;
+
+  const layout = modelTextTokenLayout(value);
+  for (const { prefix, allowedSuffixes } of groups.values()) {
+    for (let start = 0; start <= layout.tokens.length - prefix.length - 1; start += 1) {
+      if (!prefix.every((token, offset) => layout.tokens[start + offset] === token)) continue;
+      const candidateSuffix = layout.tokens[start + prefix.length];
+      if (allowedSuffixes.has(candidateSuffix)) continue;
+      if ([...allowedSuffixes].some((allowedSuffix) => sameModelTokenShape(candidateSuffix, allowedSuffix))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function textMatchesOnlyTargetNames(value: unknown, targetNames: string[]) {
+  const identities = targetNames.map(exactProductIdentity).filter((identity) => identity.decisiveParts.length > 0);
+  if (!identities.some((identity) => identity.hasExactMention(value))) return false;
+  if (hasUnexpectedMultipartVariant(value, identities)) return false;
+  const allowedIdentifiers = new Set(identities.flatMap((identity) => [...identity.identifierParts]));
+  if (!allowedIdentifiers.size) return true;
+  return exactIdentityIdentifierTokens(value).every((identifier) => allowedIdentifiers.has(identifier));
+}
+
+export function textMatchesTargetName(value: unknown, targetName: string) {
+  return exactProductIdentity(targetName).matches(value);
 }

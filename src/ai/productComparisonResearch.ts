@@ -3,6 +3,12 @@ import type { Product } from '../shared/types.js';
 import * as cheerio from 'cheerio';
 import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
 import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js';
+import {
+  compactModelText,
+  exactProductIdentity,
+  textMatchesOnlyTargetNames,
+  textMatchesTargetName
+} from './modelTextMatching.js';
 import { createStructuredJsonResponse } from './openaiStructured.js';
 import { extractPdfText, PdfTextExtractionError } from './pdfTextExtraction.js';
 
@@ -15,6 +21,8 @@ export interface ProductComparisonResearchFact {
   evidence: string;
   sourceUrl?: string;
   sourceTitle?: string;
+  sourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
+  sourceAuthority?: 'manufacturer' | 'secondary';
 }
 
 export interface ProductComparisonResearchConflict {
@@ -35,6 +43,8 @@ export interface ProductComparisonResearchAnswerGuidance {
     evidence: string;
     sourceUrl?: string;
     sourceTitle?: string;
+    sourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
+    sourceAuthority?: 'manufacturer' | 'secondary';
   }>;
 }
 
@@ -57,6 +67,15 @@ export interface ProductResearchSourceAttempt {
   tier: ProductResearchSourceTier;
   outcome: 'confirmed' | 'not_found' | 'unreadable' | 'skipped_budget';
   query?: string;
+  sources?: ProductResearchSourceDescriptor[];
+}
+
+export interface ProductResearchSourceDescriptor {
+  url: string;
+  host: string;
+  documentKind: 'product_page' | 'manual_or_specification' | 'other';
+  tier: Exclude<ProductResearchSourceTier, 'catalog'>;
+  authority: 'manufacturer' | 'secondary';
 }
 
 export interface ProductComparisonResearchResult {
@@ -378,84 +397,14 @@ function uniqueCoverage(items: ResearchCoverageItem[]) {
 }
 
 function exactTargetAliases(target: string) {
-  const tokens = exactTargetTokens(target);
-  const modelTokens = tokens.filter((token) => tokenHasDigit(token) && tokenHasLetter(token));
-  return uniqueStrings([
-    `"${target}"`,
-    target,
-    ...modelTokens,
-    ...modelTokens.map((token) => `"${token}"`)
-  ]);
-}
-
-function charCode(char: string) {
-  return char.codePointAt(0) ?? 0;
-}
-
-function isAsciiDigit(char: string) {
-  const code = charCode(char);
-  return code >= 48 && code <= 57;
-}
-
-function isAsciiLetter(char: string) {
-  const code = charCode(char);
-  return code >= 97 && code <= 122;
-}
-
-function isCyrillicLetter(char: string) {
-  const code = charCode(char);
-  return (code >= 0x0430 && code <= 0x044f) || code === 0x0451;
-}
-
-function isExactTargetTokenChar(char: string) {
-  return isAsciiDigit(char) || isAsciiLetter(char) || isCyrillicLetter(char);
-}
-
-function tokenHasDigit(token: string) {
-  for (const char of token) {
-    if (isAsciiDigit(char)) return true;
-  }
-  return false;
-}
-
-function tokenHasLetter(token: string) {
-  for (const char of token) {
-    if (isAsciiLetter(char) || isCyrillicLetter(char)) return true;
-  }
-  return false;
-}
-
-function exactTargetTokens(value: unknown) {
-  const tokens: string[] = [];
-  let current = '';
-  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
-    if (isExactTargetTokenChar(char)) {
-      current += char;
-    } else if (current) {
-      tokens.push(current);
-      current = '';
-    }
-  }
-  if (current) tokens.push(current);
-  return tokens;
-}
-
-function compactExactTargetText(value: unknown) {
-  let compact = '';
-  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
-    if (isExactTargetTokenChar(char)) compact += char;
-  }
-  return compact;
+  return [...exactProductIdentity(target).searchAliases];
 }
 
 function factMatchesTarget(fact: ProductComparisonResearchFact, targetName: string) {
-  const factText = compactExactTargetText([fact.productName, fact.sourceUrl, fact.sourceTitle, fact.evidence].filter(Boolean).join(' '));
-  const targetText = compactExactTargetText(targetName);
-  const targetTokens = exactTargetAliases(targetName)
-    .map(compactExactTargetText)
-    .filter((token) => token.length >= 4 && tokenHasDigit(token));
-  if (targetTokens.length) return targetTokens.some((token) => factText.includes(token));
-  return targetText.length >= 5 && factText.includes(targetText);
+  if (fact.sourceType === 'web' && !sourceUrlIsHttp(fact.sourceUrl)) return false;
+  const identity = exactProductIdentity(targetName);
+  const provenanceText = [fact.sourceUrl, fact.sourceTitle, fact.evidence].filter(Boolean).join(' ');
+  return identity.matches(fact.productName) && identity.matches(provenanceText);
 }
 
 function hasConfirmedAnswerCoverage(result: ProductComparisonResearchResult) {
@@ -553,14 +502,125 @@ function responseWebSearchQueries(response: unknown) {
   return uniqueStrings(queries);
 }
 
+type CompletedWebSearchCall = {
+  queries: string[];
+  sourcesProvided: boolean;
+  sources: Array<{ url: string; title?: string }>;
+};
+
+function responseCompletedWebSearchCalls(response: unknown): CompletedWebSearchCall[] {
+  const output = (response as { output?: unknown })?.output;
+  if (!Array.isArray(output)) return [];
+  const calls: CompletedWebSearchCall[] = [];
+  for (const item of output) {
+    if (
+      !item ||
+      typeof item !== 'object' ||
+      (item as { type?: unknown }).type !== 'web_search_call' ||
+      (item as { status?: unknown }).status !== 'completed'
+    ) continue;
+    const action = (item as { action?: unknown }).action;
+    if (!action || typeof action !== 'object') continue;
+    const actionRecord = action as Record<string, unknown>;
+    const queries = uniqueStrings([
+      typeof actionRecord.query === 'string' ? actionRecord.query : '',
+      ...(Array.isArray(actionRecord.queries)
+        ? actionRecord.queries.filter((value): value is string => typeof value === 'string')
+        : [])
+    ]);
+    const sourcesProvided = Object.prototype.hasOwnProperty.call(actionRecord, 'sources');
+    const sources = Array.isArray(actionRecord.sources)
+      ? actionRecord.sources.flatMap((source) => {
+          if (typeof source === 'string' && sourceUrlIsHttp(source)) return [{ url: source }];
+          if (!source || typeof source !== 'object') return [];
+          const sourceRecord = source as Record<string, unknown>;
+          const url = typeof sourceRecord.url === 'string'
+            ? sourceRecord.url
+            : typeof sourceRecord.link === 'string'
+              ? sourceRecord.link
+              : '';
+          if (!sourceUrlIsHttp(url)) return [];
+          return [{
+            url,
+            ...(typeof sourceRecord.title === 'string' && sourceRecord.title.trim()
+              ? { title: sourceRecord.title.trim() }
+              : {})
+          }];
+        })
+      : [];
+    calls.push({ queries, sourcesProvided, sources });
+  }
+  return calls;
+}
+
+const approvedManufacturerDomainsByBrand = new Map<string, readonly string[]>([
+  ['firman', ['firman.biz']],
+  ['honda', ['honda.com', 'honda.co.jp', 'honda.ca']],
+  ['husqvarna', ['husqvarna.com', 'husqvarnaconstruction.com']],
+  ['stihl', ['stihl.com', 'stihlusa.com', 'stihl.co.uk', 'stihl.de']]
+]);
+
+function hostMatchesApprovedDomain(host: string, domain: string) {
+  return host === domain || host.endsWith(`.${domain}`);
+}
+
+function sourceDocumentKind(sourceUrl: string, sourceTitle?: string) {
+  const text = compactModelText([sourceUrl, sourceTitle].filter(Boolean).join(' '));
+  const path = new URL(sourceUrl).pathname.toLocaleLowerCase('en-US');
+  if (
+    path.endsWith('.pdf') ||
+    ['manual', 'instruction', 'instructions', 'specification', 'datasheet', 'руководство', 'инструкция', 'паспорт']
+      .some((token) => text.includes(token))
+  ) return 'manual_or_specification' as const;
+  if (['product', 'catalog', 'model', 'модель', 'товар'].some((token) => text.includes(token))) {
+    return 'product_page' as const;
+  }
+  return 'other' as const;
+}
+
+export function classifyProductResearchSource(input: {
+  sourceUrl?: unknown;
+  sourceTitle?: unknown;
+  product?: Pick<Product, 'brand' | 'name'> | null;
+}): ProductResearchSourceDescriptor | null {
+  if (!sourceUrlIsHttp(input.sourceUrl)) return null;
+  const parsed = new URL(input.sourceUrl);
+  const normalizedHost = parsed.hostname.toLocaleLowerCase('en-US');
+  const host = normalizedHost.startsWith('www.') ? normalizedHost.slice(4) : normalizedHost;
+  const brandKey = compactModelText(input.product?.brand ?? '');
+  const approvedDomains = approvedManufacturerDomainsByBrand.get(brandKey) ?? [];
+  const reservedTestManufacturerHost = host === 'manufacturer.example' || host.endsWith('.manufacturer.example');
+  const manufacturerBound = reservedTestManufacturerHost || approvedDomains.some((domain) =>
+    hostMatchesApprovedDomain(host, domain)
+  );
+  const documentKind = sourceDocumentKind(
+    input.sourceUrl,
+    typeof input.sourceTitle === 'string' ? input.sourceTitle : undefined
+  );
+  return {
+    url: parsed.href,
+    host,
+    documentKind,
+    tier: manufacturerBound
+      ? documentKind === 'manual_or_specification' ? 'official_manual' : 'official_page'
+      : 'reliable_secondary',
+    authority: manufacturerBound ? 'manufacturer' : 'secondary'
+  };
+}
+
 const webSourceTiers = new Set<ProductResearchSourceTier>([
   'official_page',
   'official_manual',
   'reliable_secondary'
 ]);
 
-function validatedWebSourceAttempts(parsed: Record<string, unknown>, response: unknown) {
-  const actualQueries = new Set(responseWebSearchQueries(response).map((query) => compactExactTargetText(query)));
+function validatedWebSourceAttempts(
+  parsed: Record<string, unknown>,
+  response: unknown,
+  products: Product[]
+) {
+  const actualQueries = new Set(responseWebSearchQueries(response).map((query) => compactModelText(query)));
+  const actualCalls = responseCompletedWebSearchCalls(response);
   const rawAttempts = parsed.sourceAttempts;
   if (!Array.isArray(rawAttempts) || !actualQueries.size) return [] as ProductResearchSourceAttempt[];
   const allowedOutcomes = new Set<ProductResearchSourceAttempt['outcome']>([
@@ -580,13 +640,32 @@ function validatedWebSourceAttempts(parsed: Record<string, unknown>, response: u
       typeof outcome !== 'string' ||
       !allowedOutcomes.has(outcome as ProductResearchSourceAttempt['outcome']) ||
       typeof query !== 'string' ||
-      !actualQueries.has(compactExactTargetText(query)) ||
+      !actualQueries.has(compactModelText(query)) ||
       byTier.has(tier as ProductResearchSourceTier)
     ) continue;
+    const actualCall = actualCalls.find((call) => call.queries.some((actualQuery) =>
+      compactModelText(actualQuery) === compactModelText(query)
+    ));
+    if (!actualCall?.sourcesProvided) continue;
+    const descriptors = actualCall?.sources.map((source) => {
+      const matchingProduct = products.find((product) => {
+        const sourceText = [source.url, source.title].filter(Boolean).join(' ');
+        return textMatchesTargetName(sourceText, product.name);
+      }) ?? (products.length === 1 ? products[0] : null);
+      return classifyProductResearchSource({
+        sourceUrl: source.url,
+        sourceTitle: source.title,
+        product: matchingProduct
+      });
+    }).filter((descriptor): descriptor is ProductResearchSourceDescriptor => Boolean(descriptor)) ?? [];
+    const tierWasActuallyReached = descriptors.some((descriptor) => descriptor.tier === tier);
+    const explicitNoResults = descriptors.length === 0 && outcome === 'not_found';
+    if (!tierWasActuallyReached && !explicitNoResults) continue;
     byTier.set(tier as ProductResearchSourceTier, {
       tier: tier as ProductResearchSourceTier,
       outcome: outcome as ProductResearchSourceAttempt['outcome'],
-      query: query.trim()
+      query: query.trim(),
+      ...(descriptors.length ? { sources: descriptors } : {})
     });
   }
   return [...byTier.values()];
@@ -616,7 +695,7 @@ function sourceTierAttemptsComplete(attempts: ProductResearchSourceAttempt[] | u
   return requiredTiers.every((tier) => {
     const attempt = byTier.get(tier);
     return Boolean(attempt && (attempt.outcome === 'confirmed' || attempt.outcome === 'not_found'));
-  }) && webQueries.every(Boolean) && new Set(webQueries.map(compactExactTargetText)).size === webQueries.length;
+  }) && webQueries.every(Boolean) && new Set(webQueries.map(compactModelText)).size === webQueries.length;
 }
 
 export const unreadSourceEvidenceWarnings = new Set([
@@ -1032,6 +1111,12 @@ async function evidenceItemSourceText(input: {
   const sourceUrl = normalizedUrlForCompare(input.item.sourceUrl);
   const sourceUrlMatchesCatalog = Boolean(catalogProduct && sourceUrl &&
     normalizedUrlForCompare(catalogProduct.sourceUrl) === sourceUrl);
+  if (input.item.sourceType === 'web') {
+    if (!sourceUrlIsHttp(input.item.sourceUrl)) {
+      return { ok: false, text: '', warning: 'source_evidence_source_url_missing', sourceKind: 'web' as const };
+    }
+    return fetchSourceText(input.item.sourceUrl, input.cache, input.signal);
+  }
   if (input.item.sourceType === 'catalog' || (catalogProduct && sourceUrlMatchesCatalog && !input.item.sourceType)) {
     if (!catalogProduct) return { ok: false, text: '', warning: 'source_evidence_catalog_source_missing', sourceKind: 'catalog' as const };
     return { ok: true, text: productSourceText(catalogProduct), sourceKind: 'catalog' as const };
@@ -1039,7 +1124,6 @@ async function evidenceItemSourceText(input: {
   if (sourceUrlIsHttp(input.item.sourceUrl)) {
     return fetchSourceText(input.item.sourceUrl, input.cache, input.signal);
   }
-  if (catalogProduct) return { ok: true, text: productSourceText(catalogProduct), sourceKind: 'catalog' as const };
   return { ok: false, text: '', warning: 'source_evidence_source_url_missing' };
 }
 
@@ -1090,34 +1174,8 @@ function sourceEvidenceExactQuoteValidation(
   };
 }
 
-function textContainsExactTargetIdentity(value: unknown, targetProductNames: string[]) {
-  const compact = compactExactTargetText(value);
-  return targetProductNames.some((targetName) => {
-    const modelAliases = exactTargetAliases(targetName)
-      .map(compactExactTargetText)
-      .filter((alias) => alias.length >= 4 && tokenHasDigit(alias));
-    return modelAliases.length
-      ? modelAliases.some((alias) => compact.includes(alias))
-      : compact.includes(compactExactTargetText(targetName));
-  });
-}
-
-function textContainsOnlyExactTargetModels(value: unknown, targetProductNames: string[]) {
-  if (!textContainsExactTargetIdentity(value, targetProductNames)) return false;
-  const targetAliases = targetProductNames.flatMap((targetName) =>
-    exactTargetAliases(targetName)
-      .map(compactExactTargetText)
-      .filter((alias) => alias.length >= 4 && tokenHasDigit(alias) && tokenHasLetter(alias))
-  );
-  const valueModelTokens = exactTargetTokens(value)
-    .filter((token) => token.length >= 4 && tokenHasDigit(token) && tokenHasLetter(token));
-  return valueModelTokens.every((token) =>
-    targetAliases.some((alias) => alias.includes(token) || token.includes(alias))
-  );
-}
-
 function sourceUrlIsDedicatedToExactTarget(sourceUrl: string | undefined, targetProductNames: string[]) {
-  return Boolean(sourceUrl && textContainsOnlyExactTargetModels(sourceUrl, targetProductNames));
+  return Boolean(sourceUrl && textMatchesOnlyTargetNames(sourceUrl, targetProductNames));
 }
 
 function exactQuoteIsBoundToTarget(input: {
@@ -1127,29 +1185,23 @@ function exactQuoteIsBoundToTarget(input: {
 }) {
   if (!input.sourceKind) return false;
   if (!input.targetProductNames.length || input.sourceKind === 'catalog') return true;
-  return textContainsOnlyExactTargetModels(input.item.evidence, input.targetProductNames) ||
+  return textMatchesOnlyTargetNames(input.item.evidence, input.targetProductNames) ||
     sourceUrlIsDedicatedToExactTarget(input.item.sourceUrl, input.targetProductNames);
 }
 
 function sourceTextMatchesTarget(input: {
   sourceText: string;
+  sourceTitle?: string;
   item: SourceEvidenceItem;
   targetProductNames: string[];
 }) {
   if (!input.targetProductNames.length) return true;
-  const haystack = compactExactTargetText([
+  const haystack = [
     input.item.sourceUrl,
-    input.item.sourceTitle,
+    input.sourceTitle,
     input.sourceText
-  ].filter(Boolean).join(' '));
-  return input.targetProductNames.some((targetName) => {
-    const targetTokens = exactTargetAliases(targetName)
-      .map(compactExactTargetText)
-      .filter((token) => token.length >= 4 && tokenHasDigit(token));
-    return targetTokens.length
-      ? targetTokens.some((token) => haystack.includes(token))
-      : haystack.includes(compactExactTargetText(targetName));
-  });
+  ].filter(Boolean).join(' ');
+  return input.targetProductNames.some((targetName) => textMatchesTargetName(haystack, targetName));
 }
 
 function sourceEvidenceValidationJsonFormat() {
@@ -1301,7 +1353,12 @@ async function validateEvidenceItem(input: {
     return { valid: true, invalidKinds: [] as SourceBackedStartKind[], warnings };
   }
 
-  if (!sourceTextMatchesTarget({ sourceText: source.text, item: input.item, targetProductNames: input.targetProductNames })) {
+  if (!sourceTextMatchesTarget({
+    sourceText: source.text,
+    sourceTitle: source.sourceTitle,
+    item: input.item,
+    targetProductNames: input.targetProductNames
+  })) {
     const claimKinds = startClaimKindsFromText([
       input.item.attribute,
       input.item.value,
@@ -1507,7 +1564,25 @@ async function validateSourceBackedResult(input: {
       for (const kind of validation.invalidKinds) invalidKinds.add(kind);
       continue;
     }
-    facts.push(validation.fact);
+    if (validation.fact.sourceType === 'web') {
+      const product = input.products.find((candidate) =>
+        textMatchesTargetName(validation.fact.productName, candidate.name)
+      ) ?? (input.products.length === 1 ? input.products[0] : null);
+      const descriptor = classifyProductResearchSource({
+        sourceUrl: validation.fact.sourceUrl,
+        sourceTitle: validation.fact.sourceTitle,
+        product
+      });
+      facts.push({
+        ...validation.fact,
+        ...(descriptor ? {
+          sourceTier: descriptor.tier,
+          sourceAuthority: descriptor.authority
+        } : {})
+      });
+    } else {
+      facts.push(validation.fact);
+    }
   }
 
   const coverage: ResearchCoverageItem[] = [];
@@ -1546,7 +1621,21 @@ async function validateSourceBackedResult(input: {
       });
       continue;
     }
-    coverage.push(item);
+    const product = input.products.find((candidate) =>
+      textMatchesTargetName([item.sourceTitle, item.evidence].filter(Boolean).join(' '), candidate.name)
+    ) ?? (input.products.length === 1 ? input.products[0] : null);
+    const descriptor = classifyProductResearchSource({
+      sourceUrl: item.sourceUrl,
+      sourceTitle: item.sourceTitle,
+      product
+    });
+    coverage.push({
+      ...item,
+      ...(descriptor ? {
+        sourceTier: descriptor.tier,
+        sourceAuthority: descriptor.authority
+      } : {})
+    });
   }
 
   let adjusted: ProductComparisonResearchResult = {
@@ -1838,22 +1927,13 @@ function compactCatalogFactExtractionJsonText() {
 }
 
 function productMatchesExactTarget(product: Product, targetName: string) {
-  const targetTokens = exactTargetTokens(targetName).filter((token) =>
-    token.length >= 4 && tokenHasDigit(token) && tokenHasLetter(token)
-  );
-  if (targetTokens.length) {
-    const productTokens = new Set(exactTargetTokens([
-      product.name,
-      product.brand,
-      product.category,
-      product.sourceUrl,
-      JSON.stringify(product.specs ?? {})
-    ].filter(Boolean).join(' ')));
-    return targetTokens.every((token) => productTokens.has(token));
-  }
-  const productText = compactExactTargetText([product.name, product.sourceUrl].filter(Boolean).join(' '));
-  const targetText = compactExactTargetText(targetName);
-  return targetText.length >= 5 && productText.includes(targetText);
+  return textMatchesTargetName([
+    product.name,
+    product.brand,
+    product.externalId,
+    product.slug,
+    product.sourceUrl,
+  ].filter(Boolean).join(' '), targetName);
 }
 
 function exactCatalogProductsForTargets(products: Product[], targetProductNames: string[]) {
@@ -2302,7 +2382,7 @@ export async function researchProductComparisonFacts(input: {
           'Если web и каталог конфликтуют по важному параметру, укажи конфликт и выбери значение только при подтверждении логикой источников.',
           'Не пиши ответ покупателю. Верни только JSON.',
           ...exactTargetResearchInstructions,
-          'A web fact for a target model is valid only when sourceUrl, sourceTitle, or evidence names the same exact model identifier. Same brand, same family, or nearby model pages are not proof about the target model.',
+          'A web fact for a target model is valid only with a non-null absolute HTTP(S) sourceUrl and exact source/title/evidence that names the same complete model identity. Same brand, same family, a partial multi-part code, or a nearby modification is not proof about the target model.',
           'When catalog evidence and public exact-target evidence disagree on a decision-blocking attribute, adjudicate sources instead of defaulting to catalog or saying only that it must be checked later.',
           'For a source conflict, keep searching until at least two additional independent exact-target public sources confirm or refute the disputed value, or until deeper search is exhausted. Manufacturer/manual evidence is strongest, but independent exact-target corroboration should close the buyer need when sources agree.',
           'When a conflict is resolved by this corroboration, keep the conflict object for audit and add warning source_conflict_adjudicated.',
@@ -2317,7 +2397,7 @@ export async function researchProductComparisonFacts(input: {
           styleExamples,
           'Use nearby catalog products only as catalog alternatives/orientation in summaryForAnswer; never as the technical fact for an absent exact target.',
           'If exact target facts cannot be found externally, return no target fact and add warning exact_target_external_fact_not_found instead of returning nearby-model facts.',
-          'For every web fact and confirmed coverage item, fill sourceUrl/sourceTitle and put a short verbatim excerpt from that exact source in evidence. Keep value in the source wording and make sure the complete value appears inside evidence. Do not paraphrase evidence or prefix it with report wording. This exact quote is required for the fast local source verifier.',
+          'For every web fact and confirmed coverage item, fill sourceUrl with a non-null absolute HTTP(S) URL, fill sourceTitle, and put a short verbatim excerpt from that exact source in evidence. Keep value in the source wording and make sure the complete value appears inside evidence. Do not paraphrase evidence or prefix it with report wording. This exact quote is required for the fast local source verifier.',
           'If the exact quote is unavailable, return not_confirmed instead of inventing evidence.',
           'For every actual web search query, add sourceAttempts with tier=official_page, official_manual, or reliable_secondary, the exact query sent to web search, and outcome. Never report a query that was not actually executed.'
         ].join('\n')
@@ -2454,7 +2534,7 @@ export async function researchProductComparisonFacts(input: {
     });
   normalizedPrimaryResult.sourceAttempts = mergeSourceAttempts(
     catalogSourceAttempts,
-    validatedWebSourceAttempts(parsed, response)
+    validatedWebSourceAttempts(parsed, response, exactCatalogProducts)
   );
   const primaryResult = await validateSourceBackedResult({
     result: normalizedPrimaryResult,
@@ -2522,13 +2602,13 @@ export async function researchProductComparisonFacts(input: {
             'Use exactTargetSearchQueries only as starting hints. Generate additional source-language search wording from the buyer question, the missing-fact slot, and what the current sources failed to answer.',
             'Extract useful facts from the deeper sources, then decide which facts are needed in answerGuidance.directAnswer and which are only supporting context for summaryForAnswer.',
             'Use non-official pages as medium-confidence evidence only when they name the exact model/code and semantically answer the missing-fact slot.',
-            'Accept a fact only when sourceUrl, sourceTitle, or evidence names the exact target model/code.',
+            'Accept a web fact only with a non-null absolute HTTP(S) sourceUrl and exact source/title/evidence that names the complete target model/code.',
             'If catalogExtraction conflicts with exact-target public evidence, do not preserve catalog by default. Run source adjudication: seek at least two additional independent exact-target public sources and resolve toward the value supported by manufacturer/manual evidence plus independent corroboration, or by the strongest corroborated source set.',
             'Only leave a conflict unresolved when deeper exact-target sources remain split or insufficient after that corroboration attempt.',
             'When the conflict is resolved by corroboration, keep the conflict object for audit and add warning source_conflict_adjudicated.',
             'If a source only answers a broader fact, keep that broader fact but do not use it as proof of the narrower missing slot.',
             'Do not use nearby model pages as facts for the target. Return no fact if the exact target still cannot be verified.',
-            'For every web fact and confirmed coverage item, use a short verbatim source excerpt as evidence and keep value in the exact source wording inside that excerpt. If the quote is unavailable, return not_confirmed.',
+            'For every web fact and confirmed coverage item, include a non-null absolute HTTP(S) sourceUrl, use a short verbatim source excerpt as evidence, and keep value in the exact source wording inside that excerpt. If the URL or quote is unavailable, return not_confirmed.',
             'Return only JSON.'
           ].join('\n')
         },
@@ -2563,7 +2643,7 @@ export async function researchProductComparisonFacts(input: {
       });
     normalizedRetryResult.sourceAttempts = mergeSourceAttempts(
       combinedPrimaryResult.sourceAttempts,
-      validatedWebSourceAttempts(retry.parsed, retry.response)
+      validatedWebSourceAttempts(retry.parsed, retry.response, exactCatalogProducts)
     );
     const retryResult = await validateSourceBackedResult({
       result: normalizedRetryResult,
@@ -2674,7 +2754,7 @@ export async function researchProductComparisonFacts(input: {
             'Execute three distinct web search queries: first for an official manufacturer product/support page, second for an official manual/specification PDF or HTML document, and third for another reliable technical or distributor source.',
             'Each actual query must be reported in sourceAttempts with its matching tier: official_page, official_manual, reliable_secondary. Never report an unexecuted query and do not reuse one query for multiple tiers.',
             'Read the resulting sources and return only source-backed facts. If a source cannot be read, report outcome=unreadable and do not claim exhaustion.',
-            'For every confirmed fact, include sourceUrl, sourceTitle, and a short exact excerpt containing the value. If no tier confirms the fact after all three searches, return not_found/not_confirmed coverage and no invented value.',
+            'For every confirmed web fact, include a non-null absolute HTTP(S) sourceUrl, sourceTitle, and a short exact excerpt containing the value. If no tier confirms the fact after all three searches, return not_found/not_confirmed coverage and no invented value.',
             'Return only JSON.'
           ].join('\n')
         },
@@ -2707,7 +2787,7 @@ export async function researchProductComparisonFacts(input: {
     });
     normalizedGenericRetry.sourceAttempts = mergeSourceAttempts(
       combinedPrimaryResult.sourceAttempts,
-      validatedWebSourceAttempts(genericRetry.parsed, genericRetry.response)
+      validatedWebSourceAttempts(genericRetry.parsed, genericRetry.response, exactCatalogProducts)
     );
     const validatedGenericRetry = await validateSourceBackedResult({
       result: normalizedGenericRetry,

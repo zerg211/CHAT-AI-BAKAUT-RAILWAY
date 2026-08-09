@@ -249,7 +249,10 @@ describe('PDF text extraction child-process isolation', () => {
     ));
 
     await expect(extractPdfText(validPdf, {
-      timeoutMs: 5_000,
+      // This integration check includes cold TypeScript loader and child-process
+      // startup while the full Vitest suite is CPU-bound. Keep the production
+      // default independently covered by the deterministic timeout tests above.
+      timeoutMs: 8_000,
       childFactory: productionLikePdfChildFactory
     })).resolves.toEqual({
       text: expect.stringContaining('Hello BAKAUT PDF'),
@@ -257,5 +260,5 @@ describe('PDF text extraction child-process isolation', () => {
       parsedPages: 1,
       truncated: false
     });
-  });
+  }, 12_000);
 });

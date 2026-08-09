@@ -7,6 +7,7 @@ import type { CatalogPageInput, CatalogProductInput } from '../shared/types.js';
 import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
 import { createCatalogSyncHeartbeat, evaluateCatalogInventoryCoverage } from './catalogFreshness.js';
 import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
+import { hasPageSpecificProductEvidence } from './productPageIdentity.js';
 
 type SitemapEntry = {
   loc: string;
@@ -435,7 +436,7 @@ function isNotFoundPage($: cheerio.CheerioAPI, status: number) {
   return status === 404 || h1.includes('страница не найдена') || h1.split(' ').includes('404');
 }
 
-function extractProduct(response: FetchResult, baseUrl: string, sitemapLastmod?: string): CatalogProductInput | null {
+export function extractProduct(response: FetchResult, baseUrl: string, sitemapLastmod?: string): CatalogProductInput | null {
   const $ = cheerio.load(response.html);
   if (isNotFoundPage($, response.status)) return null;
 
@@ -444,7 +445,7 @@ function extractProduct(response: FetchResult, baseUrl: string, sitemapLastmod?:
     response.html.includes('schema.org/Product') ||
     $('[itemtype*="schema.org/Product"]').length > 0 ||
     $('.card__current-price, .card__title, .props-list, [itemprop="offers"]').length > 0;
-  if (!hasProductSignals) return null;
+  if (!hasProductSignals || !hasPageSpecificProductEvidence(response.html, response.url)) return null;
 
   const name = cleanText($('h1').first().text() || $('.card__title').first().text() || jsonProduct?.name);
   if (!name || name.length < 4) return null;

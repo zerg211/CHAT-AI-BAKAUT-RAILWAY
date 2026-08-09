@@ -41,15 +41,21 @@ describe('catalog crawler no-regex parsing', () => {
       }
       if (urlText.endsWith('/catalog/generators/signal-product/')) {
         return responseWithHtml(`
-          <html itemscope itemtype="https://schema.org/Product">
+          <html itemscope itemtype="https://schema.org/Product" itemid="https://example.test/catalog/generators/signal-product/">
+            <head><meta property="og:type" content="product"></head>
             <h1>Signal Product</h1>
+            <div class="card__main-slider">Signal Product</div>
+            <button class="js_favorite" data-id="signal-product">В избранное</button>
             <div>КУПИТЬ</div>
           </html>
         `);
       }
       return responseWithHtml(`
-        <html itemscope itemtype="https://schema.org/Product">
+        <html itemscope itemtype="https://schema.org/Product" itemid="https://example.test/catalog/generators/tss-sgg-10000eha/">
+          <head><meta property="og:type" content="product"></head>
           <h1>Generator TSS SGG 10000EHA</h1>
+          <div class="card__main-slider">Generator TSS SGG 10000EHA</div>
+          <button class="js_favorite" data-id="tss-sgg-10000eha">В избранное</button>
           <div class="params">
             <li>Power — 10 kW</li>
             <li>Start: electric</li>
@@ -85,8 +91,11 @@ describe('catalog crawler no-regex parsing', () => {
     vi.mocked(fetch).mockImplementation(async () => {
       currentTime = 20_000;
       return responseWithHtml(`
-        <html itemscope itemtype="https://schema.org/Product">
+        <html itemscope itemtype="https://schema.org/Product" itemid="https://example.test/catalog/heartbeat-product/">
+          <head><meta property="og:type" content="product"></head>
           <h1>Heartbeat crawler product</h1>
+          <div class="card__main-slider">Heartbeat crawler product</div>
+          <button class="js_favorite" data-id="heartbeat-product">В избранное</button>
         </html>
       `);
     });
@@ -127,8 +136,11 @@ describe('catalog crawler no-regex parsing', () => {
     vi.mocked(fetch).mockImplementation(async () => {
       currentTime = 20_000;
       return responseWithHtml(`
-        <html itemscope itemtype="https://schema.org/Product">
+        <html itemscope itemtype="https://schema.org/Product" itemid="https://example.test/catalog/inventory-import-product/">
+          <head><meta property="og:type" content="product"></head>
           <h1>Inventory import product</h1>
+          <div class="card__main-slider">Inventory import product</div>
+          <button class="js_favorite" data-id="inventory-import-product">В избранное</button>
           <div>КУПИТЬ</div>
         </html>
       `);
@@ -146,7 +158,7 @@ describe('catalog crawler no-regex parsing', () => {
     try {
       result = await inventoryCatalogFromSite({
         baseUrl: 'https://example.test',
-        startPath: '/catalog/',
+        startPath: '/catalog/inventory-import-product/',
         maxPages: 1,
         importMissing: true
       }, repository as never);
@@ -157,7 +169,7 @@ describe('catalog crawler no-regex parsing', () => {
     expect(result?.importedMissing).toBe(1);
     expect(repository.startCatalogSource).toHaveBeenCalledWith({
       type: 'site_crawl',
-      location: 'https://example.test/catalog/',
+      location: 'https://example.test/catalog/inventory-import-product/',
       syncMode: 'partial'
     });
     expect(repository.heartbeatCatalogSource).toHaveBeenCalledOnce();

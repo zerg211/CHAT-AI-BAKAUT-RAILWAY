@@ -29,7 +29,10 @@ vi.mock('node:dns/promises', () => ({
   lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }])
 }));
 
-const { researchProductComparisonFacts } = await import('../src/ai/productComparisonResearch.js');
+const {
+  classifyProductResearchSource,
+  researchProductComparisonFacts
+} = await import('../src/ai/productComparisonResearch.js');
 
 const queuedResearchResponses: Array<{ parsed: Record<string, unknown>; response?: unknown }> = [];
 
@@ -153,6 +156,35 @@ function queueResearchResponse(response: { parsed: Record<string, unknown>; resp
 }
 
 describe('product comparison research', () => {
+  it('derives manufacturer/manual authority from the actual host and document URL', () => {
+    expect(classifyProductResearchSource({
+      sourceUrl: 'https://www.firman.biz/manuals/RD3910E-manual.pdf',
+      sourceTitle: 'FIRMAN RD3910E instruction manual',
+      product: product()
+    })).toMatchObject({
+      host: 'firman.biz',
+      documentKind: 'manual_or_specification',
+      tier: 'official_manual',
+      authority: 'manufacturer'
+    });
+    expect(classifyProductResearchSource({
+      sourceUrl: 'https://marketplace.example/firman-rd3910e',
+      sourceTitle: 'Marketplace listing',
+      product: product()
+    })).toMatchObject({
+      tier: 'reliable_secondary',
+      authority: 'secondary'
+    });
+    expect(classifyProductResearchSource({
+      sourceUrl: 'https://firman-reviews.example/manuals/RD3910E-manual.pdf',
+      sourceTitle: 'Unofficial FIRMAN review manual mirror',
+      product: product()
+    })).toMatchObject({
+      tier: 'reliable_secondary',
+      authority: 'secondary'
+    });
+  });
+
   beforeEach(() => {
     queuedResearchResponses.length = 0;
     createStructuredJsonResponse.mockReset();
@@ -226,7 +258,7 @@ describe('product comparison research', () => {
         output: Object.values(sourceTierQueries).map((query) => ({
           type: 'web_search_call',
           status: 'completed',
-          action: { query }
+          action: { query, sources: [] }
         }))
       }
     });
@@ -251,6 +283,147 @@ describe('product comparison research', () => {
       'reliable_secondary'
     ]);
     expect(actual.warnings).not.toContain('not_enough_products_for_comparison');
+  });
+
+  it('keeps source tiers untrusted when a completed search omits requested source provenance', async () => {
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'generator THD recommendation for sensitive electronics',
+            status: 'not_found',
+            value: '',
+            evidence: 'no sufficiently specific source found',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        }
+      })
+    });
+    const sourceTierQueries = {
+      official_page: 'generator THD official manufacturer guidance',
+      official_manual: 'generator THD official manual PDF',
+      reliable_secondary: 'generator THD reliable technical distributor guidance'
+    };
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        sourceAttempts: Object.entries(sourceTierQueries).map(([tier, query]) => ({
+          tier,
+          query,
+          outcome: 'not_found'
+        })),
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'generator THD recommendation for sensitive electronics',
+            status: 'not_found',
+            value: '',
+            evidence: 'the requested fact was not confirmed after all source tiers',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        }
+      }),
+      response: {
+        output: Object.values(sourceTierQueries).map((query) => ({
+          type: 'web_search_call',
+          status: 'completed',
+          action: { query }
+        }))
+      }
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой THD допустим для питания чувствительной электроники от генератора?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['generator THD recommendation for sensitive electronics'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).toEqual(['catalog']);
+    expect(actual.warnings).toContain('source_tier_attempts_incomplete_after_retry');
+  });
+
+  it('does not accept self-reported official tiers when completed searches only returned marketplace sources', async () => {
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'service interval',
+            status: 'not_found',
+            value: '',
+            evidence: 'not confirmed',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        }
+      })
+    });
+    const sourceTierQueries = {
+      official_page: 'FIRMAN RD3910E official service interval',
+      official_manual: 'FIRMAN RD3910E official manual service interval PDF',
+      reliable_secondary: 'FIRMAN RD3910E reliable service interval'
+    };
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        sourceAttempts: Object.entries(sourceTierQueries).map(([tier, query]) => ({
+          tier,
+          query,
+          outcome: 'not_found'
+        })),
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'service interval',
+            status: 'not_found',
+            value: '',
+            evidence: 'not confirmed',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        }
+      }),
+      response: {
+        output: Object.entries(sourceTierQueries).map(([tier, query]) => ({
+          type: 'web_search_call',
+          status: 'completed',
+          action: {
+            query,
+            sources: [{
+              type: 'url',
+              url: `https://marketplace.example/${tier}/firman-rd3910e`,
+              title: 'Marketplace listing'
+            }]
+          }
+        }))
+      }
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Как проверять межсервисный интервал генератора?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['service interval'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).not.toContain('official_page');
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).not.toContain('official_manual');
   });
 
   it('keeps sources unexhausted when decisive HTML evidence is beyond the safe text limit', async () => {
@@ -441,7 +614,7 @@ describe('product comparison research', () => {
         output: [{
           type: 'web_search_call',
           status: 'completed',
-          action: { query: 'official generator service interval' }
+          action: { query: 'official generator service interval', sources: [] }
         }]
       }
     });
@@ -536,7 +709,7 @@ describe('product comparison research', () => {
       output: sourceAttempts.map((attempt) => ({
         type: 'web_search_call',
         status: 'completed',
-        action: { query: attempt.query }
+        action: { query: attempt.query, sources: [] }
       }))
     };
     const unresolved = result({
@@ -1608,6 +1781,95 @@ describe('product comparison research', () => {
     expect(actual.warnings).toContain('source_evidence_validation_failed:semantic');
   });
 
+  it('rejects a neighboring modification even when the LLM labels the fact with the target product name', async () => {
+    const neighborSource = 'TSS SGG 5000 EHA rated power: 6.0 kW.';
+    fetchMock.mockResolvedValue(sourceResponse(neighborSource));
+    const mislabeledNeighborFact = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'TSS SGG 5000 EH',
+        attribute: 'rated power',
+        value: '6.0 kW',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: neighborSource,
+        sourceUrl: 'https://example.test/tss-sgg-5000-eha',
+        sourceTitle: 'TSS SGG 5000 EHA specification'
+      }],
+      answerGuidance: {
+        directAnswer: 'TSS SGG 5000 EH has 6.0 kW rated power.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'rated power',
+          status: 'confirmed',
+          value: '6.0 kW',
+          evidence: neighborSource,
+          sourceUrl: 'https://example.test/tss-sgg-5000-eha',
+          sourceTitle: 'TSS SGG 5000 EHA specification'
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: mislabeledNeighborFact });
+    queueResearchResponse({ parsed: mislabeledNeighborFact });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the rated power of TSS SGG 5000 EH?',
+      products: [],
+      targetProductNames: ['TSS SGG 5000 EH'],
+      comparisonAttributes: ['rated power']
+    });
+
+    expect(actual.facts).toEqual([]);
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'rated power', status: 'not_confirmed' })
+    ]));
+    expect(actual.warnings).toContain('source_evidence_exact_target_not_found');
+  });
+
+  it('does not verify a web fact without an HTTP(S) source by falling back to the catalog card', async () => {
+    const titleOnlyWebFact = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD3910E',
+        attribute: 'start control',
+        value: 'поворотом ключа',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'Запуск двигателя осуществляется поворотом ключа электростартера.',
+        sourceUrl: null,
+        sourceTitle: 'FIRMAN RD3910E'
+      }],
+      answerGuidance: {
+        directAnswer: 'Запускается поворотом ключа.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'start control',
+          status: 'confirmed',
+          value: 'поворотом ключа',
+          evidence: 'Запуск двигателя осуществляется поворотом ключа электростартера.',
+          sourceUrl: null,
+          sourceTitle: 'FIRMAN RD3910E'
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: titleOnlyWebFact });
+    queueResearchResponse({ parsed: titleOnlyWebFact });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'FIRMAN RD3910E starts with a key or a button?',
+      products: [product()],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['start control'],
+      deadlineAtMs: Date.now() + 60_000
+    });
+
+    expect(actual.facts).toEqual([]);
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'start control', status: 'not_confirmed' })
+    ]));
+    expect(actual.warnings).toContain('source_evidence_source_url_missing');
+  });
+
   it('rejects non-PDF binary evidence without sending it through the HTML parser', async () => {
     fetchMock.mockImplementation(async () => sourceResponse('binary payload', 'application/octet-stream'));
     const binaryResult = (sourceUrl: string) => result({
@@ -2067,7 +2329,7 @@ describe('product comparison research', () => {
         output: attempts.map((attempt) => ({
           type: 'web_search_call',
           status: 'completed',
-          action: { query: attempt.query }
+          action: { query: attempt.query, sources: [] }
         }))
       }
     });

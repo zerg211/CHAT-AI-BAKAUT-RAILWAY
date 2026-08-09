@@ -137,6 +137,7 @@ function webResult(input: {
   attribute: string;
   value: string;
   confidence?: 'high' | 'medium';
+  sourceUrl?: string;
   conflicts?: Array<Record<string, unknown>>;
 }): ToolResult {
   return {
@@ -155,7 +156,7 @@ function webResult(input: {
         sourceType: 'web',
         confidence: input.confidence ?? 'high',
         evidence: `${input.product.name}: ${input.attribute}: ${input.value}`,
-        sourceUrl: `https://manufacturer.example/${input.product.id}`,
+        sourceUrl: input.sourceUrl ?? `https://manufacturer.example/${input.product.id}`,
         sourceTitle: input.product.name
       }],
       conflicts: input.conflicts ?? [],
@@ -171,6 +172,49 @@ function webResult(input: {
     },
     warnings: []
   };
+}
+
+function catalogResult(products: Product[]): ToolResult {
+  return {
+    requestId: 'catalog-search',
+    tool: 'catalog.search',
+    status: 'ok',
+    payload: { products },
+    warnings: []
+  };
+}
+
+function nominalPowerIntent(selectionGoal: 'preliminary_fit' | 'final_fit' = 'preliminary_fit') {
+  const requirement: SelectionRequirement = {
+    id: 'nominal-power-minimum',
+    kind: 'nominal_power_min_kw',
+    value: 6,
+    unit: 'kW',
+    relation: 'must_have',
+    role: 'hard_constraint',
+    strictness: 'strict',
+    evidence: 'the generator must provide at least 6 kW nominal active power',
+    verification: { mode: 'product_attribute' }
+  };
+  const request: ToolRequest = {
+    id: 'nominal-power-web',
+    tool: 'web.researchProductFacts',
+    args: {
+      query: 'verify exact generator nominal active power',
+      productNames: [],
+      comparisonAttributes: ['nominal active power'],
+      comparisonAttributeBindings: [{
+        attribute: 'nominal active power',
+        requirementId: requirement.id
+      }]
+    },
+    rationale: 'verify nominal active power when the catalog does not prove it',
+    required: true,
+    coversRequirementIds: [requirement.id]
+  };
+  const intent = intentFor({ requirement, request });
+  intent.selectionPolicy!.selectionGoal = selectionGoal;
+  return { intent, requirement, request };
 }
 
 function select(input: {
@@ -191,6 +235,160 @@ function select(input: {
 }
 
 describe('generic requirement proofs', () => {
+  it('keeps an unknown preliminary candidate for required research and excludes only a proven power violation', () => {
+    const missing = generator('power-missing', 'Генератор ИСТОК АД6-О230-ВМ131Э', {});
+    const violated = generator('power-violated', 'Генератор ИСТОК АД5-О230-ВМ161Э', {
+      'Nominal power': '5 kW'
+    });
+    const { intent, requirement } = nominalPowerIntent();
+
+    const result = select({
+      products: [missing, violated],
+      intent,
+      toolResults: [catalogResult([missing, violated])]
+    });
+
+    expect(result.selectedProductIds).toEqual([missing.id]);
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: missing.id,
+      status: 'unverified',
+      eligibilityStatus: 'unknown'
+    }));
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: violated.id,
+      status: 'violated',
+      eligibilityStatus: 'violated'
+    }));
+    expect(result.warnings).toContain('product_cards_preliminary:needs_evidence:1');
+  });
+
+  it('never treats maximum, peak, engine, or apparent power as nominal active-power proof', () => {
+    const products = [
+      generator('maximum-only', 'Генератор ИСТОК АД7-О230-МАКС', { 'Maximum power': '7 kW' }),
+      generator('peak-only', 'Генератор ИСТОК АД7-О230-ПИК', { 'Peak output power': '7 kW' }),
+      generator('engine-only', 'Генератор ИСТОК АД7-О230-ДВС', { 'Nominal engine power': '7 kW' }),
+      generator('apparent-only', 'Генератор ИСТОК АД7-О230-КВА', { 'Nominal apparent power': '7 kVA' }),
+      generator('nominal-active', 'Генератор ИСТОК АД65-О230-НОМ', { 'Nominal active power': '6.5 kW' })
+    ];
+    const { intent, requirement } = nominalPowerIntent();
+
+    const preliminary = select({
+      products,
+      intent,
+      toolResults: [catalogResult(products)]
+    });
+
+    expect(preliminary.selectedProductIds).toEqual(products.map((product) => product.id));
+    for (const product of products.slice(0, 4)) {
+      expect(preliminary.requirementProofs).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id,
+        productId: product.id,
+        status: 'unverified',
+        eligibilityStatus: 'unknown'
+      }));
+    }
+    expect(preliminary.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: products[4]!.id,
+      status: 'satisfied',
+      eligibilityStatus: 'satisfied'
+    }));
+
+    intent.selectionPolicy!.selectionGoal = 'final_fit';
+    const final = select({
+      products,
+      intent,
+      toolResults: [catalogResult(products)]
+    });
+    expect(final.selectedProductIds).toEqual([products[4]!.id]);
+  });
+
+  it('uses exact authoritative power proof, rejects its violation, and keeps conflicting proof unknown', () => {
+    const product = generator('web-power', 'Генератор ИСТОК АД6-О230-ВМ131Э с АВР', {});
+    const satisfiedContract = nominalPowerIntent('final_fit');
+    const satisfied = select({
+      products: [product],
+      intent: satisfiedContract.intent,
+      toolResults: [
+        catalogResult([product]),
+        webResult({
+          requestId: satisfiedContract.request.id,
+          product,
+          attribute: 'Nominal active power',
+          value: '6.4 kW'
+        })
+      ]
+    });
+    expect(satisfied.selectedProductIds).toEqual([product.id]);
+    expect(satisfied.requirementProofs).toContainEqual(expect.objectContaining({
+      productId: product.id,
+      status: 'satisfied',
+      eligibilityStatus: 'satisfied',
+      sourceAuthority: 'authoritative_web'
+    }));
+
+    const violatedContract = nominalPowerIntent();
+    const violated = select({
+      products: [product],
+      intent: violatedContract.intent,
+      toolResults: [
+        catalogResult([product]),
+        webResult({
+          requestId: violatedContract.request.id,
+          product,
+          attribute: 'Nominal active power',
+          value: '5.5 kW'
+        })
+      ]
+    });
+    expect(violated.selectedProductIds).toEqual([]);
+    expect(violated.requirementProofs).toContainEqual(expect.objectContaining({
+      productId: product.id,
+      status: 'violated',
+      eligibilityStatus: 'violated',
+      sourceAuthority: 'authoritative_web'
+    }));
+
+    const conflictedContract = nominalPowerIntent();
+    const conflictedWeb: ToolResult = {
+      requestId: conflictedContract.request.id,
+      tool: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        facts: ['6.4 kW', '5.5 kW'].map((value) => ({
+          productName: product.name,
+          attribute: 'Nominal active power',
+          value,
+          sourceType: 'web',
+          confidence: 'high'
+        }))
+      },
+      warnings: []
+    };
+    const conflicted = select({
+      products: [product],
+      intent: conflictedContract.intent,
+      toolResults: [catalogResult([product]), conflictedWeb]
+    });
+    expect(conflicted.selectedProductIds).toEqual([product.id]);
+    expect(conflicted.requirementProofs).toContainEqual(expect.objectContaining({
+      productId: product.id,
+      status: 'conflicted',
+      eligibilityStatus: 'unknown',
+      sourceAuthority: 'corroborated_web'
+    }));
+
+    conflictedContract.intent.selectionPolicy!.selectionGoal = 'final_fit';
+    const finalConflict = select({
+      products: [product],
+      intent: conflictedContract.intent,
+      toolResults: [catalogResult([product]), conflictedWeb]
+    });
+    expect(finalConflict.selectedProductIds).toEqual([]);
+  });
+
   it('binds an authoritative web fact to an open-ended numeric hard requirement', () => {
     const product = generator('quiet-58', 'Генератор ИСТОК АД6-О230-ВМ131Э', {
       'Уровень шума': 'нет данных'
@@ -336,6 +534,67 @@ describe('generic requirement proofs', () => {
       status: 'violated'
     }));
     expect(result.warnings).toContain('product_cards_filtered_by_requirement_proof:1');
+  });
+
+  it('does not let a high-confidence marketplace fact override conflicting catalog evidence', () => {
+    const product = generator('secondary-noise', 'Generator TEST G7000', {
+      'Noise level': '68 dB'
+    });
+    const requirement: SelectionRequirement = {
+      id: 'noise-limit-secondary',
+      kind: 'noise_max_db',
+      value: 60,
+      unit: 'dB',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'the generator must be no louder than 60 dB',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'noise-secondary-web',
+        tool: 'web.researchProductFacts',
+        verifier: 'technical_source_review',
+        bindAs: 'noise_level_db'
+      }
+    };
+    const request: ToolRequest = {
+      id: 'noise-secondary-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'Generator TEST G7000 noise level',
+        productNames: [product.name],
+        comparisonAttributes: ['noise level dB']
+      },
+      rationale: 'resolve catalog and web noise evidence',
+      required: true,
+      coversRequirementIds: [requirement.id]
+    };
+
+    const result = select({
+      products: [product],
+      intent: intentFor({ requirement, request }),
+      toolResults: [webResult({
+        requestId: request.id,
+        product,
+        attribute: 'Noise level',
+        value: '58 dB',
+        confidence: 'high',
+        sourceUrl: 'https://marketplace.example/generator-test-g7000',
+        conflicts: [{
+          productName: product.name,
+          attribute: 'Noise level',
+          catalogValue: '68 dB',
+          webValues: ['58 dB'],
+          resolution: 'sources disagree'
+        }]
+      })]
+    });
+
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: product.id,
+      status: 'conflicted',
+      sourceAuthority: 'corroborated_web'
+    }));
   });
 
   it('uses an authoritative phase proof over a conflicting catalog field and keeps the caveat', () => {

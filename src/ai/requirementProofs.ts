@@ -2,8 +2,10 @@ import type { Product } from '../shared/types.js';
 import type { AgentIntentContract, SelectionRequirement, ToolResult } from './agentManagerContracts.js';
 import { modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
 import { generatorPhaseProfile } from './productClassifier.js';
+import { classifyProductResearchSource } from './productComparisonResearch.js';
 
 export type RequirementProofStatus = 'satisfied' | 'violated' | 'conflicted' | 'unverified';
+export type RequirementEligibilityStatus = 'satisfied' | 'violated' | 'unknown';
 export type RequirementProofSourceAuthority = 'authoritative_web' | 'corroborated_web' | 'catalog' | 'none';
 export type RequirementProofNormalizedValue = string | number | boolean | null;
 
@@ -11,6 +13,7 @@ export interface RequirementProof {
   requirementId: string;
   productId: string;
   status: RequirementProofStatus;
+  eligibilityStatus: RequirementEligibilityStatus;
   attribute: string;
   normalizedValue: RequirementProofNormalizedValue;
   normalizedUnit: string | null;
@@ -80,6 +83,7 @@ const attributeStopWords = new Set([
 const unitAliases = [
   { unit: 'db', aliases: ['db', 'дб', 'децибел'] },
   { unit: 'kw', aliases: ['kw', 'квт', 'kilowatt', 'киловатт'] },
+  { unit: 'kva', aliases: ['kva', 'ква', 'kilovolt ampere', 'киловольт ампер'] },
   { unit: 'w', aliases: ['w', 'вт', 'watt', 'ватт'] },
   { unit: 'kg', aliases: ['kg', 'кг', 'kilogram', 'килограмм'] },
   { unit: 'l', aliases: ['l', 'л', 'liter', 'litre', 'литр'] },
@@ -154,7 +158,10 @@ function attributeMatches(left: unknown, right: unknown) {
   const leftAttribute = canonicalAttribute(left);
   const rightAttribute = canonicalAttribute(right);
   if (!leftAttribute || !rightAttribute) return false;
-  if (leftAttribute === rightAttribute) return true;
+  if (leftAttribute === rightAttribute) {
+    return leftAttribute !== 'power' ||
+      powerQualifierForBindingAttribute(left) === powerQualifierForRequirementKind(right);
+  }
   if (
     (leftAttribute === 'phase' && rightAttribute === 'voltage') ||
     (leftAttribute === 'voltage' && rightAttribute === 'phase')
@@ -195,7 +202,9 @@ const strictBindingWordsByAttribute: Record<string, string[]> = {
   ],
   power: [
     'power', 'мощность', 'output', 'выходной', 'nominal', 'rated', 'continuous', 'номинальный',
-    'maximum', 'max', 'максимальный', 'макс', 'peak', 'surge', 'пиковый', 'предельный'
+    'maximum', 'max', 'максимальный', 'макс', 'peak', 'surge', 'пиковый', 'предельный',
+    'engine', 'motor', 'двигатель', 'мотор', 'active', 'активный', 'активная',
+    'apparent', 'полный', 'полная', 'kva', 'ква'
   ],
   price: ['price', 'cost', 'цена', 'стоимость', 'budget', 'бюджет']
 };
@@ -221,8 +230,12 @@ function strictBindingHasOnlyExpectedWords(value: unknown, attribute: string) {
   );
 }
 
-function powerQualifierForBindingAttribute(value: unknown): 'nominal' | 'maximum' | undefined {
+type PowerQualifier = 'nominal' | 'maximum' | 'engine' | 'apparent';
+
+function powerQualifierForBindingAttribute(value: unknown): PowerQualifier | undefined {
   const words = new Set(normalizedWords(value));
+  if (hasAnyWords(words, ['apparent', 'полная', 'полный', 'kva', 'ква'])) return 'apparent';
+  if (hasAnyWords(words, ['engine', 'motor', 'двигатель', 'мотор'])) return 'engine';
   if (hasAnyWords(words, ['nominal', 'rated', 'continuous', 'номинальный'])) return 'nominal';
   if (hasAnyWords(words, ['maximum', 'max', 'максимальный', 'макс', 'peak', 'surge', 'пиковый', 'предельный'])) {
     return 'maximum';
@@ -230,9 +243,11 @@ function powerQualifierForBindingAttribute(value: unknown): 'nominal' | 'maximum
   return undefined;
 }
 
-function powerQualifierForRequirementKind(value: unknown): 'nominal' | 'maximum' | undefined {
+function powerQualifierForRequirementKind(value: unknown): PowerQualifier | undefined {
   const words = normalizedWords(value);
   const wordSet = new Set(words);
+  if (hasAnyWords(wordSet, ['apparent', 'полная', 'полный', 'kva', 'ква'])) return 'apparent';
+  if (hasAnyWords(wordSet, ['engine', 'motor', 'двигатель', 'мотор'])) return 'engine';
   if (hasAnyWords(wordSet, ['nominal', 'rated', 'continuous', 'номинальный'])) return 'nominal';
   const firstWord = words[0];
   if (firstWord && hasAnyWords(new Set([firstWord]), [
@@ -523,8 +538,15 @@ function webCandidates(input: {
     if (fact.sourceType === 'conflict' || (fact.confidence !== 'high' && fact.confidence !== 'medium')) continue;
     const product = productForFact(input.products, fact);
     if (!product) continue;
-    const authoritative = fact.sourceType === 'web' && fact.confidence === 'high';
     const web = fact.sourceType === 'web';
+    const sourceDescriptor = web
+      ? classifyProductResearchSource({
+          sourceUrl: fact.sourceUrl,
+          sourceTitle: fact.sourceTitle,
+          product
+        })
+      : null;
+    const authoritative = web && fact.confidence === 'high' && sourceDescriptor?.authority === 'manufacturer';
     candidates.push({
       productId: product.id,
       attribute: String(fact.attribute ?? attribute),
@@ -545,14 +567,20 @@ function webCandidates(input: {
     if (item.status !== 'confirmed' || !attributeMatches(item.attribute, attribute)) continue;
     const product = productForFact(input.products, item);
     if (!product) continue;
+    const sourceDescriptor = classifyProductResearchSource({
+      sourceUrl: item.sourceUrl,
+      sourceTitle: item.sourceTitle,
+      product
+    });
+    const authoritative = sourceDescriptor?.authority === 'manufacturer';
     candidates.push({
       productId: product.id,
       attribute: String(item.attribute ?? attribute),
       rawValue: item.value,
       rawUnit: item.attribute,
       resultId: input.result.requestId,
-      authority: 2,
-      sourceAuthority: 'corroborated_web'
+      authority: authoritative ? 3 : 2,
+      sourceAuthority: authoritative ? 'authoritative_web' : 'corroborated_web'
     });
   }
 
@@ -598,6 +626,7 @@ function proofForProduct(input: {
       requirementId: input.requirement.id,
       productId: input.product.id,
       status: 'unverified',
+      eligibilityStatus: 'unknown',
       attribute,
       normalizedValue: null,
       normalizedUnit: null,
@@ -627,6 +656,7 @@ function proofForProduct(input: {
       requirementId: input.requirement.id,
       productId: input.product.id,
       status: 'conflicted',
+      eligibilityStatus: 'unknown',
       attribute,
       normalizedValue: null,
       normalizedUnit: null,
@@ -647,6 +677,7 @@ function proofForProduct(input: {
       requirementId: input.requirement.id,
       productId: input.product.id,
       status: 'conflicted',
+      eligibilityStatus: 'unknown',
       attribute,
       normalizedValue: selected.comparable.value,
       normalizedUnit: selected.comparable.unit,
@@ -662,6 +693,9 @@ function proofForProduct(input: {
     requirementId: input.requirement.id,
     productId: input.product.id,
     status: comparison.status,
+    eligibilityStatus: comparison.status === 'satisfied' || comparison.status === 'violated'
+      ? comparison.status
+      : 'unknown',
     attribute,
     normalizedValue: selected.comparable.value,
     normalizedUnit: selected.comparable.unit,
@@ -714,6 +748,44 @@ export function combinedRequirementProofStatus(proofs: RequirementProof[]): Requ
 
 export function authoritativeRequirementProofStatus(proofs: RequirementProof[]): RequirementProofStatus | undefined {
   return combinedRequirementProofStatus(proofs.filter((proof) => proof.sourceAuthority === 'authoritative_web'));
+}
+
+export function combinedRequirementEligibilityStatus(
+  proofs: RequirementProof[]
+): RequirementEligibilityStatus | undefined {
+  if (!proofs.length) return undefined;
+  if (proofs.some((proof) => proof.eligibilityStatus === 'violated')) return 'violated';
+  if (proofs.every((proof) => proof.eligibilityStatus === 'satisfied')) return 'satisfied';
+  return 'unknown';
+}
+
+export function authoritativeRequirementEligibilityStatus(
+  proofs: RequirementProof[]
+): RequirementEligibilityStatus | undefined {
+  return combinedRequirementEligibilityStatus(
+    proofs.filter((proof) => proof.sourceAuthority === 'authoritative_web')
+  );
+}
+
+export function resolvedRequirementEligibilityStatus(
+  proofs: RequirementProof[]
+): RequirementEligibilityStatus | undefined {
+  if (!proofs.length) return undefined;
+  const byRequirementId = new Map<string, RequirementProof[]>();
+  for (const proof of proofs) {
+    byRequirementId.set(proof.requirementId, [
+      ...(byRequirementId.get(proof.requirementId) ?? []),
+      proof
+    ]);
+  }
+  const statuses = [...byRequirementId.values()].map((requirementProofs) =>
+    authoritativeRequirementEligibilityStatus(requirementProofs) ??
+    combinedRequirementEligibilityStatus(requirementProofs) ??
+    'unknown'
+  );
+  if (statuses.some((status) => status === 'violated')) return 'violated';
+  if (statuses.every((status) => status === 'satisfied')) return 'satisfied';
+  return 'unknown';
 }
 
 export function productRequirementProofCaveats(proofs: RequirementProof[]) {

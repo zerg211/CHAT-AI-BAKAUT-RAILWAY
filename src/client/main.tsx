@@ -9,9 +9,15 @@ import {
   safeStorageRemove,
   safeStorageSet,
   savedSessionHeartbeatOutcome,
-  runSessionCreationSingleFlight
+  runSessionCreationSingleFlight,
+  type RestoredChatMessage
 } from './chatHistory';
-import { streamChatMessage } from './chatStream';
+import {
+  ChatMessageNotAcceptedError,
+  recoverChatTurn,
+  registerChatAbortController,
+  streamChatMessage
+} from './chatStream';
 import { submitLead } from './leadSubmit';
 import type { CardDisplayOptions, ChatResponsePayload, ConversationSession, ConversationSummary, Lead, Message, ProductCard } from '../shared/types';
 import './styles.css';
@@ -32,6 +38,20 @@ type ChatMessage = {
 };
 
 type FeedbackRating = 'positive' | 'negative' | 'wrong_cards';
+
+function restoredMessagesForUi(messages: RestoredChatMessage[]): ChatMessage[] {
+  return messages.map((message) => ({
+    id: message.id ?? id(),
+    serverId: message.role === 'assistant' ? message.id : undefined,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt ?? nowIso(),
+    cards: message.products,
+    cardDisplay: message.cardDisplay,
+    leadRequested: message.leadRequested,
+    status: 'done'
+  }));
+}
 
 type LeadForm = {
   name: string;
@@ -613,10 +633,13 @@ async function createSession(createIfMissing = false) {
   });
 }
 
-async function sendAssistantFeedback(sessionId: string, messageId: string, rating: FeedbackRating) {
+async function sendAssistantFeedback(sessionId: string, messageId: string, rating: FeedbackRating, visitorId: string) {
   const response = await fetch(`${apiBase}/api/chat/sessions/${sessionId}/messages/${messageId}/feedback`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'x-bakaut-visitor-id': visitorId
+    },
     body: JSON.stringify({ rating })
   });
   if (!response.ok) throw new Error('feedback failed');
@@ -705,6 +728,8 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false }: {
     try {
       const activeSessionId = await createSession(true);
       if (!activeSessionId) throw new Error('Не удалось создать сессию чата');
+      const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+      if (!visitorId) throw new Error('Не удалось подтвердить сессию чата');
       await submitLead(apiBase, {
         sessionId: activeSessionId,
         clientLeadId,
@@ -712,7 +737,7 @@ function LeadPanel({ latestQuestion, autoOpenKey, disabled = false }: {
         phone: form.phone || undefined,
         email: form.email || undefined,
         question: form.question || latestQuestion || undefined
-      });
+      }, { visitorId });
       clientLeadIdRef.current = null;
       setStatus('sent');
       setForm({ name: '', phone: '', email: '', question: '' });
@@ -1214,25 +1239,97 @@ function App() {
       };
     }
 
-    restoreSavedChatSession(apiBase, initialSessionId, visitorId, chatSessionStorage).then((restoration) => {
+    let pendingController: AbortController | null = null;
+    let releasePendingController: (() => void) | null = null;
+    restoreSavedChatSession(apiBase, initialSessionId, visitorId, chatSessionStorage).then(async (restoration) => {
       if (cancelled) return;
       if (restoration.kind === 'restored') {
         setSessionId(restoration.sessionId);
+        const restoredMessages = restoredMessagesForUi(restoration.messages);
         if (restoration.messages.length > 0) {
-          const restoredMessages: ChatMessage[] = restoration.messages.map((message) => ({
-            id: message.id ?? id(),
-            serverId: message.role === 'assistant' ? message.id : undefined,
-            role: message.role,
-            content: message.content,
-            createdAt: message.createdAt ?? nowIso(),
-            cards: message.products,
-            cardDisplay: message.cardDisplay,
-            leadRequested: message.leadRequested,
-            status: 'done'
-          }));
           setMessages(restoredMessages);
         }
         if (restoration.leadRequested) setLeadAutoOpenKey((value) => value + 1);
+        if (restoration.pendingTurn?.resultState === 'failed') {
+          setMessages((current) => [
+            ...(restoration.messages.length ? restoredMessages : current),
+            {
+              id: id(),
+              role: 'assistant',
+              content: 'Не удалось завершить ответ на сохранённый вопрос. Можно отправить его ещё раз.',
+              createdAt: nowIso(),
+              status: 'error'
+            }
+          ]);
+          setChatHydrationState('ready');
+          return;
+        }
+        if (restoration.pendingTurn) {
+          const assistantId = id();
+          pendingController = new AbortController();
+          releasePendingController = registerChatAbortController(abortRef, pendingController);
+          setBusy(true);
+          setMessages((current) => [
+            ...(restoration.messages.length ? restoredMessages : current),
+            {
+              id: assistantId,
+              role: 'assistant',
+              content: '',
+              createdAt: nowIso(),
+              status: 'sending',
+              progress: 'Восстанавливаю незавершённый ответ...'
+            }
+          ]);
+          try {
+            const payload = await recoverChatTurn(
+              apiBase,
+              restoration.sessionId,
+              restoration.pendingTurn.turnId,
+              visitorId,
+              {
+                onDelta: (delta) => setMessages((current) => current.map((message) => (
+                  message.id === assistantId ? { ...message, content: message.content + delta, progress: undefined } : message
+                ))),
+                onStatus: (progress) => setMessages((current) => current.map((message) => (
+                  message.id === assistantId && !message.content ? { ...message, progress } : message
+                )))
+              },
+              pendingController.signal
+            );
+            if (cancelled) return;
+            setMessages((current) => current.map((message) => message.id === assistantId
+              ? {
+                  ...message,
+                  content: payload.answer || message.content,
+                  serverId: payload.assistantMessageId,
+                  cards: payload.productCards,
+                  cardDisplay: payload.cardDisplay ?? payload.metadata?.cardDisplay,
+                  leadRequested: payload.leadRequested,
+                  metadata: payload.metadata,
+                  progress: undefined,
+                  status: 'done'
+                }
+              : message));
+            if (payload.leadRequested) setLeadAutoOpenKey((value) => value + 1);
+          } catch {
+            if (cancelled) return;
+            const stopped = pendingController.signal.aborted;
+            setMessages((current) => current.map((message) => message.id === assistantId
+              ? {
+                  ...message,
+                  content: stopped
+                    ? 'Ответ остановлен.'
+                    : 'Не удалось восстановить ответ на уже сохранённый вопрос. Его можно отправить ещё раз.',
+                  progress: undefined,
+                  status: stopped ? 'stopped' : 'error'
+                }
+              : message));
+          } finally {
+            releasePendingController?.();
+            releasePendingController = null;
+            if (!cancelled) setBusy(false);
+          }
+        }
         setChatHydrationState('ready');
         return;
       }
@@ -1251,6 +1348,8 @@ function App() {
     });
     return () => {
       cancelled = true;
+      pendingController?.abort();
+      releasePendingController?.();
     };
   }, [chatRestoreAttempt]);
 
@@ -1324,15 +1423,16 @@ function App() {
     setError('');
     setBusy(true);
     const controller = new AbortController();
-    abortRef.current = controller;
+    const releaseController = registerChatAbortController(abortRef, controller);
     const turnTimeout = window.setTimeout(() => {
       controller.abort();
     }, CHAT_TURN_TIMEOUT_MS);
     const assistantId = id();
+    const userId = id();
     const clientMessageId = crypto.randomUUID();
     setMessages((current) => [
       ...current,
-      { id: id(), role: 'user', content: userText, createdAt: nowIso() },
+      { id: userId, role: 'user', content: userText, createdAt: nowIso() },
       {
         id: assistantId,
         role: 'assistant',
@@ -1342,11 +1442,15 @@ function App() {
         progress: 'Проверяю каталог и контекст...'
       }
     ]);
+    let attemptedSessionId: string | null = null;
 
     try {
       const activeSessionId = sessionId ?? await createSession(true);
       if (!activeSessionId) throw new Error('Не удалось создать сессию чата');
+      attemptedSessionId = activeSessionId;
       if (activeSessionId !== sessionId) setSessionId(activeSessionId);
+      const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+      if (!visitorId) throw new Error('Не удалось подтвердить сессию чата');
       const payload = await streamChatMessage(apiBase, activeSessionId, userText, {
         onDelta: (delta) => {
           setMessages((current) => current.map((message) => (
@@ -1361,7 +1465,7 @@ function App() {
               : message
           )));
         }
-      }, controller.signal, { clientMessageId });
+      }, controller.signal, { clientMessageId, visitorId });
       if (payload?.leadRequested) setLeadAutoOpenKey((value) => value + 1);
       setMessages((current) => current.map((message) => (
         message.id === assistantId
@@ -1381,14 +1485,44 @@ function App() {
           : message
       )));
     } catch (submitError) {
-      if (controller.signal.aborted || (submitError instanceof DOMException && submitError.name === 'AbortError')) {
+      if (submitError instanceof ChatMessageNotAcceptedError) {
+        setMessages((current) => current.filter((message) => message.id !== userId && message.id !== assistantId));
+        setInput(userText);
+        setError(submitError.message);
+        if (submitError.statusCode === 404 && attemptedSessionId) {
+          const chatSessionStorage = safeBrowserStorage('sessionStorage');
+          abandonSavedChat(chatSessionStorage, attemptedSessionId);
+          setSessionId((current) => current === attemptedSessionId ? null : current);
+        }
+        const activeSessionId = attemptedSessionId ?? sessionId ?? safeStorageGet(safeBrowserStorage('sessionStorage'), 'bakaut_session_id');
+        const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+        if (submitError.activeTurnId && activeSessionId && visitorId) {
+          await recoverChatTurn(
+            apiBase,
+            activeSessionId,
+            submitError.activeTurnId,
+            visitorId,
+            { onDelta: () => undefined },
+            controller.signal
+          ).catch(() => undefined);
+          const restoration = await restoreSavedChatSession(
+            apiBase,
+            activeSessionId,
+            visitorId,
+            safeBrowserStorage('sessionStorage')
+          ).catch(() => null);
+          if (restoration?.kind === 'restored') {
+            setMessages(restoredMessagesForUi(restoration.messages));
+          }
+        }
+      } else if (controller.signal.aborted || (submitError instanceof DOMException && submitError.name === 'AbortError')) {
         setMessages((current) => current.map((message) => (
           message.id === assistantId ? { ...message, content: message.content || 'Ответ остановлен.', status: 'stopped' } : message
         )));
       } else {
         const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не смог надежно сформировать ответ|не удалось получить ответ/i.test(submitError.message)
           ? submitError.message
-          : 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
+          : 'Сейчас не удалось надежно отправить или завершить вопрос. Проверьте соединение и попробуйте ещё раз.';
         setMessages((current) => current.map((message) => (
           message.id === assistantId
             ? {
@@ -1404,7 +1538,7 @@ function App() {
     } finally {
       window.clearTimeout(turnTimeout);
       setBusy(false);
-      if (abortRef.current === controller) abortRef.current = null;
+      releaseController();
     }
   }
 
@@ -1434,7 +1568,12 @@ function App() {
     )));
     const target = messages.find((message) => message.id === messageId);
     if (!target?.serverId) return;
-    await sendAssistantFeedback(sessionId, target.serverId, rating).catch(() => {
+    const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+    if (!visitorId) {
+      setError('Не удалось подтвердить сессию чата.');
+      return;
+    }
+    await sendAssistantFeedback(sessionId, target.serverId, rating, visitorId).catch(() => {
       setError('Не удалось сохранить оценку ответа.');
     });
   }

@@ -8,6 +8,7 @@ test-results/
 playwright-report/
 logs/
 .promptfoo/
+.scratch/
 .agent/
 .claude/
 .hermes/

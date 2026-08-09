@@ -4,6 +4,7 @@ import {
   allowCatalogOnlyResearchForWebRequest,
   catalogCandidatesSatisfyingConditionalWebRequest,
   enforceSearchBeforeTechnicalSpecialist,
+  filterProductsByStructuredSelectionPolicy,
   reconcileParallelIntentNeedAction,
   repairPreliminaryExactComparisonCatalogFirst,
   sourcePolicyMetadataFromIntent,
@@ -533,6 +534,142 @@ describe('conditional catalog-evidence web short-circuit', () => {
     });
 
     expect(matched.map((candidate) => candidate.id)).toEqual([product.id]);
+  });
+
+  it('keeps a preliminary candidate when nominal power and weight remain unknown instead of treating max power as nominal', () => {
+    const maxOnly = generator('max-only');
+    maxOnly.specs = { 'Maximum power': '5 kW' };
+    const intent = conditionalWebIntent({ selectionGoal: 'preliminary_fit' });
+    intent.grounding = {
+      ...intent.grounding!,
+      sourcePolicy: 'catalog_required',
+      webRequirement: 'none',
+      requiredToolKinds: ['catalog.search']
+    };
+    intent.toolRequests = intent.toolRequests.filter((request) => request.tool === 'catalog.search');
+    intent.selectionPolicy!.requirements = [{
+      id: 'nominal-min',
+      kind: 'nominal_power_min_kw',
+      value: 6,
+      unit: 'kW',
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'nominal power must be at least 6 kW',
+      verification: { mode: 'product_attribute' }
+    }, {
+      id: 'weight-max',
+      kind: 'weight_max_kg',
+      value: 90,
+      unit: 'kg',
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'weight must be no higher than 90 kg',
+      verification: { mode: 'product_attribute' }
+    }];
+
+    const filtered = filterProductsByStructuredSelectionPolicy({
+      products: [maxOnly],
+      intent,
+      toolResults: [catalogResult([maxOnly])]
+    });
+
+    expect(filtered.products.map((product) => product.id)).toEqual([maxOnly.id]);
+  });
+
+  it('still excludes a preliminary candidate with a proven nominal-power violation', () => {
+    const underpowered = generator('underpowered');
+    underpowered.specs = { 'Nominal power': '5 kW' };
+    const intent = conditionalWebIntent({ selectionGoal: 'preliminary_fit' });
+    intent.grounding = {
+      ...intent.grounding!,
+      sourcePolicy: 'catalog_required',
+      webRequirement: 'none',
+      requiredToolKinds: ['catalog.search']
+    };
+    intent.toolRequests = intent.toolRequests.filter((request) => request.tool === 'catalog.search');
+    intent.selectionPolicy!.requirements = [{
+      id: 'nominal-min',
+      kind: 'nominal_power_min_kw',
+      value: 6,
+      unit: 'kW',
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'nominal power must be at least 6 kW',
+      verification: { mode: 'product_attribute' }
+    }];
+
+    const filtered = filterProductsByStructuredSelectionPolicy({
+      products: [underpowered],
+      intent,
+      toolResults: [catalogResult([underpowered])]
+    });
+
+    expect(filtered.products).toEqual([]);
+    expect(filtered.droppedProductIds).toEqual([underpowered.id]);
+  });
+
+  it('uses qualified native facts to resolve unknown final-fit eligibility', () => {
+    const qualified = generator('qualified-native');
+    qualified.specs = {
+      'Nominal power': '6.5 kW',
+      Weight: '80 kg',
+      Voltage: '220 V'
+    };
+    const intent = conditionalWebIntent({ selectionGoal: 'final_fit' });
+    intent.grounding = {
+      ...intent.grounding!,
+      sourcePolicy: 'catalog_required',
+      webRequirement: 'none',
+      requiredToolKinds: ['catalog.search']
+    };
+    intent.toolRequests = intent.toolRequests.filter((request) => request.tool === 'catalog.search');
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      phase: 'single_phase',
+      requirements: [{
+        id: 'nominal-min',
+        kind: 'nominal_power_min_kw',
+        value: 6,
+        unit: 'kW',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'nominal power must be at least 6 kW',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'weight-max',
+        kind: 'weight_max_kg',
+        value: 90,
+        unit: 'kg',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'weight must be no higher than 90 kg',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'phase-single',
+        kind: 'phase',
+        value: 'single_phase',
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'single phase is mandatory',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    const catalogCopyWithoutAttributes = { ...qualified, specs: {} };
+
+    const filtered = filterProductsByStructuredSelectionPolicy({
+      products: [qualified],
+      intent,
+      toolResults: [catalogResult([catalogCopyWithoutAttributes])]
+    });
+
+    expect(filtered.products.map((product) => product.id)).toEqual([qualified.id]);
   });
 });
 

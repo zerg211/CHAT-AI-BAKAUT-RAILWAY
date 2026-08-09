@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const repoMocks = vi.hoisted(() => ({
   createClientLeadWithOutbox: vi.fn(),
   markEmailResult: vi.fn(),
-  getSession: vi.fn()
+  restoreSession: vi.fn()
 }));
 
 vi.mock('../src/db/repositories.js', () => ({
@@ -17,7 +17,7 @@ vi.mock('../src/db/repositories.js', () => ({
   }),
   ConversationRepository: vi.fn(function ConversationRepository() {
     return {
-      getSession: repoMocks.getSession
+      restoreSession: repoMocks.restoreSession
     };
   }),
   ProductRepository: vi.fn()
@@ -34,6 +34,8 @@ async function buildTestApp() {
 
 const sessionId = '00000000-0000-4000-8000-000000000001';
 const clientLeadId = '00000000-0000-4000-8000-000000000003';
+const visitorId = 'visitor-capability-with-high-entropy';
+const capabilityHeaders = { 'x-bakaut-visitor-id': visitorId };
 
 function validLeadPayload() {
   return {
@@ -77,8 +79,10 @@ describe('lead routes', () => {
   beforeEach(() => {
     repoMocks.createClientLeadWithOutbox.mockReset();
     repoMocks.markEmailResult.mockReset();
-    repoMocks.getSession.mockReset();
-    repoMocks.getSession.mockResolvedValue({ id: sessionId, status: 'active' });
+    repoMocks.restoreSession.mockReset();
+    repoMocks.restoreSession.mockImplementation(async (_id: string, capability: string) => capability === visitorId
+      ? { id: sessionId, status: 'active' }
+      : null);
     repoMocks.createClientLeadWithOutbox.mockResolvedValue(completedLeadCapture());
   });
 
@@ -87,6 +91,7 @@ describe('lead routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/leads',
+      headers: capabilityHeaders,
       payload: validLeadPayload()
     });
     await app.close();
@@ -112,6 +117,7 @@ describe('lead routes', () => {
     const response = await app.inject({
       method: 'POST',
       url: '/api/leads',
+      headers: capabilityHeaders,
       payload: {
         sessionId,
         clientLeadId,
@@ -136,7 +142,7 @@ describe('lead routes', () => {
       outbox: { ...completedLeadCapture().outbox, id: '' }
     });
     const app = await buildTestApp();
-    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(503);
@@ -154,7 +160,7 @@ describe('lead routes', () => {
       outbox: { ...completedLeadCapture().outbox, id: 'outbox-dead', status: 'dead' }
     });
     const app = await buildTestApp();
-    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(503);
@@ -191,7 +197,7 @@ describe('lead routes', () => {
       }
     });
     const app = await buildTestApp();
-    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(200);
@@ -205,7 +211,7 @@ describe('lead routes', () => {
       draft: null
     });
     const app = await buildTestApp();
-    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(503);
@@ -219,8 +225,8 @@ describe('lead routes', () => {
 
   it('uses the same request hash for an identical client retry and returns the same lead', async () => {
     const app = await buildTestApp();
-    const first = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
-    const second = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const first = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
+    const second = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     await app.close();
 
     expect(first.statusCode).toBe(200);
@@ -239,7 +245,7 @@ describe('lead routes', () => {
   it('returns 409 when a client lead id is reused with a different payload', async () => {
     repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce(null);
     const app = await buildTestApp();
-    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(409);
@@ -248,12 +254,12 @@ describe('lead routes', () => {
   });
 
   it('does not create a lead if the session becomes inactive before insertion', async () => {
-    repoMocks.getSession
+    repoMocks.restoreSession
       .mockResolvedValueOnce({ id: sessionId, status: 'active' })
-      .mockResolvedValueOnce({ id: sessionId, status: 'closed' });
+      .mockResolvedValueOnce(null);
     repoMocks.createClientLeadWithOutbox.mockResolvedValueOnce(null);
     const app = await buildTestApp();
-    const response = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const response = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     await app.close();
 
     expect(response.statusCode).toBe(404);
@@ -265,13 +271,15 @@ describe('lead routes', () => {
     const missingSession = await app.inject({
       method: 'POST',
       url: '/api/leads',
+      headers: capabilityHeaders,
       payload: { ...validLeadPayload(), sessionId: undefined }
     });
-    repoMocks.getSession.mockResolvedValueOnce({ id: sessionId, status: 'closed' });
-    const inactiveSession = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    repoMocks.restoreSession.mockResolvedValueOnce(null);
+    const inactiveSession = await app.inject({ method: 'POST', url: '/api/leads', headers: capabilityHeaders, payload: validLeadPayload() });
     const oversizedPhone = await app.inject({
       method: 'POST',
       url: '/api/leads',
+      headers: capabilityHeaders,
       payload: { ...validLeadPayload(), phone: '1'.repeat(41) }
     });
     await app.close();
@@ -288,6 +296,7 @@ describe('lead routes', () => {
       responses.push(await app.inject({
         method: 'POST',
         url: '/api/leads',
+        headers: capabilityHeaders,
         payload: { ...validLeadPayload(), clientLeadId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}` }
       }));
     }
@@ -295,5 +304,22 @@ describe('lead routes', () => {
 
     expect(responses.slice(0, 10).every((response) => response.statusCode === 200)).toBe(true);
     expect(responses[10]?.statusCode).toBe(429);
+  });
+
+  it('rejects a missing or wrong visitor capability before creating a lead', async () => {
+    const app = await buildTestApp();
+    const missing = await app.inject({ method: 'POST', url: '/api/leads', payload: validLeadPayload() });
+    const wrong = await app.inject({
+      method: 'POST',
+      url: '/api/leads',
+      headers: { 'x-bakaut-visitor-id': 'wrong-capability' },
+      payload: validLeadPayload()
+    });
+    await app.close();
+
+    expect(missing.statusCode).toBe(404);
+    expect(wrong.statusCode).toBe(404);
+    expect(missing.json()).toEqual(wrong.json());
+    expect(repoMocks.createClientLeadWithOutbox).not.toHaveBeenCalled();
   });
 });
