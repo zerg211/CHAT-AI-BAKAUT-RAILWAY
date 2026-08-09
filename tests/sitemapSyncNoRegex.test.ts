@@ -147,7 +147,7 @@ describe('sitemap sync no-regex XML parsing', () => {
             <meta property="og:image" content="/images/og.jpg">
           </head>
           <body>
-            <div itemscope itemtype="https://schema.org/Product">
+            <div itemscope itemtype="https://schema.org/Product" itemid="${String(url)}">
               <h1>TSS SGG 10000EHA generator</h1>
               <div class="props-item">
                 <span class="props-item__title">Бренд</span>
@@ -216,9 +216,11 @@ describe('sitemap sync no-regex XML parsing', () => {
       }
       currentTime = 20_000;
       return htmlResponse(`
-        <html><body>
-          <div itemscope itemtype="https://schema.org/Product">
+        <html><head><meta property="og:type" content="product"></head><body>
+          <div itemscope itemtype="https://schema.org/Product" itemid="${String(url)}">
             <h1>Heartbeat generator</h1>
+            <div class="card__main-slider">Heartbeat generator</div>
+            <button class="js_favorite" data-id="heartbeat-generator">В избранное</button>
             <div class="card__current-price">100 000</div>
           </div>
         </body></html>
@@ -344,9 +346,11 @@ describe('sitemap sync no-regex XML parsing', () => {
         `);
       }
       return htmlResponse(`
-        <html><body>
-          <div itemscope itemtype="https://schema.org/Product">
+        <html><head><meta property="og:type" content="product"></head><body>
+          <div itemscope itemtype="https://schema.org/Product" itemid="${String(url)}">
             <h1>Bootstrap generator</h1>
+            <div class="card__main-slider">Bootstrap generator</div>
+            <button class="js_favorite" data-id="bootstrap-generator">В избранное</button>
             <div class="card__current-price">100 000</div>
           </div>
         </body></html>

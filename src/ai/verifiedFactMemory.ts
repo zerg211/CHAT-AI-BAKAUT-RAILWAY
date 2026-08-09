@@ -6,7 +6,6 @@ import type {
 import { compactModelText, modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
 
 const genericAttributeTokens = new Set([
-  'current',
   'buyer',
   'question',
   'requested',
@@ -18,6 +17,15 @@ const genericAttributeTokens = new Set([
   'product'
 ]);
 
+const verifiedFactMemoryTtlMs = 90 * 24 * 60 * 60 * 1_000;
+const futureClockSkewMs = 5 * 60 * 1_000;
+const powerQualifierPrefixes = {
+  nominal: ['nominal', 'rated', 'continuous', 'номин', 'ном'],
+  maximum: ['maximum', 'max', 'peak', 'surge', 'максим', 'пиков'],
+  engine: ['engine', 'motor', 'двигат'],
+  apparent: ['apparent', 'kva', 'полна']
+} as const;
+
 function uniqueStrings(values: string[]) {
   return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
@@ -28,37 +36,77 @@ export function verifiedFactAttributeTokens(value: unknown) {
     .filter((token) => token.length >= 3 && !genericAttributeTokens.has(token)));
 }
 
-function tokensOverlap(left: string[], right: string[]) {
-  return left.some((leftToken) =>
-    right.some((rightToken) => {
-      if (leftToken === rightToken) return true;
-      const smaller = leftToken.length <= rightToken.length ? leftToken : rightToken;
-      const larger = leftToken.length <= rightToken.length ? rightToken : leftToken;
-      return smaller.length >= 4 && larger.startsWith(smaller);
-    })
+function attributeTokenMatches(leftToken: string, rightToken: string) {
+  if (leftToken === rightToken) return true;
+  const smaller = leftToken.length <= rightToken.length ? leftToken : rightToken;
+  const larger = leftToken.length <= rightToken.length ? rightToken : leftToken;
+  return smaller.length >= 4 && larger.startsWith(smaller);
+}
+
+function factTokensCoverRequestedAttribute(factTokens: string[], requestedTokens: string[]) {
+  return requestedTokens.every((requestedToken) =>
+    factTokens.some((factToken) => attributeTokenMatches(factToken, requestedToken))
   );
+}
+
+type PowerQualifier = keyof typeof powerQualifierPrefixes;
+
+function powerQualifiers(tokens: string[]) {
+  return new Set<PowerQualifier>((Object.entries(powerQualifierPrefixes) as Array<[
+    PowerQualifier,
+    readonly string[]
+  ]>).flatMap(([qualifier, prefixes]) =>
+    tokens.some((token) => prefixes.some((prefix) => token.startsWith(prefix))) ? [qualifier] : []
+  ));
+}
+
+function isHttpSourceUrl(value: string | null | undefined) {
+  if (!value) return false;
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
+  if (fact.status !== 'active') return false;
+  if (fact.confidence !== 'high' && fact.confidence !== 'medium') return false;
+  if (fact.sourceType === 'web' && !isHttpSourceUrl(fact.sourceUrl)) return false;
+  const verifiedAt = Date.parse(fact.lastVerifiedAt);
+  if (!Number.isFinite(verifiedAt)) return false;
+  const ageMs = now.getTime() - verifiedAt;
+  return ageMs >= -futureClockSkewMs && ageMs <= verifiedFactMemoryTtlMs;
 }
 
 export function verifiedFactMatchesAttribute(fact: VerifiedProductFact, attribute: string) {
   const requestedTokens = verifiedFactAttributeTokens(attribute);
-  if (!requestedTokens.length) return true;
+  if (!requestedTokens.length) return false;
   const factTokens = verifiedFactAttributeTokens([fact.attribute, fact.value].join(' '));
-  return factTokens.length > 0 && tokensOverlap(factTokens, requestedTokens);
+  const requestedPowerQualifiers = powerQualifiers(requestedTokens);
+  if (requestedPowerQualifiers.size) {
+    const factPowerQualifiers = powerQualifiers(factTokens);
+    if (![...requestedPowerQualifiers].some((qualifier) => factPowerQualifiers.has(qualifier))) return false;
+  }
+  return factTokens.length > 0 && factTokensCoverRequestedAttribute(factTokens, requestedTokens);
 }
 
 export function matchingVerifiedFactsForRequest(input: {
   facts: VerifiedProductFact[];
   targetProductNames: string[];
   comparisonAttributes: string[];
+  now?: Date;
 }) {
+  const reusableFacts = input.facts.filter((fact) => reusableVerifiedFact(fact, input.now ?? new Date()));
   const targetScopedFacts = input.targetProductNames.length
-    ? input.facts.filter((fact) =>
+    ? reusableFacts.filter((fact) =>
         input.targetProductNames.some((targetName) => textMatchesTargetName(fact.productName, targetName))
       )
-    : input.facts;
+    : reusableFacts;
   const meaningfulAttributes = input.comparisonAttributes
     .filter((attribute) => verifiedFactAttributeTokens(attribute).length > 0);
-  if (!meaningfulAttributes.length) return targetScopedFacts;
+  if (!meaningfulAttributes.length) return [];
   return targetScopedFacts.filter((fact) =>
     meaningfulAttributes.some((attribute) => verifiedFactMatchesAttribute(fact, attribute))
   );
@@ -71,10 +119,19 @@ export function verifiedFactsCoverRequest(input: {
   if (!input.facts.length) return false;
   const meaningfulAttributes = input.comparisonAttributes
     .filter((attribute) => verifiedFactAttributeTokens(attribute).length > 0);
-  if (!meaningfulAttributes.length) return true;
-  return meaningfulAttributes.every((attribute) =>
-    input.facts.some((fact) => verifiedFactMatchesAttribute(fact, attribute))
-  );
+  if (!meaningfulAttributes.length) return false;
+  return meaningfulAttributes.every((attribute) => {
+    const matchingFacts = input.facts.filter((fact) => verifiedFactMatchesAttribute(fact, attribute));
+    if (!matchingFacts.length) return false;
+    const valuesByProduct = new Map<string, Set<string>>();
+    for (const fact of matchingFacts) {
+      const productKey = fact.productId ?? fact.productKey ?? compactModelText(fact.productName);
+      const values = valuesByProduct.get(productKey) ?? new Set<string>();
+      values.add(compactModelText(fact.value));
+      valuesByProduct.set(productKey, values);
+    }
+    return [...valuesByProduct.values()].every((values) => values.size === 1);
+  });
 }
 
 export function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductComparisonResearchResult {

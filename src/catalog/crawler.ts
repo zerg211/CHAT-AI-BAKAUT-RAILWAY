@@ -7,6 +7,7 @@ import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
 import type { CatalogProductInput } from '../shared/types.js';
 import { createCatalogSyncHeartbeat } from './catalogFreshness.js';
 import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
+import { hasPageSpecificProductEvidence } from './productPageIdentity.js';
 
 const skippedCatalogSuffixes = [
   '.jpg',
@@ -129,14 +130,14 @@ function extractSpecs($: cheerio.CheerioAPI) {
   return specs;
 }
 
-function extractProduct(html: string, pageUrl: string, baseUrl: string): CatalogProductInput | null {
+export function extractProduct(html: string, pageUrl: string, baseUrl: string): CatalogProductInput | null {
   const $ = cheerio.load(html);
   const isProductPage =
     html.includes('schema.org/Product') ||
     html.includes('itemtype="http://schema.org/Offer"') ||
     html.includes("itemtype='http://schema.org/Offer'") ||
     html.includes('card__current-price');
-  if (!isProductPage) return null;
+  if (!isProductPage || !hasPageSpecificProductEvidence(html, pageUrl)) return null;
 
   const name = cleanText($('h1').first().text() || $('[itemprop="name"]').first().text());
   if (!name || name.length < 4) return null;

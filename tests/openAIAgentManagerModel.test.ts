@@ -9,7 +9,7 @@ vi.mock('../src/ai/openaiStructured.js', () => ({
 import { OpenAIAgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { emptyNeedState } from '../src/ai/needState.js';
-import type { AgentIntentContract } from '../src/ai/agentManagerContracts.js';
+import type { AgentIntentContract, DialogueLedgerEvent } from '../src/ai/agentManagerContracts.js';
 import type { ConversationSession, Message } from '../src/shared/types.js';
 
 describe('OpenAIAgentManagerModel semantic inputs', () => {
@@ -17,7 +17,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     createStructuredJsonResponse.mockReset();
   });
 
-  it('serializes the same redacted pending lead draft for the parallel reducer and planner', async () => {
+  it('serializes durable fact provenance and the same redacted pending lead draft for reducer and planner', async () => {
     const now = new Date('2026-07-15T10:00:00.000Z').toISOString();
     const session: ConversationSession = {
       id: '11111111-1111-4111-8111-111111111111',
@@ -101,7 +101,25 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       .mockResolvedValueOnce({ parsed: { rationale: 'continue the pending handoff', events: [] } })
       .mockResolvedValueOnce({ parsed: intentContract });
     const model = new OpenAIAgentManagerModel();
-    const ledgerState = reduceDialogueLedger([]);
+    const observedFact: DialogueLedgerEvent = {
+      sessionId: session.id,
+      turnId: '44444444-4444-4444-8444-444444444444',
+      eventId: 'observed-product-weight',
+      eventType: 'fact.observed',
+      scope: 'product',
+      payload: {
+        factKey: 'product.weight_kg',
+        value: 77,
+        confidence: 0.7,
+        needId: 'generator',
+        role: 'hard_requirement'
+      },
+      evidence: 'Observed in an unconfirmed web result.',
+      source: 'web',
+      status: 'active',
+      createdAt: now
+    };
+    const ledgerState = reduceDialogueLedger([observedFact]);
 
     await model.proposeLedgerDelta({
       session,
@@ -140,6 +158,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       ) as {
         pendingLeadCaptureDraft?: Record<string, unknown>;
         pendingExhaustedTechnicalHandoffs?: unknown;
+        existingState?: { facts?: Array<Record<string, unknown>> };
+        ledger?: { facts?: Array<Record<string, unknown>> };
       };
       expect(userInput.pendingLeadCaptureDraft).toEqual(pendingLeadCaptureDraft);
       expect(userInput.pendingLeadCaptureDraft).not.toHaveProperty('phone');
@@ -147,6 +167,13 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       if (call[0]?.stage === 'agent_intent_contract') {
         expect(userInput.pendingExhaustedTechnicalHandoffs).toEqual(pendingExhaustedTechnicalHandoffs);
       }
+      const compactFact = (userInput.existingState ?? userInput.ledger)?.facts?.[0];
+      expect(compactFact).toMatchObject({
+        eventType: 'fact.observed',
+        source: 'web',
+        confidence: 0.7,
+        createdAt: now
+      });
     }
     const plannerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_intent_contract');
     const plannerRequest = plannerCall?.[0]?.request as {
@@ -195,12 +222,42 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     const reducerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_ledger_delta');
     const reducerRequest = reducerCall?.[0]?.request as {
       input?: Array<{ role?: string; content?: string }>;
-      text?: { verbosity?: string; format?: { description?: string } };
+      text?: {
+        verbosity?: string;
+        format?: {
+          description?: string;
+          schema?: {
+            properties?: {
+              events?: {
+                items?: {
+                  properties?: {
+                    payload?: { required?: string[]; properties?: Record<string, { enum?: unknown[] }> };
+                  };
+                };
+              };
+            };
+          };
+        };
+      };
     } | undefined;
     const reducerPrompt = reducerRequest?.input?.find((item) => item.role === 'system')?.content ?? '';
+    const ledgerPayloadSchema = reducerRequest?.text?.format?.schema?.properties?.events?.items?.properties?.payload;
     expect(reducerRequest?.text?.verbosity).toBe('low');
     expect(reducerRequest?.text?.format?.description).toContain('concise');
     expect(reducerPrompt).toContain('shortest complete semantic JSON');
+    expect(reducerPrompt).toContain('rejectedProductIdsUpdateMode');
+    expect(reducerPrompt).toContain('constraintsUpdateMode');
+    expect(reducerPrompt).toContain('openQuestionsUpdateMode');
+    expect(reducerPrompt).toContain('fact.observed');
+    expect(reducerPrompt).toContain('confidence');
+    expect(ledgerPayloadSchema?.required).toEqual(expect.arrayContaining([
+      'confidence',
+      'constraintsUpdateMode',
+      'openQuestionsUpdateMode',
+      'rejectedProductIdsUpdateMode'
+    ]));
+    expect(ledgerPayloadSchema?.properties?.rejectedProductIdsUpdateMode?.enum)
+      .toEqual(['merge', 'replace', 'clear', null]);
   });
 
   it('routes current buyer wording into dynamic sales policy prompts for planner and answer', async () => {

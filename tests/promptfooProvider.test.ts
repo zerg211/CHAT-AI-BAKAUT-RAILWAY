@@ -128,6 +128,64 @@ describe('Promptfoo chat app provider', () => {
     expect(output.turns[0].ok).toBe(true);
   });
 
+  it('uses the created visitor id as capability for send, recover, and close', async () => {
+    let createdVisitorId = '';
+    const capabilities: Record<string, string | null> = {};
+
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/chat/sessions')) {
+        createdVisitorId = String(JSON.parse(String(init?.body)).visitorId);
+        return jsonResponse({ session: { id: 'session-1' } });
+      }
+      const capability = new Headers(init?.headers).get('x-bakaut-visitor-id');
+      if (url.endsWith('/api/chat/sessions/session-1/messages')) {
+        capabilities.send = capability;
+        return new Response([
+          'event: turn',
+          'data: {"turnId":"turn-1"}',
+          '',
+          'event: error',
+          'data: {"turnId":"turn-1","error":"transport interrupted","recoverable":true}',
+          ''
+        ].join('\n'), { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      }
+      if (url.endsWith('/api/chat/sessions/session-1/messages/turn-1/recover')) {
+        capabilities.recover = capability;
+        return sseDoneResponse();
+      }
+      if (url.endsWith('/api/chat/sessions/session-1/close')) {
+        capabilities.close = capability;
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected fetch ${url}`);
+    }) as typeof fetch;
+
+    const provider = new BakautChatAppProvider({
+      config: {
+        baseUrl: 'https://chat.example.test',
+        sessionAttempts: 1,
+        messageAttempts: 1,
+        recoveryAttempts: 1
+      }
+    });
+
+    const result = await provider.callApi('capability-contract', {
+      vars: {
+        caseId: 'capability-contract',
+        messagesJson: '["Нужен генератор"]'
+      }
+    });
+
+    expect(createdVisitorId.startsWith('promptfoo-capability-contract-')).toBe(true);
+    expect(capabilities).toEqual({
+      send: createdVisitorId,
+      recover: createdVisitorId,
+      close: createdVisitorId
+    });
+    expect(JSON.parse(result.output).turns[0].ok).toBe(true);
+  });
+
   it('uses the production admin judge endpoint for LLM grading', async () => {
     process.env.PROMPTFOO_CHAT_ADMIN_TOKEN = 'test-admin-token';
     let receivedPrompt = '';

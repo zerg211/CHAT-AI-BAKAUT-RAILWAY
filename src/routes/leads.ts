@@ -54,8 +54,16 @@ export async function registerLeadRoutes(app: FastifyInstance) {
     const parsed = leadSchema.safeParse(request.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid lead request' });
     const input = parsed.data;
-    const session = await conversations.getSession(input.sessionId);
-    if (!session || session.status !== 'active') {
+    reply.header('cache-control', 'no-store');
+    reply.header('vary', 'x-bakaut-visitor-id');
+    const capabilityHeader = request.headers['x-bakaut-visitor-id'];
+    const visitorCapability = typeof capabilityHeader === 'string' && capabilityHeader.trim()
+      ? capabilityHeader
+      : null;
+    const session = visitorCapability
+      ? await conversations.restoreSession(input.sessionId, visitorCapability)
+      : null;
+    if (!visitorCapability || !session) {
       return reply.code(404).send({ error: 'Session not found or inactive' });
     }
     let capturedLeadId: string | undefined;
@@ -65,8 +73,8 @@ export async function registerLeadRoutes(app: FastifyInstance) {
         clientRequestHash: requestHash(input)
       });
       if (!completion) {
-        const currentSession = await conversations.getSession(input.sessionId);
-        if (!currentSession || currentSession.status !== 'active') {
+        const currentSession = await conversations.restoreSession(input.sessionId, visitorCapability);
+        if (!currentSession) {
           return reply.code(404).send({ error: 'Session not found or inactive' });
         }
         return reply.code(409).send({ error: 'clientLeadId already used with different payload' });

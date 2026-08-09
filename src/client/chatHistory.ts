@@ -5,6 +5,29 @@ import {
 
 export type RestoredChatMessage = PublicChatHistoryMessage;
 export type ChatHydrationState = 'restoring' | 'ready' | 'error';
+export type RestoredPendingTurnStatus =
+  | 'received'
+  | 'need_extracted'
+  | 'planned'
+  | 'answering'
+  | 'completed'
+  | 'failed'
+  | 'recovered';
+
+export type RestoredPendingTurn = {
+  turnId: string;
+  status: RestoredPendingTurnStatus;
+  stage: string | null;
+  deadlineAt: string | null;
+  terminal: boolean;
+  resultState: 'pending' | 'ready' | 'failed';
+};
+
+export type LoadedChatHistory = {
+  messages: RestoredChatMessage[];
+  pendingTurn: RestoredPendingTurn | null;
+  leadOfferConsumed?: true;
+};
 
 export interface SessionIdStorage {
   getItem(key: string): string | null;
@@ -42,6 +65,7 @@ export type SavedChatRestoration =
       sessionId: string;
       messages: RestoredChatMessage[];
       leadRequested: boolean;
+      pendingTurn: RestoredPendingTurn | null;
     }
   | { kind: 'stale'; sessionId: null }
   | { kind: 'superseded'; sessionId: string | null };
@@ -119,6 +143,51 @@ export async function loadChatHistory(
   visitorId: string,
   fetcher: typeof fetch = fetch
 ): Promise<RestoredChatMessage[]> {
+  return (await loadChatHistoryState(apiBase, sessionId, visitorId, fetcher)).messages;
+}
+
+const pendingTurnStatuses = new Set<RestoredPendingTurnStatus>([
+  'received',
+  'need_extracted',
+  'planned',
+  'answering',
+  'completed',
+  'failed',
+  'recovered'
+]);
+
+function normalizePendingTurn(value: unknown): RestoredPendingTurn | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.turnId !== 'string' ||
+    !candidate.turnId.trim() ||
+    typeof candidate.status !== 'string' ||
+    !pendingTurnStatuses.has(candidate.status as RestoredPendingTurnStatus)
+  ) return null;
+  const status = candidate.status as RestoredPendingTurnStatus;
+  const terminal = status === 'completed' || status === 'failed' || status === 'recovered';
+  const resultState = candidate.resultState === 'ready'
+    ? 'ready'
+    : terminal
+      ? 'failed'
+      : 'pending';
+  return {
+    turnId: candidate.turnId,
+    status,
+    stage: typeof candidate.stage === 'string' ? candidate.stage : null,
+    deadlineAt: typeof candidate.deadlineAt === 'string' ? candidate.deadlineAt : null,
+    terminal,
+    resultState
+  };
+}
+
+export async function loadChatHistoryState(
+  apiBase: string,
+  sessionId: string,
+  visitorId: string,
+  fetcher: typeof fetch = fetch
+): Promise<LoadedChatHistory> {
   const response = await fetcher(sessionMessagesUrl(apiBase, sessionId), {
     headers: {
       Accept: 'application/json',
@@ -127,8 +196,16 @@ export async function loadChatHistory(
   });
   if (response.status === 404) throw new ChatHistoryNotFoundError();
   if (!response.ok) throw new Error(`History request failed: ${response.status}`);
-  const payload = await response.json() as { messages?: unknown };
-  return normalizePublicHistoryMessages(payload.messages);
+  const payload = await response.json() as {
+    messages?: unknown;
+    pendingTurn?: unknown;
+    leadOfferConsumed?: unknown;
+  };
+  return {
+    messages: normalizePublicHistoryMessages(payload.messages),
+    pendingTurn: normalizePendingTurn(payload.pendingTurn),
+    ...(payload.leadOfferConsumed === true ? { leadOfferConsumed: true as const } : {})
+  };
 }
 
 function staleRestorationResult(storage: SessionIdStorage | null, expectedSessionId: string): SavedChatRestoration {
@@ -146,12 +223,16 @@ export async function restoreSavedChatSession(
   fetcher: typeof fetch = fetch
 ): Promise<SavedChatRestoration> {
   try {
-    const messages = await loadChatHistory(apiBase, savedSessionId, visitorId, fetcher);
+    const history = await loadChatHistoryState(apiBase, savedSessionId, visitorId, fetcher);
+    const latestAssistantMessage = [...history.messages]
+      .reverse()
+      .find((message) => message.role === 'assistant');
     return {
       kind: 'restored',
       sessionId: savedSessionId,
-      messages,
-      leadRequested: messages.some((message) => message.leadRequested === true)
+      messages: history.messages,
+      leadRequested: latestAssistantMessage?.leadRequested === true && history.leadOfferConsumed !== true,
+      pendingTurn: history.pendingTurn
     };
   } catch (error) {
     if (error instanceof ChatHistoryNotFoundError) {

@@ -232,7 +232,10 @@ async function recoverTurnWithRetries(input) {
     if (attempt > 1) await sleep(input.delayMs ?? 5000);
     const recoveryResponse = await fetchWithTimeout(`${input.baseUrl}/api/chat/sessions/${input.sessionId}/messages/${input.turnId}/recover`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-bakaut-visitor-id': input.visitorId
+      },
       body: JSON.stringify({})
     }, input.timeoutMs);
     const recoveryRawSse = await readSseResponseText(recoveryResponse);
@@ -261,7 +264,10 @@ async function sendMessageWithRetries(input) {
     try {
       const response = await fetchWithTimeout(`${input.baseUrl}/api/chat/sessions/${input.sessionId}/messages`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'x-bakaut-visitor-id': input.visitorId
+        },
         body: JSON.stringify({ message: input.userMessage })
       }, input.timeoutMs);
       const rawSse = await readSseResponseText(response);
@@ -314,6 +320,7 @@ class BakautChatAppProvider {
     const startedAt = new Date().toISOString();
     const turns = [];
     let sessionId = null;
+    const visitorId = `promptfoo-${caseId}-${Date.now()}`;
 
     if (!messages.length) {
       return {
@@ -329,7 +336,7 @@ class BakautChatAppProvider {
       const sessionPayload = await postJsonWithRetries({
         url: `${baseUrl}/api/chat/sessions`,
         body: {
-          visitorId: `promptfoo-${caseId}-${Date.now()}`,
+          visitorId,
           pageUrl
         },
         timeoutMs,
@@ -343,6 +350,7 @@ class BakautChatAppProvider {
         const turnResult = await sendMessageWithRetries({
           baseUrl,
           sessionId,
+          visitorId,
           userMessage,
           timeoutMs,
           attempts: messageAttempts,
@@ -352,6 +360,7 @@ class BakautChatAppProvider {
           const recoveryResult = await recoverTurnWithRetries({
             baseUrl,
             sessionId,
+            visitorId,
             turnId: turnResult.turnId,
             userMessage,
             timeoutMs,
@@ -380,7 +389,10 @@ class BakautChatAppProvider {
       if (sessionId) {
         await fetch(`${baseUrl}/api/chat/sessions/${sessionId}/close`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: {
+            'content-type': 'application/json',
+            'x-bakaut-visitor-id': visitorId
+          },
           body: JSON.stringify({})
         }).catch(() => undefined);
       }

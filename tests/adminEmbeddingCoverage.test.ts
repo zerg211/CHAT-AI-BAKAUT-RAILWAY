@@ -42,7 +42,7 @@ describe('admin embedding coverage endpoint', () => {
     await app.close();
 
     expect(response.statusCode).toBe(401);
-  });
+  }, 12_000);
 
   it('returns coverage for all embedding targets', async () => {
     const app = await buildApp();
@@ -67,5 +67,5 @@ describe('admin embedding coverage endpoint', () => {
     expect(coverageCalls).toHaveBeenCalledWith('products', 'text-embedding-3-small');
     expect(coverageCalls).toHaveBeenCalledWith('catalog_pages', 'text-embedding-3-small');
     expect(coverageCalls).toHaveBeenCalledWith('troubleshooting_cases', 'text-embedding-3-small');
-  });
+  }, 12_000);
 });

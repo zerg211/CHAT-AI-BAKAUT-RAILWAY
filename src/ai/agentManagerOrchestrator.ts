@@ -20,6 +20,7 @@ import {
   type LedgerStateDelta,
   type PreSendReview,
   type ProductMentionRole,
+  type SelectionRequirement,
   type ToolRequest,
   type ToolResult
 } from './agentManagerContracts.js';
@@ -77,6 +78,7 @@ import {
   productMeetsSupportedStrictMaterialRequirement,
   productMeetsSupportedStrictPriceVisibilityRequirement,
   productMeetsSupportedStrictVoltageRequirement,
+  qualifiedNominalActivePowerKw,
   rankCatalogProductsByNumericFit,
   rankCatalogProductsByStructuredPreferences,
   selectProductsForVisibleCards,
@@ -135,6 +137,7 @@ import {
   combinedRequirementProofStatus,
   requirementUsesGenericReadProof,
   requirementProofsFor,
+  resolvedRequirementEligibilityStatus,
   selectionRequirementAttributeMatches
 } from './requirementProofs.js';
 
@@ -167,6 +170,7 @@ export interface AgentManagerModelInput {
   userMessage: string;
   ledgerEvents: DialogueLedgerEvent[];
   ledgerState?: ReducedDialogueLedgerState;
+  ledgerIncludesCurrentTurnDelta?: boolean;
   pendingLeadCaptureDraft?: PendingLeadCaptureDraftContext | null;
   pendingExhaustedTechnicalHandoffs?: PendingExhaustedTechnicalHandoffContext[];
   structuredOutputTokenCap?: number;
@@ -234,8 +238,12 @@ function compactLedger(state: ReducedDialogueLedgerState) {
     facts: Object.values(state.factsByKey).map((fact) => ({
       key: fact.factKey,
       value: fact.value,
+      eventType: fact.eventType,
       status: fact.status,
       evidence: fact.evidence,
+      source: fact.source,
+      confidence: fact.confidence,
+      createdAt: fact.createdAt,
       eventId: fact.eventId,
       needId: fact.needId,
       role: fact.role,
@@ -323,6 +331,7 @@ function activeScopedLedgerFacts(ledgerState: ReducedDialogueLedgerState) {
 
 function parallelIntentLedgerConflicts(input: {
   intent: AgentIntentContract;
+  previousLedgerState: ReducedDialogueLedgerState;
   ledgerState: ReducedDialogueLedgerState;
   turnEvents: DialogueLedgerEvent[];
 }) {
@@ -330,6 +339,10 @@ function parallelIntentLedgerConflicts(input: {
   const activeNeed = [...Object.values(input.ledgerState.needsById)]
     .reverse()
     .find((need) => need.status === 'open' || need.status === 'selected');
+  const previousActiveNeed = [...Object.values(input.previousLedgerState.needsById)]
+    .reverse()
+    .find((need) => need.status === 'open' || need.status === 'selected');
+  const relevantNeedId = activeNeed?.needId ?? previousActiveNeed?.needId;
   const ledgerClass = coerceVisibleCardIntent(activeNeed?.productClass);
   const intentClass = coerceVisibleCardIntent(
     input.intent.selectionPolicy?.canonicalProductClass ?? input.intent.selectionPolicy?.targetProductClass
@@ -355,7 +368,104 @@ function parallelIntentLedgerConflicts(input: {
   if (selectionWasReset && activeNeed?.selectedProductIds.length === 0 && input.intent.selectionPolicy?.reusePreviousCards) {
     conflicts.push('cleared_selection_cannot_reuse_previous_cards');
   }
-  return conflicts;
+
+  const explicitlyRemovedFactIds = new Set(input.turnEvents.flatMap((event) => [
+    ...requestStringArray(event.payload.targetEventIds),
+    ...requestStringArray(event.payload.negatesEventIds),
+    ...requestStringArray(event.payload.supersedesEventIds)
+  ]));
+  if (explicitlyRemovedFactIds.size && relevantNeedId) {
+    for (const previousFact of Object.values(input.previousLedgerState.factsByKey)) {
+      if (
+        previousFact.status !== 'active' ||
+        previousFact.role !== 'hard_requirement' ||
+        previousFact.needId !== relevantNeedId ||
+        !explicitlyRemovedFactIds.has(previousFact.eventId)
+      ) continue;
+      const replacement = Object.values(input.ledgerState.factsByKey).find((fact) =>
+        fact.status === 'active' &&
+        fact.role === 'hard_requirement' &&
+        fact.needId === previousFact.needId &&
+        fact.factKey === previousFact.factKey
+      );
+      if (!replacement) conflicts.push(`active_requirement_removed:${previousFact.factKey}`);
+    }
+  }
+
+  if (relevantNeedId) {
+    const previousNeed = input.previousLedgerState.needsById[relevantNeedId];
+    const currentNeed = input.ledgerState.needsById[relevantNeedId];
+    const destructiveNeedUpdate = input.turnEvents.some((event) => {
+      if (
+        (event.eventType !== 'need.opened' && event.eventType !== 'need.updated' && event.eventType !== 'need.closed') ||
+        event.payload.needId !== relevantNeedId
+      ) return false;
+      if (event.eventType === 'need.closed') return true;
+      return [
+        event.payload.constraintsUpdateMode,
+        event.payload.openQuestionsUpdateMode,
+        event.payload.rejectedProductIdsUpdateMode,
+        event.payload.selectionUpdateMode
+      ].some((mode) => mode === 'replace' || mode === 'clear') ||
+        requestStringArray(event.payload.invalidatedProductIds).length > 0;
+    });
+    if (
+      destructiveNeedUpdate &&
+      previousNeed &&
+      JSON.stringify({
+        constraints: previousNeed.constraints,
+        openQuestions: previousNeed.openQuestions,
+        selectedProductIds: previousNeed.selectedProductIds,
+        rejectedProductIds: previousNeed.rejectedProductIds,
+        status: previousNeed.status
+      }) !== JSON.stringify(currentNeed ? {
+        constraints: currentNeed.constraints,
+        openQuestions: currentNeed.openQuestions,
+        selectedProductIds: currentNeed.selectedProductIds,
+        rejectedProductIds: currentNeed.rejectedProductIds,
+        status: currentNeed.status
+      } : null)
+    ) {
+      conflicts.push(`active_need_state_replaced:${relevantNeedId}`);
+    }
+  }
+
+  const turnFactEventIds = new Set(input.turnEvents
+    .filter((event) => event.eventType === 'fact.observed' || event.eventType === 'fact.confirmed')
+    .map((event) => event.eventId));
+  const policy = input.intent.selectionPolicy;
+  for (const fact of activeScopedLedgerFacts(input.ledgerState)) {
+    if (
+      fact.role !== 'hard_requirement' ||
+      fact.status !== 'active' ||
+      !turnFactEventIds.has(fact.eventId) ||
+      !activeNeed ||
+      fact.needId !== activeNeed.needId
+    ) continue;
+    const requirements = (policy?.requirements ?? []).filter((requirement) =>
+      requirement.kind === fact.factKey &&
+      requirement.role === 'hard_constraint' &&
+      requirement.strictness === 'strict'
+    );
+    const matchingRequirement = requirements.some((requirement) => Object.is(requirement.value, fact.value));
+    const hasStructuredField = fact.factKey === 'phase' || fact.factKey === 'power_source';
+    const structuredFieldMatches = fact.factKey === 'phase'
+      ? Object.is(policy?.phase, fact.value)
+      : fact.factKey === 'power_source'
+        ? Object.is(policy?.powerSource, fact.value)
+        : false;
+    const matchingRepresentation = matchingRequirement || structuredFieldMatches;
+    const contradictoryRepresentation =
+      (hasStructuredField && !structuredFieldMatches) ||
+      (requirements.length > 0 && !matchingRequirement);
+    if (
+      !matchingRepresentation ||
+      contradictoryRepresentation
+    ) {
+      conflicts.push(`active_requirement_mismatch:${fact.factKey}`);
+    }
+  }
+  return uniqueStrings(conflicts);
 }
 
 export function reconcileNewActiveNeedProductClass(
@@ -1093,11 +1203,9 @@ function productLookupText(product: Product) {
   return [
     product.name,
     product.brand,
-    product.category,
     product.externalId,
     product.slug,
-    product.sourceUrl,
-    JSON.stringify(product.specs ?? {})
+    product.sourceUrl
   ].filter(Boolean).join(' ');
 }
 
@@ -2328,7 +2436,7 @@ function structuredCandidateTierEvidence(toolResults: ToolResult[]) {
   });
 }
 
-function authoritativeProofStatusForStrictKinds(input: {
+function resolvedEligibilityStatusForStrictKinds(input: {
   proofs: ReturnType<typeof buildRequirementProofs>;
   productId: string;
   intent: AgentIntentContract;
@@ -2342,27 +2450,29 @@ function authoritativeProofStatusForStrictKinds(input: {
       ? [requirement.id]
       : []
   );
-  return authoritativeRequirementProofStatus(requirementProofsFor(
+  return resolvedRequirementEligibilityStatus(requirementProofsFor(
     input.proofs,
     input.productId,
     requirementIds
   ));
 }
 
-function passesNativeConstraintOrAuthoritativeProof(input: {
+function passesNativeConstraintOrResolvedProof(input: {
   proofs: ReturnType<typeof buildRequirementProofs>;
   productId: string;
   intent: AgentIntentContract;
   kinds: string[];
   nativeMatch: boolean;
+  finalFit: boolean;
 }) {
-  const proofStatus = authoritativeProofStatusForStrictKinds(input);
+  const proofStatus = resolvedEligibilityStatusForStrictKinds(input);
   if (proofStatus === 'satisfied') return true;
-  if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
+  if (proofStatus === 'violated') return false;
+  if (proofStatus === 'unknown') return input.nativeMatch || !input.finalFit;
   return input.nativeMatch;
 }
 
-function filterProductsByStructuredSelectionPolicy(input: {
+export function filterProductsByStructuredSelectionPolicy(input: {
   products: Product[];
   intent: AgentIntentContract;
   toolResults: ToolResult[];
@@ -2433,54 +2543,60 @@ function filterProductsByStructuredSelectionPolicy(input: {
       !exactTargetNames.some((targetName) => productMatchesTargetName(product, targetName))
     ) return false;
     for (const requirementId of genericRequirementIds) {
-      const proofStatus = combinedRequirementProofStatus(requirementProofsFor(
+      const proofStatus = resolvedRequirementEligibilityStatus(requirementProofsFor(
         requirementProofs,
         product.id,
         [requirementId]
       ));
-      if (proofStatus === 'violated' || proofStatus === 'conflicted') return false;
+      if (proofStatus === 'violated') return false;
       if (finalFit && proofStatus !== 'satisfied') return false;
     }
     if (!acceptedCompromise && budgetMax !== undefined && !priceWithinBudget(product, budgetMax)) return false;
-    const weightProofStatus = authoritativeProofStatusForStrictKinds({
+    const weightProofStatus = resolvedEligibilityStatusForStrictKinds({
       proofs: requirementProofs,
       productId: product.id,
       intent: input.intent,
       kinds: ['weight_min_kg', 'weight_max_kg']
     });
-    if (weightProofStatus === 'violated' || weightProofStatus === 'conflicted') return false;
+    if (!acceptedCompromise && weightProofStatus === 'violated') return false;
     if (
       !acceptedCompromise &&
       weightProofStatus !== 'satisfied' &&
       (weightMin !== undefined || weightMax !== undefined)
     ) {
       const weight = extractWeightKg(product);
-      if (weight === undefined) return false;
-      if (weightMin !== undefined && weight < weightMin) return false;
-      if (weightMax !== undefined && weight > weightMax) return false;
+      if (weight === undefined) {
+        if (finalFit) return false;
+      } else {
+        if (weightMin !== undefined && weight < weightMin) return false;
+        if (weightMax !== undefined && weight > weightMax) return false;
+      }
     }
-    const powerProofStatus = authoritativeProofStatusForStrictKinds({
+    const powerProofStatus = resolvedEligibilityStatusForStrictKinds({
       proofs: requirementProofs,
       productId: product.id,
       intent: input.intent,
       kinds: ['nominal_power_min_kw', 'power_min_kw', 'nominal_power_max_kw', 'power_max_kw']
     });
-    if (powerProofStatus === 'violated' || powerProofStatus === 'conflicted') return false;
+    if (!acceptedCompromise && powerProofStatus === 'violated') return false;
     if (
       !acceptedCompromise &&
       powerProofStatus !== 'satisfied' &&
       (explicitPowerMin !== undefined || powerMax !== undefined)
     ) {
-      const power = extractGeneratorPowerForHardSelection(product);
-      const nominal = power.nominalKw ?? power.maxKw;
-      if (nominal === undefined) return false;
-      if (explicitPowerMin !== undefined && nominal < explicitPowerMin) return false;
-      if (powerMax !== undefined && nominal > powerMax) return false;
+      const nominal = qualifiedNominalActivePowerKw(product);
+      if (nominal === undefined) {
+        if (finalFit) return false;
+      } else {
+        if (explicitPowerMin !== undefined && nominal < explicitPowerMin) return false;
+        if (powerMax !== undefined && nominal > powerMax) return false;
+      }
     }
     if (derivedNominalPowerMin !== undefined) {
       if (calculatorNominalPowerMin !== undefined || powerProofStatus !== 'satisfied') {
-        const nominal = extractConfirmedGeneratorNominalPowerKw(product);
-        if (nominal === undefined || nominal < derivedNominalPowerMin) return false;
+        const nominal = qualifiedNominalActivePowerKw(product);
+        if (nominal !== undefined && nominal < derivedNominalPowerMin) return false;
+        if (nominal === undefined && finalFit) return false;
       }
     }
     if (policy.powerSource && policy.powerSource !== 'any') {
@@ -2490,55 +2606,64 @@ function filterProductsByStructuredSelectionPolicy(input: {
         : policy.powerSource === 'fuel'
           ? source === 'gasoline' || source === 'diesel'
           : false;
-      if (!passesNativeConstraintOrAuthoritativeProof({
+      if (!passesNativeConstraintOrResolvedProof({
         proofs: requirementProofs,
         productId: product.id,
         intent: input.intent,
         kinds: ['power_source', 'fuel_type'],
-        nativeMatch
+        nativeMatch,
+        finalFit
       })) return false;
     }
     if (policy.phase && policy.phase !== 'any') {
-      const authoritativeProofStatus = authoritativeRequirementProofStatus(requirementProofsFor(
+      const proofStatus = resolvedRequirementEligibilityStatus(requirementProofsFor(
         requirementProofs,
         product.id,
         phaseRequirementIds
       ));
-      if (authoritativeProofStatus === 'violated' || authoritativeProofStatus === 'conflicted') return false;
-      if (authoritativeProofStatus !== 'satisfied') {
+      if (proofStatus === 'violated') return false;
+      if (proofStatus !== 'satisfied') {
         const phase = generatorPhaseProfile(product);
-        if (policy.phase === 'single_phase' && phase !== 'single_220') return false;
-        if (policy.phase === 'three_phase' && phase !== 'three_phase_380' && phase !== 'mixed_220_380') return false;
+        if (phase === 'unknown') {
+          if (finalFit) return false;
+        } else {
+          if (policy.phase === 'single_phase' && phase !== 'single_220') return false;
+          if (policy.phase === 'three_phase' && phase !== 'three_phase_380' && phase !== 'mixed_220_380') return false;
+        }
       }
     }
-    if (!passesNativeConstraintOrAuthoritativeProof({
+    if (!passesNativeConstraintOrResolvedProof({
       proofs: requirementProofs,
       productId: product.id,
       intent: input.intent,
       kinds: ['auto_start_required', 'autostart_required'],
-      nativeMatch: productMeetsSupportedStrictAutoStartRequirement(product, input.intent, canonicalClass)
+      nativeMatch: productMeetsSupportedStrictAutoStartRequirement(product, input.intent, canonicalClass),
+      finalFit
     })) return false;
-    if (!passesNativeConstraintOrAuthoritativeProof({
+    if (!passesNativeConstraintOrResolvedProof({
       proofs: requirementProofs,
       productId: product.id,
       intent: input.intent,
       kinds: ['fuel_type', 'power_source'],
-      nativeMatch: productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass)
+      nativeMatch: productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass),
+      finalFit
     })) return false;
-    if (!passesNativeConstraintOrAuthoritativeProof({
+    if (!passesNativeConstraintOrResolvedProof({
       proofs: requirementProofs,
       productId: product.id,
       intent: input.intent,
       kinds: ['material'],
-      nativeMatch: productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass)
+      nativeMatch: productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass),
+      finalFit
     })) return false;
     if (!productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)) return false;
-    if (!passesNativeConstraintOrAuthoritativeProof({
+    if (!passesNativeConstraintOrResolvedProof({
       proofs: requirementProofs,
       productId: product.id,
       intent: input.intent,
       kinds: ['voltage_v'],
-      nativeMatch: productMeetsSupportedStrictVoltageRequirement(product, input.intent, canonicalClass)
+      nativeMatch: productMeetsSupportedStrictVoltageRequirement(product, input.intent, canonicalClass),
+      finalFit
     })) return false;
     return true;
   });
@@ -2569,28 +2694,138 @@ type TerminalCatalogRecovery = {
   cards: ProductCard[];
   catalogRequestIds: string[];
   unfinishedVerification: string[];
+  technicalHandoffEligible: boolean;
   warnings: string[];
 };
+
+function terminalVerificationFallbackSlots(
+  request: ToolRequest,
+  requirementsById: Map<string, SelectionRequirement>
+) {
+  const attributes = (request.args.comparisonAttributes ?? [])
+    .map((attribute) => attribute.trim())
+    .filter(Boolean);
+  if (attributes.length) return attributes;
+  return (request.coversRequirementIds ?? []).flatMap((requirementId) => {
+    const requirement = requirementsById.get(requirementId);
+    return requirement?.evidence?.trim() ? [requirement.evidence.trim()] : [];
+  });
+}
+
+function terminalUnfinishedWebVerification(input: {
+  request: ToolRequest;
+  result: ToolResult | undefined;
+  requirementsById: Map<string, SelectionRequirement>;
+}) {
+  const fallbackSlots = terminalVerificationFallbackSlots(input.request, input.requirementsById);
+  if (!input.result || input.result.status !== 'ok') return fallbackSlots;
+  const payload = input.result.payload && typeof input.result.payload === 'object'
+    ? input.result.payload as Record<string, unknown>
+    : {};
+  const guidance = payload.answerGuidance && typeof payload.answerGuidance === 'object'
+    ? payload.answerGuidance as Record<string, unknown>
+    : {};
+  const coverage = Array.isArray(guidance.coverage)
+    ? guidance.coverage.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    : [];
+  const unresolvedCoverage = coverage
+    .filter((item) => item.status !== 'confirmed')
+    .map((item) => typeof item.attribute === 'string' ? item.attribute.trim() : '')
+    .filter(Boolean);
+  const warnings = Array.isArray(payload.warnings)
+    ? payload.warnings.filter((warning): warning is string => typeof warning === 'string')
+    : [];
+  const unresolvedConflicts = warnings.includes('source_conflict_adjudicated')
+    ? []
+    : Array.isArray(payload.conflicts)
+      ? payload.conflicts.flatMap((item) => {
+          if (!item || typeof item !== 'object') return [];
+          const attribute = (item as Record<string, unknown>).attribute;
+          return typeof attribute === 'string' && attribute.trim() ? [attribute.trim()] : [];
+        })
+      : [];
+  const explicitUnconfirmed = Array.isArray(payload.unconfirmedFacts)
+    ? payload.unconfirmedFacts.flatMap((item) => {
+        if (typeof item === 'string' && item.trim()) return [item.trim()];
+        if (!item || typeof item !== 'object') return [];
+        const record = item as Record<string, unknown>;
+        const value = record.attribute ?? record.fact ?? record.description;
+        return typeof value === 'string' && value.trim() ? [value.trim()] : [];
+      })
+    : [];
+  const explicitGaps = uniqueStrings([
+    ...unresolvedCoverage,
+    ...unresolvedConflicts,
+    ...explicitUnconfirmed
+  ]);
+  if (explicitGaps.length) return explicitGaps;
+
+  const confirmedCoverage = new Set(coverage
+    .filter((item) => item.status === 'confirmed' && typeof item.attribute === 'string')
+    .map((item) => compactModelText(item.attribute))
+    .filter(Boolean));
+  const uncoveredRequested = fallbackSlots.filter((slot) => !confirmedCoverage.has(compactModelText(slot)));
+  if (coverage.length && uncoveredRequested.length) return uncoveredRequested;
+
+  const facts = Array.isArray(payload.facts) ? payload.facts : [];
+  const completeness = guidance.completeness;
+  const researchOutcome = payload.researchOutcome;
+  const hasTypedCompletedAnswer =
+    (completeness === 'answered' || researchOutcome === 'answered') &&
+    (coverage.some((item) => item.status === 'confirmed') || facts.length > 0);
+  return hasTypedCompletedAnswer || (coverage.length > 0 && uncoveredRequested.length === 0)
+    ? []
+    : fallbackSlots;
+}
 
 function terminalCatalogRecovery(input: {
   intent: AgentIntentContract | undefined;
   toolResults: ToolResult[];
+  previousProductReferents?: Product[];
 }): TerminalCatalogRecovery {
   const policy = input.intent?.selectionPolicy;
-  if (!input.intent || !policy || policy.selectionGoal !== 'preliminary_fit') {
-    return { products: [], cards: [], catalogRequestIds: [], unfinishedVerification: [], warnings: [] };
+  if (!input.intent || !policy) {
+    return {
+      products: [],
+      cards: [],
+      catalogRequestIds: [],
+      unfinishedVerification: [],
+      technicalHandoffEligible: false,
+      warnings: []
+    };
   }
+  const recoveryIntent: AgentIntentContract = policy.selectionGoal === 'final_fit'
+    ? {
+        ...input.intent,
+        selectionPolicy: {
+          ...policy,
+          selectionGoal: 'preliminary_fit'
+        }
+      }
+    : input.intent;
   const catalogResults = input.toolResults.filter((result) =>
-    result.tool === 'catalog.search' && result.status === 'ok'
+    (result.tool === 'catalog.search' || result.tool === 'catalog.getProductDetails') &&
+    result.status === 'ok'
   );
   const catalogRequestIds = catalogResults.map((result) => result.requestId);
-  const catalogProducts = catalogResults.flatMap(productsFromPersistedToolResult);
+  const currentCatalogProducts = catalogResults.flatMap(productsFromPersistedToolResult);
+  const catalogProducts = [...new Map([
+    ...(input.previousProductReferents ?? []),
+    ...currentCatalogProducts
+  ].map((product) => [product.id, product])).values()];
   if (!catalogProducts.length) {
-    return { products: [], cards: [], catalogRequestIds, unfinishedVerification: [], warnings: [] };
+    return {
+      products: [],
+      cards: [],
+      catalogRequestIds,
+      unfinishedVerification: [],
+      technicalHandoffEligible: false,
+      warnings: []
+    };
   }
   const eligibleProducts = filterProductsByStructuredSelectionPolicy({
     products: catalogProducts,
-    intent: input.intent,
+    intent: recoveryIntent,
     toolResults: input.toolResults
   }).products;
   if (!eligibleProducts.length) {
@@ -2599,32 +2834,59 @@ function terminalCatalogRecovery(input: {
       cards: [],
       catalogRequestIds,
       unfinishedVerification: [],
+      technicalHandoffEligible: false,
       warnings: ['terminal_catalog_recovery_no_mechanically_eligible_products']
     };
   }
   const resultByRequestId = new Map(input.toolResults.map((result) => [result.requestId, result]));
   const requirementsById = new Map(policy.requirements.map((requirement) => [requirement.id, requirement]));
-  const unfinishedVerification = uniqueStrings(input.intent.toolRequests.flatMap((request) => {
+  const unresolvedWebChecks = input.intent.toolRequests.flatMap((request) => {
     if (request.tool !== 'web.researchProductFacts' || !request.required) return [];
     const result = resultByRequestId.get(request.id);
-    if (result?.status === 'ok') return [];
-    const attributes = (request.args.comparisonAttributes ?? []).map((attribute) => attribute.trim()).filter(Boolean);
-    if (attributes.length) return attributes;
-    return (request.coversRequirementIds ?? []).flatMap((requirementId) => {
-      const requirement = requirementsById.get(requirementId);
-      return requirement?.evidence?.trim() ? [requirement.evidence.trim()] : [];
+    const gaps = terminalUnfinishedWebVerification({
+      request,
+      result,
+      requirementsById
     });
-  }));
+    return gaps.length ? [{
+      gaps,
+      exhausted: Boolean(result && webResearchResultProvesSourceExhaustion(result))
+    }] : [];
+  });
+  const unfinishedVerification = uniqueStrings(unresolvedWebChecks.flatMap((check) => check.gaps));
+  const technicalHandoffEligible =
+    unresolvedWebChecks.length > 0 &&
+    unresolvedWebChecks.every((check) => check.exhausted);
   return {
     products: eligibleProducts,
     cards: productCards(eligibleProducts),
     catalogRequestIds,
     unfinishedVerification,
+    technicalHandoffEligible,
     warnings: [
       'terminal_catalog_recovery_preliminary_cards',
-      ...(unfinishedVerification.length ? ['terminal_catalog_recovery_web_verification_incomplete'] : [])
+      ...(policy.selectionGoal === 'final_fit'
+        ? ['terminal_catalog_recovery_downgraded_from_final_fit']
+        : []),
+      ...((input.previousProductReferents?.length ?? 0) > 0
+        ? ['terminal_catalog_recovery_previous_product_referents']
+        : []),
+      ...(unfinishedVerification.length ? ['terminal_catalog_recovery_web_verification_incomplete'] : []),
+      ...(technicalHandoffEligible ? ['terminal_catalog_recovery_technical_handoff_after_exhaustion'] : [])
     ]
   };
+}
+
+function terminalProductOrientation(products: Product[]) {
+  return products.slice(0, 8).map((product) => {
+    if (typeof product.price !== 'number' || !Number.isFinite(product.price)) return product.name;
+    const amount = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
+      .format(product.price)
+      .replaceAll('\u00a0', ' ')
+      .replaceAll('\u202f', ' ');
+    const currency = product.currency === 'RUB' ? '₽' : product.currency;
+    return `${product.name} — ${amount}${currency ? ` ${currency}` : ''}`;
+  }).join('; ');
 }
 
 export function catalogCandidatesSatisfyingConditionalWebRequest(input: {
@@ -3416,6 +3678,22 @@ function productFromVisibleCard(card: ProductCard): Product {
   };
 }
 
+function visibleCardProducts(message: Message) {
+  if (message.role !== 'assistant') return [] as Product[];
+  const metadata = message.metadata as { productCards?: unknown } | undefined;
+  if (!Array.isArray(metadata?.productCards)) return [] as Product[];
+  return metadata.productCards
+    .filter((card): card is ProductCard =>
+      Boolean(
+        card &&
+        typeof card === 'object' &&
+        typeof (card as { id?: unknown }).id === 'string' &&
+        typeof (card as { name?: unknown }).name === 'string'
+      )
+    )
+    .map(productFromVisibleCard);
+}
+
 function coerceVisibleCardIntent(value: unknown): ProductSelectionClass {
   if (typeof value !== 'string' || !value.trim()) return 'unknown';
   const trimmed = value.trim();
@@ -3430,19 +3708,7 @@ function previousVisibleCardProducts(input: {
 }) {
   const productsById = new Map<string, Product>();
   for (let index = input.history.length - 1; index >= 0; index -= 1) {
-    const metadata = input.history[index]?.metadata as { productCards?: unknown } | undefined;
-    const cards = Array.isArray(metadata?.productCards)
-      ? metadata.productCards.filter((card): card is ProductCard =>
-          Boolean(
-            card &&
-            typeof card === 'object' &&
-            typeof (card as { id?: unknown }).id === 'string' &&
-            typeof (card as { name?: unknown }).name === 'string'
-          )
-        )
-      : [];
-    const products = cards
-      .map(productFromVisibleCard)
+    const products = visibleCardProducts(input.history[index]!)
       .filter((product) => !input.allowedProductIds || input.allowedProductIds.has(product.id))
       .filter((product) => input.intent === 'unknown' || productMatchesIntent(product, input.intent));
     for (const product of products) {
@@ -3451,6 +3717,108 @@ function previousVisibleCardProducts(input: {
     if (productsById.size >= 8) break;
   }
   return [...productsById.values()].slice(0, 8);
+}
+
+function previousProductReferents(input: {
+  history: Message[];
+  intent: AgentIntentContract;
+  selectedProductIds: Set<string>;
+}) {
+  if (
+    input.intent.selectionPolicy?.reusePreviousCards !== true ||
+    (
+      input.intent.grounding?.taskType !== 'comparison' &&
+      input.intent.grounding?.taskType !== 'product_selection'
+    )
+  ) return [] as Product[];
+
+  const productClass = canonicalProductClassFromIntent(input.intent);
+  const visibleProducts = previousVisibleCardProducts({
+    history: input.history,
+    intent: productClass
+  });
+  const maxReferents = Math.max(1, Math.min(8, input.intent.selectionPolicy.maxCards || 8));
+  const selectedReferents = visibleProducts.filter((product) => input.selectedProductIds.has(product.id));
+  if (selectedReferents.length) return selectedReferents.slice(0, maxReferents);
+
+  const mentionedNames = uniqueStrings((input.intent.productMentions ?? [])
+    .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+    .map((mention) => mention.name));
+  const mentionedReferents = visibleProducts.filter((product) =>
+    mentionedNames.some((name) => productMatchesTargetName(product, name))
+  );
+  if (mentionedReferents.length) return mentionedReferents.slice(0, maxReferents);
+
+  for (let index = input.history.length - 1; index >= 0; index -= 1) {
+    const latestVisibleProducts = visibleCardProducts(input.history[index]!)
+      .filter((product) => productClass === 'unknown' || productMatchesIntent(product, productClass));
+    if (latestVisibleProducts.length) return latestVisibleProducts.slice(0, maxReferents);
+  }
+  return [] as Product[];
+}
+
+function repairIntentForPreviousProductReferents(
+  intent: AgentIntentContract,
+  referents: Product[]
+) {
+  if (!referents.length) return { intent, repaired: false, requestId: null as string | null };
+  const productIds = uniqueStrings(referents.map((product) => product.id)).slice(0, 8);
+  const productNames = uniqueStrings(referents.map((product) => product.name)).slice(0, 4);
+  const detailsRequestIndex = intent.toolRequests.findIndex((request) => {
+    if (request.tool !== 'catalog.getProductDetails') return false;
+    const requestedIds = requestStringArray(request.args.productIds);
+    const requestedNames = requestStringArray(request.args.productNames);
+    return requestedIds.some((id) => productIds.includes(id)) ||
+      requestedNames.some((requestedName) =>
+        productNames.some((productName) => productMentionMatchesName(productName, requestedName))
+      );
+  });
+  const existingRequest = detailsRequestIndex >= 0 ? intent.toolRequests[detailsRequestIndex] : undefined;
+  const requestId = existingRequest?.id ?? uniqueToolRequestId(intent, 'auto:prior-product-details');
+  const detailsRequest: ToolRequest = existingRequest
+    ? {
+        ...existingRequest,
+        args: {
+          ...existingRequest.args,
+          productIds: uniqueStrings([
+            ...requestStringArray(existingRequest.args.productIds),
+            ...productIds
+          ]).slice(0, 8)
+        }
+      }
+    : {
+        id: requestId,
+        tool: 'catalog.getProductDetails',
+        args: {
+          productIds,
+          productNames,
+          productIntent: intent.selectionPolicy?.targetProductClass ?? undefined,
+          canonicalProductIntent: intent.selectionPolicy?.canonicalProductClass ?? undefined,
+          comparisonAttributes: intent.grounding?.technicalAttributes ?? [],
+          limit: productIds.length,
+          reason: 'Rehydrate the exact products referenced from the previous visible cards.',
+          notes: 'Exact prior card IDs take precedence over fuzzy lookup; a missing current row does not erase the visible card evidence.'
+        },
+        rationale: 'Read the exact previously shown products by their durable catalog IDs before answering the follow-up.',
+        required: true
+      };
+  const toolRequests = [...intent.toolRequests];
+  if (detailsRequestIndex >= 0) {
+    toolRequests[detailsRequestIndex] = detailsRequest;
+  } else {
+    const firstWebIndex = toolRequests.findIndex((request) => request.tool === 'web.researchProductFacts');
+    toolRequests.splice(firstWebIndex >= 0 ? firstWebIndex : toolRequests.length, 0, detailsRequest);
+  }
+  return {
+    intent: {
+      ...intent,
+      requiresTools: true,
+      toolRequests,
+      riskFlags: uniqueStrings([...intent.riskFlags, 'prior_product_referents_rehydrated_by_id'])
+    },
+    repaired: true,
+    requestId
+  };
 }
 
 const reusableSelectionEvidenceTools = new Set<ToolResult['tool']>([
@@ -3679,72 +4047,11 @@ function requiredResponseClausesForUserMessage(userMessage: string): RequiredRes
 }
 
 
-const broadCatalogTargetFragments = [
-  'товар', 'каталог', 'ассортимент', 'оборудован', 'инструмент', 'техник', 'машин', 'агрегат',
-  'что есть', 'что у вас', 'вариант', 'модель', 'позици'
-];
-
-function broadTextContainsAnyFragment(text: string, fragments: string[]) {
-  const normalized = text.toLocaleLowerCase('ru');
-  return fragments.some((fragment) => normalized.includes(fragment));
-}
-
-function exactProductMentionMakesCatalogSearchConcrete(intent: AgentIntentContract) {
-  return (intent.productMentions ?? []).some((mention) =>
-    exactTargetProductMentionRoles.has(mention.role) &&
-    mention.name.trim().length >= 4 &&
-    !broadTextContainsAnyFragment(mention.name, broadCatalogTargetFragments)
-  );
-}
-
-export function catalogSearchNeedsClarificationBeforeTools(intent: AgentIntentContract, userMessage: string) {
-  if (!intent.selectionPolicy || !intent.grounding) return false;
-  if (!intent.toolRequests.some((request) => request.tool === 'catalog.search')) return false;
-  if (ambiguousCutterRequestNeedsMaterialClarification(userMessage)) return true;
-  if (exactProductMentionMakesCatalogSearchConcrete(intent)) return false;
-  const canonicalProductClass = intent.selectionPolicy?.canonicalProductClass ?? null;
-  const canonicalIntent = coerceVisibleCardIntent(canonicalProductClass);
-  if (canonicalProductClass && canonicalIntent !== 'unknown') return false;
-  const targetProductClass = intent.selectionPolicy?.targetProductClass ?? '';
-  if (!targetProductClass.trim()) return true;
-  return broadTextContainsAnyFragment(targetProductClass, broadCatalogTargetFragments);
-}
-
 export function repairIntentForCatalogClarificationBeforeTools(
   intent: AgentIntentContract,
-  userMessage: string
+  _userMessage: string
 ): AgentIntentContract {
-  if (!catalogSearchNeedsClarificationBeforeTools(intent, userMessage)) return intent;
-  if (!intent.selectionPolicy || !intent.grounding) return intent;
-  const selectionPolicy = intent.selectionPolicy;
-  const grounding = intent.grounding;
-  const policyRuleIds = ambiguousCutterRequestNeedsMaterialClarification(userMessage)
-    ? uniqueStrings([...(intent.policyRuleIds ?? []), 'selection.cutter_ambiguous_material_question'])
-    : intent.policyRuleIds ?? [];
-  const missingRationale = ambiguousCutterRequestNeedsMaterialClarification(userMessage)
-    ? 'Ambiguous cutter wording requires material/work clarification before catalog tools or product cards.'
-    : 'Catalog search requires a concrete product class, exact product, or buyer task before tools or product cards.';
-  return {
-    ...intent,
-    requiresTools: false,
-    toolRequests: [],
-    policyRuleIds,
-    grounding: {
-      ...intent.grounding,
-      requiredToolKinds: [],
-      sourcePolicy: 'conversation_only',
-      webRequirement: 'none',
-      webPurpose: 'none'
-    },
-    selectionPolicy: {
-      ...selectionPolicy,
-      targetProductClass: selectionPolicy.targetProductClass ?? 'unknown',
-      canonicalProductClass: selectionPolicy.canonicalProductClass ?? 'unknown',
-      selectionGoal: 'preliminary_fit',
-      maxCards: 0,
-      rationale: [intent.selectionPolicy.rationale, missingRationale].filter(Boolean).join(' ')
-    }
-  };
+  return intent;
 }
 
 function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
@@ -4453,11 +4760,24 @@ const ledgerPayloadJsonSchema = {
     needId: nullableStringJsonSchema,
     productClass: nullableStringJsonSchema,
     role: { type: ['string', 'null'], enum: ['hard_requirement', 'preference', 'context', 'commercial', 'unknown', null] },
+    confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 },
     summary: nullableStringJsonSchema,
     constraints: stringArrayJsonSchema,
+    constraintsUpdateMode: {
+      type: ['string', 'null'],
+      enum: ['merge', 'replace', 'clear', null]
+    },
     openQuestions: stringArrayJsonSchema,
+    openQuestionsUpdateMode: {
+      type: ['string', 'null'],
+      enum: ['merge', 'replace', 'clear', null]
+    },
     selectedProductIds: stringArrayJsonSchema,
     rejectedProductIds: stringArrayJsonSchema,
+    rejectedProductIdsUpdateMode: {
+      type: ['string', 'null'],
+      enum: ['merge', 'replace', 'clear', null]
+    },
     selectionUpdateMode: {
       type: ['string', 'null'],
       enum: ['preserve', 'replace', 'clear', null]
@@ -4488,11 +4808,15 @@ const ledgerPayloadJsonSchema = {
     'needId',
     'productClass',
     'role',
+    'confidence',
     'summary',
     'constraints',
+    'constraintsUpdateMode',
     'openQuestions',
+    'openQuestionsUpdateMode',
     'selectedProductIds',
     'rejectedProductIds',
+    'rejectedProductIdsUpdateMode',
     'selectionUpdateMode',
     'invalidatedProductIds',
     'status',
@@ -5013,23 +5337,30 @@ function ledgerReducerPolicyPromptBlock() {
   return [
     'Return the shortest complete semantic JSON that satisfies the schema. Do not restate the buyer request in rationale or evidence; use only the minimum exact evidence needed to preserve meaning.',
     'Не переносишь контекст из других диалогов. Не добавляешь выдуманные факты.',
-    'Веди несколько потребностей явно. Для новой темы создай need.opened с payload needId, productClass, summary, constraints, openQuestions, selectedProductIds, rejectedProductIds, selectionUpdateMode, invalidatedProductIds, status и activate=true. Для продолжения, исправления или возврата к теме используй need.updated с тем же needId; activate=true ставит эту потребность текущей, а прежнюю reducer поставит на паузу.',
+    'Веди несколько потребностей явно. Для новой темы создай need.opened с payload needId, productClass, summary, constraints, constraintsUpdateMode, openQuestions, openQuestionsUpdateMode, selectedProductIds, rejectedProductIds, rejectedProductIdsUpdateMode, selectionUpdateMode, invalidatedProductIds, status и activate=true. Для продолжения, исправления или возврата к теме используй need.updated с тем же needId; activate=true ставит эту потребность текущей, а прежнюю reducer поставит на паузу.',
+    'В need.opened и need.updated всегда задавай constraintsUpdateMode, openQuestionsUpdateMode и rejectedProductIdsUpdateMode: merge добавляет элементы к сохранённым, replace полностью заменяет список, clear явно очищает его. Обязательный пустой массив без replace/clear не является командой удаления. Отказ покупателя от товара добавляй через rejectedProductIdsUpdateMode=merge; снимай отдельные отказы только полным replace, все отказы — только clear.',
     'В need.opened и need.updated всегда задавай selectionUpdateMode: preserve, если прежний выбор остаётся уместен; replace, если selectedProductIds полностью заменяют прежние; clear, если смена вводных аннулирует весь прежний выбор. В invalidatedProductIds перечисляй известные ID, которые больше не подходят. Не используй пустой selectedProductIds как неявную команду preserve.',
     'Для закрытой потребности создай need.closed с needId. Не смешивай факты разных needId.',
-    'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass и role: hard_requirement, preference, context или commercial. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
+    'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass, confidence от 0 до 1 и role: hard_requirement, preference, context или commercial. fact.observed означает неподтверждённое наблюдение и не получает confidence=1; fact.confirmed используй только для явно подтверждённой покупателем или проверенной источником информации. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
+    'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material или quantity. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
     'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
     'Если покупатель изменил вводные, создай новый fact.confirmed и укажи supersedesEventIds для старого факта, если он известен.'
   ].join('\n');
 }
 
-function plannerSystemPromptBlock(latestUserMessage?: string) {
+function plannerSystemPromptBlock(
+  latestUserMessage?: string,
+  ledgerIncludesCurrentTurnDelta = false
+) {
   const managerPolicy = salesManagerPlannerPolicyPromptBlock({ latestUserMessage });
   return [
     'Return the shortest complete semantic JSON that satisfies the schema. Do not restate the buyer request across summary, rationale, query, semanticQuery, reason, notes, or evidence fields. Preserve exact buyer quotes only where provenance requires them.',
     'Ты планировщик AI менеджера БАКАУТ.',
     untrustedEvidenceBoundary,
     managerPolicy,
-    'Планируй по existing ledger вместе с current userMessage: текущая реплика ещё не применена к ledger и может семантически заменить, отменить, уточнить или открыть требования. Более новая явная вводная покупателя имеет приоритет над конфликтующей старой; не смешивай их.',
+    ledgerIncludesCurrentTurnDelta
+      ? 'Текущая реплика уже применена reducer-ом к ledger. Планируй по этому post-delta state, не добавляй её повторно и обязательно согласуй selectionPolicy с активными typed hard_requirement facts.'
+      : 'Планируй по existing ledger вместе с current userMessage: текущая реплика ещё не применена к ledger и может семантически заменить, отменить, уточнить или открыть требования. Более новая явная вводная покупателя имеет приоритет над конфликтующей старой; не смешивай их.',
     'LLM решает смысл хода без фиксированного списка сценариев.',
     'Код только исполнит typed tools, но не будет подменять твой смысл.',
     'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, webRequirement, requiredToolKinds, technicalAttributes, buyerQuestion и rationale. Для technical_answer/product_selection/comparison buyerQuestion — точная непрерывная цитата из сообщения покупателя, выражающая активный бизнес-вопрос; не включай в неё телефон, email, имя или фразу о способе связи и сохраняй ту же цитату через ответы на уточнения. Для остальных задач без технического вопроса используй null. Затем toolRequests должны исполнять эту grounding-политику.',
@@ -5147,7 +5478,10 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       input: [
         {
           role: 'system',
-          content: plannerSystemPromptBlock(input.userMessage)
+          content: plannerSystemPromptBlock(
+            input.userMessage,
+            input.ledgerIncludesCurrentTurnDelta === true
+          )
         },
         {
           role: 'user',
@@ -5155,6 +5489,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             userMessage: input.userMessage,
             history: compactHistory(input.history),
             ledger: compactLedger(input.ledgerState),
+            ledgerIncludesCurrentTurnDelta: input.ledgerIncludesCurrentTurnDelta === true,
             pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null,
             pendingExhaustedTechnicalHandoffs: input.pendingExhaustedTechnicalHandoffs ??
               trustedPendingExhaustedTechnicalHandoffs(input.history)
@@ -5412,13 +5747,6 @@ export class AgentManagerOrchestrator {
     if (!initialSession || initialSession.status !== 'active') throw new Error('Conversation session is not active');
     const alreadyCompleted = await this.completedPayload(initialSession, input.turnId, input.onDelta);
     if (alreadyCompleted) return alreadyCompleted;
-    const alreadyCommitted = await this.completedFromFinalAnswerContract(
-      initialSession,
-      input.turnId,
-      true,
-      input.onDelta
-    );
-    if (alreadyCommitted) return alreadyCommitted;
 
     const repository = this.conversations as ConversationRepository & {
       beginRecoveryAttempt?: ConversationRepository['beginRecoveryAttempt'];
@@ -5486,22 +5814,35 @@ export class AgentManagerOrchestrator {
     const snapshot = typeof repository.getDialogueLedgerSnapshot === 'function'
       ? await repository.getDialogueLedgerSnapshot.call(this.conversations, sessionId)
       : null;
+    let snapshotReplayRequired = false;
     if (snapshot && typeof repository.listDialogueLedgerEventsAfter === 'function') {
       const throughEventSeq = Number(snapshot.through_event_seq ?? 0);
       if (!Number.isSafeInteger(throughEventSeq) || throughEventSeq < 0) {
         throw new Error('invalid_dialogue_ledger_snapshot_cursor');
       }
-      const initialState = parseReducedDialogueLedgerState(snapshot.state);
-      const recentRows: unknown[] = Array.isArray(snapshot.recent_events) ? snapshot.recent_events : [];
-      const recentEvents = recentRows.map((event) => DialogueLedgerEventSchema.parse(event));
-      const tailRows = await repository.listDialogueLedgerEventsAfter.call(this.conversations, sessionId, throughEventSeq, 2_000);
-      if (tailRows.length >= 2_000) throw new Error('dialogue_ledger_snapshot_tail_limit_exceeded');
-      const tailEvents = mapLedgerRows(tailRows as DialogueLedgerRow[]);
-      const state = reduceDialogueLedger(tailEvents, initialState);
-      return {
-        events: [...new Map([...recentEvents, ...tailEvents].map((event) => [event.eventId, event])).values()].slice(-160),
-        state
-      };
+      let parsedSnapshot: {
+        initialState: ReducedDialogueLedgerState;
+        recentEvents: DialogueLedgerEvent[];
+      } | undefined;
+      try {
+        const initialState = parseReducedDialogueLedgerState(snapshot.state);
+        const recentRows: unknown[] = Array.isArray(snapshot.recent_events) ? snapshot.recent_events : [];
+        const recentEvents = recentRows.map((event) => DialogueLedgerEventSchema.parse(event));
+        parsedSnapshot = { initialState, recentEvents };
+      } catch {
+        parsedSnapshot = undefined;
+        snapshotReplayRequired = true;
+      }
+      if (parsedSnapshot) {
+        const tailRows = await repository.listDialogueLedgerEventsAfter.call(this.conversations, sessionId, throughEventSeq, 2_000);
+        if (tailRows.length >= 2_000) throw new Error('dialogue_ledger_snapshot_tail_limit_exceeded');
+        const tailEvents = mapLedgerRows(tailRows as DialogueLedgerRow[]);
+        const state = reduceDialogueLedger(tailEvents, parsedSnapshot.initialState);
+        return {
+          events: [...new Map([...parsedSnapshot.recentEvents, ...tailEvents].map((event) => [event.eventId, event])).values()].slice(-160),
+          state
+        };
+      }
     }
 
     const rows = typeof repository.listDialogueLedgerEventsAfter === 'function'
@@ -5509,11 +5850,17 @@ export class AgentManagerOrchestrator {
       : await this.conversations.listDialogueLedgerEvents(sessionId, 2_000);
     if (rows.length >= 10_000) throw new Error('dialogue_ledger_initial_replay_limit_exceeded');
     const events = mapLedgerRows(rows as DialogueLedgerRow[]);
-    return { events: events.slice(-160), state: reduceDialogueLedger(events) };
+    const state = reduceDialogueLedger(events);
+    if (snapshotReplayRequired) {
+      state.warnings = Array.from(new Set([...state.warnings, 'invalid_snapshot_replayed_from_events']));
+    }
+    return { events: events.slice(-160), state };
   }
 
   private async persistDialogueLedgerState(input: {
     sessionId: string;
+    turnId: string;
+    executionOwner: string;
     state: ReducedDialogueLedgerState;
     recentEvents: DialogueLedgerEvent[];
     needState: CustomerNeedState;
@@ -5524,7 +5871,10 @@ export class AgentManagerOrchestrator {
       saveDialogueLedgerSnapshot?: ConversationRepository['saveDialogueLedgerSnapshot'];
     };
     if (typeof repository.updateNeedState === 'function') {
-      await repository.updateNeedState.call(this.conversations, input.sessionId, input.needState);
+      await repository.updateNeedState.call(this.conversations, input.sessionId, input.needState, {
+        turnId: input.turnId,
+        executionOwner: input.executionOwner
+      });
     }
     if (
       typeof repository.latestDialogueLedgerEventSeq !== 'function' ||
@@ -5534,6 +5884,8 @@ export class AgentManagerOrchestrator {
     if (!Number.isSafeInteger(cursor.eventSeq) || cursor.eventSeq <= 0) return;
     await repository.saveDialogueLedgerSnapshot.call(this.conversations, {
       sessionId: input.sessionId,
+      turnId: input.turnId,
+      executionOwner: input.executionOwner,
       throughEventSeq: cursor.eventSeq,
       eventCount: cursor.eventCount,
       state: input.state,
@@ -5583,8 +5935,11 @@ export class AgentManagerOrchestrator {
       sourceTypes: ['web'],
       limit: 32
     });
+    const exactBoundFacts = exactProductIds.length
+      ? facts.filter((fact) => Boolean(fact.productId && exactProductIds.includes(fact.productId)))
+      : facts;
     const matchingFacts = matchingVerifiedFactsForRequest({
-      facts,
+      facts: exactBoundFacts,
       targetProductNames: input.targetProductNames,
       comparisonAttributes: input.comparisonAttributes
     });
@@ -5678,8 +6033,6 @@ export class AgentManagerOrchestrator {
     turnId: string;
     recovered: boolean;
   }): Promise<ChatResponsePayload> {
-    const completedFromAnswerContract = await this.completedFromFinalAnswerContract(input.session, input.turnId, input.recovered, input.onDelta);
-    if (completedFromAnswerContract) return completedFromAnswerContract;
     const completed = await this.completedPayload(input.session, input.turnId, input.onDelta);
     if (completed) return completed;
 
@@ -5705,13 +6058,19 @@ export class AgentManagerOrchestrator {
     if (!leaseClaimed) {
       const completedAfterCollision = await this.completedPayload(input.session, input.turnId, input.onDelta);
       if (completedAfterCollision) return completedAfterCollision;
-      const contractAfterCollision = await this.completedFromFinalAnswerContract(input.session, input.turnId, input.recovered, input.onDelta);
-      if (contractAfterCollision) return contractAfterCollision;
       throw new TurnExecutionInProgressError();
     }
 
     try {
-      return await this.executeClaimedTurn(input);
+      const completedFromAnswerContract = await this.completedFromFinalAnswerContract(
+        input.session,
+        input.turnId,
+        input.recovered,
+        ownerId,
+        input.onDelta
+      );
+      if (completedFromAnswerContract) return completedFromAnswerContract;
+      return await this.executeClaimedTurn({ ...input, executionOwner: ownerId });
     } catch (error) {
       if (error instanceof AgentManagerTurnBudgetExceededError) {
         await this.conversations.updateTurn({
@@ -5720,7 +6079,8 @@ export class AgentManagerOrchestrator {
           status: 'failed',
           stage: 'budget_stopped',
           errorCode: error.stopReason,
-          errorMessage: error.message
+          errorMessage: error.message,
+          executionOwner: ownerId
         });
         await this.trace(input.sessionId, input.turnId, 'turn', 'budget_stopped', {
           stopReason: error.stopReason
@@ -5742,6 +6102,7 @@ export class AgentManagerOrchestrator {
     session: ConversationSession;
     turnId: string;
     recovered: boolean;
+    executionOwner: string;
   }): Promise<ChatResponsePayload> {
     const persistedTurn = await this.conversations.getTurn(input.sessionId, input.turnId);
     const persistedDeadlineAtMs = persistedTurn?.deadlineAt ? Date.parse(persistedTurn.deadlineAt) : Number.NaN;
@@ -5764,7 +6125,8 @@ export class AgentManagerOrchestrator {
           recovered: input.recovered,
           onDelta: input.onDelta,
           reason: 'turn_work_deadline_exhausted_before_execution',
-          deadlineAt: persistedTurn?.deadlineAt ?? null
+          deadlineAt: persistedTurn?.deadlineAt ?? null,
+          executionOwner: input.executionOwner
         });
       }
       throw error;
@@ -5780,13 +6142,14 @@ export class AgentManagerOrchestrator {
       return payload;
     } catch (error) {
       if (wallTimeSignal.aborted) {
-        // A final answer contract is the durable commit point. If the deadline
-        // crossed during delivery/checkpointing, recover from that commit instead
-        // of marking an already finished turn as budget-stopped.
+        // The fenced terminal repository write is the durable commit point. If
+        // delivery/checkpointing fails afterwards, recover the already completed
+        // turn instead of marking it as budget-stopped.
         const committed = await this.completedFromFinalAnswerContract(
           input.session,
           input.turnId,
           input.recovered,
+          input.executionOwner,
           undefined
         ).catch((recoveryError) => {
           console.warn('Committed turn recovery after wall deadline failed', safeError(recoveryError));
@@ -5799,7 +6162,8 @@ export class AgentManagerOrchestrator {
           recovered: input.recovered,
           onDelta: input.onDelta,
           reason: 'turn_work_deadline_exhausted',
-          deadlineAt: persistedTurn?.deadlineAt ?? null
+          deadlineAt: persistedTurn?.deadlineAt ?? null,
+          executionOwner: input.executionOwner
         });
       }
       throw error;
@@ -5810,6 +6174,7 @@ export class AgentManagerOrchestrator {
     session: ConversationSession;
     turnId: string;
     recovered: boolean;
+    executionOwner: string;
   }, turnBudget: AgentManagerTurnBudget): Promise<ChatResponsePayload> {
     await this.trace(input.sessionId, input.turnId, 'turn', 'started', { recovered: input.recovered });
 
@@ -5820,34 +6185,17 @@ export class AgentManagerOrchestrator {
 
     let userMessage = input.userMessage;
     if (!turn.userMessageId && !input.skipUserMessage) {
-      const repository = this.conversations as ConversationRepository & {
-        addUserMessageForTurn?: ConversationRepository['addUserMessageForTurn'];
-      };
-      const user = typeof repository.addUserMessageForTurn === 'function'
-        ? await repository.addUserMessageForTurn.call(this.conversations, {
-            sessionId: input.sessionId,
-            turnId: input.turnId,
-            content: input.userMessage,
-            activeNeedsBefore: input.session.needState.activeNeeds ?? []
-          })
-        : await this.conversations.addMessage({
-            sessionId: input.sessionId,
-            role: 'user',
-            content: input.userMessage
-          });
-      if (typeof repository.addUserMessageForTurn !== 'function') {
-        await this.conversations.updateTurn({
-          sessionId: input.sessionId,
-          turnId: input.turnId,
-          status: 'received',
-          stage: 'user_message_saved',
-          userMessageId: user.id,
-          activeNeedsBefore: input.session.needState.activeNeeds ?? []
-        });
-      }
+      const user = await this.conversations.addUserMessageForTurn({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        executionOwner: input.executionOwner,
+        content: input.userMessage,
+        activeNeedsBefore: input.session.needState.activeNeeds ?? []
+      });
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'user_message_saved',
         status: 'succeeded',
         artifactRef: user.id,
@@ -5950,6 +6298,7 @@ export class AgentManagerOrchestrator {
         await this.conversations.upsertTurnCheckpoint({
           sessionId: input.sessionId,
           turnId: input.turnId,
+          executionOwner: input.executionOwner,
           checkpoint,
           status: 'failed',
           payload: {
@@ -5968,6 +6317,7 @@ export class AgentManagerOrchestrator {
           await this.conversations.upsertTurnCheckpoint({
             sessionId: input.sessionId,
             turnId: input.turnId,
+            executionOwner: input.executionOwner,
             checkpoint: 'ledger_delta_proposed',
             status: 'succeeded',
             payload: parsed.data
@@ -5990,6 +6340,7 @@ export class AgentManagerOrchestrator {
           await this.conversations.upsertTurnCheckpoint({
             sessionId: input.sessionId,
             turnId: input.turnId,
+            executionOwner: input.executionOwner,
             checkpoint: 'intent_contract_proposed',
             status: 'succeeded',
             payload: parsed.data
@@ -6057,6 +6408,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'ledger_delta_proposed',
         status: 'succeeded',
         payload: delta
@@ -6083,6 +6435,7 @@ export class AgentManagerOrchestrator {
         await this.conversations.upsertTurnCheckpoint({
           sessionId: input.sessionId,
           turnId: input.turnId,
+          executionOwner: input.executionOwner,
           checkpoint: 'ledger_delta_proposed',
           status: 'succeeded',
           payload: delta
@@ -6112,6 +6465,7 @@ export class AgentManagerOrchestrator {
         await this.conversations.upsertDialogueLedgerEvent({
           sessionId: event.sessionId,
           turnId: event.turnId,
+          executionOwner: input.executionOwner,
           eventId: event.eventId,
           eventType: event.eventType,
           scope: event.scope,
@@ -6124,6 +6478,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'ledger_delta_applied',
         status: 'succeeded',
         payload: { eventIds: newEvents.map((event) => event.eventId) }
@@ -6139,6 +6494,8 @@ export class AgentManagerOrchestrator {
     const turnLedgerEvents = [...newEvents];
     await this.persistDialogueLedgerState({
       sessionId: input.sessionId,
+      turnId: input.turnId,
+      executionOwner: input.executionOwner,
       state: ledgerState,
       recentEvents: effectiveLedgerEvents,
       needState: needStateSnapshot
@@ -6166,6 +6523,7 @@ export class AgentManagerOrchestrator {
         userMessage,
         ledgerEvents: effectiveLedgerEvents,
         ledgerState,
+        ledgerIncludesCurrentTurnDelta: true,
         pendingLeadCaptureDraft: pendingLeadDraftContext,
         pendingExhaustedTechnicalHandoffs,
         structuredOutputTokenCap: semanticRecoveryOutputTokenCap(
@@ -6188,6 +6546,7 @@ export class AgentManagerOrchestrator {
       }
       const conflicts = parallelIntentLedgerConflicts({
         intent: plannedIntent,
+        previousLedgerState: ledgerContext.state,
         ledgerState,
         turnEvents: newEvents
       });
@@ -6203,6 +6562,7 @@ export class AgentManagerOrchestrator {
           userMessage,
           ledgerEvents: effectiveLedgerEvents,
           ledgerState,
+          ledgerIncludesCurrentTurnDelta: true,
           pendingLeadCaptureDraft: pendingLeadDraftContext,
           pendingExhaustedTechnicalHandoffs,
           structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
@@ -6239,6 +6599,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertDialogueLedgerEvent({
         sessionId: reconciliationEvent.sessionId,
         turnId: reconciliationEvent.turnId,
+        executionOwner: input.executionOwner,
         eventId: reconciliationEvent.eventId,
         eventType: reconciliationEvent.eventType,
         scope: reconciliationEvent.scope,
@@ -6258,6 +6619,8 @@ export class AgentManagerOrchestrator {
       );
       await this.persistDialogueLedgerState({
         sessionId: input.sessionId,
+        turnId: input.turnId,
+        executionOwner: input.executionOwner,
         state: ledgerState,
         recentEvents: effectiveLedgerEvents,
         needState: needStateSnapshot
@@ -6265,6 +6628,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'ledger_delta_applied',
         status: 'succeeded',
         payload: { eventIds: turnLedgerEvents.map((event) => event.eventId) }
@@ -6276,13 +6640,12 @@ export class AgentManagerOrchestrator {
       });
     }
     const plannedReuseProductIds = currentNeedSelectedProductIds(needStateSnapshot);
-    const plannedReuseIntent = coerceVisibleCardIntent(plannedIntent.selectionPolicy?.canonicalProductClass);
-    const hasReusableCurrentNeedCards = plannedIntent.selectionPolicy?.reusePreviousCards === true &&
-      previousVisibleCardProducts({
-        history,
-        intent: plannedReuseIntent,
-        allowedProductIds: plannedReuseProductIds
-      }).length > 0;
+    const plannedProductReferents = previousProductReferents({
+      history,
+      intent: plannedIntent,
+      selectedProductIds: plannedReuseProductIds
+    });
+    const hasReusableCurrentNeedCards = plannedProductReferents.length > 0;
     const provenExhaustedHandoffContinuation = hasProvenExhaustedTechnicalHandoffContinuation({
       history,
       intent: plannedIntent,
@@ -6305,7 +6668,11 @@ export class AgentManagerOrchestrator {
       ),
       userMessage
     );
-    const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(groundedIntent, {
+    const previousProductReferentRepair = repairIntentForPreviousProductReferents(
+      groundedIntent,
+      plannedProductReferents
+    );
+    const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(previousProductReferentRepair.intent, {
       openedNeedThisTurn: newEvents.some((event) => event.eventType === 'need.opened')
     });
     const openEndedWebCoverageRepair = repairIntentForOpenEndedRequirementWebCoverage(newNeedFinalFitRepair.intent);
@@ -6336,17 +6703,20 @@ export class AgentManagerOrchestrator {
       enabled: true,
       shadowMode: false
     });
-    await this.conversations.updateTurn({
+    const plannedTurn = await this.conversations.updateTurn({
       sessionId: input.sessionId,
       turnId: input.turnId,
       status: 'planned',
       stage: 'intent_contract_created',
       plannerContract: intent,
-      activeNeedsAfter: needStateSnapshot.activeNeeds
+      activeNeedsAfter: needStateSnapshot.activeNeeds,
+      executionOwner: input.executionOwner
     });
+    if (!plannedTurn) throw new TurnExecutionInProgressError();
     if (
       !intentCheckpoint.found ||
       legacyIntentUpgraded ||
+      previousProductReferentRepair.repaired ||
       newNeedFinalFitRepair.repaired ||
       openEndedWebCoverageRepair.repairs.length > 0 ||
       typedCoverageRepair.repairs.length > 0
@@ -6354,6 +6724,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'intent_contract_created',
         status: 'succeeded',
         payload: intent
@@ -6413,6 +6784,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.saveToolArtifact({
         sessionId: input.session.id,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         toolName: reboundResult.tool,
         toolRequestId: reboundResult.requestId,
         status: reboundResult.status,
@@ -6433,6 +6805,7 @@ export class AgentManagerOrchestrator {
     let { toolResults, products } = await this.executeTools({
       session: input.session,
       turnId: input.turnId,
+      executionOwner: input.executionOwner,
       userMessage,
       history,
       intent,
@@ -6447,6 +6820,7 @@ export class AgentManagerOrchestrator {
     await this.conversations.upsertTurnCheckpoint({
       sessionId: input.sessionId,
       turnId: input.turnId,
+      executionOwner: input.executionOwner,
       checkpoint: 'tool_artifacts_saved',
       status: 'succeeded',
       payload: { resultCount: toolResults.length }
@@ -6468,14 +6842,23 @@ export class AgentManagerOrchestrator {
         request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
       ) ||
       intent.selectionPolicy?.reusePreviousCards === true;
-    const historicalProducts = selectionTurnMayUseHistory
-      ? previousVisibleCardProducts({
+    const currentProductReferents = selectionTurnMayUseHistory
+      ? previousProductReferents({
           history,
-          intent: continuityIntent,
-          allowedProductIds: structuredSemanticPlan
-            ? currentNeedSelectedProductIds(needStateSnapshot)
-            : undefined
+          intent,
+          selectedProductIds: currentNeedSelectedProductIds(needStateSnapshot)
         })
+      : [];
+    const historicalProducts = selectionTurnMayUseHistory
+      ? currentProductReferents.length
+        ? currentProductReferents
+        : previousVisibleCardProducts({
+            history,
+            intent: continuityIntent,
+            allowedProductIds: structuredSemanticPlan
+              ? currentNeedSelectedProductIds(needStateSnapshot)
+              : undefined
+          })
       : [];
     const historicalSelectionTools = selectionTurnMayUseHistory
       ? previousSelectionToolResults({ history, intent })
@@ -6584,6 +6967,7 @@ export class AgentManagerOrchestrator {
         : await this.searchPlateReplacementProducts({
             session: input.session,
             turnId: input.turnId,
+            executionOwner: input.executionOwner,
             userMessage,
             intent,
             needState: needStateSnapshot,
@@ -6662,6 +7046,7 @@ export class AgentManagerOrchestrator {
         : await this.searchNarrowedReplacementProducts({
             session: input.session,
             turnId: input.turnId,
+            executionOwner: input.executionOwner,
             userMessage,
             intent,
             needState: needStateSnapshot,
@@ -6783,6 +7168,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.saveAnswerContract({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         answerText: answer.answerText,
         contract: answer,
         status: 'draft'
@@ -6790,6 +7176,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'answer_contract_created',
         status: 'succeeded',
         payload: answer
@@ -6851,6 +7238,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'answer_contract_created',
         status: 'failed',
         payload: answer,
@@ -6860,6 +7248,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'review_completed',
         status: 'failed',
         payload: review,
@@ -6869,6 +7258,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.saveAnswerContract({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         answerText: answer.answerText,
         contract: answer,
         review,
@@ -6897,6 +7287,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.upsertTurnCheckpoint({
         sessionId: input.sessionId,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         checkpoint: 'review_completed',
         status: 'succeeded',
         payload: review
@@ -6965,7 +7356,7 @@ export class AgentManagerOrchestrator {
           decisionProductClass: selectionReadiness.decision?.productClass
         }),
         allowedProductIds: structuredSemanticPlan
-          ? currentNeedSelectedProductIds(needStateSnapshot)
+          ? new Set(currentProductReferents.map((product) => product.id))
           : undefined
       });
       if (previousProducts.length) {
@@ -7060,6 +7451,7 @@ export class AgentManagerOrchestrator {
         await this.conversations.upsertDialogueLedgerEvent({
           sessionId: selectionEvent.sessionId,
           turnId: selectionEvent.turnId,
+          executionOwner: input.executionOwner,
           eventId: selectionEvent.eventId,
           eventType: selectionEvent.eventType,
           scope: selectionEvent.scope,
@@ -7079,6 +7471,8 @@ export class AgentManagerOrchestrator {
         );
         await this.persistDialogueLedgerState({
           sessionId: input.sessionId,
+          turnId: input.turnId,
+          executionOwner: input.executionOwner,
           state: ledgerState,
           recentEvents: effectiveLedgerEvents,
           needState: needStateSnapshot
@@ -7148,6 +7542,10 @@ export class AgentManagerOrchestrator {
         toolResultIds: historicalSelectionTools.map((result) => result.requestId),
         tools: historicalSelectionTools.map((result) => result.tool)
       },
+      previousProductReferents: {
+        productIds: currentProductReferents.map((product) => product.id),
+        source: currentProductReferents.length ? 'visible_product_cards' : 'none'
+      },
       cardSelection,
       selectionReadiness,
       answerProductEvidence,
@@ -7178,32 +7576,24 @@ export class AgentManagerOrchestrator {
       leadCreated: toolResults.some(isDurableLeadCaptureResult),
       metadata
     };
-    await this.conversations.saveAnswerContract({
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-      answerText: finalText,
-      contract: finalAnswerContract,
-      review,
-      responsePayload,
-      status: 'final'
-    });
-
-    await input.onDelta?.(finalText);
     const assistantMessage = await this.conversations.addAssistantMessageForTurn({
       sessionId: input.sessionId,
       turnId: input.turnId,
       content: finalText,
       metadata,
-      recovered: input.recovered
+      recovered: input.recovered,
+      executionOwner: input.executionOwner,
+      answerContract: finalAnswerContract,
+      review,
+      responsePayload,
+      checkpointPayload: { recovered: input.recovered }
     });
-    await this.conversations.upsertTurnCheckpoint({
-      sessionId: input.sessionId,
-      turnId: input.turnId,
-      checkpoint: 'assistant_message_saved',
-      status: 'succeeded',
-      artifactRef: assistantMessage.id,
-      payload: { recovered: input.recovered }
-    });
+    if (!assistantMessage) {
+      const completed = await this.completedPayload(input.session, input.turnId, input.onDelta);
+      if (completed) return completed;
+      throw new TurnExecutionInProgressError();
+    }
+    await input.onDelta?.(finalText);
     await this.trace(input.sessionId, input.turnId, 'turn', 'assistant_message_saved', {
       assistantMessageId: assistantMessage.id,
       recovered: input.recovered
@@ -7218,6 +7608,7 @@ export class AgentManagerOrchestrator {
   private async executeTools(input: {
     session: ConversationSession;
     turnId: string;
+    executionOwner: string;
     userMessage: string;
     history: Message[];
     intent: AgentIntentContract;
@@ -7261,6 +7652,7 @@ export class AgentManagerOrchestrator {
         await this.conversations.saveToolArtifact({
           sessionId: input.session.id,
           turnId: input.turnId,
+          executionOwner: input.executionOwner,
           toolName: pendingRequest.tool,
           toolRequestId: pendingRequest.id,
           status: pendingResult.status,
@@ -7551,7 +7943,7 @@ export class AgentManagerOrchestrator {
               const productsFromIds = await getProductsByIds.call(this.products, requestedProductIds);
               productsFromIds.forEach((product) => requestProductsById.set(product.id, product));
             }
-            const shouldSearchByText = names.length > 0 || requestedProductIds.length === 0;
+            const shouldSearchByText = requestedProductIds.length === 0;
             for (const query of shouldSearchByText ? queries.slice(0, 4) : []) {
               const found = await this.searchCatalogProducts({
                 query,
@@ -8062,6 +8454,7 @@ export class AgentManagerOrchestrator {
       await this.conversations.saveToolArtifact({
         sessionId: input.session.id,
         turnId: input.turnId,
+        executionOwner: input.executionOwner,
         toolName: request.tool,
         toolRequestId: request.id,
         status: result.status,
@@ -8104,6 +8497,7 @@ export class AgentManagerOrchestrator {
   private async searchPlateReplacementProducts(input: {
     session: ConversationSession;
     turnId: string;
+    executionOwner: string;
     userMessage: string;
     intent: AgentIntentContract;
     needState: CustomerNeedState;
@@ -8188,6 +8582,7 @@ export class AgentManagerOrchestrator {
     await this.conversations.saveToolArtifact({
       sessionId: input.session.id,
       turnId: input.turnId,
+      executionOwner: input.executionOwner,
       toolName: result.tool,
       toolRequestId: result.requestId,
       status: result.status,
@@ -8215,6 +8610,7 @@ export class AgentManagerOrchestrator {
   private async searchNarrowedReplacementProducts(input: {
     session: ConversationSession;
     turnId: string;
+    executionOwner: string;
     userMessage: string;
     intent: AgentIntentContract;
     needState: CustomerNeedState;
@@ -8329,6 +8725,7 @@ export class AgentManagerOrchestrator {
     await this.conversations.saveToolArtifact({
       sessionId: input.session.id,
       turnId: input.turnId,
+      executionOwner: input.executionOwner,
       toolName: result.tool,
       toolRequestId: result.requestId,
       status: result.status,
@@ -9151,11 +9548,13 @@ export class AgentManagerOrchestrator {
     onDelta?: (text: string) => void | Promise<void>;
     reason: string;
     deadlineAt: string | null;
+    executionOwner: string;
   }): Promise<ChatResponsePayload> {
     const committed = await this.completedFromFinalAnswerContract(
       input.session,
       input.turnId,
       input.recovered,
+      input.executionOwner,
       input.onDelta
     );
     if (committed) return committed;
@@ -9168,7 +9567,17 @@ export class AgentManagerOrchestrator {
       input.session.needState ?? emptyNeedState()
     );
     const persistedExecution = await this.loadPersistedTurnExecution(input.session.id, input.turnId);
-    const toolStatuses = [...persistedExecution.toolResults.values()].map((result) => ({
+    const persistedToolResults = [...persistedExecution.toolResults.values()];
+    const webResearchResults = persistedToolResults.filter((result) =>
+      result.tool === 'web.researchProductFacts'
+    );
+    const webSearchAttempted = webResearchResults.length > 0;
+    const webSearchCompleted = webResearchResults.some((result) =>
+      result.status === 'ok' &&
+      Boolean(result.payload && typeof result.payload === 'object') &&
+      (result.payload as { usedWebSearch?: unknown }).usedWebSearch === true
+    );
+    const toolStatuses = persistedToolResults.map((result) => ({
       requestId: result.requestId,
       tool: result.tool,
       status: result.status,
@@ -9179,23 +9588,40 @@ export class AgentManagerOrchestrator {
       succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_created').payload ??
       succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_proposed').payload;
     const persistedIntent = AgentIntentContractSchema.safeParse(persistedIntentPayload);
+    const terminalHistory = persistedIntent.success
+      ? await this.conversations.listMessages(input.session.id, 80)
+      : [];
+    const previousReferents = persistedIntent.success
+      ? previousProductReferents({
+          history: terminalHistory,
+          intent: persistedIntent.data,
+          selectedProductIds: currentNeedSelectedProductIds(needStateSnapshot)
+        })
+      : [];
     const catalogRecovery = terminalCatalogRecovery({
       intent: persistedIntent.success ? persistedIntent.data : undefined,
-      toolResults: [...persistedExecution.toolResults.values()]
+      toolResults: persistedToolResults,
+      previousProductReferents: previousReferents
     });
     const recoveryProductClass = persistedIntent.success
       ? persistedIntent.data.selectionPolicy?.targetProductClass?.trim() ??
         persistedIntent.data.selectionPolicy?.canonicalProductClass ??
         'unknown'
       : 'unknown';
+    const productOrientation = terminalProductOrientation(catalogRecovery.products);
     const finalText = catalogRecovery.products.length
       ? catalogRecovery.unfinishedVerification.length
         ? [
-            'По подтверждённым данным каталога предварительно подходят варианты ниже.',
-            `Не успела завершиться проверка: ${catalogRecovery.unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`,
-            'Поэтому окончательную совместимость по этому пункту пока не подтверждаю.'
+            `По уже подтверждённым данным предварительно подходят: ${productOrientation}.`,
+            catalogRecovery.technicalHandoffEligible
+              ? `После проверки доступных источников не удалось подтвердить: ${catalogRecovery.unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`
+              : `Не успела завершиться проверка: ${catalogRecovery.unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`,
+            'Поэтому окончательную совместимость по этому пункту пока не подтверждаю.',
+            ...(catalogRecovery.technicalHandoffEligible
+              ? ['Могу передать именно этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?']
+              : [])
           ].join(' ')
-        : 'По подтверждённым данным каталога предварительно подходят варианты ниже. Окончательный вывод для этого хода не успел сформироваться, поэтому не утверждаю совместимость сверх проверенных характеристик.'
+        : `По уже подтверждённым данным предварительно подходят: ${productOrientation}. Окончательный вывод для этого хода не успел сформироваться, поэтому не утверждаю совместимость сверх проверенных характеристик.`
       : 'Не успел надёжно завершить проверку в пределах этого хода, поэтому неподтверждённый результат не выдаю. Уже собранные данные сохранены в истории диалога. Если вы продолжите разговор новым сообщением, использую доступный контекст без повтора уже подтверждённых вводных.';
     const answerContract: AnswerContract = {
       answerText: finalText,
@@ -9216,10 +9642,13 @@ export class AgentManagerOrchestrator {
           : [])
       ]),
       selectedProductIds: catalogRecovery.products.map((product) => product.id),
-      leadAction: 'none',
+      leadAction: catalogRecovery.technicalHandoffEligible ? 'offer_form' : 'none',
       riskFlags: uniqueStrings([
         'deterministic_terminal_response',
-        ...(catalogRecovery.products.length ? ['terminal_catalog_recovery'] : [])
+        ...(catalogRecovery.products.length ? ['terminal_catalog_recovery'] : []),
+        ...(catalogRecovery.technicalHandoffEligible
+          ? ['terminal_technical_handoff_after_search_exhaustion']
+          : [])
       ]),
       selectionReadiness: catalogRecovery.products.length
         ? {
@@ -9251,11 +9680,15 @@ export class AgentManagerOrchestrator {
       substantiveAnswerCompleted: false,
       terminalReason: input.reason,
       deadlineAt: input.deadlineAt,
+      usedWebSearch: webSearchCompleted,
+      webSearchAttempted,
+      webSearchCompleted,
       toolStatuses,
       terminalCatalogRecovery: {
         selectedProductIds: catalogRecovery.products.map((product) => product.id),
         catalogRequestIds: catalogRecovery.catalogRequestIds,
         unfinishedVerification: catalogRecovery.unfinishedVerification,
+        technicalHandoffEligible: catalogRecovery.technicalHandoffEligible,
         warnings: catalogRecovery.warnings
       },
       answerContract,
@@ -9268,36 +9701,29 @@ export class AgentManagerOrchestrator {
       answer: finalText,
       needState: needStateSnapshot,
       productCards: catalogRecovery.cards,
-      usedWebSearch: false,
-      leadRequested: false,
+      usedWebSearch: webSearchCompleted,
+      leadRequested: catalogRecovery.technicalHandoffEligible,
       leadCreated: false,
       metadata
     };
-    await this.conversations.saveAnswerContract({
-      sessionId: input.session.id,
-      turnId: input.turnId,
-      answerText: finalText,
-      contract: answerContract,
-      review,
-      responsePayload,
-      status: 'final'
-    });
-    await input.onDelta?.(finalText);
     const assistantMessage = await this.conversations.addAssistantMessageForTurn({
       sessionId: input.session.id,
       turnId: input.turnId,
       content: finalText,
       metadata,
-      recovered: input.recovered
+      recovered: input.recovered,
+      executionOwner: input.executionOwner,
+      answerContract,
+      review,
+      responsePayload,
+      checkpointPayload: { terminal: true, reason: input.reason }
     });
-    await this.conversations.upsertTurnCheckpoint({
-      sessionId: input.session.id,
-      turnId: input.turnId,
-      checkpoint: 'assistant_message_saved',
-      status: 'succeeded',
-      artifactRef: assistantMessage.id,
-      payload: { terminal: true, reason: input.reason }
-    });
+    if (!assistantMessage) {
+      const completed = await this.completedPayload(input.session, input.turnId, input.onDelta);
+      if (completed) return completed;
+      throw new TurnExecutionInProgressError();
+    }
+    await input.onDelta?.(finalText);
     await this.trace(input.session.id, input.turnId, 'turn', 'terminal_response_committed', {
       reason: input.reason,
       deadlineAt: input.deadlineAt,
@@ -9306,6 +9732,7 @@ export class AgentManagerOrchestrator {
         selectedProductIds: catalogRecovery.products.map((product) => product.id),
         catalogRequestIds: catalogRecovery.catalogRequestIds,
         unfinishedVerification: catalogRecovery.unfinishedVerification,
+        technicalHandoffEligible: catalogRecovery.technicalHandoffEligible,
         warnings: catalogRecovery.warnings
       }
     });
@@ -9347,6 +9774,7 @@ export class AgentManagerOrchestrator {
     session: ConversationSession,
     turnId: string,
     recovered: boolean,
+    executionOwner: string,
     onDelta?: (text: string) => void | Promise<void>
   ): Promise<ChatResponsePayload | null> {
     const row = await this.conversations.getFinalAnswerContract(session.id, turnId);
@@ -9373,22 +9801,33 @@ export class AgentManagerOrchestrator {
       preSendReview: row.review,
       needStateSnapshot
     };
-    await onDelta?.(answerText);
     const assistantMessage = await this.conversations.addAssistantMessageForTurn({
       sessionId: session.id,
       turnId,
       content: answerText,
       metadata,
-      recovered
+      recovered,
+      executionOwner,
+      answerContract: row.contract,
+      review: row.review,
+      responsePayload: savedPayload ?? {
+        turnId,
+        answer: answerText,
+        needState: needStateSnapshot,
+        productCards: [],
+        usedWebSearch: false,
+        leadRequested: false,
+        leadCreated: false,
+        metadata
+      },
+      checkpointPayload: { recoveredFromAnswerContract: true }
     });
-    await this.conversations.upsertTurnCheckpoint({
-      sessionId: session.id,
-      turnId,
-      checkpoint: 'assistant_message_saved',
-      status: 'succeeded',
-      artifactRef: assistantMessage.id,
-      payload: { recoveredFromAnswerContract: true }
-    });
+    if (!assistantMessage) {
+      const completed = await this.completedPayload(session, turnId, onDelta);
+      if (completed) return completed;
+      throw new TurnExecutionInProgressError();
+    }
+    await onDelta?.(answerText);
     await this.trace(session.id, turnId, 'turn', 'assistant_message_saved_from_answer_contract', {
       assistantMessageId: assistantMessage.id,
       recovered

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
@@ -10,6 +10,7 @@ import { config } from '../config.js';
 import {
   ActiveConversationTurnError,
   ClientMessagePayloadConflictError,
+  ConversationSessionUnavailableError,
   ConversationRepository
 } from '../db/repositories.js';
 import { limitPublicHistoryResponse, normalizePublicHistoryMessage } from '../shared/publicChatHistory.js';
@@ -57,6 +58,32 @@ interface ChatRouteDependencies {
   assistant?: AssistantService;
 }
 
+function visitorCapabilityFromRequest(request: FastifyRequest) {
+  const value = request.headers['x-bakaut-visitor-id'];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function setPrivateSessionHeaders(reply: FastifyReply) {
+  reply.header('cache-control', 'no-store');
+  reply.header('vary', 'x-bakaut-visitor-id');
+}
+
+async function restoreAuthorizedSession(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  conversations: ConversationRepository,
+  sessionId: string
+) {
+  setPrivateSessionHeaders(reply);
+  const visitorCapability = visitorCapabilityFromRequest(request);
+  if (!visitorCapability) return null;
+  return conversations.restoreSession(sessionId, visitorCapability);
+}
+
+function sessionNotFound(reply: FastifyReply) {
+  return reply.code(404).send({ error: 'Session not found or inactive' });
+}
+
 function publicHistoryMessage(message: Awaited<ReturnType<ConversationRepository['listMessages']>>[number]) {
   const metadata = message.metadata && typeof message.metadata === 'object' && !Array.isArray(message.metadata)
     ? message.metadata as Record<string, unknown>
@@ -83,6 +110,21 @@ function publicHistoryMessage(message: Awaited<ReturnType<ConversationRepository
   return normalizePublicHistoryMessage(candidate);
 }
 
+function publicPendingTurn(
+  pending: NonNullable<Awaited<ReturnType<ConversationRepository['getLatestUnansweredTurn']>>>
+) {
+  const { turn, resultReady } = pending;
+  const terminal = turn.status === 'completed' || turn.status === 'recovered' || turn.status === 'failed';
+  return {
+    turnId: turn.id,
+    status: turn.status,
+    stage: turn.stage ?? null,
+    deadlineAt: turn.deadlineAt ?? null,
+    terminal,
+    resultState: resultReady ? 'ready' : terminal ? 'failed' : 'pending'
+  };
+}
+
 export async function registerChatRoutes(
   app: FastifyInstance,
   dependencies: ChatRouteDependencies = {}
@@ -102,39 +144,37 @@ export async function registerChatRoutes(
 
   app.get('/api/chat/sessions/:id/messages', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const visitorCapability = request.headers['x-bakaut-visitor-id'];
-    reply.header('cache-control', 'no-store');
-    reply.header('vary', 'x-bakaut-visitor-id');
-    if (typeof visitorCapability !== 'string') {
-      return reply.code(404).send({ error: 'Session not found' });
-    }
-    const session = await conversations.restoreSession(params.id, visitorCapability);
-    if (!session) return reply.code(404).send({ error: 'Session not found' });
-    const messages = await conversations.listMessages(params.id);
+    const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
+    if (!session) return sessionNotFound(reply);
+    const history = await conversations.getHistorySnapshot(params.id);
     return reply.send({
-      messages: limitPublicHistoryResponse(messages
+      messages: limitPublicHistoryResponse(history.messages
         .filter((message) => message.role === 'user' || message.role === 'assistant')
         .map(publicHistoryMessage)
-        .filter((message) => message !== null))
+        .filter((message) => message !== null)),
+      leadOfferConsumed: history.leadOfferConsumed,
+      pendingTurn: history.pendingTurn ? publicPendingTurn(history.pendingTurn) : null
     });
   });
 
   app.post('/api/chat/sessions/:id/heartbeat', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const visitorCapability = request.headers['x-bakaut-visitor-id'];
-    if (typeof visitorCapability !== 'string') {
-      return reply.code(404).send({ error: 'Session not found or inactive' });
-    }
-    const session = await conversations.touchSession(params.id, visitorCapability);
-    if (!session) return reply.code(404).send({ error: 'Session not found or inactive' });
+    const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
+    if (!session) return sessionNotFound(reply);
     return reply.send({ ok: true });
   });
 
   app.post('/api/chat/sessions/:id/close', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const session = await conversations.closeSession(params.id, 'closed');
-    if (!session) return reply.code(404).send({ error: 'Session not found' });
-    return reply.send({ session });
+    setPrivateSessionHeaders(reply);
+    const visitorCapability = visitorCapabilityFromRequest(request);
+    if (!visitorCapability) return sessionNotFound(reply);
+    const session = await conversations.closeSession({
+      id: params.id,
+      visitorCapability
+    });
+    if (!session) return sessionNotFound(reply);
+    return reply.send({ ok: true });
   });
 
   app.post('/api/chat/sessions/:id/messages/:messageId/feedback', async (request, reply) => {
@@ -143,32 +183,39 @@ export async function registerChatRoutes(
       messageId: z.string().uuid()
     }).parse(request.params);
     const input = feedbackSchema.parse(request.body ?? {});
+    setPrivateSessionHeaders(reply);
+    const visitorCapability = visitorCapabilityFromRequest(request);
+    if (!visitorCapability) return sessionNotFound(reply);
     const message = await conversations.updateAssistantFeedback({
       sessionId: params.id,
       messageId: params.messageId,
+      visitorCapability,
       rating: input.rating
     });
-    if (!message) return reply.code(404).send({ error: 'Message not found' });
-    return reply.send({ message });
+    if (!message) return sessionNotFound(reply);
+    return reply.send({ ok: true });
   });
 
   app.post('/api/chat/sessions/:id/messages', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const input = messageSchema.parse(request.body ?? {});
-    const session = await conversations.getSession(params.id);
-    if (!session || session.status !== 'active') return reply.code(404).send({ error: 'Session not found or inactive' });
+    const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
+    if (!session) return sessionNotFound(reply);
+    const visitorCapability = visitorCapabilityFromRequest(request);
+    if (!visitorCapability) return sessionNotFound(reply);
     const runtimeDecision = getAgentManagerRuntimeDecision();
     const requestedTurnId = randomUUID();
     const clientMessageId = input.clientMessageId ?? randomUUID();
-    let turn: Awaited<ReturnType<ConversationRepository['createTurn']>>;
+    let turn: Awaited<ReturnType<ConversationRepository['createTurnWithUserMessage']>>;
     try {
-      turn = await conversations.createTurn({
+      turn = await conversations.createTurnWithUserMessage({
         id: requestedTurnId,
         sessionId: params.id,
+        visitorCapability,
         clientMessageId,
         requestHash: requestHash(params.id, input.message),
-        status: 'received',
-        stage: 'received'
+        content: input.message,
+        activeNeedsBefore: session.needState.activeNeeds ?? []
       });
     } catch (error) {
       if (error instanceof ActiveConversationTurnError) {
@@ -180,6 +227,9 @@ export async function registerChatRoutes(
       }
       if (error instanceof ClientMessagePayloadConflictError) {
         return reply.code(409).send({ error: error.code, recoverable: false });
+      }
+      if (error instanceof ConversationSessionUnavailableError) {
+        return sessionNotFound(reply);
       }
       throw error;
     }
@@ -256,7 +306,8 @@ export async function registerChatRoutes(
           errorCode: controller.signal.aborted
             ? `${runtimeDecision.runtimeMode}_generation_aborted_or_timeout`
             : `${runtimeDecision.runtimeMode}_generation_failed`,
-          errorMessage: safeErrorMessage(error)
+          errorMessage: safeErrorMessage(error),
+          requireUnowned: true
         }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
       }
       const clientRecoveryAllowed = recoveryAllowed && !semanticRecoveryAttempted && !controller.signal.aborted;
@@ -295,7 +346,10 @@ export async function registerChatRoutes(
       id: z.string().uuid(),
       turnId: z.string().uuid()
     }).parse(request.params);
+    const sessionForRecovery = await restoreAuthorizedSession(request, reply, conversations, params.id);
+    if (!sessionForRecovery) return sessionNotFound(reply);
     const persistedTurn = await conversations.getTurn(params.id, params.turnId);
+    if (!persistedTurn) return reply.code(404).send({ error: 'Turn not found' });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(persistedTurn?.deadlineAt));
     timeout.unref?.();
@@ -303,10 +357,8 @@ export async function registerChatRoutes(
     const send = openSseReply(reply, { 'x-chat-turn-id': params.turnId });
 
     let stopStatusTimer: (() => void) | null = null;
-    let sessionForRecovery: Awaited<ReturnType<ConversationRepository['getSession']>> | null = null;
     let runtimeDecision = getAgentManagerRuntimeDecision();
     try {
-      sessionForRecovery = await conversations.getSession(params.id);
       runtimeDecision = getAgentManagerRuntimeDecision();
       send('turn', {
         turnId: params.turnId,
@@ -345,7 +397,8 @@ export async function registerChatRoutes(
           errorCode: controller.signal.aborted
             ? `${runtimeDecision.runtimeMode}_recovery_aborted_or_timeout`
             : `${runtimeDecision.runtimeMode}_recovery_failed`,
-          errorMessage: safeErrorMessage(error)
+          errorMessage: safeErrorMessage(error),
+          requireUnowned: true
         }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId: params.turnId, error: safeErrorMessage(updateError) }, 'turn recovery failure update failed'));
       }
       app.log.warn({

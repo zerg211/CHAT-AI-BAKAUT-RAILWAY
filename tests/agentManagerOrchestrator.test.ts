@@ -174,6 +174,15 @@ class FakeConversations {
     this.messages.push(saved);
     return saved;
   });
+  async addUserMessageForTurn(input: { content: string }) {
+    if (this.turn.userMessageId) {
+      const existing = this.messages.find((item) => item.id === this.turn.userMessageId && item.role === 'user');
+      if (existing) return existing;
+    }
+    const saved = await this.addMessage({ role: 'user', content: input.content });
+    this.turn = { ...this.turn, userMessageId: saved.id, stage: 'user_message_saved' };
+    return saved;
+  }
   async getSession() { return session(); }
   async listMessages() { return this.messages; }
   async getTurn() { return this.turn; }
@@ -200,8 +209,24 @@ class FakeConversations {
     return saved;
   }
   async addAgentTrace(input: unknown) { this.traces.push(input); return input; }
-  async addAssistantMessageForTurn(input: { content: string; metadata?: Record<string, unknown>; recovered?: boolean }) {
+  async addAssistantMessageForTurn(input: {
+    content: string;
+    metadata?: Record<string, unknown>;
+    recovered?: boolean;
+    executionOwner?: string;
+    answerContract?: unknown;
+    review?: unknown;
+    responsePayload?: unknown;
+  }) {
+    if (['completed', 'recovered'].includes(this.turn.status)) return null;
     this.assistantSaves.push(input);
+    this.answerContracts.push({
+      status: 'final',
+      answerText: input.content,
+      contract: input.answerContract,
+      review: input.review,
+      responsePayload: input.responsePayload
+    });
     const saved = message(input.content, 'assistant');
     saved.metadata = input.metadata ?? {};
     this.messages.push(saved);
@@ -2289,6 +2314,120 @@ describe('AgentManagerOrchestrator', () => {
       value: 'required.nominal_power_kw: 18',
       evidence: 'https://evidence.example.test/clinic-load-audit'
     }));
+  });
+
+  it('falls back to authoritative full replay when a snapshot has malformed nested state', async () => {
+    const persistedNeed: DialogueLedgerEvent = {
+      sessionId,
+      turnId,
+      eventId: 'persisted-generator-need',
+      eventType: 'need.opened',
+      scope: 'need',
+      payload: {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'Persisted generator need',
+        constraints: ['up to 80 kg'],
+        openQuestions: ['Confirm the phase'],
+        selectedProductIds: [],
+        rejectedProductIds: ['too-heavy'],
+        status: 'open',
+        activate: true
+      },
+      evidence: 'The buyer requested a portable generator.',
+      source: 'llm_state_delta',
+      status: 'active',
+      createdAt: '2026-08-09T10:00:00.000Z'
+    };
+    const persistedRow = {
+      session_id: persistedNeed.sessionId,
+      turn_id: persistedNeed.turnId,
+      event_id: persistedNeed.eventId,
+      event_type: persistedNeed.eventType,
+      scope: persistedNeed.scope,
+      payload: persistedNeed.payload,
+      evidence: persistedNeed.evidence,
+      source: persistedNeed.source,
+      status: persistedNeed.status,
+      event_seq: 1,
+      created_at: persistedNeed.createdAt
+    };
+
+    class MalformedSnapshotConversations extends FakeConversations {
+      replayCursors: number[] = [];
+
+      async getDialogueLedgerSnapshot() {
+        return {
+          session_id: sessionId,
+          through_event_seq: 1,
+          state: {
+            eventIds: ['bad-fact'],
+            factsByKey: {
+              bad: {
+                factKey: 'budget.max_rub',
+                eventId: 'bad-fact',
+                status: 'active'
+              }
+            },
+            questionsById: {},
+            needsById: {},
+            warnings: []
+          },
+          recent_events: []
+        };
+      }
+
+      async listDialogueLedgerEventsAfter(_sessionId: string, afterEventSeq: number) {
+        this.replayCursors.push(afterEventSeq);
+        return afterEventSeq === 0 ? [persistedRow] : [];
+      }
+    }
+
+    const conversations = new MalformedSnapshotConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async proposeLedgerDelta() {
+          return { rationale: 'No new durable facts.', events: [] };
+        },
+        async planTurn(input) {
+          expect(input.ledgerState.needsById.generator).toMatchObject({
+            summary: 'Persisted generator need',
+            rejectedProductIds: ['too-heavy']
+          });
+          return {
+            userMessageSummary: 'continue the persisted generator need',
+            dialogueUnderstanding: 'the durable state was restored from authoritative events',
+            nextStepRationale: 'continue without losing the need',
+            requiresTools: false,
+            toolRequests: [],
+            mustNotAskQuestionIds: [],
+            riskFlags: []
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Continue the generator selection.'
+    });
+
+    expect(conversations.replayCursors).toContain(0);
+    expect(payload.needState.activeNeeds).toContainEqual(expect.objectContaining({
+      id: 'generator',
+      constraints: ['up to 80 kg'],
+      openQuestions: ['Confirm the phase']
+    }));
+    expect(payload.needState.selectionState.rejectedProducts).toContainEqual(
+      expect.objectContaining({ productId: 'too-heavy' })
+    );
+    expect(payload.metadata).toMatchObject({
+      warnings: expect.arrayContaining(['invalid_snapshot_replayed_from_events'])
+    });
   });
 
   it('repairs catalog-required product selection plans that omit catalog.search', async () => {
@@ -6679,6 +6818,70 @@ describe('AgentManagerOrchestrator', () => {
     expect(proposeLedgerDelta).not.toHaveBeenCalled();
   });
 
+  it('passes the claimed execution owner through the atomic final commit', async () => {
+    class OwnedConversations extends FakeConversations {
+      claimedOwner: string | null = null;
+      releasedOwner: string | null = null;
+
+      async claimTurnExecution(input: { ownerId: string }) {
+        this.claimedOwner = input.ownerId;
+        this.turn = { ...this.turn, executionOwner: input.ownerId };
+        return this.turn;
+      }
+
+      async releaseTurnExecution(input: { ownerId: string }) {
+        this.releasedOwner = input.ownerId;
+        return this.turn;
+      }
+    }
+    const conversations = new OwnedConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model()
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Coffee machine 3.2 kW, grinder 400 W, is 5 kW enough?'
+    });
+
+    expect(conversations.claimedOwner).toEqual(expect.any(String));
+    expect(conversations.assistantSaves).toContainEqual(expect.objectContaining({
+      executionOwner: conversations.claimedOwner,
+      answerContract: expect.objectContaining({ answerText: expect.stringContaining('5 kW') }),
+      responsePayload: expect.objectContaining({ answer: expect.stringContaining('5 kW') })
+    }));
+    expect(conversations.releasedOwner).toBe(conversations.claimedOwner);
+  });
+
+  it('does not emit a delta when the fenced final commit loses ownership', async () => {
+    class LostOwnerConversations extends FakeConversations {
+      override async addAssistantMessageForTurn() {
+        return null;
+      }
+    }
+    const conversations = new LostOwnerConversations();
+    const onDelta = vi.fn();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model()
+    );
+
+    await expect(orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Coffee machine 3.2 kW, grinder 400 W, is 5 kW enough?',
+      onDelta
+    })).rejects.toThrow('turn_execution_in_progress');
+
+    expect(onDelta).not.toHaveBeenCalled();
+  });
+
   it('waits for the original runner and returns its saved answer when transport recovery collides with the lease', async () => {
     vi.useFakeTimers();
     try {
@@ -8498,9 +8701,9 @@ describe('AgentManagerOrchestrator', () => {
     let now = 10_000;
     const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
     class DeadlineCrossingConversations extends FakeConversations {
-      override async saveAnswerContract(input: { status?: string }) {
-        const saved = await super.saveAnswerContract(input);
-        if (input.status === 'final') now += 110_001;
+      override async addAssistantMessageForTurn(input: Parameters<FakeConversations['addAssistantMessageForTurn']>[0]) {
+        const saved = await super.addAssistantMessageForTurn(input);
+        if (saved) now += 110_001;
         return saved;
       }
     }
@@ -9388,6 +9591,211 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).not.toContain('firman-diesel');
   });
 
+  it('rehydrates exact prior-card ids and preserves their prices when current detail lookup and web research do not complete', async () => {
+    const priorProducts: Product[] = [{
+      ...generatorProductWithPower('prior-generator-a', 'A-iPower AP6000 5.5 kW generator', 5.5),
+      brand: 'A-iPower',
+      price: 99_990
+    }, {
+      ...generatorProductWithPower('prior-generator-b', 'EVOline PB7000 6.0 kW generator', 6),
+      brand: 'EVOline',
+      price: 69_990
+    }];
+    const priorCards: ProductCard[] = priorProducts.map((item) => ({
+      id: item.id,
+      name: item.name,
+      brand: item.brand,
+      category: item.category,
+      price: item.price,
+      currency: item.currency,
+      sourceUrl: item.sourceUrl,
+      specs: item.specs,
+      reasons: ['previous visible recommendation'],
+      caveats: []
+    }));
+    const previousAssistant = {
+      ...message('Показал два подходящих генератора с актуальными ценами.', 'assistant'),
+      id: 'previous-two-card-answer',
+      metadata: { productCards: priorCards }
+    };
+
+    class PriorReferentConversations extends FakeConversations {
+      currentSession: ConversationSession = {
+        ...session(),
+        needState: {
+          ...emptyNeedState(),
+          activeNeeds: [{
+            id: 'generator',
+            productClass: 'generator',
+            summary: 'compare the two previously shown generators',
+            constraints: [],
+            openQuestions: [],
+            selectedProductIds: [],
+            status: 'open',
+            updatedAt: new Date('2026-05-19T12:00:00.000Z').toISOString()
+          }]
+        }
+      };
+      override messages = [
+        message('Покажите два однофазных генератора с ценами.'),
+        previousAssistant,
+        { ...message('Сравните эти две модели по цене и запуску.'), id: 'prior-referent-current-user' }
+      ];
+      override toolArtifacts = [{
+        tool_request_id: 'prior-card-web-check',
+        tool_name: 'web.researchProductFacts',
+        status: 'timeout',
+        payload: {
+          usedWebSearch: false,
+          searchDisposition: 'timed_out',
+          facts: [],
+          conflicts: [],
+          unconfirmedFacts: [{
+            requirementIds: [],
+            attribute: 'тип запуска',
+            status: 'not_confirmed',
+            reason: 'web research timed out'
+          }]
+        },
+        warnings: ['web research timed out'],
+        error_code: 'web_research_timeout'
+      }];
+      override async getSession() { return this.currentSession; }
+    }
+
+    class MissingCurrentDetailsProducts extends FakeProducts {
+      idsSeen: string[] = [];
+      searchCalls = 0;
+
+      async getProductsByIds(ids: string[]) {
+        this.idsSeen = ids;
+        return [];
+      }
+
+      override async searchProducts(): Promise<Product[]> {
+        this.searchCalls += 1;
+        return [];
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.userMessageSummary = 'buyer asks to compare the two previously shown generators by price and start method';
+    intent.dialogueUnderstanding = 'these two models refer to the exact cards in the immediately preceding assistant answer';
+    intent.nextStepRationale = 'rehydrate the exact prior ids and preserve visible catalog facts while checking only the missing start method';
+    intent.toolRequests = [{
+      id: 'prior-card-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productNames: priorProducts.map((item) => item.name),
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        comparisonAttributes: ['price', 'тип запуска']
+      },
+      rationale: 'read the exact prior catalog products again',
+      required: true
+    }, {
+      id: 'prior-card-web-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'проверить тип запуска двух ранее показанных генераторов',
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        productNames: priorProducts.map((item) => item.name),
+        comparisonAttributes: ['тип запуска'],
+        comparisonAttributeBindings: []
+      },
+      rationale: 'check only the decisive start-method gap',
+      required: true
+    }];
+    intent.productMentions = priorProducts.map((item) => ({
+      name: item.name,
+      role: 'comparison_subject' as const,
+      productClass: 'generator',
+      evidence: 'previous visible card'
+    }));
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      needAction: 'resume',
+      reusePreviousCards: true,
+      maxCards: 2,
+      requirements: [{
+        id: 'visible-price',
+        kind: 'price_visibility',
+        value: true,
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the buyer asks to compare the visible prices',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.grounding = {
+      taskType: 'comparison',
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts'],
+      technicalAttributes: ['тип запуска'],
+      rationale: 'prior card price is durable catalog evidence; only the start method still needs checking'
+    };
+
+    const conversations = new PriorReferentConversations();
+    const products = new MissingCurrentDetailsProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.intent.toolRequests.find((request) => request.id === 'prior-card-details')?.args.productIds)
+            .toEqual(priorProducts.map((item) => item.id));
+          expect(input.products.map((item) => ({ id: item.id, price: item.price }))).toEqual([
+            { id: 'prior-generator-a', price: 99_990 },
+            { id: 'prior-generator-b', price: 69_990 }
+          ]);
+          expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain(
+            'revalidated_historical_products_are_current_evidence'
+          );
+          return {
+            answerText: 'Из этих двух EVOline PB7000 дешевле: 69 990 ₽ против 99 990 ₽ у A-iPower AP6000. Тип запуска внешне подтвердить в этом ходе не удалось, но это не отменяет ранее показанные карточки и цены.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: [],
+            selectedProductIds: priorProducts.map((item) => item.id),
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: ['тип запуска'],
+              rationale: 'The exact prior cards and prices remain visible evidence while the current checks are incomplete.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Сравните эти две модели по цене и запуску.'
+    });
+
+    expect(products.idsSeen).toEqual(priorProducts.map((item) => item.id));
+    expect(payload.productCards.map((card) => ({ id: card.id, price: card.price }))).toEqual([
+      { id: 'prior-generator-a', price: 99_990 },
+      { id: 'prior-generator-b', price: 69_990 }
+    ]);
+    const normalizedAnswer = payload.answer.toLocaleLowerCase('ru-RU');
+    expect(normalizedAnswer).not.toContain('нет карточ');
+    expect(normalizedAnswer).not.toContain('нет цен');
+    expect(normalizedAnswer).not.toContain('не удалось надёжно получить нужные данные из каталога');
+  });
+
   it('keeps the validated load calculation and close generator options when the buyer asks what to buy without overpaying', async () => {
     const secondTurnId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const thirdTurnId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
@@ -9541,8 +9949,8 @@ describe('AgentManagerOrchestrator', () => {
       new CloseGeneratorProducts() as never,
       new FakeLeads() as never,
       model({
-        async planTurn() {
-          turnNumber += 1;
+        async planTurn(input) {
+          if (!input.ledgerIncludesCurrentTurnDelta) turnNumber += 1;
           if (turnNumber === 1) return firstIntent;
           if (turnNumber === 2) return secondIntent;
           return changedLoadIntent;
@@ -9680,18 +10088,12 @@ describe('AgentManagerOrchestrator', () => {
     const deadline = new AbortController();
     const timeoutSignal = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal);
     class PostCommitAbortConversations extends FakeConversations {
-      override async saveAnswerContract(input: {
-        status?: string;
-        answerText?: string;
-        contract?: unknown;
-        review?: unknown;
-        responsePayload?: unknown;
-      }) {
-        const saved = await super.saveAnswerContract(input);
-        if (input.status === 'final') {
+      override async addAssistantMessageForTurn(input: Parameters<FakeConversations['addAssistantMessageForTurn']>[0]) {
+        const saved = await super.addAssistantMessageForTurn(input);
+        if (saved) {
           this.finalAnswerContract = {
-            answer_text: input.answerText,
-            contract: input.contract,
+            answer_text: input.content,
+            contract: input.answerContract,
             review: input.review,
             response_payload: input.responsePayload
           };
@@ -9817,7 +10219,7 @@ describe('AgentManagerOrchestrator', () => {
     };
     conversations.turn = {
       ...conversations.turn,
-      deadlineAt: new Date(Date.now() - 1_000).toISOString(),
+      deadlineAt: new Date(Date.now() + 4_000).toISOString(),
       plannerContract: intent
     };
     conversations.toolArtifacts = [{
@@ -9855,17 +10257,170 @@ describe('AgentManagerOrchestrator', () => {
     const metadata = payload.metadata as {
       answerContract?: { selectedProductIds?: string[]; selectionReadiness?: { status?: string; missingFacts?: string[] } };
       terminalCatalogRecovery?: { selectedProductIds?: string[]; unfinishedVerification?: string[] };
+      webSearchAttempted?: boolean;
+      webSearchCompleted?: boolean;
     };
 
     expect(payload.productCards.map((card) => card.id)).toEqual(['plate-80']);
+    expect(payload.usedWebSearch).toBe(false);
+    expect(metadata.webSearchAttempted).toBe(true);
+    expect(metadata.webSearchCompleted).toBe(false);
+    expect(payload.leadRequested).toBe(false);
     expect(payload.answer).toContain('предварительно');
     expect(payload.answer).toContain('Не успела завершиться');
+    expect(payload.answer).not.toContain('техническому специалисту');
     expect(metadata.answerContract?.selectedProductIds).toEqual(['plate-80']);
     expect(metadata.answerContract?.selectionReadiness).toMatchObject({
       status: 'ready_for_preliminary_cards',
       missingFacts: ['совместимость с тротуарной плиткой']
     });
     expect(metadata.terminalCatalogRecovery?.selectedProductIds).toEqual(['plate-80']);
+    expect(conversations.assistantSaves).toContainEqual(expect.objectContaining({
+      executionOwner: expect.any(String),
+      answerContract: expect.objectContaining({ selectedProductIds: ['plate-80'] })
+    }));
+  });
+
+  it('terminalizes final-fit catalog details plus an exhausted unresolved web check as a named specialist handoff', async () => {
+    const conversations = new FakeConversations();
+    const candidate: Product = {
+      ...generatorProductWithPower('terminal-detail-generator', 'TSS SGG 6000E 5.5 kW generator', 5.5),
+      brand: 'TSS',
+      price: 74_990,
+      specs: { 'Nominal power': '5.5 kW', voltage: '220 V' }
+    };
+    const intent = structuredGeneratorCatalogIntent();
+    const webRequest: ToolRequest = {
+      id: 'terminal-detail-web-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'проверить ток запуска для TSS SGG 6000E',
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        productNames: [candidate.name],
+        comparisonAttributes: ['пусковой ток подключаемого насоса'],
+        comparisonAttributeBindings: []
+      },
+      rationale: 'confirm the one decisive fact absent from the catalog card',
+      required: true
+    };
+    intent.userMessageSummary = 'buyer asks whether the exact generator will start the pump';
+    intent.dialogueUnderstanding = 'the exact catalog generator is useful preliminary orientation, but pump starting current is still unknown';
+    intent.nextStepRationale = 'preserve the exact catalog evidence if the external check times out';
+    intent.toolRequests = [{
+      id: 'terminal-product-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productIds: [candidate.id],
+        productNames: [candidate.name],
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        comparisonAttributes: ['price', 'nominal power']
+      },
+      rationale: 'read the exact current catalog product',
+      required: true
+    }, webRequest];
+    intent.productMentions = [{
+      name: candidate.name,
+      role: 'target_product',
+      productClass: 'generator',
+      evidence: 'exact catalog product requested by the buyer'
+    }];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'final_fit',
+      maxCards: 1,
+      requirements: []
+    };
+    intent.grounding = {
+      taskType: 'comparison',
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts'],
+      technicalAttributes: ['пусковой ток подключаемого насоса'],
+      rationale: 'catalog details support a preliminary answer while the decisive load fact needs external confirmation'
+    };
+    conversations.turn = {
+      ...conversations.turn,
+      deadlineAt: new Date(Date.now() + 4_000).toISOString(),
+      plannerContract: intent
+    };
+    conversations.toolArtifacts = [{
+      tool_request_id: 'terminal-product-details',
+      tool_name: 'catalog.getProductDetails',
+      status: 'ok',
+      payload: { productIds: [candidate.id], products: [candidate] },
+      warnings: []
+    }, {
+      tool_request_id: webRequest.id,
+      tool_name: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        researchOutcome: 'exhausted',
+        sourcesExhausted: true,
+        sourceAttempts: [
+          { tier: 'catalog', outcome: 'not_found' },
+          { tier: 'official_page', outcome: 'not_found', query: 'TSS SGG 6000E official page pump starting current' },
+          { tier: 'official_manual', outcome: 'not_found', query: 'TSS SGG 6000E official manual pump starting current PDF' },
+          { tier: 'reliable_secondary', outcome: 'not_found', query: 'TSS SGG 6000E reliable distributor pump starting current' }
+        ],
+        facts: [],
+        conflicts: [],
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'not_answered',
+          coverage: [{
+            attribute: 'пусковой ток подключаемого насоса',
+            status: 'not_confirmed',
+            value: '',
+            evidence: 'the decisive fact was not confirmed after source review'
+          }]
+        },
+        warnings: []
+      },
+      warnings: []
+    }];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model()
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Подойдёт ли этот TSS SGG 6000E для насоса?'
+    });
+    const metadata = payload.metadata as {
+      answerContract?: { selectedProductIds?: string[]; leadAction?: string; selectionReadiness?: { missingFacts?: string[] } };
+      terminalCatalogRecovery?: { selectedProductIds?: string[]; catalogRequestIds?: string[]; technicalHandoffEligible?: boolean };
+    };
+
+    expect(metadata.terminalCatalogRecovery?.selectedProductIds).toEqual([candidate.id]);
+    expect(payload.usedWebSearch).toBe(true);
+    expect(payload.answer).toContain(candidate.name);
+    expect(payload.answer).toContain('74 990');
+    expect(payload.answer).toContain('пусковой ток подключаемого насоса');
+    expect(payload.answer).toContain('техническому специалисту');
+    expect(payload.answer).toContain('написать или позвонить');
+    expect(payload.answer).not.toContain('уже передан');
+    expect(payload.productCards.map((card) => card.id)).toEqual([candidate.id]);
+    expect(payload.leadRequested).toBe(true);
+    expect(metadata.answerContract?.selectedProductIds).toEqual([candidate.id]);
+    expect(metadata.answerContract?.leadAction).toBe('offer_form');
+    expect(metadata.answerContract?.selectionReadiness?.missingFacts).toEqual(['пусковой ток подключаемого насоса']);
+    expect(metadata.terminalCatalogRecovery).toMatchObject({
+      selectedProductIds: [candidate.id],
+      catalogRequestIds: ['terminal-product-details'],
+      technicalHandoffEligible: true
+    });
+    expect(conversations.assistantSaves).toContainEqual(expect.objectContaining({
+      content: expect.stringContaining(candidate.name)
+    }));
   });
 });
 
@@ -10451,6 +11006,342 @@ describe('parallel semantic turn contracts', () => {
     }));
   });
 
+  it('replans once when the parallel reducer changes typed hard requirements after the planner read the old ledger', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'replace the generator budget and phase requirements',
+      events: [{
+        eventType: 'need.opened',
+        scope: 'need',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'current generator need',
+          constraints: [],
+          openQuestions: [],
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'clear',
+          invalidatedProductIds: [],
+          status: 'open',
+          activate: true
+        },
+        evidence: 'The current request is for a generator.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }, {
+        eventType: 'fact.confirmed',
+        scope: 'need',
+        payload: {
+          factKey: 'budget_max_rub',
+          value: 50_000,
+          needId: 'generator',
+          productClass: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'The updated budget is 50,000 RUB.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }, {
+        eventType: 'fact.confirmed',
+        scope: 'need',
+        payload: {
+          factKey: 'phase',
+          value: 'single_phase',
+          needId: 'generator',
+          productClass: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'The updated phase is single-phase.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const intentWithRequirements = (
+      summary: string,
+      budget: number,
+      phase: 'single_phase' | 'three_phase'
+    ): AgentIntentContract => ({
+      ...noToolIntent(summary),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        selectionGoal: 'preliminary_fit',
+        needAction: 'open',
+        phase,
+        requirements: [{
+          id: 'budget-limit',
+          kind: 'budget_max_rub',
+          value: budget,
+          unit: 'RUB',
+          relation: 'must_have',
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'typed budget limit'
+        }, {
+          id: 'phase-limit',
+          kind: 'phase',
+          value: phase,
+          unit: null,
+          relation: 'must_have',
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'typed phase requirement'
+        }]
+      }
+    });
+    const staleIntent = intentWithRequirements('stale pre-delta requirements', 70_000, 'three_phase');
+    const correctedIntent = intentWithRequirements('coherent post-delta requirements', 50_000, 'single_phase');
+    const planTurn = vi.fn()
+      .mockResolvedValueOnce(staleIntent)
+      .mockImplementationOnce(async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
+        expect(input.ledgerIncludesCurrentTurnDelta).toBe(true);
+        expect(Object.values(input.ledgerState.factsByKey)).toEqual(expect.arrayContaining([
+          expect.objectContaining({ factKey: 'budget_max_rub', value: 50_000, role: 'hard_requirement' }),
+          expect.objectContaining({ factKey: 'phase', value: 'single_phase', role: 'hard_requirement' })
+        ]));
+        return correctedIntent;
+      });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Change the budget to 50,000 RUB and use single phase.'
+    });
+
+    expect(planTurn).toHaveBeenCalledTimes(2);
+    expect(planTurn.mock.calls[0]?.[0].ledgerIncludesCurrentTurnDelta).not.toBe(true);
+    expect(conversations.turn.plannerContract).toMatchObject({
+      userMessageSummary: 'coherent post-delta requirements',
+      selectionPolicy: expect.objectContaining({ phase: 'single_phase' })
+    });
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'intent',
+      eventType: 'parallel_intent_replan_required',
+      payload: expect.objectContaining({
+        conflicts: expect.arrayContaining([
+          'active_requirement_mismatch:budget_max_rub',
+          'active_requirement_mismatch:phase'
+        ])
+      })
+    }));
+  });
+
+  it('replans once when the reducer adds a new typed hard requirement omitted by the parallel planner', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'add the newly stated generator weight limit',
+      events: [{
+        eventType: 'need.opened',
+        scope: 'need',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'current generator need',
+          constraints: [],
+          openQuestions: [],
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'clear',
+          invalidatedProductIds: [],
+          status: 'open',
+          activate: true
+        },
+        evidence: 'The current request is for a generator.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }, {
+        eventType: 'fact.confirmed',
+        scope: 'need',
+        payload: {
+          factKey: 'weight_max_kg',
+          value: 90,
+          needId: 'generator',
+          productClass: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'The generator must weigh no more than 90 kg.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const omittedIntent: AgentIntentContract = {
+      ...noToolIntent('parallel planner omitted the new weight limit'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        selectionGoal: 'preliminary_fit',
+        needAction: 'open',
+        requirements: []
+      }
+    };
+    const correctedIntent: AgentIntentContract = {
+      ...omittedIntent,
+      userMessageSummary: 'post-delta planner includes the new weight limit',
+      selectionPolicy: {
+        ...omittedIntent.selectionPolicy!,
+        requirements: [{
+          id: 'weight-limit',
+          kind: 'weight_max_kg',
+          value: 90,
+          unit: 'kg',
+          relation: 'must_have',
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'typed weight limit'
+        }]
+      }
+    };
+    const planTurn = vi.fn()
+      .mockResolvedValueOnce(omittedIntent)
+      .mockResolvedValueOnce(correctedIntent);
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Keep the generator under 90 kg.'
+    });
+
+    expect(planTurn).toHaveBeenCalledTimes(2);
+    expect(conversations.turn.plannerContract).toMatchObject({
+      userMessageSummary: 'post-delta planner includes the new weight limit'
+    });
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      phase: 'intent',
+      eventType: 'parallel_intent_replan_required',
+      payload: expect.objectContaining({
+        conflicts: expect.arrayContaining(['active_requirement_mismatch:weight_max_kg'])
+      })
+    }));
+  });
+
+  it('keeps the parallel planner fast path when its typed hard requirements match the applied delta', async () => {
+    const conversations = new FakeConversations();
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'confirm the current generator budget',
+      events: [{
+        eventType: 'need.opened',
+        scope: 'need',
+        payload: {
+          needId: 'generator',
+          productClass: 'generator',
+          summary: 'current generator need',
+          constraints: [],
+          openQuestions: [],
+          selectedProductIds: [],
+          rejectedProductIds: [],
+          selectionUpdateMode: 'clear',
+          invalidatedProductIds: [],
+          status: 'open',
+          activate: true
+        },
+        evidence: 'The current request is for a generator.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }, {
+        eventType: 'fact.confirmed',
+        scope: 'need',
+        payload: {
+          factKey: 'budget_max_rub',
+          value: 50_000,
+          needId: 'generator',
+          productClass: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'The budget is 50,000 RUB.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }, {
+        eventType: 'fact.confirmed',
+        scope: 'need',
+        payload: {
+          factKey: 'phase',
+          value: 'single_phase',
+          needId: 'generator',
+          productClass: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'Single phase is required.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }, {
+        eventType: 'fact.confirmed',
+        scope: 'need',
+        payload: {
+          factKey: 'power_source',
+          value: 'fuel',
+          needId: 'generator',
+          productClass: 'generator',
+          role: 'hard_requirement',
+          confidence: 1
+        },
+        evidence: 'A fuel generator is required.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const coherentIntent: AgentIntentContract = {
+      ...noToolIntent('coherent parallel requirements'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        selectionGoal: 'preliminary_fit',
+        needAction: 'open',
+        phase: 'single_phase',
+        powerSource: 'fuel',
+        requirements: [{
+          id: 'budget-limit',
+          kind: 'budget_max_rub',
+          value: 50_000,
+          unit: 'RUB',
+          relation: 'must_have',
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'typed budget limit'
+        }]
+      }
+    };
+    const planTurn = vi.fn(async (_input: Parameters<AgentManagerModel['planTurn']>[0]) => coherentIntent);
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Keep the generator budget at 50,000 RUB.'
+    });
+
+    expect(planTurn).toHaveBeenCalledTimes(1);
+    expect(planTurn.mock.calls[0]?.[0].ledgerIncludesCurrentTurnDelta).not.toBe(true);
+    expect(conversations.traces).not.toContainEqual(expect.objectContaining({
+      eventType: 'parallel_intent_replan_required'
+    }));
+  });
+
   it('does not replan the active need when a paused sibling need resets its own selection', async () => {
     const conversations = new FakeConversations();
     const priorTurnId = '77777777-7777-4777-8777-777777777777';
@@ -10549,12 +11440,126 @@ describe('parallel semantic turn contracts', () => {
     }));
   });
 
-  it('repairs ambiguous catalog intent before tool execution instead of running catalog search', () => {
+  it('replans when the reducer removes an active hard requirement seen by the parallel planner', async () => {
+    const conversations = new FakeConversations();
+    const priorTurnId = '77777777-7777-4777-8777-777777777770';
+    const priorRow = (
+      eventId: string,
+      eventType: 'need.opened' | 'fact.confirmed',
+      scope: 'need',
+      payload: Record<string, unknown>
+    ) => ({
+      session_id: sessionId,
+      turn_id: priorTurnId,
+      event_id: eventId,
+      event_type: eventType,
+      scope,
+      payload,
+      evidence: 'prior confirmed generator budget',
+      source: 'llm_state_delta',
+      status: 'active',
+      created_at: new Date('2026-05-19T11:00:00.000Z').toISOString()
+    });
+    conversations.ledgerEvents = [
+      priorRow('prior-generator-need', 'need.opened', 'need', {
+        needId: 'generator',
+        productClass: 'generator',
+        summary: 'active generator need',
+        constraints: ['budget_max_rub: 50000'],
+        openQuestions: [],
+        selectedProductIds: [],
+        rejectedProductIds: [],
+        selectionUpdateMode: 'preserve',
+        invalidatedProductIds: [],
+        status: 'open',
+        activate: true
+      }),
+      priorRow('prior-budget', 'fact.confirmed', 'need', {
+        factKey: 'budget_max_rub',
+        value: 50_000,
+        needId: 'generator',
+        productClass: 'generator',
+        role: 'hard_requirement',
+        confidence: 1
+      })
+    ];
+    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
+      rationale: 'the buyer explicitly removed the old budget limit',
+      events: [{
+        eventType: 'fact.negated',
+        scope: 'need',
+        payload: {
+          needId: 'generator',
+          targetEventIds: ['prior-budget']
+        },
+        evidence: 'There is no budget limit now.',
+        source: 'llm_state_delta',
+        status: 'active'
+      }]
+    }));
+    const staleIntent: AgentIntentContract = {
+      ...noToolIntent('parallel planner retained the removed budget'),
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'generator',
+        canonicalProductClass: 'generator',
+        selectionGoal: 'preliminary_fit',
+        needAction: 'continue',
+        requirements: [{
+          id: 'stale-budget',
+          kind: 'budget_max_rub',
+          value: 50_000,
+          unit: 'RUB',
+          relation: 'must_have',
+          role: 'hard_constraint',
+          strictness: 'strict',
+          evidence: 'stale budget limit'
+        }]
+      }
+    };
+    const correctedIntent: AgentIntentContract = {
+      ...staleIntent,
+      userMessageSummary: 'post-delta planner removed the old budget',
+      selectionPolicy: {
+        ...staleIntent.selectionPolicy!,
+        requirements: []
+      }
+    };
+    const planTurn = vi.fn()
+      .mockResolvedValueOnce(staleIntent)
+      .mockResolvedValueOnce(correctedIntent);
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ proposeLedgerDelta, planTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Уберите ограничение по бюджету.'
+    });
+
+    expect(planTurn).toHaveBeenCalledTimes(2);
+    expect(conversations.turn.plannerContract).toMatchObject({
+      userMessageSummary: 'post-delta planner removed the old budget',
+      selectionPolicy: expect.objectContaining({ requirements: [] })
+    });
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      eventType: 'parallel_intent_replan_required',
+      payload: expect.objectContaining({
+        conflicts: expect.arrayContaining(['active_requirement_removed:budget_max_rub'])
+      })
+    }));
+  });
+
+  it('preserves a valid typed catalog plan instead of replacing planner semantics from message fragments', () => {
     const intent: AgentIntentContract = {
       turnId: null,
       userMessageSummary: 'buyer asks what cutters are available',
       dialogueUnderstanding: 'ambiguous cutter browse request',
-      nextStepRationale: 'planner incorrectly treated ambiguous cutter wording as catalog browse',
+      nextStepRationale: 'the planner chose a safe catalog browse for the current context',
       requiresTools: true,
       toolRequests: [{
         id: 'catalog-cutters',
@@ -10613,16 +11618,16 @@ describe('parallel semantic turn contracts', () => {
 
     const repaired = repairIntentForCatalogClarificationBeforeTools(intent, 'мне нужен резчик че у вас есть?');
 
-    expect(repaired.requiresTools).toBe(false);
-    expect(repaired.toolRequests).toEqual([]);
-    expect(repaired.grounding!.requiredToolKinds).toEqual([]);
-    expect(repaired.selectionPolicy!.maxCards).toBe(0);
-    expect(repaired.selectionPolicy!.selectionGoal).toBe('preliminary_fit');
-    expect(repaired.policyRuleIds).toContain('selection.cutter_ambiguous_material_question');
+    expect(repaired).toBe(intent);
+    expect(repaired.requiresTools).toBe(true);
+    expect(repaired.toolRequests.map((request) => request.tool)).toEqual(['catalog.search']);
+    expect(repaired.grounding!.requiredToolKinds).toEqual(['catalog.search']);
+    expect(repaired.selectionPolicy!.maxCards).toBe(8);
+    expect(repaired.selectionPolicy!.selectionGoal).toBe('browse_catalog');
   });
 
 
-  it('repairs broad whole-catalog requests before tool execution', () => {
+  it('keeps a schema-valid broad catalog plan planner-owned', () => {
     const intent: AgentIntentContract = {
       ...noToolIntent('buyer asks for broad catalog'),
       requiresTools: true,
@@ -10664,12 +11669,13 @@ describe('parallel semantic turn contracts', () => {
 
     const repaired = repairIntentForCatalogClarificationBeforeTools(intent, 'что у вас вообще есть?');
 
-    expect(repaired.requiresTools).toBe(false);
-    expect(repaired.toolRequests).toEqual([]);
-    expect(repaired.grounding!.requiredToolKinds).toEqual([]);
+    expect(repaired).toBe(intent);
+    expect(repaired.requiresTools).toBe(true);
+    expect(repaired.toolRequests.map((request) => request.tool)).toEqual(['catalog.search']);
+    expect(repaired.grounding!.requiredToolKinds).toEqual(['catalog.search']);
     expect(repaired.grounding!.sourcePolicy).toBe('conversation_only');
-    expect(repaired.selectionPolicy!.maxCards).toBe(0);
-    expect(repaired.selectionPolicy!.selectionGoal).toBe('preliminary_fit');
+    expect(repaired.selectionPolicy!.maxCards).toBe(8);
+    expect(repaired.selectionPolicy!.selectionGoal).toBe('browse_catalog');
     expect(repaired.selectionPolicy!.targetProductClass).toBe('оборудование');
     expect(repaired.selectionPolicy!.canonicalProductClass).toBe('unknown');
   });

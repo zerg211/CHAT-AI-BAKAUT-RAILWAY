@@ -8,6 +8,7 @@ export type ChatStreamHandlers = {
 type FetchLike = typeof fetch;
 
 export type ChatStreamOptions = {
+  visitorId: string;
   fetcher?: FetchLike;
   idleTimeoutMs?: number;
   recoverOnError?: boolean;
@@ -20,7 +21,38 @@ const MAX_RECOVERY_TRANSPORT_ATTEMPTS = 1;
 const RECOVERY_TRANSPORT_RETRY_DELAY_MS = 250;
 const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя.';
 const RECOVERING_STATUS = 'Ответ оборвался, восстанавливаю...';
-const FRIENDLY_FINAL_ERROR = 'Сейчас не смог надежно сформировать ответ. Вопрос сохранен, повторите его через пару минут.';
+const FRIENDLY_FINAL_ERROR = 'Сейчас не удалось надежно завершить ответ. Попробуйте отправить вопрос ещё раз.';
+
+export class ChatMessageNotAcceptedError extends Error {
+  constructor(
+    message: string,
+    readonly activeTurnId?: string,
+    readonly statusCode?: number
+  ) {
+    super(message);
+    this.name = 'ChatMessageNotAcceptedError';
+  }
+}
+
+export class ActiveConversationTurnError extends ChatMessageNotAcceptedError {
+  constructor(activeTurnId: string) {
+    super('Предыдущий ответ ещё формируется. Новый вопрос не отправлен и остался в поле ввода.', activeTurnId, 409);
+    this.name = 'ActiveConversationTurnError';
+  }
+}
+
+export function registerChatAbortController(
+  slot: { current: AbortController | null },
+  controller: AbortController
+) {
+  slot.current = controller;
+  const release = () => {
+    controller.signal.removeEventListener('abort', release);
+    if (slot.current === controller) slot.current = null;
+  };
+  controller.signal.addEventListener('abort', release, { once: true });
+  return release;
+}
 
 class ServerSseError extends Error {
   constructor(message: string, readonly recoverable: boolean) {
@@ -109,6 +141,7 @@ async function recoverChatMessage(
   apiBase: string,
   sessionId: string,
   turnId: string,
+  visitorId: string,
   handlers: ChatStreamHandlers,
   signal: AbortSignal | undefined,
   fetcher: FetchLike,
@@ -120,7 +153,10 @@ async function recoverChatMessage(
     try {
       const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages/${turnId}/recover`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'x-bakaut-visitor-id': visitorId
+        },
         body: JSON.stringify({}),
         signal
       });
@@ -154,13 +190,34 @@ async function recoverChatMessage(
   throw lastError instanceof Error ? lastError : new Error(FRIENDLY_FINAL_ERROR);
 }
 
+export async function recoverChatTurn(
+  apiBase: string,
+  sessionId: string,
+  turnId: string,
+  visitorId: string,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal,
+  options: Pick<ChatStreamOptions, 'fetcher' | 'idleTimeoutMs'> = {}
+) {
+  return recoverChatMessage(
+    apiBase,
+    sessionId,
+    turnId,
+    visitorId,
+    handlers,
+    signal,
+    options.fetcher ?? fetch,
+    options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
+  );
+}
+
 export async function streamChatMessage(
   apiBase: string,
   sessionId: string,
   message: string,
   handlers: ChatStreamHandlers,
-  signal?: AbortSignal,
-  options: ChatStreamOptions = {}
+  signal: AbortSignal | undefined,
+  options: ChatStreamOptions
 ) {
   const fetcher = options.fetcher ?? fetch;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
@@ -172,22 +229,39 @@ export async function streamChatMessage(
   const recoverOnce = async (resolvedTurnId: string) => {
     if (recoveryAttempted) throw new Error(FRIENDLY_FINAL_ERROR);
     recoveryAttempted = true;
-    return recoverChatMessage(apiBase, sessionId, resolvedTurnId, handlers, signal, fetcher, idleTimeoutMs);
+    return recoverChatMessage(apiBase, sessionId, resolvedTurnId, options.visitorId, handlers, signal, fetcher, idleTimeoutMs);
   };
 
   const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'x-bakaut-visitor-id': options.visitorId
+    },
     body: JSON.stringify({ message, clientMessageId }),
     signal
   });
   if (!response.ok) {
-    const errorPayload = await response.json().catch(() => ({})) as { error?: string };
-    if (errorPayload.error === 'active_conversation_turn_exists') {
-      throw new Error('Предыдущий ответ ещё формируется. Дождитесь его завершения и повторите отправку.');
+    const errorPayload = await response.json().catch(() => ({})) as { error?: string; activeTurnId?: unknown };
+    const activeTurnId = typeof errorPayload.activeTurnId === 'string'
+      ? errorPayload.activeTurnId.trim()
+      : '';
+    if (response.status === 409) {
+      if (activeTurnId) throw new ActiveConversationTurnError(activeTurnId);
+      throw new ChatMessageNotAcceptedError(
+        'Сообщение не принято. Оно осталось в поле ввода — попробуйте отправить ещё раз.',
+        undefined,
+        response.status
+      );
     }
-    if (errorPayload.error === 'client_message_id_reused_with_different_payload') {
-      throw new Error('Не удалось безопасно повторить отправку сообщения. Отправьте его ещё раз.');
+    if (response.status >= 400 && response.status < 500) {
+      throw new ChatMessageNotAcceptedError(
+        response.status === 404
+          ? 'Сообщение не принято: сессия завершилась. Вопрос остался в поле ввода — отправьте его ещё раз.'
+          : 'Сообщение не принято. Оно осталось в поле ввода — попробуйте отправить ещё раз.',
+        undefined,
+        response.status
+      );
     }
     throw new Error('Не удалось получить ответ');
   }

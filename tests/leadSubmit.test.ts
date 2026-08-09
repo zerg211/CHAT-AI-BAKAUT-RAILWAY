@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { submitLead } from '../src/client/leadSubmit.js';
 
 describe('submitLead watchdog', () => {
+  const visitorId = 'visitor-capability-with-high-entropy';
   it('fails a stalled lead request instead of leaving the form in sending state forever', async () => {
     vi.useFakeTimers();
     try {
@@ -12,7 +13,7 @@ describe('submitLead watchdog', () => {
         name: 'Иван',
         phone: '+79990000000',
         question: 'Нужен генератор'
-      }, { fetcher, timeoutMs: 1000 });
+      }, { fetcher, timeoutMs: 1000, visitorId });
 
       const assertion = expect(result).rejects.toThrow('Заявка не отправилась вовремя');
       await vi.advanceTimersByTimeAsync(1000);
@@ -29,7 +30,7 @@ describe('submitLead watchdog', () => {
       name: 'Иван',
       email: 'buyer@example.com',
       question: 'Нужен генератор'
-    }, { fetcher: async () => new Response(JSON.stringify({
+    }, { visitorId, fetcher: async () => new Response(JSON.stringify({
       ok: true,
       status: 'queued',
       outboxId: 'outbox-1',
@@ -50,9 +51,12 @@ describe('submitLead watchdog', () => {
       phone: '+79990000000'
     };
 
-    await submitLead('', payload, { fetcher });
+    await submitLead('', payload, { fetcher, visitorId });
 
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(payload);
+    expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
+      'x-bakaut-visitor-id': visitorId
+    });
   });
 
   it('rejects a legacy success-shaped response that has no durable outbox', async () => {
@@ -62,6 +66,7 @@ describe('submitLead watchdog', () => {
       name: 'Иван',
       phone: '+79990000000'
     }, {
+      visitorId,
       fetcher: async () => new Response(JSON.stringify({
         lead: { id: 'lead-1' },
         email: { queued: false, status: 'saved_without_outbox' }
@@ -76,6 +81,7 @@ describe('submitLead watchdog', () => {
       name: 'Иван',
       phone: '+79990000000'
     }, {
+      visitorId,
       fetcher: async () => new Response(JSON.stringify({ ok: true, status: 'queued' }), { status: 200 })
     })).rejects.toThrow('lead failed');
   });

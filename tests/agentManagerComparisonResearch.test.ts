@@ -2235,6 +2235,25 @@ describe('AgentManager comparison research flow', () => {
             hitCount: 0,
             createdAt: now,
             updatedAt: now
+          },
+          {
+            id: 'legacy-name-only-button',
+            productId: null,
+            productKey: 'sunreka g7000is',
+            productName: 'SUNREKA G7000iS',
+            attribute: 'button start',
+            value: 'does not have START button start',
+            sourceType: 'web',
+            sourceUrl: 'https://legacy.example/g7000is',
+            sourceTitle: 'Legacy name-only record',
+            evidence: 'legacy name-only fact without a current catalog binding',
+            confidence: 'high',
+            status: 'active',
+            firstSeenAt: now,
+            lastVerifiedAt: now,
+            hitCount: 0,
+            createdAt: now,
+            updatedAt: now
           }
         ];
       }
@@ -2306,6 +2325,7 @@ describe('AgentManager comparison research flow', () => {
 
     expect(researchProductComparisonFacts).not.toHaveBeenCalled();
     expect(fakeProducts.usedVerifiedFactIds).toEqual(expect.arrayContaining(['fact-button', 'fact-recoil']));
+    expect(fakeProducts.usedVerifiedFactIds).not.toContain('legacy-name-only-button');
   });
 
   it('repairs follow-up plans that reuse facts from a different exact model', async () => {

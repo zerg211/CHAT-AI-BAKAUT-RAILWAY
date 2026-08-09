@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ConversationRepository, LeadRepository, ProductRepository } from '../src/db/repositories.js';
+import {
+  ConversationRepository,
+  LeadRepository,
+  ProductRepository,
+  TurnMutationFenceError
+} from '../src/db/repositories.js';
 
 function sessionRow() {
   const now = new Date('2026-04-27T08:00:00.000Z');
@@ -62,7 +67,7 @@ describe('ConversationRepository.restoreSession', () => {
 
     const [sql, params] = query.mock.calls[0];
     expect(sql).toContain('FOR UPDATE');
-    expect(sql).toContain('visitor_id = $2');
+    expect(sql).toContain("WHERE id = $1 AND visitor_id = $2 AND status = 'active'");
     expect(sql).toContain('last_heartbeat_at >=');
     expect(sql).toContain("THEN 'expired'");
     expect(params).toEqual(['session-id', 'visitor-capability', 30]);
@@ -112,6 +117,7 @@ describe('ConversationRepository.updateAssistantFeedback', () => {
     const message = await repository.updateAssistantFeedback({
       sessionId: 'session-id',
       messageId: 'message-id',
+      visitorCapability: 'visitor-capability',
       rating: 'negative'
     });
 
@@ -119,8 +125,16 @@ describe('ConversationRepository.updateAssistantFeedback', () => {
       'message-id',
       'session-id',
       expect.any(String),
-      'negative'
+      'negative',
+      'visitor-capability',
+      30
     ]);
+    expect(query.mock.calls[0][0]).toContain('authorized_session AS MATERIALIZED');
+    expect(query.mock.calls[0][0]).toContain('session.visitor_id = $5');
+    expect(query.mock.calls[0][0]).toContain("session.status = 'active'");
+    expect(query.mock.calls[0][0]).toContain('session.last_heartbeat_at >= now()');
+    expect(query.mock.calls[0][0]).toContain('FOR UPDATE OF session');
+    expect(query.mock.calls[0][0]).toContain('FROM authorized_session');
     expect(query.mock.calls[0][0]).toContain('INSERT INTO assistant_feedback_events');
     expect(JSON.parse(query.mock.calls[0][1][2])).toMatchObject({ rating: 'negative' });
     expect(message).toMatchObject({
@@ -193,11 +207,12 @@ describe('ConversationRepository turn JSON storage', () => {
     const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [turnRow] });
     const repository = new ConversationRepository({ query } as never);
 
-    await repository.createTurn({
+    await repository.createTurnWithUserMessage({
       sessionId: 'session-id',
+      visitorCapability: 'visitor-capability',
       clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       requestHash: 'hash',
-      status: 'received',
+      content: 'да',
       activeNeedsBefore: [{ summary: 'before' }]
     });
     await repository.updateTurn({
@@ -208,7 +223,7 @@ describe('ConversationRepository turn JSON storage', () => {
       activeNeedsAfter: [{ summary: 'after' }]
     });
 
-    expect(query.mock.calls[0][1][6]).toBe(JSON.stringify([{ summary: 'before' }]));
+    expect(query.mock.calls[0][1][4]).toBe(JSON.stringify([{ summary: 'before' }]));
     expect(query.mock.calls[1][1][8]).toBe(JSON.stringify({ taskType: 'product_selection_with_availability' }));
     expect(query.mock.calls[1][1][10]).toBe(JSON.stringify([{ summary: 'after' }]));
   });
@@ -267,21 +282,67 @@ describe('ConversationRepository turn idempotency', () => {
     };
   }
 
+  it('creates the turn and its user message in one statement after terminalizing expired active turns', async () => {
+    const row = {
+      ...turnRow('turn-atomic', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      user_message_id: 'user-message-id',
+      stage: 'user_message_saved'
+    };
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [row] });
+    const repository = new ConversationRepository({ query } as never);
+
+    const turn = await repository.createTurnWithUserMessage({
+      sessionId: 'session-id',
+      visitorCapability: 'visitor-capability',
+      clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      requestHash: 'same-text-hash',
+      content: 'да',
+      activeNeedsBefore: []
+    });
+
+    expect(turn).toMatchObject({
+      id: 'turn-atomic',
+      userMessageId: 'user-message-id',
+      stage: 'user_message_saved'
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toContain('expired_turns AS');
+    expect(sql).toContain('authorized_session AS MATERIALIZED');
+    expect(sql).toContain("visitor_id = $9");
+    expect(sql).toContain("status = 'active'");
+    expect(sql).toContain('last_heartbeat_at >=');
+    expect(sql).toContain('FOR UPDATE');
+    expect(sql).toContain("status IN ('received', 'need_extracted', 'planned', 'answering')");
+    expect(sql).toContain('deadline_at <= now()');
+    expect(sql).toContain("SET status = 'failed'");
+    expect(sql).toContain('INSERT INTO conversation_turns');
+    expect(sql).toContain('INSERT INTO messages');
+    expect(sql.indexOf('INSERT INTO messages')).toBeLessThan(sql.indexOf('INSERT INTO conversation_turns'));
+    expect(sql).toContain('user_message_id,');
+    expect(sql).not.toContain('updated_turn AS');
+    expect(params).toContain('да');
+  });
+
   it('creates distinct turns for distinct client actions with identical text hashes', async () => {
     const query = vi.fn()
       .mockResolvedValueOnce({ rowCount: 1, rows: [turnRow('turn-1', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')] })
       .mockResolvedValueOnce({ rowCount: 1, rows: [turnRow('turn-2', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')] });
     const repository = new ConversationRepository({ query } as never);
 
-    const first = await repository.createTurn({
+    const first = await repository.createTurnWithUserMessage({
       sessionId: 'session-id',
+      visitorCapability: 'visitor-capability',
       clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      requestHash: 'same-text-hash'
+      requestHash: 'same-text-hash',
+      content: 'да'
     });
-    const second = await repository.createTurn({
+    const second = await repository.createTurnWithUserMessage({
       sessionId: 'session-id',
+      visitorCapability: 'visitor-capability',
       clientMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-      requestHash: 'same-text-hash'
+      requestHash: 'same-text-hash',
+      content: 'да'
     });
 
     expect(first.id).toBe('turn-1');
@@ -297,16 +358,21 @@ describe('ConversationRepository turn idempotency', () => {
     const repository = new ConversationRepository({ query } as never);
     const operation = {
       sessionId: 'session-id',
+      visitorCapability: 'visitor-capability',
       clientMessageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      requestHash: 'same-text-hash'
+      requestHash: 'same-text-hash',
+      content: 'да'
     };
 
-    const first = await repository.createTurn(operation);
-    const retry = await repository.createTurn(operation);
+    const first = await repository.createTurnWithUserMessage(operation);
+    const retry = await repository.createTurnWithUserMessage(operation);
 
     expect(first.id).toBe('turn-1');
     expect(retry.id).toBe('turn-1');
-    expect(query.mock.calls[0]?.[0]).toContain('WHERE conversation_turns.request_hash = EXCLUDED.request_hash');
+    const sql = query.mock.calls[0]?.[0];
+    expect(sql).toContain('WHERE conversation_turns.request_hash = EXCLUDED.request_hash');
+    expect(sql).toContain("WHEN conversation_turns.user_message_id IS NULL THEN 'user_message_saved'");
+    expect(sql).toContain('ELSE conversation_turns.stage');
   });
 
   it('reports the existing active turn when a different client action collides', async () => {
@@ -315,17 +381,53 @@ describe('ConversationRepository turn idempotency', () => {
         code: '23505',
         constraint: 'conversation_turns_one_active_per_session_idx'
       })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'active-turn' }] });
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ session_id: 'session-id', active_turn_id: 'active-turn' }]
+      });
     const repository = new ConversationRepository({ query } as never);
 
-    await expect(repository.createTurn({
+    await expect(repository.createTurnWithUserMessage({
       sessionId: 'session-id',
+      visitorCapability: 'visitor-capability',
       clientMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-      requestHash: 'different-message'
+      requestHash: 'different-message',
+      content: 'нет'
     })).rejects.toMatchObject({
       code: 'active_conversation_turn_exists',
       activeTurnId: 'active-turn'
     });
+  });
+
+  it('retries the atomic create once when the conflicting active turn disappears before readback', async () => {
+    const retriedRow = {
+      ...turnRow('turn-after-race', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
+      user_message_id: 'user-message-id',
+      stage: 'user_message_saved'
+    };
+    const query = vi.fn()
+      .mockRejectedValueOnce({
+        code: '23505',
+        constraint: 'conversation_turns_one_active_per_session_idx'
+      })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ session_id: 'session-id', active_turn_id: null }]
+      })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [retriedRow] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.createTurnWithUserMessage({
+      sessionId: 'session-id',
+      visitorCapability: 'visitor-capability',
+      clientMessageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      requestHash: 'different-message',
+      content: 'нет'
+    })).resolves.toMatchObject({ id: 'turn-after-race', userMessageId: 'user-message-id' });
+
+    expect(query).toHaveBeenCalledTimes(3);
+    expect(query.mock.calls[0]?.[0]).toContain('INSERT INTO conversation_turns');
+    expect(query.mock.calls[2]?.[0]).toContain('INSERT INTO conversation_turns');
   });
 
   it('maps execution lease state used to prevent concurrent turn runners', async () => {
@@ -350,6 +452,8 @@ describe('ConversationRepository turn idempotency', () => {
       executionLeaseExpiresAt: leaseAt.toISOString()
     });
     expect(query.mock.calls[0]?.[0]).toContain('execution_lease_expires_at < now()');
+    expect(query.mock.calls[0]?.[0]).toContain("CASE WHEN turn.status = 'failed' THEN 'answering'");
+    expect(query.mock.calls[0]?.[0]).toContain('deadline_at > now()');
   });
 
   it('claims at most one recovery attempt atomically before the database deadline', async () => {
@@ -369,10 +473,46 @@ describe('ConversationRepository turn idempotency', () => {
     });
 
     expect(claimed).toMatchObject({ recoveryAttempts: 1, deadlineAt: deadlineAt.toISOString() });
-    expect(query.mock.calls[0]?.[0]).toContain('recovery_attempts = coalesce(recovery_attempts, 0) + 1');
-    expect(query.mock.calls[0]?.[0]).toContain('coalesce(recovery_attempts, 0) < $3');
+    expect(query.mock.calls[0]?.[0]).toContain('recovery_attempts = coalesce(turn.recovery_attempts, 0) + 1');
+    expect(query.mock.calls[0]?.[0]).toContain('coalesce(turn.recovery_attempts, 0) < $3');
     expect(query.mock.calls[0]?.[0]).toContain('deadline_at > now()');
     expect(query.mock.calls[0]?.[1]).toEqual(['session-id', 'turn-1', 1]);
+  });
+
+  it('terminalizes an expired orphan and returns only the latest unanswered turn state', async () => {
+    const deadlineAt = new Date('2026-07-10T11:59:00.000Z');
+    const row = {
+      ...turnRow('turn-expired', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+      user_message_id: 'user-message-id',
+      status: 'failed',
+      stage: 'deadline_expired',
+      deadline_at: deadlineAt,
+      result_ready: false
+    };
+    const query = vi.fn().mockResolvedValue({ rowCount: 1, rows: [row] });
+    const repository = new ConversationRepository({ query } as never);
+
+    const pending = await repository.getLatestUnansweredTurn('session-id');
+
+    expect(pending).toMatchObject({
+      turn: {
+        id: 'turn-expired',
+        status: 'failed',
+        stage: 'deadline_expired',
+        deadlineAt: deadlineAt.toISOString()
+      },
+      resultReady: false
+    });
+    const sql = query.mock.calls[0]?.[0];
+    expect(sql).toContain('expired_turns AS');
+    expect(sql).toContain('deadline_at <= now()');
+    expect(sql).toContain("SET status = 'failed'");
+    expect(sql).toContain('RETURNING conversation_turns.*');
+    expect(sql).toContain('SELECT expired_turns.*');
+    expect(sql).toContain('NOT EXISTS');
+    expect(sql).toContain('assistant_message_id IS NULL');
+    expect(sql).toContain("answer_contracts.status = 'final'");
+    expect(sql).toContain('latest_turn.deadline_at > now()');
   });
 
   it('saves the user message and links it to the turn atomically', async () => {
@@ -394,42 +534,166 @@ describe('ConversationRepository turn idempotency', () => {
     const message = await repository.addUserMessageForTurn({
       sessionId: 'session-id',
       turnId: 'turn-id',
+      executionOwner: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       content: 'да',
       activeNeedsBefore: []
     });
 
     expect(message.id).toBe('message-id');
+    expect(query).toHaveBeenCalledTimes(1);
+    const sql = query.mock.calls[0]?.[0];
+    expect(sql).toContain('active_session AS MATERIALIZED');
+    expect(sql).toContain('execution_owner = $3::uuid');
+    expect(sql).toContain('execution_lease_expires_at > now()');
+    expect(sql).toContain('deadline_at > now()');
+    expect(sql).toContain("WHEN turn.user_message_id IS NULL THEN 'user_message_saved'");
+    expect(sql).toContain('ELSE turn.stage');
     expect(query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
     expect(query.mock.calls[0]?.[0]).toContain("SELECT locked_turn.session_id, 'user'");
     expect(query.mock.calls[0]?.[0]).toContain('WHERE NOT EXISTS (SELECT 1 FROM existing_message)');
     expect(query.mock.calls[0]?.[0]).toContain('SET user_message_id = (SELECT id FROM chosen_message)');
   });
 
-  it('inserts an assistant message only from the locked existing turn', async () => {
-    const query = vi.fn()
-      .mockResolvedValueOnce({
-        rowCount: 1,
-        rows: [{
-          id: 'assistant-message-id',
-          session_id: 'session-id',
-          role: 'assistant',
-          content: 'ответ',
-          metadata: {},
-          created_at: now
-        }]
-      })
-      .mockResolvedValueOnce({ rowCount: 1, rows: [] });
+  it('atomically commits the final contract, assistant message and terminal turn only for the current live owner', async () => {
+    const query = vi.fn().mockResolvedValueOnce({
+      rowCount: 1,
+      rows: [{
+        id: 'assistant-message-id',
+        session_id: 'session-id',
+        role: 'assistant',
+        content: 'ответ',
+        metadata: {},
+        created_at: now
+      }]
+    });
     const repository = new ConversationRepository({ query } as never);
 
     await repository.addAssistantMessageForTurn({
       sessionId: 'session-id',
       turnId: 'turn-id',
-      content: 'ответ'
+      content: 'ответ',
+      executionOwner: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      answerContract: { answerText: 'ответ' },
+      review: { verdict: 'pass', issues: [] },
+      responsePayload: { answer: 'ответ' }
     });
 
-    expect(query.mock.calls[0]?.[0]).toContain('FOR UPDATE');
-    expect(query.mock.calls[0]?.[0]).toContain("SELECT locked_turn.session_id, 'assistant'");
-    expect(query.mock.calls[0]?.[0]).toContain('SET assistant_message_id = (SELECT id FROM chosen_message)');
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = query.mock.calls[0];
+    expect(sql).toContain('FOR UPDATE');
+    expect(sql).toContain("status IN ('received', 'need_extracted', 'planned', 'answering')");
+    expect(sql).toContain('execution_owner = $3::uuid');
+    expect(sql).toContain('execution_lease_expires_at > now()');
+    expect(sql).toContain('deadline_at > now()');
+    expect(sql).toContain('active_session AS MATERIALIZED');
+    expect(sql).toContain("session.status = 'active'");
+    expect(sql).toContain('INSERT INTO answer_contracts');
+    expect(sql).toContain("SELECT fenced_turn.session_id, 'assistant'");
+    expect(sql).toContain('SET assistant_message_id = committed_message.id');
+    expect(sql).toContain('execution_owner = NULL');
+    expect(sql).toContain('INSERT INTO turn_checkpoints');
+    expect(sql).toContain('UPDATE conversation_sessions');
+    expect(params).toContain('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+  });
+
+  it('does not let failure or recovery bookkeeping downgrade a terminal turn', async () => {
+    const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.updateTurn({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      status: 'failed',
+      stage: 'recovery_failed',
+      requireUnowned: true
+    });
+
+    const [sql] = query.mock.calls[0];
+    expect(sql).toContain("status NOT IN ('completed', 'recovered')");
+    expect(sql).toContain('execution_owner IS NULL');
+  });
+
+  it('loads messages and the post-expiry pending turn from one SQL snapshot', async () => {
+    const deadlineAt = new Date('2026-07-10T11:59:00.000Z');
+    const query = vi.fn().mockResolvedValue({
+      rowCount: 1,
+      rows: [{
+        messages: [{
+          id: 'user-message-id',
+          session_id: 'session-id',
+          role: 'user',
+          content: 'да',
+          metadata: {},
+          created_at: now.toISOString()
+        }],
+        pending_turn: {
+          ...turnRow('turn-expired', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+          user_message_id: 'user-message-id',
+          status: 'failed',
+          stage: 'deadline_expired',
+          deadline_at: deadlineAt.toISOString(),
+          created_at: now.toISOString(),
+          updated_at: now.toISOString(),
+          result_ready: false
+        },
+        lead_offer_consumed: true
+      }]
+    });
+    const repository = new ConversationRepository({ query } as never);
+
+    const snapshot = await repository.getHistorySnapshot('session-id');
+
+    expect(snapshot.messages).toMatchObject([{ id: 'user-message-id', content: 'да' }]);
+    expect(snapshot.pendingTurn).toMatchObject({
+      turn: { id: 'turn-expired', status: 'failed', stage: 'deadline_expired' },
+      resultReady: false
+    });
+    expect(snapshot.leadOfferConsumed).toBe(true);
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql] = query.mock.calls[0];
+    expect(sql).toContain('UPDATE conversation_turns');
+    expect(sql).toContain('RETURNING conversation_turns.*');
+    expect(sql).toContain('FROM messages');
+    expect(sql).toContain('pending_turn');
+    expect(sql).toContain('latest_lead_offer');
+    expect(sql).toContain('JOIN leads');
+  });
+});
+
+describe('ConversationRepository.closeSession', () => {
+  it('locks the exact live capability before terminalizing turns in a fresh transaction snapshot', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'session-id' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 'turn-id' }] })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ ...sessionRow(), id: 'session-id', visitor_id: 'visitor-capability' }]
+      })
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await expect(repository.closeSession({
+      id: 'session-id',
+      visitorCapability: 'visitor-capability'
+    })).resolves.toMatchObject({ id: 'session-id', status: 'closed' });
+
+    expect(query).toHaveBeenCalledTimes(4);
+    const [lockSql, lockParams] = query.mock.calls[0];
+    expect(lockSql).toContain('FOR UPDATE OF session');
+    expect(lockSql).toContain("visitor_id = $2");
+    expect(lockSql).toContain("status = 'active'");
+    expect(lockSql).toContain('last_heartbeat_at >=');
+    expect(lockParams).toEqual(['session-id', 'visitor-capability', 30]);
+
+    const [turnSql, turnParams] = query.mock.calls[1];
+    expect(turnSql).toContain('UPDATE conversation_turns');
+    expect(turnSql).toContain("ELSE 'session_closed' END");
+    expect(turnSql).toContain('execution_owner = NULL');
+    expect(turnSql).toContain('execution_lease_expires_at = NULL');
+    expect(turnParams).toEqual(['session-id', 'closed']);
+
+    expect(query.mock.calls[2]?.[0]).toContain('UPDATE conversation_sessions');
+    expect(query.mock.calls[3]?.[0]).toContain('UPDATE lead_capture_drafts');
   });
 });
 
@@ -454,6 +718,8 @@ describe('ConversationRepository dialogue ledger compaction', () => {
 
     await repository.saveDialogueLedgerSnapshot({
       sessionId: 'session-id',
+      turnId: 'turn-id',
+      executionOwner: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
       throughEventSeq: 81,
       eventCount: 81,
       state: { eventIds: ['event-81'] },
@@ -462,7 +728,132 @@ describe('ConversationRepository dialogue ledger compaction', () => {
 
     expect(query.mock.calls[0]?.[0]).toContain('ON CONFLICT (session_id) DO UPDATE');
     expect(query.mock.calls[0]?.[0]).toContain('dialogue_ledger_snapshots.through_event_seq <= EXCLUDED.through_event_seq');
+    expect(query.mock.calls[0]?.[0]).toContain('execution_owner = $7::uuid');
     expect(query.mock.calls[0]?.[1]?.[3]).toBe(JSON.stringify({ eventIds: ['event-81'] }));
+  });
+});
+
+describe('ConversationRepository turn-owned durable mutation fencing', () => {
+  const owner = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+  it('checks active session, live owner, lease and deadline inside every durable mutation statement', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ ...sessionRow(), id: 'session-id', status: 'active' }] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] })
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{}] });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.updateNeedState('session-id', { activeNeeds: [] } as never, {
+      turnId: 'turn-id',
+      executionOwner: owner
+    });
+    await repository.upsertDialogueLedgerEvent({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      executionOwner: owner,
+      eventId: 'event-id',
+      eventType: 'need.updated',
+      scope: 'need',
+      payload: {},
+      evidence: 'buyer said so',
+      source: 'buyer',
+      status: 'active'
+    });
+    await repository.saveDialogueLedgerSnapshot({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      executionOwner: owner,
+      throughEventSeq: 2,
+      eventCount: 2,
+      state: {},
+      recentEvents: []
+    });
+    await repository.upsertTurnCheckpoint({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      executionOwner: owner,
+      checkpoint: 'planned',
+      status: 'succeeded'
+    });
+    await repository.saveToolArtifact({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      executionOwner: owner,
+      toolName: 'catalog.search',
+      toolRequestId: 'request-id',
+      status: 'ok',
+      payload: {}
+    });
+    await repository.saveAnswerContract({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      executionOwner: owner,
+      answerText: 'draft',
+      contract: {},
+      status: 'draft'
+    });
+
+    expect(query).toHaveBeenCalledTimes(6);
+    for (const [sql, params] of query.mock.calls) {
+      expect(sql).toContain('active_session AS MATERIALIZED');
+      expect(sql).toContain("session.status = 'active'");
+      expect(sql).toContain('fenced_turn AS MATERIALIZED');
+      expect(sql).toContain('execution_owner =');
+      expect(sql).toContain('execution_lease_expires_at > now()');
+      expect(sql).toContain('deadline_at > now()');
+      expect(sql).toContain("status IN ('received', 'need_extracted', 'planned', 'answering')");
+      expect(params).toContain(owner);
+    }
+  });
+
+  it('rejects a stale owner with a typed error instead of silently accepting zero rows', async () => {
+    const operations: Array<[string, (repository: ConversationRepository) => Promise<unknown>]> = [
+      ['need state', (repository) => repository.updateNeedState(
+        'session-id',
+        { activeNeeds: [] } as never,
+        { turnId: 'turn-id', executionOwner: owner }
+      )],
+      ['ledger event', (repository) => repository.upsertDialogueLedgerEvent({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner,
+        eventId: 'event-id', eventType: 'need.updated', scope: 'need', payload: {},
+        evidence: 'buyer said so', source: 'buyer', status: 'active'
+      })],
+      ['ledger snapshot', (repository) => repository.saveDialogueLedgerSnapshot({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner,
+        throughEventSeq: 2, eventCount: 2, state: {}, recentEvents: []
+      })],
+      ['checkpoint', (repository) => repository.upsertTurnCheckpoint({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner,
+        checkpoint: 'planned', status: 'succeeded'
+      })],
+      ['tool artifact', (repository) => repository.saveToolArtifact({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner,
+        toolName: 'catalog.search', toolRequestId: 'request-id', status: 'ok', payload: {}
+      })],
+      ['draft answer contract', (repository) => repository.saveAnswerContract({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner,
+        answerText: 'draft', contract: {}, status: 'draft'
+      })],
+      ['user message', (repository) => repository.addUserMessageForTurn({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner, content: 'question'
+      })],
+      ['final answer', (repository) => repository.addAssistantMessageForTurn({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner, content: 'answer',
+        answerContract: {}, responsePayload: {}
+      })],
+      ['turn state', (repository) => repository.updateTurn({
+        sessionId: 'session-id', turnId: 'turn-id', executionOwner: owner, stage: 'planned'
+      })]
+    ];
+
+    for (const [label, operation] of operations) {
+      const query = vi.fn().mockResolvedValue({ rowCount: 0, rows: [] });
+      const repository = new ConversationRepository({ query } as never);
+      await expect(operation(repository), label).rejects.toBeInstanceOf(TurnMutationFenceError);
+    }
   });
 });
 

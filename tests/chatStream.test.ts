@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { streamChatMessage } from '../src/client/chatStream.js';
+import {
+  ActiveConversationTurnError,
+  ChatMessageNotAcceptedError,
+  registerChatAbortController,
+  recoverChatTurn,
+  streamChatMessage
+} from '../src/client/chatStream.js';
+
+const visitorId = 'visitor-capability-with-high-entropy';
 
 function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -14,6 +22,45 @@ describe('streamChatMessage watchdog and recovery', () => {
     expect(source).toContain("safeStorageSet(chatSessionStorage, 'bakaut_session_id', data.session.id)");
     expect(source).not.toContain("addEventListener('pagehide'");
     expect(source).not.toContain('navigator.sendBeacon');
+    expect(source).toContain('restoration.pendingTurn');
+    expect(source).toContain('recoverChatTurn');
+    expect(source).toContain('registerChatAbortController(abortRef, pendingController)');
+    expect(source).toContain('submitError instanceof ChatMessageNotAcceptedError');
+    expect(source).toContain('message.id !== userId && message.id !== assistantId');
+    expect(source).toContain('setInput(userText)');
+    expect(source).toContain('if (submitError.activeTurnId && activeSessionId && visitorId)');
+    expect(source).toContain('submitError.statusCode === 404');
+    expect(source).toContain('abandonSavedChat(chatSessionStorage, attemptedSessionId)');
+    expect(source).toContain('current === attemptedSessionId ? null : current');
+    expect(source).toContain('abortRef.current?.abort()');
+  });
+
+  it('keeps a newer chat controller owned when an older operation finishes', () => {
+    const slot: { current: AbortController | null } = { current: null };
+    const hydrationController = new AbortController();
+    const releaseHydration = registerChatAbortController(slot, hydrationController);
+    const submitController = new AbortController();
+    const releaseSubmit = registerChatAbortController(slot, submitController);
+
+    hydrationController.abort();
+    releaseHydration();
+    expect(slot.current).toBe(submitController);
+
+    slot.current?.abort();
+    expect(submitController.signal.aborted).toBe(true);
+    expect(hydrationController.signal.aborted).toBe(true);
+    expect(slot.current).toBeNull();
+
+    releaseSubmit();
+    expect(slot.current).toBeNull();
+  });
+
+  it('does not claim an unconfirmed question was saved in generic client errors', () => {
+    const streamSource = readFileSync('src/client/chatStream.ts', 'utf8');
+    const appSource = readFileSync('src/client/main.tsx', 'utf8');
+
+    expect(streamSource).not.toContain('Вопрос сохранен');
+    expect(appSource).not.toContain('Вопрос сохранен');
   });
 
   it('keeps the browser idle watchdog longer than the server generation timeout', () => {
@@ -60,7 +107,7 @@ describe('streamChatMessage watchdog and recovery', () => {
         'Оставлю телефон',
         { onDelta: (delta) => deltas.push(delta), onStatus: (status) => statuses.push(status) },
         undefined,
-        { fetcher, idleTimeoutMs: 1000 }
+        { fetcher, idleTimeoutMs: 1000, visitorId }
       );
 
       await vi.advanceTimersByTimeAsync(1000);
@@ -108,7 +155,7 @@ describe('streamChatMessage watchdog and recovery', () => {
       'need a generator',
       { onDelta: () => undefined },
       undefined,
-      { fetcher }
+      { fetcher, visitorId }
     )).resolves.toMatchObject(recoveredPayload);
 
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -154,7 +201,7 @@ describe('streamChatMessage watchdog and recovery', () => {
         'need a generator',
         { onDelta: () => undefined },
         undefined,
-        { fetcher }
+        { fetcher, visitorId }
       );
       await expect(result).rejects.toThrow('Server finished without a done payload');
       expect(fetcher).toHaveBeenCalledTimes(2);
@@ -195,7 +242,7 @@ describe('streamChatMessage watchdog and recovery', () => {
       'need a generator',
       { onDelta: () => undefined },
       undefined,
-      { fetcher }
+      { fetcher, visitorId }
     )).rejects.toThrow('The saved turn cannot be recovered.');
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
@@ -239,7 +286,7 @@ describe('streamChatMessage watchdog and recovery', () => {
         'need heavy plate',
         { onDelta: (delta) => deltas.push(delta) },
         undefined,
-        { fetcher, idleTimeoutMs: 1000 }
+        { fetcher, idleTimeoutMs: 1000, visitorId }
       );
 
       await vi.advanceTimersByTimeAsync(1000);
@@ -276,7 +323,7 @@ describe('streamChatMessage watchdog and recovery', () => {
         'текст',
         { onDelta: (delta) => deltas.push(delta) },
         undefined,
-        { fetcher: async () => new Response(stream, { status: 200 }), idleTimeoutMs: 1000 }
+        { fetcher: async () => new Response(stream, { status: 200 }), idleTimeoutMs: 1000, visitorId }
       )).resolves.toMatchObject(payload);
       expect(deltas.join('')).toBe('Готово');
     } finally {
@@ -304,11 +351,119 @@ describe('streamChatMessage watchdog and recovery', () => {
       'да',
       { onDelta: () => undefined },
       undefined,
-      { fetcher, clientMessageId }
+      { fetcher, clientMessageId, visitorId }
     );
 
     const request = fetcher.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(request.body))).toEqual({ message: 'да', clientMessageId });
+    expect(request.headers).toMatchObject({ 'x-bakaut-visitor-id': visitorId });
+  });
+
+  it('returns the active turn id without treating the second message as persisted', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      error: 'active_conversation_turn_exists',
+      activeTurnId: '33333333-3333-4333-8333-333333333333',
+      recoverable: true
+    }), { status: 409, headers: { 'content-type': 'application/json' } }));
+
+    const error = await streamChatMessage(
+      '',
+      'session-1',
+      'Второй вопрос',
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher, visitorId }
+    ).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ActiveConversationTurnError);
+    expect(error).toMatchObject({
+      activeTurnId: '33333333-3333-4333-8333-333333333333'
+    });
+    expect(error.message).not.toContain('сохран');
+  });
+
+  it('treats every 409 without an active turn id as a non-accepted buyer message', async () => {
+    for (const payload of [
+      { error: 'active_conversation_turn_exists', recoverable: true },
+      { error: 'client_message_id_reused_with_different_payload', recoverable: false },
+      { error: 'conflict' }
+    ]) {
+      const fetcher = vi.fn(async () => new Response(JSON.stringify(payload), {
+        status: 409,
+        headers: { 'content-type': 'application/json' }
+      }));
+
+      const error = await streamChatMessage(
+        '',
+        'session-1',
+        'Второй вопрос',
+        { onDelta: () => undefined },
+        undefined,
+        { fetcher, visitorId }
+      ).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(ChatMessageNotAcceptedError);
+      expect(error).not.toBeInstanceOf(ActiveConversationTurnError);
+      expect(error).toMatchObject({ activeTurnId: undefined });
+      expect(error.message).toContain('не принят');
+      expect(error.message).not.toContain('сохран');
+    }
+  });
+
+  it('types a definitive session 404 as non-accepted and marks only that session stale', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      error: 'Session not found or inactive'
+    }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' }
+    }));
+
+    const error = await streamChatMessage(
+      '',
+      'session-1',
+      'Нужен генератор',
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher, visitorId }
+    ).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ChatMessageNotAcceptedError);
+    expect(error).toMatchObject({
+      activeTurnId: undefined,
+      statusCode: 404
+    });
+    expect(error.message).toContain('не принято');
+  });
+
+  it('sends the visitor capability when recovering an existing turn', async () => {
+    const payload = {
+      turnId: '33333333-3333-4333-8333-333333333333',
+      answer: 'Готовый ответ',
+      needState: {},
+      productCards: [],
+      usedWebSearch: false
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseEvent('done', payload)));
+        controller.close();
+      }
+    });
+    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(stream, { status: 200 }));
+
+    await expect(recoverChatTurn(
+      '',
+      'session-1',
+      '33333333-3333-4333-8333-333333333333',
+      visitorId,
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher }
+    )).resolves.toMatchObject(payload);
+
+    expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
+      'x-bakaut-visitor-id': visitorId
+    });
   });
 
   it('does not start recovery when the server reports a non-recoverable runner collision', async () => {
@@ -333,7 +488,7 @@ describe('streamChatMessage watchdog and recovery', () => {
       'да',
       { onDelta: () => undefined },
       undefined,
-      { fetcher }
+      { fetcher, visitorId }
     )).rejects.toThrow('Этот ответ уже формируется.');
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
