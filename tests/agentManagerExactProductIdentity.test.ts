@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentIntentContract } from '../src/ai/agentManagerContracts.js';
-import { filterProductsByStructuredSelectionPolicy } from '../src/ai/agentManagerOrchestrator.js';
+import {
+  exactModelNamesFromUserMessage,
+  filterProductsByStructuredSelectionPolicy,
+  repairIntentForExactModelEvidence
+} from '../src/ai/agentManagerOrchestrator.js';
 import type { Product } from '../src/shared/types.js';
 
 function exactTargetIntent(targetName: string): AgentIntentContract {
@@ -66,6 +70,23 @@ function product(input: Partial<Product> & Pick<Product, 'id' | 'name'>): Produc
 }
 
 describe('structured exact-product identity', () => {
+  it('recovers split model names even when the planner omitted product mentions', () => {
+    const userMessage = 'Нужна виброплита Wacker Neuson BPS 1550 Aw с двигателем Honda GX160 QX2.';
+    expect(exactModelNamesFromUserMessage(userMessage)).toEqual(['bps 1550 aw', 'gx160 qx2']);
+
+    const intent = {
+      toolRequests: [],
+      productMentions: [],
+      riskFlags: [],
+      requiresTools: false
+    } as unknown as AgentIntentContract;
+    const repaired = repairIntentForExactModelEvidence(intent, userMessage);
+    expect(repaired.toolRequests).toHaveLength(1);
+    expect(repaired.toolRequests[0]?.tool).toBe('web.researchProductFacts');
+    expect(repaired.toolRequests[0]?.args.productNames).toEqual(['bps 1550 aw', 'gx160 qx2']);
+    expect(repaired.riskFlags).toContain('planner_repaired_exact_model_evidence');
+  });
+
   it('does not turn a neighbouring model blade dimension into the requested model code', () => {
     const requested = product({
       id: 'k770',

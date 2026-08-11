@@ -8,6 +8,7 @@ import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
 import { createCatalogSyncHeartbeat, evaluateCatalogInventoryCoverage } from './catalogFreshness.js';
 import { absoluteUrl, cleanText, normalizeSpecKey, parsePrice, productToEmbeddingText, slugFromUrl } from './normalize.js';
 import { hasPageSpecificProductEvidence } from './productPageIdentity.js';
+import { exactProductIdentity } from '../ai/modelTextMatching.js';
 
 type SitemapEntry = {
   loc: string;
@@ -25,6 +26,15 @@ export type SitemapSyncOptions = {
   requestDelayMs?: number;
   onlyUrls?: string[];
   onProgress?: (message: string) => void;
+};
+
+export type ExactCatalogRefreshResult = {
+  requestedNames: string[];
+  candidateUrls: string[];
+  importedProducts: number;
+  skippedProducts: number;
+  failedProducts: number;
+  warnings: string[];
 };
 
 type FetchResult = {
@@ -259,13 +269,19 @@ function isBrandLikeToken(value: string) {
   return value.length >= 3 && [...value].every(isAsciiAlnumOrHyphen);
 }
 
-async function fetchText(url: string, baseUrl: string, maxBytes = config.CATALOG_MAX_RESPONSE_BYTES): Promise<FetchResult> {
+async function fetchText(
+  url: string,
+  baseUrl: string,
+  maxBytes = config.CATALOG_MAX_RESPONSE_BYTES,
+  signal?: AbortSignal
+): Promise<FetchResult> {
   const response = await safeFetchBytes(url, {
     allowedOrigin: baseUrl,
     maxBytes,
     timeoutMs: config.CATALOG_REQUEST_TIMEOUT_MS,
     maxRedirects: 3,
     headers: { 'user-agent': 'Bakaut AI catalog sync (+local development; respects sitemap)' },
+    signal,
   });
   return { url: response.url, status: response.status, html: outboundText(response) };
 }
@@ -273,10 +289,11 @@ async function fetchText(url: string, baseUrl: string, maxBytes = config.CATALOG
 async function collectSitemapEntries(
   sitemapUrl: string,
   baseUrl: string,
-  heartbeat: () => Promise<void>
+  heartbeat: () => Promise<void>,
+  signal?: AbortSignal
 ) {
   await heartbeat();
-  const root = await fetchText(sitemapUrl, baseUrl, config.CATALOG_MAX_SITEMAP_BYTES);
+  const root = await fetchText(sitemapUrl, baseUrl, config.CATALOG_MAX_SITEMAP_BYTES, signal);
   await heartbeat();
   if (root.status >= 400) throw new Error(`Sitemap HTTP ${root.status}: ${sitemapUrl}`);
   const sitemapUrls = parseSitemapIndex(root.html);
@@ -288,7 +305,7 @@ async function collectSitemapEntries(
 
   for (const url of targetSitemaps) {
     await heartbeat();
-    const response = await fetchText(url, baseUrl, config.CATALOG_MAX_SITEMAP_BYTES);
+    const response = await fetchText(url, baseUrl, config.CATALOG_MAX_SITEMAP_BYTES, signal);
     await heartbeat();
     if (response.status >= 400) continue;
     entries.push(...parseSitemapEntries(response.html));
@@ -771,6 +788,105 @@ export async function syncCatalogFromSitemap(options: SitemapSyncOptions = {}, r
         failedItemCount: stats.failedProducts + stats.failedContentPages + 1
       }
     );
+    throw error;
+  }
+}
+
+/**
+ * Refreshes only sitemap URLs whose slug contains the requested exact model
+ * identity. This is deliberately separate from a full catalog sync: a live
+ * answer must be able to repair a stale/missing snapshot without crawling or
+ * deactivating the rest of the catalog.
+ */
+export async function refreshExactCatalogProducts(
+  requestedNames: string[],
+  repository = new ProductRepository(),
+  options: { signal?: AbortSignal } = {}
+): Promise<ExactCatalogRefreshResult> {
+  const names = [...new Set(requestedNames.map((name) => name.trim()).filter(Boolean))].slice(0, 4);
+  const result: ExactCatalogRefreshResult = {
+    requestedNames: names,
+    candidateUrls: [],
+    importedProducts: 0,
+    skippedProducts: 0,
+    failedProducts: 0,
+    warnings: []
+  };
+  if (!names.length) return result;
+
+  const identities = names.map(exactProductIdentity);
+  const baseUrl = config.CATALOG_BASE_URL;
+  const sitemapUrl = new URL('/sitemap.xml', baseUrl).toString();
+  const sourceId = await repository.startCatalogSource({
+    type: 'site_crawl',
+    location: `${sitemapUrl}#exact-model-refresh`,
+    syncMode: 'partial'
+  });
+  const heartbeat = createCatalogSyncHeartbeat(() => repository.heartbeatCatalogSource(sourceId));
+  const errors: Array<{ url: string; error: string }> = [];
+  try {
+    const collected = await collectSitemapEntries(sitemapUrl, baseUrl, heartbeat, options.signal);
+    const candidateEntries = collected.entries
+      .filter((entry) => isCatalogUrl(entry.loc, baseUrl) && looksLikeProductUrl(entry.loc, baseUrl))
+      .filter((entry) => identities.some((identity) => identity.hasExactMention(entry.loc)))
+      .slice(0, 8);
+    result.candidateUrls = candidateEntries.map((entry) => entry.loc);
+    if (!candidateEntries.length) {
+      result.warnings.push('exact_catalog_model_url_not_in_sitemap');
+    }
+    await runPool(candidateEntries, 2, async (entry) => {
+      await heartbeat();
+      try {
+        const response = await fetchText(entry.loc, baseUrl, config.CATALOG_MAX_RESPONSE_BYTES, options.signal);
+        const product = extractProduct(response, baseUrl, entry.lastmod);
+        if (!product) {
+          result.skippedProducts += 1;
+          return;
+        }
+        const matched = identities.some((identity) => identity.hasExactMention(product.name));
+        if (!matched) {
+          result.skippedProducts += 1;
+          result.warnings.push(`exact_catalog_identity_rejected:${entry.loc}`);
+          return;
+        }
+        await repository.upsertProduct(product);
+        result.importedProducts += 1;
+      } catch (error) {
+        result.failedProducts += 1;
+        limitedErrors(errors, entry.loc, error);
+      } finally {
+        await heartbeat();
+      }
+    });
+    if (errors.length) result.warnings.push(...errors.map((item) => `exact_catalog_refresh_failed:${item.url}`));
+    await repository.finishCatalogSource(
+      sourceId,
+      'completed',
+      { ...result, errors },
+      undefined,
+      {
+        coverageComplete: false,
+        discoveredItemCount: candidateEntries.length,
+        syncedItemCount: result.importedProducts,
+        failedItemCount: result.failedProducts
+      }
+    );
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    result.warnings.push(`exact_catalog_refresh_failed:${message}`);
+    await repository.finishCatalogSource(
+      sourceId,
+      'failed',
+      { ...result, errors },
+      message,
+      {
+        coverageComplete: false,
+        discoveredItemCount: result.candidateUrls.length,
+        syncedItemCount: result.importedProducts,
+        failedItemCount: result.failedProducts + 1
+      }
+    ).catch(() => undefined);
     throw error;
   }
 }

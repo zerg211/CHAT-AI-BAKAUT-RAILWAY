@@ -39,6 +39,7 @@ import {
   type ProductComparisonResearchFact,
   type ProductComparisonResearchResult
 } from './productComparisonResearch.js';
+import { refreshExactCatalogProducts } from '../catalog/sitemapSync.js';
 import {
   extractConfirmedGeneratorNominalPowerKw,
   extractGeneratorPowerForHardSelection,
@@ -119,6 +120,7 @@ import {
   isModelTokenChar,
   modelIdentifierDisplayTokens,
   modelIdentifierTokens,
+  modelIdentityCandidates,
   modelTextTokens,
   normalizeModelText,
   textMatchesTargetName,
@@ -1455,11 +1457,6 @@ function toolRequestEvidenceText(request: ToolRequest) {
   ].filter(Boolean).join(' ');
 }
 
-function exactModelEvidenceToolCoversToken(request: ToolRequest, token: string) {
-  if (request.tool !== 'web.researchProductFacts' && request.tool !== 'catalog.getProductDetails') return false;
-  return modelIdentifierTokens(toolRequestEvidenceText(request)).includes(token);
-}
-
 function compactReviewerProductContext(product: Product) {
   return {
     id: product.id,
@@ -1478,23 +1475,33 @@ export function isPreSendReviewStructuredOutputError(error: unknown) {
   return message.includes('agent_pre_send_review') && message.includes('json');
 }
 
-function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
-  const targetMentionNames = (intent.productMentions ?? [])
+export function exactModelNamesFromUserMessage(userMessage: string) {
+  return uniqueStrings(modelIdentityCandidates(userMessage)
+    .filter((candidate) => exactProductIdentity(candidate).decisiveParts.length >= 2)
+    .slice(0, 4));
+}
+
+export function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
+  const explicitTargetMentionNames = (intent.productMentions ?? [])
     .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
     .map((mention) => mention.name)
-    .filter((name) => modelIdentifierTokens(name).some((token) => modelIdentifierTokens(userMessage).includes(token)));
+    .filter((name) => exactProductIdentity(name).hasExactMention(userMessage));
+  const targetMentionNames = uniqueStrings([
+    ...explicitTargetMentionNames,
+    ...(explicitTargetMentionNames.length ? [] : exactModelNamesFromUserMessage(userMessage))
+  ]);
   if (!targetMentionNames.length) return intent;
-  const targetTokens = modelIdentifierTokens(userMessage);
-  if (!targetTokens.length) return intent;
-  const eligibleTokens = new Set(targetMentionNames.flatMap((name) => modelIdentifierTokens(name)));
-  const uncoveredTokens = targetTokens.filter((token) =>
-    eligibleTokens.has(token) &&
-    !intent.toolRequests.some((request) => exactModelEvidenceToolCoversToken(request, token))
+  const uncoveredNames = targetMentionNames.filter((name) =>
+    !intent.toolRequests.some((request) =>
+      (request.tool === 'web.researchProductFacts' || request.tool === 'catalog.getProductDetails') &&
+      exactProductIdentity(name).hasExactMention(toolRequestEvidenceText(request))
+    )
   );
-  if (!uncoveredTokens.length) return intent;
-  const displayTargets = targetMentionNames
-    .filter((name) => modelIdentifierTokens(name).some((token) => uncoveredTokens.includes(token)));
-  const idBase = `auto:exact-model:${uncoveredTokens.map(compactModelText).join('-')}`;
+  if (!uncoveredNames.length) return intent;
+  const idBase = `auto:exact-model:${uncoveredNames
+    .flatMap((name) => exactProductIdentity(name).decisiveParts)
+    .map(compactModelText)
+    .join('-')}`;
   const existingIds = new Set(intent.toolRequests.map((request) => request.id));
   const requestId = existingIds.has(idBase) ? `${idBase}:${intent.toolRequests.length + 1}` : idBase;
   const repairRequest: ToolRequest = {
@@ -1506,7 +1513,7 @@ function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMess
       productIntent: intent.selectionPolicy?.targetProductClass ?? 'unknown',
       canonicalProductIntent: coerceVisibleCardIntent(intent.selectionPolicy?.canonicalProductClass),
       limit: 4,
-      productNames: displayTargets.length ? displayTargets : uncoveredTokens,
+      productNames: uncoveredNames,
       comparisonAttributes: ['current buyer question'],
       reason: 'Current turn names an exact model but the planner did not request same-turn evidence for that model.',
       notes: 'Do not reuse technical or catalog facts from a different model identifier. Verify the current exact model before answering.'
@@ -1782,11 +1789,14 @@ function assertToolResultBounds(result: ToolResult) {
 }
 
 function exactProductNamesFromIntent(intent: AgentIntentContract, userMessage: string) {
-  const userTokens = new Set(modelIdentifierTokens(userMessage));
-  return uniqueStrings((intent.productMentions ?? [])
+  const explicitNames = (intent.productMentions ?? [])
     .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
-    .filter((mention) => modelIdentifierTokens(mention.name).some((token) => userTokens.has(token)))
-    .map((mention) => mention.name));
+    .filter((mention) => exactProductIdentity(mention.name).hasExactMention(userMessage))
+    .map((mention) => mention.name);
+  return uniqueStrings([
+    ...explicitNames,
+    ...(explicitNames.length ? [] : exactModelNamesFromUserMessage(userMessage))
+  ]);
 }
 
 function uniqueToolRequestId(intent: AgentIntentContract, idBase: string) {
@@ -4408,12 +4418,16 @@ function continuityProductClassFromCurrentTurn(input: {
   return 'unknown';
 }
 
-function catalogPresenceForTargets(targetNames: string[], products: Product[]) {
+function catalogPresenceForTargets(
+  targetNames: string[],
+  products: Product[],
+  options: { absenceVerified?: boolean } = {}
+) {
   return targetNames.map((productName) => {
     const exactMatches = products.filter((product) => productMatchesTargetName(product, productName));
     return {
       productName,
-      status: exactMatches.length ? 'present' : 'absent',
+      status: exactMatches.length ? 'present' : options.absenceVerified === false ? 'unknown' : 'absent',
       exactProductIds: exactMatches.map((product) => product.id)
     };
   });
@@ -8561,10 +8575,42 @@ export class AgentManagerOrchestrator {
               exactMatches.forEach((product) => productsById.set(product.id, product));
             }
           }
-          const catalogCandidatesAfterExactModelLookup = [...productsById.values()];
-          const exactTargetsPresentAfterModelLookup = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
+          let exactCatalogRefreshWarnings: string[] = [];
+          let exactCatalogAbsenceVerified = true;
+          let catalogCandidatesAfterExactModelLookup = [...productsById.values()];
+          let exactTargetsPresentAfterModelLookup = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
             catalogCandidatesAfterExactModelLookup.some((product) => productMatchesExactTargetIdentity(product, targetName))
           );
+          if (
+            targetProductNames.length &&
+            !exactTargetsPresentAfterModelLookup &&
+            typeof (this.products as ProductRepository & { startCatalogSource?: unknown }).startCatalogSource === 'function'
+          ) {
+            try {
+              const refreshed = await refreshExactCatalogProducts(targetProductNames, this.products, { signal: toolSignal });
+              exactCatalogRefreshWarnings = refreshed.warnings;
+              exactCatalogAbsenceVerified = refreshed.failedProducts === 0 &&
+                (refreshed.candidateUrls.length === 0 || refreshed.importedProducts > 0);
+              if (typeof exactModelTokenSearch === 'function') {
+                for (const targetName of targetProductNames.slice(0, 4)) {
+                  const identity = exactProductIdentity(targetName);
+                  const tokens = identity.decisiveParts.map((part) => compactModelText(part)).filter(Boolean);
+                  if (!tokens.length) continue;
+                  const refreshedMatches = await exactModelTokenSearch.call(this.products, tokens, 20)
+                    .then((products) => products.filter((product) => productMatchesExactTargetIdentity(product, targetName)))
+                    .catch(() => []);
+                  refreshedMatches.forEach((product) => productsById.set(product.id, product));
+                }
+              }
+              catalogCandidatesAfterExactModelLookup = [...productsById.values()];
+              exactTargetsPresentAfterModelLookup = targetProductNames.every((targetName) =>
+                catalogCandidatesAfterExactModelLookup.some((product) => productMatchesExactTargetIdentity(product, targetName))
+              );
+            } catch (error) {
+              exactCatalogRefreshWarnings = [`exact_catalog_refresh_failed:${safeError(error).message}`];
+              exactCatalogAbsenceVerified = false;
+            }
+          }
           const priorCatalogLookupCompleted = inlineCatalogLookupCompleted || toolResults.some((toolResult) => {
             if (toolResult.tool === 'catalog.search') {
               return toolResult.status === 'ok' || toolResult.status === 'not_found';
@@ -8637,7 +8683,9 @@ export class AgentManagerOrchestrator {
               selectedProducts
             }).catch((error) => console.warn('Verified product fact memory write failed', safeError(error)));
           }
-          const catalogPresence = catalogPresenceForTargets(targetProductNames, selectedProducts);
+          const catalogPresence = catalogPresenceForTargets(targetProductNames, selectedProducts, {
+            absenceVerified: exactCatalogAbsenceVerified
+          });
           const nearbyCatalogProducts = nearbyCatalogProductsForTargets(targetProductNames, selectedProducts);
           for (const conflict of research.conflicts) {
             const product = selectedProducts.find((item) => item.name === conflict.productName);
@@ -8694,6 +8742,7 @@ export class AgentManagerOrchestrator {
             },
             warnings: [
               ...research.warnings,
+              ...exactCatalogRefreshWarnings,
               ...suppressedTargetProductNames.map((productName) => `exact_target_suppressed_by_product_role:${productName}`),
               ...catalogPresence
                 .filter((item) => item.status === 'absent')

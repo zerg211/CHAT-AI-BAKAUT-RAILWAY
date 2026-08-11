@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { textMatchesOnlyTargetNames, textMatchesTargetName } from '../src/ai/modelTextMatching.js';
+import { modelIdentityCandidates, textMatchesOnlyTargetNames, textMatchesTargetName } from '../src/ai/modelTextMatching.js';
 
 describe('exact product model text matching', () => {
   const target = 'TSS SGG 5000 EH';
 
   it('matches an exact split multi-part model code', () => {
     expect(textMatchesTargetName('Manual for TSS SGG 5000 EH generator', target)).toBe(true);
+  });
+
+  it('extracts split model candidates when the planner has not supplied product mentions', () => {
+    expect(modelIdentityCandidates(
+      'Нужна виброплита Wacker Neuson BPS 1550 Aw с двигателем Honda GX160 QX2.'
+    )).toEqual(['bps 1550 aw', 'gx160 qx2']);
   });
 
   it('matches exact split parts across punctuation and explanatory words', () => {

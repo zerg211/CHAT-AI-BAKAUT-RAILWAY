@@ -13,7 +13,7 @@ vi.mock('node:dns/promises', () => ({
   lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }])
 }));
 
-const { syncCatalogFromSitemap } = await import('../src/catalog/sitemapSync.js');
+const { refreshExactCatalogProducts, syncCatalogFromSitemap } = await import('../src/catalog/sitemapSync.js');
 
 function xmlResponse(xml: string) {
   return new Response(xml, { status: 200, headers: { 'content-type': 'application/xml' } }) as unknown as Awaited<ReturnType<typeof fetch>>;
@@ -24,6 +24,53 @@ function htmlResponse(html: string) {
 }
 
 describe('sitemap sync no-regex XML parsing', () => {
+  it('refreshes only the exact product URL when the runtime snapshot misses a split model', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (url) => {
+      const urlText = String(url);
+      if (urlText.endsWith('/sitemap.xml')) {
+        return xmlResponse(`
+          <urlset>
+            <url><loc>https://bakautprof.ru/catalog/vibroplity/wacker-neuson-bps-1550-aw/</loc></url>
+            <url><loc>https://bakautprof.ru/catalog/vibroplity/wacker-neuson-bps-1550-gw/</loc></url>
+          </urlset>
+        `);
+      }
+      return htmlResponse(`
+        <html>
+          <body>
+              <div itemscope itemtype="https://schema.org/Product" itemid="${urlText}">
+                <h1>Wacker Neuson BPS 1550 Aw</h1>
+                <div class="props-item"><span class="props-item__title">Brand</span><span class="props-item__text">Wacker Neuson</span></div>
+                <div class="props-item"><span class="props-item__title">Weight</span><span class="props-item__text">89 kg</span></div>
+                <div class="product-caption__item"><span itemprop="sku">BPS-1550-AW</span></div>
+                <div class="card__current-price">260 000</div>
+            </div>
+          </body>
+        </html>
+      `);
+    });
+    const upsertProduct = vi.fn(async (_product: CatalogProductInput) => undefined);
+    const repository = {
+      startCatalogSource: vi.fn(async () => 'source-exact'),
+      heartbeatCatalogSource: vi.fn(async () => undefined),
+      finishCatalogSource: vi.fn(async () => undefined),
+      upsertProduct
+    };
+
+    const result = await refreshExactCatalogProducts(['BPS 1550 Aw'], repository as never);
+
+    expect(result.candidateUrls).toEqual([
+      'https://bakautprof.ru/catalog/vibroplity/wacker-neuson-bps-1550-aw/'
+    ]);
+    expect(result.importedProducts).toBe(1);
+    expect(upsertProduct).toHaveBeenCalledTimes(1);
+    expect(upsertProduct.mock.calls[0]?.[0]).toMatchObject({
+      name: 'Wacker Neuson BPS 1550 Aw',
+      price: 260000
+    });
+  });
+
   it('follows sitemap indexes and extracts URL entries with decoded loc values', async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (url, _init) => {

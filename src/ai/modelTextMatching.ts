@@ -157,6 +157,30 @@ function modelTextTokenLayout(value: unknown) {
   return { tokens, separators };
 }
 
+function rawModelTextTokenLayout(value: unknown) {
+  const tokens: string[] = [];
+  const separators: string[] = [];
+  let current = '';
+  let pendingSeparator = '';
+  for (const char of String(value ?? '').normalize('NFKD').toLocaleLowerCase('ru-RU')) {
+    if (isModelTokenChar(char)) {
+      if (!current && tokens.length > 0) {
+        separators.push(pendingSeparator);
+        pendingSeparator = '';
+      }
+      current += char;
+    } else {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      pendingSeparator += char;
+    }
+  }
+  if (current) tokens.push(current);
+  return { tokens, separators };
+}
+
 function separatorHasWhitespace(value: string) {
   for (const char of value) {
     if (char.trim() === '') return true;
@@ -249,6 +273,7 @@ function includesOrderedExactTokens(
 const modelUnitTokens = new Set([
   'kw', 'квт', 'w', 'вт', 'kva', 'ква', 'v', 'в', 'kg', 'кг', 'hz', 'гц', 'rpm', 'об'
 ]);
+const modelIdentityStopWords = new Set(['is', 'and', 'or', 'to', 'of', 'in', 'on', 'by', 'for', 'with', 'max', 'min', 'hp']);
 
 function isDigitsOnlyToken(token: string) {
   return tokenHasDigit(token) && !tokenHasLetter(token);
@@ -256,6 +281,10 @@ function isDigitsOnlyToken(token: string) {
 
 function isLettersOnlyToken(token: string) {
   return tokenHasLetter(token) && !tokenHasDigit(token);
+}
+
+function isAsciiLettersOnlyToken(token: string) {
+  return token.length > 0 && [...token].every(isAsciiLetter);
 }
 
 function splitModelIdentityTokens(value: unknown) {
@@ -287,6 +316,55 @@ function splitModelIdentityTokens(value: unknown) {
     if (candidate.some(tokenHasLetter)) candidates.push(candidate);
   }
   return candidates.sort((left, right) => right.length - left.length)[0] ?? [];
+}
+
+/**
+ * Finds all split model-code candidates in a buyer message. Unlike
+ * modelIdentifierTokens(), this keeps multipart identities such as
+ * "BPS 1550 Aw" and "GX160 QX2" intact even when the LLM has not yet
+ * returned a productMention for them.
+ */
+export function modelIdentityCandidates(value: unknown) {
+  const layout = rawModelTextTokenLayout(value);
+  const candidates: string[][] = [];
+  for (let anchor = 0; anchor < layout.tokens.length; anchor += 1) {
+    const anchorToken = layout.tokens[anchor];
+    const isMixedModelAnchor = tokenHasLetter(anchorToken) && tokenHasDigit(anchorToken) && anchorToken.length >= 4;
+    if ((!isDigitsOnlyToken(anchorToken) && !isMixedModelAnchor) || anchorToken.length < 3) continue;
+    let start = anchor;
+    let precedingLetterParts = 0;
+    while (start > 0) {
+      const previous = layout.tokens[start - 1];
+      const separator = layout.separators[start - 1] ?? '';
+      const shortLetterPart = isAsciiLettersOnlyToken(previous) && previous.length <= 4 && !modelUnitTokens.has(previous);
+      const joinedNumericPart = isDigitsOnlyToken(previous) && previous.length <= 4 && !separatorHasWhitespace(separator);
+      if (shortLetterPart && precedingLetterParts >= 2) break;
+      if (!shortLetterPart && !joinedNumericPart) break;
+      if (shortLetterPart) precedingLetterParts += 1;
+      start -= 1;
+    }
+    let end = anchor;
+    while (end + 1 < layout.tokens.length) {
+      const next = layout.tokens[end + 1];
+      const separator = layout.separators[end] ?? '';
+      const shortLetterPart = isAsciiLettersOnlyToken(next) && next.length <= 4 && !modelUnitTokens.has(next);
+      const mixedPart = tokenHasLetter(next) && tokenHasDigit(next) && next.length <= 8;
+      const joinedNumericPart = isDigitsOnlyToken(next) && next.length <= 4 && !separatorHasWhitespace(separator);
+      if (!shortLetterPart && !mixedPart && !joinedNumericPart) break;
+      end += 1;
+    }
+    const candidate = layout.tokens.slice(start, end + 1);
+    if (candidate.some(tokenHasLetter) && !modelIdentityStopWords.has(candidate[0] ?? '')) candidates.push(candidate);
+  }
+  const seen = new Set<string>();
+  return candidates
+    .sort((left, right) => right.length - left.length)
+    .map((candidate) => candidate.join(' '))
+    .filter((candidate) => {
+      if (seen.has(candidate)) return false;
+      seen.add(candidate);
+      return true;
+    });
 }
 
 export interface ExactProductIdentity {
