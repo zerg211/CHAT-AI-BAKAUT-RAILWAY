@@ -6809,6 +6809,17 @@ export class AgentManagerOrchestrator {
           executionOwner: input.executionOwner
         });
       }
+      if (error instanceof AgentManagerTurnBudgetExceededError && error.stopReason !== 'wall_time_budget_exceeded') {
+        return this.completeTerminalTurn({
+          session: input.session,
+          turnId: input.turnId,
+          recovered: input.recovered,
+          onDelta: input.onDelta,
+          reason: `turn_budget_${error.stopReason}`,
+          deadlineAt: persistedTurn?.deadlineAt ?? null,
+          executionOwner: input.executionOwner
+        });
+      }
       if (input.recovered && error instanceof AnswerReviewBlockedError) {
         await this.trace(input.sessionId, input.turnId, 'recovery', 'second_review_block_terminalized', {
           issueCodes: error.issueCodes

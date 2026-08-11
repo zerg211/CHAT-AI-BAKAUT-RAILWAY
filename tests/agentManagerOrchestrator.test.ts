@@ -8732,11 +8732,20 @@ describe('AgentManagerOrchestrator', () => {
       budgetModel
     );
 
-    await expect(orchestrator.generateAnswer({
+    const payload = await orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Run the bounded calculations.'
-    })).rejects.toThrow('tool_call_budget_exceeded');
+    });
+
+    expect(payload.answer).toContain('Не успел надёжно завершить проверку');
+    expect(payload.metadata).toMatchObject({
+      terminal: true,
+      degraded: true,
+      completionStatus: 'degraded_terminal',
+      terminalReason: 'turn_budget_tool_call_budget_exceeded'
+    });
+    expect(conversations.turn.status).toBe('completed');
 
     expect(conversations.toolArtifacts).toHaveLength(9);
     expect(new Set(conversations.toolArtifacts.map((artifact) =>
@@ -8750,9 +8759,7 @@ describe('AgentManagerOrchestrator', () => {
       })
     ]));
     expect(conversations.turn).toMatchObject({
-      status: 'failed',
-      stage: 'budget_stopped',
-      errorCode: 'tool_call_budget_exceeded'
+      status: 'completed'
     });
   });
 
