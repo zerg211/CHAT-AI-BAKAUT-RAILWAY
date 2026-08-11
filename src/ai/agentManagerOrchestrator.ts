@@ -115,6 +115,7 @@ import {
 } from './agentManagerTurnBudget.js';
 import {
   compactModelText,
+  exactProductIdentity,
   isModelTokenChar,
   modelIdentifierDisplayTokens,
   modelIdentifierTokens,
@@ -1423,6 +1424,11 @@ function answerProductContext(product: Product) {
 
 function productMatchesTargetName(product: Product, targetName: string) {
   return textMatchesTargetName(productLookupText(product), targetName);
+}
+
+export function productMatchesExactTargetIdentity(product: Product, targetName: string) {
+  const identity = exactProductIdentity(targetName);
+  return identity.decisiveParts.length > 0 && identity.matches(productLookupText(product));
 }
 
 function productNameContainsExactComparisonMention(productName: string, mentionName: string) {
@@ -8455,6 +8461,24 @@ export class AgentManagerOrchestrator {
               const productsFromIds = await getProductsByIds.call(this.products, requestedProductIds);
               productsFromIds.forEach((product) => requestProductsById.set(product.id, product));
             }
+            const exactModelSearch = (this.products as ProductRepository & {
+              searchProductsByModelTokens?: (tokens: string[], limit?: number) => Promise<Product[]>;
+            }).searchProductsByModelTokens;
+            if (!requestedProductIds.length && names.length && typeof exactModelSearch === 'function') {
+              for (const name of names.slice(0, 4)) {
+                const identity = exactProductIdentity(name);
+                const tokens = identity.decisiveParts
+                  .map((part) => compactModelText(part))
+                  .filter(Boolean);
+                if (!tokens.length) continue;
+                const exactMatches = await exactModelSearch.call(this.products, tokens, 20)
+                  .then((products) => products.filter((product) =>
+                    productMatchesExactTargetIdentity(product, name)
+                  ))
+                  .catch(() => []);
+                exactMatches.forEach((product) => requestProductsById.set(product.id, product));
+              }
+            }
             const shouldSearchByText = requestedProductIds.length === 0;
             for (const query of shouldSearchByText ? queries.slice(0, 4) : []) {
               const found = await this.searchCatalogProducts({
@@ -8512,6 +8536,35 @@ export class AgentManagerOrchestrator {
           const allExplicitTargetsPresent = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
             catalogCandidatesBeforeWeb.some((product) => productMatchesTargetName(product, targetName))
           );
+          // Exact model mentions must not depend on full-text ranking of the
+          // buyer's long technical sentence. The repository has a model-token
+          // lookup specifically for this boundary; use it before the broad
+          // semantic search and keep only products that satisfy the typed
+          // exact identity. This prevents a real catalog card from being
+          // reported as absent merely because the request also names an
+          // engine, maintenance facts, or several attributes.
+          const exactModelTokenSearch = (this.products as ProductRepository & {
+            searchProductsByModelTokens?: (tokens: string[], limit?: number) => Promise<Product[]>;
+          }).searchProductsByModelTokens;
+          if (targetProductNames.length && typeof exactModelTokenSearch === 'function') {
+            for (const targetName of targetProductNames.slice(0, 4)) {
+              const identity = exactProductIdentity(targetName);
+              const tokens = identity.decisiveParts
+                .map((part) => compactModelText(part))
+                .filter(Boolean);
+              if (!tokens.length) continue;
+              const exactMatches = await exactModelTokenSearch.call(this.products, tokens, 20)
+                .then((products) => products.filter((product) =>
+                  productMatchesExactTargetIdentity(product, targetName)
+                ))
+                .catch(() => []);
+              exactMatches.forEach((product) => productsById.set(product.id, product));
+            }
+          }
+          const catalogCandidatesAfterExactModelLookup = [...productsById.values()];
+          const exactTargetsPresentAfterModelLookup = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
+            catalogCandidatesAfterExactModelLookup.some((product) => productMatchesExactTargetIdentity(product, targetName))
+          );
           const priorCatalogLookupCompleted = inlineCatalogLookupCompleted || toolResults.some((toolResult) => {
             if (toolResult.tool === 'catalog.search') {
               return toolResult.status === 'ok' || toolResult.status === 'not_found';
@@ -8527,7 +8580,7 @@ export class AgentManagerOrchestrator {
           });
           const needsCatalogLookup = !priorCatalogLookupCompleted || productsById.size === 0 || (
             targetProductNames.length > 0
-              ? !allExplicitTargetsPresent
+              ? !(allExplicitTargetsPresent || exactTargetsPresentAfterModelLookup)
               : productsById.size < 2
           );
           if (needsCatalogLookup) {

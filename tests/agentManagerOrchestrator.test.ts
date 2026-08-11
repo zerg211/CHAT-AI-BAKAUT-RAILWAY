@@ -12,6 +12,7 @@ import {
   repairIntentForNewNeedFinalFit,
   repairIntentForRequestedTechnicalAttributeWebCoverage,
   repairIntentForTypedToolRequirementCoverage,
+  productMatchesExactTargetIdentity,
   trustedPendingExhaustedTechnicalHandoffs,
   webResearchResultProvesSourceExhaustion,
   type AgentManagerModel
@@ -1119,6 +1120,16 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
+  it('recognizes the exact catalog model even when the buyer request contains engine details', () => {
+    const exact = {
+      ...product('bps-1550-aw', 'Wacker Neuson BPS 1550 Aw', 'Vibroplates'),
+      sourceUrl: 'https://bakautprof.ru/catalog/vibroplity/bps-1550-aw/'
+    };
+
+    expect(productMatchesExactTargetIdentity(exact, 'Wacker Neuson BPS 1550 Aw')).toBe(true);
+    expect(productMatchesExactTargetIdentity(exact, 'Wacker Neuson BPS 1550 Gw')).toBe(false);
+  });
+
   it('keeps the recovery lease wait aligned with the bounded agent wall clock', () => {
     expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs);
     expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(100_000);
