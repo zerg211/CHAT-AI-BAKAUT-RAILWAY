@@ -5208,7 +5208,30 @@ function incompleteWebResearchSafeRewrite(input: {
   return lines.join(' ');
 }
 
-function researchGuidanceSafeRewrite(input: {
+function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentIntentContract) {
+  if (!targetNames.length) return true;
+  const taskType = intent.grounding?.taskType;
+  const currentTargetNames = uniqueStrings((intent.productMentions ?? [])
+    .filter((mention) =>
+      mention.role === 'target_product' ||
+      mention.role === 'catalog_candidate' ||
+      (taskType === 'comparison' && mention.role === 'comparison_subject')
+    )
+    .map((mention) => mention.name));
+  if (!currentTargetNames.length) {
+    const summary = intent.userMessageSummary.trim();
+    return Boolean(summary) && targetNames.some((targetName) =>
+      productNameContainsExactComparisonMention(summary, targetName) ||
+      productNameContainsExactComparisonMention(targetName, summary)
+    );
+  }
+  return targetNames.some((targetName) => currentTargetNames.some((currentTargetName) =>
+    productNameContainsExactComparisonMention(targetName, currentTargetName) ||
+    productNameContainsExactComparisonMention(currentTargetName, targetName)
+  ));
+}
+
+export function researchGuidanceSafeRewrite(input: {
   toolResults: ToolResult[];
   intent: AgentIntentContract;
 }) {
@@ -5230,6 +5253,7 @@ function researchGuidanceSafeRewrite(input: {
     const targetNames = Array.isArray(payload.targetProductNames)
       ? payload.targetProductNames.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
       : [];
+    if (!webResearchTargetsCurrentIntent(targetNames, input.intent)) continue;
     if (targetNames.length !== 1) continue;
     const directAnswer = typeof payload.answerGuidance?.directAnswer === 'string'
       ? payload.answerGuidance.directAnswer.trim()

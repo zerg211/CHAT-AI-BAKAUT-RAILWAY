@@ -5,6 +5,7 @@ import {
   normalizeToolObservation
 } from '../src/ai/agentManagerContracts.js';
 import { evaluateAgentManagerPolicyGate } from '../src/ai/agentManagerPolicyGate.js';
+import { researchGuidanceSafeRewrite } from '../src/ai/agentManagerOrchestrator.js';
 import {
   buildPublicCustomerResponse,
   guardCustomerOutput
@@ -148,5 +149,41 @@ describe('runtime harness contracts', () => {
     expect(review.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
       'customer_output_internal_vocabulary'
     ]));
+  });
+
+  it('does not reuse stale web guidance after the active product-selection target changes', () => {
+    const currentSelection = intent({
+      userMessageSummary: 'Показать любые виброплиты 100-120 кг до 180000 рублей.',
+      productMentions: [],
+      grounding: {
+        taskType: 'product_selection',
+        sourcePolicy: 'catalog_required',
+        webPurpose: 'technical_specs',
+        webRequirement: 'conditional_on_catalog_gap',
+        requiredToolKinds: ['catalog.search'],
+        technicalAttributes: [],
+        buyerQuestion: null,
+        rationale: 'Текущий запрос заменил прежнюю точную модель каталоговым подбором.'
+      }
+    });
+    const staleWebResult = ToolResultSchema.parse({
+      requestId: 'web-stale-bps1550',
+      tool: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        targetProductNames: ['Wacker Neuson BPS 1550 Gw-c CE'],
+        researchOutcome: 'partial',
+        answerGuidance: {
+          directAnswer: 'Для Wacker Neuson BPS 1550 Gw-c CE глубина не подтверждена.',
+          coverage: [{ attribute: 'depth', status: 'not_confirmed' }]
+        }
+      },
+      warnings: []
+    });
+
+    expect(researchGuidanceSafeRewrite({
+      intent: currentSelection,
+      toolResults: [staleWebResult]
+    })).toBe('');
   });
 });
