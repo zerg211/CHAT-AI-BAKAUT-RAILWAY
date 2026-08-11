@@ -330,6 +330,36 @@ async function collectSitemapEntries(
   };
 }
 
+async function collectExactCatalogSearchEntries(
+  requestedNames: string[],
+  baseUrl: string,
+  heartbeat: () => Promise<void>,
+  signal?: AbortSignal
+) {
+  const identities = requestedNames.map(exactProductIdentity);
+  const entries = new Map<string, SitemapEntry>();
+  for (const requestedName of requestedNames.slice(0, 4)) {
+    const searchUrl = new URL('/search/', baseUrl);
+    searchUrl.searchParams.set('q', requestedName);
+    await heartbeat();
+    const response = await fetchText(searchUrl.toString(), baseUrl, config.CATALOG_MAX_RESPONSE_BYTES, signal);
+    await heartbeat();
+    if (response.status >= 400) continue;
+    const $ = cheerio.load(response.html);
+    $('a[href]').each((_, node) => {
+      const href = $(node).attr('href');
+      if (!href) return;
+      const url = absoluteUrl(href, response.url);
+      if (!url || !isCatalogUrl(url, baseUrl) || !looksLikeProductUrl(url, baseUrl)) return;
+      const evidence = `${url} ${cleanText($(node).text())}`;
+      if (!identities.some((identity) => identity.hasExactMention(evidence))) return;
+      entries.set(url, { loc: url });
+    });
+    if (entries.size >= 8) break;
+  }
+  return [...entries.values()].slice(0, 8);
+}
+
 function assignSpec(specs: Record<string, string>, keyText: string, valueText: string) {
   const key = normalizeSpecKey(cleanText(keyText));
   const value = cleanText(valueText);
@@ -837,12 +867,15 @@ export async function refreshExactCatalogProducts(
   const heartbeat = createCatalogSyncHeartbeat(() => repository.heartbeatCatalogSource(sourceId));
   const errors: Array<{ url: string; error: string }> = [];
   try {
-    const collected = await collectSitemapEntries(sitemapUrl, baseUrl, heartbeat, options.signal);
-    result.coverageComplete = collected.coverageComplete;
-    const candidateEntries = collected.entries
-      .filter((entry) => isCatalogUrl(entry.loc, baseUrl) && looksLikeProductUrl(entry.loc, baseUrl))
-      .filter((entry) => identities.some((identity) => identity.hasExactMention(entry.loc)))
-      .slice(0, 8);
+    let candidateEntries = await collectExactCatalogSearchEntries(names, baseUrl, heartbeat, options.signal);
+    if (!candidateEntries.length) {
+      const collected = await collectSitemapEntries(sitemapUrl, baseUrl, heartbeat, options.signal);
+      result.coverageComplete = collected.coverageComplete;
+      candidateEntries = collected.entries
+        .filter((entry) => isCatalogUrl(entry.loc, baseUrl) && looksLikeProductUrl(entry.loc, baseUrl))
+        .filter((entry) => identities.some((identity) => identity.hasExactMention(entry.loc)))
+        .slice(0, 8);
+    }
     result.candidateUrls = candidateEntries.map((entry) => entry.loc);
     if (!candidateEntries.length) {
       result.warnings.push('exact_catalog_model_url_not_in_sitemap');

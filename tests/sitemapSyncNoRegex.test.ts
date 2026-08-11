@@ -115,6 +115,48 @@ describe('sitemap sync no-regex XML parsing', () => {
     }));
   });
 
+  it('uses the public catalog search before a slow or unavailable sitemap', async () => {
+    const fetchMock = vi.mocked(fetch);
+    const callsBefore = fetchMock.mock.calls.length;
+    fetchMock.mockImplementation(async (url) => {
+      const urlText = String(url);
+      if (urlText.includes('/search/')) {
+        return htmlResponse(`
+          <html><body>
+            <a href="/catalog/vibroplity/vibroplita_pryamokhodnaya_benzinovaya_wacker_neuson_bps_1550_aw_89_kg/">
+              Виброплита прямоходная бензиновая Wacker Neuson BPS 1550 Aw (89 кг)
+            </a>
+          </body></html>
+        `);
+      }
+      if (urlText.endsWith('/sitemap.xml')) throw new Error('sitemap should not be needed after exact search');
+      return htmlResponse(`
+        <html><body>
+          <div itemscope itemtype="https://schema.org/Product" itemid="${urlText}">
+            <h1>Виброплита прямоходная бензиновая Wacker Neuson BPS 1550 Aw (89 кг)</h1>
+            <div class="props-item"><span class="props-item__title">Масса</span><span class="props-item__text">89 кг</span></div>
+            <div class="product-caption__item"><span itemprop="sku">5100061216</span></div>
+            <div class="card__current-price">260 000</div>
+          </div>
+        </body></html>
+      `);
+    });
+    const repository = {
+      startCatalogSource: vi.fn(async () => 'source-search-first'),
+      heartbeatCatalogSource: vi.fn(async () => undefined),
+      finishCatalogSource: vi.fn(async () => undefined),
+      upsertProduct: vi.fn(async () => undefined)
+    };
+
+    const result = await refreshExactCatalogProducts(['BPS 1550 Aw'], repository as never);
+
+    expect(result.candidateUrls).toEqual([
+      'https://bakautprof.ru/catalog/vibroplity/vibroplita_pryamokhodnaya_benzinovaya_wacker_neuson_bps_1550_aw_89_kg/'
+    ]);
+    expect(result.importedProducts).toBe(1);
+    expect(fetchMock.mock.calls.slice(callsBefore).some(([url]) => String(url).endsWith('/sitemap.xml'))).toBe(false);
+  });
+
   it('follows sitemap indexes and extracts URL entries with decoded loc values', async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (url, _init) => {
