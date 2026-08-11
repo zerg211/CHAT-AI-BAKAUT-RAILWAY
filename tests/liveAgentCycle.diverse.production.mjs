@@ -378,6 +378,10 @@ async function main() {
     browser = await chromium.launch({ headless: true, executablePath: await resolveBrowserExecutable() });
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
     await page.goto('https://bakautprof.ru/', { waitUntil: 'domcontentloaded', timeout: 90_000 });
+    const launcher = page.locator('#bakaut-ai-loader-launcher, #bakaut-ai-widget-launcher').first();
+    if (await launcher.count()) {
+      await launcher.click({ timeout: 20_000 }).catch(() => undefined);
+    }
     const iframeElement = page.locator('iframe[src*="bakaut-chat.vexr.dev"], iframe[src*="chat-ai-production"], iframe[src*="railway"], iframe[src*="/widget"]').first();
     await iframeElement.waitFor({ state: 'attached', timeout: 60_000 });
     const frame = await iframeElement.contentFrame();
