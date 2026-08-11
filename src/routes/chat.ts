@@ -5,6 +5,7 @@ import { AssistantService } from '../ai/assistant.js';
 import { RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudgetExceededError } from '../ai/agentManagerTurnBudget.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
+import { buildPublicCustomerResponse } from '../ai/agentManagerOutputGuard.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
 import {
@@ -246,10 +247,7 @@ export async function registerChatRoutes(
       send('start', { ok: true });
       send('turn', {
         turnId,
-        clientMessageId,
-        runtimeMode: runtimeDecision.runtimeMode,
-        runtimeModeReason: runtimeDecision.reason,
-        agentManagerRuntime: runtimeDecision
+        clientMessageId
       });
       stopStatusTimer = startStatusTimer({
         send,
@@ -270,7 +268,7 @@ export async function registerChatRoutes(
       }));
       stopStatusTimer?.();
       stopStatusTimer = null;
-      send('done', payload);
+      send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
@@ -292,7 +290,7 @@ export async function registerChatRoutes(
           }));
           stopStatusTimer?.();
           stopStatusTimer = null;
-          send('done', recoveredPayload);
+          send('done', buildPublicCustomerResponse(recoveredPayload));
           return;
         } catch (recoveryError) {
           app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(recoveryError) }, 'agent manager same-turn recovery failed');
@@ -330,10 +328,7 @@ export async function registerChatRoutes(
       send('error', {
         error: message,
         turnId,
-        recoverable: clientRecoveryAllowed,
-        runtimeMode: runtimeDecision.runtimeMode,
-        runtimeModeReason: runtimeDecision.reason,
-        agentManagerRuntime: runtimeDecision
+        recoverable: clientRecoveryAllowed
       });
     } finally {
       stopStatusTimer?.();
@@ -363,10 +358,7 @@ export async function registerChatRoutes(
       runtimeDecision = getAgentManagerRuntimeDecision();
       send('turn', {
         turnId: params.turnId,
-        recovered: true,
-        runtimeMode: runtimeDecision.runtimeMode,
-        runtimeModeReason: runtimeDecision.reason,
-        agentManagerRuntime: runtimeDecision
+        recovered: true
       });
       stopStatusTimer = startStatusTimer({
         send,
@@ -384,7 +376,7 @@ export async function registerChatRoutes(
         onDelta: (delta) => send('delta', { delta }),
         signal: controller.signal
       }));
-      send('done', payload);
+      send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
@@ -412,9 +404,6 @@ export async function registerChatRoutes(
       send('error', {
         turnId: params.turnId,
         recoverable: false,
-        runtimeMode: runtimeDecision.runtimeMode,
-        runtimeModeReason: runtimeDecision.reason,
-        agentManagerRuntime: runtimeDecision,
         error: executionInProgress
           ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
           : budgetStopped

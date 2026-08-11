@@ -6,6 +6,7 @@ import {
   ProductDetailsToolArgsSchema,
   ToolRequestSchema,
   WebResearchToolArgsSchema,
+  normalizeToolObservation,
   type ToolRequest,
   type ToolResult
 } from './agentManagerContracts.js';
@@ -211,10 +212,10 @@ export function validateToolRequest(request: ToolRequest): ToolRequest {
 
 export function validateToolResultOutput(result: ToolResult): ToolResult {
   const definition = agentManagerToolRegistry[result.tool];
-  return {
+  return normalizeToolObservation({
     ...result,
     payload: definition.resultPayloadSchema.parse(result.payload)
-  };
+  });
 }
 
 export function toolResultByteLength(value: unknown) {

@@ -797,7 +797,7 @@ export interface PolicyGateResult {
   version: 1;
   ok: boolean;
   blockedReasons: string[];
-  requiredActions: AgentToolName[];
+  requiredActions: string[];
   answerConstraints: string[];
   warnings: string[];
 }
@@ -809,9 +809,9 @@ export interface PolicyGateEnforcement {
   mode: PolicyGateEnforcementMode;
   hardBlockReasons: string[];
   repairedReasons: string[];
-  requiredActions: AgentToolName[];
+  requiredActions: string[];
   answerConstraints: string[];
-  failedRequiredTools: AgentToolName[];
+  failedRequiredTools: string[];
   warnings: string[];
 }
 

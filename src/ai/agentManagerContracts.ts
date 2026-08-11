@@ -197,6 +197,37 @@ export const ToolRequestSchema = z.discriminatedUnion('tool', [
   z.object({ ...toolRequestFields, tool: z.literal('lead.capture'), args: LeadCaptureToolArgsSchema }).strict()
 ]);
 
+export const ToolObservationStatusSchema = z.enum([
+  'success',
+  'not_found',
+  'timeout',
+  'aborted',
+  'denied',
+  'malformed',
+  'conflict'
+]);
+export type ToolObservationStatus = z.infer<typeof ToolObservationStatusSchema>;
+
+const legacyToolResultStatusSchema = z.enum(['ok', 'denied', 'not_found', 'error', 'timeout']);
+type LegacyToolResultStatus = z.infer<typeof legacyToolResultStatusSchema>;
+
+export function canonicalToolObservationStatus(input: {
+  status: LegacyToolResultStatus;
+  observationStatus?: ToolObservationStatus;
+  errorCode?: string;
+}): ToolObservationStatus {
+  if (input.observationStatus) return input.observationStatus;
+  if (input.status === 'ok') return 'success';
+  if (input.status === 'not_found') return 'not_found';
+  if (input.status === 'timeout') return 'timeout';
+  if (input.status === 'denied') return 'denied';
+
+  const code = (input.errorCode ?? '').toLowerCase();
+  if (code.includes('abort')) return 'aborted';
+  if (code.includes('conflict')) return 'conflict';
+  return 'malformed';
+}
+
 export interface ToolRequestArgs {
   query?: string | null;
   semanticQuery?: string | null;
@@ -230,7 +261,8 @@ export interface ToolRequestArgs {
 export const ToolResultSchema = z.object({
   requestId: nonEmptyString,
   tool: AgentManagerToolNameSchema,
-  status: z.enum(['ok', 'denied', 'not_found', 'error', 'timeout']),
+  status: legacyToolResultStatusSchema,
+  observationStatus: ToolObservationStatusSchema.optional(),
   payload: jsonObject,
   warnings: z.array(z.string()).default([]),
   errorCode: z.string().optional()
@@ -364,6 +396,9 @@ export const AgentIntentGroundingSchema = z.object({
     'lead_handoff',
     'offtopic'
   ]),
+  buyerRequestedWeb: z.boolean().default(false),
+  catalogRequirement: z.enum(['none', 'required', 'conditional']).default('none'),
+  responseMode: z.enum(['answer', 'clarify', 'recommend', 'compare', 'handoff']).default('answer'),
   sourcePolicy: z.enum([
     'conversation_only',
     'catalog_required',
@@ -393,6 +428,9 @@ export const DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE =
 
 const defaultAgentIntentGrounding: z.infer<typeof AgentIntentGroundingSchema> = {
   taskType: 'lead_handoff',
+  buyerRequestedWeb: false,
+  catalogRequirement: 'none',
+  responseMode: 'answer',
   sourcePolicy: 'conversation_only',
   webPurpose: 'none',
   webRequirement: 'none',
@@ -490,13 +528,28 @@ export type LedgerStateDelta = z.infer<typeof LedgerStateDeltaSchema>;
 type ParsedToolRequest = z.infer<typeof ToolRequestSchema>;
 export type ToolRequest = Omit<ParsedToolRequest, 'args'> & { args: ToolRequestArgs };
 export type ToolResult = z.infer<typeof ToolResultSchema>;
+
+export function normalizeToolObservation<T extends {
+  status: LegacyToolResultStatus;
+  observationStatus?: ToolObservationStatus;
+  errorCode?: string;
+}>(result: T): T & { observationStatus: ToolObservationStatus } {
+  return {
+    ...result,
+    observationStatus: canonicalToolObservationStatus(result)
+  };
+}
 export type ProductMentionRole = z.infer<typeof ProductMentionRoleSchema>;
 export type ProductMention = z.infer<typeof ProductMentionSchema>;
 export type SelectionRequirement = z.infer<typeof SelectionRequirementSchema>;
 export type SelectionRankingObjective = z.infer<typeof SelectionRankingObjectiveSchema>;
 export type AgentSelectionPolicy = z.infer<typeof AgentSelectionPolicySchema>;
 export type LeadCaptureAuthorization = z.infer<typeof LeadCaptureAuthorizationSchema>;
-export type AgentIntentGrounding = z.infer<typeof AgentIntentGroundingSchema>;
+type ParsedAgentIntentGrounding = z.infer<typeof AgentIntentGroundingSchema>;
+export type AgentIntentGrounding = Omit<
+  ParsedAgentIntentGrounding,
+  'buyerRequestedWeb' | 'catalogRequirement' | 'responseMode'
+> & Partial<Pick<ParsedAgentIntentGrounding, 'buyerRequestedWeb' | 'catalogRequirement' | 'responseMode'>>;
 type ParsedAgentIntentContract = z.infer<typeof AgentIntentContractSchema>;
 export type AgentIntentContract = Omit<ParsedAgentIntentContract, 'toolRequests' | 'productMentions' | 'grounding' | 'policyRuleIds' | 'selectionPolicy' | 'leadCaptureAuthorization'> & {
   toolRequests: ToolRequest[];

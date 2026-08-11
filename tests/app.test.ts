@@ -19,8 +19,8 @@ describe('app', () => {
     expect(response.json()).toMatchObject({
       ok: true,
       runtime: {
-        version: '2026-07-17.gpt-5-6-terra-search-first-v16',
-        contractVersion: '2026-07-10.manager-contract-v1',
+        version: '2026-08-11.gpt-5-6-terra-harness-v1',
+        contractVersion: '2026-08-11.manager-contract-v2',
         productionRuntime: 'agent_manager'
       }
     });

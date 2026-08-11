@@ -114,6 +114,8 @@ import {
   DEFAULT_AGENT_MANAGER_TURN_LIMITS,
   runWithAgentManagerTurnBudget
 } from './agentManagerTurnBudget.js';
+import { evaluateAgentManagerPolicyGate } from './agentManagerPolicyGate.js';
+import { guardCustomerOutput } from './agentManagerOutputGuard.js';
 import {
   compactModelText,
   exactProductIdentity,
@@ -5590,6 +5592,15 @@ const groundingJsonSchema = {
         'offtopic'
       ]
     },
+    buyerRequestedWeb: { type: 'boolean' },
+    catalogRequirement: {
+      type: 'string',
+      enum: ['none', 'required', 'conditional']
+    },
+    responseMode: {
+      type: 'string',
+      enum: ['answer', 'clarify', 'recommend', 'compare', 'handoff']
+    },
     sourcePolicy: {
       type: 'string',
       enum: [
@@ -5627,6 +5638,9 @@ const groundingJsonSchema = {
   },
   required: [
     'taskType',
+    'buyerRequestedWeb',
+    'catalogRequirement',
+    'responseMode',
     'sourcePolicy',
     'webPurpose',
     'webRequirement',
@@ -5907,7 +5921,7 @@ function plannerSystemPromptBlock(
       : 'Планируй по existing ledger вместе с current userMessage: текущая реплика ещё не применена к ledger и может семантически заменить, отменить, уточнить или открыть требования. Более новая явная вводная покупателя имеет приоритет над конфликтующей старой; не смешивай их.',
     'LLM решает смысл хода без фиксированного списка сценариев.',
     'Код только исполнит typed tools, но не будет подменять твой смысл.',
-    'Сначала заполни grounding: taskType, sourcePolicy, webPurpose, webRequirement, requiredToolKinds, technicalAttributes, buyerQuestion и rationale. Для technical_answer/product_selection/comparison buyerQuestion — точная непрерывная цитата из сообщения покупателя, выражающая активный бизнес-вопрос; не включай в неё телефон, email, имя или фразу о способе связи и сохраняй ту же цитату через ответы на уточнения. Для остальных задач без технического вопроса используй null. Затем toolRequests должны исполнять эту grounding-политику.',
+    'Сначала заполни grounding: taskType, buyerRequestedWeb, catalogRequirement, responseMode, sourcePolicy, webPurpose, webRequirement, requiredToolKinds, technicalAttributes, buyerQuestion и rationale. buyerRequestedWeb=true только при явной просьбе покупателя о внешней/официальной проверке. catalogRequirement=required для точной идентификации, наличия, подбора и сравнения товаров; conditional используй только когда каталог нужен первым и web зависит от решающего пробела. responseMode выбери по смыслу: answer, clarify, recommend, compare или handoff. Для technical_answer/product_selection/comparison buyerQuestion — точная непрерывная цитата из сообщения покупателя, выражающая активный бизнес-вопрос; не включай в неё телефон, email, имя или фразу о способе связи и сохраняй ту же цитату через ответы на уточнения. Для остальных задач без технического вопроса используй null. Затем toolRequests должны исполнять эту grounding-политику.',
     'Всегда классифицируй grounding.webRequirement: none — web не нужен; buyer_requested — покупатель явно попросил проверить во внешних источниках; conditional_on_catalog_gap — при предварительном подборе или обычного предварительного сравнения точных моделей из текущего каталога web нужен только если полная карточка каталога не отвечает на решающие характеристики; independent_required — руководство, общий технический вопрос, актуальная линейка или другой факт требует внешнего источника независимо от карточки каталога.',
     'Используй conditional_on_catalog_gap только при selectionGoal=preliminary_fit. Для product_selection без заранее известных кандидатов оставляй args.productNames пустым. Для обычного предварительного сравнения точных моделей из текущего каталога разрешены exact productNames, но перед web-запросом обязательно планируй catalog.getProductDetails по тем же моделям: LLM catalog fact extractor сначала прочитает полные specs + description и сеть не запускается, только если структурированный catalog extraction полностью ответил без конфликта. Для каждой решающей характеристики conditional web-запроса создай отдельный product_attribute requirement в coversRequirementIds и ровно одну args.comparisonAttributeBindings={attribute,requirementId}; attribute должен в точности повторять comparisonAttributes. Не добавляй туда второстепенные характеристики, которые не нужны для выбора. Во всех остальных web-запросах ставь comparisonAttributeBindings=[]. Если покупатель явно просит внешнюю проверку, точной модели нет в каталоге, нужен final_fit, руководство, актуальные внешние данные или независимый technical fact, используй buyer_requested/independent_required и обязательно выполняй web.',
     'Всегда заполни selectionPolicy семантически. targetProductClass — свободное человеческое название класса товара, поэтому незнакомый класс не своди к unknown. canonicalProductClass укажи только когда он точно входит в известную кодовую онтологию; иначе null.',
@@ -6249,6 +6263,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
                 requestId: result.requestId,
                 tool: result.tool,
                 status: result.status,
+                observationStatus: result.observationStatus ?? null,
                 warnings: result.warnings
               })),
               requiredResponseClauses: input.requiredResponseClauses ?? [],
@@ -7263,6 +7278,15 @@ export class AgentManagerOrchestrator {
       ...intentWithoutOrderedTools,
       toolRequests: orderToolRequestsForSelectionDependencies(validatedToolRequests, intentWithoutOrderedTools)
     };
+    const initialPolicyGate = evaluateAgentManagerPolicyGate({ intent, toolResults: [] });
+    await this.trace(input.sessionId, input.turnId, 'intent', 'policy_gate_evaluated', {
+      ok: initialPolicyGate.ok,
+      blockedReasons: initialPolicyGate.blockedReasons,
+      requiredActions: initialPolicyGate.requiredActions,
+      warnings: initialPolicyGate.warnings,
+      catalogFirst: initialPolicyGate.catalogFirst,
+      webDeferredUntilCatalogGap: initialPolicyGate.webDeferredUntilCatalogGap
+    });
     const answerPolicyTrace = buildSalesManagerPolicyTrace({
       target: 'answer',
       semanticRuleIds: intent.policyRuleIds ?? [],
@@ -7406,7 +7430,12 @@ export class AgentManagerOrchestrator {
       payload: { resultCount: toolResults.length }
     });
     await this.trace(input.sessionId, input.turnId, 'tools', 'artifacts_saved', {
-      statuses: toolResults.map((result) => ({ requestId: result.requestId, tool: result.tool, status: result.status }))
+      statuses: toolResults.map((result) => ({
+        requestId: result.requestId,
+        tool: result.tool,
+        status: result.status,
+        observationStatus: result.observationStatus ?? null
+      }))
     });
 
     const continuityIntent = continuityProductClassFromCurrentTurn({
@@ -8113,6 +8142,40 @@ export class AgentManagerOrchestrator {
       ['Найдено в каталоге под текущий запрос.'],
       cardSelection.productCaveatsById
     );
+    const customerOutputReview = guardCustomerOutput({
+      answerText: finalText,
+      productCards: cards
+    });
+    if (!customerOutputReview.ok) {
+      const issueCodes = customerOutputReview.issues.map((issue) => issue.code);
+      await this.trace(input.sessionId, input.turnId, 'review', 'customer_output_blocked', {
+        issueCodes,
+        evidence: customerOutputReview.issues.map((issue) => issue.evidence)
+      });
+      throw new AnswerReviewBlockedError(issueCodes);
+    }
+    const policyGate = evaluateAgentManagerPolicyGate({
+      intent: effectiveIntent,
+      toolResults: selectionToolResults
+    });
+    const failedRequiredTools = policyGate.requiredActions.filter((tool) =>
+      !selectionToolResults.some((result) => result.tool === tool && result.status === 'ok')
+    );
+    const repairedPolicyReasons = initialPolicyGate.blockedReasons.filter((reason) =>
+      !policyGate.blockedReasons.includes(reason)
+    );
+    const policyGateEnforcement = {
+      version: 1 as const,
+      mode: policyGate.ok
+        ? (repairedPolicyReasons.length ? 'repair' as const : 'pass' as const)
+        : 'hard_block' as const,
+      hardBlockReasons: policyGate.blockedReasons,
+      repairedReasons: repairedPolicyReasons,
+      requiredActions: policyGate.requiredActions,
+      answerConstraints: policyGate.answerConstraints,
+      failedRequiredTools,
+      warnings: policyGate.warnings
+    };
     const runtimeDecision = getAgentManagerRuntimeDecision();
     const metadata = {
       agentManager: true,
@@ -8126,6 +8189,8 @@ export class AgentManagerOrchestrator {
       intentContract: intent,
       effectiveIntentContract: effectiveIntent === intent ? undefined : effectiveIntent,
       turnContract: turnContractMetadataFromIntent(intent),
+      policyGate,
+      policyGateEnforcement,
       sourcePolicy: sourcePolicyMetadataFromIntent(effectiveIntent, selectionToolResults),
       managerPolicy: {
         packVersion: SALES_MANAGER_POLICY_PACK_VERSION,
@@ -8339,7 +8404,8 @@ export class AgentManagerOrchestrator {
         await this.trace(input.session.id, input.turnId, 'recovery', 'tool_artifact_reused', {
           requestId: request.id,
           tool: request.tool,
-          status: reusablePersistedResult.status
+          status: reusablePersistedResult.status,
+          observationStatus: reusablePersistedResult.observationStatus ?? null
         });
         continue;
       }
@@ -9162,6 +9228,7 @@ export class AgentManagerOrchestrator {
         requestId: request.id,
         tool: request.tool,
         status: result.status,
+        observationStatus: result.observationStatus ?? null,
         attemptCount: attempt,
         durationMs: Date.now() - startedAt,
         timeoutMs: effectiveTimeoutMs,
@@ -10283,6 +10350,7 @@ export class AgentManagerOrchestrator {
       requestId: result.requestId,
       tool: result.tool,
       status: result.status,
+      observationStatus: result.observationStatus ?? null,
       errorCode: result.errorCode ?? null
     }));
     const persistedTurn = await this.conversations.getTurn(input.session.id, input.turnId);
