@@ -1505,7 +1505,43 @@ export function repairIntentForExactModelEvidence(intent: AgentIntentContract, u
   // external call whose timeout can leak as an internal status to the buyer.
   if (isCatalogAvailabilityOnlyIntent(intent)) {
     const toolRequests = intent.toolRequests.filter((request) => request.tool !== 'web.researchProductFacts');
-    if (toolRequests.length === intent.toolRequests.length) return intent;
+    const uncoveredCatalogNames = targetMentionNames.filter((name) =>
+      !toolRequests.some((request) =>
+        request.tool === 'catalog.getProductDetails' &&
+        exactProductIdentity(name).hasExactMention(toolRequestEvidenceText(request))
+      )
+    );
+    if (uncoveredCatalogNames.length) {
+      const detailsRequest: ToolRequest = {
+        id: uniqueToolRequestId(intent, 'auto:exact-catalog-availability'),
+        tool: 'catalog.getProductDetails',
+        args: {
+          productNames: uncoveredCatalogNames.slice(0, 4),
+          productIntent: intent.selectionPolicy?.targetProductClass ?? undefined,
+          canonicalProductIntent: intent.selectionPolicy?.canonicalProductClass ?? undefined,
+          comparisonAttributes: [],
+          limit: Math.min(uncoveredCatalogNames.length, 4),
+          reason: 'Read the exact named catalog card before answering availability.',
+          notes: 'Catalog presence only: do not launch external technical research for this request.'
+        },
+        rationale: 'Use exact model identity for catalog presence instead of a broad semantic search.',
+        required: true
+      };
+      toolRequests.push(detailsRequest);
+    }
+    const requiredToolKinds: AgentIntentGrounding['requiredToolKinds'] = [
+      ...(intent.grounding?.requiredToolKinds ?? []).filter((tool) => tool !== 'web.researchProductFacts')
+    ];
+    if (
+      toolRequests.some((request) => request.tool === 'catalog.getProductDetails') &&
+      !requiredToolKinds.includes('catalog.getProductDetails')
+    ) {
+      requiredToolKinds.push('catalog.getProductDetails');
+    }
+    const webWasRemoved = toolRequests.length !== intent.toolRequests.length;
+    const detailsWereAdded = uncoveredCatalogNames.length > 0;
+    if (!webWasRemoved && !detailsWereAdded &&
+      JSON.stringify(requiredToolKinds) === JSON.stringify(intent.grounding?.requiredToolKinds ?? [])) return intent;
     return {
       ...intent,
       requiresTools: toolRequests.length > 0,
@@ -1513,7 +1549,7 @@ export function repairIntentForExactModelEvidence(intent: AgentIntentContract, u
       grounding: intent.grounding
         ? {
             ...intent.grounding,
-            requiredToolKinds: intent.grounding.requiredToolKinds.filter((tool) => tool !== 'web.researchProductFacts')
+            requiredToolKinds
           }
         : intent.grounding,
       riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_availability_catalog_only'])

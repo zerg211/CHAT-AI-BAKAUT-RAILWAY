@@ -101,7 +101,16 @@ describe('structured exact-product identity', () => {
     const repaired = repairIntentForExactModelEvidence(intent, `Is ${targetName} available?`);
 
     expect(repaired.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
-    expect(repaired).toEqual(intent);
+    expect(repaired.toolRequests.map((request) => request.tool)).toEqual([
+      'catalog.search',
+      'catalog.getProductDetails'
+    ]);
+    expect(repaired.toolRequests.at(-1)?.args.productNames).toEqual([targetName]);
+    expect(repaired.toolRequests.at(-1)?.args.comparisonAttributes).toEqual([]);
+    expect(repaired.grounding?.requiredToolKinds).toEqual([
+      'catalog.search',
+      'catalog.getProductDetails'
+    ]);
 
     const staleWebPlannedIntent: AgentIntentContract = {
       ...intent,
@@ -123,7 +132,10 @@ describe('structured exact-product identity', () => {
     };
     const cleaned = repairIntentForExactModelEvidence(staleWebPlannedIntent, `Is ${targetName} available?`);
     expect(cleaned.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
-    expect(cleaned.grounding?.requiredToolKinds).toEqual(['catalog.search']);
+    expect(cleaned.grounding?.requiredToolKinds).toEqual([
+      'catalog.search',
+      'catalog.getProductDetails'
+    ]);
 
     const failedWebResult = {
       requestId: 'stale-web-request',
