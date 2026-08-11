@@ -378,7 +378,7 @@ async function main() {
     browser = await chromium.launch({ headless: true, executablePath: await resolveBrowserExecutable() });
     const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
     await page.goto('https://bakautprof.ru/', { waitUntil: 'domcontentloaded', timeout: 90_000 });
-    const iframeElement = page.locator('iframe[src*="chat-ai-production"], iframe[src*="railway"], iframe[src*="/widget"]').first();
+    const iframeElement = page.locator('iframe[src*="bakaut-chat.vexr.dev"], iframe[src*="chat-ai-production"], iframe[src*="railway"], iframe[src*="/widget"]').first();
     await iframeElement.waitFor({ state: 'attached', timeout: 60_000 });
     const frame = await iframeElement.contentFrame();
     if (!frame) throw new Error('Chat iframe frame was not available.');
