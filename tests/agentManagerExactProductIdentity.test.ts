@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentIntentContract } from '../src/ai/agentManagerContracts.js';
+import type { ToolResult } from '../src/ai/agentManagerContracts.js';
 import {
   exactModelNamesFromUserMessage,
   filterProductsByStructuredSelectionPolicy,
-  repairIntentForExactModelEvidence
+  repairIntentForExactModelEvidence,
+  requiredResponseClausesForToolResults
 } from '../src/ai/agentManagerOrchestrator.js';
 import type { Product } from '../src/shared/types.js';
 
@@ -85,6 +87,31 @@ describe('structured exact-product identity', () => {
     expect(repaired.toolRequests[0]?.tool).toBe('web.researchProductFacts');
     expect(repaired.toolRequests[0]?.args.productNames).toEqual(['bps 1550 aw', 'gx160 qx2']);
     expect(repaired.riskFlags).toContain('planner_repaired_exact_model_evidence');
+  });
+
+  it('does not convert an unverified refresh failure into catalog absence', () => {
+    const result = {
+      requestId: 'exact-bps-refresh',
+      tool: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        researchOutcome: 'partial',
+        sourcesExhausted: false,
+        searchDisposition: 'failed',
+        targetProductNames: ['BPS 1550 Aw'],
+        comparisonAttributes: ['oil'],
+        unconfirmedFacts: [{ attribute: 'oil', status: 'not_confirmed' }],
+        catalogPresence: [{ productName: 'BPS 1550 Aw', status: 'unknown', exactProductIds: [] }],
+        nearbyCatalogProducts: [],
+        facts: []
+      },
+      warnings: []
+    } as unknown as ToolResult;
+
+    const clauses = requiredResponseClausesForToolResults([result]);
+    expect(clauses.map((clause) => clause.code)).toContain('catalog_presence_unverified');
+    expect(clauses.map((clause) => clause.code)).not.toContain('state_exact_catalog_absence');
+    expect(clauses.map((clause) => clause.instruction).join('\n')).toContain('Do not say that BPS 1550 Aw is absent');
   });
 
   it('does not turn a neighbouring model blade dimension into the requested model code', () => {

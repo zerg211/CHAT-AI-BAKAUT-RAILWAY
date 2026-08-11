@@ -4521,7 +4521,7 @@ export function repairIntentForCatalogClarificationBeforeTools(
   return intent;
 }
 
-function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
+export function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
   const clauses: RequiredResponseClause[] = [];
   for (const result of toolResults) {
     if (
@@ -4645,6 +4645,15 @@ function requiredResponseClausesForToolResults(toolResults: ToolResult[]): Requi
       .filter(Boolean))
       .slice(0, 4);
     for (const presence of payload.catalogPresence ?? []) {
+      if (presence.status === 'unknown' && presence.productName) {
+        clauses.push({
+          code: 'catalog_presence_unverified',
+          sourceRequestId: result.requestId,
+          productName: presence.productName,
+          instruction: `Do not say that ${presence.productName} is absent from the BAKAUT catalog. The exact catalog refresh did not complete, so describe the catalog status as unverified and preserve any confirmed product or web facts without inventing a negative.`
+        });
+        continue;
+      }
       if (presence.status !== 'absent' || !presence.productName) continue;
       const targetProductName = presence.productName;
       const targetFacts = (payload.facts ?? []).filter((fact) =>
