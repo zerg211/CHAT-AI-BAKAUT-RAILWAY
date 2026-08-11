@@ -22,7 +22,7 @@ requireProductionLiveApproval({
   adaptiveBuyer: true
 });
 
-const productionApiBase = 'https://chat-ai-production-3057.up.railway.app';
+const productionApiBase = process.env.PRODUCTION_API_BASE || 'https://bakaut-chat.vexr.dev';
 const started = new Date().toISOString();
 const safeStamp = started.replace(/[:.]/g, '-');
 const protocolPath = path.join('local-live-tests', `${started.slice(0, 10)}-production-diverse-buyer-audit-${safeStamp}.production.md`);

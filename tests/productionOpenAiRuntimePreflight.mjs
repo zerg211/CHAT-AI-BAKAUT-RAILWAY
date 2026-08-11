@@ -19,7 +19,7 @@ function classifyRuntimePayload(payload, status) {
 }
 
 export async function checkProductionOpenAiRuntime({
-  productionApiBase = process.env.PRODUCTION_API_BASE || 'https://chat-ai-production-3057.up.railway.app',
+  productionApiBase = process.env.PRODUCTION_API_BASE || 'https://bakaut-chat.vexr.dev',
   token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY,
   fetchImpl = fetch,
   timeoutMs = 30_000,
@@ -83,7 +83,7 @@ export async function checkProductionOpenAiRuntime({
 }
 
 export async function checkProductionLiveTestBudget({
-  productionApiBase = process.env.PRODUCTION_API_BASE || 'https://chat-ai-production-3057.up.railway.app',
+  productionApiBase = process.env.PRODUCTION_API_BASE || 'https://bakaut-chat.vexr.dev',
   token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY,
   requiredRemainingTokens = Number(process.env.PRODUCTION_LIVE_REQUIRED_REMAINING_TOKENS ?? 0),
   fetchImpl = fetch,

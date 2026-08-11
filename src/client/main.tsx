@@ -91,7 +91,7 @@ type AdminConversationStats = {
 type AdminFilter = 'today' | 'all' | 'active' | 'withLeads' | 'empty';
 type AdminSource = 'local' | 'production';
 
-const PRODUCTION_ADMIN_BASE_URL = 'https://chat-ai-production-3057.up.railway.app';
+const PRODUCTION_ADMIN_BASE_URL = 'https://bakaut-chat.vexr.dev';
 
 function isLoopbackHost(hostname: string) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
