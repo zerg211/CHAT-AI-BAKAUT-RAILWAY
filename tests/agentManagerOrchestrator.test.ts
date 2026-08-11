@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   AgentManagerOrchestrator,
+  RECOVERY_LEASE_WAIT_LIMIT_MS,
   enforceSearchBeforeTechnicalSpecialist,
   isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
@@ -9,11 +10,13 @@ import {
   pendingLeadCaptureDraftMatchesAuthorizationScope,
   repairIntentForOpenEndedRequirementWebCoverage,
   repairIntentForNewNeedFinalFit,
+  repairIntentForRequestedTechnicalAttributeWebCoverage,
   repairIntentForTypedToolRequirementCoverage,
   trustedPendingExhaustedTechnicalHandoffs,
   webResearchResultProvesSourceExhaustion,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
+import { DEFAULT_AGENT_MANAGER_TURN_LIMITS } from '../src/ai/agentManagerTurnBudget.js';
 import {
   AgentIntentContractSchema,
   normalizeLedgerStateDeltaEvents,
@@ -1116,6 +1119,279 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
+  it('keeps the recovery lease wait aligned with the bounded agent wall clock', () => {
+    expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs);
+    expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(100_000);
+  });
+
+  it('repairs omitted preliminary comparison web coverage from exact catalog candidates once', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    const productNames = ['FIRMAN RD3910E', 'FIRMAN RD4910E'];
+    intent.toolRequests = [{
+      id: 'exact-comparison-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productNames,
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        comparisonAttributes: ['operating mass', 'automatic start'],
+        limit: 2
+      },
+      rationale: 'read the two exact catalog candidates',
+      required: true
+    }];
+    intent.productMentions = productNames.map((name) => ({
+      name,
+      role: 'comparison_subject' as const,
+      productClass: 'generator',
+      evidence: `exact comparison candidate ${name}`
+    }));
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'weight-limit',
+        kind: 'weight_max_kg',
+        value: 100,
+        unit: 'kg',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the buyer needs a machine no heavier than 100 kg',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'automatic-start',
+        kind: 'autostart_required',
+        value: true,
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'automatic start is required',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.grounding = {
+      taskType: 'comparison',
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'none',
+      webRequirement: 'none',
+      requiredToolKinds: ['catalog.getProductDetails'],
+      technicalAttributes: ['operating mass', 'automatic start'],
+      buyerQuestion: 'Compare the operating mass and automatic start of these two models.',
+      rationale: 'the exact catalog cards are the first evidence source'
+    };
+
+    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
+    const webRequests = repaired.intent.toolRequests.filter((request) =>
+      request.tool === 'web.researchProductFacts'
+    );
+
+    expect(repaired.repairs).toEqual([{
+      requestId: expect.any(String),
+      attributes: ['operating mass', 'automatic start'],
+      created: true
+    }]);
+    expect(webRequests).toHaveLength(1);
+    expect(webRequests[0]).toMatchObject({
+      required: true,
+      coversRequirementIds: ['weight-limit', 'automatic-start'],
+      args: {
+        productNames,
+        comparisonAttributes: ['operating mass', 'automatic start'],
+        comparisonAttributeBindings: [{
+          attribute: 'operating mass',
+          requirementId: 'weight-limit'
+        }, {
+          attribute: 'automatic start',
+          requirementId: 'automatic-start'
+        }]
+      }
+    });
+    expect(repaired.intent.grounding).toMatchObject({
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'conditional_on_catalog_gap',
+      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts']
+    });
+    expect(repaired.intent.riskFlags).toContain('planner_repaired_requested_attribute_conditional_web');
+    expect(orderToolRequestsForSelectionDependencies(
+      repaired.intent.toolRequests,
+      repaired.intent
+    ).map((request) => request.tool)).toEqual([
+      'catalog.getProductDetails',
+      'web.researchProductFacts'
+    ]);
+    expect(AgentIntentContractSchema.parse(repaired.intent)).toBeDefined();
+
+    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(repaired.intent)).toEqual({
+      intent: repaired.intent,
+      repairs: []
+    });
+  });
+
+  it('extends one compatible catalog-selection web request without names or duplicate attributes', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'weight-limit',
+        kind: 'weight_max_kg',
+        value: 100,
+        unit: 'kg',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the buyer needs a machine no heavier than 100 kg',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'automatic-start',
+        kind: 'autostart_required',
+        value: true,
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'automatic start is required',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.grounding = {
+      ...intent.grounding!,
+      webPurpose: 'none',
+      webRequirement: 'none',
+      technicalAttributes: ['operating mass', 'automatic start']
+    };
+    intent.toolRequests = [intent.toolRequests[0]!, {
+      id: 'existing-selection-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'verify the shortlisted catalog candidates',
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator',
+        productNames: [],
+        comparisonAttributes: ['operating mass'],
+        comparisonAttributeBindings: [{
+          attribute: 'operating mass',
+          requirementId: 'weight-limit'
+        }]
+      },
+      rationale: 'verify one requested catalog gap',
+      required: true,
+      coversRequirementIds: ['weight-limit']
+    }];
+
+    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
+    const webRequests = repaired.intent.toolRequests.filter((request) =>
+      request.tool === 'web.researchProductFacts'
+    );
+
+    expect(webRequests).toHaveLength(1);
+    expect(webRequests[0]?.args.productNames).toEqual([]);
+    expect(webRequests[0]?.args.comparisonAttributes).toEqual(['operating mass', 'automatic start']);
+    expect(webRequests[0]?.args.comparisonAttributeBindings).toEqual([{
+      attribute: 'operating mass',
+      requirementId: 'weight-limit'
+    }, {
+      attribute: 'automatic start',
+      requirementId: 'automatic-start'
+    }]);
+    expect(webRequests[0]?.coversRequirementIds).toEqual(['weight-limit', 'automatic-start']);
+    expect(repaired.repairs).toEqual([{
+      requestId: 'existing-selection-web',
+      attributes: ['automatic start'],
+      created: false
+    }]);
+  });
+
+  it('merges requested attributes into a same-target web superset without adding a duplicate request', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    const productNames = ['FIRMAN RD3910E', 'FIRMAN RD4910E'];
+    intent.selectionPolicy = { ...intent.selectionPolicy!, selectionGoal: 'preliminary_fit' };
+    intent.grounding = {
+      ...intent.grounding!,
+      taskType: 'comparison',
+      webPurpose: 'none',
+      webRequirement: 'none',
+      requiredToolKinds: ['catalog.getProductDetails'],
+      technicalAttributes: ['operating mass', 'automatic start']
+    };
+    intent.productMentions = productNames.map((name) => ({
+      name,
+      role: 'comparison_subject' as const,
+      productClass: 'generator',
+      evidence: `exact comparison candidate ${name}`
+    }));
+    intent.toolRequests = [{
+      id: 'existing-exact-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        productNames,
+        comparisonAttributes: ['operating mass', 'fuel consumption']
+      },
+      rationale: 'verify current facts for these exact comparison targets',
+      required: true
+    }, {
+      id: 'exact-comparison-details',
+      tool: 'catalog.getProductDetails',
+      args: { productNames, comparisonAttributes: ['operating mass', 'automatic start'] },
+      rationale: 'read the exact current catalog cards first',
+      required: true
+    }];
+
+    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
+    const webRequests = repaired.intent.toolRequests.filter((request) =>
+      request.tool === 'web.researchProductFacts'
+    );
+
+    expect(webRequests).toHaveLength(1);
+    expect(webRequests[0]?.id).toBe('existing-exact-web');
+    expect(webRequests[0]?.args.productNames).toEqual(productNames);
+    expect(webRequests[0]?.args.comparisonAttributes).toEqual([
+      'operating mass',
+      'fuel consumption',
+      'automatic start'
+    ]);
+    expect(repaired.repairs).toEqual([{
+      requestId: 'existing-exact-web',
+      attributes: ['automatic start'],
+      created: false
+    }]);
+    expect(orderToolRequestsForSelectionDependencies(
+      repaired.intent.toolRequests,
+      repaired.intent
+    ).map((request) => request.tool)).toEqual([
+      'catalog.getProductDetails',
+      'web.researchProductFacts'
+    ]);
+  });
+
+  it('does not synthesize conditional web research outside the structured preliminary catalog contract', () => {
+    const finalFit = structuredGeneratorCatalogIntent();
+    finalFit.selectionPolicy = { ...finalFit.selectionPolicy!, selectionGoal: 'final_fit' };
+    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(finalFit)).toEqual({
+      intent: finalFit,
+      repairs: []
+    });
+
+    const noAttributes = structuredGeneratorCatalogIntent();
+    noAttributes.selectionPolicy = { ...noAttributes.selectionPolicy!, selectionGoal: 'preliminary_fit' };
+    noAttributes.grounding = { ...noAttributes.grounding!, technicalAttributes: [] };
+    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(noAttributes)).toEqual({
+      intent: noAttributes,
+      repairs: []
+    });
+
+    const noCatalog = structuredGeneratorCatalogIntent();
+    noCatalog.selectionPolicy = { ...noCatalog.selectionPolicy!, selectionGoal: 'preliminary_fit' };
+    noCatalog.toolRequests = [];
+    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(noCatalog)).toEqual({
+      intent: noCatalog,
+      repairs: []
+    });
+  });
+
   it('downgrades only an unnamed newly opened selection from final fit to preliminary fit', () => {
     const intent = structuredGeneratorCatalogIntent();
     intent.selectionPolicy = {
@@ -6455,6 +6731,78 @@ describe('AgentManagerOrchestrator', () => {
     }
   });
 
+  it('commits one fenced degraded answer when the recovered draft is blocked again', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const intent = structuredGeneratorCatalogIntent();
+    const composeAnswer = vi.fn(async () => ({
+      answerText: 'This draft is deliberately rejected by semantic review.',
+      factsUsed: [],
+      questionsAsked: [],
+      toolResultIds: ['catalog-search'],
+      selectedProductIds: ['p1'],
+      leadAction: 'none' as const,
+      riskFlags: [],
+      selectionReadiness: {
+        productClass: 'generator',
+        status: 'ready_for_preliminary_cards' as const,
+        canShowProductCards: true,
+        missingFacts: [],
+        rationale: 'The catalog result is available, but the generated wording did not pass review.'
+      }
+    }));
+    const reviewAnswer = vi.fn(async () => ({
+      verdict: 'block' as const,
+      issues: [{
+        code: 'semantic_answer_rejected',
+        severity: 'high' as const,
+        message: 'The semantic answer is not safe to send.',
+        evidence: 'forced double-review regression'
+      }]
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      model({
+        async proposeLedgerDelta() {
+          return { rationale: 'the request is already represented by the typed catalog intent', events: [] };
+        },
+        async planTurn() { return intent; },
+        composeAnswer,
+        reviewAnswer
+      })
+    );
+    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
+    config.AI_MANAGER_REVIEW_MODE = 'always';
+    try {
+      await expect(orchestrator.generateAnswer({
+        sessionId,
+        turnId,
+        userMessage: 'Show me a grounded generator option.'
+      })).rejects.toThrow('Agent manager answer blocked: semantic_answer_rejected');
+      const persistedToolArtifactCount = conversations.toolArtifacts.length;
+
+      const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+
+      expect(payload.answer.length).toBeGreaterThan(40);
+      expect(payload.productCards.length).toBeGreaterThan(0);
+      expect(payload.metadata).toMatchObject({
+        terminal: true,
+        degraded: true,
+        terminalReason: 'answer_blocked_after_semantic_recovery'
+      });
+      expect(conversations.turn.status).toBe('recovered');
+      expect(conversations.assistantSaves).toHaveLength(1);
+      expect(conversations.toolArtifacts).toHaveLength(persistedToolArtifactCount);
+      expect(composeAnswer).toHaveBeenCalledTimes(2);
+      expect(reviewAnswer).toHaveBeenCalledTimes(2);
+      expect(leads.created).toHaveLength(0);
+    } finally {
+      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
+    }
+  });
+
   it('does not confirm or recreate a legacy saved lead artifact without authorization fingerprint', async () => {
     const conversations = new FakeConversations();
     conversations.checkpoints = [
@@ -9794,6 +10142,419 @@ describe('AgentManagerOrchestrator', () => {
     expect(normalizedAnswer).not.toContain('нет карточ');
     expect(normalizedAnswer).not.toContain('нет цен');
     expect(normalizedAnswer).not.toContain('не удалось надёжно получить нужные данные из каталога');
+  });
+
+  it('keeps an over-budget explicit comparison subject as reference evidence but never as a card', async () => {
+    const comparisonProducts: Product[] = [{
+      id: 'masalta-ms125-4',
+      name: 'Виброплита Masalta MS125-4',
+      brand: 'Masalta',
+      category: 'Виброплиты',
+      price: 109_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/masalta-ms125-4',
+      specs: { 'Рабочая масса': '126 kg', 'Центробежная сила': '25 kN' }
+    }, {
+      id: 'champion-pc1150ft',
+      name: 'Виброплита CHAMPION PC1150FT',
+      brand: 'CHAMPION',
+      category: 'Виброплиты',
+      price: 76_690,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/champion-pc1150ft',
+      specs: { 'Рабочая масса': '97 kg', 'Центробежная сила': '17 kN' }
+    }];
+    const nonComparisonNeighbor: Product = {
+      id: 'wacker-bps1550a',
+      name: 'Виброплита Wacker Neuson BPS1550A',
+      brand: 'Wacker Neuson',
+      category: 'Виброплиты',
+      price: 84_000,
+      currency: 'RUB',
+      sourceUrl: 'https://example.test/wacker-bps1550a',
+      specs: { 'Рабочая масса': '90 kg', 'Центробежная сила': '15 kN' }
+    };
+    const priorCards: ProductCard[] = comparisonProducts.map((item) => ({
+      id: item.id,
+      name: item.name,
+      brand: item.brand,
+      category: item.category,
+      price: item.price,
+      currency: item.currency,
+      sourceUrl: item.sourceUrl,
+      specs: item.specs,
+      reasons: ['previous visible comparison candidate'],
+      caveats: []
+    }));
+    const previousAssistant: Message = {
+      ...message('Показал Masalta и CHAMPION с актуальными ценами.', 'assistant'),
+      id: 'previous-masalta-champion-answer',
+      metadata: { productCards: priorCards }
+    };
+
+    class ChangedBudgetComparisonConversations extends FakeConversations {
+      currentSession: ConversationSession = {
+        ...session(),
+        needState: {
+          ...emptyNeedState(),
+          activeNeeds: [{
+            id: 'plate-comparison',
+            productClass: 'plate',
+            summary: 'compare the exact previously shown plate compactors',
+            constraints: [],
+            openQuestions: [],
+            selectedProductIds: comparisonProducts.map((item) => item.id),
+            status: 'selected',
+            updatedAt: new Date('2026-05-19T12:00:00.000Z').toISOString()
+          }]
+        }
+      };
+      override messages = [
+        message('Покажите две виброплиты.'),
+        previousAssistant,
+        { ...message('Сравните обе, бюджет теперь до 90 000 ₽.'), id: 'changed-budget-current-user' }
+      ];
+      override toolArtifacts = [{
+        tool_request_id: 'comparison-web-check',
+        tool_name: 'web.researchProductFacts',
+        status: 'error',
+        payload: {
+          usedWebSearch: false,
+          searchDisposition: 'failed',
+          facts: [],
+          conflicts: [],
+          unconfirmedFacts: [{
+            requirementIds: [],
+            attribute: 'дополнительные технические данные',
+            status: 'not_confirmed',
+            reason: 'web provider error'
+          }]
+        },
+        warnings: ['web provider error'],
+        error_code: 'web_provider_error'
+      }];
+      override async getSession() { return this.currentSession; }
+    }
+
+    class ExactComparisonDetailsProducts extends FakeProducts {
+      idsSeen: string[] = [];
+
+      async getProductsByIds(ids: string[]) {
+        this.idsSeen = ids;
+        return [
+          ...comparisonProducts.filter((item) => ids.includes(item.id)),
+          nonComparisonNeighbor
+        ];
+      }
+
+      override async searchProducts(): Promise<Product[]> {
+        throw new Error('exact previous-card details must not become a fuzzy neighboring search');
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.userMessageSummary = 'buyer explicitly compares the exact prior Masalta and CHAMPION cards with a new 90000 RUB ceiling';
+    intent.dialogueUnderstanding = 'Masalta remains a factual comparison subject but violates the current strict budget; CHAMPION remains eligible';
+    intent.nextStepRationale = 'compare exact grounded facts, reject the over-budget subject, and recommend only the eligible subject';
+    intent.toolRequests = [{
+      id: 'comparison-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productNames: comparisonProducts.map((item) => item.name),
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate',
+        comparisonAttributes: ['price', 'weight', 'compaction force'],
+        limit: 2
+      },
+      rationale: 'rehydrate the exact visible card ids and current product details',
+      required: true
+    }, {
+      id: 'comparison-web-check',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'compare exact Masalta and CHAMPION technical facts',
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate',
+        productNames: comparisonProducts.map((item) => item.name),
+        comparisonAttributes: ['weight', 'compaction force'],
+        comparisonAttributeBindings: [],
+        limit: 2
+      },
+      rationale: 'check only unresolved comparison facts after exact catalog details',
+      required: true
+    }];
+    intent.productMentions = comparisonProducts.map((item) => ({
+      name: item.name,
+      role: 'comparison_subject' as const,
+      productClass: 'plate',
+      evidence: 'exact previous visible card'
+    }));
+    intent.selectionPolicy = {
+      targetProductClass: 'plate',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      needAction: 'resume',
+      alternativePolicy: 'exact_only',
+      reusePreviousCards: true,
+      maxCards: 2,
+      powerSource: 'any',
+      phase: 'any',
+      requirements: [{
+        id: 'budget-max-90000',
+        kind: 'budget_max_rub',
+        value: 90_000,
+        unit: 'RUB',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'бюджет теперь до 90 000 ₽',
+        verification: { mode: 'product_attribute' }
+      }],
+      rationale: 'the changed budget is a strict current recommendation constraint'
+    };
+    intent.grounding = {
+      taskType: 'comparison',
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts'],
+      technicalAttributes: ['weight', 'compaction force'],
+      rationale: 'use exact catalog facts first and preserve web failure as missing evidence'
+    };
+
+    const conversations = new ChangedBudgetComparisonConversations();
+    const products = new ExactComparisonDetailsProducts();
+    const reviewAnswer = vi.fn(async (input: Parameters<AgentManagerModel['reviewAnswer']>[0]) => {
+      expect(input.products.map((item) => item.id)).toEqual([
+        'champion-pc1150ft',
+        'masalta-ms125-4'
+      ]);
+      expect(input.productEvidenceRoles).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          productId: 'champion-pc1150ft',
+          role: 'recommendation_candidate',
+          eligibleForRecommendation: true
+        }),
+        expect.objectContaining({
+          productId: 'masalta-ms125-4',
+          role: 'comparison_reference_only',
+          eligibleForRecommendation: false,
+          rejectionReasons: [expect.objectContaining({
+            requirementId: 'budget-max-90000',
+            kind: 'budget_max_rub',
+            requiredValue: 90_000,
+            actualValue: 109_000
+          })]
+        })
+      ]));
+      expect(input.products.map((item) => item.id)).not.toContain(nonComparisonNeighbor.id);
+      expect(input.productEvidenceRoles?.map((role) => role.productId)).not.toContain(nonComparisonNeighbor.id);
+      return { verdict: 'pass' as const, issues: [] };
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((item) => ({ id: item.id, price: item.price }))).toEqual([
+            { id: 'champion-pc1150ft', price: 76_690 },
+            { id: 'masalta-ms125-4', price: 109_000 }
+          ]);
+          expect(input.productEvidenceRoles).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              productId: 'masalta-ms125-4',
+              role: 'comparison_reference_only',
+              eligibleForRecommendation: false
+            })
+          ]));
+          expect(input.requiredResponseClauses?.map((clause) => clause.code))
+            .toContain('comparison_reference_rejected_by_hard_constraint');
+          return {
+            answerText: 'Masalta MS125-4 стоит 109 000 ₽ и превышает новый лимит 90 000 ₽, поэтому как подходящий вариант её не рекомендую. CHAMPION PC1150FT стоит 76 690 ₽ и укладывается в бюджет; из этих двух рекомендую её. Дополнительный web-поиск завершился ошибкой, поэтому сравнение ограничиваю подтверждёнными карточками.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['comparison-details'],
+            selectedProductIds: ['champion-pc1150ft'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'plate',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: ['additional web comparison facts'],
+              rationale: 'CHAMPION passes the strict budget; Masalta remains reference-only evidence.'
+            }
+          };
+        },
+        reviewAnswer
+      })
+    );
+    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
+    config.AI_MANAGER_REVIEW_MODE = 'always';
+    try {
+      const payload = await orchestrator.generateAnswer({
+        sessionId,
+        turnId,
+        userMessage: 'Сравните обе, бюджет теперь до 90 000 ₽.'
+      });
+
+      expect([...products.idsSeen].sort()).toEqual(
+        comparisonProducts.map((item) => item.id).sort(),
+      );
+      expect(reviewAnswer).toHaveBeenCalledTimes(1);
+      expect(payload.productCards.map((card) => card.id)).toEqual(['champion-pc1150ft']);
+      expect(payload.productCards.map((card) => card.id)).not.toContain(nonComparisonNeighbor.id);
+      expect(payload.answer).toContain('Masalta MS125-4');
+      expect(payload.answer).toContain('превышает');
+      expect(payload.answer).toContain('CHAMPION PC1150FT');
+      expect((payload.metadata?.answerContract as { selectedProductIds?: string[] }).selectedProductIds)
+        .toEqual(['champion-pc1150ft']);
+    } finally {
+      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
+    }
+  });
+
+  it('keeps an explicitly compared over-weight product as reference evidence while showing only the eligible card', async () => {
+    const heavy: Product = {
+      ...product('plate-heavy-126', 'Виброплита Masalta MS125-4', 'Виброплиты'),
+      specs: { 'Operating weight': '126 kg', 'Compaction force': '25 kN' },
+      price: 126_000
+    };
+    const light: Product = {
+      ...product('plate-light-97', 'Виброплита CHAMPION PC1150FT', 'Виброплиты'),
+      specs: { 'Operating weight': '97 kg', 'Compaction force': '17 kN' },
+      price: 97_000
+    };
+    const unrelated: Product = {
+      ...product('plate-unrelated-80', 'Виброплита Wacker BPS1550A', 'Виброплиты'),
+      specs: { 'Operating weight': '80 kg', 'Compaction force': '15 kN' },
+      price: 80_000
+    };
+    const intent = structuredGeneratorCatalogIntent();
+    intent.requiresTools = true;
+    intent.toolRequests = [{
+      id: 'plate-details',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productIds: [heavy.id, light.id],
+        productNames: [heavy.name, light.name],
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate',
+        comparisonAttributes: ['weight', 'compaction force'],
+        limit: 2
+      },
+      rationale: 'read exact comparison subjects',
+      required: true
+    }];
+    intent.productMentions = [heavy, light].map((item) => ({
+      name: item.name,
+      role: 'comparison_subject' as const,
+      productClass: 'plate',
+      evidence: 'explicit comparison subject'
+    }));
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'plate',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'preliminary_fit',
+      alternativePolicy: 'exact_only',
+      reusePreviousCards: false,
+      maxCards: 1,
+      requirements: [{
+        id: 'weight-max-100',
+        kind: 'weight_max_kg',
+        value: 100,
+        unit: 'kg',
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'buyer requires a plate no heavier than 100 kg',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.grounding = {
+      taskType: 'comparison',
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'none',
+      requiredToolKinds: ['catalog.getProductDetails'],
+      technicalAttributes: ['weight', 'compaction force'],
+      rationale: 'compare exact catalog subjects and apply the strict weight limit'
+    };
+
+    class ExactPlateProducts extends FakeProducts {
+      async getProductsByIds(ids: string[]) {
+        return [heavy, light, unrelated].filter((item) => ids.includes(item.id));
+      }
+    }
+
+    const conversations = new FakeConversations();
+    const composeAnswer = vi.fn(async (
+      input: Parameters<AgentManagerModel['composeAnswer']>[0]
+    ): Promise<Awaited<ReturnType<AgentManagerModel['composeAnswer']>>> => {
+      expect(input.products.map((item) => item.id)).toEqual([light.id, heavy.id]);
+      expect(input.productEvidenceRoles).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          productId: light.id,
+          role: 'recommendation_candidate',
+          eligibleForRecommendation: true
+        }),
+        expect.objectContaining({
+          productId: heavy.id,
+          role: 'comparison_reference_only',
+          eligibleForRecommendation: false,
+          rejectionReasons: [expect.objectContaining({
+            requirementId: 'weight-max-100',
+            kind: 'weight_max_kg',
+            requiredValue: 100,
+            actualValue: 126,
+            unit: 'kg',
+            sourceResultIds: ['plate-details']
+          })]
+        })
+      ]));
+      expect(input.products.map((item) => item.id)).not.toContain(unrelated.id);
+      return {
+        answerText: 'Masalta MS125-4 weighs 126 kg and exceeds the 100 kg limit. CHAMPION PC1150FT weighs 97 kg and fits the stated limit as the preliminary choice.',
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['plate-details'],
+        selectedProductIds: [light.id],
+        leadAction: 'none',
+        riskFlags: [],
+        selectionReadiness: {
+          productClass: 'plate',
+          status: 'ready_for_preliminary_cards',
+          canShowProductCards: true,
+          missingFacts: [],
+          rationale: 'the light subject satisfies the strict weight requirement'
+        }
+      };
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new ExactPlateProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        composeAnswer,
+        async reviewAnswer() { return { verdict: 'pass', issues: [] }; }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Compare Masalta MS125-4 and CHAMPION PC1150FT; I need a plate no heavier than 100 kg.'
+    });
+
+    expect(composeAnswer).toHaveBeenCalledTimes(1);
+    expect(payload.productCards.map((card) => card.id)).toEqual([light.id]);
+    expect(payload.productCards.map((card) => card.id)).not.toContain(heavy.id);
+    expect(payload.productCards.map((card) => card.id)).not.toContain(unrelated.id);
+    expect(payload.answer).toContain('Masalta MS125-4');
+    expect(payload.answer).toContain('CHAMPION PC1150FT');
   });
 
   it('keeps the validated load calculation and close generator options when the buyer asks what to buy without overpaying', async () => {

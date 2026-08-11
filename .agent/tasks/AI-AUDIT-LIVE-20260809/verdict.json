@@ -1,0 +1,24 @@
+{
+  "taskId": "AI-AUDIT-LIVE-20260809",
+  "verdict": "FAIL",
+  "criticalUnresolved": 0,
+  "highUnresolved": 0,
+  "mediumUnresolved": 0,
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "FAIL",
+    "AC8": "PASS"
+  },
+  "blockingReason": "The follow-up code has not yet been pushed/deployed and therefore has no post-fix Railway marker or valid embedded-widget live proof.",
+  "databaseProof": "UNAVAILABLE_IN_CURRENT_ENVIRONMENT",
+  "rollback": {
+    "branch": "codex/backup-pre-audit-20260809",
+    "preAuditCommit": "9bc454c",
+    "deployedMergeCommit": "7bf62ef30548666b611aacf76aef5db3ae2cec62"
+  }
+}

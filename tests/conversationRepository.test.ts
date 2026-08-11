@@ -317,6 +317,7 @@ describe('ConversationRepository turn idempotency', () => {
     expect(sql).toContain('deadline_at <= now()');
     expect(sql).toContain("SET status = 'failed'");
     expect(sql).toContain('INSERT INTO conversation_turns');
+    expect(sql).toContain("coalesce($6::timestamptz, now() + interval '105 seconds')");
     expect(sql).toContain('INSERT INTO messages');
     expect(sql.indexOf('INSERT INTO messages')).toBeLessThan(sql.indexOf('INSERT INTO conversation_turns'));
     expect(sql).toContain('user_message_id,');

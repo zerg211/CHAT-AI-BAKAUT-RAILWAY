@@ -1,0 +1,32 @@
+{
+  "taskId": "AI-AUDIT-LIVE-20260809",
+  "updatedAt": "2026-08-11T13:12:00+03:00",
+  "overall": "FAIL",
+  "reason": "Code and local gates are green; post-fix GitHub/Railway deployment and required adaptive embedded-widget proof are still pending.",
+  "acceptanceCriteria": {
+    "AC1": {"status": "PASS", "proof": "Budget and generic weight comparison tests prove separate factual reference and recommendation/card roles."},
+    "AC2": {"status": "PASS", "proof": "Structured exact buyer quote binding passes; forged product numeric claims and numeric-only quotes block."},
+    "AC3": {"status": "PASS", "proof": "Second review-block terminal recovery tests pass and use one fenced useful degraded answer."},
+    "AC4": {"status": "PASS", "proof": "Conditional catalog-first web repair, exact target/attribute bindings, duplicate-superset merge, timeout partials, and catalog short-circuit suites pass."},
+    "AC5": {"status": "PASS", "proof": "45s web / 100s turn / 105s persisted deadline and reserve relationships are covered by focused tests; fresh real-PG execution is unavailable in this environment."},
+    "AC6": {"status": "PASS", "proof": "848 full tests; 257 agentic; 158 orchestrator; typecheck, no-regex, build, verify, diff-check, production audit, and sanitized scan pass."},
+    "AC7": {"status": "FAIL", "proof": "Not yet pushed/deployed; production marker remains prior merge and post-fix widget dialogues are not yet recorded."},
+    "AC8": {"status": "PASS", "proof": "This evidence package, raw builder artifacts, live discovery protocol, problems.md, and verdict.json are present; overall remains FAIL because AC7 is pending."}
+  },
+  "commands": {
+    "fullVerify": {"command": "npm.cmd run verify", "status": "PASS", "fullTests": "77 files / 848 tests", "agenticTests": "257 tests"},
+    "typecheck": {"command": "npm.cmd run typecheck", "status": "PASS"},
+    "lint": {"command": "npm.cmd run lint:no-regex", "status": "PASS", "legacyBaseline": 508},
+    "build": {"command": "npm.cmd run build", "status": "PASS"},
+    "diffCheck": {"command": "git diff --check", "status": "PASS"},
+    "secretScan": {"status": "PASS_WITH_REVIEWED_TEST_FIXTURE", "scopedTextFiles": 659, "suspiciousProductionMatches": 0, "reviewedTestFixture": "tests/adminEmbeddingCoverage.test.ts"},
+    "postgresBarrier": {"status": "UNAVAILABLE", "reason": "ECONNREFUSED on local 5432; psql missing; Docker daemon unavailable"}
+  },
+  "deployment": {
+    "currentDeployedCommit": "7bf62ef30548666b611aacf76aef5db3ae2cec62",
+    "currentMarker": "2026-07-17.gpt-5-6-terra-search-first-v16",
+    "followUpPushed": false,
+    "railwayPostFix": "PENDING",
+    "widgetPostFix": "PENDING"
+  }
+}

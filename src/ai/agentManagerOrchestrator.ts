@@ -130,7 +130,10 @@ import {
   verifiedFactsCoverRequest,
   verifiedFactsResearchResult
 } from './verifiedFactMemory.js';
-import { revalidateReviewerRewrite } from './agentManagerRevisedAnswerGuard.js';
+import {
+  revalidateReviewerRewrite,
+  type ReviewerRewriteNumericClaimBinding
+} from './agentManagerRevisedAnswerGuard.js';
 import {
   authoritativeRequirementProofStatus,
   buildRequirementProofs,
@@ -210,6 +213,7 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
   intent: AgentIntentContract;
   toolResults: ToolResult[];
   products: Product[];
+  productEvidenceRoles?: AnswerProductEvidenceRole[];
   requiredResponseClauses?: RequiredResponseClause[];
   repairContext?: {
     priorReviewIssues: Array<{
@@ -219,6 +223,25 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
       evidence: string;
     }>;
   };
+}
+
+export interface AnswerProductRejectionReason {
+  source: 'structured_selection_requirement';
+  requirementId: string;
+  kind: string;
+  requiredValue: string | number | boolean | null;
+  actualValue: string | number | boolean | null;
+  unit: string | null;
+  evidence: string;
+  sourceResultIds?: string[];
+  sourceAuthority?: string;
+}
+
+export interface AnswerProductEvidenceRole {
+  productId: string;
+  role: 'recommendation_candidate' | 'comparison_reference_only';
+  eligibleForRecommendation: boolean;
+  rejectionReasons: AnswerProductRejectionReason[];
 }
 
 export interface AgentManagerReviewInput extends AgentManagerAnswerInput {
@@ -627,13 +650,20 @@ export function orderToolRequestsForSelectionDependencies(
       )
       .map((verification) => verification.toolRequestId)
   );
-  const hasCatalogToWebDependency =
+  const hasCatalogSearchToWebDependency =
     requests.some((request) => request.tool === 'catalog.search') &&
     requests.some((request) => request.tool === 'web.researchProductFacts');
-  if (!proofRequestIds.size && !hasCatalogToWebDependency) return requests;
+  const hasConditionalDetailsToWebDependency =
+    intent.grounding?.webRequirement === 'conditional_on_catalog_gap' &&
+    requests.some((request) => request.tool === 'catalog.getProductDetails') &&
+    requests.some((request) => request.tool === 'web.researchProductFacts');
+  if (!proofRequestIds.size && !hasCatalogSearchToWebDependency && !hasConditionalDetailsToWebDependency) {
+    return requests;
+  }
   const priority = (request: ToolRequest) => {
     if (proofRequestIds.has(request.id) && request.tool !== 'web.researchProductFacts') return 0;
     if (request.tool === 'catalog.search') return 1;
+    if (hasConditionalDetailsToWebDependency && request.tool === 'catalog.getProductDetails') return 1;
     if (request.tool === 'web.researchProductFacts') return 2;
     return 3;
   };
@@ -719,6 +749,168 @@ export function repairIntentForTypedToolRequirementCoverage(intent: AgentIntentC
     riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_typed_requirement_coverage'])
   };
   return { intent: repairedIntent, repairs };
+}
+
+export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: AgentIntentContract) {
+  const grounding = intent.grounding;
+  const policy = intent.selectionPolicy;
+  const emptyResult = {
+    intent,
+    repairs: [] as Array<{ requestId: string; attributes: string[]; created: boolean }>
+  };
+  if (
+    !grounding ||
+    !policy ||
+    (grounding.taskType !== 'comparison' && grounding.taskType !== 'product_selection') ||
+    policy.selectionGoal !== 'preliminary_fit' ||
+    grounding.sourcePolicy === 'specialist_required' ||
+    (grounding.webPurpose !== 'none' && grounding.webPurpose !== 'technical_specs') ||
+    (grounding.webRequirement !== undefined &&
+      grounding.webRequirement !== 'none' &&
+      grounding.webRequirement !== 'conditional_on_catalog_gap')
+  ) return emptyResult;
+
+  const comparisonAttributes = uniqueStrings(grounding.technicalAttributes).slice(0, 12);
+  if (!comparisonAttributes.length) return emptyResult;
+  const catalogRequests = intent.toolRequests.filter((request) =>
+    request.required &&
+    (request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails')
+  );
+  if (!catalogRequests.length) return emptyResult;
+  const targetProductNames = uniqueStrings(catalogRequests.flatMap((request) =>
+    request.tool === 'catalog.getProductDetails'
+      ? targetProductNamesForRequest(request, intent)
+      : []
+  )).slice(0, 4);
+  const normalizedTargets = targetProductNames.map((name) => normalizeModelText(name));
+  const compatibleWebRequest = intent.toolRequests.find((request) => {
+    if (!request.required || request.tool !== 'web.researchProductFacts') return false;
+    const existingTargets = targetProductNamesForRequest(request, intent)
+      .map((name) => normalizeModelText(name));
+    if (!targetProductNames.length) return existingTargets.length === 0;
+    return existingTargets.length === 0 || (
+      existingTargets.length === normalizedTargets.length &&
+      normalizedTargets.every((target) => existingTargets.includes(target))
+    );
+  });
+
+  const requestedAttributeBindings: Array<{ attribute: string; requirementId: string }> = [];
+  const usedRequirementIds = new Set<string>();
+  for (const attribute of comparisonAttributes) {
+    const matchingRequirements = policy.requirements.filter((requirement) =>
+      requirement.verification?.mode === 'product_attribute' &&
+      selectionRequirementAttributeMatches(attribute, requirement.kind)
+    );
+    if (matchingRequirements.length !== 1) continue;
+    const requirementId = matchingRequirements[0]!.id;
+    if (usedRequirementIds.has(requirementId)) continue;
+    usedRequirementIds.add(requirementId);
+    requestedAttributeBindings.push({ attribute, requirementId });
+  }
+  const coveredRequirementIds = requestedAttributeBindings.map((binding) => binding.requirementId);
+  const existingAttributes = compatibleWebRequest
+    ? comparisonAttributesForRequest(compatibleWebRequest)
+    : [];
+  const mergedComparisonAttributes = uniqueStrings([
+    ...existingAttributes,
+    ...comparisonAttributes
+  ]).slice(0, 12);
+  const existingAttributeBindings = compatibleWebRequest
+    ? comparisonAttributeBindingsForRequest(compatibleWebRequest)
+    : [];
+  const mergedAttributeBindings = [...existingAttributeBindings];
+  for (const binding of requestedAttributeBindings) {
+    if (mergedAttributeBindings.some((existing) =>
+      normalizeModelText(existing.attribute) === normalizeModelText(binding.attribute) &&
+      existing.requirementId === binding.requirementId
+    )) continue;
+    mergedAttributeBindings.push(binding);
+  }
+  const existingNormalizedAttributes = new Set(
+    existingAttributes.map((attribute) => normalizeModelText(attribute))
+  );
+  const repairedAttributes = comparisonAttributes.filter((attribute) =>
+    !existingNormalizedAttributes.has(normalizeModelText(attribute))
+  );
+  const requestId = compatibleWebRequest?.id ?? uniqueToolRequestId(
+    intent,
+    'auto:requested-technical-attribute-web'
+  );
+  const canonicalProductIntent = canonicalProductClassFromIntent(intent);
+  const productIntent = policy.targetProductClass ?? canonicalProductIntent;
+  const repairedWebRequest: ToolRequest = compatibleWebRequest
+    ? {
+        ...compatibleWebRequest,
+        args: {
+          ...compatibleWebRequest.args,
+          productNames: targetProductNames,
+          comparisonAttributes: mergedComparisonAttributes,
+          comparisonAttributeBindings: mergedAttributeBindings.slice(0, 12),
+          limit: targetProductNames.length || compatibleWebRequest.args.limit || 4
+        },
+        coversRequirementIds: uniqueStrings([
+          ...(compatibleWebRequest.coversRequirementIds ?? []),
+          ...coveredRequirementIds
+        ])
+      }
+    : {
+        id: requestId,
+        tool: 'web.researchProductFacts',
+        args: {
+          query: grounding.buyerQuestion ?? intent.userMessageSummary,
+          semanticQuery: [
+            intent.userMessageSummary,
+            intent.dialogueUnderstanding,
+            intent.nextStepRationale
+          ].filter(Boolean).join('\n'),
+          productIntent,
+          canonicalProductIntent,
+          powerSource: policy.powerSource ?? undefined,
+          phase: policy.phase ?? undefined,
+          productNames: targetProductNames,
+          comparisonAttributes,
+          comparisonAttributeBindings: requestedAttributeBindings,
+          limit: targetProductNames.length || 4,
+          reason: 'Verify only requested technical attributes that remain unresolved after current catalog retrieval.',
+          notes: 'Catalog evidence is authoritative for confirmed current-card facts; missing catalog data stays unknown until source-backed research confirms it.'
+        },
+        rationale: 'Run bounded external technical research only if the preceding catalog evidence leaves a requested attribute unresolved.',
+        required: true,
+        coversRequirementIds: coveredRequirementIds
+      };
+  const toolRequests = compatibleWebRequest
+    ? intent.toolRequests.map((request) => request.id === compatibleWebRequest.id ? repairedWebRequest : request)
+    : [...intent.toolRequests, repairedWebRequest];
+  const catalogToolKinds = catalogRequests.map((request) => request.tool);
+  const repairedIntent: AgentIntentContract = {
+    ...intent,
+    requiresTools: true,
+    grounding: {
+      ...grounding,
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'conditional_on_catalog_gap',
+      requiredToolKinds: uniqueStrings([
+        ...grounding.requiredToolKinds,
+        ...catalogToolKinds,
+        'web.researchProductFacts'
+      ]) as AgentIntentGrounding['requiredToolKinds']
+    },
+    toolRequests,
+    riskFlags: uniqueStrings([
+      ...intent.riskFlags,
+      'planner_repaired_requested_attribute_conditional_web'
+    ])
+  };
+  if (JSON.stringify(repairedIntent) === JSON.stringify(intent)) return emptyResult;
+  return {
+    intent: repairedIntent,
+    repairs: [{
+      requestId,
+      attributes: compatibleWebRequest ? repairedAttributes : comparisonAttributes,
+      created: !compatibleWebRequest
+    }]
+  };
 }
 
 export function repairIntentForOpenEndedRequirementWebCoverage(intent: AgentIntentContract) {
@@ -1233,6 +1425,20 @@ function productMatchesTargetName(product: Product, targetName: string) {
   return textMatchesTargetName(productLookupText(product), targetName);
 }
 
+function productNameContainsExactComparisonMention(productName: string, mentionName: string) {
+  const normalizedProductName = normalizeModelText(productName);
+  const normalizedMentionName = normalizeModelText(mentionName);
+  if (normalizedProductName === normalizedMentionName) return true;
+  if (!modelIdentifierTokens(mentionName).length) return false;
+  const productTokens = modelTextTokens(productName);
+  const mentionTokens = modelTextTokens(mentionName);
+  if (!mentionTokens.length || mentionTokens.length > productTokens.length) return false;
+  for (let index = 0; index <= productTokens.length - mentionTokens.length; index += 1) {
+    if (mentionTokens.every((token, offset) => productTokens[index + offset] === token)) return true;
+  }
+  return false;
+}
+
 function toolRequestEvidenceText(request: ToolRequest) {
   return [
     request.args.query,
@@ -1375,8 +1581,17 @@ export class RecoveryAttemptUnavailableError extends Error {
   }
 }
 
+class AnswerReviewBlockedError extends Error {
+  readonly code = 'answer_contract_blocked_by_review';
+
+  constructor(readonly issueCodes: string[]) {
+    super(`Agent manager answer blocked: ${issueCodes.join(', ')}`);
+    this.name = 'AnswerReviewBlockedError';
+  }
+}
+
 const RECOVERY_LEASE_RETRY_INTERVAL_MS = 500;
-const RECOVERY_LEASE_WAIT_LIMIT_MS = 80_000;
+export const RECOVERY_LEASE_WAIT_LIMIT_MS = DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs;
 const TURN_TERMINAL_RESERVE_MS = 5_000;
 const WEB_COMPOSE_REVIEW_RESERVE_MS = 30_000;
 const WEB_MIN_EXECUTION_MS = 6_000;
@@ -2689,6 +2904,217 @@ export function filterProductsByStructuredSelectionPolicy(input: {
   };
 }
 
+function selectionRequirementNumericValue(requirement: SelectionRequirement) {
+  const value = typeof requirement.value === 'number'
+    ? requirement.value
+    : typeof requirement.value === 'string'
+      ? Number(requirement.value)
+      : Number.NaN;
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function numericDimensionForSelectionRequirement(kind: string) {
+  if (kind === 'budget_max_rub' || kind === 'price_max_rub') return 'price_rub';
+  if (kind === 'weight_min_kg' || kind === 'weight_max_kg') return 'mass_kg';
+  if (
+    kind === 'nominal_power_min_kw' ||
+    kind === 'nominal_power_max_kw' ||
+    kind === 'power_min_kw' ||
+    kind === 'power_max_kw'
+  ) return 'power_kw';
+  if (kind === 'voltage_v') return 'voltage_v';
+  return null;
+}
+
+function parsedReviewerRewriteNumericClaimBinding(value: unknown): Omit<ReviewerRewriteNumericClaimBinding, 'verifiedSourceQuote'> & {
+  verifiedSourceQuote?: string;
+} | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<ReviewerRewriteNumericClaimBinding>;
+  if (
+    typeof candidate.dimension !== 'string' ||
+    !candidate.dimension.trim() ||
+    typeof candidate.value !== 'number' ||
+    !Number.isFinite(candidate.value) ||
+    (candidate.qualifier !== undefined && candidate.qualifier !== 'nominal' && candidate.qualifier !== 'maximum') ||
+    (candidate.semanticRole !== 'buyer_requirement_threshold' && candidate.semanticRole !== 'calculator_requirement_threshold') ||
+    typeof candidate.sourceId !== 'string' ||
+    !candidate.sourceId.trim()
+  ) return null;
+  return {
+    dimension: candidate.dimension,
+    value: candidate.value,
+    ...(candidate.qualifier ? { qualifier: candidate.qualifier } : {}),
+    semanticRole: candidate.semanticRole,
+    sourceId: candidate.sourceId,
+    ...(typeof candidate.verifiedSourceQuote === 'string'
+      ? { verifiedSourceQuote: candidate.verifiedSourceQuote }
+      : {})
+  };
+}
+
+function reviewerRewriteNumericClaimBindings(input: {
+  answer: AnswerContract;
+  intent: AgentIntentContract;
+  toolResults: ToolResult[];
+  userMessage: string;
+}) {
+  const requirementsById = new Map(
+    (input.intent.selectionPolicy?.requirements ?? []).map((requirement) => [requirement.id, requirement])
+  );
+  return input.answer.factsUsed.flatMap((fact) => {
+    if (!fact.value || typeof fact.value !== 'object') return [];
+    const rawValue = fact.value as { numericClaimBinding?: unknown; numericClaimBindings?: unknown };
+    const rawBindings = [
+      rawValue.numericClaimBinding,
+      ...(Array.isArray(rawValue.numericClaimBindings) ? rawValue.numericClaimBindings : [])
+    ];
+    return rawBindings.flatMap((rawBinding) => {
+      const binding = parsedReviewerRewriteNumericClaimBinding(rawBinding);
+      if (!binding) return [];
+      if (binding.semanticRole === 'buyer_requirement_threshold') {
+        const requirement = requirementsById.get(binding.sourceId);
+        const requirementValue = requirement ? selectionRequirementNumericValue(requirement) : undefined;
+        const dimension = requirement ? numericDimensionForSelectionRequirement(requirement.kind) : null;
+        const verifiedSourceQuote = requirement?.evidence?.trim() ?? '';
+        if (
+          !requirement ||
+          requirement.role === 'mentioned_only' ||
+          requirementValue === undefined ||
+          dimension !== binding.dimension ||
+          Math.abs(requirementValue - binding.value) > 1e-9 ||
+          !verifiedSourceQuote ||
+          !input.userMessage.includes(verifiedSourceQuote) ||
+          !modelTextTokens(verifiedSourceQuote).some(tokenHasLetter)
+        ) return [];
+        return [{
+          ...binding,
+          verifiedSourceQuote
+        }];
+      }
+      // Calculator thresholds stay fail-closed when a product is named in the
+      // same sentence: unlike a buyer quote, the calculator result has no
+      // source phrase in the current user turn that can safely authorize a
+      // mixed product/threshold sentence.
+      return [];
+    });
+  });
+}
+
+function structuredSelectionRejectionReasons(
+  product: Product,
+  intent: AgentIntentContract,
+  toolResults: ToolResult[] = []
+): AnswerProductRejectionReason[] {
+  const proofs = toolResults.length
+    ? buildRequirementProofs({ intent, products: [product], toolResults })
+    : [];
+  return (intent.selectionPolicy?.requirements ?? []).flatMap((requirement) => {
+    if (
+      requirement.role !== 'hard_constraint' ||
+      requirement.strictness !== 'strict'
+    ) return [];
+    // Price visibility is a presence check, not a numeric threshold. The
+    // generic proof normalizer represents the requirement as `true` while a
+    // catalog candidate carries a numeric price, so treating that comparison
+    // as a violated hard constraint would resurrect stale cards as
+    // comparison-only evidence. Only emit rejection evidence for actual
+    // constraint failures.
+    if (requirement.kind === 'price_visibility') return [];
+    const requiredValue = selectionRequirementNumericValue(requirement);
+    const directPriceViolation =
+      (requirement.kind === 'budget_max_rub' || requirement.kind === 'price_max_rub') &&
+      requiredValue !== undefined &&
+      typeof product.price === 'number' &&
+      Number.isFinite(product.price) &&
+      product.price > requiredValue;
+    const proof = proofs.find((candidate) =>
+      candidate.requirementId === requirement.id &&
+      candidate.eligibilityStatus === 'violated' &&
+      candidate.sourceResultIds.length > 0
+    );
+    if (!directPriceViolation && !proof) return [];
+    return [{
+      source: 'structured_selection_requirement' as const,
+      requirementId: requirement.id,
+      kind: requirement.kind,
+      requiredValue: proof?.normalizedRequirementValue ?? requiredValue ?? null,
+      actualValue: proof?.normalizedValue ?? product.price ?? null,
+      unit: proof?.normalizedUnit ?? requirement.unit,
+      evidence: requirement.evidence,
+      ...(proof ? {
+        sourceResultIds: proof.sourceResultIds,
+        sourceAuthority: proof.sourceAuthority
+      } : {})
+    }];
+  });
+}
+
+function answerProductEvidenceWithComparisonReferences(input: {
+  intent: AgentIntentContract;
+  rawProducts: Product[];
+  recommendationProducts: Product[];
+  explicitComparisonReferents: Product[];
+  toolResults?: ToolResult[];
+}) {
+  const rawById = new Map(input.rawProducts.map((product) => [product.id, product]));
+  const recommendationIds = new Set(input.recommendationProducts.map((product) => product.id));
+  const comparisonNames = uniqueStrings((input.intent.productMentions ?? [])
+    .filter((mention) => mention.role === 'comparison_subject')
+    .map((mention) => mention.name));
+  const comparisonProducts = [...new Map([
+    ...input.explicitComparisonReferents.map((product) => rawById.get(product.id) ?? product),
+    ...input.rawProducts.filter((product) => comparisonNames.some((name) =>
+      productNameContainsExactComparisonMention(product.name, name)
+    ))
+  ].filter((product) =>
+    !recommendationIds.has(product.id) &&
+    structuredSelectionRejectionReasons(product, input.intent, input.toolResults).length > 0
+  ).map((product) => [product.id, product])).values()];
+  const products = [...new Map(
+    [...input.recommendationProducts, ...comparisonProducts].map((product) => [product.id, product])
+  ).values()];
+  const comparisonIds = new Set(comparisonProducts.map((product) => product.id));
+  const productEvidenceRoles: AnswerProductEvidenceRole[] = products.map((product) => {
+    const eligibleForRecommendation = recommendationIds.has(product.id);
+    return {
+      productId: product.id,
+      role: eligibleForRecommendation || !comparisonIds.has(product.id)
+        ? 'recommendation_candidate'
+        : 'comparison_reference_only',
+      eligibleForRecommendation,
+      rejectionReasons: eligibleForRecommendation
+        ? []
+        : structuredSelectionRejectionReasons(product, input.intent, input.toolResults)
+    };
+  });
+  return { products, productEvidenceRoles };
+}
+
+function requiredResponseClausesForRejectedComparisonReferences(input: {
+  products: Product[];
+  productEvidenceRoles: AnswerProductEvidenceRole[];
+}): RequiredResponseClause[] {
+  const productsById = new Map(input.products.map((product) => [product.id, product]));
+  const rejected = input.productEvidenceRoles.flatMap((role) => {
+    if (role.role !== 'comparison_reference_only' || !role.rejectionReasons.length) return [];
+    const product = productsById.get(role.productId);
+    return product ? [{
+      id: product.id,
+      name: product.name,
+      price: product.price ?? null,
+      rejectionReasons: role.rejectionReasons
+    }] : [];
+  });
+  if (!rejected.length) return [];
+  return [{
+    code: 'comparison_reference_rejected_by_hard_constraint',
+    sourceRequestId: 'structured_selection_policy',
+    instruction: `Compare these exact products using their factual evidence, but explicitly state that each is rejected by the grounded hard constraint and must not be selected, recommended as fitting, or emitted as a card: ${JSON.stringify(rejected)}`,
+    catalogProductNames: rejected.map((item) => item.name)
+  }];
+}
+
 type TerminalCatalogRecovery = {
   products: Product[];
   cards: ProductCard[];
@@ -3755,6 +4181,27 @@ function previousProductReferents(input: {
     if (latestVisibleProducts.length) return latestVisibleProducts.slice(0, maxReferents);
   }
   return [] as Product[];
+}
+
+function previousExplicitComparisonSubjectProducts(input: {
+  history: Message[];
+  intent: AgentIntentContract;
+}) {
+  if (
+    input.intent.selectionPolicy?.reusePreviousCards !== true ||
+    input.intent.grounding?.taskType !== 'comparison'
+  ) return [] as Product[];
+  const comparisonNames = uniqueStrings((input.intent.productMentions ?? [])
+    .filter((mention) => mention.role === 'comparison_subject')
+    .map((mention) => mention.name));
+  if (!comparisonNames.length) return [] as Product[];
+  const visibleProducts = previousVisibleCardProducts({
+    history: input.history,
+    intent: 'unknown'
+  });
+  return visibleProducts.filter((product) =>
+    comparisonNames.some((name) => productNameContainsExactComparisonMention(product.name, name))
+  );
 }
 
 function repairIntentForPreviousProductReferents(
@@ -5561,19 +6008,19 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, if no clearly light in-budget candidate is available, do not call a heavier in-budget candidate light or clearly best. Present it as a budget/availability compromise, state the weight tradeoff, and ask whether that weight is acceptable before final selection.',
             'When the buyer gives a budget, never present products above that budget as satisfying it. If in-budget catalog candidates exist but are weaker or compromise options, say that plainly and treat higher-priced models only as above-budget reference points.',
             'For catalog selection answers, first cover all honestly suitable products that match the buyer hard requirements and materially fit the job. If there are many suitable products, group or prioritize them briefly, but do not replace them with random 1-2 picks. Add compromise products only when honest matches are few, weak, or the buyer explicitly allows alternatives; label each compromise with the exact tradeoff. Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context or checked research facts.',
-            'For catalog selection answers, every catalog model or brand-model named in answerText must be copied from products[].name, and every named catalog recommendation must be strong enough to be shown as a visible card. Do not introduce product names that are absent from products, and do not mention a returned product as narrative filler if it is not a real recommendation candidate.',
+            'For catalog selection answers, every catalog model or brand-model named in answerText must be copied from products[].name. productEvidenceRoles is authoritative for use: recommendation_candidate may be selected/recommended and shown as a card; comparison_reference_only may be named only to answer the explicit comparison with grounded facts and must be clearly rejected by its rejectionReasons. Never select or recommend a comparison_reference_only product as fitting.',
             'Products can include current catalog results or buyer-visible cards from previous turns that remain relevant to the current narrowing request. If products are present and fit the current need, use them instead of claiming there is no fresh catalog or asking for a lead form just to continue selection.',
-            'For a catalog-selection or grounded recommendation turn, the top-level products array is the authoritative mechanically validated recommendation set. Catalog tool status or raw productIds are not permission to name or show a product that is absent from products. Before accepting an empty product set caused only by missing technical evidence, use the planned web.researchProductFacts result and prefer a truthful ready_for_preliminary_cards recommendation when no hard conflict is proven. Only after catalog and web research are exhausted may the answer explain the exact unconfirmed fact and offer specialist follow-up. Do not add this explanation to greetings, off-topic replies, lead-only turns, or technical answers that did not attempt catalog selection.',
+            'For a catalog-selection or grounded recommendation turn, products is the factual evidence set and productEvidenceRoles is the authoritative recommendation boundary. Raw catalog tool status or raw productIds are not permission to name or show a product absent from products. selectedProductIds and positive fit recommendations may contain only eligible recommendation_candidate ids. Before accepting an empty eligible set caused only by missing technical evidence, use planned web research and prefer a truthful preliminary recommendation when no hard conflict is proven.',
             'repairContext is internal recovery feedback from a rejected draft. Fix the listed issue causes using the current intent, tools and validated products, but never quote issue codes, internal messages or recovery mechanics to the buyer.',
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
             'If requiredResponseClauses is non-empty, answerText must satisfy every clause by meaning. Treat these clauses as required semantic content, not optional style advice.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, distinguish rough orientation from exact selection: do not present the number as confirmed or purchase-safe, but do not hide a useful tool-calculated orientation when the clause tells you to include or qualify it.',
-            'Keep every non-product calculation, threshold, quantity, or requirement in its own sentence before naming a product whenever that number differs from the product specification. After a product name, state only numeric values supported by that exact product evidence. This keeps calculator facts distinct from product specs.',
+            'A buyer requirement threshold may share a sentence with product names only when factsUsed.value contains numericClaimBinding with the correct numeric dimension/value, semanticRole=buyer_requirement_threshold, and the exact structured requirement sourceId. Preserve the exact verifiedSourceQuote from the current buyer message inside that sentence. Calculator thresholds stay in a separate sentence before product names. Never bind or present a threshold as a product price/specification.',
             'If web.researchProductFacts payload.answerGuidance.directAnswer is present, use that practical direct answer before broader catalog context. Do not convert answerGuidance.coverage status "not_confirmed" into "no" or "does not have".',
             'If web.researchProductFacts has status error, timeout, denied, or not_found, do not write that facts were checked, verified, or confirmed by that research step. Give the best general answer only at the current truthful level and state that exact verification is unavailable in this turn when the buyer asked for verification.',
-            'For selectionGoal=preliminary_fit, a failed or incomplete web.researchProductFacts result is missing confirmation, not a proven product conflict. When products contains catalog candidates that already satisfy deterministic hard constraints, set selectionReadiness.canShowProductCards=true, recommend useful candidates explicitly as preliminary, and list the exact unconfirmed web facts in missingFacts. Do not replace that useful catalog-grounded selection with a generic failed-search answer.',
+            'For selectionGoal=preliminary_fit, a failed or incomplete web.researchProductFacts result is missing confirmation, not a proven product conflict. When productEvidenceRoles contains eligible recommendation_candidate products that satisfy deterministic hard constraints, set selectionReadiness.canShowProductCards=true, recommend those useful candidates explicitly as preliminary, and list the exact unconfirmed web facts in missingFacts. Do not upgrade comparison_reference_only evidence into a candidate.',
             styleExamples,
             'Верни только JSON AnswerContract.'
           ].join('\n')
@@ -5589,6 +6036,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             requiredResponseClauses: input.requiredResponseClauses ?? [],
             repairContext: input.repairContext,
             availableEvidenceSources: answerEvidenceSourceHints(input),
+            productEvidenceRoles: input.productEvidenceRoles ?? [],
             products: input.products.map(answerProductContext)
           })
         }
@@ -5635,16 +6083,16 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, require rewrite if the primary shortlist presents a heavier in-budget product as an equal recommendation while two or more lighter in-budget products are available in products. The heavier product may appear only as a clearly labeled compromise after the lighter shortlist.',
             'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, require rewrite if no clearly light in-budget candidate is available and the answer presents a heavier in-budget product as clearly best or light without stating the weight compromise and asking whether that tradeoff is acceptable.',
-            'For catalog selection answers, require rewrite if the answer hides honestly suitable products and shows only one or two random picks while products contains more clear matches for the current hard requirements. Require rewrite if compromise products are mixed into the main suitable list without a clear tradeoff, or if concrete dimensions/specs are stated without products or checked research facts. A named product should be treated as a visible recommendation candidate.',
-            'For catalog selection answers, require rewrite if answerText names a catalog recommendation or brand-model that is absent from products[].name, or if it names a returned product that is not strong enough to be a visible recommendation candidate.',
+            'For catalog selection answers, require rewrite if the answer hides honestly suitable recommendation_candidate products. A comparison_reference_only product is factual evidence for the explicit comparison, not a visible recommendation candidate: require rewrite if it is omitted from the requested comparison, if its grounded rejection reason is omitted, or if it is selected/recommended as fitting.',
+            'Require rewrite if answerText names a catalog recommendation absent from products[].name or marks a product eligible when productEvidenceRoles says eligibleForRecommendation=false.',
             'For a catalog narrowing continuation where products are available from current or previous visible cards, require rewrite if the answer claims it cannot show concrete models due to missing fresh catalog data or asks for a lead form instead of using those product facts.',
-            'For a catalog-selection or grounded recommendation turn, the top-level products array is the authoritative mechanically validated recommendation set. Raw catalog tool success or raw productIds do not make a product safe. Missing evidence must not be rewritten as incompatibility. If catalog evidence is incomplete, require web research before a no-card or specialist answer; when no hard conflict is proven and the checked evidence supports orientation, allow a clearly preliminary recommendation with the exact remaining uncertainty. Only after research is exhausted may a no-card answer preserve verified facts, name the concrete unconfirmed fact, and offer technical follow-up without re-asking known facts.',
+            'For a catalog-selection or grounded recommendation turn, products is factual evidence while productEvidenceRoles is the mechanically validated recommendation boundary. Raw catalog success does not make a product eligible. Missing evidence must not be rewritten as incompatibility; a grounded hard-constraint rejection must not be softened into fit. Only recommendation_candidate ids may be selected or emitted as cards.',
             'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion. Only web_research_exhausted_grounding with sourcesExhausted=true permits the technical follow-up offer, phone request, message-or-call choice, and leadAction="offer_form". A failed, timed-out, aborted, or budget-skipped search must not be described as exhausted and must not trigger handoff by itself.',
             'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
             'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
-            'When revising confidence or suitability, do not invent or alter any model or number. Put a non-product calculation, threshold, quantity, or buyer requirement in a separate sentence before any product name; after a product name, use only numbers supported by that exact product. Never place a calculator-only number after a product name in the same sentence because that falsely attributes it as a product specification.',
+            'When revising confidence or suitability, do not invent or alter any model or number. Preserve an existing numericClaimBinding sentence unchanged only when it truthfully preserves the verifiedSourceQuote from the current buyer message; otherwise put non-product numbers in a separate sentence before product names. Never restate a requirement/calculator threshold as a product price or specification.',
             'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
-            'For selectionGoal=preliminary_fit, require rewrite if products contains candidates that satisfy deterministic hard constraints but the answer hides every candidate solely because web.researchProductFacts failed, timed out, was denied, or did not confirm an open-ended attribute. Preserve the exact missing fact and preliminary caveat; do not convert missing web confirmation into incompatibility. This allowance never applies to final_fit, failed calculators, numeric constraint violations, catalog class conflicts, or a proven source conflict.',
+            'For selectionGoal=preliminary_fit, require rewrite if eligible recommendation_candidate products satisfy deterministic hard constraints but the answer hides every candidate solely because web research failed or did not confirm an open-ended attribute. Preserve the exact missing fact and preliminary caveat. This allowance never upgrades comparison_reference_only products or proven numeric conflicts.',
             'Require rewrite if the answer is formally correct but sounds like an internal report: third-person catalog wording, "В каталоге БАКАУТ...", "По деталям запуска...", or similar robotic source labels. Rewrite it as simple conversational Russian from our shop voice.',
             'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
           ].join('\n')
@@ -5658,6 +6106,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             toolResults: compactToolResultsForModel(input.toolResults, input.products),
             requiredResponseClauses: input.requiredResponseClauses ?? [],
             repairContext: input.repairContext,
+            productEvidenceRoles: input.productEvidenceRoles ?? [],
             products: input.products.map(answerProductContext),
             answer: input.answer
           })
@@ -5687,7 +6136,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
               untrustedEvidenceBoundary,
               'Проверяй ответ только по currentUserMessage, products, toolStatuses, requiredResponseClauses и answer.',
               'Каждая названная модель, цена, масса, размер, мощность, усилие, скорость и эксплуатационное преимущество должны точно поддерживаться соответствующим products item. Иначе верни rewrite_required и удали или исправь неподтверждённое.',
-              'При rewrite не меняй и не добавляй модели или числа. Расчёт, порог, количество или требование, не являющееся характеристикой товара, пиши отдельным предложением до названия модели; после названия модели оставляй только числа из evidence именно этой модели.',
+              'При rewrite не меняй и не добавляй модели или числа. comparison_reference_only можно использовать только как факт сравнения с явной причиной отклонения; выбирать и рекомендовать можно только recommendation_candidate. Сохраняй предложение numericClaimBinding только вместе с точной verifiedSourceQuote из текущей реплики покупателя либо выноси не-товарное число в отдельное предложение.',
               'Не используй failed/error/timeout/denied/not_found tool как источник факта. Если обязательный web-поиск исчерпан без подтверждения решающего факта, сохрани полезный предварительный вывод из подтверждённых данных, назови конкретный неподтверждённый факт, предложи техническое уточнение, попроси номер и выбор: написать результат или позвонить. Не утверждай, что запрос уже передан, пока lead.capture не завершён успешно.',
               'Для preliminary_fit разрешай полезное предварительное сравнение по каталожным products, если детерминированные ограничения соблюдены и отсутствующий web-факт назван как неподтверждённый, а не как конфликт.',
               'Не разрешай обещания наличия, доставки, скидки, срока или заявки без успешного точного источника. Не проси уже предоставленный контакт повторно.',
@@ -5706,6 +6155,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
                 warnings: result.warnings
               })),
               requiredResponseClauses: input.requiredResponseClauses ?? [],
+              productEvidenceRoles: input.productEvidenceRoles ?? [],
               products: input.products.map(compactReviewerProductContext),
               answer: input.answer
             })
@@ -6162,6 +6612,20 @@ export class AgentManagerOrchestrator {
           recovered: input.recovered,
           onDelta: input.onDelta,
           reason: 'turn_work_deadline_exhausted',
+          deadlineAt: persistedTurn?.deadlineAt ?? null,
+          executionOwner: input.executionOwner
+        });
+      }
+      if (input.recovered && error instanceof AnswerReviewBlockedError) {
+        await this.trace(input.sessionId, input.turnId, 'recovery', 'second_review_block_terminalized', {
+          issueCodes: error.issueCodes
+        });
+        return this.completeTerminalTurn({
+          session: input.session,
+          turnId: input.turnId,
+          recovered: true,
+          onDelta: input.onDelta,
+          reason: 'answer_blocked_after_semantic_recovery',
           deadlineAt: persistedTurn?.deadlineAt ?? null,
           executionOwner: input.executionOwner
         });
@@ -6640,11 +7104,19 @@ export class AgentManagerOrchestrator {
       });
     }
     const plannedReuseProductIds = currentNeedSelectedProductIds(needStateSnapshot);
-    const plannedProductReferents = previousProductReferents({
+    const selectedPlannedProductReferents = previousProductReferents({
       history,
       intent: plannedIntent,
       selectedProductIds: plannedReuseProductIds
     });
+    const plannedExplicitComparisonReferents = previousExplicitComparisonSubjectProducts({
+      history,
+      intent: plannedIntent
+    }).filter((product) => structuredSelectionRejectionReasons(product, plannedIntent).length > 0);
+    const plannedProductReferents = [...new Map(
+      [...selectedPlannedProductReferents, ...plannedExplicitComparisonReferents]
+        .map((product) => [product.id, product])
+    ).values()];
     const hasReusableCurrentNeedCards = plannedProductReferents.length > 0;
     const provenExhaustedHandoffContinuation = hasProvenExhaustedTechnicalHandoffContinuation({
       history,
@@ -6675,7 +7147,12 @@ export class AgentManagerOrchestrator {
     const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(previousProductReferentRepair.intent, {
       openedNeedThisTurn: newEvents.some((event) => event.eventType === 'need.opened')
     });
-    const openEndedWebCoverageRepair = repairIntentForOpenEndedRequirementWebCoverage(newNeedFinalFitRepair.intent);
+    const requestedAttributeWebCoverageRepair = repairIntentForRequestedTechnicalAttributeWebCoverage(
+      newNeedFinalFitRepair.intent
+    );
+    const openEndedWebCoverageRepair = repairIntentForOpenEndedRequirementWebCoverage(
+      requestedAttributeWebCoverageRepair.intent
+    );
     const typedCoverageRepair = repairIntentForTypedToolRequirementCoverage(openEndedWebCoverageRepair.intent);
     const repairedIntent = typedCoverageRepair.intent;
     const validatedToolRequests = assertUniqueToolRequestIds(
@@ -6718,6 +7195,7 @@ export class AgentManagerOrchestrator {
       legacyIntentUpgraded ||
       previousProductReferentRepair.repaired ||
       newNeedFinalFitRepair.repaired ||
+      requestedAttributeWebCoverageRepair.repairs.length > 0 ||
       openEndedWebCoverageRepair.repairs.length > 0 ||
       typedCoverageRepair.repairs.length > 0
     ) {
@@ -6748,6 +7226,11 @@ export class AgentManagerOrchestrator {
     if (openEndedWebCoverageRepair.repairs.length) {
       await this.trace(input.sessionId, input.turnId, 'intent', 'open_ended_requirement_web_coverage_repaired', {
         repairs: openEndedWebCoverageRepair.repairs
+      });
+    }
+    if (requestedAttributeWebCoverageRepair.repairs.length) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'requested_attribute_web_coverage_repaired', {
+        repairs: requestedAttributeWebCoverageRepair.repairs
       });
     }
     if (newNeedFinalFitRepair.repaired) {
@@ -6849,7 +7332,11 @@ export class AgentManagerOrchestrator {
           selectedProductIds: currentNeedSelectedProductIds(needStateSnapshot)
         })
       : [];
-    const historicalProducts = selectionTurnMayUseHistory
+    const explicitComparisonReferents = selectionTurnMayUseHistory
+      ? previousExplicitComparisonSubjectProducts({ history, intent })
+          .filter((product) => structuredSelectionRejectionReasons(product, intent).length > 0)
+      : [];
+    const baseHistoricalProducts = selectionTurnMayUseHistory
       ? currentProductReferents.length
         ? currentProductReferents
         : previousVisibleCardProducts({
@@ -6860,6 +7347,9 @@ export class AgentManagerOrchestrator {
               : undefined
           })
       : [];
+    const historicalProducts = [...new Map(
+      [...baseHistoricalProducts, ...explicitComparisonReferents].map((product) => [product.id, product])
+    ).values()];
     const historicalSelectionTools = selectionTurnMayUseHistory
       ? previousSelectionToolResults({ history, intent })
       : [];
@@ -7098,6 +7588,15 @@ export class AgentManagerOrchestrator {
       products = [...new Map([...products, ...replacement.products].map((product) => [product.id, product])).values()];
     }
     const answerProducts = answerProductEvidence.products;
+    const answerModelEvidence = answerProductEvidenceWithComparisonReferences({
+      intent: effectiveIntent,
+      rawProducts: rawAnswerProducts,
+      recommendationProducts: answerProducts,
+      explicitComparisonReferents,
+      toolResults: selectionToolResults
+    });
+    const answerEvidenceProducts = answerModelEvidence.products;
+    const productEvidenceRoles = answerModelEvidence.productEvidenceRoles;
 
     const historicalProductIds = new Set(historicalProducts.map((product) => product.id));
     const usingHistoricalProducts = answerProducts.some((product) => historicalProductIds.has(product.id));
@@ -7131,6 +7630,10 @@ export class AgentManagerOrchestrator {
         instruction: `Every model in the top-level products array has been revalidated against the current structured constraints, including products carried from earlier visible cards. They are all authoritative current recommendation evidence. Do not treat only the newest catalog.search payload as valid, and do not remove a closer or cheaper revalidated product merely because it came from an earlier turn. Current product evidence: ${JSON.stringify(answerProducts.map((product) => ({ id: product.id, name: product.name, price: product.price ?? null, nominalKw: extractConfirmedGeneratorNominalPowerKw(product) ?? null })))}`,
         catalogProductNames: answerProducts.map((product) => product.name)
       } satisfies RequiredResponseClause] : []),
+      ...requiredResponseClausesForRejectedComparisonReferences({
+        products: answerEvidenceProducts,
+        productEvidenceRoles
+      }),
       ...requiredResponseClausesForToolResults(toolResults)
     ];
     const repairContext = failedReviewRepairContext(persistedExecution.checkpoints);
@@ -7155,7 +7658,8 @@ export class AgentManagerOrchestrator {
           pendingLeadCaptureDraft: pendingLeadDraftContext,
           intent: effectiveIntent,
           toolResults: selectionToolResults,
-          products: answerProducts,
+          products: answerEvidenceProducts,
+          productEvidenceRoles,
           requiredResponseClauses,
           repairContext,
           signal: input.signal
@@ -7206,7 +7710,8 @@ export class AgentManagerOrchestrator {
           pendingLeadCaptureDraft: pendingLeadDraftContext,
           intent: effectiveIntent,
           toolResults: selectionToolResults,
-          products: answerProducts,
+          products: answerEvidenceProducts,
+          productEvidenceRoles,
           requiredResponseClauses,
           repairContext,
           answer,
@@ -7217,9 +7722,15 @@ export class AgentManagerOrchestrator {
       const rewriteIssues = revalidateReviewerRewrite({
         revisedAnswerText: review.revisedAnswerText,
         userMessage,
-        products: answerProducts,
+        products: answerEvidenceProducts,
         toolResults: selectionToolResults,
-        durableLeadCaptureSucceeded: selectionToolResults.some(isDurableLeadCaptureResult)
+        durableLeadCaptureSucceeded: selectionToolResults.some(isDurableLeadCaptureResult),
+        numericClaimBindings: reviewerRewriteNumericClaimBindings({
+          answer,
+          intent: effectiveIntent,
+          toolResults: selectionToolResults,
+          userMessage
+        })
       });
       if (rewriteIssues.length) {
         review = {
@@ -7267,7 +7778,7 @@ export class AgentManagerOrchestrator {
       await this.trace(input.sessionId, input.turnId, 'recovery', 'blocked_answer_checkpoint_invalidated', {
         issueCodes: reviewIssueCodes
       });
-      throw new Error(`Agent manager answer blocked: ${reviewErrorMessage}`);
+      throw new AnswerReviewBlockedError(reviewIssueCodes);
     }
     const reviewInvalidatedFactSources = review.issues.some((issue) =>
       issue.code === 'failed_tool_result_used_as_fact_source'
@@ -7546,6 +8057,7 @@ export class AgentManagerOrchestrator {
         productIds: currentProductReferents.map((product) => product.id),
         source: currentProductReferents.length ? 'visible_product_cards' : 'none'
       },
+      productEvidenceRoles,
       cardSelection,
       selectionReadiness,
       answerProductEvidence,
@@ -9138,7 +9650,13 @@ export class AgentManagerOrchestrator {
         evidence: unknownToolResultIds.join(', ')
       });
     }
-    const productEvidenceIds = new Set(input.products.map((product) => product.id));
+    const productEvidenceIds = new Set(
+      input.productEvidenceRoles
+        ? input.productEvidenceRoles
+            .filter((role) => role.eligibleForRecommendation)
+            .map((role) => role.productId)
+        : input.products.map((product) => product.id)
+    );
     const unknownSelectedProductIds = (input.answer.selectedProductIds ?? []).filter((productId) =>
       !productEvidenceIds.has(productId)
     );
@@ -9146,7 +9664,7 @@ export class AgentManagerOrchestrator {
       mechanicalIssues.push({
         code: 'selected_product_without_evidence',
         severity: 'high',
-        message: 'Answer selects product IDs that are absent from the exact product evidence passed to the writer.',
+        message: 'Answer selects product IDs that are absent from the recommendation-eligible product evidence passed to the writer.',
         evidence: unknownSelectedProductIds.join(', ')
       });
     }

@@ -971,7 +971,7 @@ export class ConversationRepository {
              'received',
              'user_message_saved',
              $5::jsonb,
-             coalesce($6::timestamptz, now() + interval '85 seconds')
+             coalesce($6::timestamptz, now() + interval '105 seconds')
            FROM expiry_barrier
            JOIN chosen_message ON true
            ON CONFLICT (session_id, client_message_id) DO UPDATE

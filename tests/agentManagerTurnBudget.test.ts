@@ -19,8 +19,27 @@ describe('agent manager turn budget', () => {
     hostedToolCostUsd: 0
   });
 
-  it('reserves an 80-second work budget for a grounded catalog and web turn', () => {
-    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(80_000);
+  it('reserves a bounded 100-second work budget with room after the full web window', () => {
+    const webTimeoutMs = agentManagerToolRegistry['web.researchProductFacts'].timeoutMs;
+
+    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(100_000);
+    expect(webTimeoutMs).toBeGreaterThan(30_000);
+    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs - webTimeoutMs).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('allows a full 45-second web call after 25 seconds while preserving compose and review time', () => {
+    let now = 1_000;
+    const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS, () => now);
+    now += 25_000;
+    const composeReviewReserveMs = 30_000;
+    const effectiveWebTimeoutMs = Math.min(
+      agentManagerToolRegistry['web.researchProductFacts'].timeoutMs,
+      budget.remainingWallTimeMs() - composeReviewReserveMs
+    );
+
+    expect(effectiveWebTimeoutMs).toBe(45_000);
+    now += effectiveWebTimeoutMs;
+    expect(budget.remainingWallTimeMs()).toBe(composeReviewReserveMs);
   });
 
   it('bounds logical model stages independently from provider reservations', () => {

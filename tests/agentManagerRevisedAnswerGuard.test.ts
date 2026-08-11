@@ -212,6 +212,62 @@ describe('reviewer revisedAnswerText deterministic guard', () => {
     expect(issues.map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
   });
 
+  it('accepts a buyer budget threshold only through an exact typed requirement binding', () => {
+    const masalta = product({
+      id: 'masalta-ms125-4',
+      name: 'Masalta MS125-4',
+      price: 109_000,
+      specs: { weight: '126 kg' }
+    });
+    const champion = product({
+      id: 'champion-pc1150ft',
+      name: 'CHAMPION PC1150FT',
+      price: 76_690,
+      specs: { weight: '97 kg' }
+    });
+    const buyerRequirementQuote = 'бюджет теперь до 90 000 ₽';
+    const thresholdSentence = `Masalta MS125-4 не укладывается, а CHAMPION PC1150FT укладывается; ${buyerRequirementQuote}.`;
+    const groundedInput = {
+      userMessage: `Сравните их, ${buyerRequirementQuote}.`,
+      products: [masalta, champion],
+      toolResults: [catalogResult(masalta), catalogResult(champion)],
+      numericClaimBindings: [{
+        verifiedSourceQuote: buyerRequirementQuote,
+        dimension: 'price_rub',
+        value: 90_000,
+        semanticRole: 'buyer_requirement_threshold' as const,
+        sourceId: 'budget-max-90000'
+      }]
+    };
+
+    expect(review(thresholdSentence, groundedInput)).toEqual([]);
+    expect(review(thresholdSentence, {
+      ...groundedInput,
+      numericClaimBindings: []
+    }).map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
+    expect(review('CHAMPION PC1150FT стоит 90 000 ₽.', groundedInput).map((issue) => issue.code))
+      .toContain('review_rewrite_unsupported_numeric_product_claim');
+    expect(review('CHAMPION PC1150FT весит 90 kg.', groundedInput).map((issue) => issue.code))
+      .toContain('review_rewrite_unsupported_numeric_product_claim');
+
+    const forgedPriceSentence = 'CHAMPION PC1150FT стоит 90 000 ₽.';
+    expect(review(forgedPriceSentence, {
+      ...groundedInput,
+      numericClaimBindings: groundedInput.numericClaimBindings
+    }).map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
+
+    expect(review(`CHAMPION PC1150FT стоит 90 000 ₽; ${buyerRequirementQuote}.`, groundedInput)
+      .map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
+
+    expect(review(forgedPriceSentence, {
+      ...groundedInput,
+      numericClaimBindings: [{
+        ...groundedInput.numericClaimBindings[0],
+        verifiedSourceQuote: '90 000 ₽'
+      }]
+    }).map((issue) => issue.code)).toContain('review_rewrite_unsupported_numeric_product_claim');
+  });
+
   it('accepts a numeric technical fact confirmed by a successful web research artifact', () => {
     const item = product({ id: 'bison-9000', name: 'BISON BS9000', price: null, specs: {} });
     const webResult: ToolResult = {

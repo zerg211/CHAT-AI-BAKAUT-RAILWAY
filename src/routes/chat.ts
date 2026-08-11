@@ -36,7 +36,7 @@ const generationStatusMessages = [
   'Собираю короткий ответ с выводом и ценами...'
 ];
 
-const TURN_DEADLINE_MS = 85_000;
+const TURN_DEADLINE_MS = 105_000;
 
 function remainingTurnDeadlineMs(deadlineAt: string | null | undefined) {
   const parsed = deadlineAt ? Date.parse(deadlineAt) : Number.NaN;
@@ -215,7 +215,8 @@ export async function registerChatRoutes(
         clientMessageId,
         requestHash: requestHash(params.id, input.message),
         content: input.message,
-        activeNeedsBefore: session.needState.activeNeeds ?? []
+        activeNeedsBefore: session.needState.activeNeeds ?? [],
+        deadlineAt: new Date(Date.now() + TURN_DEADLINE_MS).toISOString()
       });
     } catch (error) {
       if (error instanceof ActiveConversationTurnError) {

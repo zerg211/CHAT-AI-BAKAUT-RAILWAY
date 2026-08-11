@@ -1062,9 +1062,21 @@ describe('product comparison research', () => {
     expect(actual.searchDisposition).toBe('skipped_budget');
   });
 
-  it('reserves a production deadline for one modern web pass and verifies an exact source quote without another model call', async () => {
+  it('retains compact exact-catalog evidence before a deadline-bound web pass', async () => {
     const exactQuote = 'FIRMAN RD3910E starting system: ignition key electric starter.';
     fetchMock.mockResolvedValueOnce(sourceResponse(`<html><body>${exactQuote}</body></html>`));
+    queueResearchResponse({
+      parsed: compactCatalogResult({
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          value: 'запуск поворотом ключа электростартера',
+          evidence: 'Запуск двигателя осуществляется поворотом ключа электростартера.'
+        }],
+        directAnswer: 'RD3910E запускается поворотом ключа электростартера.',
+        completeness: 'answered'
+      })
+    });
     queueResearchResponse({
       parsed: result({
         usedWebSearch: true,
@@ -1102,28 +1114,217 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 20_000
     });
 
-    expect(researchCalls()).toHaveLength(1);
+    expect(researchCalls()).toHaveLength(2);
     expect(researchCalls()[0]).toMatchObject({
+      stage: 'catalog_product_fact_extraction_compact',
+      transportMaxRetries: 0,
+      minRetryRemainingMs: 6_000
+    });
+    expect(researchCalls()[1]).toMatchObject({
       stage: 'product_comparison_research',
       transportMaxRetries: 0,
       minRetryRemainingMs: 6_000
     });
-    expect(researchCalls()[0].request.tools).toEqual([{
+    expect(researchCalls()[1].request.tools).toEqual([{
       type: 'web_search',
-      search_context_size: 'medium',
+      search_context_size: 'low',
       return_token_budget: 'default'
     }]);
-    expect(createStructuredJsonResponse.mock.calls
-      .map((call) => call[0].stage)
-      .filter((stage) => stage === 'source_evidence_semantic_validation')).toHaveLength(0);
-    expect(actual.facts).toHaveLength(1);
+    expect(actual.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: 'catalog', productName: expect.stringContaining('FIRMAN RD3910E') }),
+      expect.objectContaining({ sourceType: 'web', productName: 'FIRMAN RD3910E' })
+    ]));
     expect(actual.warnings).toEqual(expect.arrayContaining([
-      'catalog_fact_extraction_skipped_for_web_deadline',
+      'catalog_fact_extraction_used',
       'source_evidence_exact_quote_verified'
+    ]));
+    expect(actual.warnings).not.toContain('catalog_fact_extraction_skipped_for_web_deadline');
+  });
+
+  it('returns a typed partial with catalog facts and exact missing coverage when deadline-bound web times out', async () => {
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'catalog_product_fact_extraction_compact') {
+        return {
+          parsed: compactCatalogResult({
+            facts: [{
+              productName: 'FIRMAN RD3910E',
+              attribute: 'electric starter',
+              value: 'электростартер',
+              evidence: 'ручной стартер / электростартер'
+            }],
+            missing: [{
+              productName: 'FIRMAN RD3910E',
+              attribute: 'start control',
+              reason: 'Карточка не уточняет орган управления электростартером.'
+            }],
+            directAnswer: 'В карточке подтверждён электростартер, но не орган управления.',
+            completeness: 'partially_answered'
+          }),
+          response: { output: [] }
+        };
+      }
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return semanticValidationResponse(call);
+      }
+      throw new DOMException('The operation timed out.', 'TimeoutError');
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Firman RD3910E заводится с ключа или кнопки?',
+      products: [product({ description: 'В карточке указан электростартер без органа управления.' })],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['start control'],
+      allowCatalogOnlyAnswer: false,
+      catalogSearchAttempted: true,
+      catalogProductsFound: true,
+      deadlineAtMs: Date.now() + 45_000
+    });
+
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'catalog_product_fact_extraction_compact',
+      'product_comparison_research'
+    ]);
+    expect(actual).toMatchObject({
+      usedWebSearch: false,
+      searchDisposition: 'timed_out',
+      sourcesExhausted: false
+    });
+    expect(actual.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        productName: expect.stringContaining('FIRMAN RD3910E'),
+        sourceType: 'catalog',
+        value: 'электростартер'
+      })
+    ]));
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        attribute: 'start control',
+        status: 'not_confirmed',
+        sourceTitle: 'FIRMAN RD3910E'
+      })
+    ]));
+    expect(actual.sourceAttempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tier: 'catalog', outcome: 'confirmed' })
+    ]));
+    expect(actual.warnings).toEqual(expect.arrayContaining([
+      'catalog_fact_extraction_used',
+      'web_research_timed_out_after_catalog_extraction'
     ]));
   });
 
+  it('does not reopen a catalog-confirmed exact target attribute when web times out', async () => {
+    const unresolvedProduct = product({
+      id: 'rd4910e',
+      name: 'Генератор бензиновый FIRMAN RD4910E 3.2 кВт',
+      sourceUrl: 'https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_firman_rd4910e_3_2_kvt/',
+      specs: {},
+      description: 'Карточка не уточняет орган управления электростартером.'
+    });
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'catalog_product_fact_extraction_compact') {
+        return {
+          parsed: compactCatalogResult({
+            facts: [{
+              productName: 'FIRMAN RD3910E',
+              attribute: 'start control',
+              value: 'поворот ключа электростартера',
+              evidence: 'Запуск двигателя осуществляется поворотом ключа электростартера.'
+            }],
+            missing: [{
+              productName: 'FIRMAN RD4910E',
+              attribute: 'start control',
+              reason: 'Карточка не уточняет орган управления электростартером.'
+            }],
+            directAnswer: 'Для RD3910E подтверждён запуск ключом; по RD4910E орган управления не указан.',
+            completeness: 'partially_answered'
+          }),
+          response: { output: [] }
+        };
+      }
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return semanticValidationResponse(call);
+      }
+      throw new DOMException('The operation timed out.', 'TimeoutError');
+    });
+
+    const targets = ['FIRMAN RD3910E', 'FIRMAN RD4910E'];
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Сравните управление запуском FIRMAN RD3910E и FIRMAN RD4910E.',
+      products: [product(), unresolvedProduct],
+      targetProductNames: targets,
+      comparisonAttributes: ['start control'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: true,
+      deadlineAtMs: Date.now() + 45_000
+    });
+
+    const catalogCall = researchCalls()[0];
+    const compactItemProperties = catalogCall.request.text.format.schema.properties.facts.items.properties;
+    expect(compactItemProperties.productName.enum).toEqual(targets);
+    expect(compactItemProperties.attribute.enum).toEqual(['start control']);
+    expect(actual.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        productName: expect.stringContaining('FIRMAN RD3910E'),
+        attribute: 'start control',
+        sourceType: 'catalog'
+      })
+    ]));
+    const unresolvedCoverage = actual.answerGuidance.coverage.filter((item) =>
+      item.attribute === 'start control' && item.status === 'not_confirmed'
+    );
+    expect(unresolvedCoverage).toEqual([
+      expect.objectContaining({ sourceTitle: 'FIRMAN RD4910E' })
+    ]);
+    expect(unresolvedCoverage[0]?.evidence).toContain('FIRMAN RD4910E');
+    expect(unresolvedCoverage[0]?.evidence).not.toContain('FIRMAN RD3910E');
+  });
+
+  it('preserves exact target and requested attribute gaps when web times out without catalog evidence', async () => {
+    createStructuredJsonResponse.mockRejectedValueOnce(
+      new DOMException('The operation was aborted.', 'AbortError')
+    );
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какова прижимная сила отсутствующей модели?',
+      products: [],
+      targetProductNames: ['EXACT MODEL 9000', 'EXACT MODEL 8000'],
+      comparisonAttributes: ['прижимная сила'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false,
+      deadlineAtMs: Date.now() + 45_000
+    });
+
+    expect(actual).toMatchObject({
+      usedWebSearch: false,
+      searchDisposition: 'timed_out',
+      sourcesExhausted: false,
+      facts: []
+    });
+    expect(actual.answerGuidance.coverage).toEqual([
+      expect.objectContaining({
+        attribute: 'прижимная сила',
+        status: 'not_confirmed',
+        sourceTitle: 'EXACT MODEL 9000 / EXACT MODEL 8000'
+      })
+    ]);
+    expect(actual.answerGuidance.coverage[0]?.evidence).toContain('EXACT MODEL 9000');
+    expect(actual.answerGuidance.coverage[0]?.evidence).toContain('EXACT MODEL 8000');
+    expect(actual.sourceAttempts).toEqual([
+      expect.objectContaining({ tier: 'catalog', outcome: 'not_found' })
+    ]);
+  });
+
   it('does not start a deep exact-target retry when less than the reserved retry window remains', async () => {
+    queueResearchResponse({
+      parsed: compactCatalogResult({
+        missing: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          reason: 'The catalog does not confirm the requested control.'
+        }],
+        completeness: 'not_answered'
+      })
+    });
     queueResearchResponse({
       parsed: result({
         usedWebSearch: true,
@@ -1151,7 +1352,10 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 5_000
     });
 
-    expect(researchCalls()).toHaveLength(1);
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'catalog_product_fact_extraction_compact',
+      'product_comparison_research'
+    ]);
     expect(actual.warnings).toContain('exact_target_external_retry_skipped_insufficient_budget');
   });
 
@@ -1852,6 +2056,16 @@ describe('product comparison research', () => {
         }]
       }
     });
+    queueResearchResponse({
+      parsed: compactCatalogResult({
+        missing: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          reason: 'Catalog evidence is intentionally incomplete in this source-validation case.'
+        }],
+        completeness: 'not_answered'
+      })
+    });
     queueResearchResponse({ parsed: titleOnlyWebFact });
     queueResearchResponse({ parsed: titleOnlyWebFact });
 
@@ -1863,7 +2077,10 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 60_000
     });
 
-    expect(actual.facts).toEqual([]);
+    expect(actual.facts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceType: 'web' })
+    ]));
+    expect(actual.facts.every((fact) => fact.sourceType === 'catalog')).toBe(true);
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'start control', status: 'not_confirmed' })
     ]));

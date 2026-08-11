@@ -18,9 +18,19 @@ export interface ReviewerRewriteGuardInput {
   products: Product[];
   toolResults: ToolResult[];
   durableLeadCaptureSucceeded: boolean;
+  numericClaimBindings?: ReviewerRewriteNumericClaimBinding[];
 }
 
 type NumericQualifier = 'nominal' | 'maximum';
+
+export interface ReviewerRewriteNumericClaimBinding {
+  verifiedSourceQuote: string;
+  dimension: string;
+  value: number;
+  qualifier?: NumericQualifier;
+  semanticRole: 'buyer_requirement_threshold';
+  sourceId: string;
+}
 
 interface NumericFact {
   dimension: string;
@@ -485,11 +495,50 @@ function sameNumericFact(claim: NumericFact, fact: NumericFact) {
   return Math.abs(claim.value - fact.value) <= tolerance;
 }
 
-function unsupportedNumericClaims(text: string, evidence: ProductEvidence[]) {
+function hasExactStructuredNumericBinding(
+  segment: string,
+  claim: NumericClaim,
+  bindings: ReviewerRewriteNumericClaimBinding[],
+  userMessage: string
+) {
+  return bindings.some((binding) => {
+    if (
+      binding.semanticRole !== 'buyer_requirement_threshold' ||
+      !binding.sourceId.trim() ||
+      !sameNumericFact(claim, binding)
+    ) return false;
+    const sourceQuote = binding.verifiedSourceQuote.trim();
+    if (
+      !sourceQuote ||
+      !userMessage.includes(sourceQuote) ||
+      !modelTextTokens(sourceQuote).some(tokenHasLetter)
+    ) return false;
+    const sourceClaims = extractNumericClaims(sourceQuote);
+    let quoteStart = segment.indexOf(sourceQuote);
+    while (quoteStart >= 0) {
+      const matchingSourceClaim = sourceClaims.some((sourceClaim) =>
+        sameNumericFact(claim, sourceClaim) &&
+        claim.start === quoteStart + sourceClaim.start &&
+        claim.end === quoteStart + sourceClaim.end
+      );
+      if (matchingSourceClaim) return true;
+      quoteStart = segment.indexOf(sourceQuote, quoteStart + 1);
+    }
+    return false;
+  });
+}
+
+function unsupportedNumericClaims(
+  text: string,
+  evidence: ProductEvidence[],
+  bindings: ReviewerRewriteNumericClaimBinding[],
+  userMessage: string
+) {
   const unsupported: Array<{ claim: NumericClaim; products: ProductEvidence[] }> = [];
   for (const segment of splitSegments(text)) {
     const claims = extractNumericClaims(segment.text);
     for (const claim of claims) {
+      if (hasExactStructuredNumericBinding(segment.text, claim, bindings, userMessage)) continue;
       if (claim.dimension === 'percent' && !evidence.some((product) => product.numericFacts.some((fact) => sameNumericFact(claim, fact)))) {
         continue;
       }
@@ -620,7 +669,12 @@ export function revalidateReviewerRewrite(input: ReviewerRewriteGuardInput): Pre
       tokenHasLetter(canonical) &&
       !supportedIdentifiers.has(canonical);
   });
-  const numericClaims = unsupportedNumericClaims(text, evidence);
+  const numericClaims = unsupportedNumericClaims(
+    text,
+    evidence,
+    input.numericClaimBindings ?? [],
+    input.userMessage
+  );
   const commercialPromises = forbiddenCommercialPromise(text);
   const issues: PreSendReview['issues'] = [];
   if (unsupportedIdentifiers.length) {

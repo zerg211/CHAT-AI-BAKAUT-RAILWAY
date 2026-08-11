@@ -2451,7 +2451,7 @@ describe('AgentManager comparison research flow', () => {
     });
   });
 
-  it('treats exact catalog product details as current-model evidence without injecting redundant web research', async () => {
+  it('routes complete exact catalog details through conditional research without using external web', async () => {
     researchProductComparisonFacts.mockClear();
     const tss = product('tss-5000n', 'TSS SGG 5000N gasoline generator 5 kW', {
       nominal_power_kw: 5,
@@ -2467,6 +2467,67 @@ describe('AgentManager comparison research flow', () => {
     });
     tss.price = 49281;
     bison.price = 61100;
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
+      sourceAttempts: [{ tier: 'catalog', outcome: 'confirmed' }],
+      facts: [{
+        productName: tss.name,
+        attribute: 'nominal power',
+        value: '5 kW',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'nominal_power_kw: 5',
+        sourceUrl: tss.sourceUrl,
+        sourceTitle: tss.name
+      }, {
+        productName: bison.name,
+        attribute: 'nominal power',
+        value: '5 kW',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'nominal_power_kw: 5',
+        sourceUrl: bison.sourceUrl,
+        sourceTitle: bison.name
+      }, {
+        productName: tss.name,
+        attribute: 'generator type',
+        value: 'conventional',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'generator_type: conventional',
+        sourceUrl: tss.sourceUrl,
+        sourceTitle: tss.name
+      }, {
+        productName: bison.name,
+        attribute: 'generator type',
+        value: 'inverter',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'generator_type: inverter',
+        sourceUrl: bison.sourceUrl,
+        sourceTitle: bison.name
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Both exact catalog cards confirm nominal power and generator type.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'nominal power',
+          status: 'confirmed',
+          value: '5 kW',
+          evidence: 'both exact current catalog cards'
+        }, {
+          attribute: 'generator type',
+          status: 'confirmed',
+          value: 'conventional / inverter',
+          evidence: 'both exact current catalog cards'
+        }]
+      },
+      summaryForAnswer: 'The exact catalog cards fully answer the requested comparison.',
+      warnings: ['catalog_fact_extraction_used', 'web_research_not_needed:catalog_extraction_answered']
+    });
 
     class ExactComparisonProducts extends FakeProducts {
       async getProductsByIds(ids: string[]) {
@@ -2548,7 +2609,15 @@ describe('AgentManager comparison research flow', () => {
       },
       async composeAnswer(input) {
         expect(input.toolResults).toEqual([
-          expect.objectContaining({ requestId: 'catalog:exact-comparison', tool: 'catalog.getProductDetails', status: 'ok' })
+          expect.objectContaining({ requestId: 'catalog:exact-comparison', tool: 'catalog.getProductDetails', status: 'ok' }),
+          expect.objectContaining({
+            tool: 'web.researchProductFacts',
+            status: 'ok',
+            payload: expect.objectContaining({
+              usedWebSearch: false,
+              searchDisposition: 'not_needed'
+            })
+          })
         ]);
         expect(input.products.map((item) => item.id)).toEqual([tss.id, bison.id]);
         return {
@@ -2592,12 +2661,199 @@ describe('AgentManager comparison research flow', () => {
       userMessage: 'Compare only TSS SGG 5000N and BISON BS6250IE: what do I get for the extra money?'
     });
 
-    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(1);
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      allowCatalogOnlyAnswer: true,
+      targetProductNames: ['TSS SGG 5000N', 'BISON BS6250IE'],
+      comparisonAttributes: ['nominal power', 'generator type']
+    }));
+    expect(payload.usedWebSearch).toBe(false);
     expect(payload.answer).toContain('предварительно выбрал бы TSS');
     expect(payload.productCards.map((card) => card.id)).toEqual([tss.id, bison.id]);
+    expect(payload.metadata?.intentContract).toMatchObject({
+      grounding: {
+        sourcePolicy: 'catalog_required',
+        webRequirement: 'conditional_on_catalog_gap'
+      },
+      riskFlags: expect.arrayContaining(['planner_repaired_requested_attribute_conditional_web'])
+    });
     expect(payload.metadata?.intentContract).not.toMatchObject({
       riskFlags: expect.arrayContaining(['planner_repaired_exact_model_evidence'])
     });
+  });
+
+  it('keeps a missing exact-candidate attribute unknown after repaired conditional research times out', async () => {
+    researchProductComparisonFacts.mockClear();
+    const confirmed = product('firman-rd3910e', 'FIRMAN RD3910E', {
+      automatic_start: true,
+      nominal_power_kw: 5.5
+    });
+    const unresolved = product('firman-rd4910e', 'FIRMAN RD4910E', {
+      nominal_power_kw: 6.0
+    });
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false,
+      searchDisposition: 'timed_out',
+      sourcesExhausted: false,
+      sourceAttempts: [{ tier: 'catalog', outcome: 'confirmed' }],
+      facts: [{
+        productName: confirmed.name,
+        attribute: 'automatic start',
+        value: 'yes',
+        sourceType: 'catalog',
+        confidence: 'high',
+        evidence: 'automatic_start: true',
+        sourceUrl: confirmed.sourceUrl,
+        sourceTitle: confirmed.name
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Automatic start is confirmed only for FIRMAN RD3910E.',
+        completeness: 'partially_answered',
+        coverage: [{
+          attribute: 'automatic start',
+          status: 'confirmed',
+          value: 'yes',
+          evidence: 'FIRMAN RD3910E catalog card',
+          sourceUrl: confirmed.sourceUrl,
+          sourceTitle: confirmed.name
+        }, {
+          attribute: 'automatic start',
+          status: 'not_confirmed',
+          value: '',
+          evidence: 'FIRMAN RD4910E external verification timed out',
+          sourceTitle: unresolved.name
+        }]
+      },
+      summaryForAnswer: 'One exact target remains unresolved.',
+      warnings: ['web_research_timed_out_after_catalog_extraction']
+    });
+
+    class ExactProductsWithGap extends FakeProducts {
+      async getProductsByIds(ids: string[]) {
+        return [confirmed, unresolved].filter((item) => ids.includes(item.id));
+      }
+      async searchProducts() {
+        return [confirmed, unresolved];
+      }
+    }
+
+    const gapModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'compare automatic start on FIRMAN RD3910E and FIRMAN RD4910E',
+          dialogueUnderstanding: 'the buyer needs one exact technical attribute for two exact catalog candidates',
+          nextStepRationale: 'read exact catalog cards, then verify only the unresolved automatic-start fact',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog:automatic-start-comparison',
+            tool: 'catalog.getProductDetails',
+            args: {
+              productIds: [confirmed.id, unresolved.id],
+              productNames: [confirmed.name, unresolved.name],
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              comparisonAttributes: ['automatic start']
+            },
+            rationale: 'read both exact current catalog cards',
+            required: true
+          }],
+          productMentions: [confirmed, unresolved].map((item) => ({
+            name: item.name,
+            role: 'comparison_subject' as const,
+            productClass: 'generator',
+            evidence: `exact comparison target ${item.name}`
+          })),
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            selectionGoal: 'preliminary_fit',
+            needAction: 'continue',
+            alternativePolicy: 'exact_only',
+            reusePreviousCards: false,
+            maxCards: 2,
+            powerSource: 'fuel',
+            phase: 'single_phase',
+            requirements: [],
+            rationale: 'keep both exact candidates preliminary while one fact is unresolved'
+          },
+          grounding: {
+            taskType: 'comparison',
+            sourcePolicy: 'catalog_required',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['catalog.getProductDetails'],
+            technicalAttributes: ['automatic start'],
+            buyerQuestion: 'Do both exact models support automatic start?',
+            rationale: 'catalog first; missing exact technical facts require bounded external verification'
+          },
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        const webResult = input.toolResults.find((result) => result.tool === 'web.researchProductFacts');
+        expect(webResult).toMatchObject({
+          status: 'ok',
+          payload: {
+            usedWebSearch: false,
+            searchDisposition: 'timed_out',
+            sourcesExhausted: false,
+            researchOutcome: 'partial',
+            unconfirmedFacts: [{
+              attribute: 'automatic start',
+              status: 'not_confirmed',
+              reason: expect.stringContaining(unresolved.name)
+            }]
+          }
+        });
+        return {
+          answerText: 'Automatic start remains unconfirmed for FIRMAN RD4910E; the missing fact is still unknown.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: input.toolResults.map((result) => result.requestId),
+          selectedProductIds: [],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            productClass: 'generator',
+            missingFacts: ['FIRMAN RD4910E automatic start'],
+            rationale: 'the unresolved fact is explicit and does not become a negative compatibility claim'
+          }
+        };
+      },
+      async reviewAnswer() {
+        return { verdict: 'pass', issues: [] };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Do both FIRMAN RD3910E and FIRMAN RD4910E support automatic start?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new ExactProductsWithGap() as never,
+      {} as never,
+      withStrictToolFixtures(gapModel)
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Do both FIRMAN RD3910E and FIRMAN RD4910E support automatic start?'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(1);
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      allowCatalogOnlyAnswer: true,
+      targetProductNames: [confirmed.name, unresolved.name],
+      comparisonAttributes: ['automatic start']
+    }));
+    expect(payload.usedWebSearch).toBe(false);
+    expect(payload.answer).toContain('remains unconfirmed');
+    expect(payload.answer).not.toContain('does not support automatic start');
+    expect(payload.productCards).toEqual([]);
   });
 
   it('executes catalog details before conditional research when a preliminary exact comparison planned web only', async () => {
