@@ -1481,6 +1481,14 @@ export function exactModelNamesFromUserMessage(userMessage: string) {
     .slice(0, 4));
 }
 
+function isCatalogAvailabilityOnlyIntent(intent: AgentIntentContract) {
+  return intent.grounding?.taskType === 'availability_or_delivery' &&
+    intent.grounding.sourcePolicy !== 'web_required' &&
+    intent.grounding.webRequirement !== 'buyer_requested' &&
+    intent.grounding.webPurpose === 'none' &&
+    intent.grounding.technicalAttributes.length === 0;
+}
+
 export function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
   const explicitTargetMentionNames = (intent.productMentions ?? [])
     .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
@@ -1491,6 +1499,26 @@ export function repairIntentForExactModelEvidence(intent: AgentIntentContract, u
     ...(explicitTargetMentionNames.length ? [] : exactModelNamesFromUserMessage(userMessage))
   ]);
   if (!targetMentionNames.length) return intent;
+  // A pure availability/delivery question is answered by the catalog presence
+  // path. Naming an exact model alone is not a request for technical web
+  // research; adding it here turns a simple catalog lookup into a long-running
+  // external call whose timeout can leak as an internal status to the buyer.
+  if (isCatalogAvailabilityOnlyIntent(intent)) {
+    const toolRequests = intent.toolRequests.filter((request) => request.tool !== 'web.researchProductFacts');
+    if (toolRequests.length === intent.toolRequests.length) return intent;
+    return {
+      ...intent,
+      requiresTools: toolRequests.length > 0,
+      toolRequests,
+      grounding: intent.grounding
+        ? {
+            ...intent.grounding,
+            requiredToolKinds: intent.grounding.requiredToolKinds.filter((tool) => tool !== 'web.researchProductFacts')
+          }
+        : intent.grounding,
+      riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_availability_catalog_only'])
+    };
+  }
   const uncoveredNames = targetMentionNames.filter((name) =>
     !intent.toolRequests.some((request) =>
       (request.tool === 'web.researchProductFacts' || request.tool === 'catalog.getProductDetails') &&
@@ -4521,7 +4549,10 @@ export function repairIntentForCatalogClarificationBeforeTools(
   return intent;
 }
 
-export function requiredResponseClausesForToolResults(toolResults: ToolResult[]): RequiredResponseClause[] {
+export function requiredResponseClausesForToolResults(
+  toolResults: ToolResult[],
+  intent?: AgentIntentContract
+): RequiredResponseClause[] {
   const clauses: RequiredResponseClause[] = [];
   for (const result of toolResults) {
     if (
@@ -4568,6 +4599,7 @@ export function requiredResponseClausesForToolResults(toolResults: ToolResult[])
       }
     }
     if (result.tool !== 'web.researchProductFacts') continue;
+    if (intent && isCatalogAvailabilityOnlyIntent(intent)) continue;
     const payload = result.payload as {
       researchOutcome?: 'answered' | 'partial' | 'exhausted';
       sourcesExhausted?: boolean;
@@ -7663,7 +7695,7 @@ export class AgentManagerOrchestrator {
         products: answerEvidenceProducts,
         productEvidenceRoles
       }),
-      ...requiredResponseClausesForToolResults(toolResults)
+      ...requiredResponseClausesForToolResults(toolResults, effectiveIntent)
     ];
     const repairContext = failedReviewRepairContext(persistedExecution.checkpoints);
     const savedAnswer = legacyIntentUpgraded

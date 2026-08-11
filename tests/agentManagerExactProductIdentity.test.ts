@@ -72,6 +72,69 @@ function product(input: Partial<Product> & Pick<Product, 'id' | 'name'>): Produc
 }
 
 describe('structured exact-product identity', () => {
+  it('does not add external research for a pure catalog-availability question', () => {
+    const targetName = 'Wacker Neuson BPS 1550 Aw';
+    const intent: AgentIntentContract = {
+      ...exactTargetIntent(targetName),
+      userMessageSummary: `Is ${targetName} available?`,
+      dialogueUnderstanding: 'The buyer asks only whether the named model is in the BAKAUT catalog.',
+      nextStepRationale: 'Answer catalog presence from the catalog; do not research technical facts.',
+      grounding: {
+        taskType: 'availability_or_delivery',
+        sourcePolicy: 'catalog_required',
+        webPurpose: 'none',
+        webRequirement: 'none',
+        requiredToolKinds: ['catalog.search'],
+        technicalAttributes: [],
+        buyerQuestion: `Is ${targetName} available?`,
+        rationale: 'Catalog presence is sufficient for this question.'
+      },
+      toolRequests: [{
+        id: 'catalog-availability',
+        tool: 'catalog.search',
+        args: { query: targetName },
+        rationale: 'Find the exact catalog card.',
+        required: true
+      }]
+    };
+
+    const repaired = repairIntentForExactModelEvidence(intent, `Is ${targetName} available?`);
+
+    expect(repaired.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
+    expect(repaired).toEqual(intent);
+
+    const staleWebPlannedIntent: AgentIntentContract = {
+      ...intent,
+      requiresTools: true,
+      toolRequests: [
+        ...intent.toolRequests,
+        {
+          id: 'stale-web-request',
+          tool: 'web.researchProductFacts',
+          args: { productNames: [targetName], comparisonAttributes: ['current buyer question'] },
+          rationale: 'An inconsistent planner request that must not run for catalog presence.',
+          required: true
+        }
+      ],
+      grounding: {
+        ...intent.grounding!,
+        requiredToolKinds: ['catalog.search', 'web.researchProductFacts']
+      }
+    };
+    const cleaned = repairIntentForExactModelEvidence(staleWebPlannedIntent, `Is ${targetName} available?`);
+    expect(cleaned.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
+    expect(cleaned.grounding?.requiredToolKinds).toEqual(['catalog.search']);
+
+    const failedWebResult = {
+      requestId: 'stale-web-request',
+      tool: 'web.researchProductFacts',
+      status: 'timeout',
+      payload: { searchDisposition: 'timed_out' },
+      warnings: []
+    } as unknown as ToolResult;
+    expect(requiredResponseClausesForToolResults([failedWebResult], intent)).toEqual([]);
+  });
+
   it('recovers split model names even when the planner omitted product mentions', () => {
     const userMessage = 'Нужна виброплита Wacker Neuson BPS 1550 Aw с двигателем Honda GX160 QX2.';
     expect(exactModelNamesFromUserMessage(userMessage)).toEqual(['bps 1550 aw', 'gx160 qx2']);
