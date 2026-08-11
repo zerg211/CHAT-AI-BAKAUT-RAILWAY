@@ -756,6 +756,51 @@ export function repairIntentForTypedToolRequirementCoverage(intent: AgentIntentC
   return { intent: repairedIntent, repairs };
 }
 
+export function repairIntentForStaleWebResearchTargets(intent: AgentIntentContract) {
+  const staleRequests = intent.toolRequests.flatMap((request) => {
+    if (request.tool !== 'web.researchProductFacts') return [];
+    const targetProductNames = requestStringArray(request.args.productNames);
+    if (!targetProductNames.length || webResearchTargetsCurrentIntent(targetProductNames, intent)) return [];
+    return [{ request, targetProductNames }];
+  });
+  if (!staleRequests.length) {
+    return {
+      intent,
+      repairs: [] as Array<{ requestId: string; targetProductNames: string[] }>
+    };
+  }
+
+  const staleRequestIds = new Set(staleRequests.map(({ request }) => request.id));
+  const toolRequests = intent.toolRequests.filter((request) => !staleRequestIds.has(request.id));
+  const remainingWebRequest = toolRequests.some((request) => request.tool === 'web.researchProductFacts');
+  const grounding = intent.grounding && !remainingWebRequest &&
+    intent.grounding.webRequirement === 'conditional_on_catalog_gap'
+    ? {
+        ...intent.grounding,
+        webPurpose: 'none' as const,
+        webRequirement: 'none' as const,
+        requiredToolKinds: intent.grounding.requiredToolKinds.filter((tool) => tool !== 'web.researchProductFacts')
+      }
+    : intent.grounding;
+  const repairedIntent: AgentIntentContract = {
+    ...intent,
+    requiresTools: toolRequests.length > 0,
+    grounding,
+    toolRequests,
+    riskFlags: uniqueStrings([
+      ...intent.riskFlags,
+      'stale_web_research_target_dropped_after_intent_change'
+    ])
+  };
+  return {
+    intent: repairedIntent,
+    repairs: staleRequests.map(({ request, targetProductNames }) => ({
+      requestId: request.id,
+      targetProductNames
+    }))
+  };
+}
+
 export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: AgentIntentContract) {
   const grounding = intent.grounding;
   const policy = intent.selectionPolicy;
@@ -5219,11 +5264,23 @@ function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentInt
     )
     .map((mention) => mention.name));
   if (!currentTargetNames.length) {
-    const summary = intent.userMessageSummary.trim();
-    return Boolean(summary) && targetNames.some((targetName) =>
-      productNameContainsExactComparisonMention(summary, targetName) ||
-      productNameContainsExactComparisonMention(targetName, summary)
+    const hasExplicitCatalogPlan = intent.toolRequests.some((request) =>
+      request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
     );
+    if (!hasExplicitCatalogPlan && taskType !== 'product_selection') return true;
+    const currentIntentEvidence = [
+      intent.userMessageSummary,
+      ...intent.toolRequests
+        .filter((request) => request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails')
+        .map((request) => toolRequestEvidenceText(request))
+    ].filter(Boolean);
+    return targetNames.some((targetName) => currentIntentEvidence.some((evidence) => {
+      if (productMentionMatchesName(evidence, targetName)) return true;
+      const evidenceTokens = new Set(modelTextTokens(evidence));
+      return modelTextTokens(targetName).some((token) =>
+        token.length >= 4 && tokenHasLetter(token) && evidenceTokens.has(token)
+      );
+    }));
   }
   return targetNames.some((targetName) => currentTargetNames.some((currentTargetName) =>
     productNameContainsExactComparisonMention(targetName, currentTargetName) ||
@@ -7276,8 +7333,9 @@ export class AgentManagerOrchestrator {
       ),
       userMessage
     );
+    const staleWebTargetRepair = repairIntentForStaleWebResearchTargets(groundedIntent);
     const previousProductReferentRepair = repairIntentForPreviousProductReferents(
-      groundedIntent,
+      staleWebTargetRepair.intent,
       plannedProductReferents
     );
     const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(previousProductReferentRepair.intent, {
@@ -7340,6 +7398,7 @@ export class AgentManagerOrchestrator {
       legacyIntentUpgraded ||
       previousProductReferentRepair.repaired ||
       newNeedFinalFitRepair.repaired ||
+      staleWebTargetRepair.repairs.length > 0 ||
       requestedAttributeWebCoverageRepair.repairs.length > 0 ||
       openEndedWebCoverageRepair.repairs.length > 0 ||
       typedCoverageRepair.repairs.length > 0
@@ -7376,6 +7435,11 @@ export class AgentManagerOrchestrator {
     if (requestedAttributeWebCoverageRepair.repairs.length) {
       await this.trace(input.sessionId, input.turnId, 'intent', 'requested_attribute_web_coverage_repaired', {
         repairs: requestedAttributeWebCoverageRepair.repairs
+      });
+    }
+    if (staleWebTargetRepair.repairs.length) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'stale_web_research_targets_dropped', {
+        repairs: staleWebTargetRepair.repairs
       });
     }
     if (newNeedFinalFitRepair.repaired) {
