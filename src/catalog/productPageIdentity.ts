@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { modelTextTokens, tokenHasDigit } from '../ai/modelTextMatching.js';
 
 function normalizedHttpUrl(value: unknown, baseUrl: string) {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -59,6 +60,24 @@ function normalizedIdentityValue(value: unknown) {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLocaleLowerCase('ru-RU');
   return normalized || null;
+}
+
+function detailHeadingMatchesProductPath($: cheerio.CheerioAPI, pageUrl: string) {
+  let pathname = '';
+  try {
+    const url = new URL(pageUrl);
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts[0] !== 'catalog' || parts.length < 3) return false;
+    pathname = parts.at(-1) ?? '';
+  } catch {
+    return false;
+  }
+  const headingTokens = new Set(modelTextTokens($('h1').first().text()));
+  const pathTokens = modelTextTokens(pathname);
+  const decisivePathTokens = pathTokens.filter((token) => tokenHasDigit(token) && token.length >= 2);
+  if (!headingTokens.size || !decisivePathTokens.length) return false;
+  const matched = decisivePathTokens.filter((token) => headingTokens.has(token));
+  return matched.length >= Math.min(2, decisivePathTokens.length);
 }
 
 function captionSkuValue(value: string) {
@@ -139,10 +158,17 @@ function hasSingleDetailLayoutIdentity($: cheerio.CheerioAPI, pageUrl: string) {
     if (sku) skus.add(sku);
   });
 
-  if (productIds.size > 1 || skus.size > 1) return false;
+  if (productIds.size > 1 || skus.size > 1) {
+    // Bakaut detail pages keep related product cards inside the same Product
+    // scope. Their ids must not invalidate the page's own identity when the
+    // URL slug and H1 independently bind the detail model.
+    if (!detailHeadingMatchesProductPath($, pageUrl)) return false;
+  }
+  const headingBoundIdentity = detailHeadingMatchesProductPath($, pageUrl) &&
+    (productIds.size > 0 || skus.size > 0);
   return hasUrlBoundDetailIdentity
-    ? productIds.size === 1 || skus.size === 1
-    : productIds.size === 1 && skus.size === 1;
+    ? productIds.size === 1 || skus.size === 1 || headingBoundIdentity
+    : (productIds.size === 1 && skus.size === 1) || headingBoundIdentity;
 }
 
 export function hasPageSpecificProductEvidence(html: string, pageUrl: string) {

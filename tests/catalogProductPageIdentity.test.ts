@@ -136,4 +136,23 @@ describe('catalog product page identity', () => {
 
     expect(hasPageSpecificProductEvidence(html, productUrl)).toBe(true);
   });
+
+  it('accepts a detail page when its Product scope also contains related-card ids', () => {
+    const detailUrl = 'https://bakautprof.ru/catalog/vibroplity/vibroplita_pryamokhodnaya_benzinovaya_wacker_neuson_bps_1550_aw_89_kg/';
+    const html = `
+      <html><body>
+        <main itemscope itemtype="https://schema.org/Product">
+          <h1>Виброплита прямоходная бензиновая Wacker Neuson BPS 1550 Aw (89 кг)</h1>
+          <div class="card__main-slider"><img src="/bps.jpg"></div>
+          <div class="product-caption__item">Артикул 5100061216</div>
+          <button class="js_favorite" data-id="2813">В избранное</button>
+          <div class="card__current-price">260 000 ₽</div>
+          <section class="related-products">
+            <button class="js_favorite" data-id="2700">В избранное</button>
+          </section>
+        </main>
+      </body></html>`;
+
+    expect(hasPageSpecificProductEvidence(html, detailUrl)).toBe(true);
+  });
 });
