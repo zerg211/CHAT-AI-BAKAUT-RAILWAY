@@ -4427,7 +4427,7 @@ function catalogPresenceForTargets(
     const exactMatches = products.filter((product) => productMatchesTargetName(product, productName));
     return {
       productName,
-      status: exactMatches.length ? 'present' : options.absenceVerified === false ? 'unknown' : 'absent',
+      status: exactMatches.length ? 'present' : options.absenceVerified === true ? 'absent' : 'unknown',
       exactProductIds: exactMatches.map((product) => product.id)
     };
   });
@@ -8585,7 +8585,11 @@ export class AgentManagerOrchestrator {
             }
           }
           let exactCatalogRefreshWarnings: string[] = [];
-          let exactCatalogAbsenceVerified = true;
+          // A missing match is not proof of catalog absence. It is only safe to
+          // say "absent" after a complete, non-empty sitemap inventory was
+          // fetched and contained no exact candidate URL. Any skipped refresh,
+          // empty inventory, or failed crawl remains explicitly unknown.
+          let exactCatalogAbsenceVerified = false;
           let catalogCandidatesAfterExactModelLookup = [...productsById.values()];
           let exactTargetsPresentAfterModelLookup = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
             catalogCandidatesAfterExactModelLookup.some((product) => productMatchesExactTargetIdentity(product, targetName))
@@ -8598,8 +8602,9 @@ export class AgentManagerOrchestrator {
             try {
               const refreshed = await refreshExactCatalogProducts(targetProductNames, this.products, { signal: toolSignal });
               exactCatalogRefreshWarnings = refreshed.warnings;
-              exactCatalogAbsenceVerified = refreshed.failedProducts === 0 &&
-                (refreshed.candidateUrls.length === 0 || refreshed.importedProducts > 0);
+              exactCatalogAbsenceVerified = refreshed.coverageComplete &&
+                refreshed.failedProducts === 0 &&
+                refreshed.candidateUrls.length === 0;
               if (typeof exactModelTokenSearch === 'function') {
                 for (const targetName of targetProductNames.slice(0, 4)) {
                   const identity = exactProductIdentity(targetName);

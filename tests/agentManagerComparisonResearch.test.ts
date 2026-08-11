@@ -1088,13 +1088,13 @@ describe('AgentManager comparison research flow', () => {
           catalogPresence?: Array<{ status?: string }>;
           nearbyCatalogProducts?: Array<{ name?: string }>;
         };
-        expect(result.catalogPresence?.[0]?.status).toBe('absent');
+        expect(result.catalogPresence?.[0]?.status).toBe('unknown');
         expect(result.nearbyCatalogProducts?.map((item) => item.name)).toEqual([
           'FIRMAN RD7910E generator 5 kW',
           'FIRMAN RD10910E generator 7.2 kW'
         ]);
         return {
-          answerText: 'RD8910E starts with a key, not a push button. It also has manual recoil start. This exact model is not in our catalog; nearby FIRMAN catalog models include RD7910E and RD10910E.',
+          answerText: 'RD8910E starts with a key, not a push button. It also has manual recoil start. The exact catalog match was not confirmed in this check; nearby FIRMAN catalog models include RD7910E and RD10910E.',
           factsUsed: [{
             factKey: 'firman_rd8910e.start_method',
             sourceEventIds: ['web:exact-model'],
@@ -1128,12 +1128,12 @@ describe('AgentManager comparison research flow', () => {
     const metadata = payload.metadata as { toolResults?: Array<{ payload?: { catalogPresence?: unknown[]; nearbyCatalogProducts?: unknown[] }; warnings?: string[] }> };
     expect(metadata.toolResults?.[0]?.payload?.catalogPresence).toEqual([{
       productName: 'FIRMAN RD8910E',
-      status: 'absent',
+      status: 'unknown',
       exactProductIds: []
     }]);
-    expect(metadata.toolResults?.[0]?.warnings).toContain('exact_catalog_product_absent:FIRMAN RD8910E');
+    expect(metadata.toolResults?.[0]?.warnings).not.toContain('exact_catalog_product_absent:FIRMAN RD8910E');
     expect(payload.answer).toContain('starts with a key');
-    expect(payload.answer).toContain('not in our catalog');
+    expect(payload.answer).toContain('not confirmed in this check');
     expect(payload.answer).toContain('RD7910E');
     const lowerAnswer = payload.answer.toLocaleLowerCase('en-US');
     for (const forbidden of ['availability', 'delivery', 'discount', 'callback', 'lead', 'price']) {
@@ -1420,7 +1420,7 @@ describe('AgentManager comparison research flow', () => {
         };
         expect(result.catalogPresence?.[0]).toEqual({
           productName: 'FIRMAN RD2910E',
-          status: 'absent',
+          status: 'unknown',
           exactProductIds: []
         });
         expect(result.nearbyCatalogProducts?.map((item) => item.name)).toEqual(expect.arrayContaining([
@@ -1429,8 +1429,7 @@ describe('AgentManager comparison research flow', () => {
         ]));
         expect(input.requiredResponseClauses?.map((clause) => clause.code)).toEqual(expect.arrayContaining([
           'answer_checked_research_guidance',
-          'state_exact_catalog_absence',
-          'mention_nearby_catalog_models'
+          'catalog_presence_unverified'
         ]));
         expect(input.requiredResponseClauses?.map((clause) => clause.instruction).join('\n')).toContain('engine/ignition switch turned to START');
         return {
@@ -1467,13 +1466,12 @@ describe('AgentManager comparison research flow', () => {
     const metadata = payload.metadata as { toolResults?: Array<{ payload?: { catalogPresence?: unknown[] }; warnings?: string[] }> };
     expect(metadata.toolResults?.[0]?.payload?.catalogPresence).toEqual([{
       productName: 'FIRMAN RD2910E',
-      status: 'absent',
+      status: 'unknown',
       exactProductIds: []
     }]);
-    expect(metadata.toolResults?.[0]?.warnings).toContain('exact_catalog_product_absent:FIRMAN RD2910E');
+    expect(metadata.toolResults?.[0]?.warnings).not.toContain('exact_catalog_product_absent:FIRMAN RD2910E');
     expect(payload.answer).toContain('START');
-    expect(payload.answer).toContain('У нас точной модели FIRMAN RD2910E в каталоге нет');
-    expect(payload.answer).toContain('Рядом по каталогу есть');
+    expect(payload.answer).not.toContain('в каталоге нет');
     expect(payload.productCards).toEqual([]);
   });
 

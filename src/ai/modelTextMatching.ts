@@ -192,9 +192,22 @@ function tokenIsShortModelSuffix(token: string) {
   return token.length <= 3 && (tokenHasDigit(token) || tokenHasLetter(token));
 }
 
-function tokenOccurrenceIsExtended(layout: ReturnType<typeof modelTextTokenLayout>, index: number) {
+function separatorIsSlugBoundary(value: string) {
+  if (!value) return false;
+  for (const char of value) {
+    if (char !== '_' && char !== '-') return false;
+  }
+  return true;
+}
+
+function tokenOccurrenceIsExtended(
+  layout: ReturnType<typeof modelTextTokenLayout>,
+  index: number,
+  options: { allowSlugSuffix?: boolean } = {}
+) {
   const nextToken = layout.tokens[index + 1];
   const nextSeparator = layout.separators[index];
+  if (options.allowSlugSuffix && separatorIsSlugBoundary(nextSeparator ?? '')) return false;
   return Boolean(
     nextToken &&
     nextSeparator &&
@@ -231,7 +244,8 @@ function layoutContainsIdentifier(layout: ReturnType<typeof modelTextTokenLayout
 
 function includesExactTokenSequence(
   layout: ReturnType<typeof modelTextTokenLayout>,
-  targetTokens: readonly string[]
+  targetTokens: readonly string[],
+  options: { allowSlugSuffix?: boolean } = {}
 ) {
   if (!targetTokens.length) return false;
   for (let start = 0; start < layout.tokens.length; start += 1) {
@@ -243,7 +257,7 @@ function includesExactTokenSequence(
       targetIndex += matchedParts;
       valueIndex += 1;
     }
-    if (targetIndex === targetTokens.length && !tokenOccurrenceIsExtended(layout, valueIndex - 1)) return true;
+    if (targetIndex === targetTokens.length && !tokenOccurrenceIsExtended(layout, valueIndex - 1, options)) return true;
   }
   return false;
 }
@@ -405,7 +419,11 @@ export function exactProductIdentity(targetName: string): ExactProductIdentity {
     hasExactMention(value: unknown) {
       if (!decisiveParts.length) return false;
       const layout = modelTextTokenLayout(value);
-      if (!identifierParts.length) return includesExactTokenSequence(layout, decisiveParts);
+      const valueText = String(value ?? '');
+      const allowSlugSuffix = valueText.includes('://') || valueText.includes('/');
+      if (!identifierParts.length) {
+        return includesExactTokenSequence(layout, decisiveParts, { allowSlugSuffix });
+      }
       return identifierParts.every((identifier) => layoutContainsIdentifier(layout, identifier));
     }
   };

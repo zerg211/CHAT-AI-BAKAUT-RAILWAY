@@ -71,6 +71,50 @@ describe('sitemap sync no-regex XML parsing', () => {
     });
   });
 
+  it('recognizes underscore slugs with a trailing weight suffix as the exact model page', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation(async (url) => {
+      const urlText = String(url);
+      if (urlText.endsWith('/sitemap.xml')) {
+        return xmlResponse(`
+          <urlset>
+            <url><loc>https://bakautprof.ru/catalog/vibroplity/vibroplita_pryamokhodnaya_benzinovaya_wacker_neuson_bps_1550_aw_89_kg/</loc></url>
+          </urlset>
+        `);
+      }
+      return htmlResponse(`
+        <html>
+          <body>
+            <div itemscope itemtype="https://schema.org/Product" itemid="${urlText}">
+              <h1>Виброплита прямоходная бензиновая Wacker Neuson BPS 1550 Aw (89 кг)</h1>
+              <div class="props-item"><span class="props-item__title">Масса</span><span class="props-item__text">89 кг</span></div>
+              <div class="product-caption__item"><span itemprop="sku">5100061216</span></div>
+              <div class="card__current-price">240 000</div>
+            </div>
+          </body>
+        </html>
+      `);
+    });
+    const upsertProduct = vi.fn(async (_product: CatalogProductInput) => undefined);
+    const repository = {
+      startCatalogSource: vi.fn(async () => 'source-underscore-slug'),
+      heartbeatCatalogSource: vi.fn(async () => undefined),
+      finishCatalogSource: vi.fn(async () => undefined),
+      upsertProduct
+    };
+
+    const result = await refreshExactCatalogProducts(['BPS 1550 Aw'], repository as never);
+
+    expect(result.candidateUrls).toEqual([
+      'https://bakautprof.ru/catalog/vibroplity/vibroplita_pryamokhodnaya_benzinovaya_wacker_neuson_bps_1550_aw_89_kg/'
+    ]);
+    expect(result.importedProducts).toBe(1);
+    expect(upsertProduct).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Виброплита прямоходная бензиновая Wacker Neuson BPS 1550 Aw (89 кг)',
+      price: 240000
+    }));
+  });
+
   it('follows sitemap indexes and extracts URL entries with decoded loc values', async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock.mockImplementation(async (url, _init) => {

@@ -31,6 +31,8 @@ export type SitemapSyncOptions = {
 export type ExactCatalogRefreshResult = {
   requestedNames: string[];
   candidateUrls: string[];
+  /** True only when a non-empty sitemap inventory was fetched without child-sitemap failures. */
+  coverageComplete: boolean;
   importedProducts: number;
   skippedProducts: number;
   failedProducts: number;
@@ -302,12 +304,16 @@ async function collectSitemapEntries(
   }
   const targetSitemaps = sitemapUrls.length ? sitemapUrls : [sitemapUrl];
   const entries: SitemapEntry[] = [];
+  let sitemapResponsesComplete = true;
 
   for (const url of targetSitemaps) {
     await heartbeat();
     const response = await fetchText(url, baseUrl, config.CATALOG_MAX_SITEMAP_BYTES, signal);
     await heartbeat();
-    if (response.status >= 400) continue;
+    if (response.status >= 400) {
+      sitemapResponsesComplete = false;
+      continue;
+    }
     entries.push(...parseSitemapEntries(response.html));
     if (entries.length > config.CATALOG_MAX_SITEMAP_ENTRIES) {
       throw new Error(`Sitemap inventory exceeds ${config.CATALOG_MAX_SITEMAP_ENTRIES} entries`);
@@ -316,7 +322,12 @@ async function collectSitemapEntries(
 
   const byUrl = new Map<string, SitemapEntry>();
   for (const entry of entries) byUrl.set(entry.loc, entry);
-  return { sitemapUrls: targetSitemaps, entries: [...byUrl.values()] };
+  const uniqueEntries = [...byUrl.values()];
+  return {
+    sitemapUrls: targetSitemaps,
+    entries: uniqueEntries,
+    coverageComplete: sitemapResponsesComplete && uniqueEntries.length > 0
+  };
 }
 
 function assignSpec(specs: Record<string, string>, keyText: string, valueText: string) {
@@ -807,6 +818,7 @@ export async function refreshExactCatalogProducts(
   const result: ExactCatalogRefreshResult = {
     requestedNames: names,
     candidateUrls: [],
+    coverageComplete: false,
     importedProducts: 0,
     skippedProducts: 0,
     failedProducts: 0,
@@ -826,6 +838,7 @@ export async function refreshExactCatalogProducts(
   const errors: Array<{ url: string; error: string }> = [];
   try {
     const collected = await collectSitemapEntries(sitemapUrl, baseUrl, heartbeat, options.signal);
+    result.coverageComplete = collected.coverageComplete;
     const candidateEntries = collected.entries
       .filter((entry) => isCatalogUrl(entry.loc, baseUrl) && looksLikeProductUrl(entry.loc, baseUrl))
       .filter((entry) => identities.some((identity) => identity.hasExactMention(entry.loc)))
