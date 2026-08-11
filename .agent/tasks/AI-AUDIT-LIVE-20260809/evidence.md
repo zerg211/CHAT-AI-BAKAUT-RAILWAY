@@ -1,10 +1,10 @@
 # AI-AUDIT-LIVE-20260809 evidence
 
-Updated: 2026-08-11 (Europe/Moscow)
+Updated: 2026-08-11 13:58 (Europe/Moscow)
 
 ## Current disposition
 
-The follow-up code is ready for publication, but the frozen task is not complete: the post-fix GitHub/Railway deployment and the required adaptive widget dialogues have not yet been run against the new commit. The verdict therefore remains `FAIL` until AC7 is completed.
+The follow-up code is pushed, but the frozen task is not complete. The embedded widget was exercised after commit `a9eaaff`; the exact model still was not retrieved from the AI catalog and the assistant stopped after an incomplete external check. Railway `/api/health` was unavailable, so the exact runtime marker could not be read back.
 
 ## Code changes verified
 
@@ -16,8 +16,8 @@ The follow-up code is ready for publication, but the frozen task is not complete
 
 ## Fresh local signals
 
-- `npm.cmd test -- --run tests/agentManagerOrchestrator.test.ts --maxWorkers=1 --no-file-parallelism`: 158/158 PASS.
-- Connected follow-up suites: 7 files / 134 tests PASS; agentic suite 4 files / 257 tests PASS; additional web/lifecycle/UI suites 8 files / 138 tests PASS.
+- `npm.cmd test -- --run tests/agentManagerOrchestrator.test.ts --maxWorkers=1 --no-file-parallelism`: 159/159 PASS.
+- Connected follow-up suites: 7 files / 134 tests PASS; agentic suite 4 files / 258 tests PASS; additional web/lifecycle/UI suites 8 files / 138 tests PASS.
 - `npm.cmd run verify`: PASS — full suite 77 files / 848 tests, agentic 257 tests, typecheck, production build, production dependency audit, and no-regex gate.
 - `npm.cmd run typecheck`: PASS.
 - `npm.cmd run lint:no-regex`: PASS (`Legacy baseline: 508`).
@@ -27,14 +27,12 @@ The follow-up code is ready for publication, but the frozen task is not complete
 
 ## Database limitation
 
+Post-fix rerun after `a9eaaff`: `npm.cmd run verify` PASS — 77 files / 849 tests, agentic 258 tests; orchestrator focused suite 159/159 PASS.
+
 The real PostgreSQL barrier script was attempted against the current environment and returned `ECONNREFUSED` on `127.0.0.1:5432`/`::1:5432`; `psql` is absent and the Docker daemon is unavailable. Repository SQL contract tests are green, but this environment cannot provide a fresh two-client PostgreSQL race proof. This is recorded as a verification limitation, not hidden as a PASS.
 
 ## Deployment/live gate
 
-The current deployed marker is still the previous merge `7bf62ef30548666b611aacf76aef5db3ae2cec62` (`2026-07-17.gpt-5-6-terra-search-first-v16`). The follow-up commit has not yet been pushed. AC7 remains `FAIL` pending:
+GitHub `main` contains `a9eaaff`; this was pushed successfully. Railway CLI reported the service online, but both Railway and widget health URLs were unavailable from this environment, so the exact runtime marker readback is `UNVERIFIED`. The adaptive widget record is in `local-live-tests/2026-08-11-AI-AUDIT-LIVE-followup.production.md`.
 
-1. commit and push through GitHub;
-2. verify the Railway deployment is the exact pushed commit and health is green;
-3. repeat the adaptive embedded-widget dialogues for the Masalta/CHAMPION budget change, exact-model technical research timeout, missing comparison attribute, active-turn reload, and commercial lead/reload boundary;
-4. audit each visible turn against its production admin trace, tool artifacts, cards, warnings, recovery, and persisted messages.
-
+Live verdict: safety is preserved, but exact catalog retrieval, useful partial answer, source provenance, and autonomous completion are `FAIL` for the technical request. Admin metadata could not be audited because the production admin page requires the Railway `ADMIN_PASSWORD`, which was not entered or printed.

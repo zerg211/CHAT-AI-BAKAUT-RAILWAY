@@ -14,7 +14,7 @@
     "AC7": "FAIL",
     "AC8": "PASS"
   },
-  "blockingReason": "The follow-up code has not yet been pushed/deployed and therefore has no post-fix Railway marker or valid embedded-widget live proof.",
+  "blockingReason": "The follow-up commits are pushed, but Railway health cannot be read back and the live widget still fails exact catalog retrieval plus autonomous source completion for the BPS 1550 Aw/Honda GX160 QX2 request.",
   "databaseProof": "UNAVAILABLE_IN_CURRENT_ENVIRONMENT",
   "rollback": {
     "branch": "codex/backup-pre-audit-20260809",
