@@ -134,9 +134,9 @@ const gates = [
     timeout: 8 * 60_000
   },
   {
-    label: 'full test suite',
+    label: 'full test suite (serial files)',
     command: npmCommand,
-    args: ['test'],
+    args: ['test', '--', '--fileParallelism=false'],
     timeout: 20 * 60_000
   },
   {
