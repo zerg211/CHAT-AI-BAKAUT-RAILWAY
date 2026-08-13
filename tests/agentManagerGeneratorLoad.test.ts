@@ -61,10 +61,10 @@ describe('Agent Manager generator load payload', () => {
     const payload = buildGeneratorLoadToolPayload({ request, userMessage: 'All four loads run simultaneously.' });
 
     expect(payload.profile).toMatchObject({
+      totalRunningKw: 5.1,
       requiredStartingKw: 9.5,
       requiredNominalKw: 9.5
     });
-    expect(payload.profile?.totalRunningKw).toBeCloseTo(5.1, 6);
     expect(payload.profile?.scenarios).toHaveLength(1);
     expect(payload.profile?.scenarios?.[0]?.itemKinds).toHaveLength(4);
   });

@@ -1,11 +1,11 @@
 import type { ProductElectricalLoadItem, ProductGeneratorLoadProfile, ProductGeneratorLoadScenario } from '../shared/types.js';
 
 function roundKw(value: number, step = 0.1) {
-  return Math.round(value / step) * step;
+  return Number((Math.round(value / step) * step).toFixed(6));
 }
 
 function ceilKw(value: number, step = 0.5) {
-  return Math.ceil(value / step) * step;
+  return Number((Math.ceil(value / step) * step).toFixed(6));
 }
 
 function normalizeKey(value: string | undefined) {
