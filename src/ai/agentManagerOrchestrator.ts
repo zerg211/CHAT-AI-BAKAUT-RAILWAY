@@ -4,6 +4,7 @@ import { ConversationRepository, LeadRepository, ProductRepository } from '../db
 import type { AgentSourcePolicyV2, AgentTaskType, AgentTurnContract, ChatResponsePayload, ConversationSession, CustomerNeedState, LeadCaptureDraft, LeadPreferredContact, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
 import {
   AgentIntentContractSchema,
+  AgentSemanticDecisionSchema,
   AnswerContractSchema,
   DialogueLedgerEventSchema,
   DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE,
@@ -14,6 +15,7 @@ import {
   normalizeLedgerStateDeltaEvents,
   parseAnswerContractModelOutput,
   type AgentIntentContract,
+  type AgentSemanticDecision,
   type AgentIntentGrounding,
   type AnswerContract,
   type DialogueLedgerEvent,
@@ -166,6 +168,7 @@ export interface AgentManagerRecoverInput {
 }
 
 export interface AgentManagerModel {
+  decideTurn?(input: AgentManagerModelInput): Promise<AgentSemanticDecision>;
   proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta>;
   planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract>;
   composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract>;
@@ -183,8 +186,11 @@ export interface AgentManagerModelInput {
   pendingExhaustedTechnicalHandoffs?: PendingExhaustedTechnicalHandoffContext[];
   structuredOutputTokenCap?: number;
   structuredDeadlineAtMs?: number;
+  semanticValidationIssues?: string[];
   signal?: AbortSignal;
 }
+
+export type { AgentSemanticDecision } from './agentManagerContracts.js';
 
 export interface PendingLeadCaptureDraftContext {
   id: string;
@@ -220,6 +226,7 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
   products: Product[];
   productEvidenceRoles?: AnswerProductEvidenceRole[];
   requiredResponseClauses?: RequiredResponseClause[];
+  semanticDecisionValidated?: boolean;
   repairContext?: {
     priorReviewIssues: Array<{
       code: string;
@@ -254,7 +261,7 @@ export interface AgentManagerReviewInput extends AgentManagerAnswerInput {
 }
 
 function compactHistory(history: Message[]) {
-  return history.slice(-12).map((message) => ({
+  return history.slice(-40).map((message) => ({
     role: message.role,
     content: message.content,
     createdAt: message.createdAt
@@ -754,6 +761,110 @@ export function repairIntentForTypedToolRequirementCoverage(intent: AgentIntentC
     riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_typed_requirement_coverage'])
   };
   return { intent: repairedIntent, repairs };
+}
+
+function semanticLoadIdentity(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  const kind = typeof item.kind === 'string' ? item.kind.trim().toLowerCase() : '';
+  const name = typeof item.name === 'string' ? item.name.trim().toLowerCase() : '';
+  return kind ? `${kind}:${name}` : null;
+}
+
+export function validateAgentSemanticDecision(input: {
+  decision: AgentSemanticDecision;
+  previousLedgerState: ReducedDialogueLedgerState;
+  sessionId: string;
+  turnId: string;
+}) {
+  const events = normalizeLedgerStateDeltaEvents({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    delta: input.decision.ledgerDelta
+  });
+  const ledgerState = reduceDialogueLedger(events, input.previousLedgerState);
+  const issues: string[] = [];
+  const activeNeed = [...Object.values(ledgerState.needsById)]
+    .reverse()
+    .find((need) => need.status === 'open' || need.status === 'selected');
+  const policy = input.decision.intent.selectionPolicy;
+  const ledgerClass = coerceVisibleCardIntent(activeNeed?.productClass);
+  const intentClass = coerceVisibleCardIntent(policy?.canonicalProductClass ?? policy?.targetProductClass);
+  if (ledgerClass !== 'unknown' && intentClass !== 'unknown' && ledgerClass !== intentClass) {
+    issues.push(`active_product_class_mismatch:${ledgerClass}:${intentClass}`);
+  }
+
+  const turnFactEventIds = new Set(events
+    .filter((event) => event.eventType === 'fact.observed' || event.eventType === 'fact.confirmed')
+    .map((event) => event.eventId));
+  const activeFacts = activeScopedLedgerFacts(ledgerState).filter((fact) =>
+    !activeNeed || !fact.needId || fact.needId === activeNeed.needId
+  );
+  const calculatorRequest = input.decision.intent.toolRequests.find((item) =>
+    item.tool === 'calculator.generatorLoad'
+  );
+  const generatorScenarioFact = [...activeFacts]
+    .reverse()
+    .find((fact) => fact.role === 'hard_requirement' && fact.factKey === 'generator_load_scenario');
+  if (calculatorRequest && !generatorScenarioFact) {
+    issues.push('generator_load_scenario_fact_missing');
+  }
+  if (calculatorRequest && generatorScenarioFact) {
+    const requirements = (policy?.requirements ?? []).filter((requirement) =>
+      requirement.kind === generatorScenarioFact.factKey &&
+      requirement.role === 'hard_constraint' &&
+      requirement.strictness === 'strict'
+    );
+    const requirement = requirements.find((item) => item.verification?.mode === 'typed_tool');
+    const verification = requirement?.verification;
+    if (!requirement || verification?.mode !== 'typed_tool') {
+      issues.push('active_requirement_mismatch:generator_load_scenario');
+    } else if (verification.toolRequestId !== calculatorRequest.id) {
+      issues.push('generator_load_scenario_missing_calculator');
+    } else {
+      const value = generatorScenarioFact.value &&
+        typeof generatorScenarioFact.value === 'object' &&
+        !Array.isArray(generatorScenarioFact.value)
+        ? generatorScenarioFact.value as Record<string, unknown>
+        : {};
+      const expectedLoads = Array.isArray(value.loads) ? value.loads : [];
+      const calculatorArgs = calculatorRequest.args as ToolRequest['args'] & {
+        loads?: unknown[];
+        simultaneousStarting?: boolean | null;
+      };
+      const actualLoadIds = new Set((calculatorArgs.loads ?? []).map(semanticLoadIdentity).filter(Boolean));
+      for (const load of expectedLoads) {
+        const identity = semanticLoadIdentity(load);
+        if (identity && !actualLoadIds.has(identity)) issues.push(`generator_load_scenario_missing_load:${identity}`);
+      }
+      if (
+        typeof value.simultaneousStarting === 'boolean' &&
+        calculatorArgs.simultaneousStarting !== value.simultaneousStarting
+      ) issues.push('generator_load_scenario_simultaneous_starting_mismatch');
+    }
+  }
+  for (const fact of activeFacts) {
+    if (
+      fact.role !== 'hard_requirement' ||
+      !turnFactEventIds.has(fact.eventId) ||
+      fact.factKey === 'generator_load_scenario'
+    ) continue;
+    const requirements = (policy?.requirements ?? []).filter((requirement) =>
+      requirement.kind === fact.factKey &&
+      requirement.role === 'hard_constraint' &&
+      requirement.strictness === 'strict'
+    );
+    const matchingRequirement = requirements.some((requirement) => Object.is(requirement.value, fact.value));
+    const structuredFieldMatches = fact.factKey === 'phase'
+      ? Object.is(policy?.phase, fact.value)
+      : fact.factKey === 'power_source'
+        ? Object.is(policy?.powerSource, fact.value)
+        : false;
+    if (!matchingRequirement && !structuredFieldMatches) {
+      issues.push(`active_requirement_mismatch:${fact.factKey}`);
+    }
+  }
+  return { issues: uniqueStrings(issues), events, ledgerState };
 }
 
 export function repairIntentForStaleWebResearchTargets(intent: AgentIntentContract) {
@@ -5288,6 +5399,54 @@ function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentInt
   ));
 }
 
+class AgentSemanticDecisionIncoherentError extends Error {
+  constructor(readonly issues: string[]) {
+    super(`semantic_decision_incoherent:${issues.join(',')}`);
+    this.name = 'AgentSemanticDecisionIncoherentError';
+  }
+}
+
+export function terminalGeneratorCalculationRecovery(toolResults: ToolResult[]) {
+  const result = [...toolResults].reverse().find((item) =>
+    item.tool === 'calculator.generatorLoad' && item.status === 'ok'
+  );
+  if (!result) return null;
+  const payload = result.payload as {
+    profile?: {
+      totalRunningKw?: unknown;
+      requiredStartingKw?: unknown;
+      requiredNominalKw?: unknown;
+    };
+    loads?: unknown[];
+  };
+  const requiredNominalKw = payload.profile?.requiredNominalKw;
+  if (typeof requiredNominalKw !== 'number' || !Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) return null;
+  const totalRunningKw = payload.profile?.totalRunningKw;
+  const requiredStartingKw = payload.profile?.requiredStartingKw;
+  return {
+    requestId: result.requestId,
+    loadCount: Array.isArray(payload.loads) ? payload.loads.length : 0,
+    totalRunningKw: typeof totalRunningKw === 'number' && Number.isFinite(totalRunningKw) ? totalRunningKw : null,
+    requiredStartingKw: typeof requiredStartingKw === 'number' && Number.isFinite(requiredStartingKw) ? requiredStartingKw : null,
+    requiredNominalKw
+  };
+}
+
+function terminalUnfinishedVerificationFromIntent(intent: AgentIntentContract | undefined, toolResults: ToolResult[]) {
+  if (!intent) return [];
+  const requirementsById = new Map((intent.selectionPolicy?.requirements ?? []).map((item) => [item.id, item]));
+  const resultByRequestId = new Map(toolResults.map((result) => [result.requestId, result]));
+  return uniqueStrings(intent.toolRequests.flatMap((request) =>
+    request.tool === 'web.researchProductFacts' && request.required
+      ? terminalUnfinishedWebVerification({
+          request,
+          result: resultByRequestId.get(request.id),
+          requirementsById
+        })
+      : []
+  ));
+}
+
 export function researchGuidanceSafeRewrite(input: {
   toolResults: ToolResult[];
   intent: AgentIntentContract;
@@ -5366,13 +5525,41 @@ const nullableIntegerRangeJsonSchema = (minimum: number, maximum: number) => ({
   maximum
 });
 const scalarValueJsonSchema = { type: ['string', 'number', 'boolean', 'null'] } as const;
+const generatorLoadScenarioLedgerValueJsonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    loads: {
+      type: 'array',
+      maxItems: 24,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: nullableStringJsonSchema,
+          name: nullableStringJsonSchema,
+          count: nullableNumberJsonSchema,
+          runningKw: nullableNumberJsonSchema,
+          startingKw: nullableNumberJsonSchema
+        },
+        required: ['kind', 'name', 'count', 'runningKw', 'startingKw']
+      }
+    },
+    simultaneousRunning: { type: 'boolean' },
+    simultaneousStarting: { type: 'boolean' }
+  },
+  required: ['loads', 'simultaneousRunning', 'simultaneousStarting']
+} as const;
+const ledgerValueJsonSchema = {
+  anyOf: [scalarValueJsonSchema, generatorLoadScenarioLedgerValueJsonSchema]
+} as const;
 
 const ledgerPayloadJsonSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
     factKey: nullableStringJsonSchema,
-    value: scalarValueJsonSchema,
+    value: ledgerValueJsonSchema,
     valueText: nullableStringJsonSchema,
     unit: nullableStringJsonSchema,
     questionId: nullableStringJsonSchema,
@@ -5875,6 +6062,24 @@ const intentContractFormat = {
   }
 } as const;
 
+const semanticDecisionFormat = {
+  verbosity: 'low',
+  format: {
+    type: 'json_schema',
+    name: 'agent_semantic_decision',
+    description: 'One authoritative turn interpretation containing both durable state changes and the executable post-delta intent.',
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        ledgerDelta: ledgerDeltaFormat.format.schema,
+        intent: intentContractFormat.format.schema
+      },
+      required: ['ledgerDelta', 'intent']
+    }
+  }
+} as const;
+
 const answerContractFormat = {
   format: {
     type: 'json_schema',
@@ -5966,6 +6171,7 @@ const preSendReviewFormat = {
 } as const;
 
 export const agentManagerStructuredFormats = {
+  semanticDecisionFormat,
   ledgerDeltaFormat,
   intentContractFormat,
   answerContractFormat,
@@ -6070,6 +6276,55 @@ function plannerSystemPromptBlock(
 }
 
 export class OpenAIAgentManagerModel implements AgentManagerModel {
+  async decideTurn(input: AgentManagerModelInput): Promise<AgentSemanticDecision> {
+    const validationRepair = input.semanticValidationIssues?.length
+      ? `Предыдущий единый decision отклонён валидатором: ${input.semanticValidationIssues.join(', ')}. Исправь обе части согласованно; не удаляй подтверждённые требования ради прохождения проверки.`
+      : 'Верни одно авторитетное решение: ledgerDelta и intent должны выражать одну и ту же интерпретацию текущей реплики.';
+    const request = {
+      model: config.OPENAI_PLANNER_MODEL,
+      reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
+      max_output_tokens: input.structuredOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
+      input: [
+        {
+          role: 'system',
+          content: [
+            'Ты единый semantic decision maker AI-менеджера БАКАУТ.',
+            untrustedEvidenceBoundary,
+            'Сначала пойми текущую реплику в контексте, затем в одном JSON верни durable ledgerDelta и исполнимый intent.',
+            'intent считается post-delta plan: он обязан включать каждое активное hard requirement, которое создаёт или изменяет ledgerDelta.',
+            'Не запускай две независимые интерпретации. Не задавай вопрос, ответ на который присутствует в текущей реплике или активном ledger.',
+            'Для generator_load_scenario сохрани полный structured value: loads, simultaneousRunning и simultaneousStarting. Каждый load из ledgerDelta обязан присутствовать в calculator.generatorLoad args.loads.',
+            validationRepair,
+            ledgerReducerPolicyPromptBlock(),
+            plannerSystemPromptBlock(input.userMessage, false)
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            userMessage: input.userMessage,
+            history: compactHistory(input.history),
+            existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
+            existingLedger: input.ledgerEvents.slice(-80),
+            pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null,
+            pendingExhaustedTechnicalHandoffs: input.pendingExhaustedTechnicalHandoffs ??
+              trustedPendingExhaustedTechnicalHandoffs(input.history),
+            semanticValidationIssues: input.semanticValidationIssues ?? []
+          })
+        }
+      ],
+      text: semanticDecisionFormat
+    };
+    const { parsed } = await createStructuredJsonResponse({
+      request,
+      stage: 'agent_semantic_decision',
+      signal: input.signal,
+      deadlineAtMs: input.structuredDeadlineAtMs,
+      minRetryRemainingMs: 25_000
+    });
+    return AgentSemanticDecisionSchema.parse(parsed);
+  }
+
   async proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta> {
     const request = {
       model: config.OPENAI_PLANNER_MODEL,
@@ -6820,6 +7075,20 @@ export class AgentManagerOrchestrator {
           executionOwner: input.executionOwner
         });
       }
+      if (error instanceof AgentSemanticDecisionIncoherentError) {
+        await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_terminalized', {
+          issues: error.issues
+        });
+        return this.completeTerminalTurn({
+          session: input.session,
+          turnId: input.turnId,
+          recovered: input.recovered,
+          onDelta: input.onDelta,
+          reason: 'semantic_decision_incoherent_after_bounded_retry',
+          deadlineAt: persistedTurn?.deadlineAt ?? null,
+          executionOwner: input.executionOwner
+        });
+      }
       if (input.recovered && error instanceof AnswerReviewBlockedError) {
         await this.trace(input.sessionId, input.turnId, 'recovery', 'second_review_block_terminalized', {
           issueCodes: error.issueCodes
@@ -6900,6 +7169,13 @@ export class AgentManagerOrchestrator {
     const ledgerEvents = ledgerContext.events;
 
     const savedDelta = succeededCheckpoint(persistedExecution.checkpoints, 'ledger_delta_proposed');
+    const semanticDecisionCheckpoint = succeededCheckpoint(persistedExecution.checkpoints, 'semantic_decision_proposed');
+    const parsedSemanticDecisionCheckpoint = semanticDecisionCheckpoint.found
+      ? AgentSemanticDecisionSchema.safeParse(semanticDecisionCheckpoint.payload)
+      : undefined;
+    const recoveredSemanticDecision = parsedSemanticDecisionCheckpoint?.success
+      ? parsedSemanticDecisionCheckpoint.data
+      : undefined;
     const intentCheckpoint = succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_created');
     const intentProposalCheckpoint = succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_proposed');
     const turnPlannerIntent = turn?.plannerContract
@@ -6909,13 +7185,26 @@ export class AgentManagerOrchestrator {
       ? intentCheckpoint
       : turnPlannerIntent.found
         ? turnPlannerIntent
-        : intentProposalCheckpoint;
+        : intentProposalCheckpoint.found
+          ? intentProposalCheckpoint
+          : recoveredSemanticDecision
+            ? { found: true as const, payload: recoveredSemanticDecision.intent }
+            : intentProposalCheckpoint;
     const savedIntentWasPreDeltaProposal = !intentCheckpoint.found &&
       !turnPlannerIntent.found &&
-      intentProposalCheckpoint.found;
+      intentProposalCheckpoint.found &&
+      !semanticDecisionCheckpoint.found;
     let parallelDelta: LedgerStateDelta | undefined;
     let parallelIntent: AgentIntentContract | undefined;
     let parallelDeltaCheckpointed = false;
+    let combinedSemanticDecision = Boolean(recoveredSemanticDecision);
+    if (recoveredSemanticDecision) {
+      parallelDelta = recoveredSemanticDecision.ledgerDelta;
+      parallelIntent = recoveredSemanticDecision.intent;
+      await this.trace(input.sessionId, input.turnId, 'recovery', 'semantic_decision_checkpoint_reused', {
+        remainingTurnMs: turnBudget.remainingWallTimeMs()
+      });
+    }
     if (!savedDelta.found && !savedIntent.found) {
       const semanticStartedAt = Date.now();
       const structuredDeadlineAtMs = turnBudget.snapshot().usage.deadlineAtMs;
@@ -6927,6 +7216,97 @@ export class AgentManagerOrchestrator {
         persistedExecution.checkpoints,
         'intent_contract_proposed'
       );
+      if (this.model.decideTurn) {
+        const sharedModelInput = {
+          session: input.session,
+          history,
+          userMessage,
+          ledgerEvents,
+          ledgerState: ledgerContext.state,
+          pendingLeadCaptureDraft: pendingLeadDraftContext,
+          pendingExhaustedTechnicalHandoffs,
+          structuredDeadlineAtMs,
+          structuredOutputTokenCap: Math.max(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS, 4_800),
+          signal: input.signal
+        };
+        await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_started', {
+          pendingLeadCaptureDraft: Boolean(pendingLeadDraftContext),
+          outputTokenCap: sharedModelInput.structuredOutputTokenCap,
+          remainingTurnMs: turnBudget.remainingWallTimeMs()
+        });
+        let validationIssues: string[] = [];
+        let decision: AgentSemanticDecision | undefined;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          turnBudget.consumeModelCall();
+          const candidate = await this.model.decideTurn({
+            ...sharedModelInput,
+            semanticValidationIssues: validationIssues
+          });
+          const validation = validateAgentSemanticDecision({
+            decision: candidate,
+            previousLedgerState: ledgerContext.state,
+            sessionId: input.sessionId,
+            turnId: input.turnId
+          });
+          validationIssues = validation.issues;
+          await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_validated', {
+            attempt,
+            valid: validationIssues.length === 0,
+            issues: validationIssues,
+            durationMs: Date.now() - semanticStartedAt,
+            remainingTurnMs: turnBudget.remainingWallTimeMs()
+          });
+          if (!validationIssues.length) {
+            decision = candidate;
+            break;
+          }
+        }
+        if (!decision) {
+          await this.conversations.upsertTurnCheckpoint({
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            executionOwner: input.executionOwner,
+            checkpoint: 'semantic_decision_proposed',
+            status: 'failed',
+            payload: { issues: validationIssues },
+            errorCode: 'semantic_decision_incoherent',
+            errorMessage: validationIssues.join(',')
+          });
+          throw new AgentSemanticDecisionIncoherentError(validationIssues);
+        }
+        parallelDelta = decision.ledgerDelta;
+        parallelIntent = decision.intent;
+        combinedSemanticDecision = true;
+        await this.conversations.upsertTurnCheckpoint({
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          executionOwner: input.executionOwner,
+          checkpoint: 'semantic_decision_proposed',
+          status: 'succeeded',
+          payload: decision
+        });
+        await this.conversations.upsertTurnCheckpoint({
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          executionOwner: input.executionOwner,
+          checkpoint: 'ledger_delta_proposed',
+          status: 'succeeded',
+          payload: decision.ledgerDelta
+        });
+        await this.conversations.upsertTurnCheckpoint({
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          executionOwner: input.executionOwner,
+          checkpoint: 'intent_contract_proposed',
+          status: 'succeeded',
+          payload: decision.intent
+        });
+        parallelDeltaCheckpointed = true;
+        await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_completed', {
+          durationMs: Date.now() - semanticStartedAt,
+          remainingTurnMs: turnBudget.remainingWallTimeMs()
+        });
+      } else {
       turnBudget.consumeModelCall();
       turnBudget.consumeModelCall();
       await this.trace(input.sessionId, input.turnId, 'intent', 'parallel_semantic_calls_started', {
@@ -7049,10 +7429,13 @@ export class AgentManagerOrchestrator {
         failures: failures.map((error) => safeError(error))
       });
       if (failures.length) throw failures[0];
+      }
     }
     let delta: LedgerStateDelta;
     if (savedDelta.found) {
       delta = LedgerStateDeltaSchema.parse(savedDelta.payload);
+    } else if (recoveredSemanticDecision) {
+      delta = recoveredSemanticDecision.ledgerDelta;
     } else if (parallelDelta) {
       delta = parallelDelta;
     } else {
@@ -7182,7 +7565,7 @@ export class AgentManagerOrchestrator {
       plannedIntent = parsedSavedIntent;
     } else if (parallelIntent) {
       plannedIntent = parallelIntent;
-      plannedAgainstPreDelta = true;
+      plannedAgainstPreDelta = !combinedSemanticDecision;
     } else {
       turnBudget.consumeModelCall();
       plannedIntent = await this.model.planTurn({
@@ -7448,6 +7831,7 @@ export class AgentManagerOrchestrator {
         repairs: requestedAttributeWebCoverageRepair.repairs
       });
     }
+    const semanticDecisionValidated = combinedSemanticDecision || Boolean(recoveredSemanticDecision);
     if (staleWebTargetRepair.repairs.length) {
       await this.trace(input.sessionId, input.turnId, 'intent', 'stale_web_research_targets_dropped', {
         repairs: staleWebTargetRepair.repairs
@@ -7886,6 +8270,7 @@ export class AgentManagerOrchestrator {
           products: answerEvidenceProducts,
           productEvidenceRoles,
           requiredResponseClauses,
+          semanticDecisionValidated,
           repairContext,
           signal: input.signal
         }),
@@ -7938,6 +8323,7 @@ export class AgentManagerOrchestrator {
           products: answerEvidenceProducts,
           productEvidenceRoles,
           requiredResponseClauses,
+          semanticDecisionValidated,
           repairContext,
           answer,
           signal: input.signal
@@ -9952,6 +10338,15 @@ export class AgentManagerOrchestrator {
     }
     for (const question of input.answer.questionsAsked) {
       const existing = input.ledgerState.questionsById[question.questionId];
+      if (input.semanticDecisionValidated && (!existing || existing.status !== 'open')) {
+        mechanicalIssues.push({
+          code: 'question_not_opened_by_semantic_decision',
+          severity: 'high',
+          message: `Question ${question.questionId} was not opened by the authoritative semantic decision.`,
+          evidence: question.text
+        });
+        continue;
+      }
       if (existing && existing.status !== 'open') {
         mechanicalIssues.push({
           code: 'asks_closed_question',
@@ -10272,7 +10667,9 @@ export class AgentManagerOrchestrator {
           input.answer.factsUsed.length > 0
       }), true);
     }
-    const closedQuestionIssue = mechanicalIssues.find((issue) => issue.code === 'asks_closed_question');
+    const closedQuestionIssue = mechanicalIssues.find((issue) =>
+      issue.code === 'asks_closed_question' || issue.code === 'question_not_opened_by_semantic_decision'
+    );
     if (closedQuestionIssue) {
       budget?.consumeModelCall();
       const semanticRewrite = await this.model.reviewAnswer({
@@ -10472,6 +10869,14 @@ export class AgentManagerOrchestrator {
       toolResults: persistedToolResults,
       previousProductReferents: previousReferents
     });
+    const calculationRecovery = terminalGeneratorCalculationRecovery(persistedToolResults);
+    const unfinishedVerification = uniqueStrings([
+      ...catalogRecovery.unfinishedVerification,
+      ...terminalUnfinishedVerificationFromIntent(
+        persistedIntent.success ? persistedIntent.data : undefined,
+        persistedToolResults
+      )
+    ]);
     const recoveryProductClass = persistedIntent.success
       ? persistedIntent.data.selectionPolicy?.targetProductClass?.trim() ??
         persistedIntent.data.selectionPolicy?.canonicalProductClass ??
@@ -10491,17 +10896,40 @@ export class AgentManagerOrchestrator {
               : [])
           ].join(' ')
         : `По уже подтверждённым данным предварительно подходят: ${productOrientation}. Окончательный вывод для этого хода не успел сформироваться, поэтому не утверждаю совместимость сверх проверенных характеристик.`
-      : 'Не успел надёжно завершить проверку в пределах этого хода, поэтому неподтверждённый результат не выдаю. Уже собранные данные сохранены в истории диалога. Если вы продолжите разговор новым сообщением, использую доступный контекст без повтора уже подтверждённых вводных.';
+      : calculationRecovery
+        ? [
+            `Расчёт нагрузки завершён: ориентир — генератор не менее ${calculationRecovery.requiredNominalKw} кВт номинальной мощности${calculationRecovery.totalRunningKw !== null ? ` при суммарной рабочей нагрузке ${calculationRecovery.totalRunningKw} кВт` : ''}.`,
+            'По текущим подтверждённым ограничениям подходящих карточек в этом ходе не найдено, поэтому конкретную модель не выдумываю.',
+            ...(unfinishedVerification.length
+              ? [`Не завершилась проверка: ${unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`]
+              : [])
+          ].join(' ')
+        : 'Не удалось получить ни одного проверенного результата в пределах этого хода. Конкретный ответ без фактической опоры не выдаю.';
     const answerContract: AnswerContract = {
       answerText: finalText,
-      factsUsed: catalogRecovery.catalogRequestIds.map((requestId) => ({
-        factKey: 'catalog.preliminary_candidates',
-        sourceEventIds: [requestId],
-        value: catalogRecovery.products.map((product) => product.id)
-      })),
+      factsUsed: [
+        ...catalogRecovery.catalogRequestIds.map((requestId) => ({
+          factKey: 'catalog.preliminary_candidates',
+          sourceEventIds: [requestId],
+          value: catalogRecovery.products.map((product) => product.id)
+        })),
+        ...(calculationRecovery
+          ? [{
+              factKey: 'calculator.generator_load_profile',
+              sourceEventIds: [calculationRecovery.requestId],
+              value: {
+                loadCount: calculationRecovery.loadCount,
+                totalRunningKw: calculationRecovery.totalRunningKw,
+                requiredStartingKw: calculationRecovery.requiredStartingKw,
+                requiredNominalKw: calculationRecovery.requiredNominalKw
+              }
+            }]
+          : [])
+      ],
       questionsAsked: [],
       toolResultIds: uniqueStrings([
         ...catalogRecovery.catalogRequestIds,
+        ...(calculationRecovery ? [calculationRecovery.requestId] : []),
         ...(catalogRecovery.unfinishedVerification.length
           ? (persistedIntent.success
               ? persistedIntent.data.toolRequests
@@ -10514,6 +10942,7 @@ export class AgentManagerOrchestrator {
       leadAction: catalogRecovery.technicalHandoffEligible ? 'offer_form' : 'none',
       riskFlags: uniqueStrings([
         'deterministic_terminal_response',
+        ...(calculationRecovery ? ['terminal_generator_calculation_recovery'] : []),
         ...(catalogRecovery.products.length ? ['terminal_catalog_recovery'] : []),
         ...(catalogRecovery.technicalHandoffEligible
           ? ['terminal_technical_handoff_after_search_exhaustion']
@@ -10524,15 +10953,17 @@ export class AgentManagerOrchestrator {
             productClass: recoveryProductClass,
             status: 'ready_for_preliminary_cards',
             canShowProductCards: true,
-            missingFacts: catalogRecovery.unfinishedVerification,
+            missingFacts: unfinishedVerification,
             rationale: 'The terminal recovery preserved catalog candidates that passed the persisted selection policy; an external verification did not finish.'
           }
         : {
-            productClass: 'unknown',
-            status: 'not_applicable',
+            productClass: calculationRecovery ? recoveryProductClass : 'unknown',
+            status: calculationRecovery ? 'needs_more_info' : 'not_applicable',
             canShowProductCards: false,
-            missingFacts: [],
-            rationale: 'The absolute turn deadline was reached before a reviewed answer could be committed.'
+            missingFacts: unfinishedVerification,
+            rationale: calculationRecovery
+              ? 'A successful generator calculation was preserved, but no recommendation-eligible catalog card was available.'
+              : 'The absolute turn deadline was reached before any fact-bearing result could be committed.'
           }
     };
     const review: PreSendReview = { verdict: 'pass', issues: [] };

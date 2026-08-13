@@ -455,6 +455,11 @@ export const AgentIntentContractSchema = z.object({
   riskFlags: z.array(z.string()).default([])
 }).strict();
 
+export const AgentSemanticDecisionSchema = z.object({
+  ledgerDelta: LedgerStateDeltaSchema,
+  intent: AgentIntentContractSchema
+}).strict();
+
 export const AnswerSelectionReadinessSchema = z.object({
   productClass: nonEmptyString,
   status: z.enum([
@@ -525,6 +530,7 @@ export const PreSendReviewSchema = z.object({
 
 export type DialogueLedgerEvent = z.infer<typeof DialogueLedgerEventSchema>;
 export type LedgerStateDelta = z.infer<typeof LedgerStateDeltaSchema>;
+export type AgentSemanticDecision = z.infer<typeof AgentSemanticDecisionSchema>;
 type ParsedToolRequest = z.infer<typeof ToolRequestSchema>;
 export type ToolRequest = Omit<ParsedToolRequest, 'args'> & { args: ToolRequestArgs };
 export type ToolResult = z.infer<typeof ToolResultSchema>;

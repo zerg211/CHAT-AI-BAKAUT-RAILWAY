@@ -17,6 +17,67 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     createStructuredJsonResponse.mockReset();
   });
 
+  it('creates ledger delta and executable intent in one structured semantic request', async () => {
+    const now = new Date('2026-08-13T10:00:00.000Z').toISOString();
+    const session: ConversationSession = {
+      id: '11111111-1111-4111-8111-111111111111',
+      status: 'active',
+      conversationNumber: 1,
+      title: 'Dialog #1',
+      needState: emptyNeedState(),
+      createdAt: now,
+      updatedAt: now,
+      lastHeartbeatAt: now
+    };
+    const history: Message[] = Array.from({ length: 20 }, (_, index) => ({
+      id: `${String(index + 1).padStart(8, '0')}-1111-4111-8111-111111111111`,
+      sessionId: session.id,
+      role: index % 2 ? 'assistant' as const : 'user' as const,
+      content: `message-${index + 1}`,
+      metadata: {},
+      createdAt: now
+    }));
+    createStructuredJsonResponse.mockResolvedValueOnce({
+      parsed: {
+        ledgerDelta: { rationale: 'preserve the current need', events: [] },
+        intent: {
+          userMessageSummary: 'continue the current need',
+          dialogueUnderstanding: 'the current turn has one coherent interpretation',
+          nextStepRationale: 'answer without tools',
+          requiresTools: false,
+          toolRequests: [],
+          riskFlags: []
+        }
+      }
+    });
+
+    const decision = await (new OpenAIAgentManagerModel() as OpenAIAgentManagerModel & {
+      decideTurn(input: unknown): Promise<{ ledgerDelta: unknown; intent: unknown }>;
+    }).decideTurn({
+      session,
+      history,
+      userMessage: history.at(-1)!.content,
+      ledgerEvents: [],
+      ledgerState: reduceDialogueLedger([])
+    });
+
+    expect(decision).toMatchObject({
+      ledgerDelta: { events: [] },
+      intent: { userMessageSummary: 'continue the current need' }
+    });
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(1);
+    expect(createStructuredJsonResponse.mock.calls[0]?.[0]?.stage).toBe('agent_semantic_decision');
+    const request = createStructuredJsonResponse.mock.calls[0]?.[0]?.request as {
+      input?: Array<{ role?: string; content?: string }>;
+      text?: { format?: { schema?: { required?: string[] } } };
+    };
+    const input = JSON.parse(request.input?.find((item) => item.role === 'user')?.content ?? '{}') as {
+      history?: unknown[];
+    };
+    expect(input.history).toHaveLength(20);
+    expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);
+  });
+
   it('serializes durable fact provenance and the same redacted pending lead draft for reducer and planner', async () => {
     const now = new Date('2026-07-15T10:00:00.000Z').toISOString();
     const session: ConversationSession = {

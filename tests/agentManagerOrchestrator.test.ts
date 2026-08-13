@@ -8738,12 +8738,20 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: 'Run the bounded calculations.'
     });
 
-    expect(payload.answer).toContain('Не успел надёжно завершить проверку');
+    expect(payload.answer).toContain('Расчёт нагрузки завершён');
+    expect(payload.answer).toContain('не менее 1 кВт');
+    expect(payload.answer).not.toContain('продолжите разговор новым сообщением');
     expect(payload.metadata).toMatchObject({
       terminal: true,
       degraded: true,
       completionStatus: 'degraded_terminal',
-      terminalReason: 'turn_budget_tool_call_budget_exceeded'
+      terminalReason: 'turn_budget_tool_call_budget_exceeded',
+      answerContract: {
+        factsUsed: [expect.objectContaining({
+          factKey: 'calculator.generator_load_profile',
+          sourceEventIds: ['calculator-8']
+        })]
+      }
     });
     expect(conversations.turn.status).toBe('completed');
 
@@ -11239,7 +11247,189 @@ describe('parallel semantic turn contracts', () => {
     };
   }
 
-  it('starts reducer and planner concurrently and persists their independent checkpoints', async () => {
+  it('uses one authoritative semantic decision in the production-capable model path', async () => {
+    const conversations = new FakeConversations();
+    const decideTurn = vi.fn(async (): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: {
+        rationale: 'one interpretation owns state and execution',
+        events: []
+      },
+      intent: noToolIntent('one semantic decision summary') as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const proposeLedgerDelta = vi.fn(async () => ({ rationale: 'must not run', events: [] }));
+    const planTurn = vi.fn(async () => noToolIntent('must not run'));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn, proposeLedgerDelta, planTurn })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+
+    expect(payload.answer).toContain('5 kW');
+    expect(decideTurn).toHaveBeenCalledTimes(1);
+    expect(proposeLedgerDelta).not.toHaveBeenCalled();
+    expect(planTurn).not.toHaveBeenCalled();
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'semantic_decision_proposed',
+      payload: expect.objectContaining({
+        ledgerDelta: expect.objectContaining({ rationale: 'one interpretation owns state and execution' }),
+        intent: expect.objectContaining({ userMessageSummary: 'one semantic decision summary' })
+      })
+    }));
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      eventType: 'semantic_decision_completed'
+    }));
+  });
+
+  it('allows exactly one semantic correction attempt before execution', async () => {
+    const conversations = new FakeConversations();
+    const coherentIntent = noToolIntent('corrected semantic decision');
+    const decideTurn = vi.fn(async (
+      _input: import('../src/ai/agentManagerOrchestrator.js').AgentManagerModelInput
+    ): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => {
+      if (decideTurn.mock.calls.length === 1) {
+        return {
+          ledgerDelta: {
+            rationale: 'incorrectly mixes two active product classes',
+            events: [{
+              eventType: 'need.opened',
+              scope: 'need',
+              payload: {
+                needId: 'generator-need',
+                productClass: 'generator',
+                summary: 'generator need',
+                constraints: [],
+                constraintsUpdateMode: 'replace',
+                openQuestions: [],
+                openQuestionsUpdateMode: 'clear',
+                selectedProductIds: [],
+                rejectedProductIds: [],
+                rejectedProductIdsUpdateMode: 'clear',
+                selectionUpdateMode: 'clear',
+                invalidatedProductIds: [],
+                status: 'open',
+                activate: true
+              },
+              evidence: 'buyer needs a generator',
+              source: 'llm_state_delta',
+              status: 'active'
+            }, {
+              eventType: 'fact.confirmed',
+              scope: 'need',
+              payload: {
+                factKey: 'budget_max_rub',
+                value: 180000,
+                needId: 'generator-need',
+                productClass: 'generator',
+                role: 'hard_requirement',
+                confidence: 1
+              },
+              evidence: 'budget is 180000 RUB',
+              source: 'llm_state_delta',
+              status: 'active'
+            }]
+          },
+          intent: {
+            ...coherentIntent,
+            selectionPolicy: {
+              ...coherentIntent.selectionPolicy!,
+              targetProductClass: 'plate',
+              canonicalProductClass: 'plate'
+            }
+          } as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+        };
+      }
+      return {
+        ledgerDelta: { rationale: 'corrected coherent interpretation', events: [] },
+        intent: coherentIntent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+      };
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+
+    expect(decideTurn).toHaveBeenCalledTimes(2);
+    expect(decideTurn.mock.calls[1]?.[0].semanticValidationIssues).toContain(
+      'active_requirement_mismatch:budget_max_rub'
+    );
+    expect(conversations.traces).toContainEqual(expect.objectContaining({
+      eventType: 'semantic_decision_validated',
+      payload: expect.objectContaining({ attempt: 1, valid: false })
+    }));
+    expect(conversations.checkpoints.filter((checkpoint) =>
+      (checkpoint as { checkpoint?: string }).checkpoint === 'semantic_decision_proposed'
+    )).toHaveLength(1);
+  });
+
+  it('terminalizes a second incoherent semantic decision with typed evidence', async () => {
+    const conversations = new FakeConversations();
+    const badIntent = noToolIntent('incoherent semantic decision');
+    const decideTurn = vi.fn(async (
+      _input: import('../src/ai/agentManagerOrchestrator.js').AgentManagerModelInput
+    ): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: {
+        rationale: 'creates a hard budget that execution ignores',
+        events: [{
+          eventType: 'fact.confirmed',
+          scope: 'need',
+          payload: {
+            factKey: 'budget_max_rub',
+            value: 180000,
+            productClass: 'generator',
+            role: 'hard_requirement',
+            confidence: 1
+          },
+          evidence: 'budget is 180000 RUB',
+          source: 'llm_state_delta',
+          status: 'active'
+        }]
+      },
+      intent: badIntent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const composeAnswer = vi.fn();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn, composeAnswer })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+
+    expect(decideTurn).toHaveBeenCalledTimes(2);
+    expect(composeAnswer).not.toHaveBeenCalled();
+    expect(payload.metadata).toMatchObject({
+      terminal: true,
+      terminalReason: 'semantic_decision_incoherent_after_bounded_retry'
+    });
+    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
+      checkpoint: 'semantic_decision_proposed',
+      status: 'failed',
+      errorCode: 'semantic_decision_incoherent',
+      payload: { issues: ['active_requirement_mismatch:budget_max_rub'] }
+    }));
+  });
+
+  it('keeps the legacy fake-model reducer and planner concurrent for compatibility', async () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();
     leads.pendingDraft = {
