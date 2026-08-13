@@ -3438,6 +3438,8 @@ export function humanizeTerminalVerificationLabel(value: string) {
     'travel type': 'тип хода',
     plate_type: 'тип виброплиты',
     'plate type': 'тип виброплиты',
+    noise_db: 'официальный уровень шума в дБ',
+    'noise db': 'официальный уровень шума в дБ',
     voltage_v: 'напряжение',
     weight_kg: 'масса'
   };
@@ -3673,6 +3675,47 @@ function terminalProductOrientation(products: Product[]) {
     const currency = product.currency === 'RUB' ? '₽' : product.currency;
     return `${product.name} — ${amount}${currency ? ` ${currency}` : ''}`;
   }).join('; ');
+}
+
+export function enforceReviewerPreliminaryCandidateRecovery(input: {
+  review: PreSendReview;
+  answer: AnswerContract;
+  intent: AgentIntentContract;
+  toolResults: ToolResult[];
+}) {
+  if (!input.review.issues.some((issue) => issue.code === 'hide_preliminary_candidates')) return null;
+  const recovery = terminalCatalogRecovery({
+    intent: input.intent,
+    toolResults: input.toolResults
+  });
+  if (!recovery.products.length) return null;
+  const orientation = terminalProductOrientation(recovery.products);
+  const missingFacts = recovery.unfinishedVerification;
+  const answerText = [
+    `По подтверждённым данным предварительно подходят: ${orientation}.`,
+    ...(missingFacts.length
+      ? [
+          `Точный неподтверждённый факт: ${missingFacts.map((item) => `«${item}»`).join(', ')}.`,
+          'Внешняя проверка не завершилась, поэтому окончательную совместимость по этому пункту пока не подтверждаю.'
+        ]
+      : [])
+  ].join(' ');
+  return {
+    ...input.answer,
+    answerText,
+    selectedProductIds: recovery.products.map((product) => product.id),
+    leadAction: recovery.technicalHandoffEligible ? 'offer_form' as const : input.answer.leadAction,
+    riskFlags: uniqueStrings([...input.answer.riskFlags, 'reviewer_preliminary_candidates_recovered']),
+    selectionReadiness: {
+      productClass: input.intent.selectionPolicy?.targetProductClass ??
+        input.intent.selectionPolicy?.canonicalProductClass ??
+        'unknown',
+      status: 'ready_for_preliminary_cards' as const,
+      canShowProductCards: true,
+      missingFacts,
+      rationale: 'The reviewer detected hidden eligible preliminary candidates, so deterministic catalog recovery restored them with the unresolved fact.'
+    }
+  } satisfies AnswerContract;
 }
 
 export function catalogCandidatesSatisfyingConditionalWebRequest(input: {
@@ -8537,6 +8580,20 @@ export class AgentManagerOrchestrator {
     let finalText = review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()
       ? review.revisedAnswerText.trim()
       : answer.answerText.trim();
+    const reviewerPreliminaryRecovery = enforceReviewerPreliminaryCandidateRecovery({
+      review,
+      answer,
+      intent: effectiveIntent,
+      toolResults: selectionToolResults
+    });
+    if (reviewerPreliminaryRecovery) {
+      answer = reviewerPreliminaryRecovery;
+      finalText = reviewerPreliminaryRecovery.answerText;
+      await this.trace(input.sessionId, input.turnId, 'review', 'preliminary_candidates_recovered', {
+        selectedProductIds: reviewerPreliminaryRecovery.selectedProductIds,
+        missingFacts: reviewerPreliminaryRecovery.selectionReadiness?.missingFacts ?? []
+      });
+    }
     const finalLeadAction = leadActionAfterReview({ answer, finalText, review, toolResults });
     if (review.verdict === 'block') {
       const reviewIssueCodes = review.issues.map((issue) => issue.code);

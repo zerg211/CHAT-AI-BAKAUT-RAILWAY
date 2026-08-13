@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   humanizeTerminalVerificationLabel,
+  enforceReviewerPreliminaryCandidateRecovery,
   limitTerminalRecoveryProducts,
   terminalCatalogRecovery,
   terminalGeneratorCalculationFromIntent,
@@ -310,6 +311,58 @@ describe('combined semantic decision validation', () => {
       products: [product],
       unfinishedVerification: []
     });
+  });
+
+  it('enforces a reviewer finding when a rewrite still hides eligible preliminary candidates', () => {
+    const product = {
+      id: 'generator-8kw', name: 'Energo E11000EAX (8.0 kW)', category: 'Бензиновые генераторы',
+      price: 110000, currency: 'RUB', specs: { voltage_v: 220, fuel_type: 'бензин', electric_start: true }
+    };
+    const intent = generatorDecision().intent;
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      requirements: [],
+      selectionGoal: 'preliminary_fit',
+      maxCards: 2
+    };
+    intent.toolRequests = [{
+      id: 'catalog', tool: 'catalog.search', required: true, rationale: 'find candidates', args: {}
+    }, {
+      id: 'web', tool: 'web.researchProductFacts', required: true, rationale: 'verify noise',
+      args: { comparisonAttributes: ['noise_db'] }
+    }];
+    const toolResults: ToolResult[] = [{
+      requestId: 'catalog', tool: 'catalog.search', status: 'ok', observationStatus: 'success',
+      payload: { products: [product], productIds: [product.id] }, warnings: []
+    }, {
+      requestId: 'web', tool: 'web.researchProductFacts', status: 'error', observationStatus: 'malformed',
+      payload: { error: { code: 'web_research_skipped_budget' } }, warnings: []
+    }];
+    const answer = {
+      answerText: 'No model can be named.', factsUsed: [], questionsAsked: [], toolResultIds: ['catalog', 'web'],
+      selectedProductIds: [], leadAction: 'none' as const, riskFlags: [],
+      selectionReadiness: {
+        productClass: 'generator', status: 'needs_more_info' as const, canShowProductCards: false,
+        missingFacts: ['noise_db'], rationale: 'noise is not confirmed'
+      }
+    };
+    const recovered = enforceReviewerPreliminaryCandidateRecovery({
+      review: {
+        verdict: 'rewrite_required',
+        revisedAnswerText: 'Still no model.',
+        issues: [{ code: 'hide_preliminary_candidates', severity: 'high', message: 'hidden', evidence: product.name }]
+      },
+      answer,
+      intent,
+      toolResults
+    });
+
+    expect(recovered).toMatchObject({
+      selectedProductIds: [product.id],
+      selectionReadiness: { canShowProductCards: true, missingFacts: ['официальный уровень шума в дБ'] }
+    });
+    expect(recovered?.answerText).toContain(product.name);
+    expect(recovered?.answerText).toContain('официальный уровень шума в дБ');
   });
 
   it('executes the persisted deterministic generator calculation at the terminal boundary', () => {
