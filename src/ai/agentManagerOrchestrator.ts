@@ -3408,6 +3408,7 @@ export function humanizeTerminalVerificationLabel(value: string) {
     phase: 'число фаз',
     fuel_type: 'тип топлива',
     'starting power kw': 'пусковая мощность',
+    max_power_kw: 'максимальная мощность',
     'current buyer question': 'применимость к текущей задаче',
     'travel type': 'тип хода',
     voltage_v: 'напряжение',
@@ -3415,6 +3416,7 @@ export function humanizeTerminalVerificationLabel(value: string) {
   };
   if (labels[normalized]) return labels[normalized];
   if (compact === 'startingpowerkw') return 'пусковая мощность';
+  if (compact === 'maxpowerkw') return 'максимальная мощность';
   if (compact === 'electricstarter') return 'электростартер';
   return value.trim().replaceAll('_', ' ');
 }

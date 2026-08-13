@@ -184,6 +184,8 @@ describe('combined semantic decision validation', () => {
     expect(humanizeTerminalVerificationLabel('starting power kw')).toBe('пусковая мощность');
     expect(humanizeTerminalVerificationLabel('electric starter')).toBe('электростартер');
     expect(humanizeTerminalVerificationLabel('Starting power, kW')).toBe('пусковая мощность');
+    expect(humanizeTerminalVerificationLabel('max_power_kw')).toBe('максимальная мощность');
+    expect(humanizeTerminalVerificationLabel('Max power kW')).toBe('максимальная мощность');
     expect(humanizeTerminalVerificationLabel('current buyer question')).toBe('применимость к текущей задаче');
     expect(humanizeTerminalVerificationLabel('travel type')).toBe('тип хода');
   });
