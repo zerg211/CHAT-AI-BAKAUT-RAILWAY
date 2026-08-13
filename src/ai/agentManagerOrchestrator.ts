@@ -785,10 +785,17 @@ export function validateAgentSemanticDecision(input: {
   });
   const ledgerState = reduceDialogueLedger(events, input.previousLedgerState);
   const issues: string[] = [];
-  if (input.userMessage && input.decision.intent.toolRequests.some((request) => request.tool === 'calculator.generatorLoad')) {
-    const decisionNumbers = scanNumericMentions(JSON.stringify(input.decision)).map((mention) => mention.value);
+  const explicitPowerCalculator = input.decision.intent.toolRequests.find((request) =>
+    request.tool === 'calculator.generatorLoad'
+  );
+  if (input.userMessage && explicitPowerCalculator) {
+    const calculatorPowers = (explicitPowerCalculator.args.loads ?? []).flatMap((load) =>
+      typeof load.runningKw === 'number' && Number.isFinite(load.runningKw)
+        ? [load.runningKw]
+        : []
+    );
     for (const explicitPowerKw of scanExplicitPowerKw(input.userMessage)) {
-      if (!decisionNumbers.some((value) => Math.abs(value - explicitPowerKw) < 0.0001)) {
+      if (!calculatorPowers.some((value) => Math.abs(value - explicitPowerKw) < 0.0001)) {
         issues.push(`explicit_power_fact_missing:${explicitPowerKw}kw`);
       }
     }
