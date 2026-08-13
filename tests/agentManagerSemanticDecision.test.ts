@@ -11,6 +11,7 @@ import {
   type AgentSemanticDecision
 } from '../src/ai/agentManagerOrchestrator.js';
 import { normalizeLedgerStateDeltaEvents } from '../src/ai/agentManagerContracts.js';
+import type { ToolResult } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 
 function generatorDecision(): AgentSemanticDecision {
@@ -246,6 +247,68 @@ describe('combined semantic decision validation', () => {
       products: [],
       cards: [],
       warnings: ['terminal_catalog_recovery_required_tool_missing:calculator.generatorLoad']
+    });
+  });
+
+  it('does not call catalog-proven candidate attributes unfinished web verification', () => {
+    const product = {
+      id: 'plate-80',
+      name: 'Виброплита прямоходная бензиновая TEST (80 кг)',
+      category: 'Виброплиты',
+      price: 100000,
+      currency: 'RUB',
+      specs: { weight_kg: 80, fuel_type: 'petrol' }
+    };
+    const intent = generatorDecision().intent;
+    intent.grounding = {
+      taskType: 'product_selection',
+      buyerRequestedWeb: false,
+      catalogRequirement: 'required',
+      responseMode: 'recommend',
+      sourcePolicy: 'catalog_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'conditional_on_catalog_gap',
+      requiredToolKinds: ['catalog.search'],
+      technicalAttributes: ['weight_kg', 'price_rub'],
+      buyerQuestion: 'Select a plate.',
+      rationale: 'Use catalog attributes first.'
+    };
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'plate',
+      canonicalProductClass: 'plate',
+      requirements: [{
+        id: 'weight', kind: 'weight_max_kg', value: 90, unit: 'kg', relation: 'must_have',
+        role: 'hard_constraint', strictness: 'strict', evidence: 'up to 90 kg', verification: { mode: 'product_attribute' }
+      }, {
+        id: 'budget', kind: 'budget_max_rub', value: 170000, unit: 'RUB', relation: 'must_have',
+        role: 'hard_constraint', strictness: 'strict', evidence: 'up to 170000 RUB', verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.toolRequests = [{
+      id: 'catalog', tool: 'catalog.search', required: true, rationale: 'find plates',
+      coversRequirementIds: ['weight', 'budget'], args: { productIntent: 'plate' }
+    }, {
+      id: 'web', tool: 'web.researchProductFacts', required: true, rationale: 'conditional verification',
+      coversRequirementIds: ['weight', 'budget'], args: {
+        comparisonAttributes: ['weight_kg', 'price_rub'],
+        comparisonAttributeBindings: [
+          { attribute: 'weight_kg', requirementId: 'weight' },
+          { attribute: 'price_rub', requirementId: 'budget' }
+        ]
+      }
+    }];
+    const toolResults: ToolResult[] = [{
+      requestId: 'catalog', tool: 'catalog.search', status: 'ok', observationStatus: 'success',
+      payload: { products: [product], productIds: [product.id] }, warnings: []
+    }, {
+      requestId: 'web', tool: 'web.researchProductFacts', status: 'error', observationStatus: 'malformed',
+      payload: { error: { code: 'web_research_skipped_budget' } }, warnings: []
+    }];
+
+    expect(terminalCatalogRecovery({ intent, toolResults: [...toolResults] })).toMatchObject({
+      products: [product],
+      unfinishedVerification: []
     });
   });
 

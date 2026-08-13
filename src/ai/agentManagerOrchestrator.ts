@@ -3436,6 +3436,8 @@ export function humanizeTerminalVerificationLabel(value: string) {
     max_power_kw: 'максимальная мощность',
     'current buyer question': 'применимость к текущей задаче',
     'travel type': 'тип хода',
+    plate_type: 'тип виброплиты',
+    'plate type': 'тип виброплиты',
     voltage_v: 'напряжение',
     weight_kg: 'масса'
   };
@@ -3606,13 +3608,31 @@ export function terminalCatalogRecovery(input: {
     };
   }
   const requirementsById = new Map(policy.requirements.map((requirement) => [requirement.id, requirement]));
+  const catalogProofs = buildRequirementProofs({
+    intent: input.intent,
+    products: eligibleProducts,
+    toolResults: catalogResults
+  });
   const unresolvedWebChecks = input.intent.toolRequests.flatMap((request) => {
     if (request.tool !== 'web.researchProductFacts' || !request.required) return [];
     const result = resultByRequestId.get(request.id);
+    const bindings = comparisonAttributeBindingsForRequest(request);
     const gaps = terminalUnfinishedWebVerification({
       request,
       result,
       requirementsById
+    }).filter((gap) => {
+      const binding = bindings.find((item) =>
+        normalizeModelText(item.attribute) === normalizeModelText(gap)
+      );
+      if (!binding) return true;
+      return !eligibleProducts.every((product) =>
+        combinedRequirementProofStatus(requirementProofsFor(
+          catalogProofs,
+          product.id,
+          [binding.requirementId]
+        )) === 'satisfied'
+      );
     }).map(humanizeTerminalVerificationLabel);
     return gaps.length ? [{
       gaps,
