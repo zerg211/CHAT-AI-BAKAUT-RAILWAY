@@ -181,6 +181,30 @@ describe('combined semantic decision validation', () => {
     expect(humanizeTerminalVerificationLabel('auto_start_required')).toBe('электростартер');
     expect(humanizeTerminalVerificationLabel('starting power kw')).toBe('пусковая мощность');
     expect(humanizeTerminalVerificationLabel('electric starter')).toBe('электростартер');
+    expect(humanizeTerminalVerificationLabel('Starting power, kW')).toBe('пусковая мощность');
+  });
+
+  it('rejects a ledger and plan that both forgot an explicit power fact', () => {
+    const decision = generatorDecision();
+    const scenarioEvent = decision.ledgerDelta.events.find((event) =>
+      event.eventType === 'fact.confirmed' && event.payload.factKey === 'generator_load_scenario'
+    );
+    if (!scenarioEvent || !('value' in scenarioEvent.payload)) throw new Error('scenario event missing');
+    const scenario = scenarioEvent.payload.value as { loads: Array<{ name: string }> };
+    scenario.loads = scenario.loads.filter((load) => load.name !== 'angle grinder');
+    const calculation = decision.intent.toolRequests.find((request) => request.tool === 'calculator.generatorLoad');
+    if (!calculation) throw new Error('calculation request missing');
+    calculation.args.loads = calculation.args.loads?.filter((load) => load.name !== 'angle grinder');
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222',
+      userMessage: 'Одновременно работают компрессор 2,2 кВт, станок 1,1 кВт, свет 300 Вт и болгарка 1,5 кВт.'
+    });
+
+    expect(result.issues).toContain('explicit_power_fact_missing:1.5kw');
   });
 
   it('does not recover stale cards when a required current-turn calculation is missing', () => {

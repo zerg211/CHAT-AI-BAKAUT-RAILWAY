@@ -776,6 +776,7 @@ export function validateAgentSemanticDecision(input: {
   previousLedgerState: ReducedDialogueLedgerState;
   sessionId: string;
   turnId: string;
+  userMessage?: string;
 }) {
   const events = normalizeLedgerStateDeltaEvents({
     sessionId: input.sessionId,
@@ -784,6 +785,14 @@ export function validateAgentSemanticDecision(input: {
   });
   const ledgerState = reduceDialogueLedger(events, input.previousLedgerState);
   const issues: string[] = [];
+  if (input.userMessage && input.decision.intent.toolRequests.some((request) => request.tool === 'calculator.generatorLoad')) {
+    const decisionNumbers = scanNumericMentions(JSON.stringify(input.decision)).map((mention) => mention.value);
+    for (const explicitPowerKw of scanExplicitPowerKw(input.userMessage)) {
+      if (!decisionNumbers.some((value) => Math.abs(value - explicitPowerKw) < 0.0001)) {
+        issues.push(`explicit_power_fact_missing:${explicitPowerKw}kw`);
+      }
+    }
+  }
   const activeNeed = [...Object.values(ledgerState.needsById)]
     .reverse()
     .find((need) => need.status === 'open' || need.status === 'selected');
@@ -3364,6 +3373,7 @@ type TerminalCatalogRecovery = {
 
 export function humanizeTerminalVerificationLabel(value: string) {
   const normalized = value.trim().toLowerCase();
+  const compact = compactModelText(normalized);
   const labels: Record<string, string> = {
     nominal_power_kw: 'номинальная мощность',
     price_rub: 'текущая цена',
@@ -3375,7 +3385,10 @@ export function humanizeTerminalVerificationLabel(value: string) {
     voltage_v: 'напряжение',
     weight_kg: 'масса'
   };
-  return labels[normalized] ?? value.trim().replaceAll('_', ' ');
+  if (labels[normalized]) return labels[normalized];
+  if (compact === 'startingpowerkw') return 'пусковая мощность';
+  if (compact === 'electricstarter') return 'электростартер';
+  return value.trim().replaceAll('_', ' ');
 }
 
 function terminalVerificationFallbackSlots(
@@ -4179,6 +4192,18 @@ function scanNumericMentions(text: string) {
     if (Number.isFinite(value)) mentions.push({ value, start, end: cursor });
   }
   return mentions;
+}
+
+function scanExplicitPowerKw(text: string) {
+  const normalized = text.toLocaleLowerCase('ru-RU');
+  return scanNumericMentions(normalized).flatMap((mention) => {
+    let cursor = mention.end;
+    while (cursor < normalized.length && normalized[cursor]?.trim() === '') cursor += 1;
+    const unit = normalized.slice(cursor, cursor + 3);
+    if (unit.startsWith('квт') || unit.startsWith('kw')) return [mention.value];
+    if (unit.startsWith('вт') || unit.startsWith('w')) return [mention.value / 1_000];
+    return [];
+  });
 }
 
 function hasExplicitNumericRange(
@@ -7323,7 +7348,8 @@ export class AgentManagerOrchestrator {
             decision: candidate,
             previousLedgerState: ledgerContext.state,
             sessionId: input.sessionId,
-            turnId: input.turnId
+            turnId: input.turnId,
+            userMessage
           });
           validationIssues = validation.issues;
           await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_validated', {

@@ -11425,7 +11425,7 @@ describe('parallel semantic turn contracts', () => {
       checkpoint: 'semantic_decision_proposed',
       status: 'failed',
       errorCode: 'semantic_decision_incoherent',
-      payload: { issues: ['active_requirement_mismatch:budget_max_rub'] }
+      payload: { issues: expect.arrayContaining(['active_requirement_mismatch:budget_max_rub']) }
     }));
   });
 
