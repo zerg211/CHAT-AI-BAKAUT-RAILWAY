@@ -3389,6 +3389,8 @@ export function humanizeTerminalVerificationLabel(value: string) {
     phase: 'число фаз',
     fuel_type: 'тип топлива',
     'starting power kw': 'пусковая мощность',
+    'current buyer question': 'применимость к текущей задаче',
+    'travel type': 'тип хода',
     voltage_v: 'напряжение',
     weight_kg: 'масса'
   };
@@ -3541,11 +3543,11 @@ export function terminalCatalogRecovery(input: {
       warnings: []
     };
   }
-  const eligibleProducts = filterProductsByStructuredSelectionPolicy({
+  const eligibleProducts = limitTerminalRecoveryProducts(filterProductsByStructuredSelectionPolicy({
     products: catalogProducts,
     intent: recoveryIntent,
     toolResults: input.toolResults
-  }).products;
+  }).products, policy.maxCards);
   if (!eligibleProducts.length) {
     return {
       products: [],
@@ -4199,6 +4201,10 @@ function scanNumericMentions(text: string) {
     if (Number.isFinite(value)) mentions.push({ value, start, end: cursor });
   }
   return mentions;
+}
+
+export function limitTerminalRecoveryProducts(products: Product[], maxCards: number | null | undefined) {
+  return products.slice(0, maxCards ?? 8);
 }
 
 function scanExplicitPowerKw(text: string) {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   humanizeTerminalVerificationLabel,
+  limitTerminalRecoveryProducts,
   terminalCatalogRecovery,
   terminalGeneratorCalculationFromIntent,
   terminalGeneratorCalculationRecovery,
@@ -182,6 +183,22 @@ describe('combined semantic decision validation', () => {
     expect(humanizeTerminalVerificationLabel('starting power kw')).toBe('пусковая мощность');
     expect(humanizeTerminalVerificationLabel('electric starter')).toBe('электростартер');
     expect(humanizeTerminalVerificationLabel('Starting power, kW')).toBe('пусковая мощность');
+    expect(humanizeTerminalVerificationLabel('current buyer question')).toBe('применимость к текущей задаче');
+    expect(humanizeTerminalVerificationLabel('travel type')).toBe('тип хода');
+  });
+
+  it('respects the semantic card limit during terminal catalog recovery', () => {
+    const products = ['one', 'two', 'three'].map((id, index) => ({
+      id,
+      name: `Generator ${id}`,
+      category: 'Generators',
+      price: 50_000 + index * 1_000,
+      currency: 'RUB',
+      specs: {}
+    }));
+
+    expect(limitTerminalRecoveryProducts(products, 2)).toHaveLength(2);
+    expect(limitTerminalRecoveryProducts(products, null)).toHaveLength(3);
   });
 
   it('rejects a ledger and plan that both forgot an explicit power fact', () => {
