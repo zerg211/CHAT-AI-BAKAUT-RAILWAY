@@ -483,7 +483,10 @@ describe('generic requirement proofs', () => {
       })]
     });
 
-    expect(result.selectedProductIds).toEqual([]);
+    expect(result.selectedProductIds).toEqual([catalogProduct.id]);
+    expect(result.warnings).toContain(
+      'product_cards_preliminary:unverified_web_covered_strict_requirements:1'
+    );
     expect(result.requirementProofs).toContainEqual(expect.objectContaining({
       requirementId: requirement.id,
       productId: catalogProduct.id,

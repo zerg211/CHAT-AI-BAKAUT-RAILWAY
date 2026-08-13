@@ -906,7 +906,10 @@ export function gateStrictSelectionRequirements(
   products: Product[] = []
 ): StrictSelectionRequirementGate {
   const assessment = assessStrictSelectionRequirements(intent, productClass, toolResults, products);
-  if (intent.selectionPolicy?.selectionGoal !== 'preliminary_fit') {
+  if (
+    intent.selectionPolicy?.selectionGoal !== 'preliminary_fit' &&
+    intent.selectionPolicy?.selectionGoal !== 'final_fit'
+  ) {
     return { ...assessment, preliminaryUnverified: [] };
   }
   const webCoveredRequirementIds = new Set(intent.toolRequests.flatMap((request) =>

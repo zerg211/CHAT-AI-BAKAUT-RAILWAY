@@ -2377,7 +2377,7 @@ describe('AgentManager visible card readiness', () => {
     ]);
   });
 
-  it('keeps web-covered unverified attributes as preliminary plate candidates but remains fail-closed for final fit', () => {
+  it('keeps web-covered unknown attributes as preliminary candidates even when final fit was requested', () => {
     const intent = structuredSelectionIntent({
       targetProductClass: 'виброплита',
       canonicalProductClass: 'plate',
@@ -2475,14 +2475,20 @@ describe('AgentManager visible card readiness', () => {
       userMessage: 'Подтвердите окончательную совместимость.',
       history: [],
       intent,
-      answerText: `${plate.name} точно подходит.`,
+      answerText: `${plate.name} — предварительный вариант; совместимость ещё не подтверждена.`,
       selectedProductIds: [plate.id],
       needState: needStateWithBudget(),
-      toolResults: []
+      toolResults: [{
+        requestId: 'plate-web-check',
+        tool: 'web.researchProductFacts',
+        status: 'timeout',
+        payload: { error: 'timeout' },
+        warnings: ['tool_execution_error']
+      }]
     });
-    expect(finalSelection.selectedProductIds).toEqual([]);
+    expect(finalSelection.selectedProductIds).toEqual([plate.id]);
     expect(finalSelection.warnings).toContain(
-      'product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:2'
+      'product_cards_preliminary:unverified_web_covered_strict_requirements:2'
     );
   });
 
