@@ -3368,8 +3368,10 @@ export function humanizeTerminalVerificationLabel(value: string) {
     nominal_power_kw: 'номинальная мощность',
     price_rub: 'текущая цена',
     auto_start_required: 'электростартер',
+    'electric starter': 'электростартер',
     phase: 'число фаз',
     fuel_type: 'тип топлива',
+    'starting power kw': 'пусковая мощность',
     voltage_v: 'напряжение',
     weight_kg: 'масса'
   };
@@ -10973,9 +10975,12 @@ export class AgentManagerOrchestrator {
         'unknown'
       : 'unknown';
     const productOrientation = terminalProductOrientation(catalogRecovery.products);
+    const calculationPrefix = calculationRecovery
+      ? `Расчёт нагрузки завершён: нужен генератор не менее ${calculationRecovery.requiredNominalKw} кВт номинальной мощности${calculationRecovery.totalRunningKw !== null ? ` при суммарной рабочей нагрузке ${calculationRecovery.totalRunningKw} кВт` : ''}. `
+      : '';
     const finalText = catalogRecovery.products.length
       ? catalogRecovery.unfinishedVerification.length
-        ? [
+        ? calculationPrefix + [
             `По уже подтверждённым данным предварительно подходят: ${productOrientation}.`,
             catalogRecovery.technicalHandoffEligible
               ? `После проверки доступных источников не удалось подтвердить: ${catalogRecovery.unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`
@@ -10985,7 +10990,7 @@ export class AgentManagerOrchestrator {
               ? ['Могу передать именно этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?']
               : [])
           ].join(' ')
-        : `По уже подтверждённым данным предварительно подходят: ${productOrientation}. Окончательный вывод для этого хода не успел сформироваться, поэтому не утверждаю совместимость сверх проверенных характеристик.`
+        : `${calculationPrefix}По уже подтверждённым данным предварительно подходят: ${productOrientation}. Окончательный вывод для этого хода не успел сформироваться, поэтому не утверждаю совместимость сверх проверенных характеристик.`
       : calculationRecovery
         ? [
             `Расчёт нагрузки завершён: ориентир — генератор не менее ${calculationRecovery.requiredNominalKw} кВт номинальной мощности${calculationRecovery.totalRunningKw !== null ? ` при суммарной рабочей нагрузке ${calculationRecovery.totalRunningKw} кВт` : ''}.`,

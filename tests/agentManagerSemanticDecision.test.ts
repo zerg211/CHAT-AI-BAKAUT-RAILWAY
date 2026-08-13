@@ -179,6 +179,8 @@ describe('combined semantic decision validation', () => {
   it('does not expose internal verification keys to the buyer', () => {
     expect(humanizeTerminalVerificationLabel('nominal_power_kw')).toBe('номинальная мощность');
     expect(humanizeTerminalVerificationLabel('auto_start_required')).toBe('электростартер');
+    expect(humanizeTerminalVerificationLabel('starting power kw')).toBe('пусковая мощность');
+    expect(humanizeTerminalVerificationLabel('electric starter')).toBe('электростартер');
   });
 
   it('does not recover stale cards when a required current-turn calculation is missing', () => {
