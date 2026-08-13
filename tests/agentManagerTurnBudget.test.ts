@@ -7,6 +7,7 @@ import {
   consumeCurrentAgentManagerProviderCall,
   runWithAgentManagerTurnBudget
 } from '../src/ai/agentManagerTurnBudget.js';
+import { effectiveAgentToolTimeoutMs } from '../src/ai/agentManagerOrchestrator.js';
 
 describe('agent manager turn budget', () => {
   const providerEstimate = (inputTokens: number, outputTokens: number, costUsd = 0.01) => ({
@@ -40,6 +41,19 @@ describe('agent manager turn budget', () => {
     expect(effectiveWebTimeoutMs).toBe(8_000);
     now += effectiveWebTimeoutMs;
     expect(budget.remainingWallTimeMs()).toBe(composeReviewReserveMs);
+  });
+
+  it('caps catalog work before the compose and terminal reserve', () => {
+    expect(effectiveAgentToolTimeoutMs({
+      tool: 'catalog.search',
+      configuredTimeoutMs: 60_000,
+      remainingWallTimeMs: 16_500
+    })).toBe(4_500);
+    expect(effectiveAgentToolTimeoutMs({
+      tool: 'calculator.generatorLoad',
+      configuredTimeoutMs: 5_000,
+      remainingWallTimeMs: 16_500
+    })).toBe(5_000);
   });
 
   it('bounds logical model stages independently from provider reservations', () => {

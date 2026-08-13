@@ -1851,6 +1851,20 @@ export const RECOVERY_LEASE_WAIT_LIMIT_MS = DEFAULT_AGENT_MANAGER_TURN_LIMITS.ma
 const TURN_TERMINAL_RESERVE_MS = 10_000;
 const WEB_COMPOSE_REVIEW_RESERVE_MS = 30_000;
 const WEB_MIN_EXECUTION_MS = 6_000;
+const CATALOG_COMPOSE_TERMINAL_RESERVE_MS = 12_000;
+
+export function effectiveAgentToolTimeoutMs(input: {
+  tool: ToolRequest['tool'];
+  configuredTimeoutMs: number;
+  remainingWallTimeMs: number;
+}) {
+  const reserveMs = input.tool === 'web.researchProductFacts'
+    ? WEB_COMPOSE_REVIEW_RESERVE_MS
+    : input.tool === 'catalog.search' || input.tool === 'catalog.getProductDetails'
+      ? CATALOG_COMPOSE_TERMINAL_RESERVE_MS
+      : 0;
+  return Math.min(input.configuredTimeoutMs, Math.max(1, input.remainingWallTimeMs - reserveMs));
+}
 
 async function waitForRecoveryLeaseRetry(signal?: AbortSignal) {
   if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
@@ -9024,12 +9038,11 @@ export class AgentManagerOrchestrator {
         });
       }
       const startedAt = Date.now();
-      const effectiveTimeoutMs = request.tool === 'web.researchProductFacts'
-        ? Math.min(
-            definition.timeoutMs,
-            Math.max(0, input.budget.remainingWallTimeMs() - WEB_COMPOSE_REVIEW_RESERVE_MS)
-          )
-        : definition.timeoutMs;
+      const effectiveTimeoutMs = effectiveAgentToolTimeoutMs({
+        tool: request.tool,
+        configuredTimeoutMs: definition.timeoutMs,
+        remainingWallTimeMs: input.budget.remainingWallTimeMs()
+      });
       const timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
       const toolSignal = input.signal
         ? AbortSignal.any([input.signal, timeoutSignal])
