@@ -287,6 +287,7 @@ export function buildGeneratorLoadToolPayload(input: {
     ? boundedEstimateBasis ? 'bounded_assumption' : 'unbounded_guess'
     : requestedEstimateBasis;
   const profile = calculateGeneratorLoadProfile(loads, {
+    simultaneousRunning: input.request.args.simultaneousRunning === true,
     simultaneousStarting: input.request.args.simultaneousStarting === true,
     simultaneousStartingKinds: Array.isArray(input.request.args.simultaneousStartingKinds)
       ? input.request.args.simultaneousStartingKinds.filter((item): item is string => typeof item === 'string')

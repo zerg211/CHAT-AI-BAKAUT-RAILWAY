@@ -19,6 +19,7 @@ function generatorLoadRequest(loads: Array<Record<string, unknown>>): ToolReques
       productNames: [],
       comparisonAttributes: [],
       loads,
+      simultaneousRunning: null,
       simultaneousStarting: true,
       simultaneousStartingKinds: ['pump', 'refrigerator'],
       estimateBasis: 'bounded_assumption',
@@ -46,6 +47,28 @@ function toolResultFromPayload(payload: ReturnType<typeof buildGeneratorLoadTool
 }
 
 describe('Agent Manager generator load payload', () => {
+  it('keeps every explicitly simultaneous workshop load in one running scenario', () => {
+    const request = generatorLoadRequest([
+      { kind: 'compressor', name: 'compressor', count: 1, runningKw: 2.2, source: 'explicit_user', evidence: 'runs simultaneously' },
+      { kind: 'machine', name: 'machine', count: 1, runningKw: 1.1, source: 'explicit_user', evidence: 'runs simultaneously' },
+      { kind: 'lighting', name: 'lighting', count: 1, runningKw: 0.3, source: 'explicit_user', evidence: 'runs simultaneously' },
+      { kind: 'handheld_tool', name: 'angle grinder', count: 1, runningKw: 1.5, source: 'explicit_user', evidence: 'runs simultaneously' }
+    ]);
+    request.args.simultaneousRunning = true;
+    request.args.simultaneousStarting = false;
+    request.args.simultaneousStartingKinds = [];
+
+    const payload = buildGeneratorLoadToolPayload({ request, userMessage: 'All four loads run simultaneously.' });
+
+    expect(payload.profile).toMatchObject({
+      requiredStartingKw: 9.5,
+      requiredNominalKw: 9.5
+    });
+    expect(payload.profile?.totalRunningKw).toBeCloseTo(5.1, 6);
+    expect(payload.profile?.scenarios).toHaveLength(1);
+    expect(payload.profile?.scenarios?.[0]?.itemKinds).toHaveLength(4);
+  });
+
   it('fills conservative defaults for bounded estimated loads with missing kW', () => {
     const payload = buildGeneratorLoadToolPayload({
       request: generatorLoadRequest([{

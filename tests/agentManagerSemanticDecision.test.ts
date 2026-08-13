@@ -97,6 +97,7 @@ function generatorDecision(): AgentSemanticDecision {
             basisKind: 'exact_power',
             basisSignals: ['explicit_power', 'simultaneous_operation_known']
           })),
+          simultaneousRunning: true,
           simultaneousStarting: false,
           simultaneousStartingKinds: [],
           estimateBasis: 'exact_or_user_provided'
@@ -290,6 +291,21 @@ describe('combined semantic decision validation', () => {
     });
 
     expect(result.issues).toContain('generator_load_scenario_missing_load:handheld_tool:angle grinder');
+  });
+
+  it('rejects a calculator plan that stages loads declared as simultaneously running', () => {
+    const decision = generatorDecision();
+    const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;
+    request.args.simultaneousRunning = false;
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222'
+    });
+
+    expect(result.issues).toContain('generator_load_scenario_simultaneous_running_mismatch');
   });
 
   it('rejects calculator execution without a persisted structured load scenario', () => {

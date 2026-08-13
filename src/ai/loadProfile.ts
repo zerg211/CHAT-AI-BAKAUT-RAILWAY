@@ -178,9 +178,11 @@ function isWorkshopKind(item: ProductElectricalLoadItem) {
 
 function isScenarioOnlyLoad(
   item: ProductElectricalLoadItem,
+  simultaneousRunning: boolean,
   simultaneousStarting: boolean,
   simultaneousKinds: Set<string>
 ) {
+  if (simultaneousRunning) return false;
   const kind = canonicalElectricalLoadKind(item.kind);
   const stagedCandidate = isKitchenComfortKind(item) || isWorkshopKind(item);
   if (stagedCandidate && hasOccasionalOrSeparateEvidence(item)) return true;
@@ -194,6 +196,7 @@ function calculateFlatScenario(
   label: string,
   items: ProductElectricalLoadItem[],
   options: {
+    simultaneousRunning?: boolean;
     simultaneousStarting?: boolean;
     simultaneousStartingKinds?: string[];
   } = {}
@@ -259,6 +262,7 @@ function strongestScenario(scenarios: ProductGeneratorLoadScenario[]) {
 export function calculateGeneratorLoadProfile(
   items: ProductElectricalLoadItem[],
   options: {
+    simultaneousRunning?: boolean;
     simultaneousStarting?: boolean;
     simultaneousStartingKinds?: string[];
     confidence?: number;
@@ -283,6 +287,7 @@ export function calculateGeneratorLoadProfile(
       totalRunningKw: aggregateScenario.totalRunningKw,
       requiredStartingKw: aggregateScenario.requiredStartingKw,
       requiredNominalKw: aggregateScenario.requiredNominalKw,
+      simultaneousRunning: Boolean(options.simultaneousRunning),
       simultaneousStarting: Boolean(options.simultaneousStarting),
       simultaneousStartingKinds: [...simultaneousKinds],
       scenarios: [aggregateScenario],
@@ -292,7 +297,12 @@ export function calculateGeneratorLoadProfile(
     };
   }
 
-  const scenarioOnly = usable.filter((item) => isScenarioOnlyLoad(item, Boolean(options.simultaneousStarting), simultaneousKinds));
+  const scenarioOnly = usable.filter((item) => isScenarioOnlyLoad(
+    item,
+    Boolean(options.simultaneousRunning),
+    Boolean(options.simultaneousStarting),
+    simultaneousKinds
+  ));
   const base = usable.filter((item) => !scenarioOnly.includes(item));
   const baseScenarioItems = base.length ? base : [];
   const scenarios: ProductGeneratorLoadScenario[] = [];
@@ -333,6 +343,7 @@ export function calculateGeneratorLoadProfile(
     totalRunningKw: primary.totalRunningKw,
     requiredStartingKw: primary.requiredStartingKw,
     requiredNominalKw: primary.requiredNominalKw,
+    simultaneousRunning: Boolean(options.simultaneousRunning),
     simultaneousStarting: Boolean(options.simultaneousStarting),
     simultaneousStartingKinds: [...simultaneousKinds],
     scenarios,

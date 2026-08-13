@@ -846,6 +846,7 @@ export function validateAgentSemanticDecision(input: {
       const expectedLoads = Array.isArray(value.loads) ? value.loads : [];
       const calculatorArgs = calculatorRequest.args as ToolRequest['args'] & {
         loads?: unknown[];
+        simultaneousRunning?: boolean | null;
         simultaneousStarting?: boolean | null;
       };
       const actualLoadIds = new Set((calculatorArgs.loads ?? []).map(semanticLoadIdentity).filter(Boolean));
@@ -853,6 +854,10 @@ export function validateAgentSemanticDecision(input: {
         const identity = semanticLoadIdentity(load);
         if (identity && !actualLoadIds.has(identity)) issues.push(`generator_load_scenario_missing_load:${identity}`);
       }
+      if (
+        typeof value.simultaneousRunning === 'boolean' &&
+        calculatorArgs.simultaneousRunning !== value.simultaneousRunning
+      ) issues.push('generator_load_scenario_simultaneous_running_mismatch');
       if (
         typeof value.simultaneousStarting === 'boolean' &&
         calculatorArgs.simultaneousStarting !== value.simultaneousStarting
@@ -5846,6 +5851,7 @@ const productDetailsToolArgsJsonSchema = strictJsonObject({
 const generatorLoadToolArgsJsonSchema = strictJsonObject({
   ...commonCatalogToolArgsJsonProperties,
   loads: { type: 'array', items: loadItemArgsJsonSchema, maxItems: 24 },
+  simultaneousRunning: nullableBooleanJsonSchema,
   simultaneousStarting: nullableBooleanJsonSchema,
   simultaneousStartingKinds: boundedStringArrayJsonSchema(24),
   estimateBasis: {
@@ -6362,7 +6368,7 @@ function plannerSystemPromptBlock(
     'For product_selection that depends on technical suitability not fully guaranteed by ordinary catalog fields, plan catalog.search first and web.researchProductFacts second in the same turn. Keep productNames empty when candidates are not known yet: the web tool will research products discovered by the preceding catalog tool. A generic work surface/material context alone is not that technical dependency. Do not choose specialist_required while catalog or web research can still answer the question.',
     'If previous visible product cards become unsuitable after the buyer narrows or corrects the need, plan a fresh catalog.search in the same product class instead of only explaining that the old cards do not fit. The answer should reject the old cards by reason and use the new catalog results as replacement cards when available.',
     'Для расчета генератора по нагрузкам планируй calculator.generatorLoad.',
-    'Set calculator.generatorLoad args.simultaneousStarting=true only when the loads may start at the same moment. Loads that merely run simultaneously must still be included in the same calculation, but do not imply simultaneousStarting=true.',
+    'Set calculator.generatorLoad args.simultaneousRunning=true when the declared loads operate together. Set args.simultaneousStarting=true only when the loads may start at the same moment. Loads that merely run simultaneously must still be included in one flat running scenario, but do not imply simultaneousStarting=true.',
     'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
     'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
     'Fill productMentions for every named product, model, brand-model, or equipment item in the current buyer turn. Classify its semantic role: target_product when the buyer wants to buy/check that exact product; catalog_candidate for a product alternative being considered; comparison_subject for products being compared; context_load_device when it is only a consumer/load/device used to size or apply another product; compatibility_context when it is only equipment that the target product must work with; mentioned_only when no action is needed.',

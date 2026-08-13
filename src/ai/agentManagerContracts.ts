@@ -114,6 +114,7 @@ export const GeneratorLoadToolArgsSchema = z.object({
   powerSource: optionalPowerSource,
   phase: optionalPhase,
   loads: z.array(generatorLoadItemSchema).max(24),
+  simultaneousRunning: optionalPlaceholder(z.boolean()),
   simultaneousStarting: optionalPlaceholder(z.boolean()),
   simultaneousStartingKinds: stringList(24),
   estimateBasis: optionalPlaceholder(z.enum(['exact_or_user_provided', 'catalog_or_web_fact', 'bounded_assumption', 'unbounded_guess'])),
@@ -244,6 +245,7 @@ export interface ToolRequestArgs {
     requirementId: string;
   }>;
   loads?: unknown[];
+  simultaneousRunning?: boolean | null;
   simultaneousStarting?: boolean | null;
   simultaneousStartingKinds?: string[];
   estimateBasis?: 'exact_or_user_provided' | 'catalog_or_web_fact' | 'bounded_assumption' | 'unbounded_guess' | null;

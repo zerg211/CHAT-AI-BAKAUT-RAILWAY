@@ -366,6 +366,7 @@ export interface ProductGeneratorLoadProfile {
   totalRunningKw?: number;
   requiredStartingKw?: number;
   requiredNominalKw?: number;
+  simultaneousRunning?: boolean;
   simultaneousStarting?: boolean;
   simultaneousStartingKinds?: string[];
   scenarios?: ProductGeneratorLoadScenario[];
