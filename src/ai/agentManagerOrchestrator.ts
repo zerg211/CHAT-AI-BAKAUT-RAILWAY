@@ -771,6 +771,20 @@ function semanticLoadIdentity(value: unknown) {
   return kind ? `${kind}:${name}` : null;
 }
 
+function executableSemanticLoadIdentity(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  const request: ToolRequest = {
+    id: 'semantic-load-identity',
+    tool: 'calculator.generatorLoad',
+    args: { loads: [item] },
+    rationale: 'normalize one semantic load for executable identity validation',
+    required: true
+  };
+  const executable = buildGeneratorLoadToolPayload({ request, userMessage: '' }).loads[0];
+  return executable ? semanticLoadIdentity(executable) : null;
+}
+
 export function validateAgentSemanticDecision(input: {
   decision: AgentSemanticDecision;
   previousLedgerState: ReducedDialogueLedgerState;
@@ -858,8 +872,11 @@ export function validateAgentSemanticDecision(input: {
       );
       for (const load of expectedLoads) {
         const identity = semanticLoadIdentity(load);
+        const executableIdentity = executableSemanticLoadIdentity(load);
         if (identity && !actualLoadIds.has(identity)) issues.push(`generator_load_scenario_missing_load:${identity}`);
-        if (identity && !executableLoadIds.has(identity)) issues.push(`generator_load_scenario_unexecutable_load:${identity}`);
+        if (identity && (!executableIdentity || !executableLoadIds.has(executableIdentity))) {
+          issues.push(`generator_load_scenario_unexecutable_load:${identity}`);
+        }
       }
       if (
         typeof value.simultaneousRunning === 'boolean' &&

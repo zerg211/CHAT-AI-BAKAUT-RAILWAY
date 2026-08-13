@@ -329,6 +329,27 @@ describe('combined semantic decision validation', () => {
     expect(result.issues).toContain('generator_load_scenario_unexecutable_load:handheld_tool:angle grinder');
   });
 
+  it('accepts an explicit numeric load after the calculator canonicalizes an unknown kind from its name', () => {
+    const decision = generatorDecision();
+    const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;
+    const machine = request.args.loads?.find((load: unknown) => (load as { name?: string }).name === 'machine') as Record<string, unknown>;
+    machine.kind = 'unknown_load';
+    const scenarioEvent = decision.ledgerDelta.events.find((event) => event.payload.factKey === 'generator_load_scenario')!;
+    const scenarioValue = scenarioEvent.payload.value as { loads: Array<Record<string, unknown>> };
+    scenarioValue.loads.find((load) => load.name === 'machine')!.kind = 'unknown_load';
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222',
+      userMessage: 'The machine is explicitly rated at 1.1 kW.'
+    });
+
+    expect(result.issues).not.toContain('generator_load_scenario_unexecutable_load:machine:machine');
+    expect(result.issues).not.toContain('generator_load_scenario_unexecutable_load:unknown_load:machine');
+  });
+
   it('rejects calculator execution without a persisted structured load scenario', () => {
     const decision = generatorDecision();
     decision.ledgerDelta.events = decision.ledgerDelta.events.filter((event) =>
