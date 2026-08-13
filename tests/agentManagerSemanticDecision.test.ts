@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  humanizeTerminalVerificationLabel,
+  terminalCatalogRecovery,
+  terminalGeneratorCalculationFromIntent,
   terminalGeneratorCalculationRecovery,
   terminalOpenQuestionRecovery,
   validateAgentSemanticDecision,
@@ -173,6 +176,49 @@ function generatorDecision(): AgentSemanticDecision {
 }
 
 describe('combined semantic decision validation', () => {
+  it('does not expose internal verification keys to the buyer', () => {
+    expect(humanizeTerminalVerificationLabel('nominal_power_kw')).toBe('номинальная мощность');
+    expect(humanizeTerminalVerificationLabel('auto_start_required')).toBe('электростартер');
+  });
+
+  it('does not recover stale cards when a required current-turn calculation is missing', () => {
+    const decision = generatorDecision();
+    const staleProduct = {
+      id: 'stale-generator',
+      name: 'Старый генератор 8 кВт',
+      category: 'Бензиновые генераторы',
+      price: 99_990,
+      currency: 'RUB',
+      specs: { nominal_power_kw: 8 }
+    };
+    expect(terminalCatalogRecovery({
+      intent: decision.intent,
+      toolResults: [],
+      previousProductReferents: [staleProduct]
+    })).toMatchObject({
+      products: [],
+      cards: [],
+      warnings: ['terminal_catalog_recovery_required_tool_missing:calculator.generatorLoad']
+    });
+  });
+
+  it('executes the persisted deterministic generator calculation at the terminal boundary', () => {
+    const result = terminalGeneratorCalculationFromIntent(generatorDecision().intent, '');
+
+    expect(result).toMatchObject({
+      requestId: 'load-calculation',
+      tool: 'calculator.generatorLoad',
+      status: 'ok',
+      warnings: expect.arrayContaining(['terminal_deterministic_generator_calculation']),
+      payload: {
+        loads: expect.arrayContaining([
+          expect.objectContaining({ name: 'compressor', runningKw: 2.2 }),
+          expect.objectContaining({ name: 'angle grinder', runningKw: 1.5 })
+        ]),
+        profile: expect.objectContaining({ requiredNominalKw: expect.any(Number) })
+      }
+    });
+  });
   it('accepts one coherent post-delta decision with every simultaneous consumer', () => {
     const result = validateAgentSemanticDecision({
       decision: generatorDecision(),

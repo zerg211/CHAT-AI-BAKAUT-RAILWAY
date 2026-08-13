@@ -1827,7 +1827,7 @@ class AnswerReviewBlockedError extends Error {
 
 const RECOVERY_LEASE_RETRY_INTERVAL_MS = 500;
 export const RECOVERY_LEASE_WAIT_LIMIT_MS = DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs;
-const TURN_TERMINAL_RESERVE_MS = 5_000;
+const TURN_TERMINAL_RESERVE_MS = 10_000;
 const WEB_COMPOSE_REVIEW_RESERVE_MS = 30_000;
 const WEB_MIN_EXECUTION_MS = 6_000;
 
@@ -3362,6 +3362,20 @@ type TerminalCatalogRecovery = {
   warnings: string[];
 };
 
+export function humanizeTerminalVerificationLabel(value: string) {
+  const normalized = value.trim().toLowerCase();
+  const labels: Record<string, string> = {
+    nominal_power_kw: 'номинальная мощность',
+    price_rub: 'текущая цена',
+    auto_start_required: 'электростартер',
+    phase: 'число фаз',
+    fuel_type: 'тип топлива',
+    voltage_v: 'напряжение',
+    weight_kg: 'масса'
+  };
+  return labels[normalized] ?? value.trim().replaceAll('_', ' ');
+}
+
 function terminalVerificationFallbackSlots(
   request: ToolRequest,
   requirementsById: Map<string, SelectionRequirement>
@@ -3442,7 +3456,7 @@ function terminalUnfinishedWebVerification(input: {
     : fallbackSlots;
 }
 
-function terminalCatalogRecovery(input: {
+export function terminalCatalogRecovery(input: {
   intent: AgentIntentContract | undefined;
   toolResults: ToolResult[];
   previousProductReferents?: Product[];
@@ -3456,6 +3470,24 @@ function terminalCatalogRecovery(input: {
       unfinishedVerification: [],
       technicalHandoffEligible: false,
       warnings: []
+    };
+  }
+  const resultByRequestId = new Map(input.toolResults.map((result) => [result.requestId, result]));
+  const missingRequiredToolRequests = input.intent.toolRequests.filter((request) =>
+    request.required &&
+    request.tool !== 'web.researchProductFacts' &&
+    resultByRequestId.get(request.id)?.status !== 'ok'
+  );
+  if (missingRequiredToolRequests.length) {
+    return {
+      products: [],
+      cards: [],
+      catalogRequestIds: [],
+      unfinishedVerification: [],
+      technicalHandoffEligible: false,
+      warnings: missingRequiredToolRequests.map((request) =>
+        `terminal_catalog_recovery_required_tool_missing:${request.tool}`
+      )
     };
   }
   const recoveryIntent: AgentIntentContract = policy.selectionGoal === 'final_fit'
@@ -3474,7 +3506,7 @@ function terminalCatalogRecovery(input: {
   const catalogRequestIds = catalogResults.map((result) => result.requestId);
   const currentCatalogProducts = catalogResults.flatMap(productsFromPersistedToolResult);
   const catalogProducts = [...new Map([
-    ...(input.previousProductReferents ?? []),
+    ...(policy.reusePreviousCards ? input.previousProductReferents ?? [] : []),
     ...currentCatalogProducts
   ].map((product) => [product.id, product])).values()];
   if (!catalogProducts.length) {
@@ -3502,7 +3534,6 @@ function terminalCatalogRecovery(input: {
       warnings: ['terminal_catalog_recovery_no_mechanically_eligible_products']
     };
   }
-  const resultByRequestId = new Map(input.toolResults.map((result) => [result.requestId, result]));
   const requirementsById = new Map(policy.requirements.map((requirement) => [requirement.id, requirement]));
   const unresolvedWebChecks = input.intent.toolRequests.flatMap((request) => {
     if (request.tool !== 'web.researchProductFacts' || !request.required) return [];
@@ -3511,7 +3542,7 @@ function terminalCatalogRecovery(input: {
       request,
       result,
       requirementsById
-    });
+    }).map(humanizeTerminalVerificationLabel);
     return gaps.length ? [{
       gaps,
       exhausted: Boolean(result && webResearchResultProvesSourceExhaustion(result))
@@ -5432,6 +5463,33 @@ export function terminalGeneratorCalculationRecovery(toolResults: ToolResult[]) 
   };
 }
 
+export function terminalGeneratorCalculationFromIntent(
+  intent: AgentIntentContract | undefined,
+  userMessage: string
+) {
+  const request = intent?.toolRequests.find((item) =>
+    item.tool === 'calculator.generatorLoad' && item.required
+  );
+  if (!request) return null;
+  const calculated = buildGeneratorLoadToolPayload({ request, userMessage });
+  if (!calculated.profile) return null;
+  return ToolResultSchema.parse({
+    requestId: request.id,
+    tool: request.tool,
+    status: 'ok',
+    observationStatus: 'success',
+    payload: {
+      loads: calculated.loads,
+      profile: calculated.profile,
+      estimateBasis: calculated.estimateBasis
+    },
+    warnings: uniqueStrings([
+      ...calculated.warnings,
+      'terminal_deterministic_generator_calculation'
+    ])
+  });
+}
+
 export function terminalOpenQuestionRecovery(ledgerState: ReducedDialogueLedgerState) {
   const activeNeed = [...Object.values(ledgerState.needsById)]
     .reverse()
@@ -5459,7 +5517,7 @@ function terminalUnfinishedVerificationFromIntent(intent: AgentIntentContract | 
           request,
           result: resultByRequestId.get(request.id),
           requirementsById
-        })
+        }).map(humanizeTerminalVerificationLabel)
       : []
   ));
 }
@@ -10859,13 +10917,6 @@ export class AgentManagerOrchestrator {
       Boolean(result.payload && typeof result.payload === 'object') &&
       (result.payload as { usedWebSearch?: unknown }).usedWebSearch === true
     );
-    const toolStatuses = persistedToolResults.map((result) => ({
-      requestId: result.requestId,
-      tool: result.tool,
-      status: result.status,
-      observationStatus: result.observationStatus ?? null,
-      errorCode: result.errorCode ?? null
-    }));
     const persistedTurn = await this.conversations.getTurn(input.session.id, input.turnId);
     const persistedIntentPayload = persistedTurn?.plannerContract ??
       succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_created').payload ??
@@ -10874,6 +10925,27 @@ export class AgentManagerOrchestrator {
     const terminalHistory = persistedIntent.success
       ? await this.conversations.listMessages(input.session.id, 80)
       : [];
+    const latestUserMessage = [...terminalHistory]
+      .reverse()
+      .find((message) => message.role === 'user')?.content ?? '';
+    const terminalCalculationResult = persistedToolResults.some((result) =>
+      result.tool === 'calculator.generatorLoad' && result.status === 'ok'
+    )
+      ? null
+      : terminalGeneratorCalculationFromIntent(
+          persistedIntent.success ? persistedIntent.data : undefined,
+          latestUserMessage
+        );
+    const terminalToolResults = terminalCalculationResult
+      ? [...persistedToolResults, terminalCalculationResult]
+      : persistedToolResults;
+    const toolStatuses = terminalToolResults.map((result) => ({
+      requestId: result.requestId,
+      tool: result.tool,
+      status: result.status,
+      observationStatus: result.observationStatus ?? null,
+      errorCode: result.errorCode ?? null
+    }));
     const previousReferents = persistedIntent.success
       ? previousProductReferents({
           history: terminalHistory,
@@ -10883,16 +10955,16 @@ export class AgentManagerOrchestrator {
       : [];
     const catalogRecovery = terminalCatalogRecovery({
       intent: persistedIntent.success ? persistedIntent.data : undefined,
-      toolResults: persistedToolResults,
+      toolResults: terminalToolResults,
       previousProductReferents: previousReferents
     });
-    const calculationRecovery = terminalGeneratorCalculationRecovery(persistedToolResults);
+    const calculationRecovery = terminalGeneratorCalculationRecovery(terminalToolResults);
     const openQuestionRecovery = terminalOpenQuestionRecovery(ledgerContext.state);
     const unfinishedVerification = uniqueStrings([
       ...catalogRecovery.unfinishedVerification,
       ...terminalUnfinishedVerificationFromIntent(
         persistedIntent.success ? persistedIntent.data : undefined,
-        persistedToolResults
+        terminalToolResults
       )
     ]);
     const recoveryProductClass = persistedIntent.success
@@ -11024,6 +11096,7 @@ export class AgentManagerOrchestrator {
         technicalHandoffEligible: catalogRecovery.technicalHandoffEligible,
         warnings: catalogRecovery.warnings
       },
+      terminalDeterministicGeneratorCalculation: Boolean(terminalCalculationResult),
       answerContract,
       preSendReview: review,
       needStateSnapshot,

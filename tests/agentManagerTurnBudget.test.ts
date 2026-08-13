@@ -19,7 +19,7 @@ describe('agent manager turn budget', () => {
     hostedToolCostUsd: 0
   });
 
-  it('reserves a bounded 40-second work budget so terminal recovery can finish before 45 seconds', () => {
+  it('reserves a bounded 40-second local budget while the route deadline keeps a larger terminal reserve', () => {
     const webTimeoutMs = agentManagerToolRegistry['web.researchProductFacts'].timeoutMs;
 
     expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(40_000);
