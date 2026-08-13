@@ -850,9 +850,16 @@ export function validateAgentSemanticDecision(input: {
         simultaneousStarting?: boolean | null;
       };
       const actualLoadIds = new Set((calculatorArgs.loads ?? []).map(semanticLoadIdentity).filter(Boolean));
+      const executableLoadIds = new Set(
+        buildGeneratorLoadToolPayload({ request: calculatorRequest, userMessage: input.userMessage ?? '' })
+          .loads
+          .map(semanticLoadIdentity)
+          .filter(Boolean)
+      );
       for (const load of expectedLoads) {
         const identity = semanticLoadIdentity(load);
         if (identity && !actualLoadIds.has(identity)) issues.push(`generator_load_scenario_missing_load:${identity}`);
+        if (identity && !executableLoadIds.has(identity)) issues.push(`generator_load_scenario_unexecutable_load:${identity}`);
       }
       if (
         typeof value.simultaneousRunning === 'boolean' &&

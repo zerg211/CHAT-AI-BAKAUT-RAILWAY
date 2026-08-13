@@ -311,6 +311,24 @@ describe('combined semantic decision validation', () => {
     expect(result.issues).toContain('generator_load_scenario_simultaneous_running_mismatch');
   });
 
+  it('rejects a semantic load that the deterministic calculator would discard', () => {
+    const decision = generatorDecision();
+    const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;
+    const grinder = request.args.loads?.find((load: unknown) => (load as { name?: string }).name === 'angle grinder') as Record<string, unknown>;
+    grinder.kind = 'generator';
+    grinder.name = 'generator';
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222',
+      userMessage: 'All loads run simultaneously.'
+    });
+
+    expect(result.issues).toContain('generator_load_scenario_unexecutable_load:handheld_tool:angle grinder');
+  });
+
   it('rejects calculator execution without a persisted structured load scenario', () => {
     const decision = generatorDecision();
     decision.ledgerDelta.events = decision.ledgerDelta.events.filter((event) =>

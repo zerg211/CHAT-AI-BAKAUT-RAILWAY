@@ -69,6 +69,27 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.profile?.scenarios?.[0]?.itemKinds).toHaveLength(4);
   });
 
+  it('keeps a welding inverter load even when its semantic kind resembles a product class', () => {
+    const request = generatorLoadRequest([{
+      kind: 'weldingGenerator',
+      name: 'welding inverter',
+      count: 1,
+      runningKw: 3,
+      source: 'explicit_user',
+      evidence: '3 kW welding inverter runs simultaneously'
+    }]);
+    request.args.simultaneousRunning = true;
+    request.args.simultaneousStarting = false;
+
+    const payload = buildGeneratorLoadToolPayload({ request, userMessage: 'The 3 kW welding inverter runs simultaneously.' });
+
+    expect(payload.loads).toEqual([
+      expect.objectContaining({ name: 'welding inverter', runningKw: 3 })
+    ]);
+    expect(payload.profile?.totalRunningKw).toBe(3);
+    expect(payload.warnings).not.toContain('generator_load_invalid_load_kind');
+  });
+
   it('fills conservative defaults for bounded estimated loads with missing kW', () => {
     const payload = buildGeneratorLoadToolPayload({
       request: generatorLoadRequest([{

@@ -18,6 +18,7 @@ function normalizeKey(value: string | undefined) {
 
 export function canonicalElectricalLoadKind(kind: string | undefined) {
   const key = normalizeKey(kind);
+  if (['welding_inverter', 'inverter_welder', 'сварочный_инвертор', 'инверторный_сварочный_аппарат'].includes(key)) return 'welding_inverter';
   if (['fridge', 'refrigerator', 'холодильник'].includes(key)) return 'refrigerator';
   if (['light', 'lights', 'lighting', 'led', 'led_light', 'освещение', 'свет'].includes(key)) return 'lighting';
   if (['pump', 'well_pump', 'borehole_pump', 'surface_pump', 'submersible_pump', 'circulation_pump', 'drainage_pump', 'насос'].includes(key)) return 'pump';
@@ -35,6 +36,7 @@ const singleActiveLoadKinds = new Set([
   'lighting',
   'pump',
   'handheld_tool',
+  'welding_inverter',
   'boiler',
   'television',
   'router',

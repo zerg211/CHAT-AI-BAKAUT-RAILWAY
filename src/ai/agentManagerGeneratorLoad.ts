@@ -3,6 +3,7 @@ import type { ToolRequest, ToolResult } from './agentManagerContracts.js';
 import { calculateGeneratorLoadProfile, canonicalElectricalLoadKind } from './loadProfile.js';
 
 const loadProductClassAliases = new Set(['generator', 'weldinggenerator', 'welding_generator', 'platecompactor', 'plate_compactor']);
+const ambiguousWeldingLoadAliases = new Set(['weldinggenerator', 'welding_generator']);
 const generatorLoadEstimateBases = new Set(['exact_or_user_provided', 'catalog_or_web_fact', 'bounded_assumption', 'unbounded_guess']);
 const generatorLoadBasisSignals = new Set([
   'consumer_type_known',
@@ -115,6 +116,11 @@ function isProductClassLoadKind(value: unknown) {
   return loadProductClassAliases.has(compactLoadToken(value));
 }
 
+function isConcreteWeldingInverterLoad(kind: unknown, name: unknown) {
+  return ambiguousWeldingLoadAliases.has(compactLoadToken(kind)) &&
+    canonicalElectricalLoadKind(typeof name === 'string' ? name : undefined) === 'welding_inverter';
+}
+
 function loadsFromArgs(args: { loads?: unknown[] }, fallbackEvidence: string): {
   loads: GeneratorLoadToolItem[];
   warnings: string[];
@@ -125,7 +131,7 @@ function loadsFromArgs(args: { loads?: unknown[] }, fallbackEvidence: string): {
 
   for (const item of rawLoads) {
     if (!isObjectRecord(item)) continue;
-    if (isProductClassLoadKind(item.kind)) {
+    if (isProductClassLoadKind(item.kind) && !isConcreteWeldingInverterLoad(item.kind, item.name)) {
       warnings.add('generator_load_invalid_load_kind');
       continue;
     }
