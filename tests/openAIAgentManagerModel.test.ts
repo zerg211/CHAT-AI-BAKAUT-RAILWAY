@@ -75,6 +75,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       history?: unknown[];
     };
     expect(input.history).toHaveLength(20);
+    expect(request).toMatchObject({ max_output_tokens: 3200 });
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);
   });
 

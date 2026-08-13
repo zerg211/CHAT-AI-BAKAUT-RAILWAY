@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   terminalGeneratorCalculationRecovery,
+  terminalOpenQuestionRecovery,
   validateAgentSemanticDecision,
   type AgentSemanticDecision
 } from '../src/ai/agentManagerOrchestrator.js';
+import { normalizeLedgerStateDeltaEvents } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 
 function generatorDecision(): AgentSemanticDecision {
@@ -252,6 +254,33 @@ describe('combined semantic decision validation', () => {
       totalRunningKw: 5.1,
       requiredStartingKw: 10.7,
       requiredNominalKw: 11
+    });
+  });
+
+  it('preserves the authoritative open question for terminal recovery', () => {
+    const decision = generatorDecision();
+    decision.ledgerDelta.events.push({
+      eventType: 'question.asked',
+      scope: 'question',
+      payload: {
+        questionId: 'generator-loads',
+        text: 'Какие приборы будут работать одновременно?',
+        needId: 'generator-workshop'
+      },
+      evidence: 'Generator power is unknown until the simultaneous loads are named.',
+      source: 'llm_state_delta',
+      status: 'active'
+    });
+    const events = normalizeLedgerStateDeltaEvents({
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222',
+      delta: decision.ledgerDelta
+    });
+
+    expect(terminalOpenQuestionRecovery(reduceDialogueLedger(events))).toMatchObject({
+      questionId: 'generator-loads',
+      text: 'Какие приборы будут работать одновременно?',
+      productClass: 'generator'
     });
   });
 });

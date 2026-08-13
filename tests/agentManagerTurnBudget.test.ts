@@ -19,25 +19,25 @@ describe('agent manager turn budget', () => {
     hostedToolCostUsd: 0
   });
 
-  it('reserves a bounded 100-second work budget with room after the full web window', () => {
+  it('reserves a bounded 40-second work budget so terminal recovery can finish before 45 seconds', () => {
     const webTimeoutMs = agentManagerToolRegistry['web.researchProductFacts'].timeoutMs;
 
-    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(100_000);
+    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(40_000);
     expect(webTimeoutMs).toBeGreaterThan(30_000);
-    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs - webTimeoutMs).toBeGreaterThanOrEqual(30_000);
+    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBeLessThan(webTimeoutMs);
   });
 
-  it('allows a full 45-second web call after 25 seconds while preserving compose and review time', () => {
+  it('caps web work to the time left after preserving compose and terminal recovery', () => {
     let now = 1_000;
     const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS, () => now);
-    now += 25_000;
+    now += 2_000;
     const composeReviewReserveMs = 30_000;
     const effectiveWebTimeoutMs = Math.min(
       agentManagerToolRegistry['web.researchProductFacts'].timeoutMs,
       budget.remainingWallTimeMs() - composeReviewReserveMs
     );
 
-    expect(effectiveWebTimeoutMs).toBe(45_000);
+    expect(effectiveWebTimeoutMs).toBe(8_000);
     now += effectiveWebTimeoutMs;
     expect(budget.remainingWallTimeMs()).toBe(composeReviewReserveMs);
   });

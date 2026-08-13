@@ -5432,6 +5432,23 @@ export function terminalGeneratorCalculationRecovery(toolResults: ToolResult[]) 
   };
 }
 
+export function terminalOpenQuestionRecovery(ledgerState: ReducedDialogueLedgerState) {
+  const activeNeed = [...Object.values(ledgerState.needsById)]
+    .reverse()
+    .find((need) => need.status === 'open' || need.status === 'selected');
+  const question = [...ledgerState.openQuestions]
+    .reverse()
+    .find((item) => !activeNeed || !item.needId || item.needId === activeNeed.needId);
+  if (!question) return null;
+  return {
+    questionId: question.questionId,
+    text: question.text,
+    sourceEventId: question.askedEventId,
+    productClass: activeNeed?.productClass ?? 'unknown',
+    needSummary: activeNeed?.summary?.trim() || null
+  };
+}
+
 function terminalUnfinishedVerificationFromIntent(intent: AgentIntentContract | undefined, toolResults: ToolResult[]) {
   if (!intent) return [];
   const requirementsById = new Map((intent.selectionPolicy?.requirements ?? []).map((item) => [item.id, item]));
@@ -6283,7 +6300,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     const request = {
       model: config.OPENAI_PLANNER_MODEL,
       reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
-      max_output_tokens: input.structuredOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
+      max_output_tokens: input.structuredOutputTokenCap ?? Math.max(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS, 3_200),
       input: [
         {
           role: 'system',
@@ -7226,7 +7243,7 @@ export class AgentManagerOrchestrator {
           pendingLeadCaptureDraft: pendingLeadDraftContext,
           pendingExhaustedTechnicalHandoffs,
           structuredDeadlineAtMs,
-          structuredOutputTokenCap: Math.max(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS, 4_800),
+          structuredOutputTokenCap: Math.max(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS, 3_200),
           signal: input.signal
         };
         await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_started', {
@@ -10870,6 +10887,7 @@ export class AgentManagerOrchestrator {
       previousProductReferents: previousReferents
     });
     const calculationRecovery = terminalGeneratorCalculationRecovery(persistedToolResults);
+    const openQuestionRecovery = terminalOpenQuestionRecovery(ledgerContext.state);
     const unfinishedVerification = uniqueStrings([
       ...catalogRecovery.unfinishedVerification,
       ...terminalUnfinishedVerificationFromIntent(
@@ -10904,6 +10922,8 @@ export class AgentManagerOrchestrator {
               ? [`Не завершилась проверка: ${unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`]
               : [])
           ].join(' ')
+        : openQuestionRecovery
+          ? `${openQuestionRecovery.needSummary ? `Чтобы продолжить ${openQuestionRecovery.needSummary.toLowerCase()}, ` : 'Чтобы продолжить подбор, '}уточните: ${openQuestionRecovery.text}`
         : 'Не удалось получить ни одного проверенного результата в пределах этого хода. Конкретный ответ без фактической опоры не выдаю.';
     const answerContract: AnswerContract = {
       answerText: finalText,
@@ -10926,7 +10946,13 @@ export class AgentManagerOrchestrator {
             }]
           : [])
       ],
-      questionsAsked: [],
+      questionsAsked: openQuestionRecovery && !catalogRecovery.products.length && !calculationRecovery
+        ? [{
+            questionId: openQuestionRecovery.questionId,
+            text: openQuestionRecovery.text,
+            reason: 'The authoritative semantic decision opened this unresolved question before the turn deadline.'
+          }]
+        : [],
       toolResultIds: uniqueStrings([
         ...catalogRecovery.catalogRequestIds,
         ...(calculationRecovery ? [calculationRecovery.requestId] : []),
@@ -10943,6 +10969,9 @@ export class AgentManagerOrchestrator {
       riskFlags: uniqueStrings([
         'deterministic_terminal_response',
         ...(calculationRecovery ? ['terminal_generator_calculation_recovery'] : []),
+        ...(openQuestionRecovery && !catalogRecovery.products.length && !calculationRecovery
+          ? ['terminal_open_question_recovery']
+          : []),
         ...(catalogRecovery.products.length ? ['terminal_catalog_recovery'] : []),
         ...(catalogRecovery.technicalHandoffEligible
           ? ['terminal_technical_handoff_after_search_exhaustion']
@@ -10957,12 +10986,16 @@ export class AgentManagerOrchestrator {
             rationale: 'The terminal recovery preserved catalog candidates that passed the persisted selection policy; an external verification did not finish.'
           }
         : {
-            productClass: calculationRecovery ? recoveryProductClass : 'unknown',
-            status: calculationRecovery ? 'needs_more_info' : 'not_applicable',
+            productClass: calculationRecovery
+              ? recoveryProductClass
+              : openQuestionRecovery?.productClass ?? 'unknown',
+            status: calculationRecovery || openQuestionRecovery ? 'needs_more_info' : 'not_applicable',
             canShowProductCards: false,
             missingFacts: unfinishedVerification,
             rationale: calculationRecovery
               ? 'A successful generator calculation was preserved, but no recommendation-eligible catalog card was available.'
+              : openQuestionRecovery
+                ? 'The authoritative semantic decision opened a still-unanswered question before the turn deadline.'
               : 'The absolute turn deadline was reached before any fact-bearing result could be committed.'
           }
     };
