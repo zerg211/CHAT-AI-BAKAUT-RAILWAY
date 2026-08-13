@@ -3405,6 +3405,7 @@ export function humanizeTerminalVerificationLabel(value: string) {
     price_rub: 'текущая цена',
     auto_start_required: 'электростартер',
     'electric starter': 'электростартер',
+    'starting system': 'электростартер',
     phase: 'число фаз',
     fuel_type: 'тип топлива',
     'starting power kw': 'пусковая мощность',
@@ -3418,6 +3419,7 @@ export function humanizeTerminalVerificationLabel(value: string) {
   if (compact === 'startingpowerkw') return 'пусковая мощность';
   if (compact === 'maxpowerkw') return 'максимальная мощность';
   if (compact === 'electricstarter') return 'электростартер';
+  if (compact === 'startingsystem') return 'электростартер';
   return value.trim().replaceAll('_', ' ');
 }
 
