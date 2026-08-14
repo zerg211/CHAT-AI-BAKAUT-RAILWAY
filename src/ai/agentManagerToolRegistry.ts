@@ -105,7 +105,10 @@ const webResearchResult = z.object({
     tier: z.enum(['catalog', 'official_page', 'official_manual', 'reliable_secondary']),
     outcome: z.enum(['confirmed', 'not_found', 'unreadable', 'skipped_budget']),
     query: z.string().optional(),
-    sources: z.array(researchSource).max(8).optional()
+    // A single web-search query may return several exact-model pages. Keep a
+    // bounded payload, but do not reject a valid result merely because the
+    // provider returned more than the former eight-source cap.
+    sources: z.array(researchSource).max(32).optional()
   }).strict()).optional(),
   unconfirmedFacts: z.array(z.object({
     requirementIds: z.array(z.string()),

@@ -115,6 +115,30 @@ describe('agent manager strict tool registry', () => {
       ])
     });
 
+    const sourceList = Array.from({ length: 9 }, (_, index) => ({
+      url: `https://manufacturer.example/manual-${index}.pdf`,
+      host: 'manufacturer.example',
+      documentKind: 'manual_or_specification' as const,
+      tier: 'official_manual' as const,
+      authority: 'manufacturer' as const
+    }));
+    expect(validateToolResultOutput({
+      requestId: 'web-source-list',
+      tool: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        sourceAttempts: [{
+          tier: 'official_manual',
+          outcome: 'confirmed',
+          query: 'exact model official manual PDF',
+          sources: sourceList
+        }]
+      },
+      warnings: []
+    }).payload).toMatchObject({
+      sourceAttempts: [{ sources: sourceList }]
+    });
+
     expect(() => validateToolResultOutput({
       requestId: 'search-1',
       tool: 'catalog.search',
