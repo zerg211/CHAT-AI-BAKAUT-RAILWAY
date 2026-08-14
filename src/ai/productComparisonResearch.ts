@@ -2558,7 +2558,7 @@ export async function researchProductComparisonFacts(input: {
     ],
     tools: [{
       type: 'web_search',
-      search_context_size: compactCatalogFirstResearch ? 'low' : targetProductNames.length ? 'medium' : 'low',
+      search_context_size: 'low',
       return_token_budget: 'default'
     }],
     tool_choice: { type: 'web_search' },

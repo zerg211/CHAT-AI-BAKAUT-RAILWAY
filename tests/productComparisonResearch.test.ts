@@ -833,7 +833,7 @@ describe('product comparison research', () => {
     expect(webCall.request.max_output_tokens).toBeGreaterThanOrEqual(1800);
     expect(webCall.request.tools).toEqual([{
       type: 'web_search',
-      search_context_size: 'medium',
+      search_context_size: 'low',
       return_token_budget: 'default'
     }]);
     expect(webCall.request.tool_choice).toEqual({ type: 'web_search' });
@@ -1595,7 +1595,7 @@ describe('product comparison research', () => {
     expect(webCall.stage).toBe('product_comparison_research');
     expect(webCall.request.tools).toEqual([{
       type: 'web_search',
-      search_context_size: 'medium',
+      search_context_size: 'low',
       return_token_budget: 'default'
     }]);
     expect(JSON.stringify(webCall.request.input)).toContain('catalogExtraction');
