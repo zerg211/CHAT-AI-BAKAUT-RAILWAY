@@ -482,6 +482,16 @@ describe('conditional catalog-evidence web short-circuit', () => {
     expect(candidates({ intent, products: [quiet] })).toEqual([]);
   });
 
+  it('short-circuits a catalog-covered product attribute even when the repaired web request has no binding', () => {
+    const quiet = generator('quiet', ['58 dB']);
+    const intent = conditionalWebIntent({
+      comparisonAttributes: [],
+      comparisonAttributeBindings: []
+    });
+
+    expect(candidates({ intent, products: [quiet] }).map((product) => product.id)).toEqual(['quiet']);
+  });
+
   it('keeps a preliminary candidate after authoritative web proof fills a missing native autostart field', () => {
     const product = generator('g7000');
     const intent = conditionalWebIntent({

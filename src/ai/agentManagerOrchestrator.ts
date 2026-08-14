@@ -3354,24 +3354,27 @@ export function catalogCandidatesSatisfyingConditionalWebRequest(input: {
   const comparisonAttributeBindings = comparisonAttributeBindingsForRequest(input.request);
   const normalizedComparisonAttributes = comparisonAttributes.map((attribute) => normalizeModelText(attribute));
   const boundRequirementIds = uniqueStrings(comparisonAttributeBindings.map((binding) => binding.requirementId));
+  const hasComparisonRequest = comparisonAttributes.length > 0 || comparisonAttributeBindings.length > 0;
   if (
     coveredRequirements.some((requirement) =>
       !requirement || requirement.verification?.mode !== 'product_attribute'
     ) ||
-    comparisonAttributes.length === 0 ||
-    comparisonAttributeBindings.length !== comparisonAttributes.length ||
-    new Set(normalizedComparisonAttributes).size !== comparisonAttributes.length ||
-    new Set(comparisonAttributeBindings.map((binding) => normalizeModelText(binding.attribute))).size !== comparisonAttributes.length ||
-    comparisonAttributeBindings.some((binding) => {
-      const comparisonAttributeIndex = normalizedComparisonAttributes.indexOf(normalizeModelText(binding.attribute));
-      const requirement = requirementsById.get(binding.requirementId);
-      return comparisonAttributeIndex < 0 ||
-        !coveredRequirementIds.includes(binding.requirementId) ||
-        requirement?.verification?.mode !== 'product_attribute' ||
-        !selectionRequirementAttributeMatches(binding.attribute, requirement.kind);
-    }) ||
-    boundRequirementIds.length !== coveredRequirementIds.length ||
-    coveredRequirementIds.some((requirementId) => !boundRequirementIds.includes(requirementId)) ||
+    (hasComparisonRequest && (
+      comparisonAttributes.length === 0 ||
+      comparisonAttributeBindings.length !== comparisonAttributes.length ||
+      new Set(normalizedComparisonAttributes).size !== comparisonAttributes.length ||
+      new Set(comparisonAttributeBindings.map((binding) => normalizeModelText(binding.attribute))).size !== comparisonAttributes.length ||
+      comparisonAttributeBindings.some((binding) => {
+        const comparisonAttributeIndex = normalizedComparisonAttributes.indexOf(normalizeModelText(binding.attribute));
+        const requirement = requirementsById.get(binding.requirementId);
+        return comparisonAttributeIndex < 0 ||
+          !coveredRequirementIds.includes(binding.requirementId) ||
+          requirement?.verification?.mode !== 'product_attribute' ||
+          !selectionRequirementAttributeMatches(binding.attribute, requirement.kind);
+      }) ||
+      boundRequirementIds.length !== coveredRequirementIds.length ||
+      coveredRequirementIds.some((requirementId) => !boundRequirementIds.includes(requirementId))
+    )) ||
     !input.toolResults.some((result) => result.tool === 'catalog.search' && result.status === 'ok')
   ) return [] as Product[];
 
