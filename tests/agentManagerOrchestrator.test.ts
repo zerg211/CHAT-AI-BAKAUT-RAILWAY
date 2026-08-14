@@ -4,6 +4,7 @@ import {
   AgentManagerOrchestrator,
   RECOVERY_LEASE_WAIT_LIMIT_MS,
   enforceSearchBeforeTechnicalSpecialist,
+  humanizeTerminalVerificationLabel,
   isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
   repairIntentForCatalogClarificationBeforeTools,
@@ -1121,6 +1122,11 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
+  it('humanizes electric-start verification labels used in terminal answers', () => {
+    expect(humanizeTerminalVerificationLabel('electric_start')).toBe('электростартер');
+    expect(humanizeTerminalVerificationLabel('electric start')).toBe('электростартер');
+  });
+
   it('recognizes the exact catalog model even when the buyer request contains engine details', () => {
     const exact = {
       ...product('bps-1550-aw', 'Wacker Neuson BPS 1550 Aw', 'Vibroplates'),
@@ -9212,7 +9218,7 @@ describe('AgentManagerOrchestrator', () => {
     }
   });
 
-  it('does not persist unseen selected card ids when the finalization deadline gate fails', async () => {
+  it('terminalizes a wall deadline crossed after a useful draft without persisting unseen selected ids', async () => {
     let now = 20_000;
     const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
     class DeadlineBeforeCommitConversations extends FakeConversations {
@@ -9259,11 +9265,11 @@ describe('AgentManagerOrchestrator', () => {
     );
 
     try {
-      await expect(orchestrator.generateAnswer({
+      const payload = await orchestrator.generateAnswer({
         sessionId,
         turnId,
         userMessage: 'Покажите TSS SGG 5000A.'
-      })).rejects.toThrow('wall_time_budget_exceeded');
+      });
 
       expect(conversations.ledgerEvents).not.toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -9271,8 +9277,11 @@ describe('AgentManagerOrchestrator', () => {
           payload: expect.objectContaining({ selectedProductIds: ['p1'] })
         })
       ]));
-      expect(conversations.assistantSaves).toHaveLength(0);
-      expect(conversations.turn.stage).toBe('budget_stopped');
+      expect(payload.answer).toContain('TSS SGG 5000A');
+      expect(payload.metadata).toMatchObject({ terminal: true, completionStatus: 'degraded_terminal' });
+      expect(conversations.assistantSaves).toHaveLength(1);
+      expect(conversations.turn.status).toBe('completed');
+      expect(conversations.turn.stage).not.toBe('budget_stopped');
     } finally {
       dateNow.mockRestore();
     }

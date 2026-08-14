@@ -3507,6 +3507,7 @@ export function humanizeTerminalVerificationLabel(value: string) {
     price_rub: 'текущая цена',
     auto_start_required: 'электростартер',
     electric_start_required: 'электростартер',
+    electric_start: 'электростартер',
     'electric starter': 'электростартер',
     'starting system': 'электростартер',
     phase: 'число фаз',
@@ -3528,6 +3529,7 @@ export function humanizeTerminalVerificationLabel(value: string) {
   if (compact === 'startingpowerkw') return 'пусковая мощность';
   if (compact === 'maxpowerkw') return 'максимальная мощность';
   if (compact === 'electricstarter') return 'электростартер';
+  if (compact === 'electricstart') return 'электростартер';
   if (compact === 'startingsystem') return 'электростартер';
   return value.trim().replaceAll('_', ' ');
 }
@@ -7346,7 +7348,10 @@ export class AgentManagerOrchestrator {
       );
       return payload;
     } catch (error) {
-      if (wallTimeSignal.aborted) {
+      if (
+        wallTimeSignal.aborted ||
+        (error instanceof AgentManagerTurnBudgetExceededError && error.stopReason === 'wall_time_budget_exceeded')
+      ) {
         // The fenced terminal repository write is the durable commit point. If
         // delivery/checkpointing fails afterwards, recover the already completed
         // turn instead of marking it as budget-stopped.
