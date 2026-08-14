@@ -4571,6 +4571,8 @@ function answerAlreadyCoversStartControlUncertainty(answerText: string, label: s
     'не нашел',
     'не нашли',
     'не подтверж',
+    'подтвердить не удалось',
+    'подтверждения найти не удалось',
     'не могу подтвердить',
     'нет подтверждения',
     'точно подтвердить не могу',
@@ -4779,6 +4781,129 @@ class AgentSemanticDecisionIncoherentError extends Error {
     super(`semantic_decision_incoherent:${issues.join(',')}`);
     this.name = 'AgentSemanticDecisionIncoherentError';
   }
+}
+
+function answerMentionsElectricStarter(answerText: string) {
+  const text = normalizeModelText(answerText);
+  return normalizedTextIncludesAny(text, [
+    'electric starter',
+    'electric start',
+    'electrostarter',
+    'электростартер',
+    'электрическ',
+    'электрический запуск',
+    'электрозапуск'
+  ]);
+}
+
+function answerExpressesUncertainty(answerText: string) {
+  const text = normalizeModelText(answerText);
+  return normalizedTextIncludesAny(text, [
+    'не подтвержд',
+    'подтвердить не удалось',
+    'не указано',
+    'не найден',
+    'не вижу',
+    'нет подтверждения',
+    'точно утверждать нельзя',
+    'not confirmed',
+    'not found',
+    'not specified',
+    'unknown',
+    'unclear'
+  ]);
+}
+
+function answerStatesExactCatalogAbsence(answerText: string, productName: string) {
+  if (!textMatchesTargetName(answerText, productName)) return false;
+  const text = normalizeModelText(answerText);
+  return normalizedTextIncludesAny(text, [
+    'нет в каталоге',
+    'в каталоге нет',
+    'отсутствует в каталоге',
+    'в каталоге отсутствует',
+    'не представлен в каталоге',
+    'not in the catalog',
+    'absent from the catalog'
+  ]);
+}
+
+export function researchGuidanceSemanticallySatisfied(input: {
+  answerText: string;
+  toolResults: ToolResult[];
+  intent: AgentIntentContract;
+}) {
+  for (const result of input.toolResults) {
+    if (result.tool !== 'web.researchProductFacts' || result.status !== 'ok') continue;
+    const payload = result.payload as {
+      targetProductNames?: unknown;
+      catalogPresence?: Array<{ productName?: string; status?: string }>;
+      nearbyCatalogProducts?: Array<{ name?: string }>;
+      researchOutcome?: 'answered' | 'partial' | 'exhausted';
+      answerGuidance?: {
+        directAnswer?: unknown;
+        coverage?: unknown;
+      };
+    };
+    if (payload.researchOutcome === 'exhausted') continue;
+    const targetNames = Array.isArray(payload.targetProductNames)
+      ? payload.targetProductNames.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+    if (!webResearchTargetsCurrentIntent(targetNames, input.intent) || targetNames.length !== 1) continue;
+    const directAnswer = typeof payload.answerGuidance?.directAnswer === 'string'
+      ? payload.answerGuidance.directAnswer.trim()
+      : '';
+    if (!directAnswer) continue;
+    const coverage = Array.isArray(payload.answerGuidance?.coverage)
+      ? payload.answerGuidance.coverage
+      : [];
+    const coverageItems = coverage
+      .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
+    const uncertainItems = coverageItems.filter((item) =>
+      typeof item.status === 'string' && startControlUncertaintyStatuses.has(item.status)
+    );
+    const confirmedStartControl = hasConfirmedStartControlCoverage(coverage);
+    if (!uncertainItems.length && !confirmedStartControl) continue;
+
+    if (coverageItems.some(coverageItemConfirmsManualStarter) && !answerMentionsManualStarter(input.answerText)) {
+      return false;
+    }
+    if (coverageItems.some(coverageItemConfirmsElectricStarter) && !answerMentionsElectricStarter(input.answerText)) {
+      return false;
+    }
+    const confirmedLabels = confirmedStartControlLabels(coverageItems);
+    const normalizedAnswer = normalizeModelText(input.answerText);
+    for (const label of confirmedLabels) {
+      if (!normalizedAnswerMentionsStartControlLabel(normalizedAnswer, label)) return false;
+    }
+    for (const item of uncertainItems) {
+      const labels = startControlCoverageLabels(item.attribute, item.value)
+        .filter((label) => !confirmedLabels.has(label));
+      if (!labels.length) {
+        if (!answerExpressesUncertainty(input.answerText)) return false;
+        continue;
+      }
+      if (answerAlreadyCoversGeneralStartControlUncertainty(input.answerText)) continue;
+      if (labels.some((label) => !answerAlreadyCoversStartControlUncertainty(input.answerText, label))) {
+        return false;
+      }
+    }
+
+    for (const presence of payload.catalogPresence ?? []) {
+      if (!presence.productName) continue;
+      const statesAbsence = answerStatesExactCatalogAbsence(input.answerText, presence.productName);
+      if (presence.status === 'unknown' && statesAbsence) return false;
+      if (presence.status !== 'absent') continue;
+      if (!statesAbsence) return false;
+      const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
+        .map((product) => typeof product.name === 'string' ? product.name.trim() : '')
+        .filter(Boolean));
+      if (nearbyNames.length && !nearbyNames.some((name) => textMatchesTargetName(input.answerText, name))) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 export function expectedResearchGuidanceText(input: {
@@ -9382,7 +9507,11 @@ export class AgentManagerOrchestrator {
       toolResults: input.toolResults,
       intent: input.intent
     });
-    if (expectedResearchGuidance && expectedResearchGuidance !== input.answer.answerText.trim()) {
+    if (expectedResearchGuidance && !researchGuidanceSemanticallySatisfied({
+      answerText: input.answer.answerText,
+      toolResults: input.toolResults,
+      intent: input.intent
+    })) {
       mechanicalIssues.push({
         code: 'research_guidance_uncertainty_mismatch',
         severity: 'high',

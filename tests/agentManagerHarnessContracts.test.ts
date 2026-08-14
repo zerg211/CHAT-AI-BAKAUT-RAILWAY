@@ -7,6 +7,7 @@ import {
 import { evaluateAgentManagerPolicyGate } from '../src/ai/agentManagerPolicyGate.js';
 import {
   expectedResearchGuidanceText,
+  researchGuidanceSemanticallySatisfied,
   repairIntentForStaleWebResearchTargets
 } from '../src/ai/agentManagerOrchestrator.js';
 import {
@@ -43,6 +44,54 @@ function intent(overrides: Record<string, unknown> = {}) {
 }
 
 describe('runtime harness contracts', () => {
+  it('accepts a faithful research paraphrase and rejects an overconfident contradiction', () => {
+    const researchIntent = intent({
+      userMessageSummary: 'Проверить способ запуска SUNREKA G7000iS',
+      productMentions: [{
+        name: 'SUNREKA G7000iS',
+        role: 'target_product',
+        evidence: 'генератор SUNREKA G7000iS',
+        productClass: 'generator'
+      }]
+    });
+    const result = ToolResultSchema.parse({
+      requestId: 'web-sunreka-start',
+      tool: 'web.researchProductFacts',
+      status: 'ok',
+      payload: {
+        targetProductNames: ['SUNREKA G7000iS'],
+        researchOutcome: 'answered',
+        catalogPresence: [{ productName: 'SUNREKA G7000iS', status: 'present' }],
+        answerGuidance: {
+          directAnswer: 'У SUNREKA G7000iS подтверждены электростартер и ручной стартер; отдельную кнопку источники не подтверждают.',
+          completeness: 'partially_answered',
+          coverage: [
+            { attribute: 'electric starter', status: 'confirmed', value: 'есть' },
+            { attribute: 'manual starter', status: 'confirmed', value: 'есть' },
+            { attribute: 'push-button start', status: 'not_confirmed', value: '' }
+          ]
+        }
+      },
+      warnings: []
+    });
+    const paraphrase = 'Проверенные источники подтверждают у SUNREKA G7000iS электрический и ручной запуск. Но отдельную кнопку запуска подтвердить не удалось.';
+
+    expect(paraphrase).not.toBe(expectedResearchGuidanceText({
+      intent: researchIntent,
+      toolResults: [result]
+    }));
+    expect(researchGuidanceSemanticallySatisfied({
+      answerText: paraphrase,
+      intent: researchIntent,
+      toolResults: [result]
+    })).toBe(true);
+    expect(researchGuidanceSemanticallySatisfied({
+      answerText: 'SUNREKA G7000iS запускается только отдельной кнопкой.',
+      intent: researchIntent,
+      toolResults: [result]
+    })).toBe(false);
+  });
+
   it('normalizes legacy tool statuses into typed observations', () => {
     expect(canonicalToolObservationStatus({ status: 'ok' })).toBe('success');
     expect(canonicalToolObservationStatus({ status: 'not_found' })).toBe('not_found');
