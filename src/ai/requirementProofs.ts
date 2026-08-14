@@ -340,6 +340,15 @@ function normalizeComparable(input: {
     if (three) return { value: 'three_phase', unit: null };
   }
 
+  if (attribute === 'auto_start') {
+    if (textHasAny(rawText, ['without autostart', 'without auto start', 'без автозапуска'])) {
+      return { value: false, unit: null };
+    }
+    if (textHasAny(rawText, ['with autostart', 'with auto start', 'с автозапуском'])) {
+      return { value: true, unit: null };
+    }
+  }
+
   if (typeof input.value === 'number' || input.preferNumeric || unit !== null) {
     const numeric = firstFiniteNumber(input.value);
     if (numeric !== undefined) return baseUnitValue(numeric, unit);
@@ -381,7 +390,17 @@ function compareRequirement(requirement: SelectionRequirement, actual: Normalize
   if (expected.unit && actual.unit && expected.unit !== actual.unit) return { status: 'unverified' as const, expected };
 
   let matches: boolean;
-  if (typeof expected.value === 'number' && typeof actual.value === 'number') {
+  if (
+    canonicalAttribute(requirementBindingAttribute(requirement)) === 'voltage' &&
+    typeof expected.value === 'number' &&
+    typeof actual.value === 'number' &&
+    (
+      ([220, 230].includes(expected.value) && [220, 230].includes(actual.value)) ||
+      ([380, 400].includes(expected.value) && [380, 400].includes(actual.value))
+    )
+  ) {
+    matches = true;
+  } else if (typeof expected.value === 'number' && typeof actual.value === 'number') {
     const relation = numericRelation(requirement);
     matches = relation === 'max'
       ? actual.value <= expected.value

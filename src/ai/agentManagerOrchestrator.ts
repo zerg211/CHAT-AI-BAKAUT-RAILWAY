@@ -3440,6 +3440,8 @@ export function humanizeTerminalVerificationLabel(value: string) {
     'plate type': 'тип виброплиты',
     noise_db: 'официальный уровень шума в дБ',
     'noise db': 'официальный уровень шума в дБ',
+    noise_level_db: 'официальный уровень шума в дБ',
+    'noise level db': 'официальный уровень шума в дБ',
     voltage_v: 'напряжение',
     weight_kg: 'масса'
   };

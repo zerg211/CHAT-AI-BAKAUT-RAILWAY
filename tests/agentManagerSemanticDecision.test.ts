@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   humanizeTerminalVerificationLabel,
   enforceReviewerPreliminaryCandidateRecovery,
+  filterProductsByStructuredSelectionPolicy,
   limitTerminalRecoveryProducts,
   terminalCatalogRecovery,
   terminalGeneratorCalculationFromIntent,
@@ -14,6 +15,7 @@ import {
 import { normalizeLedgerStateDeltaEvents } from '../src/ai/agentManagerContracts.js';
 import type { ToolResult } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
+import { buildRequirementProofs } from '../src/ai/requirementProofs.js';
 
 function generatorDecision(): AgentSemanticDecision {
   const loads = [
@@ -363,6 +365,91 @@ describe('combined semantic decision validation', () => {
     });
     expect(recovered?.answerText).toContain(product.name);
     expect(recovered?.answerText).toContain('официальный уровень шума в дБ');
+  });
+
+  it('keeps a catalog candidate at the terminal boundary when only the required web fact is unconfirmed', () => {
+    const product = {
+      id: 'energo-e11000eax',
+      name: 'Генератор бензиновый Energo E11000EAX (8,0 кВт) E11000EAX',
+      category: 'Бензиновые генераторы',
+      price: 80279,
+      currency: 'RUB',
+      specs: {
+        стартер: 'с электростартером',
+        автозапуск: 'с автозапуском',
+        'число фаз': 'однофазные',
+        'напряжение, в': '230В',
+        'вид топлива': 'бензиновые',
+        'мощность номинальная при 220 в, квт': '8'
+      }
+    };
+    const intent = generatorDecision().intent;
+    intent.selectionPolicy = {
+      phase: 'single_phase',
+      maxCards: null,
+      rationale: 'A preliminary candidate is useful while noise remains unconfirmed.',
+      needAction: 'open',
+      powerSource: 'fuel',
+      requirements: [{
+        id: 'fuel', kind: 'fuel_type', role: 'hard_constraint', unit: null, value: 'бензин',
+        evidence: 'бензиновый', relation: 'must_have', strictness: 'strict', verification: { mode: 'product_attribute' }
+      }, {
+        id: 'voltage', kind: 'voltage_v', role: 'hard_constraint', unit: 'В', value: 220,
+        evidence: '220 В', relation: 'must_have', strictness: 'strict', verification: { mode: 'product_attribute' }
+      }, {
+        id: 'power', kind: 'nominal_power_min_kw', role: 'preference', unit: 'кВт', value: 8,
+        evidence: 'около 8 кВт', relation: 'preferred', strictness: 'preferred', verification: { mode: 'product_attribute' }
+      }, {
+        id: 'start', kind: 'auto_start_required', role: 'hard_constraint', unit: null, value: true,
+        evidence: 'с электростартом', relation: 'must_have', strictness: 'strict', verification: { mode: 'product_attribute' }
+      }, {
+        id: 'budget', kind: 'budget_max_rub', role: 'hard_constraint', unit: '₽', value: 120000,
+        evidence: 'до 120 000 ₽', relation: 'must_have', strictness: 'strict', verification: { mode: 'product_attribute' }
+      }, {
+        id: 'noise', kind: 'noise_level_db_official', role: 'hard_constraint', unit: null, value: true,
+        evidence: 'точный официальный уровень шума', relation: 'must_have', strictness: 'strict', verification: { mode: 'product_attribute' }
+      }],
+      selectionGoal: 'preliminary_fit',
+      alternativePolicy: 'same_class_only',
+      rankingObjectives: [],
+      reusePreviousCards: false,
+      targetProductClass: 'бензиновый генератор',
+      canonicalProductClass: 'generator'
+    };
+    intent.toolRequests = [{
+      id: 'catalog', tool: 'catalog.search', required: true, rationale: 'find candidates',
+      args: {}, coversRequirementIds: ['power', 'voltage', 'fuel', 'start', 'budget']
+    }, {
+      id: 'web', tool: 'web.researchProductFacts', required: true, rationale: 'verify official noise',
+      args: { comparisonAttributes: ['noise_level_db'] }, coversRequirementIds: ['noise']
+    }];
+    const toolResults: ToolResult[] = [{
+      requestId: 'catalog', tool: 'catalog.search', status: 'ok', observationStatus: 'success',
+      payload: { products: [product], productIds: [product.id] },
+      warnings: ['answer_products_preliminary:unverified_web_covered_strict_requirements:1']
+    }, {
+      requestId: 'web', tool: 'web.researchProductFacts', status: 'error', observationStatus: 'malformed',
+      payload: { error: { code: 'web_research_skipped_budget' } }, warnings: []
+    }];
+    const filtered = filterProductsByStructuredSelectionPolicy({ products: [product], intent, toolResults });
+    const recovery = terminalCatalogRecovery({
+      intent,
+      toolResults
+    });
+
+    const proofs = buildRequirementProofs({ intent, products: [product], toolResults });
+    expect(proofs).toContainEqual(expect.objectContaining({
+      requirementId: 'voltage', status: 'satisfied', normalizedValue: 230
+    }));
+    expect(proofs).toContainEqual(expect.objectContaining({
+      requirementId: 'start', status: 'satisfied', normalizedValue: true
+    }));
+    expect(proofs).toContainEqual(expect.objectContaining({
+      requirementId: 'noise', status: 'unverified'
+    }));
+    expect(filtered).toMatchObject({ products: [expect.objectContaining({ id: product.id })] });
+    expect(recovery.products.map((item) => item.id)).toEqual([product.id]);
+    expect(recovery.unfinishedVerification).toEqual(['официальный уровень шума в дБ']);
   });
 
   it('executes the persisted deterministic generator calculation at the terminal boundary', () => {
