@@ -957,6 +957,79 @@ export function repairIntentForStaleWebResearchTargets(intent: AgentIntentContra
   };
 }
 
+const legacyElectricStartRequirementKinds = new Set(['auto_start_required', 'autostart_required']);
+const legacyElectricStartAttributeNames = new Set([
+  'auto_start_required',
+  'autostart_required',
+  'automatic start'
+].map((value) => normalizeModelText(value)));
+
+function explicitlyElectricStartEvidence(value: string) {
+  const normalized = value.trim().toLocaleLowerCase('ru-RU');
+  return [
+    'electric start',
+    'electric starter',
+    'электростарт',
+    'электро стартер',
+    'электрический стартер'
+  ].some((signal) => normalized.includes(signal));
+}
+
+export function repairIntentForElectricStartRequirementKinds(intent: AgentIntentContract) {
+  const policy = intent.selectionPolicy;
+  if (!policy) return { intent, requirementIds: [] as string[] };
+  const requirementIds = policy.requirements.flatMap((requirement) =>
+    legacyElectricStartRequirementKinds.has(requirement.kind) &&
+    explicitlyElectricStartEvidence(requirement.evidence)
+      ? [requirement.id]
+      : []
+  );
+  if (!requirementIds.length) return { intent, requirementIds };
+  const repairedIds = new Set(requirementIds);
+  const remapAttribute = (value: string) => legacyElectricStartAttributeNames.has(normalizeModelText(value))
+    ? 'electric_start_required'
+    : value;
+  const toolRequests = intent.toolRequests.map((request) => {
+    const coveredIds = request.coversRequirementIds ?? [];
+    if (!coveredIds.some((requirementId) => repairedIds.has(requirementId))) return request;
+    const comparisonAttributes = requestStringArray(request.args.comparisonAttributes)
+      .map(remapAttribute);
+    const comparisonAttributeBindings = comparisonAttributeBindingsForRequest(request).map((binding) =>
+      repairedIds.has(binding.requirementId)
+        ? { ...binding, attribute: remapAttribute(binding.attribute) }
+        : binding
+    );
+    return {
+      ...request,
+      args: {
+        ...request.args,
+        ...(comparisonAttributes.length ? { comparisonAttributes } : {}),
+        ...(comparisonAttributeBindings.length ? { comparisonAttributeBindings } : {})
+      }
+    };
+  });
+  return {
+    intent: {
+      ...intent,
+      grounding: intent.grounding
+        ? {
+            ...intent.grounding,
+            technicalAttributes: intent.grounding.technicalAttributes.map(remapAttribute)
+          }
+        : intent.grounding,
+      toolRequests,
+      selectionPolicy: {
+        ...policy,
+        requirements: policy.requirements.map((requirement) => repairedIds.has(requirement.id)
+          ? { ...requirement, kind: 'electric_start_required' }
+          : requirement)
+      },
+      riskFlags: uniqueStrings([...intent.riskFlags, 'legacy_electric_start_requirement_repaired'])
+    },
+    requirementIds
+  };
+}
+
 export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: AgentIntentContract) {
   const grounding = intent.grounding;
   const policy = intent.selectionPolicy;
@@ -3433,6 +3506,7 @@ export function humanizeTerminalVerificationLabel(value: string) {
     nominal_power_kw: 'номинальная мощность',
     price_rub: 'текущая цена',
     auto_start_required: 'электростартер',
+    electric_start_required: 'электростартер',
     'electric starter': 'электростартер',
     'starting system': 'электростартер',
     phase: 'число фаз',
@@ -6420,7 +6494,7 @@ function ledgerReducerPolicyPromptBlock() {
     'В need.opened и need.updated всегда задавай selectionUpdateMode: preserve, если прежний выбор остаётся уместен; replace, если selectedProductIds полностью заменяют прежние; clear, если смена вводных аннулирует весь прежний выбор. В invalidatedProductIds перечисляй известные ID, которые больше не подходят. Не используй пустой selectedProductIds как неявную команду preserve.',
     'Для закрытой потребности создай need.closed с needId. Не смешивай факты разных needId.',
     'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass, confidence от 0 до 1 и role: hard_requirement, preference, context или commercial. fact.observed означает неподтверждённое наблюдение и не получает confidence=1; fact.confirmed используй только для явно подтверждённой покупателем или проверенной источником информации. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
-    'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material или quantity. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
+    'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, electric_start_required, auto_start_required, material или quantity. electric_start_required означает наличие электростартера; auto_start_required означает именно автоматический запуск/АВР. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
     'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
     'Если покупатель изменил вводные, создай новый fact.confirmed и укажи supersedesEventIds для старого факта, если он известен.'
   ].join('\n');
@@ -6458,7 +6532,7 @@ function plannerSystemPromptBlock(
     'Keep every tool args.comparisonAttributes list to at most 12 distinct decision-relevant attributes. Prioritize the buyer\'s explicit comparison criteria and omit synonyms or low-value duplicates.',
     'Do not encode an operating condition already consumed by calculator.generatorLoad as an independently verifiable product attribute. Total job context such as total layer depth, total work area, total runtime, workpiece size, or total material volume is role="context", relation="context", strictness="informational" unless the buyer explicitly requires the product itself to provide that capability or a verified calculator derives a product minimum. The buyer\'s operating procedure — layer-by-layer work, planned number of passes, work sequence, crew size, carrying/loading method, or intended schedule — is also context unless it explicitly demands a product feature or capability.',
     'When the buyer gives a measurable maximum weight to operationalize loading or carrying by one or more people, use that weight requirement as the product constraint and keep crew size/loading method as context. Do not duplicate it as a boolean hard product_attribute such as loading_suitability unless the buyer explicitly requires a concrete built-in feature such as transport wheels, a lifting eye, or loading without ramps. If the loading method is unspecified, do not assume manual lifting; a compliant-weight candidate may be shown as preliminary with an honest ramp/loading caveat.',
-    'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, auto_start_required, material, quantity. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
+    'Для проверяемых ограничений используй стабильные kind: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, electric_start_required, auto_start_required, material, quantity. electric_start_required — электростартер; auto_start_required — автоматический запуск/АВР. Для других смыслов создай точный новый kind, не переиспользуй неподходящий.',
     'selectionPolicy.alternativePolicy должен явно решать, допустим ли только точный товар, только тот же класс, соседний вариант с объяснением или свободные альтернативы. selectionPolicy.needAction явно описывает продолжение, открытие, переключение, возврат или закрытие потребности.',
     'selectionPolicy.reusePreviousCards=true, если прежние карточки могут быть полезны в текущем ходе. Это подсказка для ответа, но не право стереть прежние подтверждённые товары: runtime всё равно добавит их в пул активной потребности и заново проверит против новых требований. maxCards отражает просьбу покупателя о количестве карточек; иначе null. powerSource и phase заполняй только из смысла текущей потребности.',
     'Всегда заполни leadCaptureAuthorization. authorized=true только когда покупатель в текущем контексте явно просит операционный результат или передачу специалисту и либо дал контакт в текущем сообщении, либо явно разрешил использовать сохранённый контакт. Иначе authorized=false, contactSource=none, purpose/evidence=null. Сам факт, что в истории есть телефон, не является согласием на новую заявку.',
@@ -7969,8 +8043,11 @@ export class AgentManagerOrchestrator {
     const newNeedFinalFitRepair = repairIntentForNewNeedFinalFit(previousProductReferentRepair.intent, {
       openedNeedThisTurn: newEvents.some((event) => event.eventType === 'need.opened')
     });
-    const requestedAttributeWebCoverageRepair = repairIntentForRequestedTechnicalAttributeWebCoverage(
+    const electricStartRequirementRepair = repairIntentForElectricStartRequirementKinds(
       newNeedFinalFitRepair.intent
+    );
+    const requestedAttributeWebCoverageRepair = repairIntentForRequestedTechnicalAttributeWebCoverage(
+      electricStartRequirementRepair.intent
     );
     const openEndedWebCoverageRepair = repairIntentForOpenEndedRequirementWebCoverage(
       requestedAttributeWebCoverageRepair.intent
@@ -8026,6 +8103,7 @@ export class AgentManagerOrchestrator {
       legacyIntentUpgraded ||
       previousProductReferentRepair.repaired ||
       newNeedFinalFitRepair.repaired ||
+      electricStartRequirementRepair.requirementIds.length > 0 ||
       staleWebTargetRepair.repairs.length > 0 ||
       requestedAttributeWebCoverageRepair.repairs.length > 0 ||
       openEndedWebCoverageRepair.repairs.length > 0 ||
@@ -8063,6 +8141,11 @@ export class AgentManagerOrchestrator {
     if (requestedAttributeWebCoverageRepair.repairs.length) {
       await this.trace(input.sessionId, input.turnId, 'intent', 'requested_attribute_web_coverage_repaired', {
         repairs: requestedAttributeWebCoverageRepair.repairs
+      });
+    }
+    if (electricStartRequirementRepair.requirementIds.length) {
+      await this.trace(input.sessionId, input.turnId, 'intent', 'electric_start_requirement_repaired', {
+        requirementIds: electricStartRequirementRepair.requirementIds
       });
     }
     const semanticDecisionValidated = combinedSemanticDecision || Boolean(recoveredSemanticDecision);

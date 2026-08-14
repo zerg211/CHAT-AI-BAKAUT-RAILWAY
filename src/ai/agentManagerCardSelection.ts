@@ -528,6 +528,7 @@ const supportedCeramicMaterialValues = new Set(['ceramic', 'porcelain_tile', 'ce
 const generatorLoadDerivedRequirementKind = 'generator_load_scenario';
 const generatorLoadDerivedMinimumRequirementKinds = new Set(['nominal_power_min_kw', 'power_min_kw']);
 const generatorAutoStartRequirementKinds = new Set(['auto_start_required', 'autostart_required']);
+const generatorElectricStartRequirementKinds = new Set(['electric_start_required']);
 const priceVisibilityRequirementKind = 'price_visibility';
 const generatorVoltageRequirementKind = 'voltage_v';
 const supportedGeneratorVoltageUnits = new Set(['v', 'volt', 'volts', fromEscaped('\\u0432')]);
@@ -830,6 +831,19 @@ export function assessStrictSelectionRequirements(
         addBlocker(requirement, 'conflicting_autostart_requirements');
       } else {
         generatorAutoStartRequirement = requirement.value;
+      }
+      continue;
+    }
+
+    if (generatorElectricStartRequirementKinds.has(requirement.kind)) {
+      if (
+        requirement.unit !== null ||
+        typeof requirement.value !== 'boolean' ||
+        requirement.value !== true ||
+        requirement.relation === 'must_not_have' ||
+        !isGeneratorProductClass(productClass)
+      ) {
+        addBlocker(requirement, 'electric_start_requirement_shape_or_product_class_mismatch');
       }
       continue;
     }

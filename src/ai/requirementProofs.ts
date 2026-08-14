@@ -1,7 +1,7 @@
 import type { Product } from '../shared/types.js';
 import type { AgentIntentContract, SelectionRequirement, ToolResult } from './agentManagerContracts.js';
 import { modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
-import { generatorPhaseProfile } from './productClassifier.js';
+import { generatorPhaseProfile, hasElectricStartSignal } from './productClassifier.js';
 import { classifyProductResearchSource } from './productComparisonResearch.js';
 
 export type RequirementProofStatus = 'satisfied' | 'violated' | 'conflicted' | 'unverified';
@@ -364,6 +364,14 @@ function normalizeComparable(input: {
     }
   }
 
+  if (attribute === 'electric_start') {
+    if (textHasAny(rawText, [
+      'without electric start', 'without electric starter', 'manual starter only',
+      'без электростартера', 'только ручной стартер'
+    ])) return { value: false, unit: null };
+    if (hasElectricStartSignal(rawText)) return { value: true, unit: null };
+  }
+
   if (typeof input.value === 'number' || input.preferNumeric || unit !== null) {
     const numeric = firstFiniteNumber(input.value);
     if (numeric !== undefined) return baseUnitValue(numeric, unit);
@@ -522,7 +530,11 @@ function catalogCandidates(input: {
     const product = input.products.find((candidate) => candidate.id === resultProduct.id) ??
       productForFact(input.products, { productName: resultProduct.name, sourceUrl: resultProduct.sourceUrl });
     if (!product) return [];
-    const entries = scalarEntries(resultProduct.specs).filter((entry) => attributeMatches(entry.path, attribute));
+    const canonical = canonicalAttribute(attribute);
+    const entries = scalarEntries(resultProduct.specs).filter((entry) =>
+      attributeMatches(entry.path, attribute) ||
+      (canonical === 'electric_start' && textHasAny(entry.path, ['starter', 'стартер', 'starting system', 'система запуска']))
+    );
     if (canonicalAttribute(attribute) === 'price' && typeof resultProduct.price === 'number') {
       entries.push({ path: 'price', value: resultProduct.price });
     }

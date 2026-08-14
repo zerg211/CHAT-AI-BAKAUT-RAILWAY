@@ -9,6 +9,7 @@ import {
   repairIntentForCatalogClarificationBeforeTools,
   pendingLeadCaptureDraftMatchesAuthorizationScope,
   repairIntentForOpenEndedRequirementWebCoverage,
+  repairIntentForElectricStartRequirementKinds,
   repairIntentForNewNeedFinalFit,
   repairIntentForRequestedTechnicalAttributeWebCoverage,
   repairIntentForTypedToolRequirementCoverage,
@@ -1293,6 +1294,41 @@ describe('AgentManagerOrchestrator', () => {
       attribute: 'цена', requirementId: 'budget'
     }]);
     expect(web?.args.comparisonAttributes).not.toContain('номинальная мощность');
+  });
+
+  it('separates electric starter from automatic start in legacy planner contracts', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      requirements: [{
+        id: 'start', kind: 'auto_start_required', value: true, unit: null,
+        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'с электростартом',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.toolRequests = [{
+      id: 'catalog', tool: 'catalog.search', required: true, rationale: 'find electric-start models',
+      coversRequirementIds: ['start'], args: { comparisonAttributes: ['auto_start_required'] }
+    }];
+    intent.grounding = { ...intent.grounding!, technicalAttributes: ['auto_start_required'] };
+
+    const repaired = repairIntentForElectricStartRequirementKinds(intent);
+
+    expect(repaired.requirementIds).toEqual(['start']);
+    expect(repaired.intent.selectionPolicy?.requirements[0]?.kind).toBe('electric_start_required');
+    expect(repaired.intent.toolRequests[0]?.args.comparisonAttributes).toEqual(['electric_start_required']);
+    expect(repaired.intent.grounding?.technicalAttributes).toEqual(['electric_start_required']);
+
+    const actualAutostart = structuredGeneratorCatalogIntent();
+    actualAutostart.selectionPolicy = {
+      ...actualAutostart.selectionPolicy!,
+      requirements: [{
+        id: 'ats', kind: 'auto_start_required', value: true, unit: null,
+        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'нужен автозапуск через АВР',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    expect(repairIntentForElectricStartRequirementKinds(actualAutostart).requirementIds).toEqual([]);
   });
 
   it('extends one compatible catalog-selection web request without names or duplicate attributes', () => {

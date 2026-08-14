@@ -400,7 +400,7 @@ describe('combined semantic decision validation', () => {
         id: 'power', kind: 'nominal_power_min_kw', role: 'preference', unit: 'кВт', value: 8,
         evidence: 'около 8 кВт', relation: 'preferred', strictness: 'preferred', verification: { mode: 'product_attribute' }
       }, {
-        id: 'start', kind: 'auto_start_required', role: 'hard_constraint', unit: null, value: true,
+        id: 'start', kind: 'electric_start_required', role: 'hard_constraint', unit: null, value: true,
         evidence: 'с электростартом', relation: 'must_have', strictness: 'strict', verification: { mode: 'product_attribute' }
       }, {
         id: 'budget', kind: 'budget_max_rub', role: 'hard_constraint', unit: '₽', value: 120000,
