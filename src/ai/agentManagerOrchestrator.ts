@@ -11317,7 +11317,7 @@ export class AgentManagerOrchestrator {
             productClass: recoveryProductClass,
             status: 'ready_for_preliminary_cards',
             canShowProductCards: true,
-            missingFacts: unfinishedVerification,
+            missingFacts: catalogRecovery.unfinishedVerification,
             rationale: 'The terminal recovery preserved catalog candidates that passed the persisted selection policy; an external verification did not finish.'
           }
         : {

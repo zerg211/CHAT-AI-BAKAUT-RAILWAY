@@ -553,6 +553,15 @@ function catalogCandidates(input: {
             : null;
       if (namePhaseValue) entries.push({ path: 'name_phase_marker', value: namePhaseValue });
     }
+    if (canonical === 'fuel_type') {
+      const identityText = `${resultProduct.name} ${resultProduct.category ?? ''}`;
+      const identityWords = new Set(normalizedWords(identityText));
+      const diesel = hasAnyWords(identityWords, ['diesel', 'дизель']);
+      const gasoline = hasAnyWords(identityWords, ['gasoline', 'petrol', 'бензин']);
+      if (diesel !== gasoline) {
+        entries.push({ path: 'name_fuel_marker', value: diesel ? 'diesel' : 'gasoline' });
+      }
+    }
     return entries.map((entry) => ({
       productId: product.id,
       attribute: entry.path,

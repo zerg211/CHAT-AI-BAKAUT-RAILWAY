@@ -315,6 +315,44 @@ describe('combined semantic decision validation', () => {
     });
   });
 
+  it('uses an unambiguous catalog product identity as fuel-type proof', () => {
+    const product = {
+      id: 'gasoline-generator',
+      name: 'Генератор бензиновый TEST 8000',
+      category: 'Бензиновые генераторы',
+      price: 100000,
+      currency: 'RUB',
+      specs: {}
+    };
+    const intent = generatorDecision().intent;
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      requirements: [{
+        id: 'fuel', kind: 'fuel_type', value: 'gasoline', unit: null, relation: 'must_have',
+        role: 'hard_constraint', strictness: 'strict', evidence: 'бензиновый',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.toolRequests = [{
+      id: 'catalog', tool: 'catalog.search', required: true, rationale: 'find gasoline generators',
+      coversRequirementIds: ['fuel'], args: { productIntent: 'generator' }
+    }];
+    const toolResults: ToolResult[] = [{
+      requestId: 'catalog', tool: 'catalog.search', status: 'ok', observationStatus: 'success',
+      payload: { products: [product], productIds: [product.id] }, warnings: []
+    }];
+
+    expect(buildRequirementProofs({ intent, products: [product], toolResults })).toContainEqual(
+      expect.objectContaining({
+        requirementId: 'fuel',
+        productId: product.id,
+        status: 'satisfied',
+        normalizedValue: 'gasoline',
+        sourceAuthority: 'catalog'
+      })
+    );
+  });
+
   it('enforces a reviewer finding when a rewrite still hides eligible preliminary candidates', () => {
     const product = {
       id: 'generator-8kw', name: 'Energo E11000EAX (8.0 kW)', category: 'Бензиновые генераторы',
