@@ -98,7 +98,14 @@ describe('agent manager strict tool registry', () => {
         }, {
           tier: 'official_manual',
           outcome: 'not_found',
-          query: 'exact model official manual PDF'
+          query: 'exact model official manual PDF',
+          sources: [{
+            url: 'https://manufacturer.example/manual.pdf',
+            host: 'manufacturer.example',
+            documentKind: 'manual_or_specification',
+            tier: 'official_manual',
+            authority: 'manufacturer'
+          }]
         }]
       },
       warnings: []

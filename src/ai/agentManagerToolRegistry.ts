@@ -88,6 +88,14 @@ const generatorLoadResult = z.object({
   error: z.unknown().optional()
 }).strict();
 
+const researchSource = z.object({
+  url: z.string().url(),
+  host: nonEmpty,
+  documentKind: z.enum(['product_page', 'manual_or_specification', 'other']),
+  tier: z.enum(['official_page', 'official_manual', 'reliable_secondary']),
+  authority: z.enum(['manufacturer', 'secondary'])
+}).strict();
+
 const webResearchResult = z.object({
   usedWebSearch: z.boolean().optional(),
   searchDisposition: z.enum(['completed', 'memory_hit', 'not_needed', 'skipped_budget', 'timed_out', 'failed', 'aborted']).optional(),
@@ -96,7 +104,8 @@ const webResearchResult = z.object({
   sourceAttempts: z.array(z.object({
     tier: z.enum(['catalog', 'official_page', 'official_manual', 'reliable_secondary']),
     outcome: z.enum(['confirmed', 'not_found', 'unreadable', 'skipped_budget']),
-    query: z.string().optional()
+    query: z.string().optional(),
+    sources: z.array(researchSource).max(8).optional()
   }).strict()).optional(),
   unconfirmedFacts: z.array(z.object({
     requirementIds: z.array(z.string()),
