@@ -110,21 +110,24 @@ function exactTargetSearchQueries(targetProductNames: string[], attributes: stri
   const usefulAttributes = attributes.length
     ? attributes
     : ['specification', 'manual', 'starter', 'start method'];
-  const semanticResearchIntents = [
-    'specification',
-    'manual pdf',
-    'instruction',
-    'start system',
-    'starter control mechanism',
-    'electric starter actuation',
-    'operator controls',
-    'buyer requested attribute in source language',
-    'electric starter',
-    'manual starter'
-  ];
+  const semanticResearchIntents = attributes.length
+    ? ['exact product page', 'manual or specification', 'starter control mechanism']
+    : [
+        'specification',
+        'manual pdf',
+        'instruction',
+        'start system',
+        'starter control mechanism',
+        'electric starter actuation',
+        'operator controls',
+        'buyer requested attribute in source language',
+        'electric starter',
+        'manual starter'
+      ];
   return targetProductNames.flatMap((target) => {
     const aliases = exactTargetAliases(target);
-    const queryAttributes = uniqueStrings([...usefulAttributes, ...semanticResearchIntents]).slice(0, 18);
+    const queryAttributes = uniqueStrings([...usefulAttributes, ...semanticResearchIntents])
+      .slice(0, attributes.length ? 6 : 18);
     return aliases.flatMap((alias) => queryAttributes.map((attribute) => `${alias} ${attribute}`));
   });
 }
