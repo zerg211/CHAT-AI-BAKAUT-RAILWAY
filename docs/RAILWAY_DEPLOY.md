@@ -12,7 +12,7 @@
 - `DATABASE_URL`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL=gpt-5.6-terra`
-- production runtime принудительно использует `gpt-5.6-terra` для planner/answer/reviewer и preflight отклоняет любой другой фактический model marker;
+- production runtime принудительно использует `gpt-5.6-terra` для семантического планирования и единственной генерации ответа; preflight отклоняет любой другой фактический model marker;
 - `ADMIN_API_KEY`
 - `PUBLIC_BASE_URL`
 
