@@ -120,6 +120,12 @@ function canonicalAttribute(value: unknown) {
   const has = (...values: string[]) => hasAnyWords(words, values);
   if (has('phase', 'phases', 'фаза', 'фазность')) return 'phase';
   if (has('voltage', 'volt', 'напряжение', 'вольтаж')) return 'voltage';
+  if (has('fuel', 'топливо')) return 'fuel_type';
+  if (textHasAny(value, [
+    'electric start', 'electric starter', 'электростарт', 'электростартер', 'электрический стартер'
+  ])) {
+    return 'electric_start';
+  }
   if (has('noise', 'sound', 'шум') && !has('insulation', 'изоляция')) return 'noise';
   if (
     has('engine', 'motor', 'двигатель', 'мотор') &&
@@ -196,6 +202,10 @@ const strictBindingWordsByAttribute: Record<string, string[]> = {
     'autostart', 'auto', 'automatic', 'start', 'авто', 'автоматический', 'запуск',
     'presence', 'наличие', 'support', 'поддержка', 'function', 'функция', 'capability', 'возможность'
   ],
+  electric_start: [
+    'electric', 'start', 'starter', 'электрический', 'электростарт', 'электростартер', 'стартер'
+  ],
+  fuel_type: ['fuel', 'type', 'топливо', 'тип'],
   material: ['material', 'материал'],
   weight: [
     'weight', 'mass', 'вес', 'масса', 'operating', 'working', 'рабочий', 'эксплуатационный'
@@ -259,6 +269,11 @@ function powerQualifierForRequirementKind(value: unknown): PowerQualifier | unde
 export function selectionRequirementAttributeMatches(left: unknown, right: unknown) {
   const leftAttribute = canonicalAttribute(left);
   const rightAttribute = canonicalAttribute(right);
+  if (
+    leftAttribute === 'electric_start' &&
+    rightAttribute === 'auto_start' &&
+    strictBindingHasOnlyExpectedWords(left, leftAttribute)
+  ) return true;
   if (!leftAttribute || leftAttribute !== rightAttribute) return false;
   if (!strictBindingHasOnlyExpectedWords(left, leftAttribute)) return false;
   if (leftAttribute === 'power') {
@@ -360,8 +375,9 @@ function normalizeComparable(input: {
   if (textHasAny(rawText, ['included', 'present', 'available', 'yes', 'да', 'есть', 'в комплекте', 'совместим', 'подходит'])) {
     return { value: true, unit: null };
   }
-  if (textHasAny(rawText, ['diesel', 'дизель'])) return { value: 'diesel', unit: null };
-  if (textHasAny(rawText, ['gasoline', 'petrol', 'бензин'])) return { value: 'gasoline', unit: null };
+  const rawWords = new Set(normalizedWords(rawText));
+  if (hasAnyWords(rawWords, ['diesel', 'дизель'])) return { value: 'diesel', unit: null };
+  if (hasAnyWords(rawWords, ['gasoline', 'petrol', 'бензин'])) return { value: 'gasoline', unit: null };
   return { value: normalizedTextValue(input.value), unit };
 }
 

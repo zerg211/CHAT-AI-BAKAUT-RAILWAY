@@ -1241,6 +1241,60 @@ describe('AgentManagerOrchestrator', () => {
     });
   });
 
+  it('does not turn unbound catalog attributes into false terminal web gaps', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'load', kind: 'generator_load_scenario', value: true, unit: null,
+        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'four simultaneous loads',
+        verification: {
+          mode: 'typed_tool', tool: 'calculator.generatorLoad', toolRequestId: 'calc',
+          bindAs: 'nominal_power_min_kw', verifier: 'generator_load_profile'
+        }
+      }, {
+        id: 'fuel', kind: 'fuel_type', value: 'бензин', unit: null,
+        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'бензиновый',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'phase', kind: 'phase', value: 'single_phase', unit: null,
+        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: '220 В',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'start', kind: 'auto_start_required', value: true, unit: null,
+        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'с электростартом',
+        verification: { mode: 'product_attribute' }
+      }, {
+        id: 'budget', kind: 'budget_max_rub', value: 150000, unit: 'RUB',
+        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'до 150 000 ₽',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.grounding = {
+      ...intent.grounding!,
+      sourcePolicy: 'catalog_required', webPurpose: 'none', webRequirement: 'none',
+      technicalAttributes: ['номинальная мощность', 'тип топлива', 'фаза', 'электростарт', 'цена']
+    };
+    intent.toolRequests = [{
+      id: 'catalog', tool: 'catalog.search', args: {}, rationale: 'find candidates', required: true,
+      coversRequirementIds: ['fuel', 'phase', 'start', 'budget']
+    }];
+
+    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
+    const web = repaired.intent.toolRequests.find((request) => request.tool === 'web.researchProductFacts');
+
+    expect(web?.args.comparisonAttributes).toEqual(['тип топлива', 'фаза', 'электростарт', 'цена']);
+    expect(web?.args.comparisonAttributeBindings).toEqual([{ attribute: 'тип топлива', requirementId: 'fuel' }, {
+      attribute: 'фаза', requirementId: 'phase'
+    }, {
+      attribute: 'электростарт', requirementId: 'start'
+    }, {
+      attribute: 'цена', requirementId: 'budget'
+    }]);
+    expect(web?.args.comparisonAttributes).not.toContain('номинальная мощность');
+  });
+
   it('extends one compatible catalog-selection web request without names or duplicate attributes', () => {
     const intent = structuredGeneratorCatalogIntent();
     intent.selectionPolicy = {
@@ -1319,7 +1373,21 @@ describe('AgentManagerOrchestrator', () => {
   it('merges requested attributes into a same-target web superset without adding a duplicate request', () => {
     const intent = structuredGeneratorCatalogIntent();
     const productNames = ['FIRMAN RD3910E', 'FIRMAN RD4910E'];
-    intent.selectionPolicy = { ...intent.selectionPolicy!, selectionGoal: 'preliminary_fit' };
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'automatic-start',
+        kind: 'autostart_required',
+        value: true,
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'automatic start is required',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
     intent.grounding = {
       ...intent.grounding!,
       taskType: 'comparison',

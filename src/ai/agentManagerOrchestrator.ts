@@ -1014,12 +1014,17 @@ export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: Ag
     requestedAttributeBindings.push({ attribute, requirementId });
   }
   const coveredRequirementIds = requestedAttributeBindings.map((binding) => binding.requirementId);
+  const bindableComparisonAttributes = requestedAttributeBindings.map((binding) => binding.attribute);
+  const repairableComparisonAttributes = grounding.taskType === 'comparison'
+    ? comparisonAttributes
+    : bindableComparisonAttributes;
+  if (!compatibleWebRequest && !repairableComparisonAttributes.length) return emptyResult;
   const existingAttributes = compatibleWebRequest
     ? comparisonAttributesForRequest(compatibleWebRequest)
     : [];
   const mergedComparisonAttributes = uniqueStrings([
     ...existingAttributes,
-    ...comparisonAttributes
+    ...repairableComparisonAttributes
   ]).slice(0, 12);
   const existingAttributeBindings = compatibleWebRequest
     ? comparisonAttributeBindingsForRequest(compatibleWebRequest)
@@ -1035,7 +1040,7 @@ export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: Ag
   const existingNormalizedAttributes = new Set(
     existingAttributes.map((attribute) => normalizeModelText(attribute))
   );
-  const repairedAttributes = comparisonAttributes.filter((attribute) =>
+  const repairedAttributes = repairableComparisonAttributes.filter((attribute) =>
     !existingNormalizedAttributes.has(normalizeModelText(attribute))
   );
   const requestId = compatibleWebRequest?.id ?? uniqueToolRequestId(
@@ -1074,7 +1079,7 @@ export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: Ag
           powerSource: policy.powerSource ?? undefined,
           phase: policy.phase ?? undefined,
           productNames: targetProductNames,
-          comparisonAttributes,
+          comparisonAttributes: repairableComparisonAttributes,
           comparisonAttributeBindings: requestedAttributeBindings,
           limit: targetProductNames.length || 4,
           reason: 'Verify only requested technical attributes that remain unresolved after current catalog retrieval.',
