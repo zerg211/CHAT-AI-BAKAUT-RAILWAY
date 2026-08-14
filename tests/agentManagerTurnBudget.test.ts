@@ -32,13 +32,13 @@ describe('agent manager turn budget', () => {
     let now = 1_000;
     const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS, () => now);
     now += 2_000;
-    const answerReserveMs = 12_000;
+    const answerReserveMs = 8_000;
     const effectiveWebTimeoutMs = Math.min(
       agentManagerToolRegistry['web.researchProductFacts'].timeoutMs,
       budget.remainingWallTimeMs() - answerReserveMs
     );
 
-    expect(effectiveWebTimeoutMs).toBe(26_000);
+    expect(effectiveWebTimeoutMs).toBe(30_000);
     now += effectiveWebTimeoutMs;
     expect(budget.remainingWallTimeMs()).toBe(answerReserveMs);
   });

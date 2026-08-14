@@ -1125,6 +1125,7 @@ describe('product comparison research', () => {
       transportMaxRetries: 0,
       minRetryRemainingMs: 6_000
     });
+    expect(researchCalls()[1].request.max_output_tokens).toBeGreaterThanOrEqual(2_600);
     expect(researchCalls()[1].request.tools).toEqual([{
       type: 'web_search',
       search_context_size: 'low',

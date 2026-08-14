@@ -2563,9 +2563,7 @@ export async function researchProductComparisonFacts(input: {
     }],
     tool_choice: { type: 'web_search' },
     include: ['web_search_call.action.sources'],
-    max_output_tokens: compactCatalogFirstResearch
-      ? Math.max(config.OPENAI_FACT_MAX_OUTPUT_TOKENS, PRODUCT_COMPARISON_MIN_OUTPUT_TOKENS)
-      : productComparisonMaxOutputTokens(targetProductNames),
+    max_output_tokens: productComparisonMaxOutputTokens(targetProductNames),
     text: {
       format: {
         type: 'json_schema',
