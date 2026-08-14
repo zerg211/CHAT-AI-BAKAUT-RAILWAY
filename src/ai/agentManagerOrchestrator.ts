@@ -1191,7 +1191,7 @@ export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: Ag
     intent: repairedIntent,
     repairs: [{
       requestId,
-      attributes: compatibleWebRequest ? repairedAttributes : comparisonAttributes,
+      attributes: compatibleWebRequest ? repairedAttributes : repairableComparisonAttributes,
       created: !compatibleWebRequest
     }]
   };

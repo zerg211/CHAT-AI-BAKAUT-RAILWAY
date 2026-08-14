@@ -1294,6 +1294,7 @@ describe('AgentManagerOrchestrator', () => {
       attribute: 'цена', requirementId: 'budget'
     }]);
     expect(web?.args.comparisonAttributes).not.toContain('номинальная мощность');
+    expect(repaired.repairs[0]?.attributes).toEqual(web?.args.comparisonAttributes);
   });
 
   it('separates electric starter from automatic start in legacy planner contracts', () => {
