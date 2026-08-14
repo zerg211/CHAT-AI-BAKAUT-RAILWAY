@@ -35,7 +35,7 @@ LLM возвращает строгий структурированный пл�
 3. Snapshot + tail восстанавливают semantic ledger; planner получает текущее состояние и canonical policy.
 4. Строгие tool requests проходят локальную валидацию, risk/side-effect policy, timeout/retry/result limits и общий turn budget.
 5. Tool results сохраняются как artifacts и передаются модели только как недоверенные evidence data.
-6. Writer формирует ответ и выбирает IDs. Deterministic verifier проверяет claims, hard fit и card/text consistency; risk-review запускается по `AI_MANAGER_REVIEW_MODE`.
+6. Writer один раз формирует ответ и выбирает IDs. Детерминированная проверка сверяет claims, hard fit и card/text consistency; она не пишет и не переписывает текст. Невалидный контракт отклоняет весь ход, отдельного LLM-review и fallback-ответа нет.
 7. Полный response payload и финальный checkpoint сохраняются до отправки покупателю; assistant message сохраняется один раз.
 8. При retry/recovery уже завершённые stages/tools не запускаются повторно, а сохранённый payload возвращается без изменений.
 

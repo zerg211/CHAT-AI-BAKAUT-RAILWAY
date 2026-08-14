@@ -83,8 +83,8 @@ describe('dynamic sales manager policy routing', () => {
     expect(prompt).toContain('cheap.preliminary_not_final');
   });
 
-  it('keeps search-before-specialist grounding mandatory across planner, answer, reviewer, and gate', () => {
-    for (const target of ['planner', 'answer', 'reviewer', 'gate'] as const) {
+  it('keeps search-before-specialist grounding mandatory across planner, answer, and gate', () => {
+    for (const target of ['planner', 'answer', 'gate'] as const) {
       const trace = buildSalesManagerPolicyTrace({
         target,
         enabled: true,

@@ -118,6 +118,26 @@ export function answerRequestsContactData(answerText: string) {
   return false;
 }
 
+export function answerRequestsPhoneOrEmail(answerText: string) {
+  const lower = lowerRu(answerText);
+  let cursor = 0;
+  while (cursor < lower.length) {
+    const start = earliestContactRequestStart(lower, cursor);
+    if (!start) return false;
+    const segmentStart = start.index + start.phrase.length;
+    const segmentEnd = Math.min(segmentStart + 100, nextLineBreak(lower, segmentStart));
+    const words = targetWords(lower.slice(segmentStart, segmentEnd));
+    if (words.some((word) =>
+      word === 'phone' ||
+      word === 'email' ||
+      wordHasRoot(word, contactTargetRoots)
+    )) return true;
+    if (words.some((word, index) => word === 'e' && words[index + 1] === 'mail')) return true;
+    cursor = start.index + 1;
+  }
+  return false;
+}
+
 function sentenceEndIndex(text: string, start: number) {
   for (let index = start; index < text.length; index += 1) {
     const char = text[index];

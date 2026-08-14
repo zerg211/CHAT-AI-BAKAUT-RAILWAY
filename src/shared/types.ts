@@ -269,11 +269,11 @@ export type SemanticRequirementKind =
   | 'startType'
   | 'phase';
 export type SemanticRequirementStatus = 'active' | 'superseded' | 'rejected' | 'paused';
-export type SemanticRequirementStrictness = 'strictOnly' | 'targetRange' | 'fallbackAllowed';
+export type SemanticRequirementStrictness = 'strictOnly' | 'targetRange' | 'buyerApprovedAlternative';
 export type SemanticMemorySource = 'explicit_user' | 'llm_inference' | 'catalog_fact';
 export type MentionedProductRole = 'targetProduct' | 'availabilityCheck' | 'comparison' | 'example' | 'compatibilityTarget';
 export type MentionedProductStatus = 'unresolved' | 'foundInCatalog' | 'notFound' | 'notMatchingRequirement';
-export type SemanticAlternativeMode = 'none' | 'afterPrimary' | 'fallbackOnly';
+export type SemanticAlternativeMode = 'none' | 'afterPrimary' | 'alternativesOnly';
 export type BotCommitmentKind = 'availability' | 'recommendation' | 'constraint' | 'fact';
 
 export interface ProductSelectionToken {
@@ -423,7 +423,7 @@ export interface ProductSelectionCriteria {
 }
 
 export interface ProductSelectionState {
-  semanticSource?: 'llm_need_extraction' | 'legacy_text_fallback' | 'planner';
+  semanticSource?: 'llm_need_extraction' | 'planner';
   currentProductClass: ProductSelectionClass;
   targetProductClass: ProductSelectionClass;
   activeRequirement?: ProductSelectionCriteria;
@@ -869,17 +869,6 @@ export interface CardDisplayOptions {
   initialVisibleCount?: number;
 }
 
-export interface AiFallbackDiagnostic {
-  used: boolean;
-  reason?: string;
-}
-
-export interface AiGenerationDiagnostics {
-  needExtractionFallback: AiFallbackDiagnostic;
-  turnPlanningFallback: AiFallbackDiagnostic;
-  answerGenerationFallback: AiFallbackDiagnostic;
-}
-
 export interface ChatResponsePayload {
   turnId?: string;
   answer: string;
@@ -899,7 +888,6 @@ export interface ChatResponsePayload {
     };
     selection?: ProductSelectionMetadata;
     cardDisplay?: CardDisplayOptions;
-    aiDiagnostics?: AiGenerationDiagnostics;
     turnId?: string;
     turnContract?: AgentTurnContract;
     agentContractV2?: AgentTurnContractV2;
@@ -924,7 +912,6 @@ export interface ChatResponsePayload {
     validatorWarnings?: string[];
     recoveryAttempts?: number;
     openAiError?: unknown;
-    answerGenerationFallback?: AiFallbackDiagnostic;
     [key: string]: unknown;
   };
 }

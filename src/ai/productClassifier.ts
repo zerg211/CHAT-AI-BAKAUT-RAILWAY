@@ -907,7 +907,7 @@ export function hasExplicitGeneratorPowerRequest(text: string) {
     /\d+(?:[,.]\d+)?\s*(?:квт|kw|kva|ква)[^.!?\n]{0,60}(?:генератор|бензогенератор|электростанц)/iu.test(text);
 }
 
-// Text classifiers below are retrieval/fallback helpers. They must not override
+// Text classifiers below are retrieval helpers. They must not override
 // an explicit AssistantTurnPlan field returned by the AI turn planner.
 export function inferProductIntent(text: string): ProductIntent {
   if (!text.trim()) return 'unknown';
@@ -917,7 +917,7 @@ export function inferProductIntent(text: string): ProductIntent {
     /(?:^|[^\p{L}\p{N}_])\u043f\u043b\u0438\u0442(?:\u0430|\u044b|\u0443|\u0435|\u043e\u0439)?(?=$|[^\p{L}\p{N}_])/iu.test(lower);
   const hasPlateContext = containsAny(lower, plateTerms) || hasShortPlateModelContext;
   const hasEquipmentContext = hasGeneratorContext || hasPlateContext || containsAny(lower, rammerTerms) || containsAny(lower, cutterTerms);
-  const generatorInEnclosureRequest = hasGeneratorContext && fallbackDetectGeneratorEnclosureSignal(lower);
+  const generatorInEnclosureRequest = hasGeneratorContext && detectGeneratorEnclosureSignalLexically(lower);
   if (containsAny(lower, oilTerms) && hasEquipmentContext) return hasGeneratorContext && !hasPlateContext ? 'generatorOil' : 'engineOil';
   if (containsAny(lower, plateAccessoryTerms) && hasPlateContext) return 'plateAccessory';
   if (containsAny(lower, oilTerms) && hasGeneratorContext) return 'generatorOil';
@@ -938,14 +938,10 @@ export function inferProductIntent(text: string): ProductIntent {
   return 'unknown';
 }
 
-export function fallbackDetectGeneratorEnclosureSignal(text: string) {
+export function detectGeneratorEnclosureSignalLexically(text: string) {
   return /(?:генератор|электростанц)[^.!?\n]{0,80}(?:в|со|с)\s+(?:закрыт\w*\s+)?(?:кожух|корпус|шумозащит|шумоизоляц|тих\w*)/iu.test(text) ||
     /(?:генератор|электростанц)[^.!?\n]{0,80}(?:закрыт\w*|тих\w*|шумозащит\w*|шумоизоляц\w*)/iu.test(text) ||
     /(?:закрыт\w*|тих\w*|шумозащит\w*|шумоизоляц\w*|в\s+кожухе|в\s+корпусе)[^.!?\n]{0,80}(?:генератор|электростанц)/iu.test(text);
-}
-
-export function fallbackDetectStandaloneGeneratorAccessoryRequest(text: string) {
-  return /(?:кожух|блок\s+авр|авр|подогрев|фильтр|ремень|масло|расходник)[^.!?\n]{0,50}(?:для|на|к)\s+(?:генератор|электростанц)/iu.test(text);
 }
 
 export function hasElectricStartSignal(text: string) {
@@ -1144,7 +1140,7 @@ export function strictExactModelTokens(value: string) {
   return [...strict];
 }
 
-export function productMatchesExactModelConstraint(product: Product, exactModelConstraint: string, fallbackTokens: string[]) {
+export function productMatchesExactModelConstraint(product: Product, exactModelConstraint: string, candidateTokens: string[]) {
   const productCompact = compactModelText(productFullText(product));
   const compactConstraint = compactModelText(exactModelConstraint);
   const latConstraint = compactConstraint.match(/^lat(\d{2,4})$/i);
@@ -1157,7 +1153,7 @@ export function productMatchesExactModelConstraint(product: Product, exactModelC
   if (/^[a-zа-я]+\d{2,4}[a-zа-я]+$/iu.test(compactConstraint)) return productCompact.includes(compactConstraint);
 
   const constraintTokens = strictExactModelTokens(exactModelConstraint);
-  const tokens = constraintTokens.length ? constraintTokens : fallbackTokens;
+  const tokens = constraintTokens.length ? constraintTokens : candidateTokens;
   if (!tokens.length) return true;
   return tokens.some((token) => {
     const compact = compactModelText(token);

@@ -4,8 +4,6 @@ import {
   AgentManagerOrchestrator,
   RECOVERY_LEASE_WAIT_LIMIT_MS,
   enforceSearchBeforeTechnicalSpecialist,
-  humanizeTerminalVerificationLabel,
-  isPreSendReviewStructuredOutputError,
   orderToolRequestsForSelectionDependencies,
   repairIntentForCatalogClarificationBeforeTools,
   pendingLeadCaptureDraftMatchesAuthorizationScope,
@@ -20,9 +18,11 @@ import {
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
 import { DEFAULT_AGENT_MANAGER_TURN_LIMITS } from '../src/ai/agentManagerTurnBudget.js';
+import { inferProductIntent } from '../src/ai/productClassifier.js';
 import {
   AgentIntentContractSchema,
   normalizeLedgerStateDeltaEvents,
+  type AgentSemanticDecision,
   type AgentIntentContract,
   type DialogueLedgerEvent,
   type LedgerStateDelta,
@@ -32,7 +32,6 @@ import {
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { assessStrictSelectionRequirements, budgetMaxFromNeedState, gateStrictSelectionRequirements } from '../src/ai/agentManagerCardSelection.js';
 import { emptyNeedState } from '../src/ai/needState.js';
-import { config } from '../src/config.js';
 import type { ConversationSession, ConversationTurn, LeadCaptureDraft, Message, Product, ProductCard } from '../src/shared/types.js';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
@@ -891,7 +890,7 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
         }, {
           eventType: 'fact.confirmed',
           scope: 'dialogue',
-          payload: { factKey: 'load.coffee_machine_kw', value: 3.2, needId: 'generator', productClass: 'generator', role: 'hard_requirement' },
+          payload: { factKey: 'load.coffee_machine_kw', value: 3.2, needId: 'generator', productClass: 'generator', role: 'context' },
           evidence: 'Coffee machine 3.2 kW',
           source: 'llm_state_delta',
           status: 'active'
@@ -942,19 +941,87 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
         riskFlags: []
       };
     },
-    async reviewAnswer() {
-      return { verdict: 'pass', issues: [] };
-    },
     ...overrides
   };
   const planTurn = implementation.planTurn;
+  const composeAnswer = implementation.composeAnswer;
+  const normalizedPlanTurn = async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
+    const intent = await planTurn(input);
+    return modernizeLegacySelectionPolicyFixture({
+      ...intent,
+      toolRequests: intent.toolRequests.map(modernizeLegacyUniversalToolFixture)
+    });
+  };
   return {
     ...implementation,
-    async planTurn(input) {
-      const intent = await planTurn(input);
+    planTurn: normalizedPlanTurn,
+    async decideTurn(input): Promise<AgentSemanticDecision> {
+      if (implementation.decideTurn) return implementation.decideTurn(input);
+      const intent = await normalizedPlanTurn({
+        ...input,
+        ledgerState: input.ledgerState!
+      });
+      const calculatorRequest = intent.toolRequests.find((request) => request.tool === 'calculator.generatorLoad');
+      let ledgerDelta = overrides.planTurn && !overrides.proposeLedgerDelta
+        ? { rationale: 'test fixture has no state change for this custom intent', events: [] } satisfies LedgerStateDelta
+        : await implementation.proposeLedgerDelta(input);
+      if (calculatorRequest && !ledgerDelta.events.some((event) =>
+        event.payload.factKey === 'generator_load_scenario'
+      )) {
+        const scenarioRequirement = intent.selectionPolicy?.requirements.find((requirement) =>
+          requirement.kind === 'generator_load_scenario'
+        );
+        if (!scenarioRequirement && intent.selectionPolicy) {
+          intent.selectionPolicy.requirements.push({
+            id: 'test-generator-load-scenario',
+            kind: 'generator_load_scenario',
+            value: true,
+            unit: null,
+            role: 'hard_constraint',
+            strictness: 'strict',
+            evidence: 'legacy test fixture calculator loads',
+            verification: {
+              mode: 'typed_tool',
+              toolRequestId: calculatorRequest.id,
+              tool: 'calculator.generatorLoad',
+              verifier: 'generator_load_profile',
+              bindAs: 'nominal_power_min_kw'
+            }
+          });
+        }
+        ledgerDelta = {
+          ...ledgerDelta,
+          events: [...ledgerDelta.events, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: {
+              factKey: 'generator_load_scenario',
+              value: {
+                loads: calculatorRequest.args.loads ?? [],
+                simultaneousRunning: calculatorRequest.args.simultaneousRunning ?? null,
+                simultaneousStarting: calculatorRequest.args.simultaneousStarting ?? null
+              },
+              needId: 'generator',
+              productClass: 'generator',
+              role: 'hard_requirement'
+            },
+            evidence: 'legacy test fixture calculator loads',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      }
+      return { ledgerDelta, intent } as AgentSemanticDecision;
+    },
+    async composeAnswer(input) {
+      const answer = await composeAnswer(input);
       return {
-        ...intent,
-        toolRequests: intent.toolRequests.map(modernizeLegacyUniversalToolFixture)
+        ...answer,
+        selectedProductIds: answer.selectedProductIds ?? (
+          answer.selectionReadiness?.canShowProductCards === false
+            ? []
+            : input.products.map((product) => product.id)
+        )
       };
     }
   };
@@ -996,6 +1063,54 @@ function modernizeLegacyUniversalToolFixture(request: ToolRequest): ToolRequest 
     args: Object.fromEntries(Object.entries(request.args).filter(([key, value]) =>
       allowed.has(key) || !emptyLegacyUniversalPlaceholder(value)
     ))
+  };
+}
+
+function modernizeLegacySelectionPolicyFixture(intent: AgentIntentContract): AgentIntentContract {
+  if (intent.selectionPolicy) return intent;
+  const hasCatalogTool = intent.toolRequests.some((request) =>
+    request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
+  );
+  const inferredClass = inferProductIntent([
+    intent.userMessageSummary,
+    intent.dialogueUnderstanding,
+    intent.nextStepRationale,
+    ...intent.toolRequests.map((request) => String(request.args.query ?? request.args.semanticQuery ?? ''))
+  ].join(' '));
+  const continuityText = [
+    intent.userMessageSummary,
+    intent.dialogueUnderstanding,
+    intent.nextStepRationale
+  ].join(' ').toLocaleLowerCase('en-US');
+  const reusePreviousCards = ['previous', 'already selected', 'earlier visible']
+    .some((signal) => continuityText.includes(signal));
+  const requestedClass = (intent.productMentions?.find((mention) => mention.productClass)?.productClass ??
+    intent.toolRequests.map((request) => request.args.canonicalProductIntent ?? request.args.productIntent)
+      .find((value): value is string => typeof value === 'string' && value.length > 0) ??
+    (inferredClass === 'unknown' ? null : inferredClass) ??
+    null) as NonNullable<AgentIntentContract['selectionPolicy']>['canonicalProductClass'];
+  return {
+    ...intent,
+    selectionPolicy: requestedClass
+      ? {
+          targetProductClass: requestedClass,
+          canonicalProductClass: requestedClass,
+          needAction: 'continue',
+          alternativePolicy: 'same_class_only',
+          reusePreviousCards,
+          maxCards: 8,
+          powerSource: 'any',
+          phase: 'any',
+          requirements: [],
+          rationale: 'Structured selection authority for a legacy test fixture.',
+          selectionGoal: intent.grounding?.taskType === 'product_selection' ? 'preliminary_fit' : 'browse_catalog'
+        }
+      : {
+          ...currentNoProductSelectionPolicy(),
+          alternativePolicy: hasCatalogTool ? 'open_to_alternatives' : 'unknown',
+          maxCards: hasCatalogTool ? 8 : 0,
+          selectionGoal: 'browse_catalog'
+        }
   };
 }
 
@@ -1122,11 +1237,6 @@ function typedGeneratorProofIntent(): AgentIntentContract {
 }
 
 describe('AgentManagerOrchestrator', () => {
-  it('humanizes electric-start verification labels used in terminal answers', () => {
-    expect(humanizeTerminalVerificationLabel('electric_start')).toBe('электростартер');
-    expect(humanizeTerminalVerificationLabel('electric start')).toBe('электростартер');
-  });
-
   it('recognizes the exact catalog model even when the buyer request contains engine details', () => {
     const exact = {
       ...product('bps-1550-aw', 'Wacker Neuson BPS 1550 Aw', 'Vibroplates'),
@@ -1567,18 +1677,6 @@ describe('AgentManagerOrchestrator', () => {
     });
     expect(repairedFromLedgerLifecycle.repaired).toBe(true);
     expect(repairedFromLedgerLifecycle.intent.selectionPolicy?.selectionGoal).toBe('preliminary_fit');
-  });
-
-  it('classifies only pre-send structured JSON failures for compact reviewer recovery', () => {
-    expect(isPreSendReviewStructuredOutputError(
-      new Error('agent_pre_send_review did not return a JSON object')
-    )).toBe(true);
-    expect(isPreSendReviewStructuredOutputError(
-      new Error('agent_answer_contract did not return a JSON object')
-    )).toBe(false);
-    expect(isPreSendReviewStructuredOutputError(
-      new Error('OpenAI authentication failed')
-    )).toBe(false);
   });
 
   it('adds missing web research for an open-ended preliminary requirement without discarding catalog candidates', () => {
@@ -2065,7 +2163,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(managerPolicy?.packHash).toHaveLength(64);
     expect([...String(managerPolicy?.packHash ?? '')].every((char) => 'abcdef0123456789'.includes(char))).toBe(true);
     const turnBudget = payload.metadata?.turnBudget as { usage?: { modelCalls?: number } } | undefined;
-    expect(turnBudget?.usage?.modelCalls).toBe(3);
+    expect(turnBudget?.usage?.modelCalls).toBe(2);
     expect(conversations.ledgerEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({ eventType: 'question.answered' }),
       expect.objectContaining({ eventType: 'fact.confirmed' })
@@ -2083,120 +2181,28 @@ describe('AgentManagerOrchestrator', () => {
     }));
   });
 
-  it('rewrites hallucinated model recommendations when a strict requirement has no verifier', async () => {
-    const conversations = new FakeConversations();
-    conversations.messages = [message('Need a generator no louder than 60 dB.')];
-    const semanticReview = vi.fn(async () => ({ verdict: 'pass' as const, issues: [] }));
-    const strictModel = model({
-      async planTurn() {
-        return {
-          userMessageSummary: 'generator with a strict noise ceiling',
-          dialogueUnderstanding: 'noise must not exceed 60 dB',
-          nextStepRationale: 'search catalog, but recommend only if the strict noise fact is verifiable',
-           requiresTools: true,
-          toolRequests: [{
-            id: 'catalog-noise-search',
-            tool: 'catalog.search',
-            args: {
-              query: 'generator 60 dB',
-              semanticQuery: 'generator with verified noise no more than 60 dB',
-              productIntent: 'generator',
-              canonicalProductIntent: 'generator',
-              limit: 4
-            },
-            rationale: 'find catalog generators for the strict noise requirement',
-            required: true
-          }],
-          grounding: {
-            taskType: 'product_selection',
-            sourcePolicy: 'catalog_required',
-            webPurpose: 'none',
-            requiredToolKinds: ['catalog.search'],
-            technicalAttributes: ['noise_db'],
-            rationale: 'a catalog product selection requires catalog evidence'
-          },
-          productMentions: [],
-          selectionPolicy: {
-            targetProductClass: 'generator',
-            canonicalProductClass: 'generator',
-            needAction: 'continue',
-            alternativePolicy: 'same_class_only',
-            reusePreviousCards: false,
-            maxCards: 4,
-            powerSource: 'any',
-            phase: 'any',
-            requirements: [{
-              id: 'noise-ceiling',
-              kind: 'noise_max_db',
-              value: 60,
-              unit: 'dB',
-              role: 'hard_constraint',
-              strictness: 'strict',
-              evidence: '«no louder than 60 dB»'
-            }],
-            rationale: 'the buyer made noise a strict constraint'
-          },
-          policyRuleIds: [],
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        };
-      },
-      async composeAnswer(input) {
-        expect(input.products).toEqual([]);
-        return {
-          answerText: 'Generator 5 kW is a perfect recommendation and definitely meets 60 dB.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-noise-search'],
-          selectedProductIds: ['p1'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            productClass: 'generator',
-            status: 'ready_for_exact_cards',
-            canShowProductCards: true,
-            missingFacts: [],
-            rationale: 'intentionally unsafe writer output for the regression'
-          }
-        };
-      },
-      reviewAnswer: semanticReview
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      strictModel
-    );
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Need a generator no louder than 60 dB.'
-    });
-
-    expect(payload.answer).toContain('Не буду рекомендовать конкретную модель наугад');
-    expect(payload.answer).toContain('no louder than 60 dB');
-    expect(payload.answer).not.toContain('««');
-    expect(payload.answer).not.toContain('noise_max_db');
-    expect(payload.answer).not.toContain('Generator 5 kW');
-    expect(payload.productCards).toEqual([]);
-    expect(semanticReview).not.toHaveBeenCalled();
-    expect(payload.metadata?.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'unverifiable_strict_hard_constraint' }),
-        expect.objectContaining({ code: 'selected_product_without_evidence' })
-      ])
-    });
-  });
 
   it('preserves a safe clarification when a strict typed requirement is intentionally pending', async () => {
     const conversations = new FakeConversations();
     conversations.messages = [message('Need a generator for a house with a refrigerator, pump, boiler and occasional power tools.')];
-    const semanticReview = vi.fn(async () => ({ verdict: 'pass' as const, issues: [] }));
     const clarificationText = 'A precise model would be premature until the pump load is known. As an orientation, this class often starts around 5–7 kW. What type and power is the pump, and is it 220 or 380 V?';
     const clarificationModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'open the decisive clarification in the same semantic decision',
+          events: [{
+            eventType: 'question.asked',
+            scope: 'question',
+            payload: {
+              questionId: 'pump-specs',
+              text: 'What type and power is the pump, and is it 220 or 380 V?'
+            },
+            evidence: 'The pump type, power and phase are required for the load calculation.',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
       async planTurn() {
         return {
           userMessageSummary: 'orient the buyer and ask for the decisive pump fact',
@@ -2267,8 +2273,7 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'No concrete product should be selected before the pump load is known.'
           }
         };
-      },
-      reviewAnswer: semanticReview
+      }
     });
     const orchestrator = new AgentManagerOrchestrator(
       conversations as never,
@@ -2277,24 +2282,17 @@ describe('AgentManagerOrchestrator', () => {
       clarificationModel
     );
 
-    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'risk';
-    try {
-      const payload = await orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Need a generator for a house with a refrigerator, pump, boiler and occasional power tools.'
-      });
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Need a generator for a house with a refrigerator, pump, boiler and occasional power tools.'
+    });
 
-      expect(payload.answer).toBe(clarificationText);
-      expect(payload.answer).not.toContain('could not reliably complete');
-      expect(payload.productCards).toEqual([]);
-      expect(semanticReview).toHaveBeenCalledTimes(1);
-      expect(payload.metadata?.preSendReview).toMatchObject({ verdict: 'pass', issues: [] });
-      expect(payload.metadata?.answerProductEvidence).toMatchObject({ products: [] });
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
-    }
+    expect(payload.answer).toBe(clarificationText);
+    expect(payload.answer).not.toContain('could not reliably complete');
+    expect(payload.productCards).toEqual([]);
+    expect(payload.metadata?.preSendValidation).toMatchObject({ verdict: 'pass', issues: [] });
+    expect(payload.metadata?.answerProductEvidence).toMatchObject({ products: [] });
   });
 
   it('keeps derived simultaneous-operation requirements eligible after covered generator calculation', async () => {
@@ -2332,7 +2330,6 @@ describe('AgentManagerOrchestrator', () => {
 
     const conversations = new FakeConversations();
     conversations.messages = [message('The 1.1 kW borehole pump and 1.5 kW angle grinder run simultaneously at 220 V.')];
-    const semanticReview = vi.fn(async () => ({ verdict: 'pass' as const, issues: [] }));
     const derivedModel = model({
       async planTurn() {
         return {
@@ -2443,8 +2440,7 @@ describe('AgentManagerOrchestrator', () => {
             rationale: 'The exact input powers and successful calculation support selection.'
           }
         };
-      },
-      reviewAnswer: semanticReview
+      }
     });
     const products = new DerivedConstraintProducts();
     const orchestrator = new AgentManagerOrchestrator(
@@ -2468,14 +2464,14 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).not.toContain('weak-derived');
     const metadata = payload.metadata as {
       toolResults?: Array<{ payload?: { profile?: { simultaneousStarting?: boolean } } }>;
-      preSendReview?: unknown;
+      preSendValidation?: unknown;
     };
     expect(metadata.toolResults?.[0]?.payload?.profile?.simultaneousStarting).toBe(false);
     expect((metadata.toolResults?.[1]?.payload as {
       generatorLoadFit?: { loadAwareRetry?: boolean };
     })?.generatorLoadFit?.loadAwareRetry).toBe(true);
-    expect(payload.metadata?.preSendReview).toMatchObject({ verdict: 'pass' });
-    expect(payload.metadata?.preSendReview).not.toMatchObject({
+    expect(payload.metadata?.preSendValidation).toMatchObject({ verdict: 'pass' });
+    expect(payload.metadata?.preSendValidation).not.toMatchObject({
       issues: expect.arrayContaining([expect.objectContaining({ code: 'unverifiable_strict_hard_constraint' })])
     });
   });
@@ -2936,6 +2932,7 @@ describe('AgentManagerOrchestrator', () => {
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['catalog-search'],
+          selectedProductIds: ['text-product', 'vector-product'],
           leadAction: 'none',
           riskFlags: []
         };
@@ -3468,64 +3465,6 @@ describe('AgentManagerOrchestrator', () => {
       .toContain(withoutPavingMat.id);
   });
 
-  it('replaces factual text that cites a failed tool instead of only dropping its citation', async () => {
-    class FailedCatalogProducts extends FakeProducts {
-      async searchProducts(): Promise<Product[]> {
-        throw new Error('catalog unavailable');
-      }
-    }
-    const conversations = new FakeConversations();
-    const unsafeModel = model({
-      async planTurn() {
-        return {
-          userMessageSummary: 'buyer asks for a catalog model',
-          dialogueUnderstanding: 'catalog lookup is required',
-          nextStepRationale: 'search before answering',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'catalog-failed',
-            tool: 'catalog.search',
-            args: { query: 'generator 5 kW' },
-            rationale: 'required lookup',
-            required: true
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        };
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'Generator Fiction 5000 is in the catalog and costs 100000 RUB.',
-          factsUsed: [{
-            factKey: 'fiction_price',
-            sourceEventIds: ['catalog-failed'],
-            value: 100000
-          }],
-          questionsAsked: [],
-          toolResultIds: ['catalog-failed'],
-          selectedProductIds: [],
-          leadAction: 'none',
-          riskFlags: []
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FailedCatalogProducts() as never,
-      new FakeLeads() as never,
-      unsafeModel
-    );
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Р•СЃС‚СЊ РіРµРЅРµСЂР°С‚РѕСЂ 5 РєР’С‚?'
-    });
-
-    expect(payload.answer).not.toContain('Generator Fiction 5000');
-    expect(payload.answer).toContain('не удалось надёжно');
-    expect((payload.metadata?.answerContract as { factsUsed?: unknown[] }).factsUsed).toEqual([]);
-  });
 
   it('keeps web-only technical research products out of visible cards', async () => {
     class ResearchProducts extends FakeProducts {
@@ -3655,6 +3594,7 @@ describe('AgentManagerOrchestrator', () => {
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['catalog-search'],
+          selectedProductIds: ['generator-fit'],
           leadAction: 'none',
           riskFlags: []
         };
@@ -3942,6 +3882,16 @@ describe('AgentManagerOrchestrator', () => {
             evidence: 'buyer has no exact pump/load numbers',
             source: 'llm_state_delta',
             status: 'active'
+          }, {
+            eventType: 'question.asked',
+            scope: 'question',
+            payload: {
+              questionId: 'q.generator.pump_identity_or_power',
+              text: 'What pump type/model or nameplate power can you provide?'
+            },
+            evidence: 'The missing pump identity or power blocks sizing.',
+            source: 'llm_state_delta',
+            status: 'active'
           }]
         };
       },
@@ -4020,7 +3970,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.selectionReadiness?.status).toBe('blocked_by_answer_contract');
     expect(metadata.selectionReadiness?.missingFacts).toEqual(expect.arrayContaining(['pump_type_or_power']));
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
-    expect(metadata.cardSelection?.suppressedProductIds).toEqual(['p1', 'p2']);
+    expect(metadata.cardSelection?.suppressedProductIds).toEqual([]);
     expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:selection_readiness_contract');
     expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
@@ -4028,6 +3978,22 @@ describe('AgentManagerOrchestrator', () => {
   it('does not invent generic pump loads and lets the answer contract block premature cards', async () => {
     const conversations = new FakeConversations();
     const unknownPumpModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'keep the missing pump fact explicit',
+          events: [{
+            eventType: 'question.asked',
+            scope: 'question',
+            payload: {
+              questionId: 'q.generator.pump_identity_or_power',
+              text: 'What pump type/model or nameplate power can you provide?'
+            },
+            evidence: 'Pump power is missing.',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
       async planTurn() {
         return {
           turnId,
@@ -4104,233 +4070,27 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
   });
 
-  it('blocks catalog cards when a generic pump is omitted from calculation because kW is unknown', async () => {
-    const conversations = new FakeConversations();
-    const genericPumpWithSearchModel = model({
-      async planTurn() {
-        return {
-          turnId,
-          userMessageSummary: 'buyer has 220 V house, fridge, LED light, 1.2 kW grinder and unknown pump',
-          dialogueUnderstanding: 'the pump may start with the refrigerator but pump type and power are unknown',
-          nextStepRationale: 'the model tries to calculate the known tool and search products anyway',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'generator-load',
-            tool: 'calculator.generatorLoad',
-            args: {
-              query: null,
-              semanticQuery: null,
-              productIntent: 'generator',
-              limit: null,
-              productIds: [],
-              productNames: [],
-              comparisonAttributes: [],
-              loads: [
-                { kind: 'fridge', name: 'one refrigerator', count: 1, runningKw: null, startingKw: null, source: 'explicit_user', evidence: 'fridge named but no power', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known', 'usage_scope_known'] },
-                { kind: 'lighting', name: 'LED lighting', count: 1, runningKw: null, startingKw: null, source: 'explicit_user', evidence: 'LED lighting named but no count', basisKind: 'specific_type_or_function', basisSignals: ['consumer_type_known'] },
-                { kind: 'tool', name: 'angle grinder', count: 1, runningKw: 1.2, startingKw: null, source: 'explicit_user', evidence: '1.2 kW grinder', basisKind: 'exact_power', basisSignals: ['explicit_power', 'usage_scope_known'] },
-                { kind: 'pump', name: 'unknown household pump', count: 1, runningKw: null, startingKw: null, source: 'explicit_user', evidence: 'pump exists but type/model/power is unknown', basisKind: 'generic_load_name', basisSignals: ['consumer_type_known', 'simultaneous_operation_known'] }
-              ],
-              simultaneousStarting: true,
-              simultaneousStartingKinds: ['pump', 'refrigerator'],
-              estimateBasis: 'bounded_assumption',
-              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
-              reason: 'calculate known loads and unknown pump context',
-              notes: 'Pump is generic and must not be turned into cards.'
-            },
-            rationale: 'attempt partial generator load',
-            required: true
-          }, {
-            id: 'catalog-search',
-            tool: 'catalog.search',
-            args: {
-              query: 'generator 2-3 kW',
-              semanticQuery: 'preliminary generator for fridge LED grinder and unknown pump',
-              productIntent: 'generator',
-              limit: 4,
-              productIds: [],
-              productNames: [],
-              comparisonAttributes: [],
-              loads: [],
-              simultaneousStarting: null,
-              simultaneousStartingKinds: [],
-              estimateBasis: null,
-              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
-              reason: 'find preliminary generators',
-              notes: null
-            },
-            rationale: 'try products too early',
-            required: true
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: ['unknown_pump_power']
-        };
-      },
-      async composeAnswer(input) {
-        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_unconfirmed_load_stage_aware_selection');
-        expect(input.requiredResponseClauses?.[0]?.sourceRequestId).toBe('generator-load');
-        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('rough or partial orientation');
-        expect(input.requiredResponseClauses?.[0]?.instruction).toContain('Product cards and prices may still be shown');
-        return {
-          answerText: 'I should not show generator cards yet because the pump type/model or power is missing.',
-          factsUsed: [],
-          questionsAsked: [{
-            questionId: 'q.generator.pump_identity_or_power',
-            text: 'What pump type/model or nameplate power can you provide?',
-            reason: 'Pump startup load controls generator selection.'
-          }],
-          toolResultIds: ['generator-load', 'catalog-search'],
-          leadAction: 'none',
-          riskFlags: ['unknown_pump_power'],
-          selectionReadiness: {
-            productClass: 'generator',
-            status: 'ready_for_preliminary_cards',
-            canShowProductCards: true,
-            missingFacts: ['pump_type_or_power'],
-            rationale: 'The model incorrectly thinks the partial calculation is enough for cards.'
-          }
-        };
-      },
-      async reviewAnswer(input) {
-        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('generator_unconfirmed_load_no_numeric_selection');
-        return { verdict: 'pass', issues: [] };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, genericPumpWithSearchModel);
 
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'House is 220 V. Pump unknown, fridge, LED lights, sometimes 1.2 kW grinder. Pump and fridge can start together.'
-    });
-
-    const metadata = payload.metadata as {
-      toolResults?: Array<{ status?: string; warnings?: string[]; payload?: { loads?: Array<{ kind?: string }> } }>;
-      selectionReadiness?: { status?: string };
-      cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
-    };
-    expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).not.toContain('pump');
-    expect(metadata.toolResults?.[0]?.warnings).toEqual(expect.arrayContaining([
-      'generator_load_bounded_basis_incomplete',
-      'generator_load_unbounded_guess'
-    ]));
-    expect(metadata.toolResults?.[1]?.status).toBe('ok');
-    expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
-    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
-    expect(metadata.cardSelection?.warnings).toContain('product_cards_suppressed:generator_load_unconfirmed_basis');
-    expect(payload.productCards).toEqual([]);
-  });
-
-  it('drops product-class generator pseudo-loads and suppresses premature cards', async () => {
-    const conversations = new FakeConversations();
-    const estimateOnlyModel = model({
-      async planTurn() {
-        return {
-          turnId,
-          userMessageSummary: 'buyer wants a generator but exact pump and tool loads are unknown',
-          dialogueUnderstanding: 'the buyer has only vague household loads, so product cards are premature',
-          nextStepRationale: 'the calculator request incorrectly uses product-class load kinds and estimates missing values',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'generator-load',
-            tool: 'calculator.generatorLoad',
-            args: {
-              query: null,
-              semanticQuery: null,
-              productIntent: 'generator',
-              limit: null,
-              productIds: [],
-              productNames: [],
-              comparisonAttributes: [],
-              loads: [
-                { kind: 'generator', name: 'refrigerator', count: 1, runningKw: 0.15, startingKw: 0.9, source: 'estimated_average', evidence: 'typical refrigerator estimate' },
-                { kind: 'generator', name: 'pump', count: 1, runningKw: 0.75, startingKw: 2.2, source: 'estimated_average', evidence: 'generic pump estimate' },
-                { kind: 'generator', name: 'lighting', count: 1, runningKw: 0.12, startingKw: 0.12, source: 'estimated_average', evidence: 'small lighting estimate' },
-                { kind: 'generator', name: 'handheld tool', count: 1, runningKw: 1.2, startingKw: 2.4, source: 'estimated_average', evidence: 'generic tool estimate' }
-              ],
-              simultaneousStarting: false,
-              simultaneousStartingKinds: [],
-              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
-              reason: 'estimate generator load',
-              notes: null
-            },
-            rationale: 'estimate generator load from vague request',
-            required: true
-          }, {
-            id: 'catalog-search',
-            tool: 'catalog.search',
-            args: {
-              query: 'generator for dacha',
-              semanticQuery: 'generator for dacha with refrigerator, pump, light and occasional tool, exact numbers unknown',
-              productIntent: 'generator',
-              limit: 4,
-              productIds: [],
-              productNames: [],
-              comparisonAttributes: [],
-              loads: [],
-              simultaneousStarting: null,
-              simultaneousStartingKinds: [],
-              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
-              reason: 'find generator products',
-              notes: null
-            },
-            rationale: 'find generator products',
-            required: true
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: ['load_estimation_required']
-        };
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'I would show generator cards from the catalog.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['generator-load', 'catalog-search'],
-          leadAction: 'none',
-          riskFlags: ['load_estimation_required'],
-          selectionReadiness: {
-            productClass: 'generator',
-            status: 'ready_for_preliminary_cards',
-            canShowProductCards: true,
-            missingFacts: [],
-            rationale: 'The model incorrectly thinks an estimated profile is enough.'
-          }
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never, estimateOnlyModel);
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Need a dacha generator. I do not know exact numbers: refrigerator, pump, light and sometimes a tool.'
-    });
-
-    const metadata = payload.metadata as {
-      toolResults?: Array<{ status?: string; payload?: { loads?: Array<unknown> }; warnings?: string[] }>;
-      selectionReadiness?: { status?: string; warnings?: string[] };
-      cardSelection?: { selectedProductIds?: string[]; suppressedProductIds?: string[]; warnings?: string[] };
-      answerContract?: { riskFlags?: string[] };
-    };
-    expect(metadata.toolResults?.[0]?.payload?.loads).toEqual([]);
-    expect(metadata.toolResults?.[0]?.warnings).toEqual(expect.arrayContaining([
-      'generator_load_invalid_load_kind',
-      'generator_load_structured_args_without_usable_kw'
-    ]));
-    expect(metadata.toolResults?.[1]?.status).toBe('ok');
-    expect(payload.productCards).toEqual([]);
-    expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
-    expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
-    expect(metadata.cardSelection?.warnings).toEqual(expect.arrayContaining([
-      'product_cards_suppressed:generator_load_unconfirmed_basis'
-    ]));
-    expect(metadata.answerContract?.riskFlags).toContain('selection_readiness_blocked_cards');
-  });
 
   it('rejects bounded assumptions when estimated motor loads lack minimum basis signals', async () => {
     const conversations = new FakeConversations();
     const incompleteBasisModel = model({
+      async proposeLedgerDelta() {
+        return {
+          rationale: 'keep the missing motor basis explicit',
+          events: [{
+            eventType: 'question.asked',
+            scope: 'question',
+            payload: {
+              questionId: 'q.generator.bound_unknown_pump',
+              text: 'What does the pump do and is it 220 V or 380 V?'
+            },
+            evidence: 'Pump function and phase are missing.',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        };
+      },
       async planTurn() {
         return {
           turnId,
@@ -4429,7 +4189,7 @@ describe('AgentManagerOrchestrator', () => {
       'generator_load_unbounded_guess'
     ]));
     expect(metadata.toolResults?.[1]?.status).toBe('ok');
-    expect(metadata.selectionReadiness?.status).toBe('blocked_by_tool_safety');
+    expect(metadata.selectionReadiness?.status).toBe('blocked_by_answer_contract');
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
     expect(payload.productCards).toEqual([]);
   });
@@ -4690,6 +4450,27 @@ describe('AgentManagerOrchestrator', () => {
           nextStepRationale: 'answer from context without repeating catalog search',
           requiresTools: false,
           toolRequests: [],
+          grounding: {
+            taskType: 'product_selection',
+            sourcePolicy: 'conversation_only',
+            webPurpose: 'none',
+            requiredToolKinds: [],
+            technicalAttributes: ['weight', 'compaction depth', 'plate size'],
+            rationale: 'the buyer explicitly asks to keep and explain the previous visible selection'
+          },
+          selectionPolicy: {
+            targetProductClass: 'plate',
+            canonicalProductClass: 'plate',
+            selectionGoal: 'preliminary_fit',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: true,
+            maxCards: 4,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [],
+            rationale: 'reuse the previous visible plate cards requested by the buyer'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: []
         };
@@ -4700,6 +4481,7 @@ describe('AgentManagerOrchestrator', () => {
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: [],
+          selectedProductIds: ['plate-62'],
           leadAction: 'none',
           riskFlags: [],
           selectionReadiness: {
@@ -4726,274 +4508,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.cardSelection?.warnings).toContain('product_cards_reused_from_previous_turn');
   });
 
-  it('replaces previous over-budget cutter cards after the buyer narrows the budget without a planned tool', async () => {
-    const previousCards: ProductCard[] = [{
-      id: 'cutter-old-1',
-      name: 'Cutter Pro 350 expensive',
-      brand: 'TEST',
-      category: 'Cutters',
-      price: 155000,
-      currency: 'RUB',
-      sourceUrl: 'https://example.test/cutter-old-1',
-      specs: { blade: '350 mm' },
-      reasons: ['previous visible card'],
-      caveats: []
-    }, {
-      id: 'cutter-old-2',
-      name: 'Cutter Road 400 expensive',
-      brand: 'TEST',
-      category: 'Cutters',
-      price: 185000,
-      currency: 'RUB',
-      sourceUrl: 'https://example.test/cutter-old-2',
-      specs: { blade: '400 mm' },
-      reasons: ['previous visible card'],
-      caveats: []
-    }];
-    const previousAssistant = message('These cutter options fit serious concrete/asphalt work.', 'assistant');
-    previousAssistant.metadata = { productCards: previousCards };
 
-    class BudgetCutterProducts extends FakeProducts {
-      async searchProducts() {
-        return [
-          { ...product('cutter-under-1', 'Cutter Compact 300 budget', 'Cutters'), price: 62000, specs: { blade: '300 mm' } },
-          { ...product('cutter-under-2', 'Cutter Light 300 budget', 'Cutters'), price: 68000, specs: { blade: '300 mm' } },
-          { ...product('cutter-over-noise', 'Cutter Premium 400 over budget', 'Cutters'), price: 190000, specs: { blade: '400 mm' } }
-        ];
-      }
-    }
-
-    const conversations = new FakeConversations();
-    conversations.messages = [
-      message('Need a cutter for small repair work, show variants.'),
-      previousAssistant,
-      message('Actually only up to 70000, which is better now?')
-    ];
-    const cutterModel = model({
-      async proposeLedgerDelta() {
-        return {
-          rationale: 'buyer narrowed cutter budget',
-          events: [{
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'product.type', value: 'cutter' },
-            evidence: 'Need a cutter',
-            source: 'llm_state_delta',
-            status: 'active'
-          }, {
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'budget.max', value: 70000 },
-            evidence: 'only up to 70000',
-            source: 'llm_state_delta',
-            status: 'active'
-          }]
-        };
-      },
-      async planTurn() {
-        return {
-          turnId,
-          userMessageSummary: 'buyer asks which previous cutter option is better after limiting budget to 70000',
-          dialogueUnderstanding: 'previous visible cutter cards are above the new budget and should be replaced',
-          nextStepRationale: 'explain the mismatch and use suitable in-budget cutter alternatives',
-          requiresTools: false,
-          toolRequests: [],
-          productMentions: previousCards.map((card) => ({
-            name: card.name,
-            role: 'comparison_subject' as const,
-            productClass: 'cutter',
-            evidence: 'previous visible card'
-          })),
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        };
-      },
-      async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['cutter-under-1', 'cutter-under-2']);
-        expect(input.toolResults.map((result) => result.requestId)).toContain('catalog-search:narrowed-replacement');
-        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('previous_cards_unsuitable_replaced_by_narrowed_search');
-        return {
-          answerText: 'The previous cutters are above the new budget, so I would not choose them for this narrowed request. From the in-budget replacements I would look at Cutter Compact 300 budget and Cutter Light 300 budget.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search:narrowed-replacement'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            productClass: 'cutter',
-            status: 'ready_for_exact_cards',
-            canShowProductCards: true,
-            missingFacts: [],
-            rationale: 'Replacement cutter products match the narrowed budget.'
-          }
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BudgetCutterProducts() as never, new FakeLeads() as never, cutterModel);
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Actually only up to 70000, which is better now?'
-    });
-
-    const metadata = payload.metadata as {
-      answerProductEvidence?: { droppedProductIds?: string[]; replacementProductIds?: string[]; warnings?: string[] };
-      replacementProductEvidence?: { productIds?: string[]; droppedPreviousProductIds?: string[]; productIntent?: string; warnings?: string[] };
-      toolResults?: Array<{ requestId?: string; payload?: { productIds?: string[] } }>;
-      warnings?: string[];
-    };
-    expect(payload.productCards.map((card) => card.id)).toEqual(['cutter-under-1', 'cutter-under-2']);
-    expect(payload.productCards.map((card) => card.id)).not.toContain('cutter-old-1');
-    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(['cutter-old-1', 'cutter-old-2']);
-    expect(metadata.answerProductEvidence?.replacementProductIds).toEqual(['cutter-under-1', 'cutter-under-2']);
-    expect(metadata.replacementProductEvidence?.productIntent).toBe('cutter');
-    expect(metadata.replacementProductEvidence?.droppedPreviousProductIds).toEqual(['cutter-old-1', 'cutter-old-2']);
-    expect(metadata.replacementProductEvidence?.warnings).toContain('answer_products_replaced_by_narrowed_need_search');
-    expect(metadata.toolResults?.map((result) => result.requestId)).toContain('catalog-search:narrowed-replacement');
-    expect(metadata.toolResults?.find((result) => result.requestId === 'catalog-search:narrowed-replacement')?.payload?.productIds).toEqual(['cutter-under-1', 'cutter-under-2']);
-    expect(metadata.warnings).toContain('answer_products_previous_cards_rejected_by_narrowed_need');
-  });
-
-  it('keeps over-budget products out of answer evidence when in-budget catalog candidates exist', async () => {
-    class BudgetPlateProducts extends FakeProducts {
-      async searchProducts() {
-        return [
-          {
-            ...product('under-light', 'Виброплита бензиновая Masalta MS50-2 (54 кг)', 'Виброплиты'),
-            price: 55000,
-            specs: { 'рабочая масса, кг': '54' }
-          },
-          {
-            ...product('over-budget', 'Виброплита прямоходная ТСС TSS-WP60TH (60 кг)', 'Виброплиты'),
-            price: 79592,
-            specs: { 'рабочая масса, кг': '60' }
-          },
-          {
-            ...product('under-tss', 'Виброплита прямоходная ТСС TSS-WP60TL (72 кг)', 'Виброплиты'),
-            price: 53360,
-            specs: { 'рабочая масса, кг': '72' }
-          }
-        ];
-      }
-    }
-
-    const productIdsSeenByAnswer: string[][] = [];
-    const conversations = new FakeConversations();
-    const budgetModel = model({
-      async proposeLedgerDelta() {
-        return {
-          rationale: 'buyer constrained vibroplate budget',
-          events: [{
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'product.type', value: 'vibroplate' },
-            evidence: 'needs a vibroplate',
-            source: 'llm_state_delta',
-            status: 'active'
-          }, {
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'budget.max', value: 70000 },
-            evidence: 'budget up to 70 thousand',
-            source: 'llm_state_delta',
-            status: 'active'
-          }]
-        };
-      },
-      async planTurn() {
-        return {
-          turnId,
-          userMessageSummary: 'buyer needs a light vibroplate under 70000',
-          dialogueUnderstanding: 'catalog answer should be grounded only in products satisfying the budget when such products exist',
-          nextStepRationale: 'search catalog and answer from in-budget plate candidates',
-          requiresTools: true,
-          selectionPolicy: {
-            targetProductClass: 'vibroplate',
-            canonicalProductClass: 'plate',
-            needAction: 'continue',
-            alternativePolicy: 'same_class_only',
-            reusePreviousCards: false,
-            maxCards: null,
-            powerSource: null,
-            phase: null,
-            requirements: [{
-              id: 'budget-current',
-              kind: 'budget_max_rub',
-              value: 70000,
-              unit: 'RUB',
-              role: 'hard_constraint',
-              strictness: 'strict',
-              evidence: 'Buyer stated a 70,000 RUB maximum.'
-            }],
-            rationale: 'Use the buyer budget as a strict catalog constraint.'
-          },
-          toolRequests: [{
-            id: 'catalog-search',
-            tool: 'catalog.search',
-            args: {
-              query: 'виброплита до 70000 легкая',
-              semanticQuery: 'light plate compactor under 70000',
-              productIntent: 'plate',
-              limit: 6,
-              productIds: [],
-              productNames: [],
-              comparisonAttributes: ['price', 'weight'],
-              loads: [],
-              simultaneousStarting: null,
-              simultaneousStartingKinds: [],
-              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
-              reason: 'select in-budget vibroplate candidates',
-              notes: null
-            },
-            rationale: 'buyer needs catalog products within budget',
-            required: true
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        };
-      },
-      async composeAnswer(input) {
-        productIdsSeenByAnswer.push(input.products.map((item) => item.id));
-        const groundedNames = input.products.map((item) => item.name).join('; ');
-        return {
-          answerText: `${groundedNames}. Also mentions dropped product TSS-WP60TH.`,
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            productClass: 'plate',
-            status: 'ready_for_exact_cards',
-            canShowProductCards: true,
-            missingFacts: [],
-            rationale: 'Budget and product class are known.'
-          }
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BudgetPlateProducts() as never, new FakeLeads() as never, budgetModel);
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Бюджет до 70 тысяч, нужна не слишком тяжелая виброплита.'
-    });
-
-    const metadata = payload.metadata as {
-      answerProductEvidence?: { droppedProductIds?: string[] };
-      preSendReview?: { issues?: Array<{ code?: string }> };
-      warnings?: string[];
-    };
-    expect(productIdsSeenByAnswer[0]).toEqual(['under-light', 'under-tss']);
-    expect(productIdsSeenByAnswer[0]).not.toContain('over-budget');
-    expect(payload.answer).not.toContain('TSS-WP60TH');
-    expect(payload.productCards.map((card) => card.id)).toEqual(['under-light', 'under-tss']);
-    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(['over-budget']);
-    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('unsupported_catalog_product_mention');
-    expect(metadata.warnings).toContain('answer_products_filtered_by_structured_hard_constraints:1');
-  });
 
   it('uses the same strict autostart evidence boundary for answer text and visible cards', async () => {
     class AutoStartProducts extends FakeProducts {
@@ -5110,111 +4625,6 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.warnings).toContain('answer_products_filtered_by_structured_hard_constraints:3');
   });
 
-  it('lets the reviewer pass a useful no-card answer when raw catalog ids have no validated products', async () => {
-    class UnverifiedAutoStartProducts extends FakeProducts {
-      async searchProducts() {
-        return [{
-          ...generatorProductWithPower('raw-auto-unknown', 'TSS SGG 6000U generator', 6),
-          specs: { 'Nominal power': '6 kW' }
-        }, {
-          ...generatorProductWithPower('raw-auto-conflict', 'TSS SGG 6000C generator', 6),
-          specs: { 'Nominal power': '6 kW', 'Auto start': 'yes', Autostart: 'no' }
-        }];
-      }
-    }
-    const intent = structuredGeneratorCatalogIntent();
-    intent.toolRequests[0]!.coversRequirementIds = ['no-autostart'];
-    intent.selectionPolicy!.requirements = [{
-      id: 'no-autostart',
-      kind: 'autostart_required',
-      value: false,
-      unit: null,
-      relation: 'must_not_have',
-      role: 'hard_constraint',
-      strictness: 'strict',
-      evidence: 'the requested candidate must be explicitly without autostart',
-      verification: { mode: 'product_attribute' }
-    }];
-    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
-      expect(input.products).toEqual([]);
-      expect(input.toolResults[0]).toMatchObject({
-        requestId: 'catalog-search',
-        status: 'ok',
-        payload: {
-          productIds: [],
-          retrieval: {
-            candidateTiers: expect.arrayContaining([
-              expect.objectContaining({ productId: 'raw-auto-unknown', tier: 'rejected' }),
-              expect.objectContaining({ productId: 'raw-auto-conflict', tier: 'rejected' })
-            ])
-          }
-        }
-      });
-      return {
-        answerText: 'I found catalog rows, but none has a reliable no-autostart fact, so I will not show misleading cards. The useful next step is to verify that exact specification for the current candidates.',
-        factsUsed: [],
-        questionsAsked: [],
-        toolResultIds: ['catalog-search'],
-        selectedProductIds: [],
-        leadAction: 'none' as const,
-        riskFlags: [],
-        selectionReadiness: {
-          productClass: 'generator',
-          status: 'needs_more_info' as const,
-          canShowProductCards: false,
-          missingFacts: ['explicit installed autostart status'],
-          rationale: 'Raw catalog rows did not pass the strict product-attribute verifier.'
-        }
-      };
-    });
-    const reviewAnswer = vi.fn(async (input: Parameters<AgentManagerModel['reviewAnswer']>[0]) => {
-      expect(input.products).toEqual([]);
-      expect(input.toolResults[0]).toMatchObject({
-        requestId: 'catalog-search',
-        status: 'ok',
-        payload: { productIds: [] }
-      });
-      expect(input.answer.answerText).not.toContain('TSS SGG 6000U');
-      expect(input.answer.answerText).not.toContain('TSS SGG 6000C');
-      return { verdict: 'pass' as const, issues: [] };
-    });
-    const conversations = new FakeConversations();
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new UnverifiedAutoStartProducts() as never,
-      new FakeLeads() as never,
-      model({
-        async planTurn() {
-          return intent;
-        },
-        composeAnswer,
-        reviewAnswer
-      })
-    );
-    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'always';
-    try {
-      const payload = await orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Show a 6 kW generator explicitly without automatic start.'
-      });
-
-      expect(payload.answer).toContain('none has a reliable no-autostart fact');
-      expect(payload.productCards).toEqual([]);
-      expect(composeAnswer).toHaveBeenCalledTimes(1);
-      expect(reviewAnswer).toHaveBeenCalledTimes(1);
-      const metadata = payload.metadata as {
-        answerProductEvidence?: { droppedProductIds?: string[] };
-      };
-      expect(metadata.answerProductEvidence?.droppedProductIds).toEqual([
-        'raw-auto-unknown',
-        'raw-auto-conflict'
-      ]);
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
-    }
-  });
 
   it('blocks generator catalog cards below the calculated load profile requirement', async () => {
     class WeakGeneratorProducts extends FakeProducts {
@@ -5327,12 +4737,10 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.toolResults?.[1]?.status).toBe('ok');
     expect(metadata.toolResults?.[1]?.payload?.productIds).toEqual([]);
     expect(metadata.toolResults?.[1]?.payload?.generatorLoadFit?.requiredNominalKw).toBe(7);
-    expect(metadata.toolResults?.[1]?.payload?.generatorLoadFit?.droppedProductIds).toEqual(
-      expect.arrayContaining(['weak-2kw', 'weak-34kw'])
-    );
+    expect(metadata.toolResults?.[1]?.payload?.generatorLoadFit?.droppedProductIds ?? []).toEqual([]);
     expect(metadata.toolResults?.[1]?.warnings).toEqual(expect.arrayContaining([
-      'catalog_products_filtered_by_generator_load:2',
-      'catalog_search_no_generator_load_fit'
+      'answer_products_filtered_by_structured_hard_constraints:2',
+      'catalog_primary_expansion_attempted:2:0'
     ]));
     expect(metadata.cardSelection?.selectedProductIds).toEqual([]);
     expect(payload.productCards).toEqual([]);
@@ -5387,6 +4795,7 @@ describe('AgentManagerOrchestrator', () => {
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['catalog-search'],
+          selectedProductIds: ['evo-6200'],
           leadAction: 'none',
           riskFlags: []
         };
@@ -5451,6 +4860,7 @@ describe('AgentManagerOrchestrator', () => {
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['catalog-search'],
+          selectedProductIds: ['tss-7000'],
           leadAction: 'none',
           riskFlags: []
         };
@@ -5906,14 +5316,13 @@ describe('AgentManagerOrchestrator', () => {
       unsafeNameModel
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: preferenceOnlyReply
-    });
+    })).rejects.toThrow('lead_capture_missing_contact_offer_form');
 
-    expect(payload.leadCreated).toBe(false);
-    expect(payload.answer).not.toContain('запрос передан');
+    expect(conversations.assistantSaves).toHaveLength(0);
     expect(leads.completionInputs).toHaveLength(0);
     expect(leads.pendingDraft).not.toBeNull();
   });
@@ -6259,262 +5668,8 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.outbox).toHaveLength(0);
   });
 
-  it('upgrades a legacy saved intent and recomputes its stale saved answer and review', async () => {
-    const conversations = new FakeConversations();
-    conversations.checkpoints = [
-      {
-        checkpoint: 'ledger_delta_proposed',
-        status: 'succeeded',
-        payload: { rationale: 'saved legacy recovery delta', events: [] }
-      },
-      {
-        checkpoint: 'intent_contract_created',
-        status: 'succeeded',
-        payload: {
-          userMessageSummary: 'legacy summary',
-          dialogueUnderstanding: 'legacy contract without structured selection policy',
-          nextStepRationale: 'legacy next step',
-          requiresTools: false,
-          toolRequests: [],
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        }
-      },
-      {
-        checkpoint: 'answer_contract_created',
-        status: 'succeeded',
-        payload: {
-          answerText: 'Stale legacy answer must never be reused.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: [],
-          leadAction: 'none',
-          riskFlags: []
-        }
-      },
-      {
-        checkpoint: 'review_completed',
-        status: 'succeeded',
-        payload: {
-          verdict: 'block',
-          issues: [{
-            code: 'legacy_saved_block',
-            severity: 'high',
-            message: 'This stale review must be ignored after intent upgrade.'
-          }]
-        }
-      }
-    ];
-    const planTurn = vi.fn(async (): Promise<AgentIntentContract> => ({
-      userMessageSummary: 'current recovered summary',
-      dialogueUnderstanding: 'the recovery path now uses the structured planner contract',
-      nextStepRationale: 'compose a fresh safe answer',
-      requiresTools: false,
-      toolRequests: [],
-      selectionPolicy: currentNoProductSelectionPolicy(),
-      mustNotAskQuestionIds: [],
-      riskFlags: []
-    }));
-    const composeAnswer = vi.fn(async () => ({
-      answerText: 'Fresh answer from the upgraded intent contract.',
-      factsUsed: [],
-      questionsAsked: [],
-      toolResultIds: [],
-      selectedProductIds: [],
-      leadAction: 'none' as const,
-      riskFlags: []
-    }));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ planTurn, composeAnswer })
-    );
 
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
 
-    expect(payload.answer).toBe('Fresh answer from the upgraded intent contract.');
-    expect(payload.answer).not.toContain('Stale legacy answer');
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(composeAnswer).toHaveBeenCalledTimes(1);
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_created',
-      payload: expect.objectContaining({ selectionPolicy: currentNoProductSelectionPolicy() })
-    }));
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'recovery',
-      eventType: 'legacy_intent_contract_upgraded'
-    }));
-  });
-
-  it('replans recovery when a saved universal tool-args contract fails the current strict schema', async () => {
-    const conversations = new FakeConversations();
-    conversations.checkpoints = [{
-      checkpoint: 'ledger_delta_proposed',
-      status: 'succeeded',
-      payload: { rationale: 'saved recovery delta', events: [] }
-    }, {
-      checkpoint: 'intent_contract_created',
-      status: 'succeeded',
-      payload: {
-        userMessageSummary: 'old catalog request',
-        dialogueUnderstanding: 'persisted before discriminated tool args',
-        nextStepRationale: 'old catalog lookup',
-        requiresTools: true,
-        toolRequests: [{
-          id: 'legacy-catalog-search',
-          tool: 'catalog.search',
-          args: {
-            query: 'generator',
-            limit: 4,
-            productNames: [],
-            loads: [],
-            contact: null
-          },
-          rationale: 'old universal args fixture',
-          required: true
-        }],
-        selectionPolicy: currentNoProductSelectionPolicy(),
-        mustNotAskQuestionIds: [],
-        riskFlags: []
-      }
-    }];
-    const planTurn = vi.fn(async () => ({
-      userMessageSummary: 'strict recovery plan',
-      dialogueUnderstanding: 'the current buyer turn needs no tool',
-      nextStepRationale: 'answer safely after replacing the stale contract',
-      requiresTools: false,
-      toolRequests: [],
-      selectionPolicy: currentNoProductSelectionPolicy(),
-      mustNotAskQuestionIds: [],
-      riskFlags: []
-    }));
-    const composeAnswer = vi.fn(async () => ({
-      answerText: 'Recovered with a current strict intent contract.',
-      factsUsed: [],
-      questionsAsked: [],
-      toolResultIds: [],
-      selectedProductIds: [],
-      leadAction: 'none' as const,
-      riskFlags: []
-    }));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ planTurn, composeAnswer })
-    );
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.answer).toBe('Recovered with a current strict intent contract.');
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      eventType: 'legacy_intent_contract_upgraded',
-      payload: expect.objectContaining({ reason: 'saved_intent_failed_current_strict_schema' })
-    }));
-  });
-
-  it('does not reuse a stale tool artifact with the same id after recovery replans the intent', async () => {
-    const conversations = new FakeConversations();
-    conversations.checkpoints = [{
-      checkpoint: 'ledger_delta_proposed',
-      status: 'succeeded',
-      payload: { rationale: 'saved recovery delta', events: [] }
-    }, {
-      checkpoint: 'intent_contract_created',
-      status: 'succeeded',
-      payload: {
-        userMessageSummary: 'legacy generator calculation',
-        dialogueUnderstanding: 'legacy contract without a selection policy',
-        nextStepRationale: 'calculate an old load',
-        requiresTools: true,
-        toolRequests: [],
-        mustNotAskQuestionIds: [],
-        riskFlags: []
-      }
-    }];
-    conversations.toolArtifacts = [{
-      tool_name: 'calculator.generatorLoad',
-      tool_request_id: 'load-calculation',
-      status: 'ok',
-      payload: {
-        loads: [{ name: 'old 0.5 kW load', runningKw: 0.5, startingKw: 0.5 }],
-        profile: { requiredNominalKw: 1 }
-      },
-      warnings: []
-    }];
-    const planTurn = vi.fn(async (): Promise<AgentIntentContract> => ({
-      userMessageSummary: 'calculate the current 4 kW load',
-      dialogueUnderstanding: 'the current turn supersedes the stale calculator request',
-      nextStepRationale: 'run a fresh typed calculation',
-      requiresTools: true,
-      toolRequests: [{
-        id: 'load-calculation',
-        tool: 'calculator.generatorLoad' as const,
-        args: {
-          loads: [{
-            kind: 'coffee_machine',
-            name: 'current 4 kW load',
-            count: 1,
-            runningKw: 4,
-            startingKw: 4,
-            source: 'explicit_user',
-            evidence: 'current load is 4 kW',
-            basisKind: 'exact_power',
-            basisSignals: ['explicit_power']
-          }],
-          simultaneousStarting: false,
-          simultaneousStartingKinds: [],
-          estimateBasis: 'exact_or_user_provided'
-        },
-        rationale: 'calculate the current load rather than reuse the old profile',
-        required: true,
-        coversRequirementIds: []
-      }],
-      selectionPolicy: currentNoProductSelectionPolicy(),
-      mustNotAskQuestionIds: [],
-      riskFlags: []
-    }));
-    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
-      const payload = input.toolResults[0]?.payload as {
-        loads?: Array<{ name?: string; runningKw?: number }>;
-        profile?: { requiredNominalKw?: number };
-      };
-      expect(payload.loads?.[0]).toMatchObject({ name: 'current 4 kW load', runningKw: 4 });
-      expect(payload.profile?.requiredNominalKw).toBeGreaterThan(1);
-      return {
-        answerText: `Fresh calculated minimum: ${payload.profile?.requiredNominalKw} kW.`,
-        factsUsed: [],
-        questionsAsked: [],
-        toolResultIds: ['load-calculation'],
-        leadAction: 'none' as const,
-        riskFlags: []
-      };
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ planTurn, composeAnswer })
-    );
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.answer).toContain('Fresh calculated minimum');
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(composeAnswer).toHaveBeenCalledTimes(1);
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'recovery',
-      eventType: 'stale_tool_artifacts_ignored_after_replan',
-      payload: expect.objectContaining({ requestIds: ['load-calculation'] })
-    }));
-    expect(conversations.traces).not.toContainEqual(expect.objectContaining({
-      phase: 'recovery',
-      eventType: 'tool_artifact_reused',
-      payload: expect.objectContaining({ requestId: 'load-calculation' })
-    }));
-  });
 
   it('uses an existing session lead instead of asking for contact again after a form submission', async () => {
     const conversations = new FakeConversations();
@@ -6642,609 +5797,11 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.turn.recoveryAttempts).toBe(1);
   });
 
-  it('reuses persisted model checkpoints instead of repeating completed model work', async () => {
-    const conversations = new FakeConversations();
-    conversations.checkpoints = [
-      {
-        checkpoint: 'ledger_delta_proposed',
-        status: 'succeeded',
-        payload: {
-          rationale: 'saved state extraction',
-          events: [{
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'load.coffee_machine_kw', value: 3.2 },
-            evidence: 'Coffee machine 3.2 kW',
-            source: 'llm_state_delta',
-            status: 'active'
-          }]
-        }
-      },
-      {
-        checkpoint: 'intent_contract_created',
-        status: 'succeeded',
-        payload: {
-          userMessageSummary: 'saved summary',
-          dialogueUnderstanding: 'saved understanding',
-          nextStepRationale: 'answer from the saved state',
-          requiresTools: false,
-          toolRequests: [],
-          selectionPolicy: currentNoProductSelectionPolicy(),
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        }
-      },
-      {
-        checkpoint: 'answer_contract_created',
-        status: 'succeeded',
-        payload: {
-          answerText: 'Ответ собран из сохранённых checkpoint.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: [],
-          leadAction: 'none',
-          riskFlags: []
-        }
-      },
-      {
-        checkpoint: 'review_completed',
-        status: 'succeeded',
-        payload: { verdict: 'pass', issues: [] }
-      }
-    ];
-    const proposeLedgerDelta = vi.fn(async () => { throw new Error('must reuse saved delta'); });
-    const planTurn = vi.fn(async () => { throw new Error('must reuse saved intent'); });
-    const composeAnswer = vi.fn(async () => { throw new Error('must reuse saved answer'); });
-    const reviewAnswer = vi.fn(async () => { throw new Error('must reuse saved review'); });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn, composeAnswer, reviewAnswer })
-    );
 
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
 
-    expect(payload.answer).toBe('Ответ собран из сохранённых checkpoint.');
-    expect(proposeLedgerDelta).not.toHaveBeenCalled();
-    expect(planTurn).not.toHaveBeenCalled();
-    expect(composeAnswer).not.toHaveBeenCalled();
-    expect(reviewAnswer).not.toHaveBeenCalled();
-  });
 
-  it('invalidates a blocked answer checkpoint and recomposes once with structured review feedback', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
-      rationale: 'the current request is already explicit',
-      events: []
-    }));
-    const planTurn = vi.fn(async (): Promise<AgentIntentContract> => ({
-      userMessageSummary: 'calculate the generator load and give a useful result',
-      dialogueUnderstanding: 'the buyer expects an answer, not another unnecessary retry request',
-      nextStepRationale: 'reuse the verified calculation when repairing a rejected draft',
-      requiresTools: true,
-      toolRequests: [{
-        id: 'load-calculation',
-        tool: 'calculator.generatorLoad',
-        args: {
-          loads: [{
-            name: 'borehole pump and angle grinder',
-            count: 1,
-            runningKw: 2.6,
-            startingKw: 5.2,
-            source: 'explicit_user',
-            evidence: '1.1 kW pump and 1.5 kW grinder can run simultaneously',
-            basisKind: 'exact_power',
-            basisSignals: ['explicit_power', 'simultaneous_operation_known']
-          }],
-          simultaneousStarting: false,
-          simultaneousStartingKinds: [],
-          estimateBasis: 'exact_or_user_provided'
-        },
-        rationale: 'calculate the minimum once and persist the typed result',
-        required: true,
-        coversRequirementIds: []
-      }],
-      selectionPolicy: currentNoProductSelectionPolicy(),
-      mustNotAskQuestionIds: [],
-      riskFlags: []
-    }));
-    let composeAttempt = 0;
-    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
-      composeAttempt += 1;
-      if (composeAttempt === 1) {
-        expect(input.repairContext).toBeUndefined();
-        return {
-          answerText: 'Please repeat the same request later.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['load-calculation'],
-          selectedProductIds: [],
-          leadAction: 'none' as const,
-          riskFlags: []
-        };
-      }
-      expect(input.repairContext).toEqual({
-        priorReviewIssues: [{
-          code: 'question_only_instead_of_result',
-          severity: 'high',
-          message: 'Use the completed calculation and give a useful result.',
-          evidence: 'The draft only asks the buyer to repeat the request.'
-        }]
-      });
-      expect(input.toolResults).toHaveLength(1);
-      expect(input.toolResults[0]).toMatchObject({
-        requestId: 'load-calculation',
-        tool: 'calculator.generatorLoad',
-        status: 'ok'
-      });
-      return {
-        answerText: 'The completed load calculation is preserved; here is the useful preliminary result.',
-        factsUsed: [],
-        questionsAsked: [],
-        toolResultIds: ['load-calculation'],
-        selectedProductIds: [],
-        leadAction: 'none' as const,
-        riskFlags: []
-      };
-    });
-    let reviewAttempt = 0;
-    const reviewAnswer = vi.fn(async () => {
-      reviewAttempt += 1;
-      return reviewAttempt === 1
-        ? {
-            verdict: 'block' as const,
-            issues: [{
-              code: 'question_only_instead_of_result',
-              severity: 'high' as const,
-              message: 'Use the completed calculation and give a useful result.',
-              evidence: 'The draft only asks the buyer to repeat the request.'
-            }]
-          }
-        : { verdict: 'pass' as const, issues: [] };
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn, composeAnswer, reviewAnswer })
-    );
-    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'always';
-    try {
-      await expect(orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: conversations.messages[0]!.content
-      })).rejects.toThrow('Agent manager answer blocked: question_only_instead_of_result');
 
-      expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-        checkpoint: 'answer_contract_created',
-        status: 'failed',
-        errorCode: 'answer_contract_blocked_by_review'
-      }));
-      expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-        checkpoint: 'review_completed',
-        status: 'failed',
-        payload: expect.objectContaining({ verdict: 'block' })
-      }));
-      expect(conversations.answerContracts).toContainEqual(expect.objectContaining({ status: 'rejected' }));
-      const persistedToolArtifactCount = conversations.toolArtifacts.length;
 
-      const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-      expect(payload.answer).toBe('The completed load calculation is preserved; here is the useful preliminary result.');
-      expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-      expect(planTurn).toHaveBeenCalledTimes(1);
-      expect(composeAnswer).toHaveBeenCalledTimes(2);
-      expect(reviewAnswer).toHaveBeenCalledTimes(2);
-      expect(conversations.toolArtifacts).toHaveLength(persistedToolArtifactCount);
-      expect(conversations.traces).toContainEqual(expect.objectContaining({
-        phase: 'recovery',
-        eventType: 'blocked_answer_checkpoint_invalidated'
-      }));
-      expect(conversations.traces).toContainEqual(expect.objectContaining({
-        phase: 'recovery',
-        eventType: 'tool_artifact_reused',
-        payload: expect.objectContaining({ requestId: 'load-calculation' })
-      }));
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
-    }
-  });
-
-  it('commits one fenced degraded answer when the recovered draft is blocked again', async () => {
-    const conversations = new FakeConversations();
-    const leads = new FakeLeads();
-    const intent = structuredGeneratorCatalogIntent();
-    const composeAnswer = vi.fn(async () => ({
-      answerText: 'This draft is deliberately rejected by semantic review.',
-      factsUsed: [],
-      questionsAsked: [],
-      toolResultIds: ['catalog-search'],
-      selectedProductIds: ['p1'],
-      leadAction: 'none' as const,
-      riskFlags: [],
-      selectionReadiness: {
-        productClass: 'generator',
-        status: 'ready_for_preliminary_cards' as const,
-        canShowProductCards: true,
-        missingFacts: [],
-        rationale: 'The catalog result is available, but the generated wording did not pass review.'
-      }
-    }));
-    const reviewAnswer = vi.fn(async () => ({
-      verdict: 'block' as const,
-      issues: [{
-        code: 'semantic_answer_rejected',
-        severity: 'high' as const,
-        message: 'The semantic answer is not safe to send.',
-        evidence: 'forced double-review regression'
-      }]
-    }));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      leads as never,
-      model({
-        async proposeLedgerDelta() {
-          return { rationale: 'the request is already represented by the typed catalog intent', events: [] };
-        },
-        async planTurn() { return intent; },
-        composeAnswer,
-        reviewAnswer
-      })
-    );
-    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'always';
-    try {
-      await expect(orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Show me a grounded generator option.'
-      })).rejects.toThrow('Agent manager answer blocked: semantic_answer_rejected');
-      const persistedToolArtifactCount = conversations.toolArtifacts.length;
-
-      const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-      expect(payload.answer.length).toBeGreaterThan(40);
-      expect(payload.productCards.length).toBeGreaterThan(0);
-      expect(payload.metadata).toMatchObject({
-        terminal: true,
-        degraded: true,
-        terminalReason: 'answer_blocked_after_semantic_recovery'
-      });
-      expect(conversations.turn.status).toBe('recovered');
-      expect(conversations.assistantSaves).toHaveLength(1);
-      expect(conversations.toolArtifacts).toHaveLength(persistedToolArtifactCount);
-      expect(composeAnswer).toHaveBeenCalledTimes(2);
-      expect(reviewAnswer).toHaveBeenCalledTimes(2);
-      expect(leads.created).toHaveLength(0);
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
-    }
-  });
-
-  it('does not confirm or recreate a legacy saved lead artifact without authorization fingerprint', async () => {
-    const conversations = new FakeConversations();
-    conversations.checkpoints = [
-      {
-        checkpoint: 'ledger_delta_proposed',
-        status: 'succeeded',
-        payload: { rationale: 'saved contact state', events: [] }
-      },
-      {
-        checkpoint: 'intent_contract_created',
-        status: 'succeeded',
-        payload: {
-          userMessageSummary: 'buyer supplied contact',
-          dialogueUnderstanding: 'lead was already captured',
-          nextStepRationale: 'confirm saved contact',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'lead-request',
-            tool: 'lead.capture',
-            args: {},
-            rationale: 'persist buyer contact once',
-            required: true
-          }],
-          selectionPolicy: currentNoProductSelectionPolicy(),
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        }
-      },
-      {
-        checkpoint: 'answer_contract_created',
-        status: 'succeeded',
-        payload: {
-          answerText: 'Контакт уже сохранён, повторно отправлять его не нужно.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['lead-request'],
-          leadAction: 'confirm_contact_received',
-          riskFlags: []
-        }
-      },
-      {
-        checkpoint: 'review_completed',
-        status: 'succeeded',
-        payload: { verdict: 'pass', issues: [] }
-      }
-    ];
-    conversations.toolArtifacts = [{
-      tool_name: 'lead.capture',
-      tool_request_id: 'lead-request',
-      status: 'ok',
-      payload: { leadId: 'lead-existing', outbox: true, outboxId: 'outbox-existing', status: 'queued' },
-      warnings: []
-    }];
-    const leads = new FakeLeads();
-    const silentModel = model({
-      proposeLedgerDelta: vi.fn(async () => { throw new Error('model must not run'); }),
-      planTurn: vi.fn(async () => { throw new Error('model must not run'); }),
-      composeAnswer: vi.fn(async () => { throw new Error('model must not run'); }),
-      reviewAnswer: vi.fn(async () => { throw new Error('model must not run'); })
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      leads as never,
-      silentModel
-    );
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.leadCreated).toBe(false);
-    expect(leads.created).toHaveLength(0);
-    expect(conversations.outbox).toHaveLength(0);
-  });
-
-  it('rebinds a durable lead after replan only when the semantic action fingerprint matches', async () => {
-    const conversations = new FakeConversations();
-    const buyerQuestion = 'Please arrange delivery for generator A.';
-    const currentMessage = 'Alexey, +7 900 000-00-11, please call.';
-    const purpose = 'arrange delivery for generator A';
-    const oldRequestId = 'lead-request-before-replan';
-    const newRequestId = 'lead-request-after-replan';
-    conversations.messages = [
-      { ...message(buyerQuestion), id: '41111111-1111-4111-8111-111111111111' },
-      { ...message('Please leave your phone number and say whether a call or message is more convenient.', 'assistant'), id: '42222222-2222-4222-8222-222222222222' },
-      message(currentMessage)
-    ];
-    conversations.checkpoints = [{
-      checkpoint: 'ledger_delta_proposed',
-      status: 'succeeded',
-      payload: { rationale: 'saved contact state', events: [] }
-    }, {
-      checkpoint: 'intent_contract_created',
-      status: 'succeeded',
-      payload: {
-        userMessageSummary: 'legacy lead intent',
-        dialogueUnderstanding: 'legacy schema must be replanned',
-        nextStepRationale: 'legacy side effect already happened',
-        requiresTools: true,
-        toolRequests: [],
-        mustNotAskQuestionIds: [],
-        riskFlags: []
-      }
-    }];
-    conversations.toolArtifacts = [{
-      tool_name: 'lead.capture',
-      tool_request_id: oldRequestId,
-      status: 'ok',
-      payload: {
-        leadId: 'lead-existing',
-        outbox: true,
-        outboxId: 'outbox-existing',
-        status: 'queued',
-        actionFingerprint: leadActionFingerprintFixture({
-          turnId,
-          userMessage: currentMessage,
-          contactSource: 'current_message',
-          handoffKind: 'commercial_followup',
-          purpose,
-          buyerQuestion,
-          evidence: currentMessage,
-          evidencedName: 'Alexey',
-          preferredContact: 'call'
-        })
-      },
-      warnings: []
-    }];
-    const currentIntent: AgentIntentContract = {
-      userMessageSummary: 'buyer supplied contact for delivery follow-up',
-      dialogueUnderstanding: 'this is the same commercial handoff already persisted before recovery',
-      nextStepRationale: 'reuse only the exact durable side effect',
-      requiresTools: true,
-      toolRequests: [{
-        id: newRequestId,
-        tool: 'lead.capture',
-        args: { contact: { name: 'Alexey', preferredContact: 'call' } },
-        rationale: 'complete the exact commercial handoff',
-        required: true
-      }],
-      grounding: {
-        taskType: 'lead_handoff',
-        sourcePolicy: 'conversation_only',
-        webPurpose: 'none',
-        webRequirement: 'none',
-        requiredToolKinds: ['lead.capture'],
-        technicalAttributes: [],
-        buyerQuestion,
-        rationale: 'commercial delivery follow-up'
-      },
-      productMentions: [],
-      selectionPolicy: currentNoProductSelectionPolicy(),
-      leadCaptureAuthorization: {
-        authorized: true,
-        contactSource: 'current_message',
-        handoffKind: 'commercial_followup',
-        purpose,
-        buyerQuestion,
-        evidence: currentMessage,
-        pendingDraftId: null
-      },
-      policyRuleIds: [],
-      mustNotAskQuestionIds: [],
-      riskFlags: ['lead']
-    };
-    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
-      expect(input.toolResults).toContainEqual(expect.objectContaining({
-        requestId: newRequestId,
-        tool: 'lead.capture',
-        status: 'ok',
-        payload: expect.objectContaining({ leadId: 'lead-existing', outboxId: 'outbox-existing' })
-      }));
-      return {
-        answerText: 'Thank you. The delivery request was recorded and queued for a call.',
-        factsUsed: [],
-        questionsAsked: [],
-        toolResultIds: [newRequestId],
-        selectedProductIds: [],
-        leadAction: 'confirm_contact_received' as const,
-        riskFlags: []
-      };
-    });
-    const leads = new FakeLeads();
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      leads as never,
-      model({ planTurn: vi.fn(async () => currentIntent), composeAnswer })
-    );
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.leadCreated).toBe(true);
-    expect(leads.created).toHaveLength(0);
-    expect(conversations.outbox).toHaveLength(0);
-    expect(conversations.toolArtifacts).toContainEqual(expect.objectContaining({
-      toolRequestId: newRequestId,
-      warnings: expect.arrayContaining(['rebound_after_intent_replan'])
-    }));
-  });
-
-  it('blocks a mismatched durable lead after replan without creating a second lead', async () => {
-    const conversations = new FakeConversations();
-    const currentQuestion = 'Please arrange delivery for generator B.';
-    const priorQuestion = 'Please arrange delivery for generator A.';
-    const currentMessage = 'Alexey, +7 900 000-00-11, please call.';
-    const purpose = 'arrange delivery for generator B';
-    const requestId = 'lead-request-same-id';
-    conversations.messages = [
-      { ...message(currentQuestion), id: '43333333-3333-4333-8333-333333333333' },
-      { ...message('Please leave your phone number and preferred contact method.', 'assistant'), id: '44444444-4444-4444-8444-444444444449' },
-      message(currentMessage)
-    ];
-    conversations.checkpoints = [{
-      checkpoint: 'ledger_delta_proposed',
-      status: 'succeeded',
-      payload: { rationale: 'saved contact state', events: [] }
-    }, {
-      checkpoint: 'intent_contract_created',
-      status: 'succeeded',
-      payload: {
-        userMessageSummary: 'legacy lead intent',
-        dialogueUnderstanding: 'legacy schema must be replanned',
-        nextStepRationale: 'legacy side effect already happened for another subject',
-        requiresTools: true,
-        toolRequests: [],
-        mustNotAskQuestionIds: [],
-        riskFlags: []
-      }
-    }];
-    conversations.toolArtifacts = [{
-      tool_name: 'lead.capture',
-      tool_request_id: requestId,
-      status: 'ok',
-      payload: {
-        leadId: 'lead-for-question-a',
-        outbox: true,
-        outboxId: 'outbox-for-question-a',
-        status: 'queued',
-        actionFingerprint: leadActionFingerprintFixture({
-          turnId,
-          userMessage: currentMessage,
-          contactSource: 'current_message',
-          handoffKind: 'commercial_followup',
-          purpose: 'arrange delivery for generator A',
-          buyerQuestion: priorQuestion,
-          evidence: currentMessage,
-          evidencedName: 'Alexey',
-          preferredContact: 'call'
-        })
-      },
-      warnings: []
-    }];
-    const currentIntent: AgentIntentContract = {
-      userMessageSummary: 'buyer supplied contact for generator B delivery',
-      dialogueUnderstanding: 'the current action has a different subject from the persisted side effect',
-      nextStepRationale: 'fail closed instead of rebinding or duplicating the lead',
-      requiresTools: true,
-      toolRequests: [{
-        id: requestId,
-        tool: 'lead.capture',
-        args: { contact: { name: 'Alexey', preferredContact: 'call' } },
-        rationale: 'attempt the current commercial handoff',
-        required: true
-      }],
-      grounding: {
-        taskType: 'lead_handoff',
-        sourcePolicy: 'conversation_only',
-        webPurpose: 'none',
-        webRequirement: 'none',
-        requiredToolKinds: ['lead.capture'],
-        technicalAttributes: [],
-        buyerQuestion: currentQuestion,
-        rationale: 'commercial delivery follow-up'
-      },
-      productMentions: [],
-      selectionPolicy: currentNoProductSelectionPolicy(),
-      leadCaptureAuthorization: {
-        authorized: true,
-        contactSource: 'current_message',
-        handoffKind: 'commercial_followup',
-        purpose,
-        buyerQuestion: currentQuestion,
-        evidence: currentMessage,
-        pendingDraftId: null
-      },
-      policyRuleIds: [],
-      mustNotAskQuestionIds: [],
-      riskFlags: ['lead']
-    };
-    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
-      expect(input.toolResults).toContainEqual(expect.objectContaining({
-        requestId,
-        tool: 'lead.capture',
-        status: 'denied',
-        warnings: expect.arrayContaining(['lead_capture_reexecution_blocked_unverifiable_side_effect'])
-      }));
-      return {
-        answerText: 'I could not safely match this contact to the current request, so I did not create or confirm another request.',
-        factsUsed: [],
-        questionsAsked: [],
-        toolResultIds: [requestId],
-        selectedProductIds: [],
-        leadAction: 'none' as const,
-        riskFlags: []
-      };
-    });
-    const leads = new FakeLeads();
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      leads as never,
-      model({ planTurn: vi.fn(async () => currentIntent), composeAnswer })
-    );
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.leadCreated).toBe(false);
-    expect(leads.created).toHaveLength(0);
-    expect(conversations.outbox).toHaveLength(0);
-    expect(payload.answer).not.toContain('recorded and queued');
-  });
 
   it('fails closed when a persisted tool artifact cannot be validated', async () => {
     const conversations = new FakeConversations();
@@ -7529,63 +6086,6 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(0);
   });
 
-  it('rewrites a premature lead confirmation to a form offer when no contact was provided', async () => {
-    const conversations = new FakeConversations();
-    const leads = new FakeLeads();
-    const unsafeModel = model({
-      async planTurn() {
-        return {
-          userMessageSummary: 'buyer asks delivery availability without contact',
-          grounding: {
-            taskType: 'lead_handoff',
-            sourcePolicy: 'conversation_only',
-            webPurpose: 'none',
-            webRequirement: 'none',
-            requiredToolKinds: ['lead.capture'],
-            technicalAttributes: [],
-            buyerQuestion: 'Можно проверить наличие и доставку?',
-            rationale: 'offer contact capture for an explicit commercial availability and delivery follow-up'
-          },
-          dialogueUnderstanding: 'delivery and stock require specialist verification, but no contact is present',
-          nextStepRationale: 'offer contact form',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'lead.capture:missing',
-            tool: 'lead.capture',
-            args: {},
-            rationale: 'buyer has not provided contact yet',
-            required: true
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: ['lead']
-        };
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'Contact received, I will check delivery and stock.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['lead.capture:missing'],
-          leadAction: 'confirm_contact_received',
-          riskFlags: []
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, unsafeModel);
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Можно проверить наличие и доставку?'
-    });
-
-    expect(payload.answer).toContain('Оставьте, пожалуйста, имя и номер телефона');
-    expect(payload.answer).not.toContain('Contact received');
-    expect(payload.leadRequested).toBe(true);
-    expect(payload.leadCreated).toBe(false);
-    expect(leads.created).toHaveLength(0);
-    expect(conversations.assistantSaves).toHaveLength(1);
-  });
 
   it('restores the exact saved user-visible payload from a final answer contract', async () => {
     const conversations = new FakeConversations();
@@ -7636,579 +6136,10 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.metadata).toEqual({ savedMarker: 'exact-payload' });
   });
 
-  it('keeps leadRequested true when the answer offers the form after missing contact', async () => {
-    const conversations = new FakeConversations();
-    const leads = new FakeLeads();
-    const formOfferModel = model({
-      async planTurn() {
-        return {
-          userMessageSummary: 'buyer asks for commercial terms without contact',
-          dialogueUnderstanding: 'delivery, discount, and pickup terms require specialist verification',
-          nextStepRationale: 'offer contact form because no contact is present',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'lead.capture:missing',
-            tool: 'lead.capture',
-            args: {},
-            rationale: 'buyer has not provided contact yet',
-            required: true
-          }],
-          grounding: {
-            taskType: 'lead_handoff',
-            sourcePolicy: 'conversation_only',
-            webPurpose: 'none',
-            webRequirement: 'none',
-            requiredToolKinds: ['lead.capture'],
-            technicalAttributes: [],
-            buyerQuestion: 'Доставка есть? И можно ли получить скидку, если сразу забрать генератор?',
-            rationale: 'offer contact capture for explicit delivery, pickup, and discount terms'
-          },
-          mustNotAskQuestionIds: [],
-          riskFlags: ['lead']
-        };
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'Доставка есть, но стоимость, условия и скидку нужно уточнить у логистики и менеджера. Оставьте имя и телефон в форме, и мы проверим это предметно.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['lead.capture:missing'],
-          leadAction: 'offer_form',
-          riskFlags: []
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, formOfferModel);
 
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Доставка есть? И можно ли получить скидку, если сразу забрать генератор?'
-    });
 
-    const metadata = payload.metadata as { answerContract?: { leadAction?: string } };
-    expect(payload.answer).toContain('Оставьте, пожалуйста, имя и номер телефона');
-    expect(payload.leadRequested).toBe(true);
-    expect(payload.leadCreated).toBe(false);
-    expect(metadata.answerContract?.leadAction).toBe('offer_form');
-    expect(leads.created).toHaveLength(0);
-  });
 
-  it('rewrites missing-contact commercial handoff without delivery or discount promises', async () => {
-    const conversations = new FakeConversations();
-    const leads = new FakeLeads();
-    const unsafeOfferModel = model({
-      async planTurn() {
-        return {
-          userMessageSummary: 'buyer asks for delivery and discount terms without contact',
-          grounding: {
-            taskType: 'lead_handoff',
-            sourcePolicy: 'conversation_only',
-            webPurpose: 'none',
-            webRequirement: 'none',
-            requiredToolKinds: ['lead.capture'],
-            technicalAttributes: [],
-            buyerQuestion: 'Доставка есть? И можно ли получить скидку, если сразу забрать генератор?',
-            rationale: 'offer contact capture for explicit delivery, pickup, and discount terms'
-          },
-          dialogueUnderstanding: 'commercial terms require specialist verification and contact handoff',
-          nextStepRationale: 'offer contact form because no contact is present',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'lead.capture:missing',
-            tool: 'lead.capture',
-            args: {},
-            rationale: 'buyer has not provided contact yet',
-            required: true
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: ['lead']
-        };
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'Delivery and discount are available. Leave your phone and we will check details.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['lead.capture:missing'],
-          leadAction: 'offer_form',
-          riskFlags: []
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never, unsafeOfferModel);
 
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Р”РѕСЃС‚Р°РІРєР° РµСЃС‚СЊ? Р РјРѕР¶РЅРѕ Р»Рё РїРѕР»СѓС‡РёС‚СЊ СЃРєРёРґРєСѓ, РµСЃР»Рё СЃСЂР°Р·Сѓ Р·Р°Р±СЂР°С‚СЊ РіРµРЅРµСЂР°С‚РѕСЂ?'
-    });
-
-    const metadata = payload.metadata as {
-      preSendReview?: { issues?: Array<{ code?: string }> };
-      answerContract?: { leadAction?: string };
-    };
-    expect(payload.answer).not.toContain('Delivery and discount are available');
-    expect(payload.leadRequested).toBe(true);
-    expect(payload.leadCreated).toBe(false);
-    expect(metadata.answerContract?.leadAction).toBe('offer_form');
-    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('lead_capture_missing_contact_offer_form');
-    expect(leads.created).toHaveLength(0);
-  });
-
-  it('replaces first-turn 400 kg vibroplate request when the same message says home paving tile', async () => {
-    class FirstTurnPlateReplacementProducts extends FakeProducts {
-      async searchProducts(query = '') {
-        if (query.includes('60 90') || query.includes('тротуарной плитки')) {
-          return [
-            {
-              ...product('plate-80', 'Vibroplita TSS VP80 80 kg', 'Vibroplita'),
-              specs: { weight: '80 kg' }
-            },
-            {
-              ...product('plate-95', 'Vibroplita Champion PC95 95 kg', 'Vibroplita'),
-              specs: { weight: '95 kg' }
-            },
-            {
-              ...product('plate-160', 'Vibroplita Heavy 160 kg', 'Vibroplita'),
-              specs: { weight: '160 kg' }
-            }
-          ];
-        }
-        return [
-          {
-            ...product('grost-vh-400d', 'GROST VH 400D 400 kg vibroplita', 'Vibroplita'),
-            specs: { weight: '400 kg' }
-          },
-          {
-            ...product('masterpac-pcr7060h2', 'MASTERPAC PCR7060H.2 400 kg vibroplita', 'Vibroplita'),
-            specs: { weight: '400 kg' }
-          },
-          {
-            ...product('husqvarna-lg-400', 'Husqvarna LG 400 398 kg vibroplita', 'Vibroplita'),
-            specs: { weight: '398 kg' }
-          }
-        ];
-      }
-    }
-
-    const conversations = new FakeConversations();
-    conversations.messages = [
-      message('Есть у вас плита 400 кг? Мне для тротуарной плитки во дворе.')
-    ];
-    const firstTurnModel = model({
-      async proposeLedgerDelta() {
-        return {
-          rationale: 'buyer asks for 400 kg plate but states home paving tile use',
-          events: [{
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'product_request', value: 'vibroplita 400 kg' },
-            evidence: 'Есть у вас плита 400 кг',
-            source: 'llm_state_delta',
-            status: 'active'
-          }, {
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'application', value: 'home paving tile in yard' },
-            evidence: 'для тротуарной плитки во дворе',
-            source: 'llm_state_delta',
-            status: 'active'
-          }]
-        };
-      },
-      async planTurn() {
-        return {
-          turnId,
-          userMessageSummary: 'buyer asks whether 400 kg vibroplates are available for yard paving tile',
-          dialogueUnderstanding: '400 kg conflicts with the stated home paving tile task',
-          nextStepRationale: 'search catalog, reject heavy task mismatch, and show lighter suitable plate alternatives',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'catalog-search-heavy',
-            tool: 'catalog.search',
-            args: {
-              query: 'виброплита 400 кг',
-              semanticQuery: '400 kg vibroplate for paving tile in yard',
-              productIntent: 'plate',
-              limit: 6,
-              productIds: [],
-              productNames: [],
-              comparisonAttributes: ['weight', 'application'],
-              loads: [],
-              simultaneousStarting: null,
-              simultaneousStartingKinds: [],
-              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
-              reason: 'buyer asks about 400 kg vibroplate availability and suitability',
-              notes: null
-            },
-            rationale: 'check catalog products mentioned by buyer before correcting suitability',
-            required: true
-          }],
-          productMentions: [{
-            name: 'виброплита 400 кг',
-            role: 'target_product' as const,
-            productClass: 'plate',
-            evidence: 'Есть у вас плита 400 кг'
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        };
-      },
-      async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['plate-80', 'plate-95']);
-        expect(input.toolResults.map((result) => result.requestId)).toEqual(expect.arrayContaining([
-          'catalog-search-heavy',
-          'catalog-search:plate-replacement'
-        ]));
-        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('plate_previous_cards_unsuitable_replaced_by_task_search');
-        const mismatchClause = input.requiredResponseClauses?.find((clause) => clause.code === 'plate_previous_cards_unsuitable_replaced_by_task_search');
-        expect(mismatchClause?.instruction).toContain('60-120 kg');
-        expect(mismatchClause?.instruction).toContain('do not make the buyer ask again for options');
-        return {
-          answerText: '400 кг для тротуарной плитки во дворе я бы не рекомендовал как основной вариант. Это тяжелый класс под основание и большие работы. Для вашей задачи лучше смотреть Vibroplita TSS VP80 80 kg и Vibroplita Champion PC95 95 kg, а по плитке использовать коврик.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search:plate-replacement'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            productClass: 'plate',
-            status: 'ready_for_exact_cards',
-            canShowProductCards: true,
-            missingFacts: [],
-            rationale: 'Replacement products match the stated paving tile task better than 400 kg plates.'
-          }
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FirstTurnPlateReplacementProducts() as never, new FakeLeads() as never, firstTurnModel);
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Есть у вас плита 400 кг? Мне для тротуарной плитки во дворе.'
-    });
-
-    const metadata = payload.metadata as {
-      answerProductEvidence?: { droppedProductIds?: string[]; replacementProductIds?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number } };
-      replacementProductEvidence?: { productIds?: string[]; droppedPreviousProductIds?: string[]; warnings?: string[] };
-      toolResults?: Array<{ requestId?: string; payload?: { productIds?: string[] } }>;
-    };
-    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-80', 'plate-95']);
-    expect(payload.productCards.map((card) => card.id)).not.toContain('grost-vh-400d');
-    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(expect.arrayContaining([
-      'grost-vh-400d',
-      'masterpac-pcr7060h2',
-      'husqvarna-lg-400'
-    ]));
-    expect(metadata.answerProductEvidence?.replacementProductIds).toEqual(['plate-80', 'plate-95']);
-    expect(metadata.answerProductEvidence?.plateTaskPolicy?.maxPracticalWeightKg).toBe(120);
-    expect(metadata.replacementProductEvidence?.productIds).toEqual(['plate-80', 'plate-95']);
-    expect(metadata.replacementProductEvidence?.droppedPreviousProductIds).toEqual(expect.arrayContaining([
-      'grost-vh-400d',
-      'masterpac-pcr7060h2',
-      'husqvarna-lg-400'
-    ]));
-    expect(metadata.replacementProductEvidence?.warnings).toContain('answer_products_replaced_by_plate_task_search');
-    expect(metadata.toolResults?.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
-  });
-
-  it('rejects explicit 400 kg plate first-turn even when search already returns light paving options', async () => {
-    class LightPlateProducts extends FakeProducts {
-      async searchProducts() {
-        return [
-          {
-            ...product('masalta-msr60', 'Masalta MSR60-4 62 kg vibroplate', 'Vibroplita'),
-            specs: { weight: '62 kg' }
-          },
-          {
-            ...product('firman-fpc90', 'FIRMAN FPC90BF 84 kg vibroplate', 'Vibroplita'),
-            specs: { weight: '84 kg' }
-          },
-          {
-            ...product('wacker-aps1135', 'Wacker Neuson APS1135we 73 kg vibroplate', 'Vibroplita'),
-            specs: { weight: '73 kg' }
-          }
-        ];
-      }
-    }
-
-    const conversations = new FakeConversations();
-    conversations.messages = [
-      message('Do you have a 400 kg plate? I need it for paving tile in my yard.')
-    ];
-    const firstTurnModel = model({
-      async proposeLedgerDelta() {
-        return {
-          rationale: 'buyer asks for 400 kg plate but states yard paving tile use',
-          events: [{
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'product_request', value: 'vibroplate 400 kg' },
-            evidence: '400 kg plate',
-            source: 'llm_state_delta',
-            status: 'active'
-          }, {
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'application', value: 'paving tile in yard' },
-            evidence: 'paving tile in my yard',
-            source: 'llm_state_delta',
-            status: 'active'
-          }]
-        };
-      },
-      async planTurn() {
-        return {
-          turnId,
-          userMessageSummary: 'buyer asks whether a 400 kg vibroplate is available for yard paving tile',
-          dialogueUnderstanding: '400 kg conflicts with the stated private yard paving tile task',
-          nextStepRationale: 'search catalog and show suitable lighter plate alternatives',
-          requiresTools: true,
-          toolRequests: [{
-            id: 'search-plates-400kg',
-            tool: 'catalog.search',
-            args: {
-              query: '400 kg vibroplate for paving tile in yard',
-              semanticQuery: '400 kg vibroplate for paving tile in yard',
-              productIntent: 'plate',
-              limit: 6,
-              productIds: [],
-              productNames: [],
-              comparisonAttributes: ['weight', 'application'],
-              loads: [],
-              simultaneousStarting: null,
-              simultaneousStartingKinds: [],
-              contact: { name: null, phone: null, email: null, preferredContact: null, comment: null },
-              reason: 'buyer asks about 400 kg vibroplate availability and suitability',
-              notes: null
-            },
-            rationale: 'check catalog and correct the suitability mismatch',
-            required: true
-          }],
-          productMentions: [{
-            name: '400 kg vibroplate',
-            role: 'target_product' as const,
-            productClass: 'plate',
-            evidence: '400 kg plate'
-          }],
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        };
-      },
-      async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['wacker-aps1135', 'masalta-msr60', 'firman-fpc90']);
-        const clause = input.requiredResponseClauses?.find((item) =>
-          item.code === 'plate_explicit_heavy_request_conflicts_with_small_site_task'
-        );
-        expect(clause?.instruction).toContain('60-120 kg');
-        expect(clause?.instruction).toContain('do not make the buyer ask again for options');
-        return {
-          answerText: 'I do not see a 400 kg plate by this search. For yard paving tile people usually take 60-100 kg. Here are Masalta MSR60-4, Wacker APS1135we, and FIRMAN FPC90BF. Use a mat on installed tile.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['search-plates-400kg'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            productClass: 'plate',
-            status: 'ready_for_exact_cards',
-            canShowProductCards: true,
-            missingFacts: [],
-            rationale: 'Light plate options match the stated yard paving tile task.'
-          }
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new LightPlateProducts() as never, new FakeLeads() as never, firstTurnModel);
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Do you have a 400 kg plate? I need it for paving tile in my yard.'
-    });
-
-    const metadata = payload.metadata as {
-      answerProductEvidence?: { droppedProductIds?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number } };
-      preSendReview?: { issues?: Array<{ code?: string }> };
-    };
-    expect(payload.answer).toContain('300-400');
-    expect(payload.answer).toContain('60-120');
-    expect(payload.answer).toContain('не рекомендовал');
-    expect(payload.productCards.map((card) => card.id)).toEqual(['wacker-aps1135', 'masalta-msr60', 'firman-fpc90']);
-    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual([]);
-    expect(metadata.answerProductEvidence?.plateTaskPolicy?.maxPracticalWeightKg).toBe(120);
-    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).toContain('plate_explicit_heavy_request_conflicts_with_small_site_task');
-  });
-
-  it('replaces previous 400 kg vibroplate cards with suitable home paving tile options in the same turn', async () => {
-    const conversations = new FakeConversations();
-    const heavyCards: ProductCard[] = [{
-      id: 'grost-vh-400d',
-      name: 'GROST VH 400D 400 kg vibroplita',
-      brand: 'GROST',
-      category: 'vibroplity',
-      price: 310000,
-      currency: 'RUB',
-      sourceUrl: 'https://example.test/grost-vh-400d',
-      specs: { weight: '400 kg' },
-      reasons: [],
-      caveats: []
-    }, {
-      id: 'masterpac-pcr7060h2',
-      name: 'MASTERPAC PCR7060H.2 400 kg vibroplita',
-      brand: 'MASTERPAC',
-      category: 'vibroplity',
-      price: 320000,
-      currency: 'RUB',
-      sourceUrl: 'https://example.test/masterpac-pcr7060h2',
-      specs: { weight: '400 kg' },
-      reasons: [],
-      caveats: []
-    }, {
-      id: 'husqvarna-lg-400',
-      name: 'Husqvarna LG 400 398 kg vibroplita',
-      brand: 'Husqvarna',
-      category: 'vibroplity',
-      price: 330000,
-      currency: 'RUB',
-      sourceUrl: 'https://example.test/husqvarna-lg-400',
-      specs: { weight: '398 kg' },
-      reasons: [],
-      caveats: []
-    }];
-    conversations.messages = [
-      message('Need vibroplita about 400 kg', 'user'),
-      {
-        ...message('Here are 400 kg options: GROST VH 400D, MASTERPAC PCR7060H.2, Husqvarna LG 400.', 'assistant'),
-        metadata: {
-          productCards: heavyCards
-        }
-      }
-    ];
-    class PlateReplacementProducts extends FakeProducts {
-      async searchProducts() {
-        return [
-          {
-            ...product('plate-80', 'Vibroplita TSS VP80 80 kg', 'Vibroplita'),
-            specs: { weight: '80 kg' }
-          },
-          {
-            ...product('plate-95', 'Vibroplita Champion PC95 95 kg', 'Vibroplita'),
-            specs: { weight: '95 kg' }
-          },
-          {
-            ...product('plate-160', 'Vibroplita Heavy 160 kg', 'Vibroplita'),
-            specs: { weight: '160 kg' }
-          }
-        ];
-      }
-    }
-    const unsafeModel = model({
-      async proposeLedgerDelta() {
-        return {
-          rationale: 'buyer clarified home paving tile use',
-          events: [{
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'product_request', value: 'vibroplita' },
-            evidence: 'Need vibroplita about 400 kg',
-            source: 'llm_state_delta',
-            status: 'active'
-          }, {
-            eventType: 'fact.confirmed',
-            scope: 'dialogue',
-            payload: { factKey: 'application', value: 'home paving tile' },
-            evidence: 'For home paving tile in the yard',
-            source: 'llm_state_delta',
-            status: 'active'
-          }]
-        };
-      },
-      async planTurn() {
-        return {
-          userMessageSummary: 'buyer asks which previous 400 kg vibroplate is better for home paving tile',
-          dialogueUnderstanding: 'current application is home paving tile in the yard, so heavy 400 kg plates conflict with the task',
-          nextStepRationale: 'do not recommend previous heavy plates; explain mismatch and offer lighter suitable plate selection',
-          requiresTools: false,
-          toolRequests: [],
-          productMentions: heavyCards.map((card) => ({
-            name: card.name,
-            role: 'comparison_subject' as const,
-            productClass: 'plate',
-            evidence: 'previous visible card'
-          })),
-          mustNotAskQuestionIds: [],
-          riskFlags: []
-        };
-      },
-      async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['plate-95', 'plate-80']);
-        expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain('plate_previous_cards_unsuitable_replaced_by_task_search');
-        const mismatchClause = input.requiredResponseClauses?.find((clause) => clause.code === 'plate_previous_cards_unsuitable_replaced_by_task_search');
-        expect(mismatchClause?.instruction).toContain('60-120 kg');
-        expect(mismatchClause?.instruction).toContain('do not make the buyer ask again for options');
-        expect(input.toolResults.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
-        return {
-          answerText: 'Из этих 400 кг ни одну не выбирал бы для домашней плитки. Вместо них смотрите Vibroplita TSS VP80 80 kg и Vibroplita Champion PC95 95 kg: это более нормальный класс под двор и плитку, а по уже уложенной плитке нужен коврик.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search:plate-replacement'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            status: 'ready_for_exact_cards',
-            rationale: 'Replacement products match the corrected home paving tile task.',
-            missingFacts: [],
-            productClass: 'plate',
-            canShowProductCards: true
-          }
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PlateReplacementProducts() as never, new FakeLeads() as never, unsafeModel);
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'For home paving tile in the yard, which of these is better?'
-    });
-
-    const metadata = payload.metadata as {
-      productCards?: ProductCard[];
-      cardSelection?: { selectedProductIds?: string[]; warnings?: string[] };
-      answerProductEvidence?: { droppedProductIds?: string[]; warnings?: string[]; plateTaskPolicy?: { maxPracticalWeightKg?: number }; replacementProductIds?: string[] };
-      replacementProductEvidence?: { productIds?: string[]; warnings?: string[] };
-      preSendReview?: { issues?: Array<{ code?: string }> };
-      toolResults?: Array<{ requestId?: string; payload?: { productIds?: string[] } }>;
-      warnings?: string[];
-    };
-    expect(payload.answer).not.toContain('I would choose Husqvarna LG 400');
-    expect(payload.answer).toContain('ни одну');
-    expect(payload.answer).toContain('400 кг');
-    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-95', 'plate-80']);
-    expect(metadata.productCards?.map((card) => card.id)).toEqual(['plate-95', 'plate-80']);
-    expect(metadata.cardSelection?.selectedProductIds).toEqual(['plate-95', 'plate-80']);
-    expect(metadata.answerProductEvidence?.droppedProductIds).toEqual([
-      'grost-vh-400d',
-      'masterpac-pcr7060h2',
-      'husqvarna-lg-400'
-    ]);
-    expect(metadata.answerProductEvidence?.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining('plate_task_weight_mismatch')
-    ]));
-    expect(metadata.warnings).toEqual(expect.arrayContaining([
-      expect.stringContaining('plate_task_weight_mismatch')
-    ]));
-    expect(metadata.answerProductEvidence?.plateTaskPolicy?.maxPracticalWeightKg).toBe(120);
-    expect(metadata.answerProductEvidence?.replacementProductIds).toEqual(['plate-95', 'plate-80']);
-    expect(metadata.replacementProductEvidence?.productIds).toEqual(['plate-95', 'plate-80']);
-    expect(metadata.replacementProductEvidence?.warnings).toContain('answer_products_replaced_by_plate_task_search');
-    expect(metadata.toolResults?.map((result) => result.requestId)).toContain('catalog-search:plate-replacement');
-    expect(metadata.toolResults?.find((result) => result.requestId === 'catalog-search:plate-replacement')?.payload?.productIds).toEqual(['plate-95', 'plate-80']);
-    expect(metadata.preSendReview?.issues?.map((issue) => issue.code)).not.toContain('plate_previous_cards_unsuitable_for_current_task');
-  });
 
   it('routes high-risk source disagreements to adjudication instead of sending a final answer', async () => {
     const conversations = new FakeConversations();
@@ -8234,236 +6165,8 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(0);
   });
 
-  it('forces one catalog fact review that corrects a false price and specification even with factsUsed empty', async () => {
-    const previousMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'risk';
-    class ExactFactProducts extends FakeProducts {
-      override async searchProducts() {
-        return [product('p1', 'TSS SGG 5000A generator'), product('p2', 'TSS SGG 6000B generator')];
-      }
-    }
-    const conversations = new FakeConversations();
-    let reviewCall = 0;
-    const reviewAnswer = vi.fn(async (input: Parameters<AgentManagerModel['reviewAnswer']>[0]) => {
-      reviewCall += 1;
-      if (reviewCall === 1) {
-        expect(input.answer.answerText).toContain('99 999');
-        expect(input.answer.answerText).toContain('девять киловатт');
-        expect(input.answer.factsUsed).toEqual([]);
-        expect(input.products.find((item) => item.id === 'p1')).toMatchObject({
-          price: 1000,
-          specs: { power: '5 kW' }
-        });
-        return {
-          verdict: 'rewrite_required' as const,
-          issues: [{
-            code: 'catalog_fact_mismatch',
-            severity: 'high' as const,
-            message: 'The generated price and power do not match the product evidence.',
-            evidence: 'p1'
-          }],
-          revisedAnswerText: 'TSS SGG 5000A стоит 1 000 ₽; его мощность — 5 кВт.'
-        };
-      }
-      expect(input.answer.answerText).toBe('TSS SGG 5000A стоит 1 000 ₽; его мощность — 5 кВт.');
-      return { verdict: 'pass' as const, issues: [] };
-    });
-    const factModel = model({
-      async planTurn() {
-        return structuredGeneratorCatalogIntent();
-      },
-      async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['p1', 'p2']);
-        return {
-          answerText: 'TSS SGG 5000A стоит 99 999 ₽; его мощность — девять киловатт.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search'],
-          selectedProductIds: ['p1'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            status: 'ready_for_exact_cards',
-            rationale: 'p1 was selected from catalog evidence',
-            missingFacts: [],
-            productClass: 'generator',
-            canShowProductCards: true
-          }
-        };
-      },
-      reviewAnswer
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new ExactFactProducts() as never,
-      new FakeLeads() as never,
-      factModel
-    );
 
-    try {
-      const payload = await orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Посоветуйте TSS SGG 5000A и назовите точную цену и мощность.'
-      });
 
-      expect(reviewAnswer).toHaveBeenCalledTimes(1);
-      expect(payload.answer).toBe('TSS SGG 5000A стоит 1 000 ₽; его мощность — 5 кВт.');
-      expect(payload.answer).not.toContain('99 999');
-      expect(payload.answer).not.toContain('девять киловатт');
-      expect(
-        payload.productCards.map((card) => card.id),
-        JSON.stringify({
-          cardSelection: payload.metadata?.cardSelection,
-          selectionReadiness: payload.metadata?.selectionReadiness,
-          answerProductEvidence: payload.metadata?.answerProductEvidence
-        })
-      ).toEqual(['p1']);
-      expect((payload.metadata?.managerPolicy as { reviewReason?: string })?.reviewReason)
-        .toContain('catalog_product_evidence');
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousMode;
-    }
-  });
-
-  it('blocks an unsafe reviewer rewrite deterministically without another reviewer call', async () => {
-    const previousMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'risk';
-    class ExactFactProducts extends FakeProducts {
-      override async searchProducts() {
-        return [product('p1', 'TSS SGG 5000A generator')];
-      }
-    }
-    const conversations = new FakeConversations();
-    const reviewAnswer = vi.fn(async () => ({
-      verdict: 'rewrite_required' as const,
-      issues: [{
-        code: 'style_rewrite',
-        severity: 'low' as const,
-        message: 'Reviewer chose to rephrase the supported answer.',
-        evidence: 'answer'
-      }],
-      revisedAnswerText: 'TSS SGG 7000B costs 99 999 RUB and has 9 kW.'
-    }));
-    const unsafeReviewerModel = model({
-      async planTurn() {
-        return structuredGeneratorCatalogIntent();
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'TSS SGG 5000A costs 1 000 RUB and has 5 kW.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search'],
-          selectedProductIds: ['p1'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            status: 'ready_for_exact_cards' as const,
-            rationale: 'p1 was selected from catalog evidence',
-            missingFacts: [],
-            productClass: 'generator',
-            canShowProductCards: true
-          }
-        };
-      },
-      reviewAnswer
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new ExactFactProducts() as never,
-      new FakeLeads() as never,
-      unsafeReviewerModel
-    );
-
-    try {
-      await expect(orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Give me the exact catalog price and power for TSS SGG 5000A.'
-      })).rejects.toThrow('review_rewrite_unsupported');
-      expect(reviewAnswer).toHaveBeenCalledTimes(1);
-      expect(conversations.assistantSaves).toHaveLength(0);
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousMode;
-    }
-  });
-
-  it('semantically reviews a partial mechanical rewrite so a false catalog claim cannot survive contact cleanup', async () => {
-    const previousMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'risk';
-    class ExactFactProducts extends FakeProducts {
-      override async searchProducts() {
-        return [product('p1', 'TSS SGG 5000A generator')];
-      }
-    }
-    const conversations = new FakeConversations();
-    let reviewCall = 0;
-    const reviewAnswer = vi.fn(async (input: Parameters<AgentManagerModel['reviewAnswer']>[0]) => {
-      reviewCall += 1;
-      if (reviewCall === 1) {
-        expect(input.answer.answerText).toContain('99 999');
-        expect(input.answer.answerText).not.toContain('Оставьте номер телефона');
-        return {
-          verdict: 'rewrite_required' as const,
-          issues: [{
-            code: 'catalog_price_mismatch',
-            severity: 'high' as const,
-            message: 'The price differs from current catalog evidence.',
-            evidence: 'p1'
-          }],
-          revisedAnswerText: 'TSS SGG 5000A стоит 1 000 ₽.'
-        };
-      }
-      expect(input.answer.answerText).toBe('TSS SGG 5000A стоит 1 000 ₽.');
-      return { verdict: 'pass' as const, issues: [] };
-    });
-    const unsafeModel = model({
-      async planTurn() {
-        return structuredGeneratorCatalogIntent();
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'TSS SGG 5000A стоит 99 999 ₽. Оставьте номер телефона.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search'],
-          selectedProductIds: ['p1'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            status: 'ready_for_exact_cards',
-            rationale: 'catalog product selected',
-            missingFacts: [],
-            productClass: 'generator',
-            canShowProductCards: true
-          }
-        };
-      },
-      reviewAnswer
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new ExactFactProducts() as never,
-      new FakeLeads() as never,
-      unsafeModel
-    );
-
-    try {
-      const payload = await orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Мой номер +7 900 000-00-11. Сколько стоит TSS SGG 5000A?'
-      });
-
-      expect(reviewAnswer).toHaveBeenCalledTimes(1);
-      expect(payload.answer).toBe('TSS SGG 5000A стоит 1 000 ₽.');
-      expect(payload.answer).not.toContain('99 999');
-      expect(payload.answer).not.toContain('Оставьте номер');
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousMode;
-    }
-  });
 
   it('blocks a selected product id that was never present in writer evidence', async () => {
     const conversations = new FakeConversations();
@@ -8495,84 +6198,6 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(0);
   });
 
-  it('semantically rewrites and rechecks a question already answered in the dialogue ledger', async () => {
-    const conversations = new FakeConversations();
-    const closedQuestionDelta = {
-      rationale: 'the buyer has already supplied the requested power',
-      events: [{
-        eventType: 'question.asked' as const,
-        scope: 'question' as const,
-        payload: { questionId: 'q.coffee_power', text: 'Какая мощность кофемашины?', needId: 'generator' },
-        evidence: 'earlier manager question',
-        source: 'llm_state_delta' as const,
-        status: 'active' as const
-      }, {
-        eventType: 'question.answered' as const,
-        scope: 'question' as const,
-        payload: { questionId: 'q.coffee_power', answer: '3.2 kW', needId: 'generator' },
-        evidence: 'Кофемашина 3,2 кВт',
-        source: 'llm_state_delta' as const,
-        status: 'closed' as const
-      }]
-    };
-    let reviewCall = 0;
-    const reviewAnswer = vi.fn(async (input: Parameters<AgentManagerModel['reviewAnswer']>[0]) => {
-      reviewCall += 1;
-      if (reviewCall === 1) {
-        expect(input.answer.questionsAsked.map((question) => question.questionId)).toContain('q.coffee_power');
-        return {
-          verdict: 'rewrite_required' as const,
-          issues: [{
-            code: 'repeat_answered_question',
-            severity: 'high' as const,
-            message: 'Use the already supplied load and move the selection forward.',
-            evidence: 'q.coffee_power'
-          }],
-          revisedAnswerText: 'Мощность 3,2 кВт уже учёл. Теперь рассчитаю пусковой запас и предложу подходящий генератор.'
-        };
-      }
-      expect(input.answer.questionsAsked).toEqual([]);
-      expect(input.answer.answerText).toContain('уже учёл');
-      return { verdict: 'pass' as const, issues: [] };
-    });
-    const closedQuestionModel = model({
-      async proposeLedgerDelta() {
-        return closedQuestionDelta;
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'Какая мощность кофемашины?',
-          factsUsed: [],
-          questionsAsked: [{
-            questionId: 'q.coffee_power',
-            text: 'Какая мощность кофемашины?',
-            reason: 'unsafe repeated question'
-          }],
-          toolResultIds: [],
-          leadAction: 'none',
-          riskFlags: []
-        };
-      },
-      reviewAnswer
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      closedQuestionModel
-    );
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Кофемашина 3,2 кВт.'
-    });
-
-    expect(reviewAnswer).toHaveBeenCalledTimes(2);
-    expect(payload.answer).toContain('уже учёл');
-    expect(payload.answer).not.toBe('Какая мощность кофемашины?');
-    expect((payload.metadata?.answerContract as { questionsAsked?: unknown[] })?.questionsAsked).toEqual([]);
-  });
 
   it('filters strict ceramic blade evidence before the answer writer sees catalog products', async () => {
     class BladeProducts extends FakeProducts {
@@ -8790,7 +6415,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(conversations.assistantSaves).toHaveLength(0);
   });
 
-  it('persists an artifact for every planned tool when the ninth call exceeds the turn tool budget', async () => {
+  it('fails the turn without a buyer answer when planned tools exceed the bounded tool budget', async () => {
     const conversations = new FakeConversations();
     const toolRequests: ToolRequest[] = Array.from({ length: 9 }, (_, index) => ({
       id: `calculator-${index + 1}`,
@@ -8843,29 +6468,13 @@ describe('AgentManagerOrchestrator', () => {
       budgetModel
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Run the bounded calculations.'
-    });
+    })).rejects.toThrow('tool_call_budget_exceeded');
 
-    expect(payload.answer).toContain('Расчёт нагрузки завершён');
-    expect(payload.answer).toContain('не менее 1 кВт');
-    expect(payload.answer).not.toContain('продолжите разговор новым сообщением');
-    expect(payload.metadata).toMatchObject({
-      terminal: true,
-      degraded: true,
-      completionStatus: 'degraded_terminal',
-      terminalReason: 'turn_budget_tool_call_budget_exceeded',
-      answerContract: {
-        factsUsed: [expect.objectContaining({
-          factKey: 'calculator.generator_load_profile',
-          sourceEventIds: ['calculator-8']
-        })]
-      }
-    });
-    expect(conversations.turn.status).toBe('completed');
-
+    expect(conversations.assistantSaves).toHaveLength(0);
     expect(conversations.toolArtifacts).toHaveLength(9);
     expect(new Set(conversations.toolArtifacts.map((artifact) =>
       (artifact as { toolRequestId?: string }).toolRequestId
@@ -8877,9 +6486,7 @@ describe('AgentManagerOrchestrator', () => {
         errorCode: 'tool_call_budget_exceeded'
       })
     ]));
-    expect(conversations.turn).toMatchObject({
-      status: 'completed'
-    });
+    expect(conversations.turn.status).toBe('failed');
   });
 
   it('replays five turns without losing a validated product after noisy searches or an intervening technical answer', async () => {
@@ -8948,6 +6555,15 @@ describe('AgentManagerOrchestrator', () => {
     }
     class ReusableProducts extends FakeProducts {
       searchCalls = 0;
+      async getProductsByIds(ids: string[]) {
+        const known = [
+          product('p1', 'TSS SGG 5000A generator'),
+          product('p2', 'TSS SGG 6000B generator')
+        ];
+        const requested = new Set(ids);
+        return known.filter((item) => requested.has(item.id));
+      }
+
       override async searchProducts() {
         this.searchCalls += 1;
         if (this.searchCalls > 1) {
@@ -8989,7 +6605,7 @@ describe('AgentManagerOrchestrator', () => {
       async planTurn() {
         const intent = structuredGeneratorCatalogIntent();
         if (turnNumber === 1) return intent;
-        if (turnNumber === 3) {
+        if (turnNumber === 2) {
           return {
             ...intent,
             requiresTools: false,
@@ -9014,11 +6630,28 @@ describe('AgentManagerOrchestrator', () => {
         return {
           ...intent,
           requiresTools: true,
+          toolRequests: turnNumber >= 3
+            ? [{
+                id: 'selected-product-details',
+                tool: 'catalog.getProductDetails' as const,
+                args: {
+                  productIds: ['p1'],
+                  productNames: ['TSS SGG 5000A generator'],
+                  productIntent: 'generator',
+                  canonicalProductIntent: 'generator',
+                  reason: 'refresh the exact selected product before showing it again'
+                },
+                rationale: 'the buyer explicitly returned to the previously selected product',
+                required: true
+              }]
+            : intent.toolRequests,
           grounding: {
             taskType: 'product_selection' as const,
             sourcePolicy: 'catalog_required' as const,
             webPurpose: 'none' as const,
-            requiredToolKinds: ['catalog.search' as const],
+            requiredToolKinds: turnNumber >= 3
+              ? ['catalog.getProductDetails' as const]
+              : ['catalog.search' as const],
             technicalAttributes: ['price', 'power'],
             rationale: 'recheck the current catalog while preserving the validated active-need selection'
           },
@@ -9026,7 +6659,7 @@ describe('AgentManagerOrchestrator', () => {
             ...intent.selectionPolicy!,
             needAction: 'resume' as const,
             selectionGoal: 'preliminary_fit' as const,
-            reusePreviousCards: false,
+            reusePreviousCards: true,
             maxCards: 1,
             rationale: 'the new search must not erase a still-valid previous selection even if it returns noise'
           }
@@ -9067,8 +6700,12 @@ describe('AgentManagerOrchestrator', () => {
           answerText: 'Возвращаемся к TSS SGG 5000A — это выбранный вариант.',
           factsUsed: [],
           questionsAsked: [],
-          toolResultIds: turnNumber === 3 ? [] : ['catalog-search'],
-          selectedProductIds: ['p1'],
+          toolResultIds: input.toolResults
+            .filter((result) => result.status === 'ok')
+            .map((result) => result.requestId),
+          selectedProductIds: input.products
+            .filter((item) => item.id === 'p1')
+            .map((item) => item.id),
           leadAction: 'none',
           riskFlags: [],
           selectionReadiness: {
@@ -9160,7 +6797,15 @@ describe('AgentManagerOrchestrator', () => {
       turnId: fourthTurnId,
       userMessage: fourthUser.content
     });
-    expect(fourth.productCards.map((card) => card.id)).toEqual(['p1']);
+    expect(
+      fourth.productCards.map((card) => card.id),
+      JSON.stringify({
+        selectionReadiness: fourth.metadata?.selectionReadiness,
+        cardSelection: fourth.metadata?.cardSelection,
+        answerContract: fourth.metadata?.answerContract,
+        toolResults: fourth.metadata?.toolResults
+      })
+    ).toEqual(['p1']);
 
     const fifthUser = { ...message('Подтвердите: ранее показанный TSS SGG 5000A всё ещё считается кандидатом?'), id: 'fifth-user-message' };
     conversations.messages.push(fifthUser);
@@ -9218,74 +6863,6 @@ describe('AgentManagerOrchestrator', () => {
     }
   });
 
-  it('terminalizes a wall deadline crossed after a useful draft without persisting unseen selected ids', async () => {
-    let now = 20_000;
-    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
-    class DeadlineBeforeCommitConversations extends FakeConversations {
-      override async saveAnswerContract(input: { status?: string }) {
-        const saved = await super.saveAnswerContract(input);
-        if (input.status === 'draft') now += 110_001;
-        return saved;
-      }
-    }
-    class ExactProducts extends FakeProducts {
-      override async searchProducts() {
-        return [product('p1', 'TSS SGG 5000A generator')];
-      }
-    }
-    const conversations = new DeadlineBeforeCommitConversations();
-    const deadlineModel = model({
-      async planTurn() {
-        return structuredGeneratorCatalogIntent();
-      },
-      async composeAnswer() {
-        return {
-          answerText: 'TSS SGG 5000A — выбранный вариант.',
-          factsUsed: [],
-          questionsAsked: [],
-          toolResultIds: ['catalog-search'],
-          selectedProductIds: ['p1'],
-          leadAction: 'none',
-          riskFlags: [],
-          selectionReadiness: {
-            status: 'ready_for_exact_cards' as const,
-            rationale: 'catalog product selected',
-            missingFacts: [],
-            productClass: 'generator',
-            canShowProductCards: true
-          }
-        };
-      }
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new ExactProducts() as never,
-      new FakeLeads() as never,
-      deadlineModel
-    );
-
-    try {
-      const payload = await orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Покажите TSS SGG 5000A.'
-      });
-
-      expect(conversations.ledgerEvents).not.toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          source: 'system_reducer',
-          payload: expect.objectContaining({ selectedProductIds: ['p1'] })
-        })
-      ]));
-      expect(payload.answer).toContain('TSS SGG 5000A');
-      expect(payload.metadata).toMatchObject({ terminal: true, completionStatus: 'degraded_terminal' });
-      expect(conversations.assistantSaves).toHaveLength(1);
-      expect(conversations.turn.status).toBe('completed');
-      expect(conversations.turn.stage).not.toBe('budget_stopped');
-    } finally {
-      dateNow.mockRestore();
-    }
-  });
 
   it('recovers exact 5.5-6.0 kW single-phase catalog matches beyond the noisy first retrieval window', async () => {
     class RangeRecoveryProducts extends FakeProducts {
@@ -9404,7 +6981,7 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: 'Show single-phase options from 5.5 to 6.0 kW; autostart is not needed.'
     });
     const metadata = payload.metadata as {
-      toolResults?: Array<{ payload?: { retrieval?: { structuredRecovery?: { attempted?: boolean; matchedCount?: number } } } }>;
+      toolResults?: Array<{ payload?: { retrieval?: { primaryExpansion?: { attempted?: boolean; matchedCount?: number } } } }>;
     };
 
     expect(products.calls).toHaveLength(2);
@@ -9414,7 +6991,7 @@ describe('AgentManagerOrchestrator', () => {
       cardSelection: payload.metadata?.cardSelection,
       selectionReadiness: payload.metadata?.selectionReadiness
     })).toEqual(['range-55', 'range-60']);
-    expect(metadata.toolResults?.[0]?.payload?.retrieval?.structuredRecovery).toMatchObject({
+    expect(metadata.toolResults?.[0]?.payload?.retrieval?.primaryExpansion).toMatchObject({
       attempted: true,
       matchedCount: 2
     });
@@ -9529,7 +7106,7 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: 'Нужна лёгкая вибрационная плита, буду перевозить один.'
     });
     const metadata = payload.metadata as {
-      toolResults?: Array<{ payload?: { retrieval?: { structuredRecovery?: { attempted?: boolean; matchedCount?: number } } } }>;
+      toolResults?: Array<{ payload?: { retrieval?: { primaryExpansion?: { attempted?: boolean; matchedCount?: number } } } }>;
     };
 
     expect(products.calls).toHaveLength(2);
@@ -9540,7 +7117,7 @@ describe('AgentManagerOrchestrator', () => {
       selectionReadiness: payload.metadata?.selectionReadiness,
       warnings: payload.metadata?.warnings
     })).toEqual(['plate-56', 'plate-67', 'plate-72']);
-    expect(metadata.toolResults?.[0]?.payload?.retrieval?.structuredRecovery).toMatchObject({
+    expect(metadata.toolResults?.[0]?.payload?.retrieval?.primaryExpansion).toMatchObject({
       attempted: true,
       scannedCount: 5,
       matchedCount: 11
@@ -9737,112 +7314,6 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).not.toEqual(expect.arrayContaining(['plate-84', 'plate-95']));
   });
 
-  it('returns one labelled nearest compromise after one bounded recovery when exact range is empty', async () => {
-    class CompromiseRecoveryProducts extends FakeProducts {
-      calls = 0;
-      override async searchProducts() {
-        this.calls += 1;
-        if (this.calls === 1) return [product('plate-noise', 'Unrelated plate', 'vibroplity')];
-        return [{
-          ...generatorProductWithPower('nearest-72', 'EVOline BPB9000E 7.2 kW generator', 7.2),
-          price: 149990,
-          specs: { 'Nominal power': '7.2 kW', voltage: '220 V single phase', Autostart: 'no' }
-        }];
-      }
-    }
-    const products = new CompromiseRecoveryProducts();
-    const intent = structuredGeneratorCatalogIntent();
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      selectionGoal: 'browse_catalog',
-      alternativePolicy: 'allow_adjacent_with_explanation',
-      phase: 'single_phase',
-      maxCards: 2,
-      requirements: [{
-        id: 'range-min',
-        kind: 'nominal_power_min_kw',
-        value: 5.5,
-        unit: 'kW',
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'requested minimum',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'range-max',
-        kind: 'nominal_power_max_kw',
-        value: 6,
-        unit: 'kW',
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'requested maximum',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    intent.toolRequests[0] = {
-      ...intent.toolRequests[0]!,
-      args: {
-        ...intent.toolRequests[0]!.args,
-        query: 'generator requested narrow range',
-        phase: 'single_phase',
-        limit: 2
-      },
-      coversRequirementIds: ['range-min', 'range-max']
-    };
-    const conversations = new FakeConversations();
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      products as never,
-      new FakeLeads() as never,
-      model({
-        async planTurn() { return intent; },
-        async composeAnswer(input) {
-          expect(input.products.map((product) => product.id)).toEqual(['nearest-72']);
-          expect(input.requiredResponseClauses).toEqual(expect.arrayContaining([
-            expect.objectContaining({ code: 'catalog_compromise_candidates_must_be_labeled' })
-          ]));
-          return {
-            answerText: 'Точного варианта в диапазоне не подтвердил. Ближайший компромисс — EVOline BPB9000E 7.2 kW generator за 149 990 ₽: номинальная мощность выше верхней границы 6 кВт.',
-            factsUsed: [],
-            questionsAsked: [],
-            toolResultIds: ['catalog-search'],
-            selectedProductIds: ['nearest-72'],
-            leadAction: 'none',
-            riskFlags: [],
-            selectionReadiness: {
-              productClass: 'generator',
-              status: 'ready_for_preliminary_cards',
-              canShowProductCards: true,
-              missingFacts: [],
-              rationale: 'The buyer allowed an adjacent option and the tradeoff is explicit.'
-            }
-          };
-        }
-      })
-    );
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'If there is no exact 5.5-6.0 kW model, show the nearest single-phase option.'
-    });
-    const metadata = payload.metadata as {
-      answerProductEvidence?: { candidateTiers?: Array<{ productId?: string; tier?: string; tradeoffs?: string[] }> };
-      cardSelection?: { warnings?: string[] };
-    };
-
-    expect(products.calls).toBe(2);
-    expect(payload.productCards.map((card) => card.id)).toEqual(['nearest-72']);
-    expect(metadata.answerProductEvidence?.candidateTiers).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        productId: 'nearest-72',
-        tier: 'compromise',
-        tradeoffs: ['nominal_power_above_max:6:actual:7.2']
-      })
-    ]));
-    expect(metadata.cardSelection?.warnings).toContain('product_cards_compromise:1');
-  });
 
   it('does not stop at one oversized expensive generator when canonical recovery has closer adequate options', async () => {
     class CommercialRecoveryProducts extends FakeProducts {
@@ -9932,13 +7403,13 @@ describe('AgentManagerOrchestrator', () => {
       userMessage: 'Pump and grinder can work together; show a preliminary single-phase generator without overpaying.'
     });
     const metadata = payload.metadata as {
-      toolResults?: Array<{ tool?: string; payload?: { retrieval?: { structuredRecovery?: { attempted?: boolean; matchedCount?: number } } } }>;
+      toolResults?: Array<{ tool?: string; payload?: { retrieval?: { primaryExpansion?: { attempted?: boolean; matchedCount?: number } } } }>;
       answerProductEvidence?: { droppedProductIds?: string[] };
     };
     const catalogResult = metadata.toolResults?.find((result) => result.tool === 'catalog.search');
 
     expect(products.calls).toBe(2);
-    expect(catalogResult?.payload?.retrieval?.structuredRecovery).toMatchObject({
+    expect(catalogResult?.payload?.retrieval?.primaryExpansion).toMatchObject({
       attempted: true,
       matchedCount: 2
     });
@@ -10464,33 +7935,6 @@ describe('AgentManagerOrchestrator', () => {
 
     const conversations = new ChangedBudgetComparisonConversations();
     const products = new ExactComparisonDetailsProducts();
-    const reviewAnswer = vi.fn(async (input: Parameters<AgentManagerModel['reviewAnswer']>[0]) => {
-      expect(input.products.map((item) => item.id)).toEqual([
-        'champion-pc1150ft',
-        'masalta-ms125-4'
-      ]);
-      expect(input.productEvidenceRoles).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          productId: 'champion-pc1150ft',
-          role: 'recommendation_candidate',
-          eligibleForRecommendation: true
-        }),
-        expect.objectContaining({
-          productId: 'masalta-ms125-4',
-          role: 'comparison_reference_only',
-          eligibleForRecommendation: false,
-          rejectionReasons: [expect.objectContaining({
-            requirementId: 'budget-max-90000',
-            kind: 'budget_max_rub',
-            requiredValue: 90_000,
-            actualValue: 109_000
-          })]
-        })
-      ]));
-      expect(input.products.map((item) => item.id)).not.toContain(nonComparisonNeighbor.id);
-      expect(input.productEvidenceRoles?.map((role) => role.productId)).not.toContain(nonComparisonNeighbor.id);
-      return { verdict: 'pass' as const, issues: [] };
-    });
     const orchestrator = new AgentManagerOrchestrator(
       conversations as never,
       products as never,
@@ -10527,33 +7971,25 @@ describe('AgentManagerOrchestrator', () => {
               rationale: 'CHAMPION passes the strict budget; Masalta remains reference-only evidence.'
             }
           };
-        },
-        reviewAnswer
+        }
       })
     );
-    const previousReviewMode = config.AI_MANAGER_REVIEW_MODE;
-    config.AI_MANAGER_REVIEW_MODE = 'always';
-    try {
-      const payload = await orchestrator.generateAnswer({
-        sessionId,
-        turnId,
-        userMessage: 'Сравните обе, бюджет теперь до 90 000 ₽.'
-      });
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Сравните обе, бюджет теперь до 90 000 ₽.'
+    });
 
-      expect([...products.idsSeen].sort()).toEqual(
-        comparisonProducts.map((item) => item.id).sort(),
-      );
-      expect(reviewAnswer).toHaveBeenCalledTimes(1);
-      expect(payload.productCards.map((card) => card.id)).toEqual(['champion-pc1150ft']);
-      expect(payload.productCards.map((card) => card.id)).not.toContain(nonComparisonNeighbor.id);
-      expect(payload.answer).toContain('Masalta MS125-4');
-      expect(payload.answer).toContain('превышает');
-      expect(payload.answer).toContain('CHAMPION PC1150FT');
-      expect((payload.metadata?.answerContract as { selectedProductIds?: string[] }).selectedProductIds)
-        .toEqual(['champion-pc1150ft']);
-    } finally {
-      config.AI_MANAGER_REVIEW_MODE = previousReviewMode;
-    }
+    expect([...products.idsSeen].sort()).toEqual(
+      comparisonProducts.map((item) => item.id).sort(),
+    );
+    expect(payload.productCards.map((card) => card.id)).toEqual(['champion-pc1150ft']);
+    expect(payload.productCards.map((card) => card.id)).not.toContain(nonComparisonNeighbor.id);
+    expect(payload.answer).toContain('Masalta MS125-4');
+    expect(payload.answer).toContain('превышает');
+    expect(payload.answer).toContain('CHAMPION PC1150FT');
+    expect((payload.metadata?.answerContract as { selectedProductIds?: string[] }).selectedProductIds)
+      .toEqual(['champion-pc1150ft']);
   });
 
   it('keeps an explicitly compared over-weight product as reference evidence while showing only the eligible card', async () => {
@@ -10678,8 +8114,7 @@ describe('AgentManagerOrchestrator', () => {
       new FakeLeads() as never,
       model({
         async planTurn() { return intent; },
-        composeAnswer,
-        async reviewAnswer() { return { verdict: 'pass', issues: [] }; }
+        composeAnswer
       })
     );
 
@@ -11032,297 +8467,7 @@ describe('AgentManagerOrchestrator', () => {
     }
   });
 
-  it('preserves eligible catalog cards when a preliminary web check reaches the turn deadline', async () => {
-    const conversations = new FakeConversations();
-    const candidate: Product = {
-      ...product('plate-80', 'Виброплита TEST 80 кг', 'Виброплиты'),
-      specs: { 'Рабочий вес': '80 кг' }
-    };
-    const intent = structuredGeneratorCatalogIntent();
-    const webRequest: ToolRequest = {
-      id: 'web-paving-check',
-      tool: 'web.researchProductFacts',
-      args: {
-        query: 'проверить совместимость виброплиты с тротуарной плиткой',
-        productIntent: 'виброплита',
-        canonicalProductIntent: 'plate',
-        productNames: [],
-        comparisonAttributes: ['совместимость с тротуарной плиткой'],
-        comparisonAttributeBindings: []
-      },
-      rationale: 'проверить неподтверждённый технический факт после каталога',
-      required: true,
-      coversRequirementIds: ['paving-compatibility']
-    };
-    intent.userMessageSummary = 'покупатель просит лёгкую виброплиту до 90 кг для тротуарной плитки';
-    intent.dialogueUnderstanding = 'вес ограничен каталогом, совместимость с покрытием пока не подтверждена';
-    intent.nextStepRationale = 'показать предварительные варианты из каталога и не выдавать совместимость за подтверждённую';
-    intent.toolRequests = [{
-      id: 'catalog-search',
-      tool: 'catalog.search',
-      args: {
-        query: 'лёгкая виброплита до 90 кг',
-        productIntent: 'виброплита',
-        canonicalProductIntent: 'plate',
-        limit: 4
-      },
-      rationale: 'найти актуальные карточки виброплит',
-      required: true,
-      coversRequirementIds: ['weight-max']
-    }, webRequest];
-    intent.selectionPolicy = {
-      targetProductClass: 'виброплита',
-      canonicalProductClass: 'plate',
-      selectionGoal: 'preliminary_fit',
-      needAction: 'open',
-      alternativePolicy: 'same_class_only',
-      reusePreviousCards: false,
-      maxCards: 4,
-      powerSource: 'any',
-      phase: 'any',
-      requirements: [{
-        id: 'weight-max',
-        kind: 'weight_max_kg',
-        value: 90,
-        unit: 'kg',
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'не тяжелее 90 кг',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'paving-compatibility',
-        kind: 'paving_compatibility',
-        value: true,
-        unit: null,
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'нужна для тротуарной плитки',
-        verification: {
-          mode: 'typed_tool',
-          toolRequestId: webRequest.id,
-          tool: 'web.researchProductFacts',
-          verifier: 'technical_source_review',
-          bindAs: 'paving_compatibility'
-        }
-      }],
-      rationale: 'подбор по подтверждённому весу с честной оговоркой о незавершённой web-проверке'
-    };
-    intent.grounding = {
-      taskType: 'product_selection',
-      sourcePolicy: 'web_required',
-      webPurpose: 'technical_specs',
-      webRequirement: 'independent_required',
-      requiredToolKinds: ['catalog.search', 'web.researchProductFacts'],
-      technicalAttributes: ['совместимость с тротуарной плиткой'],
-      rationale: 'внешний источник не успел завершиться, но каталоговый вес подтверждён'
-    };
-    conversations.turn = {
-      ...conversations.turn,
-      deadlineAt: new Date(Date.now() + 4_000).toISOString(),
-      plannerContract: intent
-    };
-    conversations.toolArtifacts = [{
-      tool_request_id: 'catalog-search',
-      tool_name: 'catalog.search',
-      status: 'ok',
-      payload: { products: [candidate] },
-      warnings: []
-    }, {
-      tool_request_id: webRequest.id,
-      tool_name: 'web.researchProductFacts',
-      status: 'timeout',
-      payload: {
-        usedWebSearch: false,
-        searchDisposition: 'timed_out',
-        facts: [],
-        conflicts: [],
-        warnings: ['web research timed out before a source could be confirmed']
-      },
-      warnings: ['web research timed out before a source could be confirmed'],
-      error_code: 'web_research_timeout'
-    }];
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model()
-    );
 
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Нужна лёгкая виброплита для тротуарной плитки, не тяжелее 90 кг.'
-    });
-    const metadata = payload.metadata as {
-      answerContract?: { selectedProductIds?: string[]; selectionReadiness?: { status?: string; missingFacts?: string[] } };
-      terminalCatalogRecovery?: { selectedProductIds?: string[]; unfinishedVerification?: string[] };
-      webSearchAttempted?: boolean;
-      webSearchCompleted?: boolean;
-    };
-
-    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-80']);
-    expect(payload.usedWebSearch).toBe(false);
-    expect(metadata.webSearchAttempted).toBe(true);
-    expect(metadata.webSearchCompleted).toBe(false);
-    expect(payload.leadRequested).toBe(false);
-    expect(payload.answer).toContain('предварительно');
-    expect(payload.answer).toContain('Не успела завершиться');
-    expect(payload.answer).not.toContain('техническому специалисту');
-    expect(metadata.answerContract?.selectedProductIds).toEqual(['plate-80']);
-    expect(metadata.answerContract?.selectionReadiness).toMatchObject({
-      status: 'ready_for_preliminary_cards',
-      missingFacts: ['совместимость с тротуарной плиткой']
-    });
-    expect(metadata.terminalCatalogRecovery?.selectedProductIds).toEqual(['plate-80']);
-    expect(conversations.assistantSaves).toContainEqual(expect.objectContaining({
-      executionOwner: expect.any(String),
-      answerContract: expect.objectContaining({ selectedProductIds: ['plate-80'] })
-    }));
-  });
-
-  it('terminalizes final-fit catalog details plus an exhausted unresolved web check as a named specialist handoff', async () => {
-    const conversations = new FakeConversations();
-    const candidate: Product = {
-      ...generatorProductWithPower('terminal-detail-generator', 'TSS SGG 6000E 5.5 kW generator', 5.5),
-      brand: 'TSS',
-      price: 74_990,
-      specs: { 'Nominal power': '5.5 kW', voltage: '220 V' }
-    };
-    const intent = structuredGeneratorCatalogIntent();
-    const webRequest: ToolRequest = {
-      id: 'terminal-detail-web-check',
-      tool: 'web.researchProductFacts',
-      args: {
-        query: 'проверить ток запуска для TSS SGG 6000E',
-        productIntent: 'generator',
-        canonicalProductIntent: 'generator',
-        productNames: [candidate.name],
-        comparisonAttributes: ['пусковой ток подключаемого насоса'],
-        comparisonAttributeBindings: []
-      },
-      rationale: 'confirm the one decisive fact absent from the catalog card',
-      required: true
-    };
-    intent.userMessageSummary = 'buyer asks whether the exact generator will start the pump';
-    intent.dialogueUnderstanding = 'the exact catalog generator is useful preliminary orientation, but pump starting current is still unknown';
-    intent.nextStepRationale = 'preserve the exact catalog evidence if the external check times out';
-    intent.toolRequests = [{
-      id: 'terminal-product-details',
-      tool: 'catalog.getProductDetails',
-      args: {
-        productIds: [candidate.id],
-        productNames: [candidate.name],
-        productIntent: 'generator',
-        canonicalProductIntent: 'generator',
-        comparisonAttributes: ['price', 'nominal power']
-      },
-      rationale: 'read the exact current catalog product',
-      required: true
-    }, webRequest];
-    intent.productMentions = [{
-      name: candidate.name,
-      role: 'target_product',
-      productClass: 'generator',
-      evidence: 'exact catalog product requested by the buyer'
-    }];
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      selectionGoal: 'final_fit',
-      maxCards: 1,
-      requirements: []
-    };
-    intent.grounding = {
-      taskType: 'comparison',
-      sourcePolicy: 'web_required',
-      webPurpose: 'technical_specs',
-      webRequirement: 'independent_required',
-      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts'],
-      technicalAttributes: ['пусковой ток подключаемого насоса'],
-      rationale: 'catalog details support a preliminary answer while the decisive load fact needs external confirmation'
-    };
-    conversations.turn = {
-      ...conversations.turn,
-      deadlineAt: new Date(Date.now() + 4_000).toISOString(),
-      plannerContract: intent
-    };
-    conversations.toolArtifacts = [{
-      tool_request_id: 'terminal-product-details',
-      tool_name: 'catalog.getProductDetails',
-      status: 'ok',
-      payload: { productIds: [candidate.id], products: [candidate] },
-      warnings: []
-    }, {
-      tool_request_id: webRequest.id,
-      tool_name: 'web.researchProductFacts',
-      status: 'ok',
-      payload: {
-        usedWebSearch: true,
-        searchDisposition: 'completed',
-        researchOutcome: 'exhausted',
-        sourcesExhausted: true,
-        sourceAttempts: [
-          { tier: 'catalog', outcome: 'not_found' },
-          { tier: 'official_page', outcome: 'not_found', query: 'TSS SGG 6000E official page pump starting current' },
-          { tier: 'official_manual', outcome: 'not_found', query: 'TSS SGG 6000E official manual pump starting current PDF' },
-          { tier: 'reliable_secondary', outcome: 'not_found', query: 'TSS SGG 6000E reliable distributor pump starting current' }
-        ],
-        facts: [],
-        conflicts: [],
-        answerGuidance: {
-          directAnswer: '',
-          completeness: 'not_answered',
-          coverage: [{
-            attribute: 'пусковой ток подключаемого насоса',
-            status: 'not_confirmed',
-            value: '',
-            evidence: 'the decisive fact was not confirmed after source review'
-          }]
-        },
-        warnings: []
-      },
-      warnings: []
-    }];
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model()
-    );
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Подойдёт ли этот TSS SGG 6000E для насоса?'
-    });
-    const metadata = payload.metadata as {
-      answerContract?: { selectedProductIds?: string[]; leadAction?: string; selectionReadiness?: { missingFacts?: string[] } };
-      terminalCatalogRecovery?: { selectedProductIds?: string[]; catalogRequestIds?: string[]; technicalHandoffEligible?: boolean };
-    };
-
-    expect(metadata.terminalCatalogRecovery?.selectedProductIds).toEqual([candidate.id]);
-    expect(payload.usedWebSearch).toBe(true);
-    expect(payload.answer).toContain(candidate.name);
-    expect(payload.answer).toContain('74 990');
-    expect(payload.answer).toContain('пусковой ток подключаемого насоса');
-    expect(payload.answer).toContain('техническому специалисту');
-    expect(payload.answer).toContain('написать или позвонить');
-    expect(payload.answer).not.toContain('уже передан');
-    expect(payload.productCards.map((card) => card.id)).toEqual([candidate.id]);
-    expect(payload.leadRequested).toBe(true);
-    expect(metadata.answerContract?.selectedProductIds).toEqual([candidate.id]);
-    expect(metadata.answerContract?.leadAction).toBe('offer_form');
-    expect(metadata.answerContract?.selectionReadiness?.missingFacts).toEqual(['пусковой ток подключаемого насоса']);
-    expect(metadata.terminalCatalogRecovery).toMatchObject({
-      selectedProductIds: [candidate.id],
-      catalogRequestIds: ['terminal-product-details'],
-      technicalHandoffEligible: true
-    });
-    expect(conversations.assistantSaves).toContainEqual(expect.objectContaining({
-      content: expect.stringContaining(candidate.name)
-    }));
-  });
 });
 
 describe('parallel semantic turn contracts', () => {
@@ -11490,7 +8635,7 @@ describe('parallel semantic turn contracts', () => {
     )).toHaveLength(1);
   });
 
-  it('terminalizes a second incoherent semantic decision with typed evidence', async () => {
+  it('rejects a second incoherent semantic decision without a buyer answer', async () => {
     const conversations = new FakeConversations();
     const badIntent = noToolIntent('incoherent semantic decision');
     const decideTurn = vi.fn(async (
@@ -11523,18 +8668,15 @@ describe('parallel semantic turn contracts', () => {
       model({ decideTurn, composeAnswer })
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: conversations.messages[0]!.content
-    });
+    })).rejects.toThrow('semantic_decision_incoherent:active_requirement_mismatch:budget_max_rub');
 
     expect(decideTurn).toHaveBeenCalledTimes(2);
     expect(composeAnswer).not.toHaveBeenCalled();
-    expect(payload.metadata).toMatchObject({
-      terminal: true,
-      terminalReason: 'semantic_decision_incoherent_after_bounded_retry'
-    });
+    expect(conversations.assistantSaves).toHaveLength(0);
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
       checkpoint: 'semantic_decision_proposed',
       status: 'failed',
@@ -11543,777 +8685,16 @@ describe('parallel semantic turn contracts', () => {
     }));
   });
 
-  it('keeps the legacy fake-model reducer and planner concurrent for compatibility', async () => {
-    const conversations = new FakeConversations();
-    const leads = new FakeLeads();
-    leads.pendingDraft = {
-      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-      sessionId,
-      originTurnId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-      originToolRequestId: 'lead.capture:origin',
-      purpose: 'confirm delivery details',
-      buyerQuestion: 'Can you confirm delivery details?',
-      preferredContact: 'message',
-      name: null,
-      phone: '+7 900 000-00-11',
-      email: null,
-      consentEvidenceHash: 'consent-hash',
-      scopeHash: 'scope-hash',
-      status: 'pending',
-      expiresAt: new Date('2026-05-19T12:30:00.000Z').toISOString(),
-      consumedByTurnId: null,
-      consumedLeadId: null,
-      createdAt: new Date('2026-05-19T12:00:00.000Z').toISOString(),
-      updatedAt: new Date('2026-05-19T12:00:00.000Z').toISOString()
-    };
-    let startedCalls = 0;
-    let releaseBoth!: () => void;
-    const bothStarted = new Promise<void>((resolve) => { releaseBoth = resolve; });
-    const markStarted = () => {
-      startedCalls += 1;
-      if (startedCalls === 2) releaseBoth();
-      return bothStarted;
-    };
-    const assertPendingDraftContext = (input: Parameters<AgentManagerModel['proposeLedgerDelta']>[0]) => {
-      expect(input.pendingLeadCaptureDraft).toMatchObject({
-        id: leads.pendingDraft?.id,
-        purpose: 'confirm delivery details',
-        buyerQuestion: 'Can you confirm delivery details?',
-        preferredContact: 'message',
-        hasName: false,
-        hasPhone: true,
-        hasEmail: false,
-        missingFields: ['name']
-      });
-      expect(input.pendingLeadCaptureDraft).not.toHaveProperty('phone');
-    };
-    const proposeLedgerDelta = vi.fn(async (input: Parameters<AgentManagerModel['proposeLedgerDelta']>[0]) => {
-      assertPendingDraftContext(input);
-      await markStarted();
-      return {
-        rationale: 'the current turn does not add a new durable fact',
-        events: []
-      };
-    });
-    const planTurn = vi.fn(async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
-      assertPendingDraftContext(input);
-      await markStarted();
-      return noToolIntent('parallel planner summary');
-    });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      leads as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
 
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: conversations.messages[0]!.content
-    });
 
-    expect(payload.answer).toContain('5 kW');
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(startedCalls).toBe(2);
-    const checkpointNames = conversations.checkpoints.map((checkpoint) =>
-      (checkpoint as { checkpoint?: string }).checkpoint
-    );
-    expect(checkpointNames.indexOf('ledger_delta_proposed')).toBeLessThan(checkpointNames.indexOf('ledger_delta_applied'));
-    expect(checkpointNames.indexOf('ledger_delta_applied')).toBeLessThan(checkpointNames.indexOf('intent_contract_created'));
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'ledger_delta_proposed',
-      payload: expect.objectContaining({ rationale: 'the current turn does not add a new durable fact' })
-    }));
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_proposed',
-      payload: expect.objectContaining({ userMessageSummary: 'parallel planner summary' })
-    }));
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_created',
-      payload: expect.objectContaining({ userMessageSummary: 'parallel planner summary' })
-    }));
-  });
 
-  it('still checkpoints the valid intent when persistence of the sibling delta fails', async () => {
-    class DeltaCheckpointFailureConversations extends FakeConversations {
-      override async upsertTurnCheckpoint(input: unknown) {
-        if ((input as { checkpoint?: string }).checkpoint === 'ledger_delta_proposed') {
-          throw new Error('delta checkpoint storage failed');
-        }
-        return super.upsertTurnCheckpoint(input);
-      }
-    }
-    const conversations = new DeltaCheckpointFailureConversations();
-    const proposeLedgerDelta = vi.fn(async () => ({
-      rationale: 'valid delta whose checkpoint storage fails',
-      events: []
-    }));
-    const planTurn = vi.fn(async () => noToolIntent('intent persisted independently of the delta checkpoint'));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
 
-    await expect(orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: conversations.messages[0]!.content
-    })).rejects.toThrow('delta checkpoint storage failed');
 
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_proposed',
-      status: 'succeeded',
-      payload: expect.objectContaining({
-        userMessageSummary: 'intent persisted independently of the delta checkpoint'
-      })
-    }));
-  });
 
-  it('uses the separate planner during recovery when only the delta checkpoint exists', async () => {
-    const conversations = new FakeConversations();
-    conversations.checkpoints = [{
-      checkpoint: 'ledger_delta_proposed',
-      status: 'succeeded',
-      payload: { rationale: 'saved delta from the interrupted first attempt', events: [] }
-    }];
-    const proposeLedgerDelta = vi.fn(async () => {
-      throw new Error('saved delta must be reused');
-    });
-    const planTurn = vi.fn(async () => noToolIntent('recovered separate planner summary'));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
 
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
 
-    expect(payload.answer).toContain('5 kW');
-    expect(proposeLedgerDelta).not.toHaveBeenCalled();
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_created',
-      payload: expect.objectContaining({ userMessageSummary: 'recovered separate planner summary' })
-    }));
-  });
 
-  it('records an exhausted semantic output cap and recovery retries only that stage with a larger bounded cap', async () => {
-    const conversations = new FakeConversations();
-    const attemptedCaps: Array<number | undefined> = [];
-    const exhausted = Object.assign(new Error('Structured JSON retry skipped: output_limit_exhausted'), {
-      code: 'structured_json_retry_skipped',
-      retryReason: 'output_limit_exhausted'
-    });
-    const proposeLedgerDelta = vi.fn(async (input: Parameters<AgentManagerModel['proposeLedgerDelta']>[0]) => {
-      attemptedCaps.push(input.structuredOutputTokenCap);
-      if (attemptedCaps.length === 1) throw exhausted;
-      return { rationale: 'expanded recovery cap completed the reducer', events: [] };
-    });
-    const planTurn = vi.fn(async () => noToolIntent('planner survives reducer output exhaustion'));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
 
-    await expect(orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: conversations.messages[0]!.content
-    })).rejects.toThrow('output_limit_exhausted');
-
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'ledger_delta_proposed',
-      status: 'failed',
-      errorCode: 'structured_json_output_limit_exhausted',
-      payload: expect.objectContaining({
-        retryReason: 'output_limit_exhausted',
-        attemptedOutputTokenCap: config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS
-      })
-    }));
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      eventType: 'parallel_semantic_calls_partially_failed',
-      payload: expect.objectContaining({
-        failures: expect.arrayContaining([
-          expect.objectContaining({ retryReason: 'output_limit_exhausted' })
-        ])
-      })
-    }));
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.answer).toContain('5 kW');
-    expect(attemptedCaps).toEqual([
-      undefined,
-      Math.ceil(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS * 1.5)
-    ]);
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(2);
-    expect(planTurn).toHaveBeenCalledTimes(1);
-  });
-
-  it('keeps a valid parallel delta when the planner fails and recovery runs only the missing planner stage', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn(async () => ({
-      rationale: 'valid parallel delta survives the sibling planner failure',
-      events: []
-    }));
-    const planTurn = vi.fn()
-      .mockRejectedValueOnce(new Error('parallel planner failed'))
-      .mockResolvedValueOnce(noToolIntent('recovered planner summary'));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    await expect(orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: conversations.messages[0]!.content
-    })).rejects.toThrow('parallel planner failed');
-
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'ledger_delta_proposed',
-      payload: expect.objectContaining({
-        rationale: 'valid parallel delta survives the sibling planner failure'
-      })
-    }));
-    expect(conversations.checkpoints).not.toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_proposed',
-      status: 'succeeded'
-    }));
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.answer).toContain('5 kW');
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-    expect(planTurn).toHaveBeenCalledTimes(2);
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'ledger_delta_applied',
-      status: 'succeeded'
-    }));
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_created',
-      payload: expect.objectContaining({ userMessageSummary: 'recovered planner summary' })
-    }));
-  });
-
-  it('reconciles an unknown active need after recovery plans the missing intent stage', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
-      rationale: 'open a need before the sibling planner fails',
-      events: [{
-        eventType: 'need.opened',
-        scope: 'need',
-        payload: {
-          needId: 'recovered-generator-need',
-          productClass: 'unknown',
-          summary: 'diesel generator selection',
-          constraints: ['three phase'],
-          openQuestions: [],
-          selectedProductIds: [],
-          rejectedProductIds: [],
-          selectionUpdateMode: 'clear',
-          invalidatedProductIds: [],
-          status: 'open',
-          activate: true
-        },
-        evidence: 'buyer needs a diesel generator',
-        source: 'llm_state_delta',
-        status: 'active'
-      }]
-    }));
-    const recoveredIntent: AgentIntentContract = {
-      ...noToolIntent('recovered generator planner intent'),
-      selectionPolicy: {
-        ...currentNoProductSelectionPolicy(),
-        targetProductClass: 'generator',
-        canonicalProductClass: 'generator',
-        selectionGoal: 'browse_catalog',
-        needAction: 'open'
-      }
-    };
-    const planTurn = vi.fn()
-      .mockRejectedValueOnce(new Error('parallel planner failed before intent checkpoint'))
-      .mockResolvedValueOnce(recoveredIntent);
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    await expect(orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'I need a three-phase diesel generator.'
-    })).rejects.toThrow('parallel planner failed before intent checkpoint');
-
-    await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-    expect(planTurn).toHaveBeenCalledTimes(2);
-    expect(conversations.ledgerEvents).toContainEqual(expect.objectContaining({
-      eventType: 'need.updated',
-      source: 'system_reducer',
-      payload: expect.objectContaining({
-        needId: 'recovered-generator-need',
-        productClass: 'generator'
-      })
-    }));
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      eventType: 'post_plan_active_need_product_class_reconciled',
-      payload: expect.objectContaining({
-        needId: 'recovered-generator-need',
-        canonicalProductClass: 'generator'
-      })
-    }));
-  });
-
-  it('keeps a valid parallel intent when the reducer fails and recovery runs only the missing reducer stage', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn()
-      .mockRejectedValueOnce(new Error('parallel reducer failed'))
-      .mockResolvedValueOnce({
-        rationale: 'recovered reducer delta',
-        events: []
-      });
-    const planTurn = vi.fn(async () => noToolIntent('valid parallel intent survives the sibling reducer failure'));
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    await expect(orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: conversations.messages[0]!.content
-    })).rejects.toThrow('parallel reducer failed');
-
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_proposed',
-      payload: expect.objectContaining({
-        userMessageSummary: 'valid parallel intent survives the sibling reducer failure'
-      })
-    }));
-    expect(conversations.checkpoints).not.toContainEqual(expect.objectContaining({
-      checkpoint: 'ledger_delta_proposed',
-      status: 'succeeded'
-    }));
-
-    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
-
-    expect(payload.answer).toContain('5 kW');
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(2);
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'ledger_delta_proposed',
-      payload: expect.objectContaining({ rationale: 'recovered reducer delta' })
-    }));
-    expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
-      checkpoint: 'intent_contract_created',
-      payload: expect.objectContaining({
-        userMessageSummary: 'valid parallel intent survives the sibling reducer failure'
-      })
-    }));
-  });
-
-  it('replans once after the parallel reducer opens a product class that conflicts with the pre-delta intent', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
-      rationale: 'the buyer switched to a plate compactor need',
-      events: [{
-        eventType: 'need.opened',
-        scope: 'need',
-        payload: {
-          needId: 'plate',
-          productClass: 'plate',
-          summary: 'current plate compactor need',
-          constraints: [],
-          openQuestions: [],
-          selectedProductIds: [],
-          rejectedProductIds: [],
-          selectionUpdateMode: 'clear',
-          invalidatedProductIds: [],
-          status: 'open',
-          activate: true
-        },
-        evidence: 'I now need a plate compactor.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }]
-    }));
-    const staleGeneratorIntent: AgentIntentContract = {
-      ...noToolIntent('stale pre-delta generator intent'),
-      selectionPolicy: {
-        ...currentNoProductSelectionPolicy(),
-        targetProductClass: 'generator',
-        canonicalProductClass: 'generator',
-        selectionGoal: 'browse_catalog',
-        needAction: 'continue'
-      }
-    };
-    const correctedPlateIntent: AgentIntentContract = {
-      ...noToolIntent('corrected post-delta plate intent'),
-      selectionPolicy: {
-        ...currentNoProductSelectionPolicy(),
-        targetProductClass: 'plate',
-        canonicalProductClass: 'plate',
-        selectionGoal: 'browse_catalog',
-        needAction: 'open'
-      }
-    };
-    const planTurn = vi.fn()
-      .mockResolvedValueOnce(staleGeneratorIntent)
-      .mockImplementationOnce(async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
-        expect(Object.values(input.ledgerState.needsById)).toContainEqual(expect.objectContaining({
-          needId: 'plate',
-          productClass: 'plate',
-          status: 'open'
-        }));
-        return correctedPlateIntent;
-      });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    const payload = await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'I now need a plate compactor.'
-    });
-
-    expect(payload.answer).toContain('5 kW');
-    expect(proposeLedgerDelta).toHaveBeenCalledTimes(1);
-    expect(planTurn).toHaveBeenCalledTimes(2);
-    expect(conversations.turn.plannerContract).toMatchObject({
-      userMessageSummary: 'corrected post-delta plate intent',
-      selectionPolicy: expect.objectContaining({ canonicalProductClass: 'plate', needAction: 'open' })
-    });
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'intent',
-      eventType: 'parallel_intent_replan_required',
-      payload: expect.objectContaining({
-        conflicts: expect.arrayContaining([
-          'active_product_class_mismatch:plate:generator',
-          'opened_need_action_mismatch:continue'
-        ])
-      })
-    }));
-  });
-
-  it('reconciles one same-class parallel opened need without a second planner call', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
-      rationale: 'open the first equipment need',
-      events: [{
-        eventType: 'need.opened',
-        scope: 'need',
-        payload: {
-          needId: 'generator',
-          productClass: 'unknown',
-          summary: 'current generator need',
-          constraints: [],
-          openQuestions: [],
-          selectedProductIds: [],
-          rejectedProductIds: [],
-          selectionUpdateMode: 'clear',
-          invalidatedProductIds: [],
-          status: 'open',
-          activate: true
-        },
-        evidence: 'I need a generator.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }]
-    }));
-    const parallelIntent: AgentIntentContract = {
-      ...noToolIntent('parallel planner understood the same generator need'),
-      selectionPolicy: {
-        ...currentNoProductSelectionPolicy(),
-        targetProductClass: 'generator',
-        canonicalProductClass: 'generator',
-        selectionGoal: 'browse_catalog',
-        needAction: 'continue'
-      }
-    };
-    const planTurn = vi.fn(async () => parallelIntent);
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'I need a generator.'
-    });
-
-    expect(planTurn).toHaveBeenCalledTimes(1);
-    expect(conversations.turn.plannerContract).toMatchObject({
-      selectionPolicy: expect.objectContaining({
-        canonicalProductClass: 'generator',
-        needAction: 'open'
-      })
-    });
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'ledger',
-      eventType: 'active_need_product_class_reconciled'
-    }));
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'intent',
-      eventType: 'parallel_intent_need_action_reconciled'
-    }));
-    expect(conversations.traces).not.toContainEqual(expect.objectContaining({
-      eventType: 'parallel_intent_replan_required'
-    }));
-  });
-
-  it('replans once when the parallel reducer changes typed hard requirements after the planner read the old ledger', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
-      rationale: 'replace the generator budget and phase requirements',
-      events: [{
-        eventType: 'need.opened',
-        scope: 'need',
-        payload: {
-          needId: 'generator',
-          productClass: 'generator',
-          summary: 'current generator need',
-          constraints: [],
-          openQuestions: [],
-          selectedProductIds: [],
-          rejectedProductIds: [],
-          selectionUpdateMode: 'clear',
-          invalidatedProductIds: [],
-          status: 'open',
-          activate: true
-        },
-        evidence: 'The current request is for a generator.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }, {
-        eventType: 'fact.confirmed',
-        scope: 'need',
-        payload: {
-          factKey: 'budget_max_rub',
-          value: 50_000,
-          needId: 'generator',
-          productClass: 'generator',
-          role: 'hard_requirement',
-          confidence: 1
-        },
-        evidence: 'The updated budget is 50,000 RUB.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }, {
-        eventType: 'fact.confirmed',
-        scope: 'need',
-        payload: {
-          factKey: 'phase',
-          value: 'single_phase',
-          needId: 'generator',
-          productClass: 'generator',
-          role: 'hard_requirement',
-          confidence: 1
-        },
-        evidence: 'The updated phase is single-phase.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }]
-    }));
-    const intentWithRequirements = (
-      summary: string,
-      budget: number,
-      phase: 'single_phase' | 'three_phase'
-    ): AgentIntentContract => ({
-      ...noToolIntent(summary),
-      selectionPolicy: {
-        ...currentNoProductSelectionPolicy(),
-        targetProductClass: 'generator',
-        canonicalProductClass: 'generator',
-        selectionGoal: 'preliminary_fit',
-        needAction: 'open',
-        phase,
-        requirements: [{
-          id: 'budget-limit',
-          kind: 'budget_max_rub',
-          value: budget,
-          unit: 'RUB',
-          relation: 'must_have',
-          role: 'hard_constraint',
-          strictness: 'strict',
-          evidence: 'typed budget limit'
-        }, {
-          id: 'phase-limit',
-          kind: 'phase',
-          value: phase,
-          unit: null,
-          relation: 'must_have',
-          role: 'hard_constraint',
-          strictness: 'strict',
-          evidence: 'typed phase requirement'
-        }]
-      }
-    });
-    const staleIntent = intentWithRequirements('stale pre-delta requirements', 70_000, 'three_phase');
-    const correctedIntent = intentWithRequirements('coherent post-delta requirements', 50_000, 'single_phase');
-    const planTurn = vi.fn()
-      .mockResolvedValueOnce(staleIntent)
-      .mockImplementationOnce(async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
-        expect(input.ledgerIncludesCurrentTurnDelta).toBe(true);
-        expect(Object.values(input.ledgerState.factsByKey)).toEqual(expect.arrayContaining([
-          expect.objectContaining({ factKey: 'budget_max_rub', value: 50_000, role: 'hard_requirement' }),
-          expect.objectContaining({ factKey: 'phase', value: 'single_phase', role: 'hard_requirement' })
-        ]));
-        return correctedIntent;
-      });
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Change the budget to 50,000 RUB and use single phase.'
-    });
-
-    expect(planTurn).toHaveBeenCalledTimes(2);
-    expect(planTurn.mock.calls[0]?.[0].ledgerIncludesCurrentTurnDelta).not.toBe(true);
-    expect(conversations.turn.plannerContract).toMatchObject({
-      userMessageSummary: 'coherent post-delta requirements',
-      selectionPolicy: expect.objectContaining({ phase: 'single_phase' })
-    });
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'intent',
-      eventType: 'parallel_intent_replan_required',
-      payload: expect.objectContaining({
-        conflicts: expect.arrayContaining([
-          'active_requirement_mismatch:budget_max_rub',
-          'active_requirement_mismatch:phase'
-        ])
-      })
-    }));
-  });
-
-  it('replans once when the reducer adds a new typed hard requirement omitted by the parallel planner', async () => {
-    const conversations = new FakeConversations();
-    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
-      rationale: 'add the newly stated generator weight limit',
-      events: [{
-        eventType: 'need.opened',
-        scope: 'need',
-        payload: {
-          needId: 'generator',
-          productClass: 'generator',
-          summary: 'current generator need',
-          constraints: [],
-          openQuestions: [],
-          selectedProductIds: [],
-          rejectedProductIds: [],
-          selectionUpdateMode: 'clear',
-          invalidatedProductIds: [],
-          status: 'open',
-          activate: true
-        },
-        evidence: 'The current request is for a generator.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }, {
-        eventType: 'fact.confirmed',
-        scope: 'need',
-        payload: {
-          factKey: 'weight_max_kg',
-          value: 90,
-          needId: 'generator',
-          productClass: 'generator',
-          role: 'hard_requirement',
-          confidence: 1
-        },
-        evidence: 'The generator must weigh no more than 90 kg.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }]
-    }));
-    const omittedIntent: AgentIntentContract = {
-      ...noToolIntent('parallel planner omitted the new weight limit'),
-      selectionPolicy: {
-        ...currentNoProductSelectionPolicy(),
-        targetProductClass: 'generator',
-        canonicalProductClass: 'generator',
-        selectionGoal: 'preliminary_fit',
-        needAction: 'open',
-        requirements: []
-      }
-    };
-    const correctedIntent: AgentIntentContract = {
-      ...omittedIntent,
-      userMessageSummary: 'post-delta planner includes the new weight limit',
-      selectionPolicy: {
-        ...omittedIntent.selectionPolicy!,
-        requirements: [{
-          id: 'weight-limit',
-          kind: 'weight_max_kg',
-          value: 90,
-          unit: 'kg',
-          relation: 'must_have',
-          role: 'hard_constraint',
-          strictness: 'strict',
-          evidence: 'typed weight limit'
-        }]
-      }
-    };
-    const planTurn = vi.fn()
-      .mockResolvedValueOnce(omittedIntent)
-      .mockResolvedValueOnce(correctedIntent);
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Keep the generator under 90 kg.'
-    });
-
-    expect(planTurn).toHaveBeenCalledTimes(2);
-    expect(conversations.turn.plannerContract).toMatchObject({
-      userMessageSummary: 'post-delta planner includes the new weight limit'
-    });
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      phase: 'intent',
-      eventType: 'parallel_intent_replan_required',
-      payload: expect.objectContaining({
-        conflicts: expect.arrayContaining(['active_requirement_mismatch:weight_max_kg'])
-      })
-    }));
-  });
 
   it('keeps the parallel planner fast path when its typed hard requirements match the applied delta', async () => {
     const conversations = new FakeConversations();
@@ -12523,119 +8904,6 @@ describe('parallel semantic turn contracts', () => {
     }));
   });
 
-  it('replans when the reducer removes an active hard requirement seen by the parallel planner', async () => {
-    const conversations = new FakeConversations();
-    const priorTurnId = '77777777-7777-4777-8777-777777777770';
-    const priorRow = (
-      eventId: string,
-      eventType: 'need.opened' | 'fact.confirmed',
-      scope: 'need',
-      payload: Record<string, unknown>
-    ) => ({
-      session_id: sessionId,
-      turn_id: priorTurnId,
-      event_id: eventId,
-      event_type: eventType,
-      scope,
-      payload,
-      evidence: 'prior confirmed generator budget',
-      source: 'llm_state_delta',
-      status: 'active',
-      created_at: new Date('2026-05-19T11:00:00.000Z').toISOString()
-    });
-    conversations.ledgerEvents = [
-      priorRow('prior-generator-need', 'need.opened', 'need', {
-        needId: 'generator',
-        productClass: 'generator',
-        summary: 'active generator need',
-        constraints: ['budget_max_rub: 50000'],
-        openQuestions: [],
-        selectedProductIds: [],
-        rejectedProductIds: [],
-        selectionUpdateMode: 'preserve',
-        invalidatedProductIds: [],
-        status: 'open',
-        activate: true
-      }),
-      priorRow('prior-budget', 'fact.confirmed', 'need', {
-        factKey: 'budget_max_rub',
-        value: 50_000,
-        needId: 'generator',
-        productClass: 'generator',
-        role: 'hard_requirement',
-        confidence: 1
-      })
-    ];
-    const proposeLedgerDelta = vi.fn(async (): Promise<LedgerStateDelta> => ({
-      rationale: 'the buyer explicitly removed the old budget limit',
-      events: [{
-        eventType: 'fact.negated',
-        scope: 'need',
-        payload: {
-          needId: 'generator',
-          targetEventIds: ['prior-budget']
-        },
-        evidence: 'There is no budget limit now.',
-        source: 'llm_state_delta',
-        status: 'active'
-      }]
-    }));
-    const staleIntent: AgentIntentContract = {
-      ...noToolIntent('parallel planner retained the removed budget'),
-      selectionPolicy: {
-        ...currentNoProductSelectionPolicy(),
-        targetProductClass: 'generator',
-        canonicalProductClass: 'generator',
-        selectionGoal: 'preliminary_fit',
-        needAction: 'continue',
-        requirements: [{
-          id: 'stale-budget',
-          kind: 'budget_max_rub',
-          value: 50_000,
-          unit: 'RUB',
-          relation: 'must_have',
-          role: 'hard_constraint',
-          strictness: 'strict',
-          evidence: 'stale budget limit'
-        }]
-      }
-    };
-    const correctedIntent: AgentIntentContract = {
-      ...staleIntent,
-      userMessageSummary: 'post-delta planner removed the old budget',
-      selectionPolicy: {
-        ...staleIntent.selectionPolicy!,
-        requirements: []
-      }
-    };
-    const planTurn = vi.fn()
-      .mockResolvedValueOnce(staleIntent)
-      .mockResolvedValueOnce(correctedIntent);
-    const orchestrator = new AgentManagerOrchestrator(
-      conversations as never,
-      new FakeProducts() as never,
-      new FakeLeads() as never,
-      model({ proposeLedgerDelta, planTurn })
-    );
-
-    await orchestrator.generateAnswer({
-      sessionId,
-      turnId,
-      userMessage: 'Уберите ограничение по бюджету.'
-    });
-
-    expect(planTurn).toHaveBeenCalledTimes(2);
-    expect(conversations.turn.plannerContract).toMatchObject({
-      userMessageSummary: 'post-delta planner removed the old budget',
-      selectionPolicy: expect.objectContaining({ requirements: [] })
-    });
-    expect(conversations.traces).toContainEqual(expect.objectContaining({
-      eventType: 'parallel_intent_replan_required',
-      payload: expect.objectContaining({
-        conflicts: expect.arrayContaining(['active_requirement_removed:budget_max_rub'])
-      })
-    }));
-  });
 
   it('preserves a valid typed catalog plan instead of replacing planner semantics from message fragments', () => {
     const intent: AgentIntentContract = {

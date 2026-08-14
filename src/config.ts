@@ -85,7 +85,6 @@ const schema = z.object({
   OPENAI_DAILY_TOKEN_BUDGET: defaultPositiveInt(6000000),
   OPENAI_BUDGET_GUARD_RESERVE_TOKENS: defaultNonNegativeInt(16000),
   OPENAI_ENABLE_WEB_FACT_EXTRACTION: booleanFlag(true),
-  AI_MANAGER_REVIEW_MODE: z.enum(['off', 'risk', 'always']).default(process.env.NODE_ENV === 'test' ? 'off' : 'risk'),
   CATALOG_BASE_URL: z.string().url().default('https://bakautprof.ru'),
   CATALOG_MAX_PAGES: z.coerce.number().int().positive().default(300),
   CATALOG_REQUEST_TIMEOUT_MS: defaultPositiveInt(35_000),
@@ -138,9 +137,6 @@ const normalizeReasoningEffort = (value: z.infer<typeof reasoningEffort>) =>
 
 export const config = {
   ...parsedConfig,
-  AI_MANAGER_REVIEW_MODE: parsedConfig.NODE_ENV === 'production' && parsedConfig.AI_MANAGER_REVIEW_MODE === 'off'
-    ? 'risk' as const
-    : parsedConfig.AI_MANAGER_REVIEW_MODE,
   EMAIL_HTTP_URL: parsedConfig.EMAIL_HTTP_URL || resendEmailUrl,
   EMAIL_HTTP_AUTH_HEADER: parsedConfig.EMAIL_HTTP_AUTH_HEADER || resendAuthHeader,
   EMAIL_HTTP_TIMEOUT_MS: parsedConfig.RESEND_TIMEOUT_MS || parsedConfig.EMAIL_HTTP_TIMEOUT_MS,

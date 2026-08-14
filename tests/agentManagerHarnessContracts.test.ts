@@ -6,7 +6,7 @@ import {
 } from '../src/ai/agentManagerContracts.js';
 import { evaluateAgentManagerPolicyGate } from '../src/ai/agentManagerPolicyGate.js';
 import {
-  researchGuidanceSafeRewrite,
+  expectedResearchGuidanceText,
   repairIntentForStaleWebResearchTargets
 } from '../src/ai/agentManagerOrchestrator.js';
 import {
@@ -184,7 +184,7 @@ describe('runtime harness contracts', () => {
       warnings: []
     });
 
-    expect(researchGuidanceSafeRewrite({
+    expect(expectedResearchGuidanceText({
       intent: currentSelection,
       toolResults: [staleWebResult]
     })).toBe('');

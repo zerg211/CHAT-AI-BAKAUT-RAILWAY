@@ -380,8 +380,13 @@ function harnessModel(input: {
   return {
     async proposeLedgerDelta() { return input.delta ?? { rationale: 'no state change', events: [] }; },
     async planTurn() { return input.intent; },
-    composeAnswer: input.compose,
-    async reviewAnswer() { return { verdict: 'pass', issues: [] }; }
+    async decideTurn(): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> {
+      return {
+        ledgerDelta: input.delta ?? { rationale: 'no state change', events: [] },
+        intent: input.intent
+      } as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision;
+    },
+    composeAnswer: input.compose
   };
 }
 
@@ -876,27 +881,13 @@ describe('catalog-evidence synthetic web artifact', () => {
       })
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Нужен генератор с автозапуском.'
-    });
-
+    })).rejects.toThrow('failed_tool_result_used_as_fact_source');
     expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
-    expect(payload.metadata?.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'failed_tool_result_used_as_fact_source' })
-      ])
-    });
-    const finalContract = payload.metadata?.answerContract as {
-      factsUsed?: Array<{ sourceEventIds?: string[] }>;
-      toolResultIds?: string[];
-    };
-    expect(finalContract.factsUsed?.flatMap((fact) => fact.sourceEventIds ?? [])).not.toContain(
-      'web-autostart-check'
-    );
-    expect(finalContract.toolResultIds).not.toContain('web-autostart-check');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 });
 

@@ -20,7 +20,7 @@ describe('agent manager turn budget', () => {
     hostedToolCostUsd: 0
   });
 
-  it('reserves a bounded 40-second local budget while the route deadline keeps a larger terminal reserve', () => {
+  it('reserves a bounded 40-second work budget plus a small durable-commit reserve', () => {
     const webTimeoutMs = agentManagerToolRegistry['web.researchProductFacts'].timeoutMs;
 
     expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(40_000);
@@ -28,27 +28,27 @@ describe('agent manager turn budget', () => {
     expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBeLessThan(webTimeoutMs);
   });
 
-  it('caps web work to the time left after preserving compose and terminal recovery', () => {
+  it('caps web work to the time left after preserving one answer composition', () => {
     let now = 1_000;
     const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS, () => now);
     now += 2_000;
-    const composeReviewReserveMs = 30_000;
+    const answerReserveMs = 12_000;
     const effectiveWebTimeoutMs = Math.min(
       agentManagerToolRegistry['web.researchProductFacts'].timeoutMs,
-      budget.remainingWallTimeMs() - composeReviewReserveMs
+      budget.remainingWallTimeMs() - answerReserveMs
     );
 
-    expect(effectiveWebTimeoutMs).toBe(8_000);
+    expect(effectiveWebTimeoutMs).toBe(26_000);
     now += effectiveWebTimeoutMs;
-    expect(budget.remainingWallTimeMs()).toBe(composeReviewReserveMs);
+    expect(budget.remainingWallTimeMs()).toBe(answerReserveMs);
   });
 
-  it('caps catalog work before the compose and terminal reserve', () => {
+  it('caps catalog work before the answer reserve', () => {
     expect(effectiveAgentToolTimeoutMs({
       tool: 'catalog.search',
       configuredTimeoutMs: 60_000,
       remainingWallTimeMs: 16_500
-    })).toBe(4_500);
+    })).toBe(8_500);
     expect(effectiveAgentToolTimeoutMs({
       tool: 'calculator.generatorLoad',
       configuredTimeoutMs: 5_000,
@@ -67,11 +67,11 @@ describe('agent manager turn budget', () => {
       .toThrow(AgentManagerTurnBudgetExceededError);
   });
 
-  it('reserves the default six model stages needed by semantic replan plus closed-question repair', () => {
+  it('reserves semantic decision, answer composition, and one bounded semantic correction', () => {
     const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS);
-    for (let call = 0; call < 6; call += 1) budget.consumeModelCall();
+    for (let call = 0; call < 3; call += 1) budget.consumeModelCall();
 
-    expect(budget.snapshot().usage.modelCalls).toBe(6);
+    expect(budget.snapshot().usage.modelCalls).toBe(3);
     expect(() => budget.consumeModelCall()).toThrow('model_call_budget_exceeded');
   });
 

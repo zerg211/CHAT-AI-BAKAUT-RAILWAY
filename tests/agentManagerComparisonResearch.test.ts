@@ -204,9 +204,6 @@ function model(): AgentManagerModel {
         leadAction: 'none',
         riskFlags: []
       };
-    },
-    async reviewAnswer() {
-      return { verdict: 'pass', issues: [] };
     }
   };
 }
@@ -233,25 +230,32 @@ const allowedToolArgKeys: Record<ToolRequest['tool'], Set<string>> = {
 
 function withStrictToolFixtures(implementation: AgentManagerModel): AgentManagerModel {
   const planTurn = implementation.planTurn;
+  const strictPlanTurn = async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
+    const intent = await planTurn(input);
+    return {
+      ...intent,
+      toolRequests: intent.toolRequests.map((request) => ({
+        ...request,
+        args: Object.fromEntries(Object.entries(request.args).filter(([key]) =>
+          allowedToolArgKeys[request.tool].has(key)
+        ))
+      })) as ToolRequest[]
+    };
+  };
   return {
     ...implementation,
-    async planTurn(input) {
-      const intent = await planTurn(input);
-      return {
-        ...intent,
-        toolRequests: intent.toolRequests.map((request) => ({
-          ...request,
-          args: Object.fromEntries(Object.entries(request.args).filter(([key]) =>
-            allowedToolArgKeys[request.tool].has(key)
-          ))
-        })) as ToolRequest[]
-      };
+    planTurn: strictPlanTurn,
+    async decideTurn(input): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> {
+      if (implementation.decideTurn) return implementation.decideTurn(input);
+      const ledgerDelta = await implementation.proposeLedgerDelta(input);
+      const intent = await strictPlanTurn({ ...input, ledgerState: input.ledgerState! });
+      return { ledgerDelta, intent } as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision;
     }
   };
 }
 
 describe('AgentManager comparison research flow', () => {
-  it('does not claim sources are exhausted or start a handoff when web execution fails', async () => {
+  it('rejects a premature handoff instead of replacing it when web execution fails', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
       new Error('product_comparison_research did not return a JSON object')
     );
@@ -312,11 +316,11 @@ describe('AgentManager comparison research flow', () => {
       withStrictToolFixtures(groundingModel)
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Explain why THD matters for an inverter generator and check facts if catalog data is missing.'
-    });
+    })).rejects.toThrow('premature_handoff_before_web_exhausted');
 
     expect(clausesSeen).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -327,30 +331,8 @@ describe('AgentManager comparison research flow', () => {
     expect(clausesSeen[0]?.instruction).toContain('did not complete');
     expect(clausesSeen[0]?.instruction).toContain('Do not describe sources as exhausted');
     expect(clausesSeen[0]?.instruction).not.toContain('leadAction="offer_form"');
-    expect(payload.leadRequested).toBe(false);
-    const metadata = payload.metadata as {
-      toolResults?: Array<{ status?: string; warnings?: string[] }>;
-      answerContract?: { leadAction?: string; toolResultIds?: string[] };
-      preSendReview?: { verdict?: string; issues?: unknown[] };
-    };
-    expect(metadata.toolResults?.[0]).toMatchObject({
-      status: 'error',
-      warnings: expect.arrayContaining([
-        'tool_execution_error',
-        'attempts:1',
-        expect.stringContaining('duration_ms:')
-      ])
-    });
-    expect(metadata.answerContract).toMatchObject({
-      leadAction: 'none',
-      toolResultIds: ['web:thd']
-    });
-    expect(metadata.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'premature_handoff_before_web_exhausted' })
-      ])
-    });
+    expect(conversations.assistantSaves).toEqual([]);
+    expect(conversations.answerContracts).toContainEqual(expect.objectContaining({ status: 'rejected' }));
   });
 
   it('blocks a technical handoff after a successful but still partial web result', async () => {
@@ -421,32 +403,15 @@ describe('AgentManager comparison research flow', () => {
       withStrictToolFixtures(partialModel)
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: conversations.messages[0]!.content
-    });
-    const metadata = payload.metadata as {
-      answerContract?: { leadAction?: string };
-      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
-      toolResults?: Array<{ status?: string; payload?: { researchOutcome?: string; sourcesExhausted?: boolean } }>;
-    };
-
-    expect(metadata.toolResults?.[0]).toMatchObject({
-      status: 'ok',
-      payload: { researchOutcome: 'partial', sourcesExhausted: false }
-    });
-    expect(metadata.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'premature_handoff_before_web_exhausted' })
-      ])
-    });
-    expect(metadata.answerContract?.leadAction).toBe('none');
-    expect(payload.leadRequested).toBe(false);
+    })).rejects.toThrow('premature_handoff_before_web_exhausted');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
-  it('removes the entire technical handoff when research stopped before source exhaustion', async () => {
+  it('rejects a technical handoff when research stopped before source exhaustion', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
       searchDisposition: 'skipped_budget',
@@ -527,31 +492,12 @@ describe('AgentManager comparison research flow', () => {
       withStrictToolFixtures(incompleteModel)
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: conversations.messages[0]!.content
-    });
-    const metadata = payload.metadata as {
-      answerContract?: { leadAction?: string };
-      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
-    };
-
-    expect(payload.answer).toContain('Опция; приобретаются отдельно');
-    expect(payload.answer).toContain('точный ответ по этому пункту остаётся неподтверждённым');
-    expect(payload.answer).toContain('штатные транспортировочные колёса');
-    expect(payload.answer).toContain('Проверка доступных источников в этом ходе не была завершена');
-    expect(payload.answer).not.toContain('Можем отдельно уточнить');
-    expect(payload.answer).not.toContain('специалист');
-    expect(payload.answer).not.toContain('Оставьте номер');
-    expect(metadata.answerContract?.leadAction).toBe('none');
-    expect(metadata.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'premature_handoff_before_web_exhausted' })
-      ])
-    });
-    expect(payload.leadRequested).toBe(false);
+    })).rejects.toThrow('premature_handoff_before_web_exhausted');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
   it('treats a completed research call with no confirmed answer as exhausted', async () => {
@@ -666,7 +612,7 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.leadRequested).toBe(true);
   });
 
-  it('rewrites failed general THD web research to a useful unverified technical explanation', async () => {
+  it('rejects a failed web result used as a fact instead of rewriting the answer', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
       new Error('product_comparison_research did not return a JSON object')
     );
@@ -717,9 +663,6 @@ describe('AgentManager comparison research flow', () => {
           leadAction: 'none',
           riskFlags: ['web_research_failed']
         };
-      },
-      async reviewAnswer() {
-        throw new Error('mechanical review should rewrite failed general web fact evidence');
       }
     };
 
@@ -732,28 +675,12 @@ describe('AgentManager comparison research flow', () => {
       withStrictToolFixtures(thdModel)
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Explain why THD matters for an inverter generator and check facts if catalog data is missing.'
-    });
-
-    const metadata = payload.metadata as {
-      answerContract?: { factsUsed?: unknown[] };
-      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
-    };
-    expect(payload.answer).toContain('THD');
-    expect(payload.answer).toContain('гармонических искажений');
-    expect(payload.answer).toContain('инверторный генератор');
-    expect(payload.answer).toContain('внешняя проверка не завершилась');
-    expect(payload.answer).not.toContain('The web check confirmed');
-    expect(metadata.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'failed_tool_result_used_as_fact_source' })
-      ])
-    });
-    expect(metadata.answerContract?.factsUsed).toEqual([]);
+    })).rejects.toThrow('failed_tool_result_used_as_fact_source');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
   it('repairs web-required grounding into an executable web research tool', async () => {
@@ -863,7 +790,7 @@ describe('AgentManager comparison research flow', () => {
     expect(toolResultIdsSeen).toEqual(['auto:web-grounding']);
   });
 
-  it('rewrites exact-model claims that cite failed web research as fact evidence', async () => {
+  it('rejects exact-model claims that cite failed web research as fact evidence', async () => {
     researchProductComparisonFacts.mockRejectedValueOnce(
       new Error('product_comparison_research did not return a JSON object')
     );
@@ -922,9 +849,6 @@ describe('AgentManager comparison research flow', () => {
           leadAction: 'none',
           riskFlags: ['web_research_failed_for_named_model']
         };
-      },
-      async reviewAnswer() {
-        throw new Error('mechanical review should catch failed tool fact evidence before LLM review');
       }
     };
 
@@ -937,41 +861,12 @@ describe('AgentManager comparison research flow', () => {
       withStrictToolFixtures(badGroundingModel)
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?'
-    });
-
-    expect(payload.answer).toContain('SUNREKA G7000iS остаётся предварительным вариантом');
-    expect(payload.answer).toContain('Внешняя проверка в этом ходе не завершилась');
-    expect(payload.answer).not.toContain('техническому специалисту');
-    expect(payload.answer).not.toContain('написать или позвонить');
-    expect(payload.leadRequested).toBe(false);
-    expect(payload.answer).not.toContain('запускается ручным стартером');
-    expect(payload.answer).not.toContain('Кнопочного запуска для этой модели в данных не вижу');
-    expect(payload.answer).not.toContain('есть в каталоге');
-    const metadata = payload.metadata as {
-      answerContract?: { factsUsed?: unknown[]; leadAction?: string };
-      preSendReview?: { verdict?: string; issues?: Array<{ code?: string }> };
-      toolResults?: Array<{ status?: string; warnings?: string[] }>;
-    };
-    expect(metadata.toolResults?.[0]).toMatchObject({
-      status: 'error',
-      warnings: expect.arrayContaining([
-        'tool_execution_error',
-        'attempts:1',
-        expect.stringContaining('duration_ms:')
-      ])
-    });
-    expect(metadata.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'failed_tool_result_used_as_fact_source' })
-      ])
-    });
-    expect(metadata.answerContract?.factsUsed).toEqual([]);
-    expect(metadata.answerContract?.leadAction).toBe('none');
+    })).rejects.toThrow('failed_tool_result_used_as_fact_source');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
   it('preserves a useful catalog-grounded comparison when a failed web result is referenced only as status', async () => {
@@ -994,9 +889,6 @@ describe('AgentManager comparison research flow', () => {
           leadAction: 'none',
           riskFlags: []
         };
-      },
-      async reviewAnswer() {
-        return { verdict: 'pass', issues: [] };
       }
     };
     const conversations = new FakeConversations();
@@ -1019,7 +911,7 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.metadata?.answerContract).toMatchObject({
       toolResultIds: ['catalog:test', 'web:test']
     });
-    expect(payload.metadata?.preSendReview).toEqual({ verdict: 'pass', issues: [] });
+    expect(payload.metadata?.preSendValidation).toEqual({ verdict: 'pass', issues: [] });
   });
 
   it('answers exact external facts for a named model absent from catalog and exposes nearby catalog models', async () => {
@@ -1157,6 +1049,31 @@ describe('AgentManager comparison research flow', () => {
             evidence: 'котел Baxi 24 is a load device for generator sizing',
             source: 'llm_state_delta',
             status: 'active'
+          }, {
+            eventType: 'fact.confirmed',
+            scope: 'dialogue',
+            payload: {
+              factKey: 'generator_load_scenario',
+              value: {
+                loads: [{
+                  kind: 'boiler',
+                  name: 'Baxi 24 boiler',
+                  runningKw: 0.15,
+                  startingKw: 0.2
+                }, {
+                  kind: 'pump',
+                  name: 'deep well pump',
+                  runningKw: 1.1,
+                  startingKw: 3.3
+                }],
+                simultaneousStarting: true
+              },
+              role: 'hard_requirement',
+              confidence: 1
+            },
+            evidence: 'The Baxi boiler and 1.1 kW pump define the executable load scenario.',
+            source: 'llm_state_delta',
+            status: 'active'
           }]
         };
       },
@@ -1206,7 +1123,8 @@ describe('AgentManager comparison research flow', () => {
               notes: 'Baxi 24 is only a load device'
             },
             rationale: 'load sizing for generator',
-            required: true
+            required: true,
+            coversRequirementIds: ['baxi-load-scenario']
           }],
           productMentions: [{
             name: 'Baxi 24',
@@ -1214,6 +1132,35 @@ describe('AgentManager comparison research flow', () => {
             productClass: 'boiler',
             evidence: 'котел Baxi 24 is one of the loads connected to the generator'
           }],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            selectionGoal: 'preliminary_fit',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 4,
+            powerSource: 'fuel',
+            phase: 'single_phase',
+            requirements: [{
+              id: 'baxi-load-scenario',
+              kind: 'generator_load_scenario',
+              value: true,
+              unit: null,
+              relation: 'must_have',
+              role: 'hard_constraint',
+              strictness: 'strict',
+              evidence: 'Baxi boiler and pump load scenario',
+              verification: {
+                mode: 'typed_tool',
+                toolRequestId: 'calc:baxi-load',
+                tool: 'calculator.generatorLoad',
+                verifier: 'generator_load_profile',
+                bindAs: 'nominal_power_min_kw'
+              }
+            }],
+            rationale: 'calculate the declared load without treating Baxi as a catalog target'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: []
         };
@@ -1450,11 +1397,11 @@ describe('AgentManager comparison research flow', () => {
     conversations.messages = [message('Firman RD2910E - заводится с ключа или с кнопки?')];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new SuffixCatalogProducts() as never, {} as never, withStrictToolFixtures(exactFactModel));
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Firman RD2910E - заводится с ключа или с кнопки?'
-    });
+    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
 
     expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
       targetProductNames: ['FIRMAN RD2910E'],
@@ -1463,19 +1410,10 @@ describe('AgentManager comparison research flow', () => {
         expect.objectContaining({ name: 'FIRMAN RD2910E1 generator 2 kW' })
       ])
     }));
-    const metadata = payload.metadata as { toolResults?: Array<{ payload?: { catalogPresence?: unknown[] }; warnings?: string[] }> };
-    expect(metadata.toolResults?.[0]?.payload?.catalogPresence).toEqual([{
-      productName: 'FIRMAN RD2910E',
-      status: 'unknown',
-      exactProductIds: []
-    }]);
-    expect(metadata.toolResults?.[0]?.warnings).not.toContain('exact_catalog_product_absent:FIRMAN RD2910E');
-    expect(payload.answer).toContain('START');
-    expect(payload.answer).not.toContain('в каталоге нет');
-    expect(payload.productCards).toEqual([]);
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
-  it('rewrites exact-model answers to checked guidance when start-control coverage is ambiguous', async () => {
+  it('blocks an exact-model answer that diverges from checked ambiguous guidance', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
       facts: [{
@@ -1565,27 +1503,15 @@ describe('AgentManager comparison research flow', () => {
     conversations.messages = [message('Firman RD3910E есть? Он с ключа или с кнопки?')];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(overconfidentModel));
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Firman RD3910E есть? Он с ключа или с кнопки?'
-    });
-
-    expect(payload.answer).toContain('ключ/замок и кнопка в источниках не подтверждены');
-    expect(payload.answer).not.toContain('запускается ключом/замком');
-    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
-    expect(payload.answer).not.toContain('В каталоге БАКАУТ');
-    expect(payload.answer).not.toContain('По деталям запуска');
-    expect(payload.answer).not.toContain('Из близких вариантов');
-    expect(payload.metadata?.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
-      ])
-    });
+    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
-  it('rewrites exact-model answers to checked catalog description guidance when the answer omits it', async () => {
+  it('blocks an exact-model answer that omits checked catalog description guidance', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: false,
       facts: [{
@@ -1681,26 +1607,15 @@ describe('AgentManager comparison research flow', () => {
     conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(omittingModel));
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Firman RD3910E - заводится с ключа или с кнопки?'
-    });
-
-    expect(payload.answer).toContain('ключа электростартера');
-    expect(payload.answer).not.toContain('По ключу или кнопке точной строки нет');
-    expect(payload.answer).not.toContain('У нас эта модель есть в каталоге.');
-    expect(payload.answer).not.toContain('В каталоге БАКАУТ');
-    expect(payload.answer).not.toContain('По деталям запуска');
-    expect(payload.metadata?.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
-      ])
-    });
+    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
-  it('keeps confirmed manual starter facts and avoids duplicate start-control uncertainty', async () => {
+  it('blocks a primary answer that drops confirmed starter guidance', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: false,
       facts: [{
@@ -1811,22 +1726,15 @@ describe('AgentManager comparison research flow', () => {
     conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(modelThatDropsCoverageFacts));
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Firman RD3910E - заводится с ключа или с кнопки?'
-    });
-
-    expect(payload.answer).toContain('RD3910E заводится с ключа, через электростартер');
-    expect(payload.answer).toContain('Ручной стартер тоже есть');
-    expect(payload.answer).toContain('Кнопочного запуска тут не вижу');
-    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
-    expect(payload.answer.split('Кнопоч').length - 1).toBe(1);
-    expect(payload.answer).not.toContain('У нас эта модель есть в каталоге.');
-    expect(payload.answer).not.toContain('У нас Firman RD3910E есть в каталоге');
+    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
-  it('does not duplicate start-control uncertainty when checked guidance already says it', async () => {
+  it('blocks an unsupported key-start answer when checked guidance remains uncertain', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
       facts: [{
@@ -1930,16 +1838,12 @@ describe('AgentManager comparison research flow', () => {
     conversations.messages = [message('Firman RD4910E заводится с ключа или с кнопки?')];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, withStrictToolFixtures(badModel));
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Firman RD4910E заводится с ключа или с кнопки?'
-    });
-
-    expect(payload.answer).toContain('Электростартер есть, ручной запуск тоже есть');
-    expect(payload.answer).toContain('источники не подтвердили');
-    expect(payload.answer).not.toContain('Чем именно включается электростартер');
-    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
+    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
   it('does not append uncertainty for a start-control label that later coverage confirms', async () => {
@@ -2052,21 +1956,12 @@ describe('AgentManager comparison research flow', () => {
     conversations.messages = [message('SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?')];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(badModel));
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?'
-    });
-
-    expect(payload.answer).toContain('Кнопочный запуск подтвержден. Ручной запуск тоже есть.');
-    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
-    expect(payload.answer).not.toContain('есть в каталоге');
-    expect(payload.metadata?.preSendReview).toMatchObject({
-      verdict: 'rewrite_required',
-      issues: expect.arrayContaining([
-        expect.objectContaining({ code: 'research_guidance_uncertainty_safe_rewrite' })
-      ])
-    });
+    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
   it('saves high-confidence exact web facts into reusable product memory', async () => {
@@ -2326,7 +2221,7 @@ describe('AgentManager comparison research flow', () => {
     expect(fakeProducts.usedVerifiedFactIds).not.toContain('legacy-name-only-button');
   });
 
-  it('repairs follow-up plans that reuse facts from a different exact model', async () => {
+  it('repairs stale follow-up research but blocks a writer that still reuses the old model fact', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
       facts: [{
@@ -2427,26 +2322,16 @@ describe('AgentManager comparison research flow', () => {
     ];
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(badFollowUpPlanner));
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'А Firman RD3910E у вас есть? Там запуск так же через ключ/выключатель, а не кнопкой?'
-    });
+    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
 
     expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
       targetProductNames: ['FIRMAN RD3910E']
     }));
-    expect(payload.answer).toContain('Запуск с ключа/через выключатель точно подтвердить не могу');
-    expect(payload.answer).toContain('кнопка по точным источникам не подтверждена');
-    expect(payload.answer).not.toContain('Кнопочный запуск в данных не вижу');
-    expect(payload.answer).not.toContain('тоже запускается с ключа');
-    expect(payload.answer).toContain('У нас эта модель есть в каталоге.');
-    expect(payload.answer).not.toContain('В каталоге БАКАУТ');
-    expect(payload.answer).not.toContain('По деталям запуска');
-    expect(payload.metadata?.intentContract).toMatchObject({
-      requiresTools: true,
-      riskFlags: expect.arrayContaining(['planner_repaired_exact_model_evidence'])
-    });
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
   it('routes complete exact catalog details through conditional research without using external web', async () => {
@@ -2638,9 +2523,6 @@ describe('AgentManager comparison research flow', () => {
             rationale: 'both exact catalog products have the comparison facts needed for a preliminary recommendation'
           }
         };
-      },
-      async reviewAnswer() {
-        return { verdict: 'pass', issues: [] };
       }
     };
 
@@ -2822,9 +2704,6 @@ describe('AgentManager comparison research flow', () => {
             rationale: 'the unresolved fact is explicit and does not become a negative compatibility claim'
           }
         };
-      },
-      async reviewAnswer() {
-        return { verdict: 'pass', issues: [] };
       }
     };
     const conversations = new FakeConversations();

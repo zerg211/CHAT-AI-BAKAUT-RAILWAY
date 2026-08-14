@@ -1,4 +1,4 @@
-export type PolicyRuleApplyTarget = 'planner' | 'answer' | 'reviewer' | 'gate';
+export type PolicyRuleApplyTarget = 'planner' | 'answer' | 'gate';
 export type PolicyRiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type PolicySeverity = 'may' | 'should' | 'must' | 'must_not';
 export type PolicyRuleStatus = 'active' | 'draft' | 'deprecated';

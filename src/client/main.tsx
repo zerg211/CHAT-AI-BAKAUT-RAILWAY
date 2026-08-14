@@ -102,10 +102,6 @@ function localAdminBaseUrl() {
   return isApiOrigin ? '' : 'http://127.0.0.1:3010';
 }
 
-function shouldShowAiDiagnostics() {
-  return isLoopbackHost(window.location.hostname);
-}
-
 function shortDiagnosticReason(reason: unknown) {
   const value = String(reason ?? '').trim();
   if (!value) return 'unknown';
@@ -173,22 +169,6 @@ function AgentTracePanel({ traces }: { traces: AdminAgentTrace[] }) {
       </div>
     </section>
   );
-}
-
-function aiFallbackLabels(metadata?: ChatResponsePayload['metadata']) {
-  const diagnostics = metadata?.aiDiagnostics;
-  const labels: string[] = [];
-  if (diagnostics?.needExtractionFallback?.used) {
-    labels.push(`need: ${shortDiagnosticReason(diagnostics.needExtractionFallback.reason)}`);
-  }
-  if (diagnostics?.turnPlanningFallback?.used) {
-    labels.push(`planner: ${shortDiagnosticReason(diagnostics.turnPlanningFallback.reason)}`);
-  }
-  const answerFallback = diagnostics?.answerGenerationFallback ?? metadata?.answerGenerationFallback;
-  if (answerFallback?.used) {
-    labels.push(`answer: ${shortDiagnosticReason(answerFallback.reason)}`);
-  }
-  return labels;
 }
 
 type AdminDiagnosticFlag = {
@@ -281,17 +261,6 @@ function adminRuntimeFlags(metadata?: ChatResponsePayload['metadata']): AdminDia
     flags.push({ label: `warnings: ${warningCount}`, warn: true });
   }
   return flags;
-}
-
-function AiDiagnosticsBadge({ metadata }: { metadata?: ChatResponsePayload['metadata'] }) {
-  const labels = aiFallbackLabels(metadata);
-  if (!shouldShowAiDiagnostics() || !labels.length) return null;
-  return (
-    <div className="ai-diagnostics" title="Developer-only diagnostic. Hidden from normal production visitors.">
-      <strong>AI fallback</strong>
-      <span>{labels.join(' | ')}</span>
-    </div>
-  );
 }
 
 const ADMIN_SOURCES: Record<AdminSource, { label: string; baseUrl: string; storageKey: string; hint: string }> = {
@@ -1122,9 +1091,8 @@ function AdminApp() {
                     cardDisplay?: CardDisplayOptions;
                     usedWebSearch?: boolean;
                     feedback?: { rating?: FeedbackRating; createdAt?: string };
-                    cardSelection?: { fallbackSuppressed?: boolean; fallbackReason?: string; rankedCount?: number; selectedRejectedCount?: number };
+                    cardSelection?: { readinessBlocked?: boolean; readinessReason?: string; rankedCount?: number; selectedRejectedCount?: number };
                   };
-                  const answerFallback = metadata.aiDiagnostics?.answerGenerationFallback ?? metadata.answerGenerationFallback;
                   const runtimeFlags = adminRuntimeFlags(metadata);
                   return (
                     <article className={`admin-message ${message.role}`} key={message.id}>
@@ -1136,12 +1104,9 @@ function AdminApp() {
                       {message.role === 'assistant' ? (
                         <div className="admin-message-flags">
                           <span>web: {metadata.usedWebSearch ? 'да' : 'нет'}</span>
-                          <span>fallback: {metadata.cardSelection?.fallbackSuppressed ? 'сработал стоп' : 'нет'}</span>
-                          {answerFallback?.used ? <span className="warn">answer fallback: {shortDiagnosticReason(answerFallback.reason)}</span> : null}
-                          {metadata.aiDiagnostics?.needExtractionFallback?.used ? <span className="warn">need fallback: {shortDiagnosticReason(metadata.aiDiagnostics.needExtractionFallback.reason)}</span> : null}
-                          {metadata.aiDiagnostics?.turnPlanningFallback?.used ? <span className="warn">planner fallback: {shortDiagnosticReason(metadata.aiDiagnostics.turnPlanningFallback.reason)}</span> : null}
+                          <span>readiness: {metadata.cardSelection?.readinessBlocked ? 'blocked' : 'ready'}</span>
                           {metadata.feedback?.rating ? <span>feedback: {metadata.feedback.rating}</span> : null}
-                          {metadata.cardSelection?.fallbackReason ? <span>{metadata.cardSelection.fallbackReason}</span> : null}
+                          {metadata.cardSelection?.readinessReason ? <span>{metadata.cardSelection.readinessReason}</span> : null}
                           {typeof metadata.cardSelection?.rankedCount === 'number' ? <span>ranked: {metadata.cardSelection.rankedCount}</span> : null}
                           {runtimeFlags.map((flag) => (
                             <span className={flag.warn ? 'warn' : undefined} key={flag.label}>
@@ -1606,7 +1571,6 @@ function App() {
                 </span>
               ) : null)}
             </div>
-            {message.role === 'assistant' ? <AiDiagnosticsBadge metadata={message.metadata} /> : null}
             {message.role === 'user' ? (
               <div className="message-actions">
                 <button type="button" onClick={() => editMessage(message.content)} disabled={busy || chatInteractionDisabled}>

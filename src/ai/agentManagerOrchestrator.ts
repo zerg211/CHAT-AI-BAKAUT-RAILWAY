@@ -60,6 +60,7 @@ import { getAgentManagerRuntimeDecision } from './agentManagerRuntime.js';
 import { containsExplicitContactName, extractContact, hasLeadContact } from './contactExtraction.js';
 import {
   answerRequestsContactData,
+  answerRequestsPhoneOrEmail,
   leadCaptureMissingContact,
   leadCaptureMissingName,
   leadCaptureRepairText,
@@ -138,10 +139,6 @@ import {
   verifiedFactsResearchResult
 } from './verifiedFactMemory.js';
 import {
-  revalidateReviewerRewrite,
-  type ReviewerRewriteNumericClaimBinding
-} from './agentManagerRevisedAnswerGuard.js';
-import {
   authoritativeRequirementProofStatus,
   buildRequirementProofs,
   combinedRequirementProofStatus,
@@ -172,7 +169,6 @@ export interface AgentManagerModel {
   proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta>;
   planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract>;
   composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract>;
-  reviewAnswer(input: AgentManagerReviewInput): Promise<PreSendReview>;
 }
 
 export interface AgentManagerModelInput {
@@ -227,14 +223,6 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
   productEvidenceRoles?: AnswerProductEvidenceRole[];
   requiredResponseClauses?: RequiredResponseClause[];
   semanticDecisionValidated?: boolean;
-  repairContext?: {
-    priorReviewIssues: Array<{
-      code: string;
-      severity: PreSendReview['issues'][number]['severity'];
-      message: string;
-      evidence: string;
-    }>;
-  };
 }
 
 export interface AnswerProductRejectionReason {
@@ -785,6 +773,14 @@ function executableSemanticLoadIdentity(value: unknown) {
   return executable ? semanticLoadIdentity(executable) : null;
 }
 
+function semanticLoadDeclaresPower(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return [item.runningKw, item.startingKw].some((candidate) =>
+    typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0
+  );
+}
+
 export function validateAgentSemanticDecision(input: {
   decision: AgentSemanticDecision;
   previousLedgerState: ReducedDialogueLedgerState;
@@ -799,21 +795,6 @@ export function validateAgentSemanticDecision(input: {
   });
   const ledgerState = reduceDialogueLedger(events, input.previousLedgerState);
   const issues: string[] = [];
-  const explicitPowerCalculator = input.decision.intent.toolRequests.find((request) =>
-    request.tool === 'calculator.generatorLoad'
-  );
-  if (input.userMessage && explicitPowerCalculator) {
-    const calculatorPowers = (explicitPowerCalculator.args.loads ?? []).flatMap((load) =>
-      typeof load.runningKw === 'number' && Number.isFinite(load.runningKw)
-        ? [load.runningKw]
-        : []
-    );
-    for (const explicitPowerKw of scanExplicitPowerKw(input.userMessage)) {
-      if (!calculatorPowers.some((value) => Math.abs(value - explicitPowerKw) < 0.0001)) {
-        issues.push(`explicit_power_fact_missing:${explicitPowerKw}kw`);
-      }
-    }
-  }
   const activeNeed = [...Object.values(ledgerState.needsById)]
     .reverse()
     .find((need) => need.status === 'open' || need.status === 'selected');
@@ -874,7 +855,11 @@ export function validateAgentSemanticDecision(input: {
         const identity = semanticLoadIdentity(load);
         const executableIdentity = executableSemanticLoadIdentity(load);
         if (identity && !actualLoadIds.has(identity)) issues.push(`generator_load_scenario_missing_load:${identity}`);
-        if (identity && (!executableIdentity || !executableLoadIds.has(executableIdentity))) {
+        if (
+          identity &&
+          semanticLoadDeclaresPower(load) &&
+          (!executableIdentity || !executableLoadIds.has(executableIdentity))
+        ) {
           issues.push(`generator_load_scenario_unexecutable_load:${identity}`);
         }
       }
@@ -1578,7 +1563,7 @@ function durableLeadOutboxStatus(row: unknown) {
     : null;
 }
 
-function leadActionAfterReview(input: {
+function leadActionAfterValidation(input: {
   answer: AnswerContract;
   finalText: string;
   review: PreSendReview;
@@ -1736,24 +1721,6 @@ function toolRequestEvidenceText(request: ToolRequest) {
     request.args.notes,
     ...requestStringArray(request.args.productNames)
   ].filter(Boolean).join(' ');
-}
-
-function compactReviewerProductContext(product: Product) {
-  return {
-    id: product.id,
-    name: product.name,
-    brand: product.brand,
-    category: product.category,
-    price: product.price,
-    currency: product.currency,
-    specs: product.specs,
-    description: (compactProductDescription(product.description) ?? '').slice(0, 700)
-  };
-}
-
-export function isPreSendReviewStructuredOutputError(error: unknown) {
-  const message = safeError(error).message?.toLocaleLowerCase('en-US') ?? '';
-  return message.includes('agent_pre_send_review') && message.includes('json');
 }
 
 export function exactModelNamesFromUserMessage(userMessage: string) {
@@ -1939,21 +1906,21 @@ export class RecoveryAttemptUnavailableError extends Error {
   }
 }
 
-class AnswerReviewBlockedError extends Error {
-  readonly code = 'answer_contract_blocked_by_review';
+class AnswerValidationBlockedError extends Error {
+  readonly code = 'answer_contract_blocked_by_validation';
 
   constructor(readonly issueCodes: string[]) {
     super(`Agent manager answer blocked: ${issueCodes.join(', ')}`);
-    this.name = 'AnswerReviewBlockedError';
+    this.name = 'AnswerValidationBlockedError';
   }
 }
 
 const RECOVERY_LEASE_RETRY_INTERVAL_MS = 500;
 export const RECOVERY_LEASE_WAIT_LIMIT_MS = DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs;
-const TURN_TERMINAL_RESERVE_MS = 10_000;
-const WEB_COMPOSE_REVIEW_RESERVE_MS = 30_000;
+const TURN_COMMIT_RESERVE_MS = 5_000;
+const WEB_ANSWER_RESERVE_MS = 12_000;
 const WEB_MIN_EXECUTION_MS = 6_000;
-const CATALOG_COMPOSE_TERMINAL_RESERVE_MS = 12_000;
+const CATALOG_ANSWER_RESERVE_MS = 8_000;
 
 export function effectiveAgentToolTimeoutMs(input: {
   tool: ToolRequest['tool'];
@@ -1961,9 +1928,9 @@ export function effectiveAgentToolTimeoutMs(input: {
   remainingWallTimeMs: number;
 }) {
   const reserveMs = input.tool === 'web.researchProductFacts'
-    ? WEB_COMPOSE_REVIEW_RESERVE_MS
+    ? WEB_ANSWER_RESERVE_MS
     : input.tool === 'catalog.search' || input.tool === 'catalog.getProductDetails'
-      ? CATALOG_COMPOSE_TERMINAL_RESERVE_MS
+      ? CATALOG_ANSWER_RESERVE_MS
       : 0;
   return Math.min(input.configuredTimeoutMs, Math.max(1, input.remainingWallTimeMs - reserveMs));
 }
@@ -2067,24 +2034,6 @@ function semanticRecoveryOutputTokenCap(rows: unknown[], checkpoint: string) {
     payload?.retryReason !== 'output_limit_exhausted'
   ) return undefined;
   return Math.ceil(config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS * 1.5);
-}
-
-const maxRecoveryReviewIssues = 12;
-const maxRecoveryReviewMessageChars = 500;
-
-function failedReviewRepairContext(rows: unknown[]): AgentManagerAnswerInput['repairContext'] | undefined {
-  const row = latestCheckpoint(rows, 'review_completed');
-  if (row?.status !== 'failed') return undefined;
-  const parsed = PreSendReviewSchema.safeParse(row.payload);
-  if (!parsed.success || !parsed.data.issues.length) return undefined;
-  return {
-    priorReviewIssues: parsed.data.issues.slice(0, maxRecoveryReviewIssues).map((issue) => ({
-      code: issue.code,
-      severity: issue.severity,
-      message: issue.message.slice(0, maxRecoveryReviewMessageChars),
-      evidence: issue.evidence.slice(0, maxRecoveryReviewMessageChars)
-    }))
-  };
 }
 
 function parsePersistedToolArtifact(value: unknown): ToolResult {
@@ -2989,22 +2938,6 @@ function shortlistStructuredSelectionProducts(input: {
   };
 }
 
-function structuredCompromiseProductIds(toolResults: ToolResult[]) {
-  const ids = new Set<string>();
-  for (const result of toolResults) {
-    if (result.tool !== 'catalog.search' || result.status !== 'ok') continue;
-    const retrieval = (result.payload as {
-      retrieval?: { candidateTiers?: Array<{ productId?: unknown; tier?: unknown }> };
-    }).retrieval;
-    for (const candidate of retrieval?.candidateTiers ?? []) {
-      if (candidate.tier === 'compromise' && typeof candidate.productId === 'string') {
-        ids.add(candidate.productId);
-      }
-    }
-  }
-  return ids;
-}
-
 function structuredCandidateTierEvidence(toolResults: ToolResult[]) {
   return toolResults.flatMap((result) => {
     if (result.tool !== 'catalog.search') return [];
@@ -3013,7 +2946,7 @@ function structuredCandidateTierEvidence(toolResults: ToolResult[]) {
     }).retrieval?.candidateTiers ?? [];
     return tiers.flatMap((candidate) =>
       typeof candidate.productId === 'string' &&
-      (candidate.tier === 'exact_match' || candidate.tier === 'preliminary_match' || candidate.tier === 'compromise' || candidate.tier === 'rejected')
+      (candidate.tier === 'exact_match' || candidate.tier === 'preliminary_match' || candidate.tier === 'rejected')
         ? [{
             productId: candidate.productId,
             tier: candidate.tier,
@@ -3077,9 +3010,6 @@ export function filterProductsByStructuredSelectionPolicy(input: {
   const explicitPowerMin = hardSelectionNumber(input.intent, ['nominal_power_min_kw', 'power_min_kw']);
   const powerMax = hardSelectionNumber(input.intent, ['nominal_power_max_kw', 'power_max_kw']);
   const policy = input.intent.selectionPolicy;
-  const compromiseProductIds = structuredCompromiseProductIds(input.toolResults);
-  const allowCompromises = policy.alternativePolicy === 'allow_adjacent_with_explanation' ||
-    policy.alternativePolicy === 'open_to_alternatives';
   const requirementProofs = buildRequirementProofs({
     intent: input.intent,
     products: input.products,
@@ -3123,7 +3053,6 @@ export function filterProductsByStructuredSelectionPolicy(input: {
   );
   const finalFit = (policy.selectionGoal ?? 'final_fit') === 'final_fit';
   const products = input.products.filter((product) => {
-    const acceptedCompromise = allowCompromises && compromiseProductIds.has(product.id);
     const strictProductClass = policy.alternativePolicy === 'exact_only' ||
       policy.alternativePolicy === 'same_class_only';
     if (strictProductClass && canonicalClass !== 'unknown' && !productMatchesIntent(product, canonicalClass)) return false;
@@ -3141,16 +3070,15 @@ export function filterProductsByStructuredSelectionPolicy(input: {
       if (proofStatus === 'violated') return false;
       if (finalFit && proofStatus !== 'satisfied') return false;
     }
-    if (!acceptedCompromise && budgetMax !== undefined && !priceWithinBudget(product, budgetMax)) return false;
+    if (budgetMax !== undefined && !priceWithinBudget(product, budgetMax)) return false;
     const weightProofStatus = resolvedEligibilityStatusForStrictKinds({
       proofs: requirementProofs,
       productId: product.id,
       intent: input.intent,
       kinds: ['weight_min_kg', 'weight_max_kg']
     });
-    if (!acceptedCompromise && weightProofStatus === 'violated') return false;
+    if (weightProofStatus === 'violated') return false;
     if (
-      !acceptedCompromise &&
       weightProofStatus !== 'satisfied' &&
       (weightMin !== undefined || weightMax !== undefined)
     ) {
@@ -3168,9 +3096,8 @@ export function filterProductsByStructuredSelectionPolicy(input: {
       intent: input.intent,
       kinds: ['nominal_power_min_kw', 'power_min_kw', 'nominal_power_max_kw', 'power_max_kw']
     });
-    if (!acceptedCompromise && powerProofStatus === 'violated') return false;
+    if (powerProofStatus === 'violated') return false;
     if (
-      !acceptedCompromise &&
       powerProofStatus !== 'satisfied' &&
       (explicitPowerMin !== undefined || powerMax !== undefined)
     ) {
@@ -3288,94 +3215,6 @@ function selectionRequirementNumericValue(requirement: SelectionRequirement) {
   return Number.isFinite(value) ? value : undefined;
 }
 
-function numericDimensionForSelectionRequirement(kind: string) {
-  if (kind === 'budget_max_rub' || kind === 'price_max_rub') return 'price_rub';
-  if (kind === 'weight_min_kg' || kind === 'weight_max_kg') return 'mass_kg';
-  if (
-    kind === 'nominal_power_min_kw' ||
-    kind === 'nominal_power_max_kw' ||
-    kind === 'power_min_kw' ||
-    kind === 'power_max_kw'
-  ) return 'power_kw';
-  if (kind === 'voltage_v') return 'voltage_v';
-  return null;
-}
-
-function parsedReviewerRewriteNumericClaimBinding(value: unknown): Omit<ReviewerRewriteNumericClaimBinding, 'verifiedSourceQuote'> & {
-  verifiedSourceQuote?: string;
-} | null {
-  if (!value || typeof value !== 'object') return null;
-  const candidate = value as Partial<ReviewerRewriteNumericClaimBinding>;
-  if (
-    typeof candidate.dimension !== 'string' ||
-    !candidate.dimension.trim() ||
-    typeof candidate.value !== 'number' ||
-    !Number.isFinite(candidate.value) ||
-    (candidate.qualifier !== undefined && candidate.qualifier !== 'nominal' && candidate.qualifier !== 'maximum') ||
-    (candidate.semanticRole !== 'buyer_requirement_threshold' && candidate.semanticRole !== 'calculator_requirement_threshold') ||
-    typeof candidate.sourceId !== 'string' ||
-    !candidate.sourceId.trim()
-  ) return null;
-  return {
-    dimension: candidate.dimension,
-    value: candidate.value,
-    ...(candidate.qualifier ? { qualifier: candidate.qualifier } : {}),
-    semanticRole: candidate.semanticRole,
-    sourceId: candidate.sourceId,
-    ...(typeof candidate.verifiedSourceQuote === 'string'
-      ? { verifiedSourceQuote: candidate.verifiedSourceQuote }
-      : {})
-  };
-}
-
-function reviewerRewriteNumericClaimBindings(input: {
-  answer: AnswerContract;
-  intent: AgentIntentContract;
-  toolResults: ToolResult[];
-  userMessage: string;
-}) {
-  const requirementsById = new Map(
-    (input.intent.selectionPolicy?.requirements ?? []).map((requirement) => [requirement.id, requirement])
-  );
-  return input.answer.factsUsed.flatMap((fact) => {
-    if (!fact.value || typeof fact.value !== 'object') return [];
-    const rawValue = fact.value as { numericClaimBinding?: unknown; numericClaimBindings?: unknown };
-    const rawBindings = [
-      rawValue.numericClaimBinding,
-      ...(Array.isArray(rawValue.numericClaimBindings) ? rawValue.numericClaimBindings : [])
-    ];
-    return rawBindings.flatMap((rawBinding) => {
-      const binding = parsedReviewerRewriteNumericClaimBinding(rawBinding);
-      if (!binding) return [];
-      if (binding.semanticRole === 'buyer_requirement_threshold') {
-        const requirement = requirementsById.get(binding.sourceId);
-        const requirementValue = requirement ? selectionRequirementNumericValue(requirement) : undefined;
-        const dimension = requirement ? numericDimensionForSelectionRequirement(requirement.kind) : null;
-        const verifiedSourceQuote = requirement?.evidence?.trim() ?? '';
-        if (
-          !requirement ||
-          requirement.role === 'mentioned_only' ||
-          requirementValue === undefined ||
-          dimension !== binding.dimension ||
-          Math.abs(requirementValue - binding.value) > 1e-9 ||
-          !verifiedSourceQuote ||
-          !input.userMessage.includes(verifiedSourceQuote) ||
-          !modelTextTokens(verifiedSourceQuote).some(tokenHasLetter)
-        ) return [];
-        return [{
-          ...binding,
-          verifiedSourceQuote
-        }];
-      }
-      // Calculator thresholds stay fail-closed when a product is named in the
-      // same sentence: unlike a buyer quote, the calculator result has no
-      // source phrase in the current user turn that can safely authorize a
-      // mixed product/threshold sentence.
-      return [];
-    });
-  });
-}
-
 function structuredSelectionRejectionReasons(
   product: Product,
   intent: AgentIntentContract,
@@ -3488,317 +3327,6 @@ function requiredResponseClausesForRejectedComparisonReferences(input: {
     instruction: `Compare these exact products using their factual evidence, but explicitly state that each is rejected by the grounded hard constraint and must not be selected, recommended as fitting, or emitted as a card: ${JSON.stringify(rejected)}`,
     catalogProductNames: rejected.map((item) => item.name)
   }];
-}
-
-type TerminalCatalogRecovery = {
-  products: Product[];
-  cards: ProductCard[];
-  catalogRequestIds: string[];
-  unfinishedVerification: string[];
-  technicalHandoffEligible: boolean;
-  warnings: string[];
-};
-
-export function humanizeTerminalVerificationLabel(value: string) {
-  const normalized = value.trim().toLowerCase();
-  const compact = compactModelText(normalized);
-  const labels: Record<string, string> = {
-    nominal_power_kw: 'номинальная мощность',
-    price_rub: 'текущая цена',
-    auto_start_required: 'электростартер',
-    electric_start_required: 'электростартер',
-    electric_start: 'электростартер',
-    'electric starter': 'электростартер',
-    'starting system': 'электростартер',
-    phase: 'число фаз',
-    fuel_type: 'тип топлива',
-    'starting power kw': 'пусковая мощность',
-    max_power_kw: 'максимальная мощность',
-    'current buyer question': 'применимость к текущей задаче',
-    'travel type': 'тип хода',
-    plate_type: 'тип виброплиты',
-    'plate type': 'тип виброплиты',
-    noise_db: 'официальный уровень шума в дБ',
-    'noise db': 'официальный уровень шума в дБ',
-    noise_level_db: 'официальный уровень шума в дБ',
-    'noise level db': 'официальный уровень шума в дБ',
-    voltage_v: 'напряжение',
-    weight_kg: 'масса'
-  };
-  if (labels[normalized]) return labels[normalized];
-  if (compact === 'startingpowerkw') return 'пусковая мощность';
-  if (compact === 'maxpowerkw') return 'максимальная мощность';
-  if (compact === 'electricstarter') return 'электростартер';
-  if (compact === 'electricstart') return 'электростартер';
-  if (compact === 'startingsystem') return 'электростартер';
-  return value.trim().replaceAll('_', ' ');
-}
-
-function terminalVerificationFallbackSlots(
-  request: ToolRequest,
-  requirementsById: Map<string, SelectionRequirement>
-) {
-  const attributes = (request.args.comparisonAttributes ?? [])
-    .map((attribute) => attribute.trim())
-    .filter(Boolean);
-  if (attributes.length) return attributes;
-  return (request.coversRequirementIds ?? []).flatMap((requirementId) => {
-    const requirement = requirementsById.get(requirementId);
-    return requirement?.evidence?.trim() ? [requirement.evidence.trim()] : [];
-  });
-}
-
-function terminalUnfinishedWebVerification(input: {
-  request: ToolRequest;
-  result: ToolResult | undefined;
-  requirementsById: Map<string, SelectionRequirement>;
-}) {
-  const fallbackSlots = terminalVerificationFallbackSlots(input.request, input.requirementsById);
-  if (!input.result || input.result.status !== 'ok') return fallbackSlots;
-  const payload = input.result.payload && typeof input.result.payload === 'object'
-    ? input.result.payload as Record<string, unknown>
-    : {};
-  const guidance = payload.answerGuidance && typeof payload.answerGuidance === 'object'
-    ? payload.answerGuidance as Record<string, unknown>
-    : {};
-  const coverage = Array.isArray(guidance.coverage)
-    ? guidance.coverage.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-    : [];
-  const unresolvedCoverage = coverage
-    .filter((item) => item.status !== 'confirmed')
-    .map((item) => typeof item.attribute === 'string' ? item.attribute.trim() : '')
-    .filter(Boolean);
-  const warnings = Array.isArray(payload.warnings)
-    ? payload.warnings.filter((warning): warning is string => typeof warning === 'string')
-    : [];
-  const unresolvedConflicts = warnings.includes('source_conflict_adjudicated')
-    ? []
-    : Array.isArray(payload.conflicts)
-      ? payload.conflicts.flatMap((item) => {
-          if (!item || typeof item !== 'object') return [];
-          const attribute = (item as Record<string, unknown>).attribute;
-          return typeof attribute === 'string' && attribute.trim() ? [attribute.trim()] : [];
-        })
-      : [];
-  const explicitUnconfirmed = Array.isArray(payload.unconfirmedFacts)
-    ? payload.unconfirmedFacts.flatMap((item) => {
-        if (typeof item === 'string' && item.trim()) return [item.trim()];
-        if (!item || typeof item !== 'object') return [];
-        const record = item as Record<string, unknown>;
-        const value = record.attribute ?? record.fact ?? record.description;
-        return typeof value === 'string' && value.trim() ? [value.trim()] : [];
-      })
-    : [];
-  const explicitGaps = uniqueStrings([
-    ...unresolvedCoverage,
-    ...unresolvedConflicts,
-    ...explicitUnconfirmed
-  ]);
-  if (explicitGaps.length) return explicitGaps;
-
-  const confirmedCoverage = new Set(coverage
-    .filter((item) => item.status === 'confirmed' && typeof item.attribute === 'string')
-    .map((item) => compactModelText(item.attribute))
-    .filter(Boolean));
-  const uncoveredRequested = fallbackSlots.filter((slot) => !confirmedCoverage.has(compactModelText(slot)));
-  if (coverage.length && uncoveredRequested.length) return uncoveredRequested;
-
-  const facts = Array.isArray(payload.facts) ? payload.facts : [];
-  const completeness = guidance.completeness;
-  const researchOutcome = payload.researchOutcome;
-  const hasTypedCompletedAnswer =
-    (completeness === 'answered' || researchOutcome === 'answered') &&
-    (coverage.some((item) => item.status === 'confirmed') || facts.length > 0);
-  return hasTypedCompletedAnswer || (coverage.length > 0 && uncoveredRequested.length === 0)
-    ? []
-    : fallbackSlots;
-}
-
-export function terminalCatalogRecovery(input: {
-  intent: AgentIntentContract | undefined;
-  toolResults: ToolResult[];
-  previousProductReferents?: Product[];
-}): TerminalCatalogRecovery {
-  const policy = input.intent?.selectionPolicy;
-  if (!input.intent || !policy) {
-    return {
-      products: [],
-      cards: [],
-      catalogRequestIds: [],
-      unfinishedVerification: [],
-      technicalHandoffEligible: false,
-      warnings: []
-    };
-  }
-  const resultByRequestId = new Map(input.toolResults.map((result) => [result.requestId, result]));
-  const missingRequiredToolRequests = input.intent.toolRequests.filter((request) =>
-    request.required &&
-    request.tool !== 'web.researchProductFacts' &&
-    resultByRequestId.get(request.id)?.status !== 'ok'
-  );
-  if (missingRequiredToolRequests.length) {
-    return {
-      products: [],
-      cards: [],
-      catalogRequestIds: [],
-      unfinishedVerification: [],
-      technicalHandoffEligible: false,
-      warnings: missingRequiredToolRequests.map((request) =>
-        `terminal_catalog_recovery_required_tool_missing:${request.tool}`
-      )
-    };
-  }
-  const recoveryIntent: AgentIntentContract = policy.selectionGoal === 'final_fit'
-    ? {
-        ...input.intent,
-        selectionPolicy: {
-          ...policy,
-          selectionGoal: 'preliminary_fit'
-        }
-      }
-    : input.intent;
-  const catalogResults = input.toolResults.filter((result) =>
-    (result.tool === 'catalog.search' || result.tool === 'catalog.getProductDetails') &&
-    result.status === 'ok'
-  );
-  const catalogRequestIds = catalogResults.map((result) => result.requestId);
-  const currentCatalogProducts = catalogResults.flatMap(productsFromPersistedToolResult);
-  const catalogProducts = [...new Map([
-    ...(policy.reusePreviousCards ? input.previousProductReferents ?? [] : []),
-    ...currentCatalogProducts
-  ].map((product) => [product.id, product])).values()];
-  if (!catalogProducts.length) {
-    return {
-      products: [],
-      cards: [],
-      catalogRequestIds,
-      unfinishedVerification: [],
-      technicalHandoffEligible: false,
-      warnings: []
-    };
-  }
-  const eligibleProducts = limitTerminalRecoveryProducts(filterProductsByStructuredSelectionPolicy({
-    products: catalogProducts,
-    intent: recoveryIntent,
-    toolResults: input.toolResults
-  }).products, policy.maxCards);
-  if (!eligibleProducts.length) {
-    return {
-      products: [],
-      cards: [],
-      catalogRequestIds,
-      unfinishedVerification: [],
-      technicalHandoffEligible: false,
-      warnings: ['terminal_catalog_recovery_no_mechanically_eligible_products']
-    };
-  }
-  const requirementsById = new Map(policy.requirements.map((requirement) => [requirement.id, requirement]));
-  const catalogProofs = buildRequirementProofs({
-    intent: input.intent,
-    products: eligibleProducts,
-    toolResults: catalogResults
-  });
-  const unresolvedWebChecks = input.intent.toolRequests.flatMap((request) => {
-    if (request.tool !== 'web.researchProductFacts' || !request.required) return [];
-    const result = resultByRequestId.get(request.id);
-    const bindings = comparisonAttributeBindingsForRequest(request);
-    const gaps = terminalUnfinishedWebVerification({
-      request,
-      result,
-      requirementsById
-    }).filter((gap) => {
-      const binding = bindings.find((item) =>
-        normalizeModelText(item.attribute) === normalizeModelText(gap)
-      );
-      if (!binding) return true;
-      return !eligibleProducts.every((product) =>
-        combinedRequirementProofStatus(requirementProofsFor(
-          catalogProofs,
-          product.id,
-          [binding.requirementId]
-        )) === 'satisfied'
-      );
-    }).map(humanizeTerminalVerificationLabel);
-    return gaps.length ? [{
-      gaps,
-      exhausted: Boolean(result && webResearchResultProvesSourceExhaustion(result))
-    }] : [];
-  });
-  const unfinishedVerification = uniqueStrings(unresolvedWebChecks.flatMap((check) => check.gaps));
-  const technicalHandoffEligible =
-    unresolvedWebChecks.length > 0 &&
-    unresolvedWebChecks.every((check) => check.exhausted);
-  return {
-    products: eligibleProducts,
-    cards: productCards(eligibleProducts),
-    catalogRequestIds,
-    unfinishedVerification,
-    technicalHandoffEligible,
-    warnings: [
-      'terminal_catalog_recovery_preliminary_cards',
-      ...(policy.selectionGoal === 'final_fit'
-        ? ['terminal_catalog_recovery_downgraded_from_final_fit']
-        : []),
-      ...((input.previousProductReferents?.length ?? 0) > 0
-        ? ['terminal_catalog_recovery_previous_product_referents']
-        : []),
-      ...(unfinishedVerification.length ? ['terminal_catalog_recovery_web_verification_incomplete'] : []),
-      ...(technicalHandoffEligible ? ['terminal_catalog_recovery_technical_handoff_after_exhaustion'] : [])
-    ]
-  };
-}
-
-function terminalProductOrientation(products: Product[]) {
-  return products.slice(0, 8).map((product) => {
-    if (typeof product.price !== 'number' || !Number.isFinite(product.price)) return product.name;
-    const amount = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 })
-      .format(product.price)
-      .replaceAll('\u00a0', ' ')
-      .replaceAll('\u202f', ' ');
-    const currency = product.currency === 'RUB' ? '₽' : product.currency;
-    return `${product.name} — ${amount}${currency ? ` ${currency}` : ''}`;
-  }).join('; ');
-}
-
-export function enforceReviewerPreliminaryCandidateRecovery(input: {
-  review: PreSendReview;
-  answer: AnswerContract;
-  intent: AgentIntentContract;
-  toolResults: ToolResult[];
-}) {
-  if (!input.review.issues.some((issue) => issue.code === 'hide_preliminary_candidates')) return null;
-  const recovery = terminalCatalogRecovery({
-    intent: input.intent,
-    toolResults: input.toolResults
-  });
-  if (!recovery.products.length) return null;
-  const orientation = terminalProductOrientation(recovery.products);
-  const missingFacts = recovery.unfinishedVerification;
-  const answerText = [
-    `По подтверждённым данным предварительно подходят: ${orientation}.`,
-    ...(missingFacts.length
-      ? [
-          `Точный неподтверждённый факт: ${missingFacts.map((item) => `«${item}»`).join(', ')}.`,
-          'Внешняя проверка не завершилась, поэтому окончательную совместимость по этому пункту пока не подтверждаю.'
-        ]
-      : [])
-  ].join(' ');
-  return {
-    ...input.answer,
-    answerText,
-    selectedProductIds: recovery.products.map((product) => product.id),
-    leadAction: recovery.technicalHandoffEligible ? 'offer_form' as const : input.answer.leadAction,
-    riskFlags: uniqueStrings([...input.answer.riskFlags, 'reviewer_preliminary_candidates_recovered']),
-    selectionReadiness: {
-      productClass: input.intent.selectionPolicy?.targetProductClass ??
-        input.intent.selectionPolicy?.canonicalProductClass ??
-        'unknown',
-      status: 'ready_for_preliminary_cards' as const,
-      canShowProductCards: true,
-      missingFacts,
-      rationale: 'The reviewer detected hidden eligible preliminary candidates, so deterministic catalog recovery restored them with the unresolved fact.'
-    }
-  } satisfies AnswerContract;
 }
 
 export function catalogCandidatesSatisfyingConditionalWebRequest(input: {
@@ -3961,15 +3489,15 @@ export function allowCatalogOnlyResearchForWebRequest(
     hasRequiredCatalogLookup;
 }
 
-type SelectionCandidateTier = 'exact_match' | 'preliminary_match' | 'compromise' | 'rejected';
+type SelectionCandidateTier = 'exact_match' | 'preliminary_match' | 'rejected';
 
-function visibleSelectionTier(intent: AgentIntentContract): Exclude<SelectionCandidateTier, 'compromise' | 'rejected'> {
+function visibleSelectionTier(intent: AgentIntentContract): Exclude<SelectionCandidateTier, 'rejected'> {
   return intent.selectionPolicy?.selectionGoal === 'final_fit'
     ? 'exact_match'
     : 'preliminary_match';
 }
 
-function structuredCatalogRecoveryQuery(
+function structuredCatalogExpansionQuery(
   productClass: ProductSelectionClass,
   targetProductClass?: string | null
 ) {
@@ -3991,122 +3519,6 @@ function structuredCatalogRecoveryQuery(
   return [targetProductClass, canonicalQueries[productClass], productClass === 'unknown' ? undefined : productClass]
     .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     .join(' ');
-}
-
-const compromiseRelaxableRequirementKinds = new Set([
-  'budget_max_rub',
-  'price_max_rub',
-  'weight_min_kg',
-  'weight_max_kg',
-  'nominal_power_min_kw',
-  'nominal_power_max_kw',
-  'power_min_kw',
-  'power_max_kw'
-]);
-
-function structuredProductTradeoffs(product: Product, intent: AgentIntentContract) {
-  const tradeoffs: string[] = [];
-  const budgetMax = hardSelectionNumber(intent, ['budget_max_rub', 'price_max_rub']);
-  const weightMin = hardSelectionNumber(intent, ['weight_min_kg']);
-  const weightMax = hardSelectionNumber(intent, ['weight_max_kg']);
-  const powerMin = hardSelectionNumber(intent, ['nominal_power_min_kw', 'power_min_kw']);
-  const powerMax = hardSelectionNumber(intent, ['nominal_power_max_kw', 'power_max_kw']);
-  if (budgetMax !== undefined && (!priceWithinBudget(product, budgetMax))) {
-    tradeoffs.push(`price_above_max:${budgetMax}`);
-  }
-  const weight = extractWeightKg(product);
-  if (weightMin !== undefined && (weight === undefined || weight < weightMin)) {
-    tradeoffs.push(`weight_below_min:${weightMin}`);
-  }
-  if (weightMax !== undefined && (weight === undefined || weight > weightMax)) {
-    tradeoffs.push(`weight_above_max:${weightMax}`);
-  }
-  const power = extractGeneratorPowerForHardSelection(product);
-  const nominalPower = power.nominalKw ?? power.maxKw;
-  if (powerMin !== undefined && (nominalPower === undefined || nominalPower < powerMin)) {
-    tradeoffs.push(`nominal_power_below_min:${powerMin}:actual:${nominalPower ?? 'unknown'}`);
-  }
-  if (powerMax !== undefined && (nominalPower === undefined || nominalPower > powerMax)) {
-    tradeoffs.push(`nominal_power_above_max:${powerMax}:actual:${nominalPower ?? 'unknown'}`);
-  }
-  return tradeoffs;
-}
-
-function structuredCompromiseScore(product: Product, intent: AgentIntentContract) {
-  let score = 0;
-  const budgetMax = hardSelectionNumber(intent, ['budget_max_rub', 'price_max_rub']);
-  const weightMin = hardSelectionNumber(intent, ['weight_min_kg']);
-  const weightMax = hardSelectionNumber(intent, ['weight_max_kg']);
-  const powerMin = hardSelectionNumber(intent, ['nominal_power_min_kw', 'power_min_kw']);
-  const powerMax = hardSelectionNumber(intent, ['nominal_power_max_kw', 'power_max_kw']);
-  const power = extractGeneratorPowerForHardSelection(product);
-  const nominalPower = power.nominalKw ?? power.maxKw;
-  if (powerMin !== undefined) {
-    score += nominalPower === undefined
-      ? 100_000
-      : nominalPower < powerMin
-        ? 10_000 + (powerMin - nominalPower) * 1_000
-        : 0;
-  }
-  if (powerMax !== undefined) {
-    score += nominalPower === undefined
-      ? 100_000
-      : nominalPower > powerMax
-        ? (nominalPower - powerMax) * 100
-        : 0;
-  }
-  if (budgetMax !== undefined) {
-    score += product.price === undefined || product.price === null
-      ? 50_000
-      : product.price > budgetMax
-        ? 1_000 + ((product.price - budgetMax) / Math.max(1, budgetMax)) * 1_000
-        : 0;
-  }
-  const weight = extractWeightKg(product);
-  if (weightMin !== undefined) {
-    score += weight === undefined ? 50_000 : weight < weightMin ? (weightMin - weight) * 100 : 0;
-  }
-  if (weightMax !== undefined) {
-    score += weight === undefined ? 50_000 : weight > weightMax ? (weight - weightMax) * 100 : 0;
-  }
-  return score;
-}
-
-function structuredCompromiseProducts(input: {
-  products: Product[];
-  intent: AgentIntentContract;
-  toolResults: ToolResult[];
-  limit: number;
-}) {
-  const alternativePolicy = input.intent.selectionPolicy?.alternativePolicy;
-  if (alternativePolicy !== 'allow_adjacent_with_explanation' && alternativePolicy !== 'open_to_alternatives') {
-    return [] as Array<{ product: Product; tradeoffs: string[] }>;
-  }
-  const relaxedIntent: AgentIntentContract = {
-    ...input.intent,
-    selectionPolicy: input.intent.selectionPolicy
-      ? {
-          ...input.intent.selectionPolicy,
-          alternativePolicy: 'same_class_only',
-          requirements: input.intent.selectionPolicy.requirements.filter((requirement) =>
-            !compromiseRelaxableRequirementKinds.has(requirement.kind)
-          )
-        }
-      : undefined
-  };
-  const safeSameClass = filterProductsByStructuredSelectionPolicy({
-    products: input.products,
-    intent: relaxedIntent,
-    toolResults: input.toolResults
-  }).products;
-  return safeSameClass
-    .map((product) => ({ product, tradeoffs: structuredProductTradeoffs(product, input.intent) }))
-    .filter((candidate) => candidate.tradeoffs.length > 0)
-    .sort((left, right) => {
-      return structuredCompromiseScore(left.product, input.intent) - structuredCompromiseScore(right.product, input.intent) ||
-        (left.product.price ?? Number.MAX_SAFE_INTEGER) - (right.product.price ?? Number.MAX_SAFE_INTEGER);
-    })
-    .slice(0, input.limit);
 }
 
 function previousProductsRejectedByCurrentBudget(input: {
@@ -4164,7 +3576,7 @@ type ReplacementProductEvidence = {
 
 function replacementFromPersistedToolResult(input: {
   result: ToolResult;
-  fallback: ReplacementProductEvidence;
+  baseline: ReplacementProductEvidence;
 }) {
   if (input.result.tool !== 'catalog.search') {
     throw new Error(`saved_tool_artifact_tool_mismatch:${input.result.requestId}`);
@@ -4173,25 +3585,25 @@ function replacementFromPersistedToolResult(input: {
   const products = productsFromPersistedToolResult(input.result);
   const productIntent = typeof payload.productIntent === 'string' && productSelectionClasses.includes(payload.productIntent as ProductSelectionClass)
     ? payload.productIntent as ProductSelectionClass
-    : input.fallback.productIntent;
+    : input.baseline.productIntent;
   return {
     products,
     toolResult: input.result,
     evidence: {
-      query: typeof payload.query === 'string' ? payload.query : input.fallback.query,
+      query: typeof payload.query === 'string' ? payload.query : input.baseline.query,
       productIds: products.length
         ? products.map((product) => product.id)
         : Array.isArray(payload.productIds)
           ? payload.productIds.filter((id): id is string => typeof id === 'string')
-          : input.fallback.productIds,
+          : input.baseline.productIds,
       droppedPreviousProductIds: Array.isArray(payload.droppedPreviousProductIds)
         ? payload.droppedPreviousProductIds.filter((id): id is string => typeof id === 'string')
-        : input.fallback.droppedPreviousProductIds,
+        : input.baseline.droppedPreviousProductIds,
       warnings: input.result.warnings,
       sourceRequestId: input.result.requestId,
       productIntent,
-      reason: typeof payload.reason === 'string' ? payload.reason : input.fallback.reason,
-      policy: input.fallback.policy
+      reason: typeof payload.reason === 'string' ? payload.reason : input.baseline.reason,
+      policy: input.baseline.policy
     } satisfies ReplacementProductEvidence
   };
 }
@@ -4327,16 +3739,6 @@ function requiredResponseClausesForPlateTaskProductMismatch(input: {
   }];
 }
 
-function plateTaskMismatchSafeRewrite(clause: RequiredResponseClause) {
-  const names = uniqueStrings(clause.catalogProductNames ?? []);
-  const namesText = names.length ? `: ${names.join(', ')}` : '';
-  return [
-    `Из этих вариантов я бы не выбирал ни один как основной для домашней укладки тротуарной плитки${namesText}.`,
-    'Это тяжелые реверсивные плиты около 400 кг: они нужны под серьезное основание, щебень, грунт, дорожные и профессиональные работы. Для двора и плитки такой вес избыточный: выше риск повредить плитку, сложнее работать у дома и обычно нужен другой класс плиты.',
-    'Под домашнюю плитку лучше смотреть конкретный рабочий диапазон: примерно 60-120 кг, а для частного двора чаще 60-90/100 кг в зависимости от основания, площади и того, сколько щебня. По уже уложенной плитке нужен резиновый или полиуретановый коврик. Я бы подобрал и показал варианты из каталога в этом диапазоне, а эти 400 кг оставил бы только если у вас реально тяжелая подготовка основания, а не финишная укладка плитки.'
-  ].join('\n\n');
-}
-
 function answerSatisfiesExplicitHeavyPlateTaskConflict(answerText: string) {
   const normalized = normalizeModelText(answerText);
   const numericMentions = scanNumericMentions(answerText);
@@ -4396,10 +3798,6 @@ function scanNumericMentions(text: string) {
   return mentions;
 }
 
-export function limitTerminalRecoveryProducts(products: Product[], maxCards: number | null | undefined) {
-  return products.slice(0, maxCards ?? 8);
-}
-
 function scanExplicitPowerKw(text: string) {
   const normalized = text.toLocaleLowerCase('ru-RU');
   return scanNumericMentions(normalized).flatMap((mention) => {
@@ -4433,23 +3831,6 @@ function hasExplicitNumericRange(
     )) return true;
   }
   return false;
-}
-
-function plateExplicitHeavyTaskConflictSafeRewrite(products: Product[]) {
-  const productLines = products.slice(0, 6).map((product) => {
-    const weight = extractWeightKg(product);
-    return weight !== undefined
-      ? `- ${product.name} (${weight} kg)`
-      : `- ${product.name}`;
-  });
-  const productBlock = productLines.length
-    ? `Из подходящих вариантов сейчас можно смотреть:\n${productLines.join('\n')}`
-    : 'Могу подобрать и показать варианты из каталога в этом диапазоне.';
-  return [
-    'Плиту около 300-400 кг под тротуарную плитку во дворе я бы не рекомендовал как основной вариант. Это слишком тяжелый класс для такой задачи: он больше нужен под серьезную подготовку основания, щебень, грунт, дорожные и профессиональные объемы.',
-    'Для двора и тротуарной плитки практичнее смотреть примерно 60-120 кг, а для частного двора чаще 60-90/100 кг в зависимости от основания, площади и слоя щебня. По уже уложенной плитке нужен резиновый или полиуретановый коврик.',
-    productBlock
-  ].join('\n\n');
 }
 
 function hasCatalogEvidenceRequest(intent: AgentIntentContract) {
@@ -4491,38 +3872,7 @@ function nonTargetMentionModelTokens(intent: AgentIntentContract) {
     .flatMap((mention) => modelIdentifierTokens(mention.name)));
 }
 
-function splitAnswerSegments(value: string) {
-  const segments: string[] = [];
-  let current = '';
-  const terminators = new Set(['.', '!', '?', '\n', '。', '！', '？']);
-  for (const char of value) {
-    current += char;
-    if (terminators.has(char)) {
-      segments.push(current);
-      current = '';
-    }
-  }
-  if (current) segments.push(current);
-  return segments;
-}
-
-function collapseExcessBlankLines(value: string) {
-  const lines = value.split('\n');
-  const output: string[] = [];
-  let blank = 0;
-  for (const line of lines) {
-    if (line.trim()) {
-      blank = 0;
-      output.push(line.trimEnd());
-    } else {
-      blank += 1;
-      if (blank <= 1) output.push('');
-    }
-  }
-  return output.join('\n').trim();
-}
-
-function unsupportedCatalogProductMentionSafeRewrite(input: {
+function unsupportedCatalogProductMentionTokens(input: {
   answerText: string;
   intent: AgentIntentContract;
   products: Product[];
@@ -4537,15 +3887,7 @@ function unsupportedCatalogProductMentionSafeRewrite(input: {
   const unsupportedTokens = new Set(unsupportedDisplayTokens.map(compactModelText));
   if (!unsupportedTokens.size) return null;
 
-  const keptSegments = splitAnswerSegments(input.answerText).filter((segment) =>
-    !modelIdentifierTokens(segment).some((token) => unsupportedTokens.has(token))
-  );
-  const revisedAnswerText = collapseExcessBlankLines(keptSegments.join(''));
-  if (!revisedAnswerText || revisedAnswerText === input.answerText.trim()) return null;
-  return {
-    revisedAnswerText,
-    unsupportedDisplayTokens: uniqueStrings(unsupportedDisplayTokens)
-  };
+  return unsupportedTokens.size ? uniqueStrings(unsupportedDisplayTokens) : null;
 }
 
 function targetBrandCandidates(targetNames: string[]) {
@@ -4872,11 +4214,11 @@ function currentNeedSelectedProductIds(needState: CustomerNeedState) {
 }
 
 function continuityCardIntent(input: {
-  fallback: ProductSelectionClass;
+  defaultIntent: ProductSelectionClass;
   decisionProductClass?: string;
 }) {
   const decisionIntent = coerceVisibleCardIntent(input.decisionProductClass);
-  return decisionIntent === 'unknown' ? input.fallback : decisionIntent;
+  return decisionIntent === 'unknown' ? input.defaultIntent : decisionIntent;
 }
 
 function continuityProductClassFromCurrentTurn(input: {
@@ -5042,19 +4384,6 @@ export function requiredResponseClausesForToolResults(
         sourceRequestId: result.requestId,
         instruction: `This generator load calculation used estimateBasis=bounded_assumption. ${profileInstruction} Preserve the missing exact fact such as pump nameplate power/model in the answer. Do not phrase the estimate as confirmed nameplate data, exact sizing, or final purchase-safe selection.`
       });
-    }
-    if (result.tool === 'catalog.search' && result.status === 'ok') {
-      const candidateTiers = (result.payload as {
-        retrieval?: { candidateTiers?: Array<{ productId?: unknown; tier?: unknown; tradeoffs?: unknown }> };
-      }).retrieval?.candidateTiers ?? [];
-      const compromises = candidateTiers.filter((candidate) => candidate.tier === 'compromise');
-      if (compromises.length) {
-        clauses.push({
-          code: 'catalog_compromise_candidates_must_be_labeled',
-          sourceRequestId: result.requestId,
-          instruction: `The validated catalog candidates are compromise alternatives, not exact matches. Label each shown option as a compromise and explain its tradeoffs from retrieval.candidateTiers; do not call it an exact fit. Tradeoff evidence: ${JSON.stringify(compromises)}`
-        });
-      }
     }
     if (result.tool !== 'web.researchProductFacts') continue;
     if (intent && isCatalogAvailabilityOnlyIntent(intent)) continue;
@@ -5394,67 +4723,6 @@ function nonFactBearingToolResultIds(toolResults: ToolResult[]) {
     .map((result) => result.requestId));
 }
 
-function llmReviewPolicy(input: {
-  intent: AgentIntentContract;
-  answer: AnswerContract;
-  toolResults: ToolResult[];
-  products: Product[];
-  userMessage?: string;
-}) {
-  const currentMessageHasContact = input.userMessage
-    ? hasLeadContact(extractContact(input.userMessage))
-    : false;
-  const unresolvedStrictClarification = (
-    input.answer.selectionReadiness?.canShowProductCards === false &&
-    (input.answer.selectedProductIds?.length ?? 0) === 0 &&
-    (input.intent.selectionPolicy?.requirements ?? []).some((requirement) =>
-      requirement.role === 'hard_constraint' && requirement.strictness === 'strict'
-    )
-  );
-  const reasons = uniqueStrings([
-    ...(input.intent.riskFlags.length ? ['intent_risk_flags'] : []),
-    ...(input.answer.riskFlags.length ? ['answer_risk_flags'] : []),
-    ...(input.answer.leadAction !== 'none' ? ['lead_action'] : []),
-    ...(currentMessageHasContact ? ['current_message_has_contact'] : []),
-    ...(input.intent.grounding?.sourcePolicy === 'web_required' ? ['web_required'] : []),
-    ...(input.intent.grounding?.sourcePolicy === 'specialist_required' ? ['specialist_required'] : []),
-    ...(input.products.length ? ['catalog_product_evidence'] : []),
-    ...(input.answer.selectedProductIds?.length ? ['selected_product_ids'] : []),
-    ...(input.toolResults.some((result) => result.status !== 'ok') ? ['non_ok_tool_result'] : []),
-    ...(input.toolResults.some((result) => result.warnings.length > 0) ? ['tool_warnings'] : []),
-    ...(unresolvedStrictClarification ? ['unresolved_strict_clarification'] : [])
-  ]);
-  return {
-    mode: config.AI_MANAGER_REVIEW_MODE,
-    llmRequired: config.AI_MANAGER_REVIEW_MODE === 'always' ||
-      (config.AI_MANAGER_REVIEW_MODE === 'risk' && reasons.length > 0),
-    reasons
-  };
-}
-
-function unverifiableStrictHardConstraintSafeRewrite(
-  blockers: Array<{ kind: string; reason: string; evidence: string }>
-) {
-  const constraints = blockers
-    .map((blocker) => {
-      const evidence = blocker.evidence.trim();
-      const alreadyQuoted = (
-        (evidence.startsWith('«') && evidence.endsWith('»')) ||
-        (evidence.startsWith('"') && evidence.endsWith('"')) ||
-        (evidence.startsWith("'") && evidence.endsWith("'"))
-      );
-      return alreadyQuoted ? evidence : `«${evidence}»`;
-    })
-    .join('; ');
-  const calculationFailure = blockers.some((blocker) =>
-    blocker.reason.startsWith('typed_tool_') || blocker.reason.startsWith('generator_load_')
-  );
-  if (calculationFailure) {
-    return `Не буду рекомендовать конкретную модель наугад: сейчас не удалось надёжно завершить и применить расчёт для требования ${constraints}. Я не стану подменять расчёт предположением; повторите сообщение или уточните исходные данные, и я продолжу подбор.`;
-  }
-  return `Не буду рекомендовать конкретную модель наугад: по доступным характеристикам товаров сейчас нельзя надёжно проверить требование ${constraints}. Нужны подтверждённые данные именно по нему; после этого я продолжу подбор и покажу только подходящие карточки.`;
-}
-
 function uniqueReviewIssues(issues: PreSendReview['issues']) {
   const unique = new Map<string, PreSendReview['issues'][number]>();
   for (const issue of issues) unique.set(`${issue.code}:${issue.evidence}`, issue);
@@ -5469,163 +4737,6 @@ function factSourceIdsFromNonFactBearingTools(input: {
   return uniqueStrings(input.answer.factsUsed.flatMap((fact) =>
     fact.sourceEventIds.filter((sourceId) => failedIds.has(sourceId))
   ));
-}
-
-function failedToolEvidenceSafeRewrite(toolResults: ToolResult[]) {
-  const failedTools = new Set(toolResults.filter((result) => result.status !== 'ok').map((result) => result.tool));
-  if (failedTools.has('catalog.search') || failedTools.has('catalog.getProductDetails')) {
-    return 'Сейчас не удалось надёжно получить нужные данные из каталога, поэтому я не буду придумывать модели, характеристики или цены. Попробуйте повторить запрос — я заново проверю карточки и продолжу подбор.';
-  }
-  if (failedTools.has('calculator.generatorLoad')) {
-    return 'Сейчас не удалось надёжно завершить расчёт требуемой мощности, поэтому я не буду называть неподтверждённую цифру или рекомендовать модели наугад. Повторите данные по нагрузке — мощность, количество и что запускается одновременно — и я пересчитаю.';
-  }
-  if (failedTools.has('web.researchProductFacts')) {
-    return 'Внешняя проверка источников сейчас не завершилась, поэтому точный факт по модели я не подтверждаю. Могу передать этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?';
-  }
-  return 'Не удалось надёжно завершить требуемую проверку, поэтому я не буду выдавать неподтверждённый результат. Попробуйте повторить запрос.';
-}
-
-function failedGeneralTechnicalWebResearchSafeRewrite(input: {
-  intent: AgentIntentContract;
-  request?: ToolRequest;
-}) {
-  const requestText = [
-    input.request?.args.query,
-    input.request?.args.semanticQuery,
-    Array.isArray(input.request?.args.comparisonAttributes) ? input.request?.args.comparisonAttributes.join(' ') : '',
-    input.intent.userMessageSummary,
-    input.intent.grounding?.rationale
-  ].filter(Boolean).join(' ');
-  const normalizedRequestText = normalizeModelText(requestText);
-  const isThdQuestion = normalizedTextIncludesAny(normalizedRequestText, [
-    'thd',
-    'гармоник',
-    'искажен'
-  ]);
-  const isGeneratorPowerQualityQuestion = normalizedTextIncludesAny(normalizedRequestText, [
-    'generator',
-    'inverter',
-    'voltage',
-    'sine',
-    'генератор',
-    'инвертор',
-    'напряжен',
-    'синусоид'
-  ]);
-  if (!isThdQuestion || !isGeneratorPowerQualityQuestion) return null;
-
-  const mentionsSensitiveLoads = normalizedTextIncludesAny(normalizedRequestText, [
-    'boiler',
-    'electronics',
-    'control board',
-    'power supply',
-    'котел',
-    'электроник',
-    'плата',
-    'блок питания'
-  ]);
-  const loadLine = mentionsSensitiveLoads
-    ? 'Для котла, платы управления, блоков питания и другой электроники это важно: чем выше гармонические искажения, тем выше риск ошибок, нагрева, шума в питании и нестабильной работы чувствительных устройств.'
-    : 'Для чувствительной электроники это важно: чем выше гармонические искажения, тем выше риск ошибок, нагрева, шума в питании и нестабильной работы устройств.';
-  return [
-    'THD — это уровень гармонических искажений: насколько форма напряжения генератора отличается от ровной синусоиды.',
-    loadLine,
-    'Практический вывод такой: для чувствительной нагрузки лучше выбирать инверторный генератор или модель, где прямо указаны чистая синусоида, низкий THD или пригодность для электроники.',
-    'Точную цифру THD по конкретной модели в этом ходе не подтверждаю: внешняя проверка не завершилась. Поэтому это общий инженерный ориентир, а точное значение для выбранной модели нужно отдельно подтвердить по источнику или паспорту.',
-    'Могу передать этот технический вопрос специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?'
-  ].join('\n\n');
-}
-
-function failedWebResearchSafeRewrite(input: {
-  intent: AgentIntentContract;
-  toolResults: ToolResult[];
-}) {
-  const failedWebResult = input.toolResults.find((result) =>
-    result.tool === 'web.researchProductFacts' && result.status !== 'ok'
-  );
-  if (!failedWebResult) return null;
-  const request = input.intent.toolRequests.find((item) => item.id === failedWebResult.requestId);
-  const productName = productNamesFromToolRequest(request)[0];
-  if (!webResearchResultProvesSourceExhaustion(failedWebResult)) {
-    const generalTechnicalRewrite = failedGeneralTechnicalWebResearchSafeRewrite({ intent: input.intent, request });
-    if (!productName && generalTechnicalRewrite) {
-      const handoffParagraphStart = generalTechnicalRewrite.lastIndexOf('\n\n');
-      return handoffParagraphStart > 0
-        ? generalTechnicalRewrite.slice(0, handoffParagraphStart)
-        : generalTechnicalRewrite;
-    }
-    const missingFact = input.intent.userMessageSummary.trim();
-    if (productName) {
-      return `По уже подтверждённым данным ${productName} остаётся предварительным вариантом. Внешняя проверка в этом ходе не завершилась, поэтому решающий факт пока не подтверждаю: ${missingFact} Незавершённый поиск не считаю доказательством отсутствия функции или несовместимости.`;
-    }
-    return `Внешняя проверка в этом ходе не завершилась, поэтому решающий факт пока не подтверждаю: ${missingFact} Уже подтверждённые данные и предварительный вывод сохраняю; незавершённый поиск не считаю доказательством отсутствия функции или несовместимости.`;
-  }
-  const exhaustedGeneralTechnicalRewrite = failedGeneralTechnicalWebResearchSafeRewrite({ intent: input.intent, request });
-  if (!productName && exhaustedGeneralTechnicalRewrite) return exhaustedGeneralTechnicalRewrite;
-  const missingFact = input.intent.userMessageSummary.trim();
-  if (productName) {
-    return `По уже подтверждённым данным ${productName} остаётся предварительным вариантом, но внешняя проверка не подтвердила решающий факт: ${missingFact} Поэтому окончательно утверждать не буду. Могу передать именно этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?`;
-  }
-  return `Внешняя проверка не подтвердила решающий факт: ${missingFact} Поэтому точный ответ сейчас не выдам как подтверждённый. Могу передать этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?`;
-}
-
-function incompleteWebResearchSafeRewrite(input: {
-  intent: AgentIntentContract;
-  toolResults: ToolResult[];
-}) {
-  const incompleteResult = input.toolResults.find((result) => {
-    if (result.tool !== 'web.researchProductFacts' || webResearchResultProvesSourceExhaustion(result)) {
-      return false;
-    }
-    const payload = result.payload as {
-      researchOutcome?: unknown;
-      searchDisposition?: unknown;
-    };
-    return result.status !== 'ok' ||
-      payload.researchOutcome === 'partial' ||
-      payload.researchOutcome === 'exhausted' ||
-      payload.searchDisposition === 'skipped_budget' ||
-      payload.searchDisposition === 'timed_out' ||
-      payload.searchDisposition === 'failed' ||
-      payload.searchDisposition === 'aborted';
-  });
-  if (!incompleteResult) return null;
-
-  const payload = incompleteResult.payload as {
-    facts?: Array<{
-      productName?: unknown;
-      attribute?: unknown;
-      value?: unknown;
-    }>;
-    answerGuidance?: {
-      coverage?: Array<{
-        attribute?: unknown;
-        status?: unknown;
-      }>;
-    };
-    comparisonAttributes?: unknown;
-  };
-  const confirmedFactLines = uniqueStrings((payload.facts ?? []).flatMap((fact) => {
-    const productName = typeof fact.productName === 'string' ? fact.productName.trim() : '';
-    const attribute = typeof fact.attribute === 'string' ? fact.attribute.trim() : '';
-    const value = typeof fact.value === 'string' ? fact.value.trim() : '';
-    if (!attribute || !value) return [];
-    const formattedValue = value.endsWith('.') ? value.slice(0, -1).trimEnd() : value;
-    return [`${productName ? `${productName}: ` : ''}${attribute} — ${formattedValue}`];
-  })).slice(0, 3);
-  const unresolvedAttributes = uniqueStrings((payload.answerGuidance?.coverage ?? []).flatMap((item) => {
-    if (item.status !== 'not_confirmed' && item.status !== 'ambiguous' && item.status !== 'not_found') return [];
-    return typeof item.attribute === 'string' && item.attribute.trim() ? [item.attribute.trim()] : [];
-  }));
-  const requestedAttributes = requestStringArray(payload.comparisonAttributes);
-  const missingFact = unresolvedAttributes[0] ?? requestedAttributes[0] ?? input.intent.userMessageSummary.trim();
-  const lines: string[] = [];
-  if (confirmedFactLines.length) {
-    lines.push(`В найденных источниках указано: ${confirmedFactLines.join('; ')}.`);
-  }
-  lines.push(`Но точный ответ по этому пункту остаётся неподтверждённым: ${missingFact}.`);
-  lines.push('Проверка доступных источников в этом ходе не была завершена, поэтому я не считаю этот пробел доказательством отсутствия функции или несовместимости и не буду выдавать окончательный ответ без подтверждения.');
-  return lines.join(' ');
 }
 
 function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentIntentContract) {
@@ -5670,92 +4781,7 @@ class AgentSemanticDecisionIncoherentError extends Error {
   }
 }
 
-export function terminalGeneratorCalculationRecovery(toolResults: ToolResult[]) {
-  const result = [...toolResults].reverse().find((item) =>
-    item.tool === 'calculator.generatorLoad' && item.status === 'ok'
-  );
-  if (!result) return null;
-  const payload = result.payload as {
-    profile?: {
-      totalRunningKw?: unknown;
-      requiredStartingKw?: unknown;
-      requiredNominalKw?: unknown;
-    };
-    loads?: unknown[];
-  };
-  const requiredNominalKw = payload.profile?.requiredNominalKw;
-  if (typeof requiredNominalKw !== 'number' || !Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) return null;
-  const totalRunningKw = payload.profile?.totalRunningKw;
-  const requiredStartingKw = payload.profile?.requiredStartingKw;
-  return {
-    requestId: result.requestId,
-    loadCount: Array.isArray(payload.loads) ? payload.loads.length : 0,
-    totalRunningKw: typeof totalRunningKw === 'number' && Number.isFinite(totalRunningKw) ? totalRunningKw : null,
-    requiredStartingKw: typeof requiredStartingKw === 'number' && Number.isFinite(requiredStartingKw) ? requiredStartingKw : null,
-    requiredNominalKw
-  };
-}
-
-export function terminalGeneratorCalculationFromIntent(
-  intent: AgentIntentContract | undefined,
-  userMessage: string
-) {
-  const request = intent?.toolRequests.find((item) =>
-    item.tool === 'calculator.generatorLoad' && item.required
-  );
-  if (!request) return null;
-  const calculated = buildGeneratorLoadToolPayload({ request, userMessage });
-  if (!calculated.profile) return null;
-  return ToolResultSchema.parse({
-    requestId: request.id,
-    tool: request.tool,
-    status: 'ok',
-    observationStatus: 'success',
-    payload: {
-      loads: calculated.loads,
-      profile: calculated.profile,
-      estimateBasis: calculated.estimateBasis
-    },
-    warnings: uniqueStrings([
-      ...calculated.warnings,
-      'terminal_deterministic_generator_calculation'
-    ])
-  });
-}
-
-export function terminalOpenQuestionRecovery(ledgerState: ReducedDialogueLedgerState) {
-  const activeNeed = [...Object.values(ledgerState.needsById)]
-    .reverse()
-    .find((need) => need.status === 'open' || need.status === 'selected');
-  const question = [...ledgerState.openQuestions]
-    .reverse()
-    .find((item) => !activeNeed || !item.needId || item.needId === activeNeed.needId);
-  if (!question) return null;
-  return {
-    questionId: question.questionId,
-    text: question.text,
-    sourceEventId: question.askedEventId,
-    productClass: activeNeed?.productClass ?? 'unknown',
-    needSummary: activeNeed?.summary?.trim() || null
-  };
-}
-
-function terminalUnfinishedVerificationFromIntent(intent: AgentIntentContract | undefined, toolResults: ToolResult[]) {
-  if (!intent) return [];
-  const requirementsById = new Map((intent.selectionPolicy?.requirements ?? []).map((item) => [item.id, item]));
-  const resultByRequestId = new Map(toolResults.map((result) => [result.requestId, result]));
-  return uniqueStrings(intent.toolRequests.flatMap((request) =>
-    request.tool === 'web.researchProductFacts' && request.required
-      ? terminalUnfinishedWebVerification({
-          request,
-          result: resultByRequestId.get(request.id),
-          requirementsById
-        }).map(humanizeTerminalVerificationLabel)
-      : []
-  ));
-}
-
-export function researchGuidanceSafeRewrite(input: {
+export function expectedResearchGuidanceText(input: {
   toolResults: ToolResult[];
   intent: AgentIntentContract;
 }) {
@@ -6449,42 +5475,11 @@ const answerContractFormat = {
   }
 } as const;
 
-const preSendReviewFormat = {
-  format: {
-    type: 'json_schema',
-    name: 'agent_pre_send_review',
-    schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        verdict: { type: 'string', enum: ['pass', 'rewrite_required', 'block'] },
-        issues: {
-          type: 'array',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: {
-              code: { type: 'string' },
-              severity: { type: 'string', enum: ['low', 'medium', 'high'] },
-              message: { type: 'string' },
-              evidence: { type: 'string' }
-            },
-            required: ['code', 'severity', 'message', 'evidence']
-          }
-        },
-        revisedAnswerText: nullableStringJsonSchema
-      },
-      required: ['verdict', 'issues', 'revisedAnswerText']
-    }
-  }
-} as const;
-
 export const agentManagerStructuredFormats = {
   semanticDecisionFormat,
   ledgerDeltaFormat,
   intentContractFormat,
-  answerContractFormat,
-  preSendReviewFormat
+  answerContractFormat
 } as const;
 
 function ledgerReducerPolicyPromptBlock() {
@@ -6749,7 +5744,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'If the buyer explicitly asks for preliminary generator variants and toolResults include calculator.generatorLoad status ok plus catalog.search products, use selectionReadiness.status="ready_for_preliminary_cards" when the catalog products are useful orientation candidates. The answer must say the cards are preliminary and name any missing exact load fact before final purchase-safe selection.',
             'When the buyer asks for a generator selection and the successful load calculation plus catalog evidence already prove that candidates meet load and phase constraints, missing fuel preference or budget alone must not suppress useful preliminary cards. Show technically suitable options as preliminary, state the remaining assumption, and ask at most one narrowing question. An exact pump model is not required merely to show preliminary cards when the buyer already gave its type and power and the calculator marked the remaining basis as bounded.',
             'You must set selectionReadiness for the current answer. It is your semantic decision about whether buyer-visible product cards are useful and honest now.',
-            'You must set selectedProductIds explicitly. Use only IDs from the provided products/toolResults, include only products you actually recommend in answerText, respect selectionPolicy.maxCards and alternativePolicy, and use [] when cards are not useful. The code will validate facts and hard constraints but will not choose products for you.',
+            'You must set selectedProductIds explicitly. Use only IDs from the provided products/toolResults, include only products that support the recommendation in answerText, respect selectionPolicy.maxCards and alternativePolicy, and use [] when cards are not useful. Product cards may carry the model names, so answerText does not need to enumerate every selected card. The code will validate facts and hard constraints but will not choose products for you.',
             'When selectionReadiness.canShowProductCards is false, answerText must itself explain what is missing or what the next useful question is. The code will not append a canned clarification.',
             'When productClass is generator and cards are blocked, answerText must remain self-contained: explicitly mention the generator selection and the missing load/power/model fact that blocks the next step. Do not return only a bare question.',
             'Use selectionReadiness.status="needs_more_info" when fit cards would be premature and the buyer did not ask merely to browse. Use "ready_for_preliminary_cards" for browse_catalog or preliminary_fit when validated products are useful without a final compatibility promise. Use "ready_for_exact_cards" only when the facts are strong enough for final_fit.',
@@ -6760,14 +5755,13 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'For plate compactors, preserve the buyer transport constraint from tool results and product cards: if the buyer will load it alone, do not recommend heavy 90+ kg plates as the first choice unless no lighter catalog candidates are present.',
             'For a small driveway/paving plate compactor that the buyer will load alone, recommend roughly 50-80 kg, usually 60-75 kg. Mention 90+ kg only as heavier than the preferred self-loading range, not as part of the first target range.',
             'For a plate compactor mismatch where the buyer asked for around 300-400 kg but the stated job is private yard / paving tile / paths, never say only "lighter class". State a concrete range: roughly 60-120 kg, usually around 60-90/100 kg for a private paving tile job depending on base and area. If products are provided, show and explain those options now instead of asking the buyer to request them again; ask whether to show/select options only when no suitable products are available in products.',
-            'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, rank the shortlist by fit to both constraints: first show the lightest in-budget candidates that still match the job. If two or more clearly lighter in-budget candidates are present in products, do not put a heavier in-budget product in the primary bullet list as an equal recommendation; mention it only after the shortlist as a heavier compromise if that tradeoff is useful.',
-            'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, if no clearly light in-budget candidate is available, do not call a heavier in-budget candidate light or clearly best. Present it as a budget/availability compromise, state the weight tradeoff, and ask whether that weight is acceptable before final selection.',
-            'When the buyer gives a budget, never present products above that budget as satisfying it. If in-budget catalog candidates exist but are weaker or compromise options, say that plainly and treat higher-priced models only as above-budget reference points.',
-            'For catalog selection answers, first cover all honestly suitable products that match the buyer hard requirements and materially fit the job. If there are many suitable products, group or prioritize them briefly, but do not replace them with random 1-2 picks. Add compromise products only when honest matches are few, weak, or the buyer explicitly allows alternatives; label each compromise with the exact tradeoff. Mention dimensions, widths, weights, prices, and specs only when they are present in the provided product context or checked research facts.',
+            'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, rank only candidates that satisfy every hard requirement. Prefer the lightest suitable in-budget candidates and do not add a heavier or over-budget substitute.',
+            'If no candidate satisfies every hard requirement, say which requirement remains unsatisfied and ask whether the buyer wants to change it. Do not relax the requirement automatically.',
+            'When the buyer gives a budget, never present products above that budget as satisfying it. Higher-priced models may appear only when the buyer explicitly asks for a comparison, and never as selected recommendations.',
+            'For catalog selection answers, cover honestly suitable products that match every hard requirement and materially fit the job. If there are many suitable products, group or prioritize them briefly. Do not introduce a near match merely because exact matches are few. Mention dimensions, widths, weights, prices, and specs only when present in product context or checked research facts.',
             'For catalog selection answers, every catalog model or brand-model named in answerText must be copied from products[].name. productEvidenceRoles is authoritative for use: recommendation_candidate may be selected/recommended and shown as a card; comparison_reference_only may be named only to answer the explicit comparison with grounded facts and must be clearly rejected by its rejectionReasons. Never select or recommend a comparison_reference_only product as fitting.',
             'Products can include current catalog results or buyer-visible cards from previous turns that remain relevant to the current narrowing request. If products are present and fit the current need, use them instead of claiming there is no fresh catalog or asking for a lead form just to continue selection.',
             'For a catalog-selection or grounded recommendation turn, products is the factual evidence set and productEvidenceRoles is the authoritative recommendation boundary. Raw catalog tool status or raw productIds are not permission to name or show a product absent from products. selectedProductIds and positive fit recommendations may contain only eligible recommendation_candidate ids. Before accepting an empty eligible set caused only by missing technical evidence, use planned web research and prefer a truthful preliminary recommendation when no hard conflict is proven.',
-            'repairContext is internal recovery feedback from a rejected draft. Fix the listed issue causes using the current intent, tools and validated products, but never quote issue codes, internal messages or recovery mechanics to the buyer.',
             'factsUsed[].sourceEventIds must contain only exact strings from availableEvidenceSources.allowedSourceIds. Do not invent source ids from fact names.',
             'If a fact comes from a tool result, cite the tool request id. If it comes from ledger, cite the ledger event id. toolResultIds must contain only current tool request ids.',
             'For a pure availability/delivery/discount handoff where no exact live status is known, keep factsUsed empty unless you explicitly use catalog or checked research facts.',
@@ -6790,7 +5784,6 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             intent: input.intent,
             toolResults: compactToolResultsForModel(input.toolResults, input.products),
             requiredResponseClauses: input.requiredResponseClauses ?? [],
-            repairContext: input.repairContext,
             availableEvidenceSources: answerEvidenceSourceHints(input),
             productEvidenceRoles: input.productEvidenceRoles ?? [],
             products: input.products.map(answerProductContext)
@@ -6803,131 +5796,6 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     return parseAnswerContractModelOutput(parsed);
   }
 
-  async reviewAnswer(input: AgentManagerReviewInput): Promise<PreSendReview> {
-    const managerPolicy = buildSalesManagerPolicyTrace({
-      target: 'reviewer',
-      semanticRuleIds: input.intent.policyRuleIds ?? [],
-      riskFlags: input.intent.riskFlags,
-      enabled: true,
-      shadowMode: false
-    }).promptBlock;
-    const request = {
-      model: config.OPENAI_FACT_MODEL,
-      reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
-      max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
-      input: [
-        {
-          role: 'system',
-          content: [
-            'Ты evidence-bound reviewer ответа AI менеджера БАКАУТ.',
-            untrustedEvidenceBoundary,
-            managerPolicy,
-            'Проверь только по фактам ledger/toolResults/products.',
-            'Блокируй или требуй rewrite, если ответ спрашивает уже известное, обещает непроверенное наличие/доставку/скидку/срок, противоречит текущему диалогу или просит повторить контакт, который уже есть.',
-            'Interpret contact requests and lead/commercial confirmations semantically, not by a phrase list. If currentUserMessage already contains the requested phone/email/name, rewrite any unnecessary request to provide it again. A missing name may still be requested when only a phone/email was provided.',
-            'A claim that a request, callback, or lead was registered is allowed only when lead.capture has status=ok and its payload proves durable dispatch with outbox=true, status="queued", and a non-empty outboxId. A claim that stock, delivery, discount, deadline, or special terms are confirmed is allowed only with an exact successful evidence source; otherwise rewrite as a verification/handoff offer.',
-            'For every catalog product named or recommended in answerText, independently compare every stated price, power, weight, dimension, capacity, noise value, phase and other specification against the exact products payload. factsUsed=[] is not an exemption. If any value is absent or differs, require a rewrite that uses the exact supported value or removes the unsupported claim.',
-            'For calculator.generatorLoad, block or rewrite any answer that states a calculated minimum inconsistent with payload.profile.requiredNominalKw/requiredStartingKw.',
-            'For generator answers, require rewrite if products are presented as preliminary/final technical fits while tool results include generator_load_estimate_only, generator_load_unbounded_guess, or generator_load_invalid_load_kind. Do not reject validated catalog browsing or prices for selectionGoal=browse_catalog merely because load fit is still unknown.',
-            'For generator_load_bounded_basis_incomplete, reject a final-fit claim but allow catalog browsing and a clearly labelled preliminary shortlist when the validated products meet the explicit range/phase constraints and the answer preserves the missing fact.',
-            'For generator_load_bounded_assumption, allow preliminary product cards only when the answer labels them as approximate, preserves missing exact facts, and does not present assumptions as confirmed nameplate data.',
-            'For generator preliminary selection, require rewrite if catalog.search returned useful products and the buyer asked for preliminary variants, but the answer refuses to show any orientation cards solely because one exact load fact is still missing. The rewrite should keep the missing fact caveat and present the candidates as preliminary, not final.',
-            'Treat generator_load_scenario as valid only when its evidence and linked calculator args actually describe generator loads or their operating relationship. If an unrelated constraint was mislabeled or given an incompatible value/unit, require rewrite and do not approve product recommendations.',
-            'Do not reject useful preliminary generator cards solely because fuel preference, budget, or an exact pump model is still unknown when the buyer already supplied the pump type and power and a successful bounded load calculation proves the candidates meet the load and phase constraints.',
-            'For a generator clarification answer with selectionReadiness.canShowProductCards=false, require rewrite if the answer is only a short question or does not explicitly mention generator selection plus the missing load/power/model fact.',
-            'For catalog.search plate results, block or rewrite any first-choice recommendation that ignores an explicit self-loading/light transport constraint when lighter product cards are available.',
-            'For self-loading small-site plate compactor advice, require rewrite if the answer recommends 90 kg as part of the primary target range instead of treating it as a heavier fallback.',
-            'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, require rewrite if the primary shortlist presents a heavier in-budget product as an equal recommendation while two or more lighter in-budget products are available in products. The heavier product may appear only as a clearly labeled compromise after the lighter shortlist.',
-            'For plate compactor selection with a budget plus one-person, light, or self-loading transport constraint, require rewrite if no clearly light in-budget candidate is available and the answer presents a heavier in-budget product as clearly best or light without stating the weight compromise and asking whether that tradeoff is acceptable.',
-            'For catalog selection answers, require rewrite if the answer hides honestly suitable recommendation_candidate products. A comparison_reference_only product is factual evidence for the explicit comparison, not a visible recommendation candidate: require rewrite if it is omitted from the requested comparison, if its grounded rejection reason is omitted, or if it is selected/recommended as fitting.',
-            'Require rewrite if answerText names a catalog recommendation absent from products[].name or marks a product eligible when productEvidenceRoles says eligibleForRecommendation=false.',
-            'For a catalog narrowing continuation where products are available from current or previous visible cards, require rewrite if the answer claims it cannot show concrete models due to missing fresh catalog data or asks for a lead form instead of using those product facts.',
-            'For a catalog-selection or grounded recommendation turn, products is factual evidence while productEvidenceRoles is the mechanically validated recommendation boundary. Raw catalog success does not make a product eligible. Missing evidence must not be rewritten as incompatibility; a grounded hard-constraint rejection must not be softened into fit. Only recommendation_candidate ids may be selected or emitted as cards.',
-            'For a pure technical fact question about an exact model absent from catalog, require rewrite if the answer skips a checked web fact, omits catalogPresence.status="absent", omits non-empty nearbyCatalogProducts, fails to separate external facts from BAKAUT catalog facts, says only that it cannot answer, or adds unsolicited availability, delivery, discount, lead, callback, or price discussion. Only web_research_exhausted_grounding with sourcesExhausted=true permits the technical follow-up offer, phone request, message-or-call choice, and leadAction="offer_form". A failed, timed-out, aborted, or budget-skipped search must not be described as exhausted and must not trigger handoff by itself.',
-            'For every item in requiredResponseClauses, check whether answer.answerText contains the clause by meaning. If any required clause is missing, return rewrite_required and revise the answer by adding the missing content while preserving correct existing facts.',
-            'If a requiredResponseClause says a generator load basis is unconfirmed, require rewrite when the answer presents a numeric kW value as confirmed/final, or when it omits the clause-required rough/partial orientation and missing load fact.',
-            'When revising confidence or suitability, do not invent or alter any model or number. Preserve an existing numericClaimBinding sentence unchanged only when it truthfully preserves the verifiedSourceQuote from the current buyer message; otherwise put non-product numbers in a separate sentence before product names. Never restate a requirement/calculator threshold as a product price or specification.',
-            'For web.researchProductFacts answerGuidance.coverage, require rewrite if the answer turns not_confirmed/ambiguous/not_found into a categorical negative claim. It may say the control was not confirmed, not that it is absent.',
-            'For selectionGoal=preliminary_fit, require rewrite if eligible recommendation_candidate products satisfy deterministic hard constraints but the answer hides every candidate solely because web research failed or did not confirm an open-ended attribute. Preserve the exact missing fact and preliminary caveat. This allowance never upgrades comparison_reference_only products or proven numeric conflicts.',
-            'Require rewrite if the answer is formally correct but sounds like an internal report: third-person catalog wording, "В каталоге БАКАУТ...", "По деталям запуска...", or similar robotic source labels. Rewrite it as simple conversational Russian from our shop voice.',
-            'Не оценивай стиль субъективно. Верни только JSON PreSendReview.'
-          ].join('\n')
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({
-            currentUserMessage: input.userMessage,
-            ledger: compactLedger(input.ledgerState),
-            intent: input.intent,
-            toolResults: compactToolResultsForModel(input.toolResults, input.products),
-            requiredResponseClauses: input.requiredResponseClauses ?? [],
-            repairContext: input.repairContext,
-            productEvidenceRoles: input.productEvidenceRoles ?? [],
-            products: input.products.map(answerProductContext),
-            answer: input.answer
-          })
-        }
-      ],
-      text: preSendReviewFormat
-    };
-    try {
-      const { parsed } = await createStructuredJsonResponse({
-        request,
-        stage: 'agent_pre_send_review',
-        signal: input.signal
-      });
-      return PreSendReviewSchema.parse(parsed);
-    } catch (error) {
-      if (input.signal?.aborted || !isPreSendReviewStructuredOutputError(error)) throw error;
-      console.warn('[agent_pre_send_review] Full structured review failed; retrying with compact evidence context', safeError(error));
-      const compactRequest = {
-        model: config.OPENAI_FACT_MODEL,
-        reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
-        max_output_tokens: config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
-        input: [
-          {
-            role: 'system',
-            content: [
-              'Ты компактный evidence-bound reviewer ответа AI менеджера БАКАУТ.',
-              untrustedEvidenceBoundary,
-              'Проверяй ответ только по currentUserMessage, products, toolStatuses, requiredResponseClauses и answer.',
-              'Каждая названная модель, цена, масса, размер, мощность, усилие, скорость и эксплуатационное преимущество должны точно поддерживаться соответствующим products item. Иначе верни rewrite_required и удали или исправь неподтверждённое.',
-              'При rewrite не меняй и не добавляй модели или числа. comparison_reference_only можно использовать только как факт сравнения с явной причиной отклонения; выбирать и рекомендовать можно только recommendation_candidate. Сохраняй предложение numericClaimBinding только вместе с точной verifiedSourceQuote из текущей реплики покупателя либо выноси не-товарное число в отдельное предложение.',
-              'Не используй failed/error/timeout/denied/not_found tool как источник факта. Если обязательный web-поиск исчерпан без подтверждения решающего факта, сохрани полезный предварительный вывод из подтверждённых данных, назови конкретный неподтверждённый факт, предложи техническое уточнение, попроси номер и выбор: написать результат или позвонить. Не утверждай, что запрос уже передан, пока lead.capture не завершён успешно.',
-              'Для preliminary_fit разрешай полезное предварительное сравнение по каталожным products, если детерминированные ограничения соблюдены и отсутствующий web-факт назван как неподтверждённый, а не как конфликт.',
-              'Не разрешай обещания наличия, доставки, скидки, срока или заявки без успешного точного источника. Не проси уже предоставленный контакт повторно.',
-              'Сохрани прямой ответ на вопрос покупателя и простой русский язык. Верни только JSON PreSendReview.'
-            ].join('\n')
-          },
-          {
-            role: 'user',
-            content: JSON.stringify({
-              currentUserMessage: input.userMessage,
-              selectionGoal: input.intent.selectionPolicy?.selectionGoal ?? null,
-              toolStatuses: input.toolResults.map((result) => ({
-                requestId: result.requestId,
-                tool: result.tool,
-                status: result.status,
-                observationStatus: result.observationStatus ?? null,
-                warnings: result.warnings
-              })),
-              requiredResponseClauses: input.requiredResponseClauses ?? [],
-              productEvidenceRoles: input.productEvidenceRoles ?? [],
-              products: input.products.map(compactReviewerProductContext),
-              answer: input.answer
-            })
-          }
-        ],
-        text: preSendReviewFormat
-      };
-      const { parsed } = await createStructuredJsonResponse({
-        request: compactRequest,
-        stage: 'agent_pre_send_review_compact',
-        signal: input.signal
-      });
-      return PreSendReviewSchema.parse(parsed);
-    }
-  }
 }
 
 export class AgentManagerOrchestrator {
@@ -7249,7 +6117,7 @@ export class AgentManagerOrchestrator {
     const persistedDeadlineAtMs = persistedTurn.deadlineAt ? Date.parse(persistedTurn.deadlineAt) : Number.NaN;
     const leaseMs = Number.isFinite(persistedDeadlineAtMs)
       ? Math.max(1_000, persistedDeadlineAtMs - Date.now())
-      : DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs + TURN_TERMINAL_RESERVE_MS;
+      : DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs + TURN_COMMIT_RESERVE_MS;
     const leaseRepository = this.conversations as ConversationRepository & {
       claimTurnExecution?: ConversationRepository['claimTurnExecution'];
       releaseTurnExecution?: ConversationRepository['releaseTurnExecution'];
@@ -7314,7 +6182,7 @@ export class AgentManagerOrchestrator {
     const persistedTurn = await this.conversations.getTurn(input.sessionId, input.turnId);
     const persistedDeadlineAtMs = persistedTurn?.deadlineAt ? Date.parse(persistedTurn.deadlineAt) : Number.NaN;
     const absoluteWorkDeadlineAtMs = Number.isFinite(persistedDeadlineAtMs)
-      ? persistedDeadlineAtMs - TURN_TERMINAL_RESERVE_MS
+      ? persistedDeadlineAtMs - TURN_COMMIT_RESERVE_MS
       : undefined;
     const turnBudget = new AgentManagerTurnBudget(
       DEFAULT_AGENT_MANAGER_TURN_LIMITS,
@@ -7325,17 +6193,6 @@ export class AgentManagerOrchestrator {
     try {
       wallTimeSignal = turnBudget.createWallTimeAbortSignal();
     } catch (error) {
-      if (error instanceof AgentManagerTurnBudgetExceededError) {
-        return this.completeTerminalTurn({
-          session: input.session,
-          turnId: input.turnId,
-          recovered: input.recovered,
-          onDelta: input.onDelta,
-          reason: 'turn_work_deadline_exhausted_before_execution',
-          deadlineAt: persistedTurn?.deadlineAt ?? null,
-          executionOwner: input.executionOwner
-        });
-      }
       throw error;
     }
     const signal = input.signal
@@ -7366,54 +6223,16 @@ export class AgentManagerOrchestrator {
           return null;
         });
         if (committed) return committed;
-        return this.completeTerminalTurn({
-          session: input.session,
-          turnId: input.turnId,
-          recovered: input.recovered,
-          onDelta: input.onDelta,
-          reason: 'turn_work_deadline_exhausted',
-          deadlineAt: persistedTurn?.deadlineAt ?? null,
-          executionOwner: input.executionOwner
-        });
+        throw new AgentManagerTurnBudgetExceededError('wall_time_budget_exceeded');
       }
       if (error instanceof AgentManagerTurnBudgetExceededError && error.stopReason !== 'wall_time_budget_exceeded') {
-        return this.completeTerminalTurn({
-          session: input.session,
-          turnId: input.turnId,
-          recovered: input.recovered,
-          onDelta: input.onDelta,
-          reason: `turn_budget_${error.stopReason}`,
-          deadlineAt: persistedTurn?.deadlineAt ?? null,
-          executionOwner: input.executionOwner
-        });
+        throw error;
       }
       if (error instanceof AgentSemanticDecisionIncoherentError) {
-        await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_terminalized', {
+        await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_failed', {
           issues: error.issues
         });
-        return this.completeTerminalTurn({
-          session: input.session,
-          turnId: input.turnId,
-          recovered: input.recovered,
-          onDelta: input.onDelta,
-          reason: 'semantic_decision_incoherent_after_bounded_retry',
-          deadlineAt: persistedTurn?.deadlineAt ?? null,
-          executionOwner: input.executionOwner
-        });
-      }
-      if (input.recovered && error instanceof AnswerReviewBlockedError) {
-        await this.trace(input.sessionId, input.turnId, 'recovery', 'second_review_block_terminalized', {
-          issueCodes: error.issueCodes
-        });
-        return this.completeTerminalTurn({
-          session: input.session,
-          turnId: input.turnId,
-          recovered: true,
-          onDelta: input.onDelta,
-          reason: 'answer_blocked_after_semantic_recovery',
-          deadlineAt: persistedTurn?.deadlineAt ?? null,
-          executionOwner: input.executionOwner
-        });
+        throw error;
       }
       throw error;
     }
@@ -7502,10 +6321,9 @@ export class AgentManagerOrchestrator {
           : recoveredSemanticDecision
             ? { found: true as const, payload: recoveredSemanticDecision.intent }
             : intentProposalCheckpoint;
-    const savedIntentWasPreDeltaProposal = !intentCheckpoint.found &&
-      !turnPlannerIntent.found &&
-      intentProposalCheckpoint.found &&
-      !semanticDecisionCheckpoint.found;
+    if (!recoveredSemanticDecision && (savedDelta.found || savedIntent.found)) {
+      throw new Error('legacy_split_semantic_checkpoint_not_supported');
+    }
     let parallelDelta: LedgerStateDelta | undefined;
     let parallelIntent: AgentIntentContract | undefined;
     let parallelDeltaCheckpointed = false;
@@ -7520,15 +6338,9 @@ export class AgentManagerOrchestrator {
     if (!savedDelta.found && !savedIntent.found) {
       const semanticStartedAt = Date.now();
       const structuredDeadlineAtMs = turnBudget.snapshot().usage.deadlineAtMs;
-      const deltaOutputTokenCap = semanticRecoveryOutputTokenCap(
-        persistedExecution.checkpoints,
-        'ledger_delta_proposed'
-      );
-      const intentOutputTokenCap = semanticRecoveryOutputTokenCap(
-        persistedExecution.checkpoints,
-        'intent_contract_proposed'
-      );
-      if (this.model.decideTurn) {
+      if (!this.model.decideTurn) {
+        throw new Error('combined_semantic_decision_required');
+      }
         const sharedModelInput = {
           session: input.session,
           history,
@@ -7619,130 +6431,6 @@ export class AgentManagerOrchestrator {
           durationMs: Date.now() - semanticStartedAt,
           remainingTurnMs: turnBudget.remainingWallTimeMs()
         });
-      } else {
-      turnBudget.consumeModelCall();
-      turnBudget.consumeModelCall();
-      await this.trace(input.sessionId, input.turnId, 'intent', 'parallel_semantic_calls_started', {
-        pendingLeadCaptureDraft: Boolean(pendingLeadDraftContext),
-        deltaOutputTokenCap: deltaOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
-        intentOutputTokenCap: intentOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
-        remainingTurnMs: turnBudget.remainingWallTimeMs()
-      });
-      const sharedModelInput = {
-        session: input.session,
-        history,
-        userMessage,
-        ledgerEvents,
-        ledgerState: ledgerContext.state,
-        pendingLeadCaptureDraft: pendingLeadDraftContext,
-        pendingExhaustedTechnicalHandoffs,
-        structuredDeadlineAtMs,
-        signal: input.signal
-      };
-      const [deltaOutcome, intentOutcome] = await Promise.allSettled([
-        this.model.proposeLedgerDelta({
-          ...sharedModelInput,
-          structuredOutputTokenCap: deltaOutputTokenCap
-        }),
-        this.model.planTurn({
-          ...sharedModelInput,
-          ledgerState: ledgerContext.state,
-          structuredOutputTokenCap: intentOutputTokenCap
-        })
-      ]);
-      const persistFailedSemanticCheckpoint = async (
-        checkpoint: 'ledger_delta_proposed' | 'intent_contract_proposed',
-        error: unknown,
-        attemptedOutputTokenCap: number
-      ) => {
-        const failure = semanticCheckpointError(error);
-        await this.conversations.upsertTurnCheckpoint({
-          sessionId: input.sessionId,
-          turnId: input.turnId,
-          executionOwner: input.executionOwner,
-          checkpoint,
-          status: 'failed',
-          payload: {
-            retryReason: failure.retryReason ?? null,
-            attemptedOutputTokenCap
-          },
-          errorCode: failure.errorCode,
-          errorMessage: failure.details.message
-        });
-      };
-      const persistDeltaOutcome = async () => {
-        try {
-          if (deltaOutcome.status === 'rejected') throw deltaOutcome.reason;
-          const parsed = LedgerStateDeltaSchema.safeParse(deltaOutcome.value);
-          if (!parsed.success) throw new Error(`parallel_ledger_delta_invalid:${parsed.error.issues.length}`);
-          await this.conversations.upsertTurnCheckpoint({
-            sessionId: input.sessionId,
-            turnId: input.turnId,
-            executionOwner: input.executionOwner,
-            checkpoint: 'ledger_delta_proposed',
-            status: 'succeeded',
-            payload: parsed.data
-          });
-          return parsed.data;
-        } catch (error) {
-          await persistFailedSemanticCheckpoint(
-            'ledger_delta_proposed',
-            error,
-            deltaOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS
-          ).catch(() => undefined);
-          throw error;
-        }
-      };
-      const persistIntentOutcome = async () => {
-        try {
-          if (intentOutcome.status === 'rejected') throw intentOutcome.reason;
-          const parsed = AgentIntentContractSchema.safeParse(intentOutcome.value);
-          if (!parsed.success) throw new Error(`parallel_intent_contract_invalid:${parsed.error.issues.length}`);
-          await this.conversations.upsertTurnCheckpoint({
-            sessionId: input.sessionId,
-            turnId: input.turnId,
-            executionOwner: input.executionOwner,
-            checkpoint: 'intent_contract_proposed',
-            status: 'succeeded',
-            payload: parsed.data
-          });
-          return parsed.data;
-        } catch (error) {
-          await persistFailedSemanticCheckpoint(
-            'intent_contract_proposed',
-            error,
-            intentOutputTokenCap ?? config.OPENAI_PLANNER_MAX_OUTPUT_TOKENS
-          ).catch(() => undefined);
-          throw error;
-        }
-      };
-      const [deltaCheckpointOutcome, intentCheckpointOutcome] = await Promise.allSettled([
-        persistDeltaOutcome(),
-        persistIntentOutcome()
-      ]);
-      const failures: unknown[] = [];
-      if (deltaCheckpointOutcome.status === 'fulfilled') {
-        parallelDelta = deltaCheckpointOutcome.value;
-        parallelDeltaCheckpointed = true;
-      } else {
-        failures.push(deltaCheckpointOutcome.reason);
-      }
-      if (intentCheckpointOutcome.status === 'fulfilled') {
-        parallelIntent = intentCheckpointOutcome.value;
-      } else {
-        failures.push(intentCheckpointOutcome.reason);
-      }
-      await this.trace(input.sessionId, input.turnId, 'intent', failures.length
-        ? 'parallel_semantic_calls_partially_failed'
-        : 'parallel_semantic_calls_completed', {
-        deltaCompleted: Boolean(parallelDelta),
-        intentCompleted: Boolean(parallelIntent),
-        durationMs: Date.now() - semanticStartedAt,
-        remainingTurnMs: turnBudget.remainingWallTimeMs(),
-        failures: failures.map((error) => safeError(error))
-      });
-      if (failures.length) throw failures[0];
-      }
     }
     let delta: LedgerStateDelta;
     if (savedDelta.found) {
@@ -7752,21 +6440,7 @@ export class AgentManagerOrchestrator {
     } else if (parallelDelta) {
       delta = parallelDelta;
     } else {
-      turnBudget.consumeModelCall();
-      delta = await this.model.proposeLedgerDelta({
-        session: input.session,
-        history,
-        userMessage,
-        ledgerEvents,
-        ledgerState: ledgerContext.state,
-        pendingLeadCaptureDraft: pendingLeadDraftContext,
-        structuredOutputTokenCap: semanticRecoveryOutputTokenCap(
-          persistedExecution.checkpoints,
-          'ledger_delta_proposed'
-        ),
-        structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
-        signal: input.signal
-      });
+      throw new Error('combined_semantic_decision_missing_ledger_delta');
     }
     if (!savedDelta.found && !parallelDeltaCheckpointed) {
       await this.conversations.upsertTurnCheckpoint({
@@ -7791,7 +6465,7 @@ export class AgentManagerOrchestrator {
           ? savedIntentForLedgerReconciliation.data
           : undefined),
         {
-          allowParallelContinue: Boolean(parallelIntent || savedIntentWasPreDeltaProposal)
+          allowParallelContinue: Boolean(parallelIntent)
         }
       );
       if (reconciliation.repairedNeedId) {
@@ -7872,69 +6546,13 @@ export class AgentManagerOrchestrator {
       savedIntentParse?.success === false || !parsedSavedIntent?.selectionPolicy
     ));
     let intentWasReplanned = !parsedSavedIntent || legacyIntentUpgraded;
-    let plannedAgainstPreDelta = savedIntentWasPreDeltaProposal;
     let plannedIntent: AgentIntentContract;
     if (parsedSavedIntent && !legacyIntentUpgraded) {
       plannedIntent = parsedSavedIntent;
     } else if (parallelIntent) {
       plannedIntent = parallelIntent;
-      plannedAgainstPreDelta = !combinedSemanticDecision;
     } else {
-      turnBudget.consumeModelCall();
-      plannedIntent = await this.model.planTurn({
-        session: input.session,
-        history,
-        userMessage,
-        ledgerEvents: effectiveLedgerEvents,
-        ledgerState,
-        ledgerIncludesCurrentTurnDelta: true,
-        pendingLeadCaptureDraft: pendingLeadDraftContext,
-        pendingExhaustedTechnicalHandoffs,
-        structuredOutputTokenCap: semanticRecoveryOutputTokenCap(
-          persistedExecution.checkpoints,
-          'intent_contract_proposed'
-        ),
-        structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
-        signal: input.signal
-      });
-    }
-    if (plannedAgainstPreDelta) {
-      const needActionReconciliation = reconcileParallelIntentNeedAction(delta, plannedIntent);
-      if (needActionReconciliation.repairedNeedId) {
-        plannedIntent = needActionReconciliation.intent;
-        await this.trace(input.sessionId, input.turnId, 'intent', 'parallel_intent_need_action_reconciled', {
-          needId: needActionReconciliation.repairedNeedId,
-          needAction: plannedIntent.selectionPolicy?.needAction,
-          remainingTurnMs: turnBudget.remainingWallTimeMs()
-        });
-      }
-      const conflicts = parallelIntentLedgerConflicts({
-        intent: plannedIntent,
-        previousLedgerState: ledgerContext.state,
-        ledgerState,
-        turnEvents: newEvents
-      });
-      if (conflicts.length) {
-        await this.trace(input.sessionId, input.turnId, 'intent', 'parallel_intent_replan_required', {
-          conflicts,
-          remainingTurnMs: turnBudget.remainingWallTimeMs()
-        });
-        turnBudget.consumeModelCall();
-        plannedIntent = await this.model.planTurn({
-          session: input.session,
-          history,
-          userMessage,
-          ledgerEvents: effectiveLedgerEvents,
-          ledgerState,
-          ledgerIncludesCurrentTurnDelta: true,
-          pendingLeadCaptureDraft: pendingLeadDraftContext,
-          pendingExhaustedTechnicalHandoffs,
-          structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
-          signal: input.signal
-        });
-        intentWasReplanned = true;
-        plannedAgainstPreDelta = false;
-      }
+      throw new Error('combined_semantic_decision_missing_intent');
     }
     const postPlanReconciliation = reconcileNewActiveNeedProductClass(delta, plannedIntent);
     if (
@@ -8081,13 +6699,6 @@ export class AgentManagerOrchestrator {
     });
     const answerPolicyTrace = buildSalesManagerPolicyTrace({
       target: 'answer',
-      semanticRuleIds: intent.policyRuleIds ?? [],
-      riskFlags: intent.riskFlags,
-      enabled: true,
-      shadowMode: false
-    });
-    const reviewerPolicyTrace = buildSalesManagerPolicyTrace({
-      target: 'reviewer',
       semanticRuleIds: intent.policyRuleIds ?? [],
       riskFlags: intent.riskFlags,
       enabled: true,
@@ -8374,7 +6985,7 @@ export class AgentManagerOrchestrator {
       const replacement = savedReplacement
         ? replacementFromPersistedToolResult({
             result: savedReplacement,
-            fallback: {
+            baseline: {
               query: 'виброплита 60 90 кг для тротуарной плитки во дворе с ковриком',
               productIds: [],
               droppedPreviousProductIds: plateAnswerProductEvidence.droppedProductIds,
@@ -8454,7 +7065,7 @@ export class AgentManagerOrchestrator {
       const replacement = savedReplacement
         ? replacementFromPersistedToolResult({
             result: savedReplacement,
-            fallback: {
+            baseline: {
               query: [userMessage, narrowedReason, continuityIntent].filter(Boolean).join(' '),
               productIds: [],
               droppedPreviousProductIds: budgetNarrowingRejection.droppedProductIds,
@@ -8567,7 +7178,6 @@ export class AgentManagerOrchestrator {
       }),
       ...requiredResponseClausesForToolResults(toolResults, effectiveIntent)
     ];
-    const repairContext = failedReviewRepairContext(persistedExecution.checkpoints);
     const savedAnswer = legacyIntentUpgraded
       ? { found: false as const, payload: undefined }
       : succeededCheckpoint(persistedExecution.checkpoints, 'answer_contract_created');
@@ -8593,7 +7203,6 @@ export class AgentManagerOrchestrator {
           productEvidenceRoles,
           requiredResponseClauses,
           semanticDecisionValidated,
-          repairContext,
           signal: input.signal
         }),
         ledgerState,
@@ -8646,51 +7255,13 @@ export class AgentManagerOrchestrator {
           productEvidenceRoles,
           requiredResponseClauses,
           semanticDecisionValidated,
-          repairContext,
           answer,
           signal: input.signal
         }, turnBudget);
     }
-    if (review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()) {
-      const rewriteIssues = revalidateReviewerRewrite({
-        revisedAnswerText: review.revisedAnswerText,
-        userMessage,
-        products: answerEvidenceProducts,
-        toolResults: selectionToolResults,
-        durableLeadCaptureSucceeded: selectionToolResults.some(isDurableLeadCaptureResult),
-        numericClaimBindings: reviewerRewriteNumericClaimBindings({
-          answer,
-          intent: effectiveIntent,
-          toolResults: selectionToolResults,
-          userMessage
-        })
-      });
-      if (rewriteIssues.length) {
-        review = {
-          verdict: 'block',
-          issues: uniqueReviewIssues([...review.issues, ...rewriteIssues])
-        };
-      }
-    }
-    let finalText = review.verdict === 'rewrite_required' && review.revisedAnswerText?.trim()
-      ? review.revisedAnswerText.trim()
-      : answer.answerText.trim();
-    const reviewerPreliminaryRecovery = enforceReviewerPreliminaryCandidateRecovery({
-      review,
-      answer,
-      intent: effectiveIntent,
-      toolResults: selectionToolResults
-    });
-    if (reviewerPreliminaryRecovery) {
-      answer = reviewerPreliminaryRecovery;
-      finalText = reviewerPreliminaryRecovery.answerText;
-      await this.trace(input.sessionId, input.turnId, 'review', 'preliminary_candidates_recovered', {
-        selectedProductIds: reviewerPreliminaryRecovery.selectedProductIds,
-        missingFacts: reviewerPreliminaryRecovery.selectionReadiness?.missingFacts ?? []
-      });
-    }
-    const finalLeadAction = leadActionAfterReview({ answer, finalText, review, toolResults });
-    if (review.verdict === 'block') {
+    const finalText = answer.answerText.trim();
+    const finalLeadAction = leadActionAfterValidation({ answer, finalText, review, toolResults });
+    if (review.verdict !== 'pass') {
       const reviewIssueCodes = review.issues.map((issue) => issue.code);
       const reviewErrorMessage = reviewIssueCodes.join(', ');
       await this.conversations.upsertTurnCheckpoint({
@@ -8700,7 +7271,7 @@ export class AgentManagerOrchestrator {
         checkpoint: 'answer_contract_created',
         status: 'failed',
         payload: answer,
-        errorCode: 'answer_contract_blocked_by_review',
+        errorCode: 'answer_contract_blocked_by_validation',
         errorMessage: reviewErrorMessage
       });
       await this.conversations.upsertTurnCheckpoint({
@@ -8710,7 +7281,7 @@ export class AgentManagerOrchestrator {
         checkpoint: 'review_completed',
         status: 'failed',
         payload: review,
-        errorCode: 'answer_contract_blocked_by_review',
+        errorCode: 'answer_contract_blocked_by_validation',
         errorMessage: reviewErrorMessage
       });
       await this.conversations.saveAnswerContract({
@@ -8725,18 +7296,10 @@ export class AgentManagerOrchestrator {
       await this.trace(input.sessionId, input.turnId, 'recovery', 'blocked_answer_checkpoint_invalidated', {
         issueCodes: reviewIssueCodes
       });
-      throw new AnswerReviewBlockedError(reviewIssueCodes);
+      throw new AnswerValidationBlockedError(reviewIssueCodes);
     }
-    const reviewInvalidatedFactSources = review.issues.some((issue) =>
-      issue.code === 'failed_tool_result_used_as_fact_source'
-    );
-    const failedToolSourceIds = reviewInvalidatedFactSources
-      ? nonFactBearingToolResultIds(selectionToolResults)
-      : new Set<string>();
-    const finalToolResultIds = answer.toolResultIds.filter((toolResultId) => !failedToolSourceIds.has(toolResultId));
-    const finalFactsUsed = reviewInvalidatedFactSources
-      ? answer.factsUsed.filter((fact) => !fact.sourceEventIds.some((sourceId) => failedToolSourceIds.has(sourceId)))
-      : answer.factsUsed;
+    const finalToolResultIds = answer.toolResultIds;
+    const finalFactsUsed = answer.factsUsed;
     const finalQuestionsAsked = answer.questionsAsked.filter((question) => {
       const existing = ledgerState.questionsById[question.questionId];
       return !existing || existing.status === 'open';
@@ -8753,7 +7316,7 @@ export class AgentManagerOrchestrator {
     } else {
       await this.trace(input.sessionId, input.turnId, 'recovery', 'checkpoint_reused', { checkpoint: 'review_completed' });
     }
-    await this.trace(input.sessionId, input.turnId, 'review', 'completed', {
+    await this.trace(input.sessionId, input.turnId, 'validation', 'completed', {
       verdict: review.verdict,
       issues: review.issues.map((issue) => issue.code)
     });
@@ -8810,7 +7373,7 @@ export class AgentManagerOrchestrator {
       const previousProducts = previousVisibleCardProducts({
         history,
         intent: continuityCardIntent({
-          fallback: initialCardSelection.intent,
+          defaultIntent: initialCardSelection.intent,
           decisionProductClass: selectionReadiness.decision?.productClass
         }),
         allowedProductIds: structuredSemanticPlan
@@ -8963,17 +7526,17 @@ export class AgentManagerOrchestrator {
       ['Найдено в каталоге под текущий запрос.'],
       cardSelection.productCaveatsById
     );
-    const customerOutputReview = guardCustomerOutput({
+    const customerOutputValidation = guardCustomerOutput({
       answerText: finalText,
       productCards: cards
     });
-    if (!customerOutputReview.ok) {
-      const issueCodes = customerOutputReview.issues.map((issue) => issue.code);
-      await this.trace(input.sessionId, input.turnId, 'review', 'customer_output_blocked', {
+    if (!customerOutputValidation.ok) {
+      const issueCodes = customerOutputValidation.issues.map((issue) => issue.code);
+      await this.trace(input.sessionId, input.turnId, 'validation', 'customer_output_blocked', {
         issueCodes,
-        evidence: customerOutputReview.issues.map((issue) => issue.evidence)
+        evidence: customerOutputValidation.issues.map((issue) => issue.evidence)
       });
-      throw new AnswerReviewBlockedError(issueCodes);
+      throw new AnswerValidationBlockedError(issueCodes);
     }
     const policyGate = evaluateAgentManagerPolicyGate({
       intent: effectiveIntent,
@@ -9017,19 +7580,16 @@ export class AgentManagerOrchestrator {
         packVersion: SALES_MANAGER_POLICY_PACK_VERSION,
         packHash: SALES_MANAGER_POLICY_PACK_HASH,
         selectedByPlanner: intent.policyRuleIds ?? [],
-        reviewMode: config.AI_MANAGER_REVIEW_MODE,
-        reviewReason: llmReviewPolicy({ intent: effectiveIntent, answer, toolResults: selectionToolResults, products: answerProducts, userMessage }).reasons.join(','),
-        answer: answerPolicyTrace,
-        reviewer: reviewerPolicyTrace
+        validationMode: 'deterministic',
+        answer: answerPolicyTrace
       },
       models: {
         planner: config.OPENAI_PLANNER_MODEL,
-        answer: config.OPENAI_ANSWER_MODEL,
-        reviewer: config.OPENAI_FACT_MODEL
+        answer: config.OPENAI_ANSWER_MODEL
       },
       turnBudget: turnBudget.snapshot(),
       answerContract: finalAnswerContract,
-      preSendReview: review,
+      preSendValidation: review,
       toolResults,
       historicalSelectionEvidence: {
         reused: historicalSelectionTools.length > 0,
@@ -9310,7 +7870,7 @@ export class AgentManagerOrchestrator {
             unconfirmedFacts: [],
             error: { code: 'web_research_skipped_budget', effectiveTimeoutMs }
           },
-          warnings: ['web_research_skipped:compose_review_reserve'],
+          warnings: ['web_research_skipped:answer_reserve'],
           errorCode: 'web_research_skipped_budget'
         });
       }
@@ -9324,7 +7884,7 @@ export class AgentManagerOrchestrator {
           attempt,
           timeoutMs: effectiveTimeoutMs,
           configuredTimeoutMs: definition.timeoutMs,
-          postWebReserveMs: request.tool === 'web.researchProductFacts' ? WEB_COMPOSE_REVIEW_RESERVE_MS : 0,
+          postWebAnswerReserveMs: request.tool === 'web.researchProductFacts' ? WEB_ANSWER_RESERVE_MS : 0,
           remainingTurnMs: input.budget.remainingWallTimeMs()
         });
         if (request.tool === 'catalog.search') {
@@ -9339,7 +7899,6 @@ export class AgentManagerOrchestrator {
               semanticContext: [semanticQuery, input.userMessage, request.rationale].join('\n'),
               productIntent,
               powerSource: resolvedToolPowerSource(request, input.intent),
-              useLegacySemanticRanking: !input.intent.selectionPolicy,
               embeddingQuery: semanticQuery,
               budgetMax,
               intent: input.intent,
@@ -9365,12 +7924,11 @@ export class AgentManagerOrchestrator {
                 semanticContext: [semanticQuery, loadAwareQuery, input.userMessage, request.rationale].join('\n'),
                 productIntent,
                 powerSource: resolvedToolPowerSource(request, input.intent),
-                useLegacySemanticRanking: !input.intent.selectionPolicy,
                 embeddingQuery: loadAwareQuery,
                 budgetMax,
                 intent: input.intent,
                 toolResults,
-                allowStructuredRecovery: false
+                allowPrimaryExpansion: false
               });
               const mergedProducts = [...new Map(
                 [...search.products, ...retrySearch.products].map((product) => [product.id, product])
@@ -9413,7 +7971,7 @@ export class AgentManagerOrchestrator {
                   vectorCount: search.vectorCount,
                   usedEmbeddings: search.vectorCount > 0,
                   candidateTiers: search.candidateTiers,
-                  structuredRecovery: search.structuredRecovery ?? null
+                  primaryExpansion: search.primaryExpansion ?? null
                 }
               },
               warnings: catalogSearchGrounded ? warnings : [...warnings, 'catalog_search_no_matches']
@@ -9466,12 +8024,11 @@ export class AgentManagerOrchestrator {
                 semanticContext: [semanticQuery, query, input.userMessage, request.rationale].join('\n'),
                 productIntent,
                 powerSource: resolvedToolPowerSource(request, input.intent),
-                useLegacySemanticRanking: !input.intent.selectionPolicy,
                 embeddingQuery: semanticQuery,
                 budgetMax,
                 intent: input.intent,
                 toolResults,
-                allowStructuredRecovery: false
+                allowPrimaryExpansion: false
               });
               found.products.forEach((product) => requestProductsById.set(product.id, product));
             }
@@ -9610,7 +8167,6 @@ export class AgentManagerOrchestrator {
               semanticContext: [scopedQuery.semanticQuery, lookupQuery, input.userMessage, request.rationale].join('\n'),
               productIntent: resolvedToolProductIntent(request, input.intent),
               powerSource: resolvedToolPowerSource(request, input.intent),
-              useLegacySemanticRanking: !input.intent.selectionPolicy,
               embeddingQuery: scopedQuery.semanticQuery,
               budgetMax
             });
@@ -10380,12 +8936,11 @@ export class AgentManagerOrchestrator {
     semanticContext?: string;
     productIntent?: ProductSelectionClass;
     powerSource?: 'battery' | 'fuel' | 'mains' | 'any';
-    useLegacySemanticRanking?: boolean;
     embeddingQuery?: string;
     budgetMax?: number;
     intent?: AgentIntentContract;
     toolResults?: ToolResult[];
-    allowStructuredRecovery?: boolean;
+    allowPrimaryExpansion?: boolean;
   }) {
     const query = input.query;
     const limit = input.limit;
@@ -10446,10 +9001,10 @@ export class AgentManagerOrchestrator {
             if (!byId.has(product.id)) added += 1;
             byId.set(product.id, product);
           }
-          if (added > 0) warnings.push(`catalog_budget_fallback_pool:${added}`);
+          if (added > 0) warnings.push(`catalog_budget_expansion_pool:${added}`);
         } catch (error) {
           firstError ??= error;
-          warnings.push(`catalog_budget_fallback_error:${safeError(error).code ?? safeError(error).message}`);
+          warnings.push(`catalog_budget_expansion_error:${safeError(error).code ?? safeError(error).message}`);
         }
       }
     }
@@ -10468,21 +9023,21 @@ export class AgentManagerOrchestrator {
       warnings.push(`catalog_products_filtered_by_power_source:battery:${matchingProducts.length - sourceFilteredProducts.length}`);
       if (!sourceFilteredProducts.length) {
         try {
-          const fallbackBatteryProducts = await this.products.searchProducts(
+          const expandedBatteryProducts = await this.products.searchProducts(
             fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446\\u0438\\u044f'),
             Math.max(limit * 6, 80)
           );
-          sourceFilteredProducts = fallbackBatteryProducts
+          sourceFilteredProducts = expandedBatteryProducts
             .filter((product) => productMatchesIntent(product, productIntent))
             .filter(isBatteryPowerStation);
           if (sourceFilteredProducts.length) {
-            warnings.push(`catalog_battery_power_station_fallback_pool:${sourceFilteredProducts.length}`);
+            warnings.push(`catalog_battery_power_station_expansion_pool:${sourceFilteredProducts.length}`);
           } else {
             warnings.push('catalog_search_no_power_source_fit:battery');
           }
         } catch (error) {
           firstError ??= error;
-          warnings.push(`catalog_battery_power_station_fallback_error:${safeError(error).code ?? safeError(error).message}`);
+          warnings.push(`catalog_battery_power_station_expansion_error:${safeError(error).code ?? safeError(error).message}`);
           warnings.push('catalog_search_no_power_source_fit:battery');
         }
       }
@@ -10494,7 +9049,7 @@ export class AgentManagerOrchestrator {
           toolResults: input.toolResults ?? []
         })
       : { products: sourceFilteredProducts, droppedProductIds: [] as string[], warnings: [] as string[] };
-    let structuredRecovery: {
+    let primaryExpansion: {
       attempted: boolean;
       query: string;
       scannedCount: number;
@@ -10515,29 +9070,29 @@ export class AgentManagerOrchestrator {
       structuredCatalogSelection &&
       (structuredEvidence.products.length < desiredStructuredCandidateCount || structuredRankingObjectives.length > 0) &&
       !firstError &&
-      input.allowStructuredRecovery !== false
+      input.allowPrimaryExpansion !== false
     ) {
-      const recoveryQuery = structuredCatalogRecoveryQuery(
+      const expansionQuery = structuredCatalogExpansionQuery(
         productIntent,
         input.intent?.selectionPolicy?.targetProductClass
       );
       try {
         const initialStructuredEvidence = structuredEvidence;
-        const recoveryPool = await this.products.searchProducts(recoveryQuery, 1_000);
-        const matchingRecoveryPool = recoveryPool
+        const expansionPool = await this.products.searchProducts(expansionQuery, 1_000);
+        const matchingExpansionPool = expansionPool
           .filter((product) => productMatchesIntent(product, productIntent))
           .filter((product) => productMeetsStructuredPowerSource(
             product,
             input.intent?.selectionPolicy?.powerSource
           ));
-        const recoveredEvidence = filterProductsByStructuredSelectionPolicy({
-          products: matchingRecoveryPool,
+        const expandedEvidence = filterProductsByStructuredSelectionPolicy({
+          products: matchingExpansionPool,
           intent: input.intent!,
           toolResults: input.toolResults ?? []
         });
         const mergedEvidence = filterProductsByStructuredSelectionPolicy({
           products: [...new Map(
-            [...initialStructuredEvidence.products, ...recoveredEvidence.products]
+            [...initialStructuredEvidence.products, ...expandedEvidence.products]
               .map((product) => [product.id, product])
           ).values()],
           intent: input.intent!,
@@ -10547,50 +9102,29 @@ export class AgentManagerOrchestrator {
           products: mergedEvidence.products,
           droppedProductIds: uniqueStrings([
             ...initialStructuredEvidence.droppedProductIds,
-            ...recoveredEvidence.droppedProductIds,
+            ...expandedEvidence.droppedProductIds,
             ...mergedEvidence.droppedProductIds
           ]),
           warnings: uniqueStrings([
             ...initialStructuredEvidence.warnings,
-            ...recoveredEvidence.warnings,
+            ...expandedEvidence.warnings,
             ...mergedEvidence.warnings
           ])
         };
-        if (!structuredEvidence.products.length) {
-          const compromises = structuredCompromiseProducts({
-            products: matchingRecoveryPool,
-            intent: input.intent!,
-            toolResults: input.toolResults ?? [],
-            limit: Math.max(limit, 8)
-          });
-          if (compromises.length) {
-            candidateTier = 'compromise';
-            for (const candidate of compromises) {
-              candidateTradeoffs.set(candidate.product.id, candidate.tradeoffs);
-            }
-            structuredEvidence = {
-              products: compromises.map((candidate) => candidate.product),
-              droppedProductIds: matchingRecoveryPool
-                .filter((product) => !candidateTradeoffs.has(product.id))
-                .map((product) => product.id),
-              warnings: [`catalog_structured_recovery_compromise_candidates:${compromises.length}`]
-            };
-          }
-        }
-        structuredRecovery = {
+        primaryExpansion = {
           attempted: true,
-          query: recoveryQuery,
-          scannedCount: recoveryPool.length,
+          query: expansionQuery,
+          scannedCount: expansionPool.length,
           matchedCount: structuredEvidence.products.length
         };
-        warnings.push(`catalog_structured_recovery_attempted:${recoveryPool.length}:${structuredEvidence.products.length}`);
+        warnings.push(`catalog_primary_expansion_attempted:${expansionPool.length}:${structuredEvidence.products.length}`);
         if (structuredRankingObjectives.length) {
-          warnings.push(`catalog_structured_preference_recovery:${structuredRankingObjectives.length}`);
+          warnings.push(`catalog_structured_preference_expansion:${structuredRankingObjectives.length}`);
         }
       } catch (error) {
         firstError ??= error;
-        structuredRecovery = { attempted: true, query: recoveryQuery, scannedCount: 0, matchedCount: 0 };
-        warnings.push(`catalog_structured_recovery_error:${safeError(error).code ?? safeError(error).message}`);
+        primaryExpansion = { attempted: true, query: expansionQuery, scannedCount: 0, matchedCount: 0 };
+        warnings.push(`catalog_primary_expansion_error:${safeError(error).code ?? safeError(error).message}`);
       }
     }
     warnings.push(...structuredEvidence.warnings);
@@ -10600,15 +9134,15 @@ export class AgentManagerOrchestrator {
           intent: input.intent
         })
       : structuredEvidence.products;
-    const rankedProducts = input.useLegacySemanticRanking === false
-      ? preferenceRankedProducts
-      : rankCatalogProductsByNumericFit({
+    const rankedProducts = input.intent
+      ? rankCatalogProductsByNumericFit({
           products: preferenceRankedProducts,
           intent: productIntent,
           query,
           semanticContext,
           userMessage: input.userMessage ?? query
-        });
+        })
+      : preferenceRankedProducts;
     const products = rankedProducts.slice(0, limit);
     if (!products.length && firstError) throw firstError;
     return {
@@ -10633,7 +9167,7 @@ export class AgentManagerOrchestrator {
             tradeoffs: [] as string[]
           }))
       ],
-      structuredRecovery,
+      primaryExpansion,
       warnings
     };
   }
@@ -10663,7 +9197,14 @@ export class AgentManagerOrchestrator {
         evidence: strictRequirementBlockers.map((blocker) => `${blocker.id}:${blocker.kind}:${blocker.reason}`).join(', ')
       });
     }
-    if (hasLeadContact(contactInTurn) && answerRequestsContactData(input.answer.answerText)) {
+    const requestsMissingNameOnly = !contactInTurn.name &&
+      Boolean(contactInTurn.phone || contactInTurn.email) &&
+      !answerRequestsPhoneOrEmail(input.answer.answerText);
+    if (
+      hasLeadContact(contactInTurn) &&
+      answerRequestsContactData(input.answer.answerText) &&
+      !requestsMissingNameOnly
+    ) {
       mechanicalIssues.push({
         code: 'asks_contact_already_provided',
         severity: 'high',
@@ -10804,29 +9345,29 @@ export class AgentManagerOrchestrator {
         evidence: input.answer.riskFlags.join(', ')
       });
     }
-    const safeResearchRewrite = researchGuidanceSafeRewrite({
+    const expectedResearchGuidance = expectedResearchGuidanceText({
       toolResults: input.toolResults,
       intent: input.intent
     });
-    if (safeResearchRewrite && safeResearchRewrite !== input.answer.answerText.trim()) {
+    if (expectedResearchGuidance && expectedResearchGuidance !== input.answer.answerText.trim()) {
       mechanicalIssues.push({
-        code: 'research_guidance_uncertainty_safe_rewrite',
+        code: 'research_guidance_uncertainty_mismatch',
         severity: 'high',
         message: 'Exact-model research has unconfirmed or ambiguous coverage; use checked answerGuidance instead of a broader generated claim.',
-        evidence: safeResearchRewrite
+        evidence: expectedResearchGuidance
       });
     }
-    const unsupportedCatalogProductMentionRewrite = unsupportedCatalogProductMentionSafeRewrite({
+    const unsupportedCatalogProductMentions = unsupportedCatalogProductMentionTokens({
       answerText: input.answer.answerText,
       intent: input.intent,
       products: input.products
     });
-    if (unsupportedCatalogProductMentionRewrite) {
+    if (unsupportedCatalogProductMentions) {
       mechanicalIssues.push({
         code: 'unsupported_catalog_product_mention',
         severity: 'high',
         message: 'Catalog selection answer names a model identifier that is absent from the product evidence passed to the answer.',
-        evidence: unsupportedCatalogProductMentionRewrite.unsupportedDisplayTokens.join(', ')
+        evidence: unsupportedCatalogProductMentions.join(', ')
       });
     }
     const incompleteWebWithoutExhaustion = input.toolResults.some((result) => {
@@ -10898,514 +9439,10 @@ export class AgentManagerOrchestrator {
         evidence: explicitHeavyPlateTaskConflictClause.instruction
       });
     }
-    const blockingIssueCodes = new Set([
-      'unsupported_fact_source',
-      'unknown_tool_result_reference',
-      'selected_product_without_evidence',
-      'lead_confirmation_without_local_capture',
-      'requires_adjudication',
-      'unsupported_claim_risk_flag'
-    ]);
-    const blockingIssues = mechanicalIssues.filter((issue) =>
-      blockingIssueCodes.has(issue.code) &&
-      !(issue.code === 'selected_product_without_evidence' && strictRequirementBlockers.length > 0)
-    );
-    if (blockingIssues.length) {
-      return {
-        verdict: 'block',
-        issues: blockingIssues
-      };
-    }
-    const finalizeMechanicalRewrite = async (
-      candidateText: string,
-      forceSemanticReview = false
-    ): Promise<PreSendReview> => {
-      const revisedAnswerText = candidateText.trim();
-      if (!revisedAnswerText) {
-        return {
-          verdict: 'block',
-          issues: uniqueReviewIssues([
-            ...mechanicalIssues,
-            {
-              code: 'mechanical_rewrite_missing_text',
-              severity: 'high',
-              message: 'A required safety rewrite produced no buyer-visible text.',
-              evidence: candidateText
-            }
-          ])
-        };
-      }
-      const candidateInput: AgentManagerReviewInput = {
-        ...input,
-        answer: { ...input.answer, answerText: revisedAnswerText }
-      };
-      const policy = llmReviewPolicy(candidateInput);
-      const semanticReviewRequired = forceSemanticReview || (
-        policy.mode !== 'off' && policy.llmRequired && candidateInput.products.length > 0
-      );
-      if (!semanticReviewRequired) {
-        return { verdict: 'rewrite_required', issues: mechanicalIssues, revisedAnswerText };
-      }
-
-      budget?.consumeModelCall();
-      const semanticReview = await this.model.reviewAnswer(candidateInput);
-      if (semanticReview.verdict === 'block') {
-        return {
-          verdict: 'block',
-          issues: uniqueReviewIssues([...mechanicalIssues, ...semanticReview.issues])
-        };
-      }
-      if (semanticReview.verdict === 'pass') {
-        return {
-          verdict: 'rewrite_required',
-          issues: uniqueReviewIssues([...mechanicalIssues, ...semanticReview.issues]),
-          revisedAnswerText
-        };
-      }
-      const semanticText = semanticReview.revisedAnswerText?.trim();
-      if (!semanticText) {
-        return {
-          verdict: 'block',
-          issues: uniqueReviewIssues([
-            ...mechanicalIssues,
-            ...semanticReview.issues,
-            {
-              code: 'catalog_evidence_rewrite_missing_text',
-              severity: 'high',
-              message: 'Catalog evidence reviewer required a rewrite but returned no text.',
-              evidence: revisedAnswerText
-            }
-          ])
-        };
-      }
-      return {
-        verdict: 'rewrite_required',
-        issues: uniqueReviewIssues([...mechanicalIssues, ...semanticReview.issues]),
-        revisedAnswerText: semanticText
-      };
-    };
-    const unverifiableStrictRequirementIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'unverifiable_strict_hard_constraint'
-    );
-    if (unverifiableStrictRequirementIssue) {
-      return finalizeMechanicalRewrite(unverifiableStrictHardConstraintSafeRewrite(strictRequirementBlockers));
-    }
-    const leadCaptureRepairIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'lead_capture_missing_contact_offer_form' || issue.code === 'lead_capture_missing_name'
-    );
-    if (leadCaptureRepairIssue) {
-      return finalizeMechanicalRewrite(leadCaptureRepairText({
-        contact: contactInTurn,
-        toolResults: input.toolResults,
-        answerText: input.answer.answerText,
-        preserveAnswer: input.toolResults.some((result) => result.tool !== 'lead.capture' && result.status === 'ok') ||
-          input.answer.factsUsed.length > 0
-      }), true);
-    }
-    const closedQuestionIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'asks_closed_question' || issue.code === 'question_not_opened_by_semantic_decision'
-    );
-    if (closedQuestionIssue) {
-      budget?.consumeModelCall();
-      const semanticRewrite = await this.model.reviewAnswer({
-        ...input,
-        answer: {
-          ...input.answer,
-          riskFlags: uniqueStrings([...input.answer.riskFlags, 'asks_closed_question'])
-        }
-      });
-      const revisedAnswerText = semanticRewrite.verdict === 'rewrite_required'
-        ? semanticRewrite.revisedAnswerText?.trim()
-        : undefined;
-      if (!revisedAnswerText || revisedAnswerText === input.answer.answerText.trim()) {
-        return {
-          verdict: 'block',
-          issues: uniqueReviewIssues([
-            ...mechanicalIssues,
-            ...semanticRewrite.issues,
-            {
-              code: 'closed_question_semantic_rewrite_missing',
-              severity: 'high',
-              message: 'The semantic reviewer did not replace a repeated closed question with a useful continuation.',
-              evidence: input.answer.answerText
-            }
-          ])
-        };
-      }
-      budget?.consumeModelCall();
-      const recheck = await this.model.reviewAnswer({
-        ...input,
-        answer: {
-          ...input.answer,
-          answerText: revisedAnswerText,
-          questionsAsked: input.answer.questionsAsked.filter((question) => {
-            const existing = input.ledgerState.questionsById[question.questionId];
-            return !existing || existing.status === 'open';
-          })
-        }
-      });
-      if (recheck.verdict !== 'pass') {
-        return {
-          verdict: 'block',
-          issues: uniqueReviewIssues([
-            ...mechanicalIssues,
-            ...semanticRewrite.issues,
-            ...recheck.issues,
-            {
-              code: 'closed_question_semantic_rewrite_failed_recheck',
-              severity: 'high',
-              message: 'The semantic rewrite for a repeated closed question did not pass recheck.',
-              evidence: revisedAnswerText
-            }
-          ])
-        };
-      }
-      return {
-        verdict: 'rewrite_required',
-        issues: uniqueReviewIssues([...mechanicalIssues, ...semanticRewrite.issues]),
-        revisedAnswerText
-      };
-    }
-    const researchGuidanceRepairIssue = mechanicalIssues.find((issue) => issue.code === 'research_guidance_uncertainty_safe_rewrite');
-    if (researchGuidanceRepairIssue && safeResearchRewrite) {
-      return finalizeMechanicalRewrite(safeResearchRewrite);
-    }
-    const prematureHandoffIssue = mechanicalIssues.find((issue) => issue.code === 'premature_handoff_before_web_exhausted');
-    if (prematureHandoffIssue) {
-      const incompleteResearchRewrite = incompleteWebResearchSafeRewrite({
-        intent: input.intent,
-        toolResults: input.toolResults
-      });
-      const incompleteRewrite = failedWebResearchSafeRewrite({ intent: input.intent, toolResults: input.toolResults });
-      return finalizeMechanicalRewrite(
-        incompleteResearchRewrite ?? incompleteRewrite ?? stripContactRequestSentence(input.answer.answerText)
-      );
-    }
-    const failedFactSourceRepairIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'failed_tool_result_used_as_fact_source'
-    );
-    const failedWebResearchRewrite = failedWebResearchSafeRewrite({
-      intent: input.intent,
-      toolResults: input.toolResults
-    });
-    if (failedFactSourceRepairIssue && failedWebResearchRewrite) {
-      return finalizeMechanicalRewrite(failedWebResearchRewrite);
-    }
-    const unsupportedCatalogProductMentionIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'unsupported_catalog_product_mention'
-    );
-    if (unsupportedCatalogProductMentionIssue && unsupportedCatalogProductMentionRewrite) {
-      return finalizeMechanicalRewrite(unsupportedCatalogProductMentionRewrite.revisedAnswerText);
-    }
-    if (failedFactSourceRepairIssue) {
-      return finalizeMechanicalRewrite(failedToolEvidenceSafeRewrite(input.toolResults));
-    }
-    const plateTaskMismatchIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'plate_previous_cards_unsuitable_for_current_task'
-    );
-    if (plateTaskMismatchIssue && plateTaskMismatchClause) {
-      return finalizeMechanicalRewrite(plateTaskMismatchSafeRewrite(plateTaskMismatchClause));
-    }
-    const explicitHeavyPlateTaskConflictIssue = mechanicalIssues.find((issue) =>
-      issue.code === 'plate_explicit_heavy_request_conflicts_with_small_site_task'
-    );
-    if (explicitHeavyPlateTaskConflictIssue) {
-      return finalizeMechanicalRewrite(plateExplicitHeavyTaskConflictSafeRewrite(input.products));
-    }
     if (mechanicalIssues.length) {
-      return finalizeMechanicalRewrite(stripContactRequestSentence(input.answer.answerText));
+      return { verdict: 'block', issues: uniqueReviewIssues(mechanicalIssues) };
     }
-    const reviewPolicy = llmReviewPolicy(input);
-    if (reviewPolicy.mode === 'off') {
-      return { verdict: 'pass', issues: [] };
-    }
-    if (!reviewPolicy.llmRequired) return { verdict: 'pass', issues: [] };
-    budget?.consumeModelCall();
-    const semanticReview = await this.model.reviewAnswer(input);
-    if (semanticReview.verdict !== 'rewrite_required') return semanticReview;
-    const revisedAnswerText = semanticReview.revisedAnswerText?.trim();
-    if (!revisedAnswerText) {
-      return {
-        verdict: 'block',
-        issues: uniqueReviewIssues([
-          ...semanticReview.issues,
-          {
-            code: 'semantic_rewrite_missing_text',
-            severity: 'high',
-            message: 'Semantic reviewer required a rewrite but did not return revised text.',
-            evidence: semanticReview.issues.map((issue) => issue.code).join(', ')
-          }
-        ])
-      };
-    }
-    return semanticReview;
-  }
-
-  private async completeTerminalTurn(input: {
-    session: ConversationSession;
-    turnId: string;
-    recovered: boolean;
-    onDelta?: (text: string) => void | Promise<void>;
-    reason: string;
-    deadlineAt: string | null;
-    executionOwner: string;
-  }): Promise<ChatResponsePayload> {
-    const committed = await this.completedFromFinalAnswerContract(
-      input.session,
-      input.turnId,
-      input.recovered,
-      input.executionOwner,
-      input.onDelta
-    );
-    if (committed) return committed;
-    const existing = await this.completedPayload(input.session, input.turnId, input.onDelta);
-    if (existing) return existing;
-
-    const ledgerContext = await this.loadDialogueLedgerContext(input.session.id);
-    const needStateSnapshot = deriveNeedStateSnapshotFromLedger(
-      ledgerContext.state,
-      input.session.needState ?? emptyNeedState()
-    );
-    const persistedExecution = await this.loadPersistedTurnExecution(input.session.id, input.turnId);
-    const persistedToolResults = [...persistedExecution.toolResults.values()];
-    const webResearchResults = persistedToolResults.filter((result) =>
-      result.tool === 'web.researchProductFacts'
-    );
-    const webSearchAttempted = webResearchResults.length > 0;
-    const webSearchCompleted = webResearchResults.some((result) =>
-      result.status === 'ok' &&
-      Boolean(result.payload && typeof result.payload === 'object') &&
-      (result.payload as { usedWebSearch?: unknown }).usedWebSearch === true
-    );
-    const persistedTurn = await this.conversations.getTurn(input.session.id, input.turnId);
-    const persistedIntentPayload = persistedTurn?.plannerContract ??
-      succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_created').payload ??
-      succeededCheckpoint(persistedExecution.checkpoints, 'intent_contract_proposed').payload;
-    const persistedIntent = AgentIntentContractSchema.safeParse(persistedIntentPayload);
-    const terminalHistory = persistedIntent.success
-      ? await this.conversations.listMessages(input.session.id, 80)
-      : [];
-    const latestUserMessage = [...terminalHistory]
-      .reverse()
-      .find((message) => message.role === 'user')?.content ?? '';
-    const terminalCalculationResult = persistedToolResults.some((result) =>
-      result.tool === 'calculator.generatorLoad' && result.status === 'ok'
-    )
-      ? null
-      : terminalGeneratorCalculationFromIntent(
-          persistedIntent.success ? persistedIntent.data : undefined,
-          latestUserMessage
-        );
-    const terminalToolResults = terminalCalculationResult
-      ? [...persistedToolResults, terminalCalculationResult]
-      : persistedToolResults;
-    const toolStatuses = terminalToolResults.map((result) => ({
-      requestId: result.requestId,
-      tool: result.tool,
-      status: result.status,
-      observationStatus: result.observationStatus ?? null,
-      errorCode: result.errorCode ?? null
-    }));
-    const previousReferents = persistedIntent.success
-      ? previousProductReferents({
-          history: terminalHistory,
-          intent: persistedIntent.data,
-          selectedProductIds: currentNeedSelectedProductIds(needStateSnapshot)
-        })
-      : [];
-    const catalogRecovery = terminalCatalogRecovery({
-      intent: persistedIntent.success ? persistedIntent.data : undefined,
-      toolResults: terminalToolResults,
-      previousProductReferents: previousReferents
-    });
-    const calculationRecovery = terminalGeneratorCalculationRecovery(terminalToolResults);
-    const openQuestionRecovery = terminalOpenQuestionRecovery(ledgerContext.state);
-    const unfinishedVerification = uniqueStrings([
-      ...catalogRecovery.unfinishedVerification,
-      ...terminalUnfinishedVerificationFromIntent(
-        persistedIntent.success ? persistedIntent.data : undefined,
-        terminalToolResults
-      )
-    ]);
-    const recoveryProductClass = persistedIntent.success
-      ? persistedIntent.data.selectionPolicy?.targetProductClass?.trim() ??
-        persistedIntent.data.selectionPolicy?.canonicalProductClass ??
-        'unknown'
-      : 'unknown';
-    const productOrientation = terminalProductOrientation(catalogRecovery.products);
-    const calculationPrefix = calculationRecovery
-      ? `Расчёт нагрузки завершён: нужен генератор не менее ${calculationRecovery.requiredNominalKw} кВт номинальной мощности${calculationRecovery.totalRunningKw !== null ? ` при суммарной рабочей нагрузке ${calculationRecovery.totalRunningKw} кВт` : ''}. `
-      : '';
-    const finalText = catalogRecovery.products.length
-      ? catalogRecovery.unfinishedVerification.length
-        ? calculationPrefix + [
-            `По уже подтверждённым данным предварительно подходят: ${productOrientation}.`,
-            catalogRecovery.technicalHandoffEligible
-              ? `После проверки доступных источников не удалось подтвердить: ${catalogRecovery.unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`
-              : `Не успела завершиться проверка: ${catalogRecovery.unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`,
-            'Поэтому окончательную совместимость по этому пункту пока не подтверждаю.',
-            ...(catalogRecovery.technicalHandoffEligible
-              ? ['Могу передать именно этот вопрос техническому специалисту и сообщить результат. Оставьте номер и скажите, как удобнее связаться — написать или позвонить?']
-              : [])
-          ].join(' ')
-        : `${calculationPrefix}По уже подтверждённым данным предварительно подходят: ${productOrientation}. Окончательный вывод для этого хода не успел сформироваться, поэтому не утверждаю совместимость сверх проверенных характеристик.`
-      : calculationRecovery
-        ? [
-            `Расчёт нагрузки завершён: ориентир — генератор не менее ${calculationRecovery.requiredNominalKw} кВт номинальной мощности${calculationRecovery.totalRunningKw !== null ? ` при суммарной рабочей нагрузке ${calculationRecovery.totalRunningKw} кВт` : ''}.`,
-            'По текущим подтверждённым ограничениям подходящих карточек в этом ходе не найдено, поэтому конкретную модель не выдумываю.',
-            ...(unfinishedVerification.length
-              ? [`Не завершилась проверка: ${unfinishedVerification.map((item) => `«${item}»`).join(', ')}.`]
-              : [])
-          ].join(' ')
-        : openQuestionRecovery
-          ? `${openQuestionRecovery.needSummary ? `Чтобы продолжить ${openQuestionRecovery.needSummary.toLowerCase()}, ` : 'Чтобы продолжить подбор, '}уточните: ${openQuestionRecovery.text}`
-        : 'Не удалось получить ни одного проверенного результата в пределах этого хода. Конкретный ответ без фактической опоры не выдаю.';
-    const answerContract: AnswerContract = {
-      answerText: finalText,
-      factsUsed: [
-        ...catalogRecovery.catalogRequestIds.map((requestId) => ({
-          factKey: 'catalog.preliminary_candidates',
-          sourceEventIds: [requestId],
-          value: catalogRecovery.products.map((product) => product.id)
-        })),
-        ...(calculationRecovery
-          ? [{
-              factKey: 'calculator.generator_load_profile',
-              sourceEventIds: [calculationRecovery.requestId],
-              value: {
-                loadCount: calculationRecovery.loadCount,
-                totalRunningKw: calculationRecovery.totalRunningKw,
-                requiredStartingKw: calculationRecovery.requiredStartingKw,
-                requiredNominalKw: calculationRecovery.requiredNominalKw
-              }
-            }]
-          : [])
-      ],
-      questionsAsked: openQuestionRecovery && !catalogRecovery.products.length && !calculationRecovery
-        ? [{
-            questionId: openQuestionRecovery.questionId,
-            text: openQuestionRecovery.text,
-            reason: 'The authoritative semantic decision opened this unresolved question before the turn deadline.'
-          }]
-        : [],
-      toolResultIds: uniqueStrings([
-        ...catalogRecovery.catalogRequestIds,
-        ...(calculationRecovery ? [calculationRecovery.requestId] : []),
-        ...(catalogRecovery.unfinishedVerification.length
-          ? (persistedIntent.success
-              ? persistedIntent.data.toolRequests
-                  .filter((request) => request.tool === 'web.researchProductFacts')
-                  .map((request) => request.id)
-              : [])
-          : [])
-      ]),
-      selectedProductIds: catalogRecovery.products.map((product) => product.id),
-      leadAction: catalogRecovery.technicalHandoffEligible ? 'offer_form' : 'none',
-      riskFlags: uniqueStrings([
-        'deterministic_terminal_response',
-        ...(calculationRecovery ? ['terminal_generator_calculation_recovery'] : []),
-        ...(openQuestionRecovery && !catalogRecovery.products.length && !calculationRecovery
-          ? ['terminal_open_question_recovery']
-          : []),
-        ...(catalogRecovery.products.length ? ['terminal_catalog_recovery'] : []),
-        ...(catalogRecovery.technicalHandoffEligible
-          ? ['terminal_technical_handoff_after_search_exhaustion']
-          : [])
-      ]),
-      selectionReadiness: catalogRecovery.products.length
-        ? {
-            productClass: recoveryProductClass,
-            status: 'ready_for_preliminary_cards',
-            canShowProductCards: true,
-            missingFacts: catalogRecovery.unfinishedVerification,
-            rationale: 'The terminal recovery preserved catalog candidates that passed the persisted selection policy; an external verification did not finish.'
-          }
-        : {
-            productClass: calculationRecovery
-              ? recoveryProductClass
-              : openQuestionRecovery?.productClass ?? 'unknown',
-            status: calculationRecovery || openQuestionRecovery ? 'needs_more_info' : 'not_applicable',
-            canShowProductCards: false,
-            missingFacts: unfinishedVerification,
-            rationale: calculationRecovery
-              ? 'A successful generator calculation was preserved, but no recommendation-eligible catalog card was available.'
-              : openQuestionRecovery
-                ? 'The authoritative semantic decision opened a still-unanswered question before the turn deadline.'
-              : 'The absolute turn deadline was reached before any fact-bearing result could be committed.'
-          }
-    };
-    const review: PreSendReview = { verdict: 'pass', issues: [] };
-    const runtimeDecision = getAgentManagerRuntimeDecision();
-    const metadata = {
-      agentManager: true,
-      runtimeMode: runtimeDecision.runtimeMode,
-      runtimeModeReason: runtimeDecision.reason,
-      agentManagerRuntime: runtimeDecision,
-      recovered: input.recovered,
-      terminal: true,
-      degraded: true,
-      completionStatus: 'degraded_terminal',
-      substantiveAnswerCompleted: false,
-      terminalReason: input.reason,
-      deadlineAt: input.deadlineAt,
-      usedWebSearch: webSearchCompleted,
-      webSearchAttempted,
-      webSearchCompleted,
-      toolStatuses,
-      terminalCatalogRecovery: {
-        selectedProductIds: catalogRecovery.products.map((product) => product.id),
-        catalogRequestIds: catalogRecovery.catalogRequestIds,
-        unfinishedVerification: catalogRecovery.unfinishedVerification,
-        technicalHandoffEligible: catalogRecovery.technicalHandoffEligible,
-        warnings: catalogRecovery.warnings
-      },
-      terminalDeterministicGeneratorCalculation: Boolean(terminalCalculationResult),
-      answerContract,
-      preSendReview: review,
-      needStateSnapshot,
-      productCards: catalogRecovery.cards
-    };
-    const responsePayload: ChatResponsePayload = {
-      turnId: input.turnId,
-      answer: finalText,
-      needState: needStateSnapshot,
-      productCards: catalogRecovery.cards,
-      usedWebSearch: webSearchCompleted,
-      leadRequested: catalogRecovery.technicalHandoffEligible,
-      leadCreated: false,
-      metadata
-    };
-    const assistantMessage = await this.conversations.addAssistantMessageForTurn({
-      sessionId: input.session.id,
-      turnId: input.turnId,
-      content: finalText,
-      metadata,
-      recovered: input.recovered,
-      executionOwner: input.executionOwner,
-      answerContract,
-      review,
-      responsePayload,
-      checkpointPayload: { terminal: true, reason: input.reason }
-    });
-    if (!assistantMessage) {
-      const completed = await this.completedPayload(input.session, input.turnId, input.onDelta);
-      if (completed) return completed;
-      throw new TurnExecutionInProgressError();
-    }
-    await input.onDelta?.(finalText);
-    await this.trace(input.session.id, input.turnId, 'turn', 'terminal_response_committed', {
-      reason: input.reason,
-      deadlineAt: input.deadlineAt,
-      toolStatuses,
-      terminalCatalogRecovery: {
-        selectedProductIds: catalogRecovery.products.map((product) => product.id),
-        catalogRequestIds: catalogRecovery.catalogRequestIds,
-        unfinishedVerification: catalogRecovery.unfinishedVerification,
-        technicalHandoffEligible: catalogRecovery.technicalHandoffEligible,
-        warnings: catalogRecovery.warnings
-      }
-    });
-    return { ...responsePayload, assistantMessageId: assistantMessage.id };
+    return { verdict: 'pass', issues: [] };
   }
 
   private async completedPayload(
@@ -11467,7 +9504,7 @@ export class AgentManagerOrchestrator {
       recoveredFromAnswerContract: true,
       turnId,
       answerContract: row.contract,
-      preSendReview: row.review,
+      preSendValidation: row.review,
       needStateSnapshot
     };
     const assistantMessage = await this.conversations.addAssistantMessageForTurn({

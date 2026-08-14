@@ -272,31 +272,7 @@ export async function registerChatRoutes(
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
       const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
-      const recoveryAllowed = !executionInProgress && !budgetStopped;
-      let semanticRecoveryAttempted = false;
-      if (!controller.signal.aborted && recoveryAllowed) {
-        semanticRecoveryAttempted = true;
-        try {
-          const recoveredPayload = await runWithOpenAIUsageContext({
-            sessionId: params.id,
-            turnId,
-            pageUrl: session.pageUrl,
-            userAgent: session.userAgent
-          }, () => assistant.recoverTurn({
-            sessionId: params.id,
-            turnId,
-            onDelta: (delta) => send('delta', { delta }),
-            signal: controller.signal
-          }));
-          stopStatusTimer?.();
-          stopStatusTimer = null;
-          send('done', buildPublicCustomerResponse(recoveredPayload));
-          return;
-        } catch (recoveryError) {
-          app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(recoveryError) }, 'agent manager same-turn recovery failed');
-        }
-      }
-      if (recoveryAllowed) {
+      if (!executionInProgress) {
         await conversations.updateTurn({
           sessionId: params.id,
           turnId,
@@ -309,14 +285,13 @@ export async function registerChatRoutes(
           requireUnowned: true
         }).catch((updateError) => app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(updateError) }, 'turn failure update failed'));
       }
-      const clientRecoveryAllowed = recoveryAllowed && !semanticRecoveryAttempted && !controller.signal.aborted;
       const message = executionInProgress
         ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
         : budgetStopped
           ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
           : controller.signal.aborted
             ? 'Не удалось завершить ответ в пределах времени этого хода. Запрос сохранён, но повторный запуск этого же хода не выполняется.'
-            : 'Не удалось завершить ответ после единственной попытки восстановления. Запрос сохранён, но повторный запуск этого же хода не выполняется.';
+            : 'Не удалось сформировать проверенный ответ. Подменный ответ не создавался; сообщение можно отправить ещё раз.';
       if (!controller.signal.aborted) {
         app.log.warn({
           sessionId: params.id,
@@ -328,7 +303,7 @@ export async function registerChatRoutes(
       send('error', {
         error: message,
         turnId,
-        recoverable: clientRecoveryAllowed
+        recoverable: false
       });
     } finally {
       stopStatusTimer?.();

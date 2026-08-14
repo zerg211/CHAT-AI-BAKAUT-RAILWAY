@@ -8,7 +8,7 @@ import {
 /**
  * Route-facing adapter for the sole AI-manager runtime.
  * Semantic planning, tools, answer generation, review and recovery all live in
- * AgentManagerOrchestrator; no alternative writer or legacy fallback exists.
+ * AgentManagerOrchestrator; no alternative writer or secondary answer path exists.
  */
 export class AssistantService {
   private readonly agentManager: AgentManagerOrchestrator;

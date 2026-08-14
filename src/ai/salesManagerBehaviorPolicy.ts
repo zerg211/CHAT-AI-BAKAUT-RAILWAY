@@ -26,7 +26,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Сначала помоги покупателю полезно и конкретно. Если данных мало, дай безопасную ориентацию и задай один главный вопрос. Правила — рамки честности, а не готовые ответы.',
     category: 'core',
     tags: ['core', 'style', 'help_first'],
-    appliesTo: ['answer', 'planner', 'reviewer'],
+    appliesTo: ['answer', 'planner'],
     riskLevel: 'high',
     severity: 'must',
     priority: 100,
@@ -41,7 +41,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Нет факта: отсутствие данных не равно несовместимости. Без hard-конфликта оставь товар предварительным кандидатом. Ищи: каталог/память → официальный сайт/руководство производителя → надёжные профильные источники. Сбой или таймаут не исчерпывает источники. Специалиста или контакт предлагай только после безрезультатного поиска: сохрани предварительный вывод, назови точный пробел, попроси номер и выбор «написать или позвонить». До подтверждённой очереди lead.capture не говори, что запрос передан.',
     category: 'grounding',
     tags: ['grounding', 'catalog', 'web', 'selection', 'research', 'specialist'],
-    appliesTo: ['answer', 'planner', 'reviewer', 'gate'],
+    appliesTo: ['answer', 'planner', 'gate'],
     riskLevel: 'critical',
     severity: 'must',
     priority: 99,
@@ -56,7 +56,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Не обещай наличие, самовывоз сегодня, резерв, точный срок доставки, скидку или финальную цену без проверенных операционных данных. Catalog presence is product evidence, not live warehouse stock.',
     category: 'commercial',
     tags: ['stock', 'availability', 'commercial', 'catalog'],
-    appliesTo: ['answer', 'planner', 'reviewer', 'gate'],
+    appliesTo: ['answer', 'planner', 'gate'],
     riskLevel: 'critical',
     severity: 'must_not',
     priority: 98,
@@ -71,7 +71,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Подходящие товары показывай первыми. Компромиссные карточки допустимы только ниже и только если текст явно говорит, что именно не совпадает. Товар без hard requirement нельзя выдавать как match.',
     category: 'cards',
     tags: ['cards', 'compromise', 'hard_requirements', 'selection'],
-    appliesTo: ['answer', 'planner', 'reviewer', 'gate'],
+    appliesTo: ['answer', 'planner', 'gate'],
     riskLevel: 'critical',
     severity: 'must',
     priority: 96,
@@ -86,7 +86,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Не проси телефон для обычного подбора, сравнения, fit-check, характеристик или брендового ориентира. Проси контакт только когда нужен результат: склад, резерв, точная доставка, скидка, оформление или проверка поставщика/документов.',
     category: 'lead',
     tags: ['contact', 'lead', 'delivery', 'discount', 'order'],
-    appliesTo: ['answer', 'planner', 'reviewer', 'gate'],
+    appliesTo: ['answer', 'planner', 'gate'],
     riskLevel: 'high',
     severity: 'must',
     priority: 94,
@@ -101,7 +101,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Если покупатель не хочет оставлять контакт, не спорь и не повторяй просьбу без новой причины. Продолжай помогать в рамках доступной информации и объясняй границу точности спокойно.',
     category: 'lead',
     tags: ['contact', 'refusal', 'lead'],
-    appliesTo: ['answer', 'planner', 'reviewer'],
+    appliesTo: ['answer', 'planner'],
     riskLevel: 'high',
     severity: 'must',
     priority: 88,
@@ -116,7 +116,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Не уходи только в “зависит”. Сначала дай короткий человеческий вывод, потом 2–4 главных отличия. Личное “я бы взял” используй только когда покупатель просит совет.',
     category: 'comparison',
     tags: ['comparison', 'brand', 'recommendation'],
-    appliesTo: ['answer', 'planner', 'reviewer'],
+    appliesTo: ['answer', 'planner'],
     riskLevel: 'medium',
     severity: 'should',
     priority: 70,
@@ -144,7 +144,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Если покупатель просит “резчик/резак” без задачи, считай класс неоднозначным: это может быть шовнарезчик для швов/реза пола, бетона или асфальта, либо ручной бензорез для металла, бетона, кирпича и похожих работ. Планировщик не должен трактовать это как browse_catalog: не планируй catalog.search и карточки до уточнения, поставь policyRuleIds=[selection.cutter_ambiguous_material_question], requiresTools=false, selectionPolicy.maxCards=0. В ответе дай короткую ориентацию и задай один главный вопрос: по какому материалу и какой работе нужен рез.',
     category: 'selection',
     tags: ['cutter', 'ambiguous_category', 'selection', 'material_question'],
-    appliesTo: ['answer', 'planner', 'reviewer'],
+    appliesTo: ['answer', 'planner'],
     riskLevel: 'high',
     severity: 'must',
     priority: 85,
@@ -159,7 +159,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
     body: 'Buyer corrections require evidence check before apologizing: buyer requirements by conversation memory, product facts by catalog plus reliable sources, stock/delivery/price by checked operational data.',
     category: 'correction',
     tags: ['correction', 'evidence', 'error_recovery'],
-    appliesTo: ['answer', 'planner', 'reviewer'],
+    appliesTo: ['answer', 'planner'],
     riskLevel: 'high',
     severity: 'must',
     priority: 86,
@@ -200,7 +200,7 @@ export const SALES_MANAGER_POLICY_PACK_HASH = createHash('sha256')
   .digest('hex');
 
 export interface SalesManagerPolicyTraceInput {
-  target: 'planner' | 'answer' | 'reviewer' | 'gate';
+  target: 'planner' | 'answer' | 'gate';
   latestUserMessage?: string;
   tags?: string[];
   riskFlags?: string[];

@@ -1,7 +1,7 @@
 import type { Product, ProductSelectionClass } from '../shared/types.js';
 import { extractStructuredProductAttributes } from './productAttributeExtraction.js';
 
-export type RequirementStrictness = 'hard' | 'strict' | 'soft' | 'fallbackAllowed';
+export type RequirementStrictness = 'hard' | 'strict' | 'soft' | 'buyerApprovedAlternative';
 
 export interface BuyerRequirementItem {
   kind: string;

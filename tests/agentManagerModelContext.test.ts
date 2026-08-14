@@ -86,10 +86,10 @@ describe('agent manager model context compaction', () => {
     expect(compactBody.length).toBeLessThan(originalBody.length * 0.6);
   });
 
-  it('uses the same compaction boundary in writer and reviewer request serialization', () => {
+  it('uses the compact tool boundary in the single writer request serialization', () => {
     const source = readFileSync(new URL('../src/ai/agentManagerOrchestrator.ts', import.meta.url), 'utf8');
     const boundary = 'toolResults: compactToolResultsForModel(input.toolResults, input.products)';
-    expect(source.split(boundary).length - 1).toBe(2);
+    expect(source.split(boundary).length - 1).toBe(1);
     expect(source).toContain('products: input.products.map(answerProductContext)');
   });
 });

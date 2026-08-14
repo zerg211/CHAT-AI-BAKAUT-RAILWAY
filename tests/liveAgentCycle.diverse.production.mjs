@@ -277,9 +277,22 @@ function codeAudit(step, assistantMessage) {
   const productCards = metadata.productCards ?? [];
   const diagnostics = metadata.aiDiagnostics ?? {};
   const fallbackStage = Object.entries(diagnostics).find(([, diagnostic]) => diagnostic?.used);
+  const prohibitedAnswerPathKeys = [
+    'answerGenerationFallback',
+    'terminalResponse',
+    'degradedTerminal',
+    'reviewerRecovery',
+    'legacySemanticFallback'
+  ].filter((key) => metadata[key] !== undefined && metadata[key] !== null);
 
-  if (metadata.recovered || metadata.answerGenerationFallback?.used || fallbackStage) {
-    issues.push(`fallback/recovery: ${fallbackStage?.[0] ?? 'answerGenerationFallback/recovered'}`);
+  if (metadata.recovered === true || fallbackStage || prohibitedAnswerPathKeys.length) {
+    const alternatePath = fallbackStage?.[0] ?? (
+      prohibitedAnswerPathKeys.length ? prohibitedAnswerPathKeys.join(',') : 'recovered'
+    );
+    issues.push(`alternate answer path: ${alternatePath}`);
+  }
+  if (metadata.preSendValidation?.verdict !== 'pass') {
+    issues.push(`primary answer validation is not pass: ${metadata.preSendValidation?.verdict ?? 'missing'}`);
   }
   if (!contract.taskType || !contract.catalogAction || !contract.productCardsPolicy) {
     issues.push('нет полного turnContract');

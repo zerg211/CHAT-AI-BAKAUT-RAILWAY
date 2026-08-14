@@ -520,7 +520,7 @@ export function parseAnswerContractModelOutput(value: unknown) {
 }
 
 export const PreSendReviewSchema = z.object({
-  verdict: z.enum(['pass', 'rewrite_required', 'block']),
+  verdict: z.enum(['pass', 'block']),
   issues: z.array(z.object({
     code: nonEmptyString,
     severity: z.enum(['low', 'medium', 'high']),

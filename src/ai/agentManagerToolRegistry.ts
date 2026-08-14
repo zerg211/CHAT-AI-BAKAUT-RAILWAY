@@ -47,7 +47,7 @@ const retrievalResult = z.object({
     tier: z.enum(['exact_match', 'preliminary_match', 'compromise', 'rejected']),
     tradeoffs: z.array(z.string())
   }).strict()).max(12).optional(),
-  structuredRecovery: z.object({
+  primaryExpansion: z.object({
     attempted: z.boolean(),
     query: z.string(),
     scannedCount: z.number().int().nonnegative(),

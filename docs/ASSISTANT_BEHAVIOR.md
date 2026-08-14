@@ -72,6 +72,6 @@ Planner задаёт `alternativePolicy` и hard requirements, writer выбир
 
 Подробный источник правил поведения: `docs/SALES_MANAGER_BEHAVIOR_POLICY.md`. Это не фиксированные скрипты, а логика и стиль для LLM-менеджера.
 
-## Review и обратная связь
+## Проверка ответа и обратная связь
 
-Policy pack с одной версией/hash передаётся planner, writer и reviewer. В production `AI_MANAGER_REVIEW_MODE=risk`: дополнительный LLM review включается для рискованных ответов, а причина и версия пишутся в metadata. Негативная оценка или `wrong_cards` сохраняет turn/policy/model/tool/card evidence в review queue; экспорт создаёт только candidate regression fixture с обязательной человеческой проверкой.
+Policy pack с одной версией/hash передаётся семантическому планировщику и writer. После единственной генерации детерминированная проверка только допускает или блокирует контракт; она не вызывает вторую модель и не создаёт заменяющий текст. Негативная оценка или `wrong_cards` сохраняет turn/policy/model/tool/card evidence в review queue; экспорт создаёт только candidate regression fixture с обязательной человеческой проверкой.

@@ -34,7 +34,7 @@ npm run feedback:export-evals -- --output .private/feedback-candidates.json --ac
 
 ## Конфигурация
 
-См. `.env.example`. Для production обязательны `DATABASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL=gpt-5.6-terra`, `ADMIN_API_KEY`, `PUBLIC_BASE_URL` и HTTP email-настройки. SMTP не используется. Активный production AgentManager fail-safe закрепляет planner, answer и reviewer на `gpt-5.6-terra`, поэтому старые `MODEL`/stage-specific значения не могут незаметно вернуть прежнюю модель. `AI_MANAGER_REVIEW_MODE` поддерживает `off | risk | always`; production default — `risk`. `CATALOG_STALE_AFTER_HOURS` по умолчанию равен `48`.
+См. `.env.example`. Для production обязательны `DATABASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL=gpt-5.6-terra`, `ADMIN_API_KEY`, `PUBLIC_BASE_URL` и HTTP email-настройки. SMTP не используется. Активный production AgentManager закрепляет семантическое решение и единственную генерацию ответа на `gpt-5.6-terra`; отдельного LLM-review и альтернативного fallback-ответа нет. После генерации код только детерминированно проверяет контракт и либо сохраняет исходный ответ, либо отклоняет весь ход. `CATALOG_STALE_AFTER_HOURS` по умолчанию равен `48`.
 
 ## Надёжность диалога
 

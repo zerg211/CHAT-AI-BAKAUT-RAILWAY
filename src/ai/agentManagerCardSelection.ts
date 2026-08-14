@@ -30,11 +30,6 @@ import {
   tokenHasLetter
 } from './modelTextMatching.js';
 import {
-  classifyProductSuitability,
-  selectProductsBySuitability,
-  type BuyerRequirementContract
-} from './productSuitability.js';
-import {
   buildRequirementProofs,
   productRequirementProofCaveats,
   requirementUsesGenericReadProof,
@@ -228,18 +223,18 @@ function productMatchesExactNamedTarget(product: Product, targetName: string) {
   return Boolean(normalizedTarget && compactModelText(product.name).includes(normalizedTarget));
 }
 
-export function toolRequestProductIntent(request: ToolRequest, _fallbackText = ''): ProductSelectionClass {
+export function toolRequestProductIntent(request: ToolRequest): ProductSelectionClass {
   const args = request.args as Record<string, unknown>;
   const canonical = coerceProductSelectionClass(args.canonicalProductIntent);
   if (canonical !== 'unknown') return canonical;
   return coerceProductSelectionClass(args.productIntent);
 }
 
-export function toolRequestScopedQuery(request: ToolRequest, fallbackQuery: string) {
+export function toolRequestScopedQuery(request: ToolRequest, defaultQuery: string) {
   const args = request.args as Record<string, unknown>;
   const query = typeof args.query === 'string' && args.query.trim()
     ? args.query.trim()
-    : fallbackQuery;
+    : defaultQuery;
   const semanticQuery = typeof args.semanticQuery === 'string' && args.semanticQuery.trim()
     ? args.semanticQuery.trim()
     : [
@@ -1121,20 +1116,6 @@ function structuredBudgetMax(intent: AgentIntentContract) {
   return Math.min(inclusiveMax, exclusiveMax);
 }
 
-function structuredCompromiseProductIds(toolResults: ToolResult[]) {
-  const ids = new Set<string>();
-  for (const result of toolResults) {
-    if (result.tool !== 'catalog.search' || result.status !== 'ok') continue;
-    const retrieval = (result.payload as {
-      retrieval?: { candidateTiers?: Array<{ productId?: unknown; tier?: unknown }> };
-    }).retrieval;
-    for (const candidate of retrieval?.candidateTiers ?? []) {
-      if (candidate.tier === 'compromise' && typeof candidate.productId === 'string') ids.add(candidate.productId);
-    }
-  }
-  return ids;
-}
-
 function structuredGeneratorPowerRequirement(intent: AgentIntentContract): GeneratorPowerCardRequirement | undefined {
   const minKw = structuredRequirementNumber(intent, ['nominal_power_min_kw', 'power_min_kw']);
   const maxKw = structuredRequirementNumber(intent, ['nominal_power_max_kw', 'power_max_kw']);
@@ -1916,53 +1897,6 @@ function sameIntentProducts(products: Product[], cardIntent: ProductSelectionCla
   return products.filter((product) => productMatchesIntent(product, cardIntent));
 }
 
-function plateRequirementsForCardSelection(input: {
-  needState: CustomerNeedState;
-  intent: AgentIntentContract;
-  userMessage: string;
-  plateWeightRange?: { min?: number; max?: number };
-}): BuyerRequirementContract {
-  const maxRub = input.intent.selectionPolicy
-    ? structuredBudgetMax(input.intent)
-    : budgetMaxFromNeedState(input.needState);
-  const hasLightConstraint = Boolean(input.plateWeightRange);
-  return {
-    buyerGoal: [input.intent.userMessageSummary, input.intent.dialogueUnderstanding, input.userMessage].filter(Boolean).join(' / '),
-    targetProductClass: 'plate',
-    hardRequirements: maxRub ? [{ kind: 'budgetMaxRub', value: maxRub, evidence: 'structured budget', strictness: 'strict' }] : [],
-    softRequirements: hasLightConstraint ? [{ kind: 'notTooHeavy', value: true, evidence: 'structured light/weight preference', strictness: 'soft' }] : [],
-    allowedCompromises: hasLightConstraint ? [{ kind: 'slightlyHeavierForBetterCompaction', value: true, evidence: 'plate compaction tradeoff' }] : [],
-    forbiddenRecommendations: [],
-    criticalAttributes: ['weightKg'],
-    budgetPolicy: maxRub ? { maxRub, strictness: 'strict', allowSlightlyAboveWhenFewMatches: true } : undefined,
-    topicAction: 'continue_current_need',
-    rationale: 'visible card selection safety gate'
-  };
-}
-
-function honestPlateExpansionProducts(input: {
-  products: Product[];
-  needState: CustomerNeedState;
-  intent: AgentIntentContract;
-  userMessage: string;
-  plateWeightRange?: { min?: number; max?: number };
-}) {
-  const requirements = plateRequirementsForCardSelection(input);
-  const maxRub = input.intent.selectionPolicy
-    ? structuredBudgetMax(input.intent)
-    : budgetMaxFromNeedState(input.needState);
-  const inBudgetMatchCount = maxRub === undefined
-    ? input.products.length
-    : input.products.filter((product) => typeof product.price === 'number' && Number.isFinite(product.price) && product.price <= maxRub).length;
-  const decisions = input.products.map((product) => classifyProductSuitability({
-    product,
-    requirements,
-    matchContext: { inBudgetMatchCount }
-  }));
-  return selectProductsBySuitability({ decisions, uiSafeCap: 8, minimumGoodMatchesBeforeCompromises: 3 })
-    .map((decision) => decision.product);
-}
-
 function buyerRequirementTextForCardSelection(input: {
   userMessage: string;
   intent: AgentIntentContract;
@@ -2012,14 +1946,22 @@ export function selectProductsForVisibleCards(input: {
   const structuredSelection = Boolean(
     input.intent.selectionPolicy && input.selectedProductIds !== undefined
   );
-  const compromiseProductIds = structuredSelection
-    ? structuredCompromiseProductIds(input.toolResults ?? [])
-    : new Set<string>();
-  const structuredCompromisesAllowed = input.intent.selectionPolicy?.alternativePolicy === 'allow_adjacent_with_explanation' ||
-    input.intent.selectionPolicy?.alternativePolicy === 'open_to_alternatives';
+  if (!structuredSelection) {
+    return {
+      semanticAuthority: 'missing_structured_authority' as const,
+      intent: cardIntent,
+      products: [],
+      selectedProductIds: [],
+      answerMentionedProductIds: [],
+      droppedProductIds: unique.map((product) => product.id),
+      warnings: ['product_cards_blocked:missing_structured_llm_selection'],
+      requirementProofs,
+      productCaveatsById
+    };
+  }
   if (!hasExplicitCardTool) {
     return {
-      semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
+      semanticAuthority: 'llm_contract' as const,
       intent: cardIntent,
       products: [],
       selectedProductIds: [],
@@ -2031,10 +1973,6 @@ export function selectProductsForVisibleCards(input: {
     };
   }
   const mentioned = answerMentionedProducts(unique, input.answerText);
-  const mentionedMatchingIntent = cardIntent === 'unknown'
-    ? mentioned
-    : mentioned.filter((product) => productMatchesIntent(product, cardIntent));
-  const sameIntentPool = sameIntentProducts(unique, cardIntent);
   const strictRequirementAssessment = gateStrictSelectionRequirements(
     input.intent,
     cardIntent,
@@ -2043,7 +1981,7 @@ export function selectProductsForVisibleCards(input: {
   );
   if (strictRequirementAssessment.blockers.length) {
     return {
-      semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
+      semanticAuthority: 'llm_contract' as const,
       intent: cardIntent,
       products: [],
       selectedProductIds: [],
@@ -2055,65 +1993,22 @@ export function selectProductsForVisibleCards(input: {
     };
   }
 
-  let selected: Product[];
-  if (structuredSelection) {
-    const requestedIds = new Set(input.selectedProductIds ?? []);
-    selected = unique.filter((product) => requestedIds.has(product.id));
-    if (input.intent.selectionPolicy?.alternativePolicy === 'exact_only') {
-      const exactTargetNames = (input.intent.productMentions ?? [])
-        .filter((mention) => mention.role === 'target_product' || mention.role === 'comparison_subject')
-        .map((mention) => mention.name);
-      if (exactTargetNames.length) {
-        selected = selected.filter((product) =>
-          exactTargetNames.some((targetName) => productMatchesExactNamedTarget(product, targetName))
-        );
-      }
+  const requestedIds = new Set(input.selectedProductIds ?? []);
+  let selected = unique.filter((product) => requestedIds.has(product.id));
+  if (input.intent.selectionPolicy?.alternativePolicy === 'exact_only') {
+    const exactTargetNames = (input.intent.productMentions ?? [])
+      .filter((mention) => mention.role === 'target_product' || mention.role === 'comparison_subject')
+      .map((mention) => mention.name);
+    if (exactTargetNames.length) {
+      selected = selected.filter((product) =>
+        exactTargetNames.some((targetName) => productMatchesExactNamedTarget(product, targetName))
+      );
     }
-    const strictProductClass = input.intent.selectionPolicy?.alternativePolicy === 'exact_only' ||
-      input.intent.selectionPolicy?.alternativePolicy === 'same_class_only';
-    if (strictProductClass && cardIntent !== 'unknown') {
-      selected = selected.filter((product) => productMatchesIntent(product, cardIntent));
-    }
-    const mentionedIds = new Set(mentioned.map((product) => product.id));
-    selected = selected.filter((product) => mentionedIds.has(product.id));
-  } else if (mentionedMatchingIntent.length) {
-    const shouldExpandCatalogSearch = cardIntent === 'plate' &&
-      mentionedMatchingIntent.length === 1 &&
-      input.intent.toolRequests.some((request) => request.tool === 'catalog.search') &&
-      sameIntentPool.length > mentionedMatchingIntent.length;
-    if (shouldExpandCatalogSearch) {
-      const honestExpandedIds = new Set(honestPlateExpansionProducts({
-        products: sameIntentPool,
-        needState: input.needState,
-        intent: input.intent,
-        userMessage: input.userMessage,
-        plateWeightRange: requestedPlateWeightRangeKg({
-          userMessage: input.userMessage,
-          query: toolRequestSemanticText(input.intent),
-          semanticContext: [
-            input.intent.userMessageSummary,
-            input.intent.dialogueUnderstanding,
-            input.intent.nextStepRationale
-          ].filter(Boolean).join('\n')
-        })
-      }).map((product) => product.id));
-      selected = uniqueProducts([
-        ...mentionedMatchingIntent,
-        ...sameIntentPool.filter((product) => honestExpandedIds.has(product.id))
-      ]);
-    } else {
-      selected = mentionedMatchingIntent;
-    }
-  } else if (mentioned.length && cardIntent === 'unknown') {
-    selected = mentioned;
-  } else if (cardIntent !== 'unknown') {
-    selected = unique.filter((product) => productMatchesIntent(product, cardIntent));
-  } else {
-    selected = unique.filter((product) => isCoreEquipment(product));
   }
-
-  if (cardIntent === 'unknown' && !mentioned.length) {
-    selected = [];
+  const strictProductClass = input.intent.selectionPolicy?.alternativePolicy === 'exact_only' ||
+    input.intent.selectionPolicy?.alternativePolicy === 'same_class_only';
+  if (strictProductClass && cardIntent !== 'unknown') {
+    selected = selected.filter((product) => productMatchesIntent(product, cardIntent));
   }
 
   const beforeGenericProofCount = selected.length;
@@ -2126,7 +2021,7 @@ export function selectProductsForVisibleCards(input: {
 
   let priceVisibilityFilteredCount = 0;
   let priceVisibilityNoFit = false;
-  if (structuredSelection && strictPriceVisibilityRequired(input.intent) && selected.length) {
+  if (strictPriceVisibilityRequired(input.intent) && selected.length) {
     const priceVisibleSelected = selected.filter((product) =>
       productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)
     );
@@ -2137,9 +2032,7 @@ export function selectProductsForVisibleCards(input: {
 
   let voltageFilteredCount = 0;
   let voltageNoFit = false;
-  const strictGeneratorVoltage = structuredSelection
-    ? structuredGeneratorVoltageRequirement(input.intent)
-    : undefined;
+  const strictGeneratorVoltage = structuredGeneratorVoltageRequirement(input.intent);
   if (strictGeneratorVoltage !== undefined && selected.length) {
     const voltageMatchingSelected = selected.filter((product) =>
       productPassesNativeConstraintOrAuthoritativeProof({
@@ -2158,61 +2051,37 @@ export function selectProductsForVisibleCards(input: {
   let powerSourceFilteredCount = 0;
   let powerSourceNoFit = false;
   const buyerRequirementText = buyerRequirementTextForCardSelection(input);
-  const structuredPowerSource = structuredSelection
-    ? input.intent.selectionPolicy?.powerSource
-    : undefined;
-  const batteryPowerSourceRequired = structuredSelection
-    ? structuredPowerSource === 'battery'
-    : requiresBatteryPowerStationFromText(buyerRequirementText);
-  const strictGeneratorFuelRequirement = structuredSelection && isGeneratorProductClass(cardIntent)
-    ? structuredGeneratorFuelRequirement(input.intent)
-    : undefined;
-  const sourceConstrainedGeneratorPool = (isGeneratorProductClass(cardIntent)
-    ? structuredSelection && structuredPowerSource && structuredPowerSource !== 'any'
-      ? sameIntentPool.filter((product) => productMeetsStructuredPowerSource(product, structuredPowerSource))
-      : batteryPowerSourceRequired
-        ? sameIntentPool.filter(isBatteryPowerStation)
-        : sameIntentPool
-    : sameIntentPool).filter((product) =>
-      !strictGeneratorFuelRequirement ||
-      productMeetsSupportedStrictFuelRequirement(product, input.intent, cardIntent)
-    );
+  const structuredPowerSource = input.intent.selectionPolicy?.powerSource;
+  const batteryPowerSourceRequired = structuredPowerSource === 'battery';
+  const strictFuelRequirement = structuredGeneratorFuelRequirement(input.intent);
   const hasStructuredPowerSource = Boolean(
-    structuredSelection && structuredPowerSource && structuredPowerSource !== 'any'
+    structuredPowerSource && structuredPowerSource !== 'any'
   );
   if (
     isGeneratorProductClass(cardIntent) &&
     selected.length &&
     (batteryPowerSourceRequired || hasStructuredPowerSource)
   ) {
-    const sourceMatchingSelected = structuredSelection
-      ? selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
-          proofs: requirementProofs,
-          productId: product.id,
-          intent: input.intent,
-          kinds: ['power_source'],
-          nativeMatch: productMeetsStructuredPowerSource(product, structuredPowerSource)
-        }))
-      : selected.filter(isBatteryPowerStation);
+    const sourceMatchingSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+      proofs: requirementProofs,
+      productId: product.id,
+      intent: input.intent,
+      kinds: ['power_source'],
+      nativeMatch: productMeetsStructuredPowerSource(product, structuredPowerSource)
+    }));
     if (sourceMatchingSelected.length) {
       powerSourceFilteredCount = selected.length - sourceMatchingSelected.length;
       selected = sourceMatchingSelected;
     } else {
       powerSourceFilteredCount = selected.length;
-      if (structuredSelection) {
-        selected = [];
-        powerSourceNoFit = true;
-      } else {
-        const fallbackBatteryProducts = sameIntentPool.filter(isBatteryPowerStation);
-        selected = fallbackBatteryProducts;
-        powerSourceNoFit = fallbackBatteryProducts.length === 0;
-      }
+      selected = [];
+      powerSourceNoFit = true;
     }
   }
 
   let generatorFuelFilteredCount = 0;
   let generatorFuelNoFit = false;
-  if (strictGeneratorFuelRequirement && selected.length) {
+  if (strictFuelRequirement && selected.length) {
     const fuelMatchingSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
       proofs: requirementProofs,
       productId: product.id,
@@ -2227,12 +2096,9 @@ export function selectProductsForVisibleCards(input: {
 
   let generatorPowerFilteredCount = 0;
   let generatorPowerNoFit = false;
-  const structuredGeneratorRequirement = structuredSelection
-    ? structuredGeneratorPowerRequirement(input.intent)
-    : undefined;
+  const structuredGeneratorRequirement = structuredGeneratorPowerRequirement(input.intent);
   const generatorPowerRequirement = isGeneratorProductClass(cardIntent)
-    ? structuredSelection
-      ? strictRequirementAssessment.generatorNominalPowerMinKw === undefined
+    ? strictRequirementAssessment.generatorNominalPowerMinKw === undefined
         ? structuredGeneratorRequirement
         : {
             minKw: Math.max(
@@ -2242,7 +2108,6 @@ export function selectProductsForVisibleCards(input: {
             maxKw: structuredGeneratorRequirement?.maxKw,
             requireNominal: true
           }
-      : generatorPowerRequirementForCardSelection(buyerRequirementText)
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPowerRequirement) {
     const powerMatchingSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
@@ -2250,39 +2115,26 @@ export function selectProductsForVisibleCards(input: {
       productId: product.id,
       intent: input.intent,
       kinds: ['nominal_power_min_kw', 'power_min_kw', 'nominal_power_max_kw', 'power_max_kw'],
-      nativeMatch: productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement, structuredSelection)
+      nativeMatch: productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement, true)
     }));
     if (powerMatchingSelected.length) {
       generatorPowerFilteredCount = selected.length - powerMatchingSelected.length;
       selected = powerMatchingSelected;
     } else {
       generatorPowerFilteredCount = selected.length;
-      if (structuredSelection) {
-        const allowedCompromises = structuredCompromisesAllowed
-          ? selected.filter((product) => compromiseProductIds.has(product.id))
-          : [];
-        selected = allowedCompromises;
-        generatorPowerNoFit = allowedCompromises.length === 0;
-      } else {
-        const fallbackPowerMatches = sourceConstrainedGeneratorPool.filter((product) =>
-          productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement)
-        );
-        selected = fallbackPowerMatches;
-        generatorPowerNoFit = fallbackPowerMatches.length === 0;
-      }
+      selected = [];
+      generatorPowerNoFit = true;
     }
   }
 
   let generatorPhaseFilteredCount = 0;
   let generatorPhaseNoFit = false;
   const generatorPhaseRequirement = isGeneratorProductClass(cardIntent)
-    ? structuredSelection
-      ? input.intent.selectionPolicy?.phase === 'single_phase'
+    ? input.intent.selectionPolicy?.phase === 'single_phase'
         ? 'single_220'
         : input.intent.selectionPolicy?.phase === 'three_phase'
           ? 'three_380'
           : undefined
-      : requestedGeneratorPhaseRequirement(buyerRequirementText)
     : undefined;
   if (isGeneratorProductClass(cardIntent) && selected.length && generatorPhaseRequirement) {
     const phaseMatchingSelected = selected.filter((product) => {
@@ -2291,7 +2143,7 @@ export function selectProductsForVisibleCards(input: {
         productId: product.id,
         intent: input.intent,
         kinds: ['phase', generatorVoltageRequirementKind],
-        nativeMatch: productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, structuredSelection)
+        nativeMatch: productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, true)
       });
     });
     if (phaseMatchingSelected.length) {
@@ -2299,16 +2151,8 @@ export function selectProductsForVisibleCards(input: {
       selected = phaseMatchingSelected;
     } else {
       generatorPhaseFilteredCount = selected.length;
-      if (structuredSelection) {
-        selected = [];
-        generatorPhaseNoFit = true;
-      } else {
-        const fallbackPhaseMatches = sourceConstrainedGeneratorPool
-          .filter((product) => productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement))
-          .filter((product) => productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement));
-        selected = fallbackPhaseMatches;
-        generatorPhaseNoFit = fallbackPhaseMatches.length === 0;
-      }
+      selected = [];
+      generatorPhaseNoFit = true;
     }
   }
 
@@ -2330,9 +2174,7 @@ export function selectProductsForVisibleCards(input: {
     generatorAutoStartNoFit = selected.length === 0;
   }
 
-  const budgetMax = structuredSelection
-    ? structuredBudgetMax(input.intent)
-    : effectiveVisibleCardBudgetMax({ needState: input.needState, userMessage: input.userMessage });
+  const budgetMax = structuredBudgetMax(input.intent);
   let budgetFilteredCount = 0;
   let budgetNoFit = false;
   if (budgetMax !== undefined && selected.length) {
@@ -2345,28 +2187,9 @@ export function selectProductsForVisibleCards(input: {
       budgetFilteredCount = selected.length - withinBudget.length;
       selected = withinBudget;
     } else {
-      if (structuredSelection) {
-        const allowedCompromises = structuredCompromisesAllowed
-          ? selected.filter((product) => compromiseProductIds.has(product.id))
-          : [];
-        budgetFilteredCount = selected.length - allowedCompromises.length;
-        budgetNoFit = allowedCompromises.length === 0;
-        selected = allowedCompromises;
-      } else {
-      const fallbackWithinBudget = sameIntentPool.filter((product) =>
-        typeof product.price === 'number' &&
-        Number.isFinite(product.price) &&
-        product.price <= budgetMax
-      );
-      if (fallbackWithinBudget.length) {
-        budgetFilteredCount = selected.length;
-        selected = fallbackWithinBudget;
-      } else if (isGeneratorProductClass(cardIntent)) {
-        budgetFilteredCount = selected.length;
-        budgetNoFit = true;
-        selected = [];
-      }
-      }
+      budgetFilteredCount = selected.length;
+      budgetNoFit = true;
+      selected = [];
     }
   }
 
@@ -2374,32 +2197,9 @@ export function selectProductsForVisibleCards(input: {
   let plateTaskFilteredCount = 0;
   let plateTaskWarnings: string[] = [];
   const plateWeightRange = cardIntent === 'plate'
-    ? structuredSelection
-      ? structuredPlateWeightRange(input.intent)
-      : requestedPlateWeightRangeKg({
-        userMessage: input.userMessage,
-        query: toolRequestSemanticText(input.intent),
-        semanticContext: [
-          input.intent.userMessageSummary,
-          input.intent.dialogueUnderstanding,
-          input.intent.nextStepRationale
-        ].filter(Boolean).join('\n')
-        })
+    ? structuredPlateWeightRange(input.intent)
     : undefined;
-  const plateTaskPolicyForSelection = cardIntent === 'plate'
-    ? structuredSelection
-      ? undefined
-      : plateTaskWeightPolicy({
-        userMessage: input.userMessage,
-        query: toolRequestSemanticText(input.intent),
-        semanticContext: [
-          input.intent.userMessageSummary,
-          input.intent.dialogueUnderstanding,
-          input.intent.nextStepRationale,
-          input.answerText
-        ].filter(Boolean).join('\n')
-        })
-    : undefined;
+  const plateTaskPolicyForSelection = undefined;
   if (plateWeightRange && selected.length) {
     const nativeWeightMatches = new Set(
       productsWithinPlateWeightRange(selected, plateWeightRange).map((product) => product.id)
@@ -2413,124 +2213,48 @@ export function selectProductsForVisibleCards(input: {
         nativeMatch: nativeWeightMatches.has(product.id)
       }))
       .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
-    const heavierTradeoffAllowed = structuredSelection
-      ? input.intent.selectionPolicy?.alternativePolicy === 'allow_adjacent_with_explanation' ||
-        input.intent.selectionPolicy?.alternativePolicy === 'open_to_alternatives'
-      : allowsHeavierPlateTradeoff({
-          userMessage: input.userMessage,
-          semanticContext: [
-            input.intent.userMessageSummary,
-            input.intent.dialogueUnderstanding,
-            input.intent.nextStepRationale,
-            input.answerText
-          ].filter(Boolean).join('\n')
-        });
     if (selectedWithinRange.length) {
-      const inRangeIds = new Set(selectedWithinRange.map((product) => product.id));
-      const mentionedIds = new Set(mentionedMatchingIntent.map((product) => product.id));
-      const selectedAfterNumericFit = heavierTradeoffAllowed
-        ? selected.filter((product) => inRangeIds.has(product.id) || mentionedIds.has(product.id))
-        : selectedWithinRange;
-      numericFitFilteredCount = selected.length - selectedAfterNumericFit.length;
-      selected = selectedAfterNumericFit;
+      numericFitFilteredCount = selected.length - selectedWithinRange.length;
+      selected = selectedWithinRange;
     } else {
-      if (structuredSelection) {
-        const allowedCompromises = structuredCompromisesAllowed
-          ? selected.filter((product) => compromiseProductIds.has(product.id))
-          : [];
-        numericFitFilteredCount = selected.length - allowedCompromises.length;
-        plateTaskWarnings = allowedCompromises.length
-          ? ['product_cards_compromise:structured_weight_outside_requested_range']
-          : ['product_cards_suppressed:structured_weight_no_fit'];
-        selected = allowedCompromises;
-      } else {
-      const fallbackWithinRange = productsWithinPlateWeightRange(sameIntentPool, plateWeightRange)
-        .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
-      if (fallbackWithinRange.length) {
-        numericFitFilteredCount = selected.length;
-        selected = fallbackWithinRange;
-      } else if (plateWeightRange.source === 'self_loading' || plateWeightRange.source === 'small_site') {
-        numericFitFilteredCount = selected.length;
-        plateTaskWarnings = ['product_cards_suppressed:plate_task_weight_mismatch:selected_outside_task_range'];
-        selected = [];
-      }
-      }
-    }
-  }
-  if (!structuredSelection && cardIntent === 'plate' && selected.length) {
-    const plateTaskFilter = filterPlateProductsByCurrentTask({
-      products: selected,
-      userMessage: input.userMessage,
-      query: toolRequestSemanticText(input.intent),
-      semanticContext: [
-        input.intent.userMessageSummary,
-        input.intent.dialogueUnderstanding,
-        input.intent.nextStepRationale,
-        input.answerText
-      ].filter(Boolean).join('\n')
-    });
-    if (plateTaskFilter.droppedProductIds.length) {
-      plateTaskFilteredCount = plateTaskFilter.droppedProductIds.length;
-      plateTaskWarnings = plateTaskFilter.warnings;
-      selected = plateTaskFilter.products;
+      numericFitFilteredCount = selected.length;
+      plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
+      selected = [];
     }
   }
 
   let diamondMaterialFilteredCount = 0;
   let diamondMaterialNoFit = false;
-  const structuredMaterial = structuredSelection ? structuredMaterialRequirement(input.intent) : undefined;
-  const requiresCeramic = structuredSelection
-    ? structuredMaterial === 'ceramic' || structuredMaterial === 'porcelain_tile' || structuredMaterial === 'ceramic_tile'
-    : requiresCeramicDiamondBlade(buyerRequirementText);
+  const structuredMaterial = structuredMaterialRequirement(input.intent);
+  const requiresCeramic = structuredMaterial === 'ceramic' || structuredMaterial === 'porcelain_tile' || structuredMaterial === 'ceramic_tile';
   if (cardIntent === 'diamondBlade' && selected.length && requiresCeramic) {
-    const ceramicSelected = selected.filter((product) => structuredSelection
-      ? productPassesNativeConstraintOrAuthoritativeProof({
-          proofs: requirementProofs,
-          productId: product.id,
-          intent: input.intent,
-          kinds: ['material'],
-          nativeMatch: diamondBladeSupportsCeramic(product)
-        })
-      : diamondBladeSupportsCeramic(product));
+    const ceramicSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+      proofs: requirementProofs,
+      productId: product.id,
+      intent: input.intent,
+      kinds: ['material'],
+      nativeMatch: diamondBladeSupportsCeramic(product)
+    }));
     if (ceramicSelected.length) {
       diamondMaterialFilteredCount = selected.length - ceramicSelected.length;
       selected = ceramicSelected;
     } else {
       diamondMaterialFilteredCount = selected.length;
-      if (structuredSelection) {
-        selected = [];
-        diamondMaterialNoFit = true;
-      } else {
-        const fallbackCeramic = sameIntentPool.filter(diamondBladeSupportsCeramic);
-        selected = fallbackCeramic;
-        diamondMaterialNoFit = fallbackCeramic.length === 0;
-      }
+      selected = [];
+      diamondMaterialNoFit = true;
     }
   }
 
-  const visibleCardLimit = structuredSelection
-    ? input.intent.selectionPolicy?.maxCards ?? undefined
-    : requestedVisibleCardLimit({
-        userMessage: input.userMessage,
-        semanticContext: [
-          input.intent.userMessageSummary,
-          input.intent.dialogueUnderstanding,
-          input.intent.nextStepRationale,
-          input.answerText
-        ].filter(Boolean).join('\n')
-      });
+  const visibleCardLimit = input.intent.selectionPolicy?.maxCards ?? undefined;
   const selectedById = uniqueProducts(selected);
   const selectedProducts = uniqueVisibleProductsByIdentity(selectedById).slice(0, visibleCardLimit ?? 8);
   const identityDeduplicatedCount = selectedById.length - uniqueVisibleProductsByIdentity(selectedById).length;
   const selectedIds = new Set(selectedProducts.map((product) => product.id));
   const structuredRequestedIds = new Set(input.selectedProductIds ?? []);
-  const structuredSuppressedCount = structuredSelection
-    ? [...structuredRequestedIds].filter((id) => !selectedIds.has(id)).length
-    : 0;
+  const structuredSuppressedCount = [...structuredRequestedIds].filter((id) => !selectedIds.has(id)).length;
   const droppedProductIds = unique
     .filter((product) => !selectedIds.has(product.id))
     .map((product) => product.id);
-  const visibleCompromiseCount = selectedProducts.filter((product) => compromiseProductIds.has(product.id)).length;
   const warnings = [
     ...(strictRequirementAssessment.preliminaryUnverified.length
       ? [`product_cards_preliminary:unverified_web_covered_strict_requirements:${strictRequirementAssessment.preliminaryUnverified.length}`]
@@ -2565,10 +2289,10 @@ export function selectProductsForVisibleCards(input: {
       ? [`product_cards_suppressed:power_source_no_fit:${structuredPowerSource ?? 'battery'}`]
       : []),
     ...(generatorFuelFilteredCount > 0
-      ? [`product_cards_filtered_by_generator_fuel:${strictGeneratorFuelRequirement}:${generatorFuelFilteredCount}`]
+      ? [`product_cards_filtered_by_fuel:${strictFuelRequirement}:${generatorFuelFilteredCount}`]
       : []),
     ...(generatorFuelNoFit
-      ? [`product_cards_suppressed:generator_fuel_no_fit:${strictGeneratorFuelRequirement}`]
+      ? [`product_cards_suppressed:fuel_no_fit:${strictFuelRequirement}`]
       : []),
     ...(generatorPowerFilteredCount > 0 ? [`product_cards_filtered_by_generator_power:${generatorPowerFilteredCount}`] : []),
     ...(generatorPowerNoFit ? ['product_cards_suppressed:generator_power_no_fit'] : []),
@@ -2576,7 +2300,6 @@ export function selectProductsForVisibleCards(input: {
     ...(generatorPhaseNoFit ? ['product_cards_suppressed:generator_phase_no_fit'] : []),
     ...(generatorAutoStartFilteredCount > 0 ? [`product_cards_filtered_by_generator_autostart:${generatorAutoStartFilteredCount}`] : []),
     ...(generatorAutoStartNoFit ? ['product_cards_suppressed:generator_autostart_no_fit'] : []),
-    ...(visibleCompromiseCount > 0 ? [`product_cards_compromise:${visibleCompromiseCount}`] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
     ...(diamondMaterialFilteredCount > 0 ? [`product_cards_filtered_by_diamond_material:${diamondMaterialFilteredCount}`] : []),
@@ -2585,7 +2308,7 @@ export function selectProductsForVisibleCards(input: {
   ];
 
   return {
-    semanticAuthority: structuredSelection ? 'llm_contract' as const : 'legacy_fallback' as const,
+    semanticAuthority: 'llm_contract' as const,
     intent: cardIntent,
     products: selectedProducts,
     selectedProductIds: selectedProducts.map((product) => product.id),
@@ -2618,7 +2341,7 @@ type VisibleCardSelection = Omit<
   ReturnType<typeof selectProductsForVisibleCards>,
   'semanticAuthority' | 'requirementProofs' | 'productCaveatsById'
 > & {
-  semanticAuthority?: 'llm_contract' | 'legacy_fallback';
+  semanticAuthority?: 'llm_contract' | 'missing_structured_authority';
   requirementProofs?: RequirementProof[];
   productCaveatsById?: Record<string, string[]>;
 };
