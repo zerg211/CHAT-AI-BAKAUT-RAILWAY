@@ -492,6 +492,14 @@ function resultProducts(result: ToolResult): Product[] {
     : [];
 }
 
+function fuelTypeFromText(value: unknown): 'diesel' | 'gasoline' | null {
+  const words = new Set(normalizedWords(value));
+  const diesel = hasAnyWords(words, ['diesel', 'дизель']);
+  const gasoline = hasAnyWords(words, ['gasoline', 'petrol', 'бензин']);
+  if (diesel === gasoline) return null;
+  return diesel ? 'diesel' : 'gasoline';
+}
+
 function eligibleResults(input: {
   requirement: SelectionRequirement;
   intent: AgentIntentContract;
@@ -531,10 +539,11 @@ function catalogCandidates(input: {
       productForFact(input.products, { productName: resultProduct.name, sourceUrl: resultProduct.sourceUrl });
     if (!product) return [];
     const canonical = canonicalAttribute(attribute);
-    const entries = scalarEntries(resultProduct.specs).filter((entry) =>
-      attributeMatches(entry.path, attribute) ||
-      (canonical === 'electric_start' && textHasAny(entry.path, ['starter', 'стартер', 'starting system', 'система запуска']))
-    );
+    const entries = scalarEntries(resultProduct.specs).filter((entry) => {
+      const attributeMatch = attributeMatches(entry.path, attribute) ||
+        (canonical === 'electric_start' && textHasAny(entry.path, ['starter', 'стартер', 'starting system', 'система запуска']));
+      return attributeMatch && (canonical !== 'fuel_type' || fuelTypeFromText(entry.value) !== null);
+    });
     if (canonicalAttribute(attribute) === 'price' && typeof resultProduct.price === 'number') {
       entries.push({ path: 'price', value: resultProduct.price });
     }
@@ -555,12 +564,8 @@ function catalogCandidates(input: {
     }
     if (canonical === 'fuel_type') {
       const identityText = `${resultProduct.name} ${resultProduct.category ?? ''}`;
-      const identityWords = new Set(normalizedWords(identityText));
-      const diesel = hasAnyWords(identityWords, ['diesel', 'дизель']);
-      const gasoline = hasAnyWords(identityWords, ['gasoline', 'petrol', 'бензин']);
-      if (diesel !== gasoline) {
-        entries.push({ path: 'name_fuel_marker', value: diesel ? 'diesel' : 'gasoline' });
-      }
+      const identityFuelType = fuelTypeFromText(identityText);
+      if (identityFuelType) entries.push({ path: 'name_fuel_marker', value: identityFuelType });
     }
     return entries.map((entry) => ({
       productId: product.id,

@@ -322,7 +322,11 @@ describe('combined semantic decision validation', () => {
       category: 'Бензиновые генераторы',
       price: 100000,
       currency: 'RUB',
-      specs: {}
+      specs: {
+        'вид топлива': 'бензиновые',
+        'расход топлива, л/ч': '1',
+        'емкость топливного бака, л': '26'
+      }
     };
     const intent = generatorDecision().intent;
     intent.selectionPolicy = {
