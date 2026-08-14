@@ -2552,7 +2552,11 @@ export async function researchProductComparisonFacts(input: {
           comparisonAttributes,
           catalogExtraction: catalogResultForResearch,
           exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes),
-          products: compactCatalogFirstResearch ? [] : productResearchContext(input.products)
+          products: compactCatalogFirstResearch
+            ? []
+            : targetProductNames.length
+              ? productResearchContext(exactCatalogProducts)
+              : productResearchContext(input.products)
         })
       }
     ],

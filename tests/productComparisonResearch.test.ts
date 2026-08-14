@@ -1705,6 +1705,7 @@ describe('product comparison research', () => {
     expect(JSON.stringify(researchCalls()[0].request.input)).not.toContain('control panel photo');
     expect(researchCalls()[1].request.input[0].content).toContain('missing-fact slot');
     expect(researchCalls()[1].request.input[0].content).toContain('Do not reduce the task to a fixed phrase list');
+    expect(String(researchCalls()[0].request.input[1].content)).not.toContain('FIRMAN RD3910E');
     expect(actual.answerGuidance.directAnswer).toContain('с ключа');
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'key start', status: 'confirmed' })

@@ -1432,23 +1432,24 @@ function App() {
         }
       }, controller.signal, { clientMessageId, visitorId });
       if (payload?.leadRequested) setLeadAutoOpenKey((value) => value + 1);
+      const committedAnswer = typeof payload?.answer === 'string' && payload.answer.trim()
+        ? payload.answer
+        : '';
       setMessages((current) => current.map((message) => (
         message.id === assistantId
           ? {
-              ...message,
-              content: payload?.metadata?.recovered === true || !message.content
-                ? payload?.answer || message.content || 'Ответ сформирован, но текст не был передан. Повторите запрос.'
-                : message.content,
-              serverId: payload?.assistantMessageId,
-              cards: payload?.productCards?.length ? payload.productCards : message.cards,
-              cardDisplay: payload?.cardDisplay ?? payload?.metadata?.cardDisplay ?? message.cardDisplay,
-              leadRequested: payload?.leadRequested,
-              metadata: payload?.metadata ?? message.metadata,
-              progress: undefined,
-              status: 'done'
-            }
-          : message
-      )));
+               ...message,
+               content: committedAnswer || message.content,
+               serverId: payload?.assistantMessageId,
+               cards: payload?.productCards?.length ? payload.productCards : message.cards,
+               cardDisplay: payload?.cardDisplay ?? payload?.metadata?.cardDisplay ?? message.cardDisplay,
+               leadRequested: payload?.leadRequested,
+               metadata: payload?.metadata ?? message.metadata,
+               progress: undefined,
+               status: committedAnswer || message.content ? 'done' : 'error'
+             }
+           : message
+       )));
     } catch (submitError) {
       if (submitError instanceof ChatMessageNotAcceptedError) {
         setMessages((current) => current.filter((message) => message.id !== userId && message.id !== assistantId));
@@ -1488,14 +1489,14 @@ function App() {
         const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не смог надежно сформировать ответ|не удалось получить ответ/i.test(submitError.message)
           ? submitError.message
           : 'Сейчас не удалось надежно отправить или завершить вопрос. Проверьте соединение и попробуйте ещё раз.';
-        setMessages((current) => current.map((message) => (
-          message.id === assistantId
-            ? {
-                ...message,
-                content: message.content || safeMessage,
-                progress: undefined,
-                status: 'error'
-              }
+         setMessages((current) => current.map((message) => (
+           message.id === assistantId
+             ? {
+                 ...message,
+                 content: message.content,
+                 progress: undefined,
+                 status: 'error'
+               }
             : message
         )));
       setError(safeMessage);

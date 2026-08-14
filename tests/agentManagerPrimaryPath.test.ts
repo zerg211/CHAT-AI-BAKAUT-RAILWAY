@@ -51,5 +51,7 @@ describe('agent manager primary answer path', () => {
     expect(sharedTypes).not.toContain('answerGenerationFallback');
     expect(client).not.toContain('AI fallback');
     expect(client).not.toContain('answer fallback');
+    expect(client).not.toContain('payload?.answer || message.content ||');
+    expect(client).not.toContain('message.content || safeMessage');
   });
 });
