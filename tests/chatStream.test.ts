@@ -14,7 +14,7 @@ function sseEvent(event: string, data: unknown) {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-describe('streamChatMessage watchdog and recovery', () => {
+describe('streamChatMessage watchdog and explicit continuation', () => {
   it('preserves the session across reloads and same-tab catalog navigation', () => {
     const source = readFileSync('src/client/main.tsx', 'utf8');
 
@@ -71,7 +71,45 @@ describe('streamChatMessage watchdog and recovery', () => {
     expect(Number(match![1]!.replace(/_/g, ''))).toBeGreaterThan(120_000);
   });
 
-  it('recovers a stalled SSE stream when the server already emitted turnId', async () => {
+  it('never turns a failed primary stream into an automatic recover request', async () => {
+    const primaryStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      }
+    });
+    const recoveredStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(sseEvent('done', {
+          turnId: 'turn-primary-failed',
+          answer: 'This alternate delivery path must not be used automatically.',
+          productCards: [],
+          usedWebSearch: false
+        })));
+        controller.close();
+      }
+    });
+    const fetcher = vi.fn(async (url: string | URL | Request) => (
+      String(url).includes('/recover')
+        ? new Response(recoveredStream, { status: 200 })
+        : new Response(primaryStream, {
+            status: 200,
+            headers: { 'x-chat-turn-id': 'turn-primary-failed' }
+          })
+    ));
+
+    await expect(streamChatMessage(
+      '',
+      'session-1',
+      'Нужна виброплита',
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher, visitorId }
+    )).rejects.toThrow('Server finished without a done payload');
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a stalled primary SSE stream without automatic recovery', async () => {
     vi.useFakeTimers();
     try {
       const firstStream = new ReadableStream<Uint8Array>({
@@ -110,18 +148,18 @@ describe('streamChatMessage watchdog and recovery', () => {
         { fetcher, idleTimeoutMs: 1000, visitorId }
       );
 
+      const rejection = expect(result).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(1000);
-
-      await expect(result).resolves.toMatchObject(recoveredPayload);
-      expect(fetcher).toHaveBeenCalledTimes(2);
-      expect(deltas.join('')).toBe('Восстановленный ответ');
-      expect(statuses).toContain('Ответ оборвался, восстанавливаю...');
+      await rejection;
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(deltas).toEqual([]);
+      expect(statuses).not.toContain('Ответ оборвался, восстанавливаю...');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('recovers a completed turn when the primary SSE body closes before any event is delivered', async () => {
+  it('surfaces a closed primary SSE body without automatic recovery', async () => {
     const emptyPrimaryStream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.close();
@@ -156,13 +194,12 @@ describe('streamChatMessage watchdog and recovery', () => {
       { onDelta: () => undefined },
       undefined,
       { fetcher, visitorId }
-    )).resolves.toMatchObject(recoveredPayload);
+    )).rejects.toThrow('Server finished without a done payload');
 
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    expect(String(fetcher.mock.calls[1]?.[0])).toContain('/messages/turn-from-header/recover');
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it('does not start a second recovery transport when the only recovery closes before done', async () => {
+  it('does not start any recovery transport when the primary stream closes', async () => {
     vi.useFakeTimers();
     try {
       const emptyStream = () => new ReadableStream<Uint8Array>({
@@ -204,14 +241,14 @@ describe('streamChatMessage watchdog and recovery', () => {
         { fetcher, visitorId }
       );
       await expect(result).rejects.toThrow('Server finished without a done payload');
-      expect(fetcher).toHaveBeenCalledTimes(2);
-      expect(recoveryCalls).toBe(1);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(recoveryCalls).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('does not retry a recovery stream after an explicit non-recoverable server error', async () => {
+  it('does not request recovery after a primary stream closes', async () => {
     const emptyPrimary = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.close();
@@ -243,11 +280,11 @@ describe('streamChatMessage watchdog and recovery', () => {
       { onDelta: () => undefined },
       undefined,
       { fetcher, visitorId }
-    )).rejects.toThrow('The saved turn cannot be recovered.');
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    )).rejects.toThrow('Server finished without a done payload');
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it('lets recovery outlive the primary stream idle watchdog', async () => {
+  it('does not extend a failed primary stream through recovery', async () => {
     vi.useFakeTimers();
     try {
       const firstStream = new ReadableStream<Uint8Array>({
@@ -289,12 +326,11 @@ describe('streamChatMessage watchdog and recovery', () => {
         { fetcher, idleTimeoutMs: 1000, visitorId }
       );
 
+      const rejection = expect(result).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(1000);
-      expect(fetcher).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(70_000);
-
-      await expect(result).resolves.toMatchObject(recoveredPayload);
-      expect(deltas.join('')).toBe('Recovered after a long repair');
+      await rejection;
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(deltas).toEqual([]);
     } finally {
       vi.useRealTimers();
     }

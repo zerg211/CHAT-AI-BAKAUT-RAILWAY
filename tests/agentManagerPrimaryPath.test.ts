@@ -22,6 +22,8 @@ describe('agent manager primary answer path', () => {
     expect(contracts).not.toContain('rewrite_required');
     expect(config).not.toContain('AI_MANAGER_REVIEW_MODE');
     expect(policyTargets).not.toContain("'reviewer'");
+    expect(orchestrator).toContain('answerContractFormatForEvidenceSources');
+    expect(orchestrator).toContain('enum: allowedSourceIds');
   });
 
   it('does not perform an automatic semantic rerun after initial generation fails', async () => {

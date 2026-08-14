@@ -11,7 +11,6 @@ export type ChatStreamOptions = {
   visitorId: string;
   fetcher?: FetchLike;
   idleTimeoutMs?: number;
-  recoverOnError?: boolean;
   clientMessageId?: string;
 };
 
@@ -221,16 +220,7 @@ export async function streamChatMessage(
 ) {
   const fetcher = options.fetcher ?? fetch;
   const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS;
-  const recoverOnError = options.recoverOnError !== false;
   const clientMessageId = options.clientMessageId ?? crypto.randomUUID();
-  let turnId: string | undefined;
-  let recoveryAttempted = false;
-  let serverAllowsRecovery = true;
-  const recoverOnce = async (resolvedTurnId: string) => {
-    if (recoveryAttempted) throw new Error(FRIENDLY_FINAL_ERROR);
-    recoveryAttempted = true;
-    return recoverChatMessage(apiBase, sessionId, resolvedTurnId, options.visitorId, handlers, signal, fetcher, idleTimeoutMs);
-  };
 
   const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages`, {
     method: 'POST',
@@ -266,21 +256,10 @@ export async function streamChatMessage(
     throw new Error('Не удалось получить ответ');
   }
   if (!response.body) throw new Error('Не удалось получить ответ');
-  turnId = response.headers.get('x-chat-turn-id')?.trim() || turnId;
-
   try {
-    return await consumeSse(response, handlers, signal, idleTimeoutMs, async (event, data) => {
-      if (event === 'turn') turnId = String(data.turnId ?? turnId ?? '');
-      if (event === 'error' && data.recoverable === false) serverAllowsRecovery = false;
-      if (event === 'error' && data.recoverable !== false && recoverOnError && (data.turnId || turnId)) {
-        return recoverOnce(String(data.turnId ?? turnId));
-      }
-    });
+    return await consumeSse(response, handlers, signal, idleTimeoutMs);
   } catch (error) {
     if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-    if (serverAllowsRecovery && recoverOnError && turnId && !recoveryAttempted) {
-      return recoverOnce(turnId);
-    }
     throw new Error(error instanceof Error && error.message ? error.message : FRIENDLY_FINAL_ERROR);
   }
 }

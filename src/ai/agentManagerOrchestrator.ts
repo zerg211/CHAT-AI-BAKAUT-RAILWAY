@@ -5475,6 +5475,38 @@ const answerContractFormat = {
   }
 } as const;
 
+function answerContractFormatForEvidenceSources(allowedSourceIds: string[]) {
+  const sourceIdItems = allowedSourceIds.length
+    ? { type: 'string', enum: allowedSourceIds }
+    : { type: 'string' };
+  return {
+    ...answerContractFormat,
+    format: {
+      ...answerContractFormat.format,
+      schema: {
+        ...answerContractFormat.format.schema,
+        properties: {
+          ...answerContractFormat.format.schema.properties,
+          factsUsed: {
+            ...answerContractFormat.format.schema.properties.factsUsed,
+            items: {
+              ...answerContractFormat.format.schema.properties.factsUsed.items,
+              properties: {
+                ...answerContractFormat.format.schema.properties.factsUsed.items.properties,
+                sourceEventIds: {
+                  type: 'array',
+                  items: sourceIdItems,
+                  ...(allowedSourceIds.length ? {} : { maxItems: 0 })
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  };
+}
+
 export const agentManagerStructuredFormats = {
   semanticDecisionFormat,
   ledgerDeltaFormat,
@@ -5708,6 +5740,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
 
   async composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract> {
     const styleExamples = approvedAnswerStyleExamplesPromptBlock();
+    const availableEvidenceSources = answerEvidenceSourceHints(input);
     const managerPolicy = buildSalesManagerPolicyTrace({
       target: 'answer',
       latestUserMessage: input.userMessage,
@@ -5784,13 +5817,13 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             intent: input.intent,
             toolResults: compactToolResultsForModel(input.toolResults, input.products),
             requiredResponseClauses: input.requiredResponseClauses ?? [],
-            availableEvidenceSources: answerEvidenceSourceHints(input),
+            availableEvidenceSources,
             productEvidenceRoles: input.productEvidenceRoles ?? [],
             products: input.products.map(answerProductContext)
           })
         }
       ],
-      text: answerContractFormat
+      text: answerContractFormatForEvidenceSources(availableEvidenceSources.allowedSourceIds)
     };
     const { parsed } = await createStructuredJsonResponse({ request, stage: 'agent_answer_contract', signal: input.signal });
     return parseAnswerContractModelOutput(parsed);
