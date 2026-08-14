@@ -2572,6 +2572,7 @@ export async function researchProductComparisonFacts(input: {
     include: ['web_search_call.action.sources'],
     max_output_tokens: productComparisonMaxOutputTokens(targetProductNames),
     text: {
+      verbosity: 'low',
       format: {
         type: 'json_schema',
         name: 'product_comparison_research',
