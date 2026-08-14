@@ -164,6 +164,31 @@ describe('structured exact-product identity', () => {
     expect(repaired.riskFlags).toContain('planner_repaired_exact_model_evidence');
   });
 
+  it('does not treat a generic product class as an exact model when the planner labels it target_product', () => {
+    const userMessage = 'Нужна бензиновая виброплита для работы одному: вес 60–90 кг, бюджет до 90 000 ₽.';
+    const intent = {
+      toolRequests: [{
+        id: 'catalog-search',
+        tool: 'catalog.search',
+        args: { query: userMessage },
+        rationale: 'Find suitable catalog products.',
+        required: true
+      }],
+      productMentions: [{
+        name: 'виброплита',
+        role: 'target_product',
+        productClass: 'виброплита',
+        evidence: 'бензиновая виброплита'
+      }],
+      riskFlags: [],
+      requiresTools: true
+    } as unknown as AgentIntentContract;
+
+    const repaired = repairIntentForExactModelEvidence(intent, userMessage);
+
+    expect(repaired.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
+  });
+
   it('does not convert an unverified refresh failure into catalog absence', () => {
     const result = {
       requestId: 'exact-bps-refresh',

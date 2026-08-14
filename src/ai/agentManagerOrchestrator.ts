@@ -1729,6 +1729,14 @@ export function exactModelNamesFromUserMessage(userMessage: string) {
     .slice(0, 4));
 }
 
+function isExactModelMentionName(name: string) {
+  const identity = exactProductIdentity(name);
+  if (identity.identifierParts.length > 0) return true;
+  return modelIdentityCandidates(name).some((candidate) =>
+    exactProductIdentity(candidate).decisiveParts.length >= 2
+  );
+}
+
 function isCatalogAvailabilityOnlyIntent(intent: AgentIntentContract) {
   return intent.grounding?.taskType === 'availability_or_delivery' &&
     intent.grounding.sourcePolicy !== 'web_required' &&
@@ -1740,6 +1748,7 @@ function isCatalogAvailabilityOnlyIntent(intent: AgentIntentContract) {
 export function repairIntentForExactModelEvidence(intent: AgentIntentContract, userMessage: string): AgentIntentContract {
   const explicitTargetMentionNames = (intent.productMentions ?? [])
     .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+    .filter((mention) => isExactModelMentionName(mention.name))
     .map((mention) => mention.name)
     .filter((name) => exactProductIdentity(name).hasExactMention(userMessage));
   const targetMentionNames = uniqueStrings([
@@ -2099,6 +2108,7 @@ function assertToolResultBounds(result: ToolResult) {
 function exactProductNamesFromIntent(intent: AgentIntentContract, userMessage: string) {
   const explicitNames = (intent.productMentions ?? [])
     .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+    .filter((mention) => isExactModelMentionName(mention.name))
     .filter((mention) => exactProductIdentity(mention.name).hasExactMention(userMessage))
     .map((mention) => mention.name);
   return uniqueStrings([
