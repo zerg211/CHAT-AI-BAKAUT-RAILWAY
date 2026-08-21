@@ -30,7 +30,7 @@ export type AgentManagerStopReason =
 
 export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
   maxModelCalls: 3,
-  maxProviderCalls: 20,
+  maxProviderCalls: 60,
   maxToolCalls: 8,
   maxWebCalls: 2,
   maxResultBytes: 900_000,

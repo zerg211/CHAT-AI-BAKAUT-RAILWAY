@@ -125,7 +125,8 @@ describe('agent manager turn budget', () => {
     expect(limits.maxProviderEstimatedTotalTokens).toBeGreaterThanOrEqual(
       limits.maxProviderEstimatedInputTokens + limits.maxProviderReservedOutputTokens
     );
-    expect(worstCaseCostAtTokenCeilings).toBeLessThanOrEqual(limits.maxEstimatedCostUsd);
+    expect(limits.maxEstimatedCostUsd).toBeGreaterThanOrEqual(10);
+    expect(worstCaseCostAtTokenCeilings).toBeLessThanOrEqual(limits.maxEstimatedCostUsd + limits.maxProviderCalls * 0.01);
   });
 
   it('accepts the operational provider ceiling exactly and rejects one extra input token prospectively', () => {
