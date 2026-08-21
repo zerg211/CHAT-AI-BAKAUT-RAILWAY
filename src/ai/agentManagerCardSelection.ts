@@ -2177,6 +2177,7 @@ export function selectProductsForVisibleCards(input: {
   const budgetMax = structuredBudgetMax(input.intent);
   let budgetFilteredCount = 0;
   let budgetNoFit = false;
+  let budgetCompromiseCount = 0;
   if (budgetMax !== undefined && selected.length) {
     const withinBudget = selected.filter((product) =>
       typeof product.price === 'number' &&
@@ -2187,9 +2188,28 @@ export function selectProductsForVisibleCards(input: {
       budgetFilteredCount = selected.length - withinBudget.length;
       selected = withinBudget;
     } else {
-      budgetFilteredCount = selected.length;
-      budgetNoFit = true;
-      selected = [];
+      const allowBudgetCompromise = input.intent.selectionPolicy?.alternativePolicy !== 'exact_only';
+      if (allowBudgetCompromise) {
+        const softBudgetMax = budgetMax * 1.15;
+        const pricedOverBudget = selected
+          .filter((product) => typeof product.price === 'number' && Number.isFinite(product.price) && product.price > budgetMax && product.price <= softBudgetMax)
+          .sort((a, b) => (a.price ?? 0) - (b.price ?? 0))
+          .slice(0, 3);
+        if (pricedOverBudget.length) {
+          budgetCompromiseCount = pricedOverBudget.length;
+          budgetFilteredCount = selected.length - pricedOverBudget.length;
+          selected = pricedOverBudget;
+        } else {
+          // No over-budget within +15% — keep hard block, do not substitute unselected products
+          budgetFilteredCount = selected.length;
+          budgetNoFit = true;
+          selected = [];
+        }
+      } else {
+        budgetFilteredCount = selected.length;
+        budgetNoFit = true;
+        selected = [];
+      }
     }
   }
 
@@ -2273,6 +2293,7 @@ export function selectProductsForVisibleCards(input: {
       ? [`product_cards_suppressed:selected_id_not_grounded_mentioned_or_fit:${structuredSuppressedCount}`]
       : []),
     ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : []),
+    ...(budgetCompromiseCount > 0 ? [`product_cards_compromise:budget_over_limit:${budgetCompromiseCount}`] : []),
     ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
     ...(priceVisibilityFilteredCount > 0
       ? [`product_cards_filtered_by_price_visibility:${priceVisibilityFilteredCount}`]

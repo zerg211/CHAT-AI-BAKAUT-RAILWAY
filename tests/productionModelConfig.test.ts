@@ -50,7 +50,7 @@ describe('production model configuration', () => {
       answerReasoning: 'none',
       planner: 'gpt-5.6-terra',
       plannerReasoning: 'none',
-      plannerMaxOutputTokens: 2400,
+      plannerMaxOutputTokens: 4500,
       fact: 'gpt-5.6-terra',
       factReasoning: 'none',
       deepReasoning: 'gpt-5.6-terra'
