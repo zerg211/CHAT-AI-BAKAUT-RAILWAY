@@ -4578,7 +4578,10 @@ describe('AgentManagerOrchestrator', () => {
         };
       },
       async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['generator-no-auto']);
+        expect(input.products.map((item) => item.id)).toEqual([
+          'generator-no-auto',
+          'generator-auto-unknown'
+        ]);
         return {
           answerText: 'TSS SGG 6000NA generator is the only currently validated no-autostart candidate in this result.',
           factsUsed: [],
@@ -4619,10 +4622,10 @@ describe('AgentManagerOrchestrator', () => {
     };
     expect(metadata.answerProductEvidence?.droppedProductIds).toEqual(expect.arrayContaining([
       'generator-with-auto',
-      'generator-auto-unknown',
       'generator-auto-conflict'
     ]));
-    expect(metadata.warnings).toContain('answer_products_filtered_by_structured_hard_constraints:3');
+    expect(metadata.warnings).toContain('answer_products_filtered_by_structured_hard_constraints:2');
+    expect(metadata.warnings).toContain('answer_products_preliminary:unknown_evidence_kept:1');
   });
 
 

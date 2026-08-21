@@ -50,6 +50,7 @@ import {
   extractGeneratorPowerForHardSelection,
   extractWeightKg,
   fromEscaped,
+  generatorAutoStartProfile,
   generatorPhaseProfile,
   inferProductIntent,
   isBatteryPowerStation,
@@ -3043,12 +3044,24 @@ function passesNativeConstraintOrResolvedProof(input: {
   kinds: string[];
   nativeMatch: boolean;
   finalFit: boolean;
-}) {
+  nativeKnown?: boolean;
+}): 'ok' | 'conflict' | 'unconfirmed' {
   const proofStatus = resolvedEligibilityStatusForStrictKinds(input);
-  if (proofStatus === 'satisfied') return true;
-  if (proofStatus === 'violated') return false;
-  if (proofStatus === 'unknown') return input.nativeMatch || !input.finalFit;
-  return input.nativeMatch;
+  const nativeKnown = input.nativeKnown ?? true;
+  // The product card itself does not carry the attribute: evidence cannot be
+  // checked natively, so an unsatisfied proof is a data gap, not a conflict.
+  if (!nativeKnown) {
+    if (proofStatus === 'violated') return 'conflict';
+    if (proofStatus === 'satisfied') return 'ok';
+    return input.finalFit ? 'unconfirmed' : 'ok';
+  }
+  if (proofStatus === 'satisfied') return 'ok';
+  if (proofStatus === 'violated') return 'conflict';
+  if (proofStatus === 'unknown') {
+    if (input.nativeMatch) return 'ok';
+    return input.finalFit ? 'conflict' : 'ok';
+  }
+  return input.nativeMatch ? 'ok' : 'conflict';
 }
 
 export function filterProductsByStructuredSelectionPolicy(input: {
@@ -3108,138 +3121,182 @@ export function filterProductsByStructuredSelectionPolicy(input: {
     requirement.kind === 'phase' || requirement.kind === 'voltage_v' ? [requirement.id] : []
   );
   const finalFit = (policy.selectionGoal ?? 'final_fit') === 'final_fit';
-  const products = input.products.filter((product) => {
+  const needsNativeCheck = (kinds: string[]) =>
+    strictRequirements.some((requirement) => kinds.includes(requirement.kind));
+  // Unknown evidence is not a proven conflict. Confirmed products rank first;
+  // candidates whose only failure is a missing/unchecked attribute stay in the
+  // pool as preliminary so the writer can show real alternatives instead of a
+  // single "perfect card" model.
+  const confirmedProducts: Product[] = [];
+  const unconfirmedProducts: Array<{ product: Product; reasons: string[] }> = [];
+  for (const product of input.products) {
+    let unconfirmed = false;
+    let dropped = false;
+    const markUnconfirmed = () => { if (!dropped) unconfirmed = true; };
     const strictProductClass = policy.alternativePolicy === 'exact_only' ||
       policy.alternativePolicy === 'same_class_only';
-    if (strictProductClass && canonicalClass !== 'unknown' && !productMatchesIntent(product, canonicalClass)) return false;
+    if (strictProductClass && canonicalClass !== 'unknown' && !productMatchesIntent(product, canonicalClass)) dropped = true;
     if (
+      !dropped &&
       policy.alternativePolicy === 'exact_only' &&
       exactTargetNames.length > 0 &&
       !exactTargetNames.some((targetName) => productMatchesTargetName(product, targetName))
-    ) return false;
-    for (const requirementId of genericRequirementIds) {
-      const proofStatus = resolvedRequirementEligibilityStatus(requirementProofsFor(
-        requirementProofs,
-        product.id,
-        [requirementId]
-      ));
-      if (proofStatus === 'violated') return false;
-      if (finalFit && proofStatus !== 'satisfied') return false;
-    }
-    if (budgetMax !== undefined && !priceWithinBudget(product, budgetMax)) return false;
-    const weightProofStatus = resolvedEligibilityStatusForStrictKinds({
-      proofs: requirementProofs,
-      productId: product.id,
-      intent: input.intent,
-      kinds: ['weight_min_kg', 'weight_max_kg']
-    });
-    if (weightProofStatus === 'violated') return false;
-    if (
-      weightProofStatus !== 'satisfied' &&
-      (weightMin !== undefined || weightMax !== undefined)
-    ) {
-      const weight = extractWeightKg(product);
-      if (weight === undefined) {
-        if (finalFit) return false;
-      } else {
-        if (weightMin !== undefined && weight < weightMin) return false;
-        if (weightMax !== undefined && weight > weightMax) return false;
+    ) dropped = true;
+    if (!dropped) {
+      for (const requirementId of genericRequirementIds) {
+        const proofStatus = resolvedRequirementEligibilityStatus(requirementProofsFor(
+          requirementProofs,
+          product.id,
+          [requirementId]
+        ));
+        if (proofStatus === 'violated') {
+          dropped = true;
+          break;
+        }
+        if (proofStatus !== 'satisfied') markUnconfirmed();
       }
     }
-    const powerProofStatus = resolvedEligibilityStatusForStrictKinds({
-      proofs: requirementProofs,
-      productId: product.id,
-      intent: input.intent,
-      kinds: ['nominal_power_min_kw', 'power_min_kw', 'nominal_power_max_kw', 'power_max_kw']
-    });
-    if (powerProofStatus === 'violated') return false;
-    if (
-      powerProofStatus !== 'satisfied' &&
-      (explicitPowerMin !== undefined || powerMax !== undefined)
-    ) {
-      const nominal = qualifiedNominalActivePowerKw(product);
-      if (nominal === undefined) {
-        if (finalFit) return false;
-      } else {
-        if (explicitPowerMin !== undefined && nominal < explicitPowerMin) return false;
-        if (powerMax !== undefined && nominal > powerMax) return false;
+    if (!dropped && budgetMax !== undefined && !priceWithinBudget(product, budgetMax)) dropped = true;
+    if (!dropped) {
+      const weightProofStatus = resolvedEligibilityStatusForStrictKinds({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['weight_min_kg', 'weight_max_kg']
+      });
+      if (weightProofStatus === 'violated') dropped = true;
+      else if (
+        weightProofStatus !== 'satisfied' &&
+        (weightMin !== undefined || weightMax !== undefined)
+      ) {
+        const weight = extractWeightKg(product);
+        if (weight === undefined) markUnconfirmed();
+        else {
+          if (weightMin !== undefined && weight < weightMin) dropped = true;
+          if (!dropped && weightMax !== undefined && weight > weightMax) dropped = true;
+        }
       }
     }
-    if (derivedNominalPowerMin !== undefined) {
-      if (calculatorNominalPowerMin !== undefined || powerProofStatus !== 'satisfied') {
+    if (!dropped) {
+      const powerProofStatus = resolvedEligibilityStatusForStrictKinds({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['nominal_power_min_kw', 'power_min_kw', 'nominal_power_max_kw', 'power_max_kw']
+      });
+      if (powerProofStatus === 'violated') dropped = true;
+      else if (
+        powerProofStatus !== 'satisfied' &&
+        (explicitPowerMin !== undefined || powerMax !== undefined)
+      ) {
         const nominal = qualifiedNominalActivePowerKw(product);
-        if (nominal !== undefined && nominal < derivedNominalPowerMin) return false;
-        if (nominal === undefined && finalFit) return false;
+        if (nominal === undefined) markUnconfirmed();
+        else {
+          if (explicitPowerMin !== undefined && nominal < explicitPowerMin) dropped = true;
+          if (!dropped && powerMax !== undefined && nominal > powerMax) dropped = true;
+        }
+      }
+      if (
+        !dropped &&
+        derivedNominalPowerMin !== undefined &&
+        (calculatorNominalPowerMin !== undefined || powerProofStatus !== 'satisfied')
+      ) {
+        const nominal = qualifiedNominalActivePowerKw(product);
+        if (nominal !== undefined && nominal < derivedNominalPowerMin) dropped = true;
+        if (nominal === undefined) markUnconfirmed();
       }
     }
-    if (policy.powerSource && policy.powerSource !== 'any') {
+    if (!dropped && policy.powerSource && policy.powerSource !== 'any') {
       const source = productPowerSource(product);
       const nativeMatch = policy.powerSource === 'battery'
         ? source === 'battery'
         : policy.powerSource === 'fuel'
           ? source === 'gasoline' || source === 'diesel'
           : false;
-      if (!passesNativeConstraintOrResolvedProof({
+      const outcome = passesNativeConstraintOrResolvedProof({
         proofs: requirementProofs,
         productId: product.id,
         intent: input.intent,
         kinds: ['power_source', 'fuel_type'],
         nativeMatch,
         finalFit
-      })) return false;
+      });
+      if (outcome === 'conflict') dropped = true;
+      if (outcome === 'unconfirmed') markUnconfirmed();
     }
-    if (policy.phase && policy.phase !== 'any') {
+    if (!dropped && policy.phase && policy.phase !== 'any') {
       const proofStatus = resolvedRequirementEligibilityStatus(requirementProofsFor(
         requirementProofs,
         product.id,
         phaseRequirementIds
       ));
-      if (proofStatus === 'violated') return false;
-      if (proofStatus !== 'satisfied') {
+      if (proofStatus === 'violated') dropped = true;
+      else if (proofStatus !== 'satisfied') {
         const phase = generatorPhaseProfile(product);
-        if (phase === 'unknown') {
-          if (finalFit) return false;
-        } else {
-          if (policy.phase === 'single_phase' && phase !== 'single_220') return false;
-          if (policy.phase === 'three_phase' && phase !== 'three_phase_380' && phase !== 'mixed_220_380') return false;
+        if (phase === 'unknown') markUnconfirmed();
+        else {
+          if (policy.phase === 'single_phase' && phase !== 'single_220') dropped = true;
+          if (!dropped && policy.phase === 'three_phase' && phase !== 'three_phase_380' && phase !== 'mixed_220_380') dropped = true;
         }
       }
     }
-    if (!passesNativeConstraintOrResolvedProof({
-      proofs: requirementProofs,
-      productId: product.id,
-      intent: input.intent,
-      kinds: ['auto_start_required', 'autostart_required'],
-      nativeMatch: productMeetsSupportedStrictAutoStartRequirement(product, input.intent, canonicalClass),
-      finalFit
-    })) return false;
-    if (!passesNativeConstraintOrResolvedProof({
-      proofs: requirementProofs,
-      productId: product.id,
-      intent: input.intent,
-      kinds: ['fuel_type', 'power_source'],
-      nativeMatch: productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass),
-      finalFit
-    })) return false;
-    if (!passesNativeConstraintOrResolvedProof({
-      proofs: requirementProofs,
-      productId: product.id,
-      intent: input.intent,
-      kinds: ['material'],
-      nativeMatch: productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass),
-      finalFit
-    })) return false;
-    if (!productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)) return false;
-    if (!passesNativeConstraintOrResolvedProof({
-      proofs: requirementProofs,
-      productId: product.id,
-      intent: input.intent,
-      kinds: ['voltage_v'],
-      nativeMatch: productMeetsSupportedStrictVoltageRequirement(product, input.intent, canonicalClass),
-      finalFit
-    })) return false;
-    return true;
-  });
+    if (!dropped && needsNativeCheck(['auto_start_required', 'autostart_required'])) {
+      const autoStartOutcome = passesNativeConstraintOrResolvedProof({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['auto_start_required', 'autostart_required'],
+        nativeMatch: productMeetsSupportedStrictAutoStartRequirement(product, input.intent, canonicalClass),
+        finalFit,
+        nativeKnown: generatorAutoStartProfile(product) !== 'unknown'
+      });
+      if (autoStartOutcome === 'conflict') dropped = true;
+      if (autoStartOutcome === 'unconfirmed') markUnconfirmed();
+    }
+    if (!dropped && needsNativeCheck(['fuel_type', 'power_source'])) {
+      const fuelOutcome = passesNativeConstraintOrResolvedProof({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['fuel_type', 'power_source'],
+        nativeMatch: productMeetsSupportedStrictFuelRequirement(product, input.intent, canonicalClass),
+        finalFit,
+        nativeKnown: productPowerSource(product) !== 'unknown'
+      });
+      if (fuelOutcome === 'conflict') dropped = true;
+      if (fuelOutcome === 'unconfirmed') markUnconfirmed();
+    }
+    if (!dropped && needsNativeCheck(['material'])) {
+      const materialOutcome = passesNativeConstraintOrResolvedProof({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['material'],
+        nativeMatch: productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass),
+        finalFit
+      });
+      if (materialOutcome === 'conflict') dropped = true;
+      if (materialOutcome === 'unconfirmed') markUnconfirmed();
+    }
+    if (!dropped && !productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)) dropped = true;
+    if (!dropped && needsNativeCheck(['voltage_v'])) {
+      const voltageOutcome = passesNativeConstraintOrResolvedProof({
+        proofs: requirementProofs,
+        productId: product.id,
+        intent: input.intent,
+        kinds: ['voltage_v'],
+        nativeMatch: productMeetsSupportedStrictVoltageRequirement(product, input.intent, canonicalClass),
+        finalFit,
+        nativeKnown: generatorPhaseProfile(product) !== 'unknown'
+      });
+      if (voltageOutcome === 'conflict') dropped = true;
+      if (voltageOutcome === 'unconfirmed') markUnconfirmed();
+    }
+    if (dropped) continue;
+    if (unconfirmed) unconfirmedProducts.push({ product, reasons: ['evidence_unconfirmed'] });
+    else confirmedProducts.push(product);
+  }
+  const products = [...confirmedProducts, ...unconfirmedProducts.map((item) => item.product)];
   const commercialShortlist = shortlistStructuredSelectionProducts({
     products,
     intent: input.intent,
@@ -3256,6 +3313,9 @@ export function filterProductsByStructuredSelectionPolicy(input: {
         : []),
       ...(input.products.length !== products.length
         ? [`answer_products_filtered_by_structured_hard_constraints:${input.products.length - products.length}`]
+        : []),
+      ...(unconfirmedProducts.length
+        ? [`answer_products_preliminary:unknown_evidence_kept:${unconfirmedProducts.length}`]
         : []),
       ...commercialShortlist.warnings
     ])
