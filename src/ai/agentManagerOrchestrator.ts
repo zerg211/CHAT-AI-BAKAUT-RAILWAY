@@ -7415,6 +7415,68 @@ export class AgentManagerOrchestrator {
       factsUsed: answer.factsUsed.map((fact) => fact.factKey)
     });
 
+    // The writer (a semantic actor) may ask a clarification the planner did not
+    // pre-open. Recording that asked question in the durable ledger is
+    // bookkeeping, not semantics: register synthetic question.asked events so
+    // memory stays consistent instead of failing the whole buyer turn.
+    const unregisteredQuestions = answer.questionsAsked.filter((question) => {
+      const existing = ledgerState.questionsById[question.questionId];
+      return !existing || existing.status === 'closed';
+    });
+    if (unregisteredQuestions.length) {
+      const syntheticEvents = unregisteredQuestions.map((question) => DialogueLedgerEventSchema.parse({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        eventId: createStableLedgerEventId({
+          sessionId: input.sessionId,
+          turnId: input.turnId,
+          eventType: 'question.asked',
+          scope: 'dialogue',
+          payload: { questionId: question.questionId, text: question.text, reason: question.reason },
+          evidence: `Writer asked: ${question.text}`,
+          source: 'system_reducer',
+          status: 'active'
+        }),
+        eventType: 'question.asked' as const,
+        scope: 'dialogue' as const,
+        payload: { questionId: question.questionId, text: question.text, reason: question.reason },
+        evidence: `Writer asked: ${question.text}`,
+        source: 'system_reducer' as const,
+        status: 'active' as const
+      }));
+      for (const event of syntheticEvents) {
+        await this.conversations.upsertDialogueLedgerEvent({
+          sessionId: event.sessionId,
+          turnId: event.turnId,
+          executionOwner: input.executionOwner,
+          eventId: event.eventId,
+          eventType: event.eventType,
+          scope: event.scope,
+          payload: event.payload,
+          evidence: event.evidence,
+          source: event.source,
+          status: event.status
+        });
+      }
+      effectiveLedgerEvents = [
+        ...new Map([...effectiveLedgerEvents, ...syntheticEvents].map((event) => [event.eventId, event])).values()
+      ];
+      ledgerState = reduceDialogueLedger(syntheticEvents, ledgerState);
+      needStateSnapshot = deriveNeedStateSnapshotFromLedger(ledgerState, needStateSnapshot);
+      turnLedgerEvents.push(...syntheticEvents);
+      await this.persistDialogueLedgerState({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        executionOwner: input.executionOwner,
+        state: ledgerState,
+        recentEvents: effectiveLedgerEvents,
+        needState: needStateSnapshot
+      });
+      await this.trace(input.sessionId, input.turnId, 'ledger', 'writer_questions_registered', {
+        questionIds: syntheticEvents.map((event) => event.payload.questionId)
+      });
+    }
+
     const savedReview = legacyIntentUpgraded || !savedAnswer.found
       ? { found: false as const, payload: undefined }
       : succeededCheckpoint(persistedExecution.checkpoints, 'review_completed');
