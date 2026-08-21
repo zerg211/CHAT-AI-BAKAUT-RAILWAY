@@ -183,6 +183,83 @@ export const LedgerStateDeltaSchema = z.object({
   events: z.array(LedgerStateDeltaEventSchema).max(40)
 }).strict();
 
+const DEFAULT_DRAFT_RATIONALE = 'Planner did not provide a rationale for this field.';
+const DEFAULT_DRAFT_SUMMARY = 'Buyer turn summary was not provided by the planner.';
+const DEFAULT_DRAFT_UNDERSTANDING = 'Dialogue understanding was not provided by the planner.';
+const DEFAULT_DRAFT_NEXT_STEP = 'Answer the buyer helpfully without additional assumptions.';
+const DEFAULT_DRAFT_EVIDENCE = 'Evidence was not provided by the planner.';
+
+function isNonEmptyDraftText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function draftTextWithFallback(value: unknown, fallback: string) {
+  return isNonEmptyDraftText(value) ? value : fallback;
+}
+
+export function normalizeLedgerStateDeltaDraft(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const delta = { ...(value as Record<string, unknown>) };
+  delta.rationale = draftTextWithFallback(delta.rationale, DEFAULT_DRAFT_RATIONALE);
+  if (Array.isArray(delta.events)) {
+    delta.events = (delta.events as unknown[]).map((event) => {
+      if (!event || typeof event !== 'object' || Array.isArray(event)) return event;
+      const record = { ...(event as Record<string, unknown>) };
+      record.evidence = draftTextWithFallback(record.evidence, DEFAULT_DRAFT_EVIDENCE);
+      return record;
+    });
+  }
+  return delta;
+}
+
+export function normalizeAgentIntentContractDraft(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const intent = { ...(value as Record<string, unknown>) };
+  intent.userMessageSummary = draftTextWithFallback(intent.userMessageSummary, DEFAULT_DRAFT_SUMMARY);
+  intent.dialogueUnderstanding = draftTextWithFallback(intent.dialogueUnderstanding, DEFAULT_DRAFT_UNDERSTANDING);
+  intent.nextStepRationale = draftTextWithFallback(intent.nextStepRationale, DEFAULT_DRAFT_NEXT_STEP);
+  if (intent.grounding && typeof intent.grounding === 'object' && !Array.isArray(intent.grounding)) {
+    intent.grounding = {
+      ...(intent.grounding as Record<string, unknown>),
+      rationale: draftTextWithFallback(
+        (intent.grounding as Record<string, unknown>).rationale,
+        DEFAULT_DRAFT_RATIONALE
+      )
+    };
+  }
+  if (intent.selectionPolicy && typeof intent.selectionPolicy === 'object' && !Array.isArray(intent.selectionPolicy)) {
+    const policy = { ...(intent.selectionPolicy as Record<string, unknown>) };
+    policy.rationale = draftTextWithFallback(policy.rationale, DEFAULT_DRAFT_RATIONALE);
+    if (Array.isArray(policy.requirements)) {
+      policy.requirements = (policy.requirements as unknown[]).map((requirement) => {
+        if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) return requirement;
+        return {
+          ...(requirement as Record<string, unknown>),
+          evidence: draftTextWithFallback((requirement as Record<string, unknown>).evidence, DEFAULT_DRAFT_EVIDENCE)
+        };
+      });
+    }
+    intent.selectionPolicy = policy;
+  }
+  if (Array.isArray(intent.toolRequests)) {
+    intent.toolRequests = (intent.toolRequests as unknown[]).map((request) => {
+      if (!request || typeof request !== 'object' || Array.isArray(request)) return request;
+      const record = { ...(request as Record<string, unknown>) };
+      record.rationale = draftTextWithFallback(record.rationale, `Executed ${String(record.tool ?? 'tool')} request.`);
+      return record;
+    });
+  }
+  return intent;
+}
+
+export function normalizeSemanticDecisionDraft(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const draft = { ...(value as Record<string, unknown>) };
+  draft.ledgerDelta = normalizeLedgerStateDeltaDraft(draft.ledgerDelta);
+  draft.intent = normalizeAgentIntentContractDraft(draft.intent);
+  return draft;
+}
+
 const toolRequestFields = {
   id: nonEmptyString,
   rationale: nonEmptyString,

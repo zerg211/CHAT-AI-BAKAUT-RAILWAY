@@ -12,7 +12,10 @@ import {
   PreSendReviewSchema,
   ToolResultSchema,
   createStableLedgerEventId,
+  normalizeAgentIntentContractDraft,
+  normalizeLedgerStateDeltaDraft,
   normalizeLedgerStateDeltaEvents,
+  normalizeSemanticDecisionDraft,
   parseAnswerContractModelOutput,
   type AgentIntentContract,
   type AgentSemanticDecision,
@@ -5796,7 +5799,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       deadlineAtMs: input.structuredDeadlineAtMs,
       minRetryRemainingMs: 25_000
     });
-    return AgentSemanticDecisionSchema.parse(parsed);
+    const direct = AgentSemanticDecisionSchema.safeParse(parsed);
+    if (direct.success) return direct.data;
+    return AgentSemanticDecisionSchema.parse(normalizeSemanticDecisionDraft(parsed));
   }
 
   async proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta> {
@@ -5835,7 +5840,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       deadlineAtMs: input.structuredDeadlineAtMs,
       minRetryRemainingMs: 25_000
     });
-    return LedgerStateDeltaSchema.parse(parsed);
+    const directDelta = LedgerStateDeltaSchema.safeParse(parsed);
+    if (directDelta.success) return directDelta.data;
+    return LedgerStateDeltaSchema.parse(normalizeLedgerStateDeltaDraft(parsed));
   }
 
   async planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract> {
@@ -5873,7 +5880,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       deadlineAtMs: input.structuredDeadlineAtMs,
       minRetryRemainingMs: 25_000
     });
-    return AgentIntentContractSchema.parse(parsed);
+    const directIntent = AgentIntentContractSchema.safeParse(parsed);
+    if (directIntent.success) return directIntent.data;
+    return AgentIntentContractSchema.parse(normalizeAgentIntentContractDraft(parsed));
   }
 
   async composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract> {
