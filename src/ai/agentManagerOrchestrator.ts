@@ -3091,6 +3091,32 @@ export function filterProductsByStructuredSelectionPolicy(input: {
     input.products
   );
   if (strictRequirementAssessment.blockers.length) {
+    // Catalog-presence questions ("есть ли у вас X?") must be answered from the
+    // exact card the details tool just returned. Wiping products here makes the
+    // writer report a present model as absent. Keep class/exact-target matches
+    // visible as preliminary evidence; strict-attribute fit stays unconfirmed.
+    const presenceRelevant = input.intent.grounding?.taskType === 'availability_or_delivery' ||
+      (input.intent.riskFlags ?? []).includes('answer_policy_catalog_presence_relevant');
+    if (presenceRelevant) {
+      const exactTargetNames = (input.intent.productMentions ?? [])
+        .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+        .map((mention) => mention.name);
+      const keptProducts = input.products.filter((product) =>
+        canonicalClass === 'unknown' ||
+        productMatchesIntent(product, canonicalClass) ||
+        exactTargetNames.some((targetName) => productMatchesTargetName(product, targetName))
+      );
+      return {
+        products: keptProducts,
+        droppedProductIds: input.products
+          .filter((product) => !keptProducts.some((kept) => kept.id === product.id))
+          .map((product) => product.id),
+        warnings: uniqueStrings([
+          `answer_products_suppressed:unsupported_or_unverifiable_strict_hard_constraint:${strictRequirementAssessment.blockers.length}`,
+          'answer_products_preliminary:presence_kept_despite_unverified_strict_attributes'
+        ])
+      };
+    }
     return {
       products: [],
       droppedProductIds: input.products.map((product) => product.id),
