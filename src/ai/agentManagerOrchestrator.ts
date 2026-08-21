@@ -1018,6 +1018,35 @@ export function repairIntentForElectricStartRequirementKinds(intent: AgentIntent
   };
 }
 
+const catalogNativeSpecAttributeTokens = [
+  'номинальная мощность',
+  'мощность',
+  'nominal power',
+  'nominalpowerkw',
+  'maximumpower',
+  'максимальная мощность',
+  'напряжение',
+  'voltage',
+  'фаза',
+  'phase',
+  'топливо',
+  'fuel',
+  'тип топлива',
+  'цена',
+  'price',
+  'масса',
+  'вес',
+  'weight'
+];
+
+export function attributeIsCatalogNativeSpec(attribute: string) {
+  const normalized = normalizeModelText(attribute);
+  if (!normalized) return false;
+  return catalogNativeSpecAttributeTokens.some((token) =>
+    normalized.includes(normalizeModelText(token))
+  );
+}
+
 export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: AgentIntentContract) {
   const grounding = intent.grounding;
   const policy = intent.selectionPolicy;
@@ -1039,6 +1068,20 @@ export function repairIntentForRequestedTechnicalAttributeWebCoverage(intent: Ag
 
   const comparisonAttributes = uniqueStrings(grounding.technicalAttributes).slice(0, 12);
   if (!comparisonAttributes.length) return emptyResult;
+  // Ordinary catalog fields (power, voltage, phase, fuel, price, weight) are
+  // structurally present on catalog cards. When a preliminary product
+  // selection requests only such attributes, the auto-added conditional web
+  // pass re-verifies facts the catalog already provides and burns ~30s of the
+  // turn budget. Skipping it is a catalog-capability check, not semantics.
+  if (
+    grounding.taskType === 'product_selection' &&
+    comparisonAttributes.every((attribute) => attributeIsCatalogNativeSpec(attribute))
+  ) {
+    return {
+      ...emptyResult,
+      skippedCatalogNative: true
+    };
+  }
   const catalogRequests = intent.toolRequests.filter((request) =>
     request.required &&
     (request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails')
