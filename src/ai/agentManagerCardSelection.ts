@@ -1034,7 +1034,7 @@ function productsMeetingGenericRequirementProofs(input: {
   products: Product[];
   intent: AgentIntentContract;
   proofs: RequirementProof[];
-}) {
+}): { products: Product[]; unknownEvidenceKeptIds: string[] } {
   const strictRequirements = (input.intent.selectionPolicy?.requirements ?? []).filter((requirement) =>
     requirement.role === 'hard_constraint' && requirement.strictness === 'strict'
   );
@@ -1046,20 +1046,40 @@ function productsMeetingGenericRequirementProofs(input: {
       ? [requirement.id]
       : [];
   });
-  if (!genericRequirementIds.length) return input.products;
+  if (!genericRequirementIds.length) {
+    return { products: input.products, unknownEvidenceKeptIds: [] };
+  }
   const finalFit = (input.intent.selectionPolicy?.selectionGoal ?? 'final_fit') === 'final_fit';
-  return input.products.filter((product) => {
+  const survivors: Array<{ product: Product; allSatisfied: boolean }> = [];
+  for (const product of input.products) {
+    let allSatisfied = true;
+    let hasUnknown = false;
+    let violated = false;
     for (const requirementId of genericRequirementIds) {
       const status = resolvedRequirementEligibilityStatus(requirementProofsFor(
         input.proofs,
         product.id,
         [requirementId]
       ));
-      if (status === 'violated') return false;
-      if (finalFit && status !== 'satisfied') return false;
+      if (status === 'violated') {
+        violated = true;
+        break;
+      }
+      if (status !== 'satisfied') hasUnknown = true;
     }
-    return true;
-  });
+    if (violated) continue;
+    // A proven conflict excludes the product outright. Missing confirmation is
+    // not a conflict: under final fit the product stays as a caveated
+    // preliminary candidate instead of silently disappearing from the answer.
+    if (finalFit && hasUnknown) allSatisfied = false;
+    survivors.push({ product, allSatisfied });
+  }
+  const keptUnknown = survivors.filter((item) => !item.allSatisfied).map((item) => item.product);
+  const ordered = [
+    ...survivors.filter((item) => item.allSatisfied).map((item) => item.product),
+    ...keptUnknown
+  ];
+  return { products: ordered, unknownEvidenceKeptIds: keptUnknown.map((product) => product.id) };
 }
 
 function structuredGeneratorAutoStartRequirement(intent: AgentIntentContract) {
@@ -2012,12 +2032,16 @@ export function selectProductsForVisibleCards(input: {
   }
 
   const beforeGenericProofCount = selected.length;
-  selected = productsMeetingGenericRequirementProofs({
+  const genericProofOutcome = productsMeetingGenericRequirementProofs({
     products: selected,
     intent: input.intent,
     proofs: requirementProofs
   });
+  selected = genericProofOutcome.products;
   const genericProofFilteredCount = beforeGenericProofCount - selected.length;
+  const unknownEvidenceKeptIds = input.intent.selectionPolicy?.selectionGoal === 'final_fit'
+    ? genericProofOutcome.unknownEvidenceKeptIds
+    : [];
 
   let priceVisibilityFilteredCount = 0;
   let priceVisibilityNoFit = false;
@@ -2311,6 +2335,9 @@ export function selectProductsForVisibleCards(input: {
       : []),
     ...(genericProofFilteredCount > 0
       ? [`product_cards_filtered_by_requirement_proof:${genericProofFilteredCount}`]
+      : []),
+    ...(unknownEvidenceKeptIds.length
+      ? [`product_cards_preliminary:unknown_evidence_kept:${unknownEvidenceKeptIds.length}`]
       : []),
     ...(identityDeduplicatedCount > 0
       ? [`product_cards_deduplicated_by_product_identity:${identityDeduplicatedCount}`]
