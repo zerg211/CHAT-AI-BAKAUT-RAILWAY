@@ -35,7 +35,9 @@ jobs:
           cache: npm
 
       - name: Install locked dependencies
-        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm ci --no-audit --no-fund
 
       - name: Run AI manager release gate
         run: node tests/aiManagerReleaseGate.mjs
