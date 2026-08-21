@@ -2237,9 +2237,36 @@ export function selectProductsForVisibleCards(input: {
       numericFitFilteredCount = selected.length - selectedWithinRange.length;
       selected = selectedWithinRange;
     } else {
-      numericFitFilteredCount = selected.length;
-      plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
-      selected = [];
+      const allowWeightCompromise = input.intent.selectionPolicy?.alternativePolicy !== 'exact_only';
+      if (allowWeightCompromise) {
+        const targetWeight = (plateWeightRange.min + plateWeightRange.max) / 2;
+        const ranked = [...selected].sort((a, b) => {
+          const wa = extractWeightKg(a);
+          const wb = extractWeightKg(b);
+          if (wa === undefined && wb === undefined) return 0;
+          if (wa === undefined) return 1;
+          if (wb === undefined) return -1;
+          return Math.abs(wa - targetWeight) - Math.abs(wb - targetWeight);
+        });
+        const reasonable = ranked.filter((product) => {
+          const w = extractWeightKg(product);
+          if (w === undefined) return false;
+          return w >= plateWeightRange.min - 30 && w <= plateWeightRange.max + 50;
+        }).slice(0, 3);
+        if (reasonable.length) {
+          numericFitFilteredCount = selected.length - reasonable.length;
+          plateTaskWarnings = [`product_cards_compromise:weight_no_fit:${reasonable.length}`];
+          selected = reasonable;
+        } else {
+          numericFitFilteredCount = selected.length;
+          plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
+          selected = [];
+        }
+      } else {
+        numericFitFilteredCount = selected.length;
+        plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
+        selected = [];
+      }
     }
   }
 
