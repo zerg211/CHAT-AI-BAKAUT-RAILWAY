@@ -66,7 +66,7 @@ describe('agent manager strict tool registry', () => {
     // Production traces #1842-#1848 exhausted the former 19.5-30s cap before
     // official/manual research could return. Keep a bounded but usable window;
     // the orchestrator still reserves final answer composition time from the turn budget.
-    expect(agentManagerToolRegistry['web.researchProductFacts'].timeoutMs).toBe(45_000);
+    expect(agentManagerToolRegistry['web.researchProductFacts'].timeoutMs).toBe(30_000);
   });
 
   it('validates tool-specific result payloads and rejects unknown output fields', () => {
