@@ -63,3 +63,4 @@
 
 - `generators-full.json` — все 2718 позиций {id, brand, name, price, url, starterSpec, cardClass}
 - Этот отчёт: `docs/electric-start-audit-2026-08-21.md`
+
