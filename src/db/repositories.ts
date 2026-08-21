@@ -3508,14 +3508,14 @@ export class ProductRepository {
     return result.rows.map(mapProduct);
   }
 
-  async listProducts(limit = 100) {
+  async listProducts(limit = 100, offset = 0) {
     const result = await this.db.query(
       `SELECT ${PRODUCT_RESPONSE_COLUMNS}
        FROM products
        WHERE ${PRODUCT_FILTER}
        ORDER BY updated_at DESC
-       LIMIT $1`,
-      [limit]
+       LIMIT $1 OFFSET $2`,
+      [limit, Math.max(0, offset)]
     );
     return result.rows.map(mapProduct);
   }

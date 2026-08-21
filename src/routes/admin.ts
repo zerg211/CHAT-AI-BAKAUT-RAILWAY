@@ -284,8 +284,11 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   });
 
   app.get('/api/admin/products', async (request) => {
-    const query = z.object({ limit: z.coerce.number().int().positive().max(500).default(100) }).parse(request.query);
-    return { products: await products.listProducts(query.limit) };
+    const query = z.object({
+      limit: z.coerce.number().int().positive().max(500).default(100),
+      offset: z.coerce.number().int().nonnegative().default(0)
+    }).parse(request.query);
+    return { products: await products.listProducts(query.limit, query.offset) };
   });
 
   app.get('/api/admin/embedding-coverage', async () => buildEmbeddingCoverageReport(products));
