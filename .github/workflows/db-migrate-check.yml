@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   migrate:
@@ -65,3 +65,15 @@ jobs:
             cat migrate.log 2>/dev/null || true
             '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit debug logs to ci-debug branch
+        if: failure()
+        run: |
+          git config user.email "ci@bot.local"
+          git config user.name "ci-bot"
+          git fetch origin ci-debug || git branch ci-debug
+          git checkout ci-debug || git checkout -b ci-debug
+          mkdir -p debug && cp -f npm-ci.log migrate.log debug/ 2>/dev/null || true
+          git add -A debug
+          git commit -m "ci debug logs ($GITHUB_SHA)" || true
+          git push origin ci-debug
