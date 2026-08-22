@@ -37,6 +37,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -73,7 +75,9 @@ jobs:
           git config user.name "ci-bot"
           git fetch origin ci-debug || git branch ci-debug
           git checkout ci-debug || git checkout -b ci-debug
-          mkdir -p debug && cp -f npm-ci.log migrate.log debug/ 2>/dev/null || true
+          mkdir -p debug
+          [ -f npm-ci.log ] && cp -f npm-ci.log debug/ || echo "no npm-ci.log" > debug/npm-ci.missing
+          [ -f migrate.log ] && cp -f migrate.log debug/ || echo "no migrate.log" > debug/migrate.missing
           git add -A debug
           git commit -m "ci debug logs ($GITHUB_SHA)" || true
           git push origin ci-debug
