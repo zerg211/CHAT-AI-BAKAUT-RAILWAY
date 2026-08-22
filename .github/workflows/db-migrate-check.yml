@@ -1,0 +1,78 @@
+name: DB migrate check (pg16)
+
+on:
+  push:
+    paths:
+      - 'sql/**'
+      - 'src/db/migrate.ts'
+      - '.github/workflows/db-migrate-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: chat_ai
+          POSTGRES_PASSWORD: chat_ai
+          POSTGRES_DB: chat_ai
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://chat_ai:chat_ai@localhost:5432/chat_ai
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install deps
+        run: npm ci --no-audit --no-fund
+
+      - name: Run migrations
+        run: |
+          set +e
+          npx tsx src/db/migrate.ts > migrate.log 2>&1
+          code=$?
+          echo "exit=$code" | tee migrate.status
+          tail -n 60 migrate.log | tee -a migrate.log.tail > /dev/null
+          exit $code
+
+      - name: Publish failure details to step summary
+        if: failure()
+        run: |
+          {
+            echo "### Migrate output"
+            '```'
+            cat migrate.log 2>/dev/null || true
+            '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify electric-start knowledge applied
+        if: success()
+        run: |
+          PGPASSWORD=chat_ai psql -h localhost -U chat_ai -d chat_ai -tAc "
+            SELECT count(*) FROM verified_product_facts WHERE attribute = 'electric start электростартер';
+          " > facts.txt
+          echo "facts=$(cat facts.txt)" | tee -a "$GITHUB_STEP_SUMMARY"
+          PGPASSWORD=chat_ai psql -h localhost -U chat_ai -d chat_ai -tAc "
+            SELECT specs->>'стартер' FROM products WHERE specs->>'артикул' = 'BS6250IE';
+          " > card.txt
+          echo "bs6250 starter spec: $(cat card.txt)" | tee -a "$GITHUB_STEP_SUMMARY"

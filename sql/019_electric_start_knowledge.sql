@@ -1,4 +1,5 @@
--- 019: Electric-start knowledge injection (audit 2026-08-21, docs/electric-start-audit-2026-08-21.md)
+-- 019 2):
+-- retrigger: Electric-start knowledge injection (audit 2026-08-21, docs/electric-start-audit-2026-08-21.md)
 -- Web-verified: 32 catalog cards said "ручной" but manufacturers/dealers confirm electric start.
 -- 1) Fix product cards (survives until next full crawl re-sync; verified facts below persist regardless).
 UPDATE products SET specs = specs || '{"стартер":"ручной и электростартер","электростартер":"есть"}'::jsonb, updated_at = now()
