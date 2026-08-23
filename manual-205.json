@@ -1,0 +1,1641 @@
+[
+  {
+    "id": "867d5deb-7b39-43de-a46c-f16f468c2bdc",
+    "name": "Генератор бензиновый сварочный Вепрь АСПБВ 220-5-Т400-1ВМ39 (5,0 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "190FD",
+    "article": "АСПБВ 220-5-Т400-1ВМ39"
+  },
+  {
+    "id": "e172064a-7f5a-483d-bdca-eb27e97bb13f",
+    "name": "Генератор бензиновый сварочный Вепрь АСПБВ 220-5-Т400-1ВМ8 (5,0 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GВ 40",
+    "article": "АСПБВ 220-5-Т400-1ВМ8"
+  },
+  {
+    "id": "139bf238-cd49-4c5c-a6ae-380e6e27e201",
+    "name": "Генератор бензиновый сварочный Вепрь АСПБВ220-6-Т400ВХ (5,0 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "АСПБВ220-6-Т400ВХ"
+  },
+  {
+    "id": "895cbfa2-c55c-476f-957a-b01fda87a6d8",
+    "name": "Генератор бензиновый сварочный Вепрь АСПБВ 220-5-230-1ВМ8 (5,0 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GВ 40",
+    "article": "АСПБВ 220-5-230-1ВМ8"
+  },
+  {
+    "id": "efed3fce-73bc-43bf-a727-7f6d6ffab06c",
+    "name": "Генератор бензиновый сварочный Вепрь АСПБВ220-6-230ВХ (5,0 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "АСПБВ220-6-230ВХ"
+  },
+  {
+    "id": "5625f373-da59-43db-96c5-7d65903f65a8",
+    "name": "Генератор бензиновый сварочный Energo EB6.5/400-W220DCK-R (6,5 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX400",
+    "article": "EB6.5/400-W220DCK-R"
+  },
+  {
+    "id": "319c039f-ca58-426a-899d-c3cfe896b102",
+    "name": "Генератор бензиновый сварочный Energo EB6.5/400-W220DC-R (6,5 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX400",
+    "article": "EB6.5/400-W220DC-R"
+  },
+  {
+    "id": "e3ad888a-835d-4a02-badf-0dfe33c9297c",
+    "name": "Генератор бензиновый сварочный Energo EB7.0/230-W220АC-R (7,0 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX400",
+    "article": "EB7.0/230-W220АC-R"
+  },
+  {
+    "id": "dea1ac72-aaa2-4e6f-8b6f-d2fd68aaee41",
+    "name": "Генератор бензиновый сварочный Energo EB6.0/230-W220MDC-R (5,0 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX400",
+    "article": "EB6.0/230-W220MDC-R"
+  },
+  {
+    "id": "34bcd13c-c23c-432f-bd21-9a3a4c559eef",
+    "name": "Генератор бензиновый сварочный ТСС GGW 6.0/250D-R (6,0 кВт) 031170",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "S460",
+    "article": "031170"
+  },
+  {
+    "id": "4e2ba929-0cea-48e6-8d06-5f117a02fcf1",
+    "name": "Генератор бензиновый сварочный ТСС GGW 5.0/200D-R (5,0 кВт) 031169",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "S420",
+    "article": "031169"
+  },
+  {
+    "id": "29c9b365-eef3-4611-8373-051402810b1b",
+    "name": "Генератор бензиновый сварочный Energo EB6.5/400-W220DCK-Y (5,2 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "MX 400",
+    "article": "EB6.5/400-W220DCK-Y"
+  },
+  {
+    "id": "c78e7992-d9a7-48a8-9629-9b31aab8578a",
+    "name": "Генератор бензиновый сварочный Energo EB6.5/400-W220DC-Y (5,2 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "MX 400",
+    "article": "EB6.5/400-W220DC-Y"
+  },
+  {
+    "id": "28a94ac1-efe3-4919-8604-5727898caf8f",
+    "name": "Генератор бензиновый сварочный Energo EB7.0/230-W220АC-Y (5,1 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "MX 400",
+    "article": "EB7.0/230-W220АC-Y"
+  },
+  {
+    "id": "e7b4d542-e980-4a63-8954-c7d1f257af39",
+    "name": "Генератор бензиновый сварочный Energo EB6.0/230-W220MDC-Y (5,0 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "MX 400",
+    "article": "EB6.0/230-W220MDC-Y"
+  },
+  {
+    "id": "56136429-e959-4903-bda6-a664cdec75fa",
+    "name": "Генератор бензиновый сварочный FUBAG WHS 210 DC (4,5 кВт) 838240",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "Honda",
+    "article": "838240"
+  },
+  {
+    "id": "dd2c9d7a-1942-4dcf-9055-1b6b2525194a",
+    "name": "Генератор бензиновый сварочный EB6.5/400-W220DC-H",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "EB6.5/400-W220DC-H"
+  },
+  {
+    "id": "662464b0-3543-4f5c-a23a-d784512e30f4",
+    "name": "Генератор бензиновый сварочный Energo EB 6.0/230-W220MDC-H (5,0 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX 390",
+    "article": "EB6,0/230-W220MDC-H"
+  },
+  {
+    "id": "366694a1-219b-4856-98c6-6ad01cb16648",
+    "name": "Генератор сварочный бензиновый Energo EB7.0/230-W220AC-H (5,1 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "EB7.0/230-W220AC-H"
+  },
+  {
+    "id": "cc64bbb6-3ef7-487e-967d-4c29ab931f87",
+    "name": "Генератор бензиновый инверторный Dinking DK2500iC (2,3 кВт)",
+    "brand": "Dinking",
+    "starter": "с ручным стартером",
+    "engine": "DK164F/P-2",
+    "article": "ГЕН034"
+  },
+  {
+    "id": "fdbadab8-8d78-43bd-a9ce-5161b97e612e",
+    "name": "Генератор бензиновый инверторный Dinking DK2300iC (2,0 кВт)",
+    "brand": "Dinking",
+    "starter": "с ручным стартером",
+    "engine": "DK164F/P-2",
+    "article": "ГЕН032"
+  },
+  {
+    "id": "533a2f63-a5af-4a32-bb30-53cd5befbb40",
+    "name": "Генератор бензиновый инверторный Dinking DK1400iC (1,2 кВт)",
+    "brand": "Dinking",
+    "starter": "с ручным стартером",
+    "engine": "DK145F/P",
+    "article": "ГЕН037"
+  },
+  {
+    "id": "fa986823-54cc-4f2a-9aa2-b4119cf16d9d",
+    "name": "Генератор бензиновый инверторный BISON BS2500IS (English socket + plug) (2,3 кВт)",
+    "brand": "BISON",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "BS2500IS English socket"
+  },
+  {
+    "id": "495d007b-1e88-4ed8-b61d-4d1013f1534c",
+    "name": "Генератор бензиновый инверторный ТСС SGG 1400SI (1,2 кВт)",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "SH60B",
+    "article": "060024"
+  },
+  {
+    "id": "df44e9a0-1f52-48ea-9e75-41c93c410deb",
+    "name": "Генератор бензиновый инверторный ТСС SGG 2100Si (1,8 кВт)",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "KM148F",
+    "article": "260023"
+  },
+  {
+    "id": "164f6789-b27b-47d4-b4c7-98fea84a6638",
+    "name": "Генератор бензиновый инверторный SUMEC SU4500i (4,0 кВт)",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "SU4500i"
+  },
+  {
+    "id": "72bdda92-6db6-4ddd-8460-4b894e271bab",
+    "name": "Генератор бензиновый инверторный SUMEC SU3500i (3,0 кВт)",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "SU3500i"
+  },
+  {
+    "id": "19d32563-0757-456f-af9a-2390ac7a0cb8",
+    "name": "Генератор бензиновый инверторный SUMEC SU2500iS (1,8 кВт)",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "SU2500iS"
+  },
+  {
+    "id": "a7eb3b2c-23a0-444a-b3f9-a70f6c1c53e5",
+    "name": "Генератор бензиновый инверторный SUMEC SU1200iS (0,9 кВт)",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "SU1200iS"
+  },
+  {
+    "id": "0cb15217-a276-443a-864f-db63588d5be8",
+    "name": "Генератор бензиновый инверторный BISON BS2500IS (2,3 кВт)",
+    "brand": "BISON",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "BS2500IS"
+  },
+  {
+    "id": "df8b715c-87e8-47b4-9ff1-6e3cfa1406fc",
+    "name": "Генератор бензиновый инверторный BISON BS2000IS (1,8 кВт)",
+    "brand": "BISON",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "BS2000IS"
+  },
+  {
+    "id": "8ab137a3-1d21-4bcb-a480-1a81788e24ca",
+    "name": "Генератор бензиновый инверторный BISON BS3750i (3,5 кВт)",
+    "brand": "BISON",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "BS3750i"
+  },
+  {
+    "id": "71c2e4f8-02fc-44bf-b05f-372c883f3b6c",
+    "name": "Генератор бензиновый инверторный BISON BS3250i (3,0 кВт)",
+    "brand": "BISON",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "BS3250i"
+  },
+  {
+    "id": "d9e8367c-5c40-48f3-8148-76fcf34144f4",
+    "name": "Генератор бензиновый инверторный BISON BS1500i (0,9 кВт)",
+    "brand": "BISON",
+    "starter": "с ручным стартером",
+    "engine": "154F",
+    "article": "BS1500i"
+  },
+  {
+    "id": "c2ae90ff-641a-4f8a-89b8-8b1dcef20060",
+    "name": "Генератор бензиновый инверторный EVOline BPB 4500 (4,2 кВт) 1T90DFB50EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 270",
+    "article": "1T90DFB50EVO"
+  },
+  {
+    "id": "db6a21ea-eab3-4089-ae6e-d1e922a7642d",
+    "name": "Генератор бензиновый инверторный EVOline BPB 4000 (3,5 кВт) 1T90DFB40EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 225",
+    "article": "1T90DFB40EVO"
+  },
+  {
+    "id": "44d50049-b409-4c67-8288-ea6d18cfa409",
+    "name": "Генератор бензиновый инверторный EVOline BQH 4000 (3,6 кВт) 1T90DFQ40EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "NH 225 E",
+    "article": "1T90DFQ40EVO"
+  },
+  {
+    "id": "87585bb6-4847-43c9-b944-11a64daa71fa",
+    "name": "Генератор бензиновый инверторный EVOline BQH 3300 (2,7 кВт) 1T90DFQ33EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "165 F D/P",
+    "article": "1T90DFQ33EVO"
+  },
+  {
+    "id": "9ce6f99d-fe7a-4ed0-819c-ca8eeb52f119",
+    "name": "Генератор бензиновый инверторный EVOline BQH 2800 (2,3 кВт) 1T90DFQ28EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "165 F D/P",
+    "article": "1T90DFQ28EVO"
+  },
+  {
+    "id": "c2f96927-fd84-406f-8555-797725cddc49",
+    "name": "Генератор бензиновый инверторный HND GE 3300 JS i (3,0 кВт) GE3300JSi",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "JH185ie",
+    "article": "GE3300JSi"
+  },
+  {
+    "id": "bab3657d-1652-4d57-a409-359fc0ff5997",
+    "name": "Генератор бензиновый инверторный EVOline BQH 2200 (1,9 кВт)",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "148 FD/P",
+    "article": "1T90DFQ22EVO"
+  },
+  {
+    "id": "6ad38777-930f-4698-bc5a-d722934721fc",
+    "name": "Генератор бензиновый инверторный SUNREKA G7500iSM (7,0 кВт) 11026",
+    "brand": "SUNREKA",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "11026"
+  },
+  {
+    "id": "0d2a26db-0768-4fdc-b9a2-80ce70f060e1",
+    "name": "Генератор бензиновый инверторный EVOline BQH 2000 (1,7 кВт) 1T90DFQ20EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "148 FD/P",
+    "article": "1T90DFQ20EVO"
+  },
+  {
+    "id": "7e5b803d-5179-46ae-94bb-b09ee02debd5",
+    "name": "Генератор бензиновый инверторный ET-POWER ET5500iS (5,0 кВт)",
+    "brand": "ET-POWER",
+    "starter": "с ручным стартером",
+    "engine": "225i-3",
+    "article": "ET5500iS"
+  },
+  {
+    "id": "29538832-aba1-45d0-b0a6-1d5b427a26ae",
+    "name": "Генератор бензиновый инверторный ET-POWER ET2500iS (2,3 кВт)",
+    "brand": "ET-POWER",
+    "starter": "с ручным стартером",
+    "engine": "80-i",
+    "article": "ET2500iS"
+  },
+  {
+    "id": "a63d4ea5-e3cb-4fc3-8ad0-e6ad59de628b",
+    "name": "Генератор бензиновый инверторный ET-POWER ET1100i (0,9 кВт)",
+    "brand": "ET-POWER",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "ET1100i"
+  },
+  {
+    "id": "2bc6fb68-93cf-479b-bc16-b758c7bef45d",
+    "name": "Генератор бензиновый инверторный YAMAHA EF2000iS (1,6 кВт) 7PB329-060A",
+    "brand": "YAMAHA",
+    "starter": "с ручным стартером",
+    "engine": "MZ80",
+    "article": "7PB329-060A"
+  },
+  {
+    "id": "7a85577c-633b-4256-9ffb-e0bae4c0d3df",
+    "name": "Генератор бензиновый инверторный HND GE 2200 Ji (2,0 кВт) GE2200Ji",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "JH100i-D",
+    "article": "GE2200Ji"
+  },
+  {
+    "id": "e6ae7837-af1d-4965-b5dc-e5d732dcf660",
+    "name": "Генератор бензиновый инверторный HND GE 1100 Ji (1,0 кВт) GE1100Ji",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "JHR60i",
+    "article": "GE1100Ji"
+  },
+  {
+    "id": "83207539-65da-47e6-a401-db73d1f7c2db",
+    "name": "Генератор бензиновый инверторный Honda EU 22 iT RG (1,8 кВт) EU22ITRGEU",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GXR 120",
+    "article": "EU22ITRGEU"
+  },
+  {
+    "id": "ffc1ecf4-2aff-470b-b697-68d68fcfcde2",
+    "name": "Генератор бензиновый инверторный Honda EU 10 iT1 (0,9 кВт) EU10iT1RG",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GXH 50",
+    "article": "EU10iT1RG"
+  },
+  {
+    "id": "5d6ec44c-33a1-4a20-add5-f396ce03c7fc",
+    "name": "Генератор бензиновый инверторный A-iPower A1400LIS (1,2 кВт) 20311",
+    "brand": "A-IPOWER",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "20311"
+  },
+  {
+    "id": "03468681-d23e-48cf-8320-85c646152d66",
+    "name": "Генератор бензиновый инверторный Energo E3500IS (3,0 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "SH150B",
+    "article": "E3500IS"
+  },
+  {
+    "id": "cdb6b826-f0e8-4619-906e-9f2f610dee7c",
+    "name": "Генератор бензиновый инверторный Energo E1700IS (1,6 кВт)",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "SH80C",
+    "article": "E1700IS"
+  },
+  {
+    "id": "e79723a5-9a1d-43f3-963f-20036f3d4c29",
+    "name": "Генератор бензиновый инверторный Energo E1400iS (1,1 кВт) E1400IS",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "SH60B",
+    "article": "E1400IS"
+  },
+  {
+    "id": "75f0c0be-c4b9-4704-a6a3-da0ddd2ac272",
+    "name": "Генератор бензиновый инверторный ТСС SGG 3000SI (2,8 кВт) 060054",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "KM165F",
+    "article": "060054"
+  },
+  {
+    "id": "3981ada3-7201-4f06-a78c-1a9c2a728caa",
+    "name": "Генератор бензиновый инверторный A-iPower A3500Lis (3,0 кВт) 20309/20314",
+    "brand": "A-IPOWER",
+    "starter": "с ручным стартером",
+    "engine": "SH150B",
+    "article": "20309/20314"
+  },
+  {
+    "id": "2b1264e1-1b6b-4a09-938f-58649c3585ae",
+    "name": "Генератор бензиновый инверторный FUBAG TI 1000 (0,9 кВт) 8641450",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "8641450"
+  },
+  {
+    "id": "191ec6c0-a2d2-4510-97e4-7cbeeea04199",
+    "name": "Генератор бензиновый инверторный FUBAG TI 4300 (3,8 кВт) 641025",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "641025"
+  },
+  {
+    "id": "634a24dc-69e9-45f7-8351-32bdacbe504d",
+    "name": "Генератор бензиновый инверторный Zongshen BPB 4000 (3,5 кВт) 1T90DFB40",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB225",
+    "article": "1T90DFB40"
+  },
+  {
+    "id": "d479f669-4aed-4d66-b425-e7f683a527de",
+    "name": "Генератор бензиновый инверторный Zongshen BQH 4000 (3,5 кВт) 1T90DFQ40",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "NH 225",
+    "article": "1T90DFQ40"
+  },
+  {
+    "id": "4f6563a4-3f8a-45a4-af79-2c9f99f50b9d",
+    "name": "Генератор бензиновый инверторный Zongshen BQH 3500 (3,2 кВт) 1T90DF351",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "Zongshen NH 225",
+    "article": "1T90DF351"
+  },
+  {
+    "id": "5d2b066b-7cfa-496e-b758-96c0e773fe5d",
+    "name": "Генератор бензиновый инверторный Zongshen BQH 3300 (2,9 кВт) 1T90DFQ33",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "165FED/P",
+    "article": "1T90DFQ33"
+  },
+  {
+    "id": "14b26312-43ae-445e-9188-56a330f17d6a",
+    "name": "Генератор бензиновый инверторный ТСС SGG 2400SI (2,0 кВт) 060028",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "KM152F",
+    "article": "060028"
+  },
+  {
+    "id": "0fefa81a-d83c-412d-a606-4e8ece851235",
+    "name": "Генератор бензиновый инверторный Zongshen BQH 2800 (2,3 кВт) 1T90DFQ28",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "165FED/P",
+    "article": "1T90DFQ28"
+  },
+  {
+    "id": "1a29117d-a0cc-4ec4-8733-cf5af75ac903",
+    "name": "Генератор бензиновый инверторный A-iPower A1400IS (1,2 кВт) 20306",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "SH60B",
+    "article": "20306"
+  },
+  {
+    "id": "010c9196-3ec9-4e4c-8e73-8f32bcc45329",
+    "name": "Генератор бензиновый инверторный DAEWOO GDA 4400i (3,4 кВт)",
+    "brand": "Daewoo",
+    "starter": "с ручным стартером",
+    "engine": "series 215",
+    "article": "GDA 4400i"
+  },
+  {
+    "id": "be0c4e2d-e847-4183-ac72-19b1b8baab0e",
+    "name": "Генератор бензиновый инверторный DAEWOO GDA 1400i (1,0 кВт)",
+    "brand": "Daewoo",
+    "starter": "с ручным стартером",
+    "engine": "series 060",
+    "article": "GDA 1400i"
+  },
+  {
+    "id": "b9352ce6-227f-4b2f-8cb9-e1e633187a28",
+    "name": "Генератор бензиновый инверторный A-iPower A2000iS (1,6 кВт) 20301",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "SC80",
+    "article": "20301"
+  },
+  {
+    "id": "9becdbc8-2bb3-4bc2-9b2e-0c22c0cd221b",
+    "name": "Генератор бензиновый инверторный A-iPower A2500iS (2,2 кВт) 20303",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "SH100",
+    "article": "20303"
+  },
+  {
+    "id": "3d777918-75a9-4679-9177-aaac4f612979",
+    "name": "Генератор бензиновый инверторный FUBAG TI 2300 (2,0 кВт) 646253/838980",
+    "brand": "Fubag",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "646253/838980"
+  },
+  {
+    "id": "7e45f902-61c3-4a94-a8b0-cc501e4fa0df",
+    "name": "Генератор бензиновый инверторный DAEWOO GDA 5600i (4,0 кВт)",
+    "brand": "Daewoo",
+    "starter": "с ручным стартером",
+    "engine": "series 220",
+    "article": "GDA 5600i"
+  },
+  {
+    "id": "2e83c8bd-f753-4132-bb35-2b8f53071e4a",
+    "name": "Генератор бензиновый инверторный TI 800 FUBAG (0,7 кВт) 838977",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "838977"
+  },
+  {
+    "id": "f88f3547-a9ad-43ec-817e-d5fa0b45aabf",
+    "name": "Генератор бензиновый инверторный CHAMPION IGG950 (0,8 кВт)",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G65HC",
+    "article": "IGG950"
+  },
+  {
+    "id": "206fafee-1a46-4938-95ad-f4a964ae3b42",
+    "name": "Генератор бензиновый инверторный CHAMPION IGG1000 (0,9 кВт)",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "IGG1000"
+  },
+  {
+    "id": "1fd52701-26cf-4302-930a-eda6c2476bf9",
+    "name": "Генератор бензиновый инверторный ТСС SGG 1800SI (1,8 кВт) 060023",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "KM148F",
+    "article": "060023"
+  },
+  {
+    "id": "abd78871-723e-465b-ac09-884ec8cd3cdd",
+    "name": "Генератор бензиновый инверторный ТСС SGG 3000SI (3,0 кВт) 060038",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "SH140",
+    "article": "060038"
+  },
+  {
+    "id": "e3bccdeb-c9d2-437b-b6e7-a4493192ec57",
+    "name": "Генератор бензиновый инверторный A-iPower A3500i (3,0 кВт) 20307",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "SH150B",
+    "article": "20307"
+  },
+  {
+    "id": "a39dcee3-4648-49af-be8a-5f1319690b88",
+    "name": "Генератор бензиновый инверторный A-iPower A2300iS (1,8 кВт) 20302",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "SC80",
+    "article": "20302"
+  },
+  {
+    "id": "763207fa-ddc4-4422-87d2-5316eb87d8ec",
+    "name": "Генератор бензиновый инверторный CHAMPION IGG3200 (3,2 кВт)",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G210-10HB",
+    "article": "IGG3200"
+  },
+  {
+    "id": "01ab6edb-dbdf-4d0a-b624-b1df04af34cb",
+    "name": "Генератор бензиновый инверторный Zongshen BQH 2000 (1,7 кВт) 1T90DFQ20",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "148 FD/P",
+    "article": "1T90DFQ20"
+  },
+  {
+    "id": "235d8377-225a-4649-8f1a-97344bf1e2d8",
+    "name": "Генератор бензиновый инверторный ТСС SGG 2000SI (1,6 кВт) 060030",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "SC80",
+    "article": "060030"
+  },
+  {
+    "id": "95a1bc1b-ea30-4f0d-99be-0fddcd655f7a",
+    "name": "Генератор бензиновый инверторный Zongshen BQH 2200 (1,9 кВт)",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "148 FD/P",
+    "article": "1T90DFQ22"
+  },
+  {
+    "id": "3a9c36eb-308b-46b4-9a93-0bde20d06647",
+    "name": "Генератор бензиновый инверторный ТСС SGG 3200i (3,0 кВт) 060031",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "AP170F",
+    "article": "060031"
+  },
+  {
+    "id": "aa656388-7034-47bb-b5aa-3658c6674ec6",
+    "name": "Генератор бензиновый инверторный Zongshen BPB 4500 (4,2 кВт) 1T90DFB50",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB270",
+    "article": "1T90DFB50"
+  },
+  {
+    "id": "590ede97-0e66-4524-98f5-e70595141694",
+    "name": "Генератор бензиновый инверторный DAEWOO GDA 2600i (2,0 кВт)",
+    "brand": "Daewoo",
+    "starter": "с ручным стартером",
+    "engine": "series 140",
+    "article": "GDA 2600i"
+  },
+  {
+    "id": "ea4b6d79-2ceb-417b-9deb-e8564a443b01",
+    "name": "Генератор бензиновый FUBAG BS 5500 (5,0 кВт) 646278",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "DH420",
+    "article": "646278"
+  },
+  {
+    "id": "73d49f52-c780-45d1-ad3e-021972ddcd81",
+    "name": "Генератор бензиновый FIRMAN RD3910 (2,5 кВт) RD3910",
+    "brand": "Firman",
+    "starter": "с ручным стартером",
+    "engine": "SPE200",
+    "article": "RD3910"
+  },
+  {
+    "id": "9352409b-67da-4503-a19d-5bf9a4067839",
+    "name": "Генератор бензиновый SUMEC SU8800 (6,0 кВт) SU8800",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "190F",
+    "article": "SU8800"
+  },
+  {
+    "id": "a670e26b-cfde-48db-aec7-164d30a21a75",
+    "name": "Генератор бензиновый SUMEC SU7700 (5,0 кВт) SU7700",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "190F",
+    "article": "SU7700"
+  },
+  {
+    "id": "07dbac0f-ed31-49a0-80f7-a7039a2086d6",
+    "name": "Генератор бензиновый SUMEC SU3700 (2,5 кВт) SU3700",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "170F",
+    "article": "SU3700"
+  },
+  {
+    "id": "8cd444af-6c87-4023-97b0-8c60869770bf",
+    "name": "Генератор бензиновый SUMEC SU2700 (2,0 кВт) SU2700",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "168F",
+    "article": "SU2700"
+  },
+  {
+    "id": "4238c75d-c437-4d0a-9d8c-1dc1c6860094",
+    "name": "Генератор бензиновый SUMEC SU4700 (3,2 кВт) SU4700",
+    "brand": "SUMEC",
+    "starter": "с ручным стартером",
+    "engine": "170F-1",
+    "article": "SU4700"
+  },
+  {
+    "id": "1e5762c3-61fb-4430-8df6-4fa008fc80c0",
+    "name": "Генератор бензиновый Вепрь АБП 7/4-Т400/230 ВХ (5,5 кВт) АБП 7/4-Т400/230 ВХ",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "АБП 7/4-Т400/230 ВХ"
+  },
+  {
+    "id": "829b9cab-73f2-4835-9ce9-745c27f11260",
+    "name": "Генератор бензиновый Вепрь АБ 6-Т400-1ВМ8 (5,5 кВт) АБ 6-Т400-1ВМ8",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GВ 40",
+    "article": "АБ 6-Т400-1ВМ8"
+  },
+  {
+    "id": "cef06897-ebde-4dcc-9e38-7e7ef32a0bb8",
+    "name": "Генератор бензиновый Вепрь АБП 6-230 ВХ (5,5 кВт) АБП 6-230 ВХ",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "АБП 6-230 ВХ"
+  },
+  {
+    "id": "8bbf010d-905e-435e-a680-a364a0612c64",
+    "name": "Генератор бензиновый Вепрь АБ 6-230-1ВМ39 (5,5 кВт) АБ 6-230-1ВМ39",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "190FD-V",
+    "article": "АБ 6-230-1ВМ39"
+  },
+  {
+    "id": "cfac514d-3c51-4d71-8a29-d54d1d71582a",
+    "name": "Генератор бензиновый Вепрь АБП 2,7-230 ВХ-Б (2,5 кВт) АБП 2,7-230 ВХ-Б",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GX200",
+    "article": "АБП 2,7-230 ВХ-Б"
+  },
+  {
+    "id": "e711a2d7-e183-4a55-9629-78a58e4d69a8",
+    "name": "Генератор бензиновый Вепрь АБ 6-230-1ВМ8 (5,5 кВт) АБ 6-230-1ВМ8",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GВ 40",
+    "article": "АБ 6-230-1ВМ8"
+  },
+  {
+    "id": "818ab850-06a4-43c0-98f8-dd91d9d5232d",
+    "name": "Генератор бензиновый Вепрь АБП 2,7-230 ВХ (2,5 кВт) АБП 2,7-230 ВХ",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "GX200",
+    "article": "АБП 2,7-230 ВХ"
+  },
+  {
+    "id": "3a2ee77b-eded-4ccb-b041-fc3d8fb495ff",
+    "name": "Генератор бензиновый EVOline KB 7003 (6,0 кВт) 1T90DF704EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 420",
+    "article": "1T90DF704EVO"
+  },
+  {
+    "id": "6318d347-4754-4a2d-bed6-23997161842a",
+    "name": "Генератор бензиновый EVOline KB 7000 (6,0 кВт) 1T90DF700EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 420",
+    "article": "1T90DF700EVO"
+  },
+  {
+    "id": "6b26e2e5-defc-4c84-9688-96993ab25ff4",
+    "name": "Генератор бензиновый EVOline KB 6000 (5,0 кВт) 1T90DF600EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 420",
+    "article": "1T90DF600EVO"
+  },
+  {
+    "id": "131f698f-7d5d-47fa-b112-ef17d8938ebd",
+    "name": "Генератор бензиновый EVOline KB 5000 (4,0 кВт) 1T90DF500EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 270",
+    "article": "1T90DF500EVO"
+  },
+  {
+    "id": "4d86c6a0-8f0e-4957-a3c8-4cdf8b090b71",
+    "name": "Генератор бензиновый EVOline KB 3300 (2,8 кВт) 1T90DF330EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 210",
+    "article": "1T90DF330EVO"
+  },
+  {
+    "id": "1b20b58b-c9ce-4fcf-a2e4-00464471bcff",
+    "name": "Генератор бензиновый EVOline KB 2500 (2,0 кВт) 1T90DF200EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 210",
+    "article": "1T90DF200EVO"
+  },
+  {
+    "id": "e62394bf-f7cb-48b6-b613-9667625c201c",
+    "name": "Генератор бензиновый EVOline PB 7000 (6,0 кВт) 1T90DF705EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 420",
+    "article": "1T90DF705EVO"
+  },
+  {
+    "id": "24e6fcc5-e74d-4deb-93c7-a593cfc05f81",
+    "name": "Генератор бензиновый EVOline PB 6000 (5,0 кВт) 1T90DF603EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 420",
+    "article": "1T90DF603EVO"
+  },
+  {
+    "id": "c7d5b0d8-7dc5-4301-8896-cfb7b234bd4f",
+    "name": "Генератор бензиновый EVOline PB 5000 (4,0 кВт) 1T90DF502EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 270",
+    "article": "1T90DF502EVO"
+  },
+  {
+    "id": "5fe97db5-9822-4159-9753-0d1a4448f3f3",
+    "name": "Генератор бензиновый EVOline PB 3300 (2,8 кВт) 1T90DF332EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 210",
+    "article": "1T90DF332EVO"
+  },
+  {
+    "id": "99aa77f2-2e4e-4fcd-8c42-52916a30f5fe",
+    "name": "Генератор бензиновый EVOline PB 1800 (1,3 кВт) 1T90DF130EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "NH 150",
+    "article": "1T90DF130EVO"
+  },
+  {
+    "id": "f2e51b9c-ffa5-4e26-ab65-0f9d6c89089e",
+    "name": "Генератор бензиновый EVOline PB 2500 (2,0 кВт) 1T90DF201EVO",
+    "brand": "EVOline",
+    "starter": "с ручным стартером",
+    "engine": "GB 210",
+    "article": "1T90DF201EVO"
+  },
+  {
+    "id": "87d852e0-3f14-4329-b342-5b87a2c0cdb1",
+    "name": "Генератор бензиновый HND GE 5500 XN (5,0 кВт) GE5500XN",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "GE5500XN"
+  },
+  {
+    "id": "e4e9bd41-730b-430f-9153-49cd5d7fe062",
+    "name": "Генератор бензиновый HND GE 3000 PN (2,8 кВт) GE3000PN",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "GP 200",
+    "article": "GE3000PN"
+  },
+  {
+    "id": "3b319753-1529-41c5-bcdb-6ca2ca69c94d",
+    "name": "Генератор бензиновый HND GE 5500 XL (5,0 кВт) GE5500XL",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "GE5500XL"
+  },
+  {
+    "id": "7c3953f2-03aa-4bbe-9675-2b3d5be74902",
+    "name": "Генератор бензиновый HND GE 3000 PL (2,8 кВт) GE3000PL",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "GP 200",
+    "article": "GE3000PL"
+  },
+  {
+    "id": "b42370f9-688d-4771-aeea-668c47995bcd",
+    "name": "Генератор бензиновый HND GE 3300 JN (2,8 кВт) GE3300JN",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "JH212V",
+    "article": "GE3300JN"
+  },
+  {
+    "id": "2ac4736e-cb20-4b95-92c6-6bd87ad7c1cb",
+    "name": "Генератор бензиновый HND GE 2200 PL (2,0 кВт) GE2200PL",
+    "brand": "HND",
+    "starter": "с ручным стартером",
+    "engine": "GP 160",
+    "article": "GE2200PL"
+  },
+  {
+    "id": "fd02b5b3-3574-4b14-b362-7e55744b1b16",
+    "name": "Генератор бензиновый EUROPOWER EP 7000 (6,0 кВт) 950000700",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "950000700"
+  },
+  {
+    "id": "d2778b53-bff3-456e-b18c-68fdecd40468",
+    "name": "Генератор бензиновый EUROPOWER ЕР 6500 TLN (6,5 кВт) 950000654",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "950000654"
+  },
+  {
+    "id": "a9775c05-4608-4d8c-805b-edd76c79cffe",
+    "name": "Генератор бензиновый EUROPOWER ЕР 6500 T 3X230V для ж/д (5,1 кВт) SA431",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "SA431"
+  },
+  {
+    "id": "79d844a8-b0ae-4867-9faf-ae1cca01ebfc",
+    "name": "Генератор бензиновый EUROPOWER ЕР 6000 T (6,5 кВт) SA0950642",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "SA0950642"
+  },
+  {
+    "id": "6dc81d75-6c30-4894-9f30-e298beb66111",
+    "name": "Генератор бензиновый EUROPOWER ЕР 6000 (5,4 кВт) SA0950590",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "SA0950590"
+  },
+  {
+    "id": "a7b6c2d9-6e3b-44d3-ab29-b4bf7397390f",
+    "name": "Генератор бензиновый EUROPOWER ЕР 5000 T (3,6 кВт) SA506",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX270",
+    "article": "SA506"
+  },
+  {
+    "id": "c86217cf-8a61-42c9-a896-598ca9f25be3",
+    "name": "Генератор бензиновый EUROPOWER ЕР 4100 (3,6 кВт) SA0950398-S2",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX270",
+    "article": "SA0950398-S2"
+  },
+  {
+    "id": "060ea452-dffe-4597-891e-1b95bdeca750",
+    "name": "Генератор бензиновый EUROPOWER ЕР 2500 (2,0 кВт) SA0950260-S1",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX-160 UT1 VSD9",
+    "article": "SA0950260-S1"
+  },
+  {
+    "id": "32cc7b72-ec31-4162-83d3-270ee695c173",
+    "name": "Генератор бензиновый EUROPOWER ЕР 3300 (2,7 кВт) SA0990300-S2",
+    "brand": "EUROPOWER",
+    "starter": "с ручным стартером",
+    "engine": "GX200",
+    "article": "SA0990300-S2"
+  },
+  {
+    "id": "d01e71ff-a296-4cfc-bf38-85728a5814aa",
+    "name": "Генератор бензиновый Honda EG 5000 CX (4,0 кВт) EG5000CXRHC",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GX 340",
+    "article": "EG5000CXRHC"
+  },
+  {
+    "id": "3dc90b29-fda3-4aee-8a9c-0a9056dc684d",
+    "name": "Генератор бензиновый Honda EG 6500 CX (5,0 кВт) EG6500CXRHC",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GX 390",
+    "article": "EG6500CXRHC"
+  },
+  {
+    "id": "a4dfdc6b-2f95-40d3-85c2-00aaa48005ac",
+    "name": "Генератор бензиновый Honda EG 4000 CX (3,2 кВт) EG4000CXRHC",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GX 270",
+    "article": "EG4000CXRHC"
+  },
+  {
+    "id": "8fe8b61a-73b9-4c43-917c-a652d10fd141",
+    "name": "Генератор бензиновый Honda EQ 3000 CX (2,5 кВт) EQ3000CX",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GP 200",
+    "article": "EQ3000CX"
+  },
+  {
+    "id": "1079552e-2811-4cfd-9a63-7e81176452aa",
+    "name": "Генератор бензиновый Honda EС 2500 CX (2,0 кВт) EC2500CXRH/EC2500CX3RH",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GX160",
+    "article": "EC2500CXRH/EC2500CX3RH"
+  },
+  {
+    "id": "e3c70ad3-cbed-4f06-b7e4-b9595717a8dd",
+    "name": "Генератор бензиновый Honda ER 2500 CX (2,0 кВт) ER2500CXRH",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GP 160",
+    "article": "ER2500CXRH"
+  },
+  {
+    "id": "b9fba0a6-1993-4d94-a86c-4afa2507e081",
+    "name": "Генератор бензиновый GETINK G5500X (5,0 кВт) 11003",
+    "brand": "GETINK",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "11003"
+  },
+  {
+    "id": "15243f7c-43b0-4175-890e-36106511039e",
+    "name": "Генератор бензиновый GETINK G3500X (3,0 кВт) 11001",
+    "brand": "GETINK",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "11001"
+  },
+  {
+    "id": "52789993-5813-4fff-a861-4a527b16c46a",
+    "name": "Генератор бензиновый ET-POWER ET3200X (2,8 кВт) ET3200X",
+    "brand": "ET-POWER",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "ET3200X"
+  },
+  {
+    "id": "3d7402f8-2488-4066-8bb7-03a656168143",
+    "name": "Генератор бензиновый Honda EC 2500 CX (2,0 кВт)",
+    "brand": "Honda",
+    "starter": "с ручным стартером",
+    "engine": "GX 160"
+  },
+  {
+    "id": "2c372825-8510-4315-95fa-110daece7d41",
+    "name": "Генератор бензиновый Energo E3500AX (2,8 кВт) E3500AX",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "AP170F",
+    "article": "E3500AX"
+  },
+  {
+    "id": "8e91d50d-0ae3-41a7-b1fb-eb6d77ffa53c",
+    "name": "Генератор бензиновый Energo EB5.0/230-R (5,0 кВт) EB5.0/230-R",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX27DF",
+    "article": "EB5.0/230-R"
+  },
+  {
+    "id": "df76ee6c-30b9-4953-890d-b2b7effb0044",
+    "name": "Генератор бензиновый Energo EB4.0/230-R (4,2 кВт) EB4.0/230-R",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX27DF",
+    "article": "EB4.0/230-R"
+  },
+  {
+    "id": "03726f9c-7702-4504-ac22-faa2fbbc447f",
+    "name": "Генератор бензиновый Energo EB7.0/400-R (5,6 кВт) EB7.0/400-R",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX40DS",
+    "article": "EB7.0/400-R"
+  },
+  {
+    "id": "f838d532-9aaf-40ee-8f73-cb8a1017e547",
+    "name": "Генератор бензиновый Energo EB7.0/400-RL (5,6 кВт) EB7.0/400-RL",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX40DS",
+    "article": "EB7.0/400-RL"
+  },
+  {
+    "id": "3f94268e-89c2-4aa1-938b-3551cdb925dc",
+    "name": "Генератор бензиновый Energo EB7.0/230-RL (7,0 кВт) EB7.0/230-RL",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX40DF",
+    "article": "EB7.0/230-RL"
+  },
+  {
+    "id": "cf605d8a-0f11-416a-9cc7-1916bf5ae9cd",
+    "name": "Генератор бензиновый Energo EB7.0/230-R (7,0 кВт) EB7.0/230-R",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX40DF",
+    "article": "EB7.0/230-R"
+  },
+  {
+    "id": "77a1c348-e0cf-4904-b877-918aa4ace75d",
+    "name": "Генератор бензиновый Energo EB3,0-230-R (3,0 кВт) EB3,0-230-R",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "EX21DF",
+    "article": "EB3,0-230-R"
+  },
+  {
+    "id": "eb529e1e-6890-4820-b98e-b7d53c749c04",
+    "name": "Генератор бензиновый A-iPower A5500 (5,0 кВт) 20105",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E1000",
+    "article": "20105"
+  },
+  {
+    "id": "c358eaee-518b-4ac8-9195-e9c680d1dd5a",
+    "name": "Генератор бензиновый A-iPower A3100 (2,8 кВт) 20102",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "1000",
+    "article": "20102"
+  },
+  {
+    "id": "8a7351dd-b77f-4ed6-8cd6-a3e1405d1f7d",
+    "name": "Генератор бензиновый A-iPower A7500 (7,0 кВт) 20111",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E1000",
+    "article": "20111"
+  },
+  {
+    "id": "d9dded57-d3ee-4c38-a76e-0817aae424eb",
+    "name": "Генератор бензиновый Fubag BS 2200 (2,0 кВт) 431246/8641487",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "GF210",
+    "article": "431246/8641487"
+  },
+  {
+    "id": "ce768935-c726-4080-9815-bfb1507868e2",
+    "name": "Генератор бензиновый Energo EB8.0/400-HL (5,6 кВт) EB8.0/400-HL",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "EB8.0/400-HL"
+  },
+  {
+    "id": "19af8aca-3e85-4793-8828-138fa5687f8d",
+    "name": "Генератор бензиновый Energo EB8.0/400-H (5,6 кВт) EB8.0/400-H",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "EB8.0/400-H"
+  },
+  {
+    "id": "5d35fb17-e2d5-4ccd-9760-32eb79a7e07d",
+    "name": "Генератор бензиновый Energo EB7.0/230-HL (6,6 кВт) EB7.0/230-HL",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "EB7.0/230-HL"
+  },
+  {
+    "id": "aa0b7676-bbe7-494b-bbcc-84aa69f25c13",
+    "name": "Генератор бензиновый Energo EB7.0/230-H (6,6 кВт) EB7.0/230-H",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX390",
+    "article": "EB7.0/230-H"
+  },
+  {
+    "id": "0bd0ef41-6694-4499-ba16-3c8f5bd9ef89",
+    "name": "Генератор бензиновый Energo EB5.0/230-H (4,2 кВт) EB5,0/230-H",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX270",
+    "article": "EB5,0/230-H"
+  },
+  {
+    "id": "94a9ade2-e20a-446b-86b0-b37baff07319",
+    "name": "Генератор бензиновый Energo EB3.0/230-H (3,0 кВт) EB3.0/230-H",
+    "brand": "Energo",
+    "starter": "с ручным стартером",
+    "engine": "GX200",
+    "article": "EB3.0/230-H"
+  },
+  {
+    "id": "1469222f-d5db-43c1-bf00-8f477ad3e185",
+    "name": "Генератор бензиновый Zongshen KB 7003 (4,8 кВт) 1T90DF704",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "ZS190F",
+    "article": "1T90DF704"
+  },
+  {
+    "id": "4adb1499-653a-4bad-b5ee-bf909fae90a7",
+    "name": "Генератор бензиновый Zongshen KB 3300 (2,8 кВт) 1T90DF330",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB210E(208 cc)",
+    "article": "1T90DF330"
+  },
+  {
+    "id": "071392da-3680-4b14-991a-b95f59fc4e94",
+    "name": "Генератор бензиновый Zongshen KB 2500 (2,0 кВт) 1T90DF200",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB210",
+    "article": "1T90DF200"
+  },
+  {
+    "id": "1d645e82-7e39-4de3-b5aa-59d7f6255624",
+    "name": "Генератор бензиновый Zongshen PB 6000 (5,0 кВт) 1T90DF603",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB420",
+    "article": "1T90DF603"
+  },
+  {
+    "id": "e28c2ec1-9f52-4177-818a-f9c4d763184c",
+    "name": "Генератор бензиновый Zongshen PB 3300 (2,8 кВт) 1T90DF332",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "ZS170F",
+    "article": "1T90DF332"
+  },
+  {
+    "id": "666ffad5-87fd-4ce5-899e-cb1d22f22654",
+    "name": "Генератор бензиновый Zongshen PB 2500 A (2,0 кВт) 1T90DF201",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "ZS170F",
+    "article": "1T90DF201"
+  },
+  {
+    "id": "418be0de-d02a-4fef-ab3c-c0a6f675957c",
+    "name": "Генератор бензиновый ELEMAX SH3900EX-R (2,8 кВт) SH3900EX-R",
+    "brand": "Elemax",
+    "starter": "с ручным стартером",
+    "engine": "GX 200",
+    "article": "SH3900EX-R"
+  },
+  {
+    "id": "a2e51b86-8b0a-444c-b534-bf4641c0c4ed",
+    "name": "Генератор бензиновый Zongshen PB 5000 (3,2 кВт) 1T90DF502",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB 270",
+    "article": "1T90DF502"
+  },
+  {
+    "id": "774907d1-4eaf-414c-a6d4-377ac734c8be",
+    "name": "Генератор бензиновый Zongshen PB 1800 (1,3 кВт) 1T90DF130",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "NH150",
+    "article": "1T90DF130"
+  },
+  {
+    "id": "aec5c144-2ab0-4395-8dc5-b3f341120c66",
+    "name": "Генератор бензиновый ТСС SGG 5000N (5,0 кВт) 060007",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "190F",
+    "article": "060007"
+  },
+  {
+    "id": "1ad12897-574e-463f-94f0-b3611bfc4a14",
+    "name": "Генератор бензиновый FUBAG BS 3300 (3,0 кВт) 431247/8641452",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "GF210",
+    "article": "431247/8641452"
+  },
+  {
+    "id": "547f13fb-3c1d-4cc8-b8e3-24732b65f01d",
+    "name": "Генератор бензиновый CHAMPION GG3200 (3,2 кВт) GG3200",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "GG3200"
+  },
+  {
+    "id": "77cfb9f9-fe08-4e4c-acb3-399e9b613636",
+    "name": "Генератор бензиновый CHAMPION GG2300 (2,3 кВт) GG2300",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G210-25HC",
+    "article": "GG2300"
+  },
+  {
+    "id": "84c6e136-73c0-458c-81f0-eaaacf022b34",
+    "name": "Генератор бензиновый A-iPower LITE AР3100 (2,8 кВт) 20203",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E500",
+    "article": "20203"
+  },
+  {
+    "id": "aa2fdac0-0fa3-407f-9fd2-e4467c05fd41",
+    "name": "Генератор бензиновый FUBAG BS 7500 (7,0 кВт) 641032",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "641032"
+  },
+  {
+    "id": "9d0f77b8-a9e9-41a2-b7f8-566bdb2818ad",
+    "name": "Генератор бензиновый DDE G550P (5,0 кВт) 919-990",
+    "brand": "DDE",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "919-990"
+  },
+  {
+    "id": "86472a23-4d74-4f00-948b-37e1257cbc1b",
+    "name": "Генератор бензиновый ELEMAX SH3200EX-R (2,6 кВт) SH3200EX-R",
+    "brand": "Elemax",
+    "starter": "с ручным стартером",
+    "engine": "GX 160",
+    "article": "SH3200EX-R"
+  },
+  {
+    "id": "06f4685b-2015-4918-8343-dc35746e0fd1",
+    "name": "Генератор бензиновый CHAMPION GG951DC (0,65 кВт) GG951DC",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "GG951DC"
+  },
+  {
+    "id": "b0a06b63-1707-4e3d-b26c-a28c072d308f",
+    "name": "Генератор бензиновый CHAMPION GG6500 (5,0 кВт) GG6500",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G421HC",
+    "article": "GG6500"
+  },
+  {
+    "id": "1f4d71c3-589d-4926-8def-b84046786176",
+    "name": "Генератор бензиновый CHAMPION GG3301 (2,8 кВт) GG3301",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G225HC",
+    "article": "GG3301"
+  },
+  {
+    "id": "3e701ac0-7ece-46c4-a4f0-a83923b52b0f",
+    "name": "Генератор бензиновый Champion GG3000 (2,3 кВт) GG3000",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "¶G210-25HC",
+    "article": "GG3000"
+  },
+  {
+    "id": "e12bcc57-b28f-4fab-9365-def47b5a13a8",
+    "name": "Генератор бензиновый CHAMPION GG3300 (2,6 кВт) GG3300",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "168",
+    "article": "GG3300"
+  },
+  {
+    "id": "5a987d23-0fcc-4712-96dc-da6e626bdcf4",
+    "name": "Генератор бензиновый FIRMAN RD7910 (5,0 кВт) RD7910",
+    "brand": "Firman",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "RD7910"
+  },
+  {
+    "id": "5d1d94e5-9231-4c9b-8439-45cdd9960e71",
+    "name": "Генератор бензиновый CHAMPION GG6500-3 (6,2 кВт) GG6500-3",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G421HC",
+    "article": "GG6500-3"
+  },
+  {
+    "id": "1651aaac-9b9e-4c87-bd40-13e08f54990b",
+    "name": "Генератор бензиновый CHAMPION GG5000 (5,0 кВт) GG5000",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "GG5000"
+  },
+  {
+    "id": "cfa66687-5421-4215-a9b7-640fb65f8513",
+    "name": "Генератор бензиновый CHAMPION GG3301C (2,8 кВт) GG3301C",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G225HC",
+    "article": "GG3301C"
+  },
+  {
+    "id": "9b779dd5-999d-4d34-8e54-86a53f389081",
+    "name": "Генератор бензиновый CHAMPION GG2801 (2,8 кВт) GG2801",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G210-25HC",
+    "article": "GG2801"
+  },
+  {
+    "id": "b1fcb9e6-86ba-4e8d-86c2-7a3179d4344a",
+    "name": "Генератор бензиновый CHAMPION GG2000 (2,0 кВт) GG2000",
+    "brand": "Champion",
+    "starter": "с ручным стартером",
+    "engine": "G210HC",
+    "article": "GG2000"
+  },
+  {
+    "id": "1c65a19f-7a42-45a8-ae6c-ac982f1326e7",
+    "name": "Генератор бензиновый ТСС SGG 2800N (2,8 кВт) 060005",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "TSS KM 170FD",
+    "article": "060005"
+  },
+  {
+    "id": "94b20745-db19-47a9-9300-b5fab54f6501",
+    "name": "Генератор бензиновый FUBAG BS 5500 (5,0 кВт) 641689/8641489",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "DH420",
+    "article": "641689/8641489"
+  },
+  {
+    "id": "9be7a6e0-925a-416c-92b6-d3fe0a56a33b",
+    "name": "Генератор бензиновый FUBAG BS 6600 (5,0 кВт) 646280/641690/8641491",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "DH420",
+    "article": "646280/641690/8641491"
+  },
+  {
+    "id": "445047d3-5b36-4a06-b487-f63fc9c9fcbb",
+    "name": "Генератор бензиновый ТСС SGG 2000N (2,0 кВт) 059999",
+    "brand": "ТСС",
+    "starter": "с ручным стартером",
+    "engine": "KM 170FD",
+    "article": "059999"
+  },
+  {
+    "id": "9d108d64-fc93-4219-8343-af9ae447a5f7",
+    "name": "Генератор бензиновый A-iPower A2200 (2,0 кВт) 20101",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "1000",
+    "article": "20101"
+  },
+  {
+    "id": "6f2ee192-b8f7-4bde-a2e4-c985ad8b393a",
+    "name": "Генератор бензиновый A-iPower LITE AР2200 (2,0 кВт) 20201",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E500",
+    "article": "20201"
+  },
+  {
+    "id": "7c9f5ad5-89f8-4d05-83b0-82db074033fd",
+    "name": "Генератор бензиновый A-iPower A6500 (6,0 кВт) 20108",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "Е1000",
+    "article": "20108"
+  },
+  {
+    "id": "b2f2b7fa-f382-4f31-b624-9c82e49cf207",
+    "name": "Генератор бензиновый A-iPower A3500X (3,0 кВт) 20104",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E1000",
+    "article": "20104"
+  },
+  {
+    "id": "2df78e55-7160-496a-9c5d-07e77844ef5d",
+    "name": "Генератор бензиновый A-iPower LITE AР6500 (6,0 кВт) 20206",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E500",
+    "article": "20206"
+  },
+  {
+    "id": "538f3f62-d2b1-4470-b0f8-50bc3eb4b1c9",
+    "name": "Генератор бензиновый FUBAG BS 3500 Duplex (2,8 кВт) 431249/8641453",
+    "brand": "FUBAG",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "431249/8641453"
+  },
+  {
+    "id": "98bb3537-19e5-4650-91d7-f2f265b4b10e",
+    "name": "Генератор бензиновый A-iPower LITE AР5500 (5,0 кВт) 20204",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E500",
+    "article": "20204"
+  },
+  {
+    "id": "2de7fe78-7f3b-49af-b192-4cbc552b9f7a",
+    "name": "Генератор бензиновый Zongshen KB 5000 (4,0 кВт) 1T90DF500",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "",
+    "article": "1T90DF500"
+  },
+  {
+    "id": "67c006ab-8979-442a-bfe5-02de4e913700",
+    "name": "Генератор бензиновый Zongshen KB 7000 (6,0 кВт) 1T90DF700",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "ZS190F",
+    "article": "1T90DF700"
+  },
+  {
+    "id": "45c9484a-e777-427a-adbe-dd9b9d512d3c",
+    "name": "Генератор бензиновый Zongshen PB 7000 (6,0 кВт) 1T90DF705",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB420-2",
+    "article": "1T90DF705"
+  },
+  {
+    "id": "3c02249a-d467-46e7-85cf-d6a77b7c9bdf",
+    "name": "Генератор бензиновый A-iPower A5500C (5,0 кВт) 20107",
+    "brand": "A-iPower",
+    "starter": "с ручным стартером",
+    "engine": "E1000 322cc",
+    "article": "20107"
+  },
+  {
+    "id": "0570c956-b541-4d7b-98c6-fd3a972dd720",
+    "name": "Генератор бензиновый Zongshen KB 6000 (5,0 кВт) 1T90DF600",
+    "brand": "Zongshen",
+    "starter": "с ручным стартером",
+    "engine": "GB 420",
+    "article": "1T90DF600"
+  },
+  {
+    "id": "a00b0d88-703f-4f1f-a5c2-778d294fd10b",
+    "name": "Генератор бензиновый DAEWOO GDA 3500 (2,8 кВт) GDA 3500",
+    "brand": "Daewoo",
+    "starter": "с ручным стартером",
+    "engine": "series 210",
+    "article": "GDA 3500"
+  },
+  {
+    "id": "fba76dd2-a37c-4331-963b-80324bc3be5e",
+    "name": "Генератор дизельный Вепрь АДП 7/4-Т400/230 ВЛ1-Б (6,5 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "3LD510",
+    "article": "АДП 7/4-Т400/230 ВЛ1-Б"
+  },
+  {
+    "id": "fd96a8c4-d485-423d-8512-d92f2cc59c3d",
+    "name": "Генератор дизельный Вепрь АД 3-230-ВМ18 (2,8 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "KD178F",
+    "article": "АД 3-230-ВМ18"
+  },
+  {
+    "id": "21cc7272-6a2e-467a-8e9e-fa82a23edc43",
+    "name": "Генератор дизельный Вепрь АД 5-230-ВМ18 (5,0 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "KD188FA",
+    "article": "АД 5-230-ВМ18"
+  },
+  {
+    "id": "6da411f5-76c9-4cab-9e7d-44638f8d5419",
+    "name": "Генератор дизельный Вепрь АД 5-Т400-ВМ18 (5,0 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "KD188FA",
+    "article": "АД 5-Т400-ВМ18"
+  },
+  {
+    "id": "5dca3828-fd11-4cdc-91ec-e07f0f40bd34",
+    "name": "Генератор дизельный Вепрь АД 2-230-ВМ18 (1,8 кВт)",
+    "brand": "Вепрь",
+    "starter": "с ручным стартером",
+    "engine": "KD170F",
+    "article": "АД 2-230-ВМ18"
+  }
+]

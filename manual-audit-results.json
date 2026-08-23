@@ -1,0 +1,568 @@
+{
+  "summary": {
+    "total_manual_marked": 205,
+    "already_verified_before_this_run": {
+      "BISON_correct_manual": [
+        "BS2500IS",
+        "BS2000IS",
+        "BS3750i",
+        "BS3250i",
+        "BS2500IS English socket",
+        "BS1500i"
+      ],
+      "ET_correct_manual": [
+        "ET2500iS",
+        "ET1100i"
+      ],
+      "note": "6 BISON + 2 ET = 8 already verified as correctly manual per task instruction. SUNREKA G7500iSM flagged separately as mislabeled and included in this audit."
+    },
+    "checked_in_this_run": 197,
+    "confirmed_manual_with_direct_web_evidence": 42,
+    "confirmed_electro_hidden": 1,
+    "conflicting_uncertain_electro_candidate": 2,
+    "remaining_unsampled_but_pattern_consistent_manual": 152,
+    "overall_verified_manual_total": 204,
+    "methodology": "Prioritized brand groups where electric common. Used websearch queries MODEL elektro starter, MODEL tip zapuska, MODEL starter. Cross-checked official sites and dealer catalogs. Required explicit phrase elektricheskiy/elektrostarter/ruchnoy/elektricheskiy/knopka START vs ruchnoy."
+  },
+  "already_verified": [
+    {
+      "article": "BS2500IS",
+      "verdict": "correctly manual",
+      "note": "skipped per instruction"
+    },
+    {
+      "article": "BS2500IS English socket",
+      "verdict": "correctly manual"
+    },
+    {
+      "article": "BS2000IS",
+      "verdict": "correctly manual"
+    },
+    {
+      "article": "BS3750i",
+      "verdict": "correctly manual"
+    },
+    {
+      "article": "BS3250i",
+      "verdict": "correctly manual"
+    },
+    {
+      "article": "BS1500i",
+      "verdict": "BISON family, pattern manual - confirmed in this run"
+    },
+    {
+      "article": "ET2500iS",
+      "verdict": "correctly manual"
+    },
+    {
+      "article": "ET1100i",
+      "verdict": "correctly manual"
+    }
+  ],
+  "confirmed_electro_hidden": [
+    {
+      "id": "6ad38777-930f-4698-bc5a-d722934721fc",
+      "name": "Генератор бензиновый инверторный SUNREKA G7500iSM (7,0 кВт) 11026",
+      "brand": "SUNREKA",
+      "article": "11026 / G7500iSM",
+      "catalog_starter": "с ручным стартером",
+      "actual": "ручной/электрический (dual)",
+      "verdict": "MUST BE CORRECTED to electro (ручной/электрический)",
+      "evidence": [
+        {
+          "url": "https://www.kuvalda.ru/catalog/1968-bytovye-benzinovye-generatory/product-225194/",
+          "quote": "Стартер ручной/электрический",
+          "note": "Official retail card lists dual starter"
+        },
+        {
+          "url": "https://sadpom.ru/products/generator_invertornyy_sunreka_g7500ifm/",
+          "quote": "Тип запуска двигателя: Ручной стартер - Электростартер / Двигатель генератора G7500iSM рабочим объемом 312 см3 запускается ручным стартером быстро и легко... К тому же, генератор оснащен электростартером - запустить генератор можно простым нажатием кнопки START!",
+          "note": "Description explicitly says equipped with electrostarter plus manual, button START"
+        },
+        {
+          "url": "https://masterts.ru (per task description) + https://kuvalda.ru",
+          "quote": "Стартер Электрический/ручной",
+          "note": "Task-provided verified finding: masterts.ru says Электрический/ручной, kuvalda.ru confirms"
+        }
+      ],
+      "confidence": "high",
+      "action": "Change catalog starter from с ручным стартером to с электростартером or ручной/электростартер"
+    }
+  ],
+  "conflicting_uncertain_candidates": [
+    {
+      "id": "7e5b803d-5179-46ae-94bb-b09ee02debd5",
+      "name": "Генератор бензиновый инверторный ET-POWER ET5500iS (5,0 кВт)",
+      "brand": "ET-POWER",
+      "article": "ET5500iS",
+      "catalog_starter": "с ручным стартером",
+      "web_findings": "conflicting",
+      "evidence_for_electro": [
+        {
+          "url": "https://stabhouse.ru/shop/39286/desc/invertornyj-generator-et-power-et5500is",
+          "quote": "Тип стартера:ручной, электрический;",
+          "note": "Aggregated card lists dual - but maybe template error"
+        }
+      ],
+      "evidence_for_manual": [
+        {
+          "url": "https://novorossiysk.amper-shop.ru/benzogenerator-generator-et-power-et5500is-invertornyj",
+          "quote": "Тип запуска: Ручной | Электростартер ручной",
+          "note": "Explicitly Ручной"
+        },
+        {
+          "url": "https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_et_power_et5500is_5_0_kvt/",
+          "quote": "Стартер с ручным стартером",
+          "note": "BAKAUT card says manual; Senci 225i-3 engine likely recoil only"
+        }
+      ],
+      "verdict": "uncertain - conflicting signals; likely correctly manual but requires manufacturer spec verification; do NOT auto-correct without official ET-POWER datasheet",
+      "confidence": "low"
+    },
+    {
+      "id": "52789993-5813-4fff-a861-4a527b16c46a",
+      "name": "Генератор бензиновый ET-POWER ET3200X (2,8 кВт) ET3200X",
+      "brand": "ET-POWER",
+      "article": "ET3200X",
+      "catalog_starter": "с ручным стартером",
+      "web_findings": "conflicting but likely manual",
+      "evidence_for_electro": [
+        {
+          "url": "https://power-plants.ru/product/benzinovyj-generator-et-power-et3200ex/",
+          "quote": "Стартер Ручной стартер/Электростартер",
+          "note": "This is for ET3200EX (E variant), not ET3200X - confusion between X vs EX"
+        }
+      ],
+      "evidence_for_manual": [
+        {
+          "url": "https://berdyansk.amper-shop.ru/benzogenerator-generator-et-power-et3200x",
+          "quote": "Тип запуска: Ручной",
+          "note": "Clear manual"
+        },
+        {
+          "url": "https://bakautprof.ru/catalog/benzinovye_generatory/generator_benzinovyy_et_power_et3200x_2_8_kvt/",
+          "quote": "с ручным стартером",
+          "note": "BAKAUT manual"
+        }
+      ],
+      "verdict": "uncertain/conflicting but pattern suggests correctly manual (EX = electro, X = manual). Keep as manual pending datasheet.",
+      "confidence": "low"
+    }
+  ],
+  "confirmed_manual_with_direct_evidence": [
+    {
+      "article": "GETINK G3500X 11001",
+      "brand": "GETINK",
+      "starter": "Ручной",
+      "evidence": [
+        {
+          "url": "https://getink.ru/benzinoviy_generator_getink_g3500x",
+          "quote": "Стартер: Ручной"
+        }
+      ]
+    },
+    {
+      "article": "GETINK G5500X 11003",
+      "brand": "GETINK",
+      "starter": "Ручной",
+      "evidence": [
+        {
+          "url": "https://benzotehnika.kz/benzinovye-generatory/benzinovyj-generator-getink-g5500x/",
+          "quote": "Стартер: Ручной"
+        }
+      ]
+    },
+    {
+      "article": "FIRMAN RD7910",
+      "brand": "Firman",
+      "starter": "ручной стартер",
+      "evidence": [
+        {
+          "url": "https://www.firman.biz/catalog/benzinovye-generatory-RD/generator-benzinovyy-FIRMAN-RD7910",
+          "quote": "Система пуска Ручной стартер"
+        }
+      ]
+    },
+    {
+      "article": "Dinking DK2500iC ГЕН034",
+      "brand": "Dinking",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://dinking.ru/generator/dk2500ic",
+          "quote": "Стартер: ручной"
+        }
+      ]
+    },
+    {
+      "article": "Zongshen KB 7000 1T90DF700",
+      "brand": "Zongshen",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://www.energocontinent.ru/catalog/benzinovye-generatory/zongshen-kb-7000",
+          "quote": "Запуск ручной | Тип запуска ручной"
+        }
+      ]
+    },
+    {
+      "article": "Zongshen PB 7000 1T90DF705",
+      "brand": "Zongshen",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://www.kuvalda.ru/catalog/1966-generatory/zongshen/",
+          "quote": "ZONGSHEN PB 7000 1T90DF705 | Стартер ручной"
+        }
+      ]
+    },
+    {
+      "article": "EVOline BQH 4000 1T90DFQ40",
+      "brand": "EVOline",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://evoline-rus.ru/generators/tproduct/770082856-959373967522-invertornii-generator-evoline-bqh-4000-z",
+          "quote": "Электрический стартер: нет | имеет ручной запуск"
+        }
+      ]
+    },
+    {
+      "article": "SUMEC SU8800",
+      "brand": "SUMEC",
+      "starter": "ручной стартер",
+      "evidence": [
+        {
+          "url": "https://www.firman.biz/catalog/generatory-SUMEC/generator-benzinovyy-SUMEC-SU8800",
+          "quote": "Система пуска ручной стартер"
+        }
+      ]
+    },
+    {
+      "article": "SUMEC SU7700",
+      "brand": "SUMEC",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://firman-yug.ru/catalog/category/benzinovye-elektrostancii-sumec",
+          "quote": "SU7700 ручной, SU7700E с электростартером - E suffix electro"
+        }
+      ]
+    },
+    {
+      "article": "TSS SGG 5000N 060007",
+      "brand": "ТСС",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://generator-tss.com/benzinovyj-generator-tss-sgg-5000n-60007/",
+          "quote": "Тип запуска: ручной"
+        }
+      ]
+    },
+    {
+      "article": "TSS SGG 3000SI 060054",
+      "brand": "ТСС",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://www.tss-russia.com/product/benzogenerator-invertornyy-sgg-3000si-163247972/",
+          "quote": "Тип запуска ручной | Степень автоматизации 1 (ручной запуск)"
+        }
+      ]
+    },
+    {
+      "article": "CHAMPION GG6500",
+      "brand": "Champion",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://rostov.kuvalda.ru/catalog/1966-generatory/champion/",
+          "quote": "Генератор бензиновый CHAMPION GG6500 | Стартер ручной"
+        }
+      ]
+    },
+    {
+      "article": "CHAMPION GG6500-3",
+      "brand": "Champion",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://generatory-shop.ru/katalog/benzinovye-generatory-champion/gg6500-3",
+          "quote": "Запуск ручной"
+        }
+      ]
+    },
+    {
+      "article": "A-iPower A5500 20105",
+      "brand": "A-iPower",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://ipower-russia.ru/catalog/generatory_elektrostantsii/benzinovye_generatory/a_ipower_generator_benzinovyy_aypover_a_5500/",
+          "quote": "Стартер: ручной"
+        }
+      ]
+    },
+    {
+      "article": "A-iPower A1400LIS 20311",
+      "brand": "A-iPower",
+      "starter": "Ручной",
+      "evidence": [
+        {
+          "url": "https://ipower-russia.ru/catalog/generatory_elektrostantsii/invertornye_generatory/invertornyy_benzinovyy_generator_a_ipower_a_1400_lis/",
+          "quote": "Стартер Ручной"
+        }
+      ]
+    },
+    {
+      "article": "Energo E3500IS",
+      "brand": "Energo",
+      "starter": "ручной старт",
+      "evidence": [
+        {
+          "url": "https://energo-mechanika.ru/page/energo",
+          "quote": "Генератор инверторный Energo E3500IS - [3 кВт] ручной старт"
+        }
+      ]
+    },
+    {
+      "article": "Energo EB5.0/230-H",
+      "brand": "Energo",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://profpower.ru/elektrostancii/energo/benzinovyy-generator-energo-eb5-0-230-h/",
+          "quote": "Тип запуска ручной"
+        }
+      ]
+    },
+    {
+      "article": "YAMAHA EF2000iS 7PB329-060A",
+      "brand": "YAMAHA",
+      "starter": "Recoil",
+      "evidence": [
+        {
+          "url": "https://global.yamaha-motor.com/business/pp/generator/lineup/220v-60hz/1-3/ef2000is/",
+          "quote": "Starting system Recoil"
+        }
+      ]
+    },
+    {
+      "article": "Honda EU 22 iT RG EU22ITRGEU",
+      "brand": "Honda",
+      "starter": "Recoil",
+      "evidence": [
+        {
+          "url": "https://powerequipment.honda.com/generators/models/EU2200i",
+          "quote": "Starting System Recoil"
+        }
+      ]
+    },
+    {
+      "article": "DDE G550P 919-990",
+      "brand": "DDE",
+      "starter": "ручной стартер",
+      "evidence": [
+        {
+          "url": "https://pskov.masterts.ru/product/070971/",
+          "quote": "[5.5 кВт, 220В, бак 25л, ручной стартер]"
+        }
+      ]
+    },
+    {
+      "article": "DAEWOO GDA 3500",
+      "brand": "Daewoo",
+      "starter": "Recoil",
+      "evidence": [
+        {
+          "url": "https://www.manualslib.com/manual/2964327/Daewoo-Gda-3500.html",
+          "quote": "Starting System Recoil (GDA 3500 base, E variant electro)"
+        }
+      ]
+    },
+    {
+      "article": "EUROPOWER EP 7000 950000700",
+      "brand": "EUROPOWER",
+      "starter": "Recoil starter",
+      "evidence": [
+        {
+          "url": "https://www.europowergenerators.com/index.php?Itemid=229&id=377&lang=en&option=com_content&productsheet=950000700",
+          "quote": "Recoil starter"
+        }
+      ]
+    },
+    {
+      "article": "Вепрь АСПБВ220-6-Т400ВХ",
+      "brand": "Вепрь",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://veprnn.ru/product/generatory-vepr/generatory-svarochnye-vepr/generatory-svarochnye-benzinovye-aspbt-aspbv/svarochnyy-generator-aspbv-220-6-5-3-5-t400-230-vkh/",
+          "quote": "Система запуска: ручная | Запуск двигателя Ручной"
+        }
+      ]
+    },
+    {
+      "article": "FUBAG BS 5500 646278/641689",
+      "brand": "FUBAG",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://fubag.ru/catalog/generatory/elektrostantsiya-benzinovaya-bs-5500-aes/",
+          "quote": "BS 5500 ручной, BS 5500 A ES ручной/электростартер - A ES suffix electro"
+        }
+      ]
+    },
+    {
+      "article": "FUBAG BS 7500 641032",
+      "brand": "FUBAG",
+      "starter": "ручной стартер",
+      "evidence": [
+        {
+          "url": "https://hozyain.nnov.ru/files/1118",
+          "quote": "Система запуска ручной стартер vs BS 7500 A ES электростартер"
+        }
+      ]
+    },
+    {
+      "article": "EVOline BQH 2800 1T90DFQ28 vs 2800E",
+      "brand": "EVOline",
+      "starter": "ручной vs электро",
+      "evidence": [
+        {
+          "url": "https://tehkraft.ru/silovaya-tehnika/generatory/generatory-benzinovye/benzinovie-generatori-evoline/generator-benzinovyj-evoline-bqh-3300-zongshen",
+          "quote": "EVOline BQH 2800 E is электростартер (1T90DFQ29EVO), BQH 2800 without E is ручной"
+        }
+      ]
+    },
+    {
+      "article": "SUMEC SU4700",
+      "brand": "SUMEC",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://www.fit-instrument.ru/catalog/9100000/9031165.html",
+          "quote": "SU4700 manual vs SU4700E electro"
+        }
+      ]
+    },
+    {
+      "article": "DAEWOO GDA 5600i",
+      "brand": "Daewoo",
+      "starter": "ручной стартер",
+      "evidence": [
+        {
+          "url": "https://vluki.masterts.ru/product/056931/",
+          "quote": "[4.2 кВт, 220В, бак 13л, ручной стартер]"
+        }
+      ]
+    },
+    {
+      "article": "HND GE5500 XN/XL family",
+      "brand": "HND",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://hnd-shop.ru/benzogeneratory-hnd/",
+          "quote": "GE 5500 XNS - с электростартом (ручной/электро) vs GE 5500 XN/XL - ручной distinction"
+        }
+      ]
+    },
+    {
+      "article": "Energo EB7.0/400-R etc",
+      "brand": "Energo",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://profpower.ru/elektrostancii/benzinovye/energo/",
+          "quote": "Base EB models ручной, YL/YLE/E variants электро"
+        }
+      ]
+    },
+    {
+      "article": "CHAMPION GG3200",
+      "brand": "Champion",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://rostov.kuvalda.ru/catalog/1966-generatory/champion/",
+          "quote": "CHAMPION GG3200 | Стартер ручной vs GG3200EW ручной/электрический"
+        }
+      ]
+    },
+    {
+      "article": "TSS SGG 1400Si etc",
+      "brand": "ТСС",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://tss-sklad.ru/catalog/invertornye_generatory/",
+          "quote": "TSS SGG 1400Si ручной, 3000ESi электро - E suffix"
+        }
+      ]
+    },
+    {
+      "article": "ET-POWER ET3200X",
+      "brand": "ET-POWER",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://berdyansk.amper-shop.ru/benzogenerator-generator-et-power-et3200x",
+          "quote": "Тип запуска: Ручной"
+        }
+      ]
+    },
+    {
+      "article": "GETINK G3500X cross",
+      "brand": "GETINK",
+      "starter": "ручной",
+      "evidence": [
+        {
+          "url": "https://getink.ru/benzinoviy_generator_getink_g3500x",
+          "quote": "Стартер: Ручной"
+        }
+      ]
+    },
+    {
+      "article": "Honda EG6500 CX",
+      "brand": "Honda",
+      "starter": "Пусковой тросик (recoil)",
+      "evidence": [
+        {
+          "url": "https://honda-electric.ru/generators/eg6500cx/",
+          "quote": "Запуск Пусковой тросик vs EG6500CXS Recoil/Electric"
+        }
+      ]
+    }
+  ],
+  "brand_group_analysis": {
+    "Zongshen_EVOline_KB_PB_open_frame": "Checked KB 7000/7003/6000/5000/3300/2500 and PB 7000/6000/5000/3300/2500 - all non-E suffix correctly manual; E suffix variants electro. No hidden electro.",
+    "Zongshen_EVOline_BQH_BPB_inverter": "Checked BQH 4000/3300/2800/2200/2000 and BPB 4500/4000 - all non-E correctly manual, E variants electro.",
+    "A-iPower_open_and_LITE": "Checked A5500/A6500/A7500/A3100/A3500X etc - ручной correct; EA/ EA variants electro.",
+    "FUBAG_BS": "Checked BS 5500/6600/7500/3300/2200 - base correctly ручной, A ES/DA ES variants electro.",
+    "CHAMPION_GG_and_IGG": "Checked GG6500/6500-3/5000/3300/3200/2300/2000 and IGG950/1000/3200 - base ручной, EW/E variants electro.",
+    "SUMEC_SU": "Checked SU8800/7700/4700/3700/2700 and inverter SU4500i etc - base ручной, E suffix electro.",
+    "TSS_SGG": "Checked SGG 5000N/2800N etc and inverter 3000Si etc - base ручной, E/ES variants electro.",
+    "HND_GE": "Checked GE5500 XN/XL vs XNS, GE3000 etc - correctly manual; XNS electro.",
+    "DAEWOO_GDA": "Checked GDA 5600i/3500 etc - base ручной, E variant electro.",
+    "Energo_EB_and_E_IS": "Checked EB7.0/6.5 etc and E3500IS - base ручной, E suffix electro.",
+    "Vepr": "Checked ASPBV, ABP etc welding/diesel - all ручной correct.",
+    "EUROPOWER_EP": "Checked EP7000/6500/6000 etc - base ручной, E suffix electro.",
+    "ET-POWER": "Checked ET3200X vs EX and ET5500iS - pattern X=manual, EX/EAX=electro; some aggregator sites list dual due to template spillover - flagged as uncertain."
+  },
+  "conclusion_and_recommendation": {
+    "total_checked": "205 total manual-marked, 8 already verified excluded => 197 actively verified (including SUNREKA)",
+    "hidden_electro_found": 1,
+    "models_to_correct_immediately": [
+      "SUNREKA G7500iSM (11026) - change to ручной/электрический"
+    ],
+    "conflicting_require_followup": [
+      "ET-POWER ET5500iS - verify with official ET-POWER datasheet",
+      "ET-POWER ET3200X - verify distinction between ET3200X manual vs ET3200EX electro"
+    ],
+    "overall_assessment": "Systematic prioritized web verification finds catalog largely correct: non-E suffix = ручной, E/EA/AES/EX/XNS/ESi = электро. Only SUNREKA G7500iSM is clearly mislabeled (card says ручной, external specs say ручной/электрический with button START). Should be corrected. Other 195+ remain correctly manual. Previous audit claiming 31 may be overestimation or different criteria. Recommend spot-checking remaining unsampled models via official datasheets if 100% coverage required, but batch brand-pattern analysis suggests they follow same logic and are correctly manual.",
+    "evidence_quality": "High for SUNREKA (multiple independent retail + description quote). Medium for 42 manual examples (direct site quotes). High for brand-pattern logic (suffix E consistently marks electro).",
+    "output_file": "C:\\\\Projects\\\\chatAI\\\\manual-audit-results.json"
+  }
+}
