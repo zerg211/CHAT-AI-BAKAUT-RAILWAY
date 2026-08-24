@@ -254,18 +254,44 @@ export async function registerChatRoutes(
         initialStatus: generationStatusMessages[0],
         statusMessages: generationStatusMessages
       });
-      const payload = await runWithOpenAIUsageContext({
-        sessionId: params.id,
-        turnId,
-        pageUrl: session.pageUrl,
-        userAgent: session.userAgent
-      }, () => assistant.generateAnswer({
-        sessionId: params.id,
-        userMessage: input.message,
-        turnId,
-        onDelta: (delta) => send('delta', { delta }),
-        signal: controller.signal
-      }));
+      let payload: Awaited<ReturnType<typeof assistant.generateAnswer>>;
+      try {
+        payload = await runWithOpenAIUsageContext({
+          sessionId: params.id,
+          turnId,
+          pageUrl: session.pageUrl,
+          userAgent: session.userAgent
+        }, () => assistant.generateAnswer({
+          sessionId: params.id,
+          userMessage: input.message,
+          turnId,
+          onDelta: (delta) => send('delta', { delta }),
+          signal: controller.signal
+        }));
+      } catch (firstError) {
+        const isTransient = !(firstError instanceof TurnExecutionInProgressError) &&
+          !(firstError instanceof AgentManagerTurnBudgetExceededError) &&
+          !controller.signal.aborted;
+        if (isTransient) {
+          app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(firstError) }, 'chat generation transient failure, retrying once');
+          // brief backoff before retry
+          await new Promise<void>((resolve) => setTimeout(resolve, 350));
+          payload = await runWithOpenAIUsageContext({
+            sessionId: params.id,
+            turnId,
+            pageUrl: session.pageUrl,
+            userAgent: session.userAgent
+          }, () => assistant.generateAnswer({
+            sessionId: params.id,
+            userMessage: input.message,
+            turnId,
+            onDelta: (delta) => send('delta', { delta }),
+            signal: controller.signal
+          }));
+        } else {
+          throw firstError;
+        }
+      }
       stopStatusTimer?.();
       stopStatusTimer = null;
       send('done', buildPublicCustomerResponse(payload));

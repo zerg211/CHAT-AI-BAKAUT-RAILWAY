@@ -8316,8 +8316,38 @@ export class AgentManagerOrchestrator {
               };
               loadFit = filterGeneratorProductsByLoadProfile(search.products, loadRequirementKw);
             }
-            const products = loadFit.products;
-            const warnings = [...search.warnings, ...loadFit.warnings];
+            let products = loadFit.products;
+            let warnings = [...search.warnings, ...loadFit.warnings];
+            // Triple-filter fallback: if power+electro+AVR all strict but nothing found, broaden by power and let filter handle electro/AVR from enriched specs
+            const hasElectroStrict = input.intent.selectionPolicy?.requirements.some(r => r.kind === 'electric_start_required' && r.role === 'hard_constraint' && r.strictness === 'strict');
+            const hasAvrStrict = input.intent.selectionPolicy?.requirements.some(r => r.kind === 'auto_start_required' && r.role === 'hard_constraint' && r.strictness === 'strict');
+            const needsTripleRetry = loadRequirementKw !== undefined && hasElectroStrict && hasAvrStrict && !products.length && !loadAwareRetry;
+            if (needsTripleRetry) {
+              const broadQuery = `генератор номинальная мощность не менее ${loadRequirementKw} кВт`;
+              const retrySearch2 = await this.searchCatalogProducts({
+                query: broadQuery,
+                limit: Math.max(limit, 12),
+                signal: toolSignal,
+                userMessage: input.userMessage,
+                semanticContext: [semanticQuery, broadQuery, input.userMessage, request.rationale].join('\n'),
+                productIntent,
+                powerSource: resolvedToolPowerSource(request, input.intent),
+                embeddingQuery: broadQuery,
+                budgetMax,
+                intent: input.intent,
+                toolResults,
+                allowPrimaryExpansion: false
+              });
+              const merged2 = [...new Map([...search.products, ...retrySearch2.products].map(p => [p.id, p])).values()];
+              search = {
+                ...retrySearch2,
+                products: merged2,
+                warnings: uniqueStrings([...search.warnings, ...retrySearch2.warnings, 'catalog_search_retried_with_power_broad_for_electro_avr'])
+              };
+              loadFit = filterGeneratorProductsByLoadProfile(search.products, loadRequirementKw);
+              products = loadFit.products;
+              warnings = [...search.warnings, ...loadFit.warnings];
+            }
             const catalogSearchGrounded = products.length > 0 || search.candidateTiers.length > 0;
             products.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
