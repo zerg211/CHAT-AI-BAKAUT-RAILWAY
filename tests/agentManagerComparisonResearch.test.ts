@@ -32,9 +32,9 @@ function message(content: string, role: Message['role'] = 'user'): Message {
 }
 
 function session(): ConversationSession {
-  const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
-  return {
-    id: sessionId,
+    const now = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // fresh: inside 90d fact TTL
+    return {
+      id: sessionId,
     status: 'active',
     conversationNumber: 1,
     title: 'Dialog #1',
@@ -46,7 +46,7 @@ function session(): ConversationSession {
 }
 
 function turn(): ConversationTurn {
-  const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
+  const now = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // fresh: inside 90d fact TTL
   return {
     id: turnId,
     sessionId,
@@ -124,7 +124,7 @@ class FakeProducts {
   }
   async upsertVerifiedProductFact(input: VerifiedProductFactInput) {
     this.savedVerifiedFacts.push(input);
-    const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
+    const now = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // fresh: inside 90d fact TTL
     const saved: VerifiedProductFact = {
       id: `verified-${this.savedVerifiedFacts.length}`,
       productId: input.productId ?? null,
@@ -2086,7 +2086,7 @@ describe('AgentManager comparison research flow', () => {
 
   it('uses reusable exact web facts before spending another web research call', async () => {
     researchProductComparisonFacts.mockClear();
-    const now = new Date('2026-05-19T12:00:00.000Z').toISOString();
+    const now = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // fresh: inside 90d fact TTL
     class MemoryProducts extends FakeProducts {
       constructor() {
         super();

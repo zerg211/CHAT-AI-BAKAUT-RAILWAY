@@ -202,7 +202,9 @@ export const agentManagerToolRegistry = {
     timeoutMs: 30_000,
     maxResultItems: 32,
     maxResultBytes: 300_000,
-    maxAttempts: 1
+    // 2 attempts: a single network timeout must not end the search while the turn
+    // budget still fits a shortened retry (AGENTS.md: exhaust sources before giving up).
+    maxAttempts: 2
   },
   'lead.capture': {
     argsSchema: LeadCaptureToolArgsSchema,

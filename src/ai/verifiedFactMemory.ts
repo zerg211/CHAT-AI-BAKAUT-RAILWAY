@@ -70,7 +70,7 @@ function isHttpSourceUrl(value: string | null | undefined) {
   }
 }
 
-function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
+export function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
   if (fact.status !== 'active') return false;
   if (fact.confidence !== 'high' && fact.confidence !== 'medium') return false;
   if (fact.sourceType === 'web' && !isHttpSourceUrl(fact.sourceUrl)) return false;
@@ -134,7 +134,10 @@ export function verifiedFactsCoverRequest(input: {
   });
 }
 
-export function verifiedFactsResearchResult(facts: VerifiedProductFact[]): ProductComparisonResearchResult {
+export function verifiedFactsResearchResult(
+  facts: VerifiedProductFact[],
+  options: { attributesCovered?: boolean } = {}
+): ProductComparisonResearchResult {
   const researchFacts: ProductComparisonResearchFact[] = facts.map((fact) => ({
     productName: fact.productName,
     attribute: fact.attribute,
@@ -145,6 +148,7 @@ export function verifiedFactsResearchResult(facts: VerifiedProductFact[]): Produ
     sourceUrl: fact.sourceUrl ?? undefined,
     sourceTitle: fact.sourceTitle ?? undefined
   }));
+  const attributesCovered = options.attributesCovered !== false;
   return {
     usedWebSearch: false,
     searchDisposition: 'memory_hit',
@@ -163,8 +167,12 @@ export function verifiedFactsResearchResult(facts: VerifiedProductFact[]): Produ
         sourceTitle: fact.sourceTitle ?? undefined
       }))
     },
-    summaryForAnswer: 'Verified local product fact memory found source-backed exact-model facts. Use payload.facts and answer in simple buyer-facing words without copying raw attribute labels.',
-    warnings: ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory']
+    summaryForAnswer: attributesCovered
+      ? 'Verified local product fact memory found source-backed exact-model facts. Use payload.facts and answer in simple buyer-facing words without copying raw attribute labels.'
+      : 'Verified local product fact memory has source-backed facts for this model, but they may not cover every requested attribute. Answer only what payload.facts confirm; for any requested attribute absent from the facts, say honestly that it is not confirmed yet instead of guessing.',
+    warnings: attributesCovered
+      ? ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory']
+      : ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory', 'verified_fact_memory_partial_attribute_coverage']
   };
 }
 

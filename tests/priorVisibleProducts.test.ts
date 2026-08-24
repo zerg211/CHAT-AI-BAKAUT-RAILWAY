@@ -9,8 +9,8 @@ function message(role: Message['role'], content: string, productCards?: Array<Re
     role,
     content,
     metadata: productCards ? { productCards } : {},
-    createdAt: new Date('2026-08-24T12:00:00.000Z')
-  } as Message;
+    createdAt: new Date('2026-08-24T12:00:00.000Z').toISOString()
+  } as unknown as Message;
 }
 
 describe('priorVisibleProductsFromHistory', () => {

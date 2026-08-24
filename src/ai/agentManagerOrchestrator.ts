@@ -139,6 +139,7 @@ import {
 import {
   matchingVerifiedFactsForRequest,
   researchFactConfidenceNumber,
+  reusableVerifiedFact,
   verifiedFactsCoverRequest,
   verifiedFactsResearchResult
 } from './verifiedFactMemory.js';
@@ -6438,31 +6439,28 @@ export class AgentManagerOrchestrator {
       targetProductNames: input.targetProductNames,
       comparisonAttributes: input.comparisonAttributes
     });
-    const requiredProductNames = input.targetProductNames.length
-      ? input.targetProductNames
-      : input.selectedProducts.length > 1
-        ? input.selectedProducts.map((product) => product.name)
-        : [];
-    const coversRequiredProducts = requiredProductNames.length
-      ? requiredProductNames.every((productName) =>
-          verifiedFactsCoverRequest({
-            facts: matchingFacts.filter((fact) => textMatchesTargetName(fact.productName, productName)),
-            comparisonAttributes: input.comparisonAttributes
-          })
-        )
-      : true;
-    if (!coversRequiredProducts) return null;
-    if (!verifiedFactsCoverRequest({ facts: matchingFacts, comparisonAttributes: input.comparisonAttributes })) return null;
+    // Token matching cannot decide whether a fact "answers" the buyer's question
+    // ("стартер" vs "электростартер", "тип запуска" vs "electric start" — both missed).
+    // Attribute coverage is a semantic judgment: hand ALL checked facts for the target
+    // model to the writer with a partial-coverage marker; the writer answers only what
+    // the facts confirm and names the rest as unconfirmed.
+    const reusableTargetFacts = exactBoundFacts.filter((fact) =>
+      reusableVerifiedFact(fact, new Date())
+    );
+    if (!reusableTargetFacts.length) return null;
+    const attributesCovered = input.comparisonAttributes.length > 0 &&
+      verifiedFactsCoverRequest({ facts: matchingFacts, comparisonAttributes: input.comparisonAttributes });
     if (typeof repo.markVerifiedProductFactsUsed === 'function') {
-      await repo.markVerifiedProductFactsUsed(matchingFacts.map((fact) => fact.id))
+      await repo.markVerifiedProductFactsUsed(reusableTargetFacts.map((fact) => fact.id))
         .catch((error) => console.warn('Verified product fact usage write failed', safeError(error)));
     }
     await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_used', {
-      factIds: matchingFacts.map((fact) => fact.id),
-      productNames: uniqueStrings(matchingFacts.map((fact) => fact.productName)),
-      attributes: uniqueStrings(matchingFacts.map((fact) => fact.attribute))
+      factIds: reusableTargetFacts.map((fact) => fact.id),
+      productNames: uniqueStrings(reusableTargetFacts.map((fact) => fact.productName)),
+      attributes: uniqueStrings(reusableTargetFacts.map((fact) => fact.attribute)),
+      attributesCovered
     });
-    return verifiedFactsResearchResult(matchingFacts);
+    return verifiedFactsResearchResult(reusableTargetFacts, { attributesCovered });
   }
 
   private async persistVerifiedResearchFacts(input: {
@@ -8354,13 +8352,13 @@ export class AgentManagerOrchestrator {
         });
       }
       const startedAt = Date.now();
-      const effectiveTimeoutMs = effectiveAgentToolTimeoutMs({
+      let effectiveTimeoutMs = effectiveAgentToolTimeoutMs({
         tool: request.tool,
         configuredTimeoutMs: definition.timeoutMs,
         remainingWallTimeMs: input.budget.remainingWallTimeMs()
       });
-      const timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
-      const toolSignal = input.signal
+      let timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
+      let toolSignal = input.signal
         ? AbortSignal.any([input.signal, timeoutSignal])
         : timeoutSignal;
       let result: ToolResult | undefined;
@@ -9131,6 +9129,27 @@ export class AgentManagerOrchestrator {
             !input.signal?.aborted;
           if (retryable) continue;
           const timedOut = timeoutSignal.aborted && !input.signal?.aborted;
+          // Web research must exhaust the turn budget before giving up (AGENTS.md):
+          // a single timeout is often a network flap. If the remaining wall time
+          // still fits one shortened attempt plus the writer reserve, retry once.
+          const webTimeoutRetryable = timedOut &&
+            request.tool === 'web.researchProductFacts' &&
+            attempt < definition.maxAttempts;
+          const retryBudgetMs = input.budget.remainingWallTimeMs() - WEB_ANSWER_RESERVE_MS - 1_000;
+          if (webTimeoutRetryable && retryBudgetMs >= 12_000) {
+            effectiveTimeoutMs = Math.min(effectiveTimeoutMs, retryBudgetMs);
+            timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
+            toolSignal = input.signal
+              ? AbortSignal.any([input.signal, timeoutSignal])
+              : timeoutSignal;
+            await this.trace(input.session.id, input.turnId, 'recovery', 'web_research_retry_after_timeout', {
+              requestId: request.id,
+              attempt,
+              retryTimeoutMs: effectiveTimeoutMs,
+              remainingTurnMs: input.budget.remainingWallTimeMs()
+            });
+            continue;
+          }
           const webFailurePayload = request.tool === 'web.researchProductFacts'
             ? {
                 usedWebSearch: false,
