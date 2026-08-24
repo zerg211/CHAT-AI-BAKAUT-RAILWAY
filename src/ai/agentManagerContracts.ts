@@ -566,6 +566,7 @@ export const AnswerContractSchema = z.object({
   }).strict()).default([]),
   toolResultIds: z.array(nonEmptyString).default([]),
   selectedProductIds: z.array(nonEmptyString).max(8).optional(),
+  selectionRationale: nonEmptyString.optional(),
   leadAction: z.enum(['none', 'offer_form', 'capture_contact', 'confirm_contact_received']).default('none'),
   riskFlags: z.array(z.string()).default([]),
   selectionReadiness: AnswerSelectionReadinessSchema.optional()

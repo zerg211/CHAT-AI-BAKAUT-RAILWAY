@@ -30,10 +30,20 @@ describe('risk review guards', () => {
     }
   });
 
-  it('recognizes unsupported factual claim risk flags', () => {
-    for (const flag of ['unsupported', 'unverified', 'no_evidence', 'hallucination']) {
+  it('blocks only exact unsupported-claim flags that assert unconfirmed facts as confirmed', () => {
+    for (const flag of [
+      'unsupported_claim',
+      'unverified_claim_presented_as_confirmed',
+      'no_evidence_claim',
+      'hallucination_risk'
+    ]) {
       expect(hasUnsupportedClaimRisk([flag])).toBe(true);
     }
+  });
+
+  it('does not block handled-gap flags that keep claims preliminary', () => {
+    expect(hasUnsupportedClaimRisk(['web_fact_unverified_kept_preliminary'])).toBe(false);
+    expect(hasUnsupportedClaimRisk(['unverified_attribute_marked_caveat'])).toBe(false);
   });
 
   it('does not flag unrelated risk labels', () => {

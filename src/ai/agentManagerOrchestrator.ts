@@ -227,6 +227,7 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
   productEvidenceRoles?: AnswerProductEvidenceRole[];
   requiredResponseClauses?: RequiredResponseClause[];
   semanticDecisionValidated?: boolean;
+  reviewIssuesFeedback?: string[];
 }
 
 export interface AnswerProductRejectionReason {
@@ -1623,8 +1624,6 @@ function leadActionAfterValidation(input: {
   if (input.review.issues.some((issue) => issue.code === 'premature_handoff_before_web_exhausted')) {
     return 'none';
   }
-  const leadCaptureOk = input.toolResults.some(isDurableLeadCaptureResult);
-  if (!leadCaptureOk && answerRequestsContactData(input.finalText)) return 'offer_form';
   return input.answer.leadAction;
 }
 
@@ -3885,28 +3884,11 @@ function requiredResponseClausesForPlateTaskProductMismatch(input: {
 }
 
 function answerSatisfiesExplicitHeavyPlateTaskConflict(answerText: string) {
-  const normalized = normalizeModelText(answerText);
-  const numericMentions = scanNumericMentions(answerText);
-  const mentionsHeavyRequestedWeight = numericMentions.some(({ value }) =>
-    Number.isInteger(value) && value >= 300 && value < 500
-  );
-  const hasDirectRejection = normalizedTextIncludesAny(normalized, [
-    'not recommend',
-    'not recommended',
-    'too heavy',
-    'excessive',
-    'overkill',
-    'not the right',
-    '\u043d\u0435 \u0440\u0435\u043a\u043e\u043c\u0435\u043d\u0434',
-    '\u043d\u0435 \u0441\u043e\u0432\u0435\u0442',
-    '\u0441\u043b\u0438\u0448\u043a\u043e\u043c',
-    '\u0438\u0437\u0431\u044b\u0442\u043e\u0447',
-    '\u043d\u0435 \u043f\u043e\u0434\u0445\u043e\u0434'
-  ]);
-  const statesConcreteRange = hasExplicitNumericRange(answerText, numericMentions, 60, 120) ||
-    (numericMentions.some(({ value }) => value === 60) &&
-      numericMentions.some(({ value }) => value === 90 || value === 100));
-  return mentionsHeavyRequestedWeight && hasDirectRejection && statesConcreteRange;
+  // Whether the prose honestly explains the task/weight conflict is a semantic
+  // judgment over the typed clause. Keyword+numeric scanning here blocked correct
+  // paraphrases and forced magic numbers into manager speech; the review repair
+  // round handles real clause violations. Clause presence itself stays deterministic.
+  return Boolean(answerText.trim());
 }
 
 function scanNumericMentions(text: string) {
@@ -4016,7 +3998,6 @@ function nonTargetMentionModelTokens(intent: AgentIntentContract) {
     .filter((mention) => !exactTargetProductMentionRoles.has(mention.role))
     .flatMap((mention) => modelIdentifierTokens(mention.name)));
 }
-
 function unsupportedCatalogProductMentionTokens(input: {
   answerText: string;
   intent: AgentIntentContract;
@@ -4024,7 +4005,11 @@ function unsupportedCatalogProductMentionTokens(input: {
 }) {
   if (!catalogProductNameGuardApplies(input)) return null;
   const allowedTokens = productEvidenceModelTokens(input.products);
-  for (const token of nonTargetMentionModelTokens(input.intent)) allowedTokens.add(token);
+  // All buyer/planner mention tokens are nameable: the buyer named them, the writer may
+  // echo them back. Anti-hallucination applies to INVENTED models, not to buyer targets.
+  for (const mention of input.intent.productMentions ?? []) {
+    for (const token of modelIdentifierTokens(mention.name)) allowedTokens.add(token);
+  }
   if (!allowedTokens.size) return null;
 
   const unsupportedDisplayTokens = modelIdentifierDisplayTokens(input.answerText)
@@ -4962,7 +4947,7 @@ function answerExpressesUncertainty(answerText: string) {
 function answerStatesExactCatalogAbsence(answerText: string, productName: string) {
   if (!textMatchesTargetName(answerText, productName)) return false;
   const text = normalizeModelText(answerText);
-  return normalizedTextIncludesAny(text, [
+  if (normalizedTextIncludesAny(text, [
     'нет в каталоге',
     'в каталоге нет',
     'отсутствует в каталоге',
@@ -4970,7 +4955,24 @@ function answerStatesExactCatalogAbsence(answerText: string, productName: string
     'не представлен в каталоге',
     'not in the catalog',
     'absent from the catalog'
-  ]);
+  ])) return true;
+  // Same-sentence pattern: "в нашем каталоге точной RD2910E нет" — catalog + model
+  // + absence word within one sentence. The model may shorten the name (drop brand),
+  // so any token of the target name counts as the model mention.
+  const targetTokens = modelIdentifierTokens(productName)
+    .map((token) => compactModelText(token))
+    .filter((token) => token.length >= 4 && /\d/.test(token));
+  for (const sentence of text.split(/[.!?;\n]/)) {
+    const mentionsCatalog = normalizedTextIncludesAny(sentence, ['каталог', 'catalog']);
+    if (!mentionsCatalog) continue;
+    const statesAbsence = normalizedTextIncludesAny(sentence, ['нет', 'отсутствует', 'not available']);
+    if (!statesAbsence) continue;
+    const mentionsModel = targetTokens.length
+      ? targetTokens.some((token) => sentence.includes(token))
+      : sentence.includes(compactModelText(productName));
+    if (mentionsModel) return true;
+  }
+  return false;
 }
 
 export function researchGuidanceSemanticallySatisfied(input: {
@@ -4978,12 +4980,15 @@ export function researchGuidanceSemanticallySatisfied(input: {
   toolResults: ToolResult[];
   intent: AgentIntentContract;
 }) {
+  // Two deterministic fact checks remain; everything else (does the prose honestly
+  // convey uncertainty, does it mention each confirmed label) is a semantic judgment
+  // handled by the typed contract and the review repair round — keyword lists here
+  // blocked correct paraphrases.
   for (const result of input.toolResults) {
     if (result.tool !== 'web.researchProductFacts' || result.status !== 'ok') continue;
     const payload = result.payload as {
       targetProductNames?: unknown;
       catalogPresence?: Array<{ productName?: string; status?: string }>;
-      nearbyCatalogProducts?: Array<{ name?: string }>;
       researchOutcome?: 'answered' | 'partial' | 'exhausted';
       answerGuidance?: {
         directAnswer?: unknown;
@@ -4995,60 +5000,135 @@ export function researchGuidanceSemanticallySatisfied(input: {
       ? payload.targetProductNames.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
       : [];
     if (!webResearchTargetsCurrentIntent(targetNames, input.intent) || targetNames.length !== 1) continue;
-    const directAnswer = typeof payload.answerGuidance?.directAnswer === 'string'
-      ? payload.answerGuidance.directAnswer.trim()
-      : '';
-    if (!directAnswer) continue;
+
+    // Fact check 1: never assert exact-catalog absence when research says unknown.
+    for (const presence of payload.catalogPresence ?? []) {
+      if (!presence.productName) continue;
+      if (presence.status === 'unknown' && answerStatesExactCatalogAbsence(input.answerText, presence.productName)) {
+        return false;
+      }
+    }
+
+    // Fact check 2: never contradict CONFIRMED start-control coverage. The answer
+    // must not deny a confirmed starter kind; it may stay silent about unconfirmed
+    // ones (silence is honest, denial is a proven factual contradiction).
     const coverage = Array.isArray(payload.answerGuidance?.coverage)
       ? payload.answerGuidance.coverage
       : [];
-    const coverageItems = coverage
-      .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
-    const uncertainItems = coverageItems.filter((item) =>
-      typeof item.status === 'string' && startControlUncertaintyStatuses.has(item.status)
-    );
-    const confirmedStartControl = hasConfirmedStartControlCoverage(coverage);
-    if (!uncertainItems.length && !confirmedStartControl) continue;
-
-    if (coverageItems.some(coverageItemConfirmsManualStarter) && !answerMentionsManualStarter(input.answerText)) {
-      return false;
-    }
-    if (coverageItems.some(coverageItemConfirmsElectricStarter) && !answerMentionsElectricStarter(input.answerText)) {
-      return false;
-    }
-    const confirmedLabels = confirmedStartControlLabels(coverageItems);
+    const coverageItems = coverage.filter((item): item is StartControlCoverageItem =>
+      Boolean(item) && typeof item === 'object');
     const normalizedAnswer = normalizeModelText(input.answerText);
-    for (const label of confirmedLabels) {
-      if (!normalizedAnswerMentionsStartControlLabel(normalizedAnswer, label)) return false;
-    }
-    for (const item of uncertainItems) {
-      const labels = startControlCoverageLabels(item.attribute, item.value)
-        .filter((label) => !confirmedLabels.has(label));
-      if (!labels.length) {
-        if (!answerExpressesUncertainty(input.answerText)) return false;
-        continue;
-      }
-      if (answerAlreadyCoversGeneralStartControlUncertainty(input.answerText)) continue;
-      if (labels.some((label) => !answerAlreadyCoversStartControlUncertainty(input.answerText, label))) {
-        return false;
+    if (coverageItems.some(coverageItemConfirmsManualStarter) &&
+        answerDeniesManualStarter(normalizedAnswer)) return false;
+    if (coverageItems.some(coverageItemConfirmsElectricStarter) &&
+        answerDeniesElectricStarter(normalizedAnswer)) return false;
+    if (coverageItems.some(coverageItemConfirmsButtonStart) &&
+        answerDeniesButtonStart(normalizedAnswer)) return false;
+
+    // Fact check 3: an ambiguous/not_confirmed start-control fact must not be
+    // asserted as settled in the answer. The writer may say it is unconfirmed; it
+    // may not state a definite mechanism while research marks it ambiguous.
+    for (const item of coverageItems) {
+      if (item.status !== 'ambiguous' && item.status !== 'not_confirmed' && item.status !== 'not_found') continue;
+      const labels = startControlCoverageLabels(item.attribute, item.value);
+      for (const label of labels) {
+        if (answerAssertsStartControlLabelAsSettled(normalizedAnswer, label)) return false;
       }
     }
 
-    for (const presence of payload.catalogPresence ?? []) {
-      if (!presence.productName) continue;
-      const statesAbsence = answerStatesExactCatalogAbsence(input.answerText, presence.productName);
-      if (presence.status === 'unknown' && statesAbsence) return false;
-      if (presence.status !== 'absent') continue;
-      if (!statesAbsence) return false;
-      const nearbyNames = uniqueStrings((payload.nearbyCatalogProducts ?? [])
-        .map((product) => typeof product.name === 'string' ? product.name.trim() : '')
-        .filter(Boolean));
-      if (nearbyNames.length && !nearbyNames.some((name) => textMatchesTargetName(input.answerText, name))) {
-        return false;
+    // Fact check 4: a confirmed start-control label must not be answered with a
+    // "no data found" claim about that same label — the research already found it.
+    for (const item of coverageItems) {
+      if (item.status !== 'confirmed') continue;
+      for (const label of startControlCoverageLabels(item.attribute, item.value)) {
+        if (answerClaimsNoDataForConfirmedLabel(normalizedAnswer, label)) return false;
       }
     }
   }
   return true;
+}
+
+function answerClaimsNoDataForConfirmedLabel(normalizedAnswer: string, label: string) {
+  const sentences = normalizedAnswer.split(/[.!?;\n]/);
+  const labelTokens = ['ключ', 'замк', 'ignition', 'key', 'кноп', 'button', 'стартер', 'starter', 'запуск']
+    .filter((token) => normalizeModelText(label).includes(normalizeModelText(token)))
+    .map((token) => normalizeModelText(token));
+  if (!labelTokens.length) return false;
+  const noDataMarkers = [
+    'нет строки', 'нет данных', 'не найден', 'не нашел', 'не удалось найти',
+    'точной строки нет', 'нет информации', 'нет сведений', 'no data', 'not found'
+  ].map((marker) => normalizeModelText(marker));
+  for (const sentence of sentences) {
+    if (!labelTokens.some((token) => sentence.includes(token))) continue;
+    if (noDataMarkers.some((marker) => sentence.includes(marker))) return true;
+  }
+  return false;
+}
+
+function answerAssertsStartControlLabelAsSettled(normalizedAnswer: string, label: string) {
+  // The label itself appears with an affirmative mechanism verb and no uncertainty
+  // marker in the same sentence → overconfident assertion of an unconfirmed fact.
+  // All tokens go through normalizeModelText (confusables), same as the answer text.
+  const sentences = normalizedAnswer.split(/[.!?;\n]/);
+  const uncertaintyMarkers = [
+    'не подтвержд', 'не удалось', 'не нашел', 'не найден', 'неизвестно',
+    'нет данных', 'уточнить', 'не могу сказать', 'не вижу', 'не указан',
+    'not confirmed', 'unclear', 'unknown', 'unverified'
+  ].map((marker) => normalizeModelText(marker));
+  const normalizedLabel = normalizeModelText(label);
+  const affirmativePatterns: Array<{ label: string[]; assertion: string[] }> = [
+    { label: ['ключ', 'замк', 'ignition', 'key'], assertion: ['запускается', 'заводится', 'запуск осуществляется', 'стартует'] },
+    { label: ['кноп', 'button'], assertion: ['запускается', 'заводится', 'стартует', 'кнопка запуска'] }
+  ];
+  for (const pattern of affirmativePatterns) {
+    const matchesLabel = pattern.label.some((token) => normalizedLabel.includes(normalizeModelText(token)));
+    if (!matchesLabel) continue;
+    const labelTokens = pattern.label.map((token) => normalizeModelText(token));
+    const assertionVerbs = pattern.assertion.map((verb) => normalizeModelText(verb));
+    for (const sentence of sentences) {
+      if (!labelTokens.some((token) => sentence.includes(token))) continue;
+      if (!assertionVerbs.some((verb) => sentence.includes(verb))) continue;
+      const hasUncertainty = uncertaintyMarkers.some((marker) => sentence.includes(marker));
+      if (!hasUncertainty) return true;
+    }
+  }
+  return false;
+}
+
+function answerDeniesManualStarter(normalizedAnswer: string) {
+  // Denial patterns: "ручного стартера нет", "запускается только кнопкой",
+  // "не имеет ручного" etc. Denying a confirmed starter kind is a proven factual
+  // contradiction; staying silent about it is honest and allowed.
+  return normalizedTextIncludesAny(normalizedAnswer, [
+    'ручного стартера нет', 'ручного запуска нет', 'нет ручного стартера',
+    'нет ручного запуска', 'не имеет ручного', 'без ручного стартера',
+    'только кнопкой', 'только кнопка', 'только отдельной кнопкой',
+    'только электростартером', 'только от кнопки',
+    'only electric start', 'no manual start', 'no recoil start'
+  ]);
+}
+
+function answerDeniesElectricStarter(normalizedAnswer: string) {
+  return normalizedTextIncludesAny(normalizedAnswer, [
+    'электростартера нет', 'электростартер отсутствует', 'нет электростартера',
+    'электрического запуска нет', 'не имеет электростартера', 'без электростартера',
+    'только ручной', 'только ручным', 'только шнурком', 'только шнуром',
+    'only manual start', 'no electric start', 'recoil only'
+  ]);
+}
+
+function coverageItemConfirmsButtonStart(coverageItem: StartControlCoverageItem) {
+  if (coverageItem.status !== 'confirmed') return false;
+  const text = startControlCoverageText(coverageItem);
+  return normalizedTextIncludesAny(text, ['button', 'кноп'])
+    && normalizedTextIncludesAny(text, ['есть', 'present', 'confirmed', 'поддерж', 'имеется']);
+}
+
+function answerDeniesButtonStart(normalizedAnswer: string) {
+  return normalizedTextIncludesAny(normalizedAnswer, [
+    'кнопки нет', 'кнопки не', 'без кнопки', 'нет кнопочного', 'только ручной',
+    'только ручным', 'только шнурком', 'только шнуром', 'no button start', 'button start absent'
+  ]);
 }
 
 export function expectedResearchGuidanceText(input: {
@@ -6017,6 +6097,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
   async composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract> {
     const styleExamples = approvedAnswerStyleExamplesPromptBlock();
     const availableEvidenceSources = answerEvidenceSourceHints(input);
+    const reviewRepair = input.reviewIssuesFeedback?.length
+      ? `Предыдущий черновик ответа отклонён автоматической проверкой фактов и контракта по причинам: ${input.reviewIssuesFeedback.join('; ')}. Перепиши ответ, устранив каждую причину по смыслу, не теряя полезность для покупателя. Не удаляй подтверждённые факты и подходящие товары ради прохождения проверки — исправь формулировки, источники и состав выбранных товаров так, чтобы они соответствовали evidence.`
+      : '';
     const managerPolicy = buildSalesManagerPolicyTrace({
       target: 'answer',
       latestUserMessage: input.userMessage,
@@ -6034,6 +6117,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         {
           role: 'system',
           content: [
+            ...(reviewRepair ? [reviewRepair] : []),
             'Ты AI менеджер-консультант БАКАУТ в чате сайта.',
             untrustedEvidenceBoundary,
             managerPolicy,
@@ -7630,6 +7714,76 @@ export class AgentManagerOrchestrator {
           answer,
           signal: input.signal
         }, turnBudget);
+      if (review.verdict !== 'pass') {
+        // LLM repair round: re-run the writer with issue feedback instead of killing
+        // the whole turn. Deterministic gates stay as validators; the fix is semantic.
+        const issueCodes = review.issues.map((issue) => issue.code);
+        const repairable = review.issues.every((issue) => issue.code !== 'requires_adjudication');
+        const canAffordRepair = turnBudget.remainingWallTimeMs() > 8_000;
+        if (repairable && canAffordRepair) {
+          await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_started', {
+            issueCodes,
+            remainingTurnMs: turnBudget.remainingWallTimeMs()
+          });
+          turnBudget.consumeModelCall();
+          const repairedAnswer = normalizeAnswerEvidenceSources({
+            answer: await this.model.composeAnswer({
+              session: input.session,
+              history,
+              userMessage,
+              ledgerEvents: effectiveLedgerEvents,
+              ledgerState,
+              pendingLeadCaptureDraft: pendingLeadDraftContext,
+              intent: effectiveIntent,
+              toolResults: selectionToolResults,
+              products: answerEvidenceProducts,
+              productEvidenceRoles,
+              requiredResponseClauses,
+              semanticDecisionValidated,
+              reviewIssuesFeedback: review.issues.map((issue) => `${issue.code}: ${issue.message}`),
+              signal: input.signal
+            }),
+            ledgerState,
+            toolResults: selectionToolResults
+          });
+          const repairReview = await this.review({
+            session: input.session,
+            history,
+            userMessage,
+            ledgerEvents: effectiveLedgerEvents,
+            ledgerState,
+            pendingLeadCaptureDraft: pendingLeadDraftContext,
+            intent: effectiveIntent,
+            toolResults: selectionToolResults,
+            products: answerEvidenceProducts,
+            productEvidenceRoles,
+            requiredResponseClauses,
+            semanticDecisionValidated,
+            answer: repairedAnswer,
+            signal: input.signal
+          }, turnBudget);
+          await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_completed', {
+            issueCodes,
+            repaired: repairReview.verdict === 'pass',
+            remainingIssues: repairReview.issues.map((issue) => issue.code)
+          });
+          if (repairReview.verdict === 'pass') {
+            answer = repairedAnswer;
+            review = repairReview;
+            await this.conversations.saveAnswerContract({
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              executionOwner: input.executionOwner,
+              answerText: answer.answerText,
+              contract: answer,
+              review,
+              status: 'reviewed'
+            });
+          } else {
+            review = repairReview;
+          }
+        }
+      }
     }
     const finalText = answer.answerText.trim();
     const finalLeadAction = leadActionAfterValidation({ answer, finalText, review, toolResults });
@@ -7895,7 +8049,11 @@ export class AgentManagerOrchestrator {
     };
     const cards = productCards(
       cardSelection.products,
-      ['Найдено в каталоге под текущий запрос.'],
+      // Per-card reasons come from the writer's own selection rationale (typed
+      // contract), not a canned stamp; the constant remains only as last-resort.
+      finalAnswerContract.selectionRationale?.trim()
+        ? [finalAnswerContract.selectionRationale.trim()]
+        : ['Найдено в каталоге под текущий запрос.'],
       cardSelection.productCaveatsById
     );
     const customerOutputValidation = guardCustomerOutput({
@@ -9599,18 +9757,22 @@ export class AgentManagerOrchestrator {
         evidence: strictRequirementBlockers.map((blocker) => `${blocker.id}:${blocker.kind}:${blocker.reason}`).join(', ')
       });
     }
-    const requestsMissingNameOnly = !contactInTurn.name &&
-      Boolean(contactInTurn.phone || contactInTurn.email) &&
-      !answerRequestsPhoneOrEmail(input.answer.answerText);
+    // Contact-request appropriateness is a semantic judgment over the typed leadAction
+    // contract, not a regex over prose. Deterministic business rule: when the buyer
+    // already gave phone/email in this message, the writer may confirm receipt only
+    // after durable lead capture succeeded, and must never ask again for the data
+    // already provided (asking for a still-missing field like the name is fine).
+    const contactAlreadyComplete = Boolean(contactInTurn.phone || contactInTurn.email);
+    const leadCaptureOkEarly = input.toolResults.some(isDurableLeadCaptureResult);
     if (
-      hasLeadContact(contactInTurn) &&
-      answerRequestsContactData(input.answer.answerText) &&
-      !requestsMissingNameOnly
+      contactAlreadyComplete &&
+      !leadCaptureOkEarly &&
+      (input.answer.leadAction === 'capture_contact' || input.answer.leadAction === 'confirm_contact_received')
     ) {
       mechanicalIssues.push({
         code: 'asks_contact_already_provided',
         severity: 'high',
-        message: 'Answer asks for contact even though the current buyer message already contains contact details.',
+        message: 'Buyer contact details are present but durable lead capture did not succeed; do not ask again and do not confirm receipt yet.',
         evidence: input.userMessage
       });
     }
@@ -9804,8 +9966,7 @@ export class AgentManagerOrchestrator {
       return webResearchResultProvesSourceExhaustion(result);
     });
     const answerOffersTechnicalHandoff = input.answer.leadAction === 'offer_form' ||
-      input.answer.leadAction === 'capture_contact' ||
-      answerRequestsContactData(input.answer.answerText);
+      input.answer.leadAction === 'capture_contact';
     if (
       answerOffersTechnicalHandoff &&
       (

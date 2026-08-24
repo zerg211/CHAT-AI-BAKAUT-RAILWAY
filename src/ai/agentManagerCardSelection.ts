@@ -160,19 +160,11 @@ export function budgetMaxFromNeedState(needState: CustomerNeedState) {
   return undefined;
 }
 
-function excludedAroundSeventyBudgetMax(userMessage: string) {
-  const normalized = normalizedHintText(userMessage);
-  const excludesExpensive = hintTextContainsAny(normalized, ['без', 'не надо', 'исключ', 'дорог', 'строго без']);
-  const mentionsSeventy = hintTextContainsAny(normalized, ['70 тысяч', '70 тыс', '70000', '70 000', 'около 70']);
-  return excludesExpensive && mentionsSeventy ? 69_999 : undefined;
-}
-
 function effectiveVisibleCardBudgetMax(input: { needState: CustomerNeedState; userMessage: string }) {
-  const structuredBudget = budgetMaxFromNeedState(input.needState);
-  const excludedBudget = excludedAroundSeventyBudgetMax(input.userMessage);
-  if (structuredBudget === undefined) return excludedBudget;
-  if (excludedBudget === undefined) return structuredBudget;
-  return Math.min(structuredBudget, excludedBudget);
+  // Budget semantics come from the typed planner contract (budget_max_rub). The old
+  // "70 тысяч + exclusion words" special case was a single-dialogue crutch that
+  // misfired on paraphrases; the planner now owns this judgment.
+  return budgetMaxFromNeedState(input.needState);
 }
 
 function toolRequestSemanticText(intent: AgentIntentContract) {
@@ -549,6 +541,25 @@ const webVerifiablePreliminaryBlockerReasons = new Set([
   'unsupported_strict_requirement_kind'
 ]);
 
+// Strict kinds with a deterministic verifier path in this module. A strict
+// requirement of any other kind is an unconfirmed data gap (preliminary), not a
+// blocker — AGENTS.md: missing verification ≠ proven conflict.
+const deterministicallyVerifiableStrictKinds = new Set([
+  ...supportedStrictNumericRequirementKinds,
+  'product_type',
+  'product_class',
+  'phase',
+  generatorVoltageRequirementKind,
+  'fuel_type',
+  'power_source',
+  priceVisibilityRequirementKind,
+  'comparison_scope',
+  'quantity',
+  'material',
+  ...generatorAutoStartRequirementKinds,
+  generatorLoadDerivedRequirementKind
+]);
+
 const failedOrOpenEndedWebProofBlockerReasons = new Set([
   'typed_tool_result_missing',
   'typed_tool_result_not_found',
@@ -894,7 +905,10 @@ export function assessStrictSelectionRequirements(
 
     const genericProofs = requirementProofs.filter((proof) => proof.requirementId === requirement.id);
     if (!genericProofs.some((proof) => proof.status !== 'unverified')) {
-      addBlocker(requirement, 'unsupported_strict_requirement_kind');
+      // No deterministic verifier for this kind: that is missing confirmation, not a
+      // proven conflict. Per AGENTS.md the product stays a preliminary candidate and
+      // the writer marks the unverified attribute; do not block concrete selection.
+      continue;
     }
   }
   return { blockers, generatorNominalPowerMinKw };
@@ -954,9 +968,24 @@ export function gateStrictSelectionRequirements(
     if (
       requirement.role !== 'hard_constraint' ||
       requirement.strictness !== 'strict' ||
-      representedRequirementIds.has(requirement.id) ||
-      (!webCoveredRequirementIds.has(requirement.id) && !typedWebRequirementIds.has(requirement.id))
+      representedRequirementIds.has(requirement.id)
     ) continue;
+    // Unsupported strict kinds (no deterministic verifier exists) are unconfirmed
+    // data gaps, not blockers (AGENTS.md): surface them as needing evidence so the
+    // writer marks the caveat instead of suppressing the whole shortlist.
+    const hasDeterministicVerifier = deterministicallyVerifiableStrictKinds.has(requirement.kind);
+    const webCovered = webCoveredRequirementIds.has(requirement.id) || typedWebRequirementIds.has(requirement.id);
+    if (!hasDeterministicVerifier) {
+      preliminaryUnverified.push({
+        id: requirement.id,
+        kind: requirement.kind,
+        reason: 'unsupported_strict_requirement_kind',
+        evidence: requirement.evidence
+      });
+      representedRequirementIds.add(requirement.id);
+      continue;
+    }
+    if (!webCovered) continue;
     const candidateNeedsEvidence = products.some((product) =>
       resolvedRequirementEligibilityStatus(requirementProofsFor(
         requirementProofs,
@@ -1014,6 +1043,7 @@ function productPassesNativeConstraintOrAuthoritativeProof(input: {
   intent: AgentIntentContract;
   kinds: string[];
   nativeMatch: boolean;
+  nativeKnown?: boolean;
 }) {
   const proofs = requirementProofsFor(
     input.proofs,
@@ -1021,13 +1051,17 @@ function productPassesNativeConstraintOrAuthoritativeProof(input: {
     strictRequirementIdsForKinds(input.intent, input.kinds)
   );
   const proofStatus = proofEligibilityStatusForKinds(input);
+  const nativeKnown = input.nativeKnown ?? true;
   if (proofStatus === 'satisfied') return true;
   if (proofStatus === 'violated') return false;
+  // Tri-state per AGENTS.md: a card missing the attribute is an unconfirmed data gap,
+  // not a proven conflict — keep the candidate (writer marks the caveat). Only a
+  // natively known mismatch is a real conflict.
+  if (!nativeKnown) return true;
   if (proofs.some((proof) => proof.status === 'conflicted')) {
     return input.intent.selectionPolicy?.selectionGoal === 'preliminary_fit';
   }
-  if (input.nativeMatch) return true;
-  return input.intent.selectionPolicy?.selectionGoal === 'preliminary_fit';
+  return input.nativeMatch;
 }
 
 function productsMeetingGenericRequirementProofs(input: {
@@ -1284,6 +1318,18 @@ export function productMeetsSupportedStrictVoltageRequirement(
   return false;
 }
 
+export function productVoltageNativeKnown(product: Product, productClass: ProductSelectionClass) {
+  return isGeneratorProductClass(productClass) && generatorPhaseProfile(product) !== 'unknown';
+}
+
+export function productFuelNativeKnown(product: Product) {
+  return productPowerSource(product) !== 'unknown';
+}
+
+export function productAutoStartNativeKnown(product: Product) {
+  return generatorAutoStartProfile(product) !== 'unknown';
+}
+
 function requestedPowerRangeKw(text: string) {
   for (let index = 0; index < text.length; index += 1) {
     const left = decimalNumberAt(text, index);
@@ -1523,6 +1569,10 @@ function requiresCeramicDiamondBlade(text: string) {
 
 function diamondBladeSupportsCeramic(product: Product) {
   return windowContainsAny(productTextForMaterial(product), ceramicBladeMaterialTerms);
+}
+
+function diamondBladeMaterialKnown(product: Product) {
+  return productTextForMaterial(product).trim().length > 0;
 }
 
 export function generatorMeetsRequiredLoad(product: Product, requiredNominalKw: number) {
@@ -2064,7 +2114,8 @@ export function selectProductsForVisibleCards(input: {
         productId: product.id,
         intent: input.intent,
         kinds: [generatorVoltageRequirementKind],
-        nativeMatch: productMeetsSupportedStrictVoltageRequirement(product, input.intent, cardIntent)
+        nativeMatch: productMeetsSupportedStrictVoltageRequirement(product, input.intent, cardIntent),
+        nativeKnown: productVoltageNativeKnown(product, cardIntent)
       })
     );
     voltageFilteredCount = selected.length - voltageMatchingSelected.length;
@@ -2091,7 +2142,8 @@ export function selectProductsForVisibleCards(input: {
       productId: product.id,
       intent: input.intent,
       kinds: ['power_source'],
-      nativeMatch: productMeetsStructuredPowerSource(product, structuredPowerSource)
+      nativeMatch: productMeetsStructuredPowerSource(product, structuredPowerSource),
+      nativeKnown: productFuelNativeKnown(product)
     }));
     if (sourceMatchingSelected.length) {
       powerSourceFilteredCount = selected.length - sourceMatchingSelected.length;
@@ -2111,7 +2163,8 @@ export function selectProductsForVisibleCards(input: {
       productId: product.id,
       intent: input.intent,
       kinds: ['fuel_type', 'power_source'],
-      nativeMatch: productMeetsSupportedStrictFuelRequirement(product, input.intent, cardIntent)
+      nativeMatch: productMeetsSupportedStrictFuelRequirement(product, input.intent, cardIntent),
+      nativeKnown: productFuelNativeKnown(product)
     }));
     generatorFuelFilteredCount = selected.length - fuelMatchingSelected.length;
     selected = fuelMatchingSelected;
@@ -2139,7 +2192,10 @@ export function selectProductsForVisibleCards(input: {
       productId: product.id,
       intent: input.intent,
       kinds: ['nominal_power_min_kw', 'power_min_kw', 'nominal_power_max_kw', 'power_max_kw'],
-      nativeMatch: productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement, true)
+      nativeMatch: productMeetsGeneratorPowerCardRequirement(product, generatorPowerRequirement, true),
+      // Only a qualified nominal ACTIVE power reading (kW, not max/peak/engine/kVA)
+      // counts as natively known; otherwise the card is an unconfirmed data gap.
+      nativeKnown: qualifiedNominalActivePowerKw(product) !== undefined
     }));
     if (powerMatchingSelected.length) {
       generatorPowerFilteredCount = selected.length - powerMatchingSelected.length;
@@ -2167,7 +2223,8 @@ export function selectProductsForVisibleCards(input: {
         productId: product.id,
         intent: input.intent,
         kinds: ['phase', generatorVoltageRequirementKind],
-        nativeMatch: productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, true)
+        nativeMatch: productMeetsGeneratorPhaseRequirement(product, generatorPhaseRequirement, true),
+        nativeKnown: productVoltageNativeKnown(product, cardIntent)
       });
     });
     if (phaseMatchingSelected.length) {
@@ -2191,7 +2248,8 @@ export function selectProductsForVisibleCards(input: {
       productId: product.id,
       intent: input.intent,
       kinds: [...generatorAutoStartRequirementKinds],
-      nativeMatch: productMeetsSupportedStrictAutoStartRequirement(product, input.intent, cardIntent)
+      nativeMatch: productMeetsSupportedStrictAutoStartRequirement(product, input.intent, cardIntent),
+      nativeKnown: productAutoStartNativeKnown(product)
     }));
     generatorAutoStartFilteredCount = selected.length - autoStartMatchingSelected.length;
     selected = autoStartMatchingSelected;
@@ -2254,7 +2312,8 @@ export function selectProductsForVisibleCards(input: {
         productId: product.id,
         intent: input.intent,
         kinds: ['weight_min_kg', 'weight_max_kg'],
-        nativeMatch: nativeWeightMatches.has(product.id)
+        nativeMatch: nativeWeightMatches.has(product.id),
+        nativeKnown: extractWeightKg(product) !== undefined
       }))
       .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
     if (selectedWithinRange.length) {
@@ -2304,7 +2363,8 @@ export function selectProductsForVisibleCards(input: {
       productId: product.id,
       intent: input.intent,
       kinds: ['material'],
-      nativeMatch: diamondBladeSupportsCeramic(product)
+      nativeMatch: diamondBladeSupportsCeramic(product),
+      nativeKnown: diamondBladeMaterialKnown(product)
     }));
     if (ceramicSelected.length) {
       diamondMaterialFilteredCount = selected.length - ceramicSelected.length;
@@ -2410,9 +2470,7 @@ export function ambiguousCutterRequestNeedsMaterialClarification(text: string) {
   const normalized = text.toLocaleLowerCase('ru');
   if (!textContainsAnyFragment(normalized, ambiguousCutterTerms)) return false;
   return !textContainsAnyFragment(normalized, cutterMaterialOrWorkTerms);
-}
-
-type VisibleCardSelection = Omit<
+}type VisibleCardSelection = Omit<
   ReturnType<typeof selectProductsForVisibleCards>,
   'semanticAuthority' | 'requirementProofs' | 'productCaveatsById'
 > & {

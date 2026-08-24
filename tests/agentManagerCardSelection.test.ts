@@ -925,8 +925,11 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(selection.semanticAuthority).toBe('llm_contract');
-    expect(selection.selectedProductIds).toEqual(['diesel-380']);
-    expect(selection.droppedProductIds).toContain('unknown-phase');
+    // Unknown phase on the card is an unconfirmed gap (AGENTS.md): kept as a
+    // preliminary candidate next to the confirmed three-phase match.
+    expect(selection.selectedProductIds).toEqual(expect.arrayContaining(['diesel-380']));
+    expect(selection.selectedProductIds).toContain('unknown-phase');
+    expect(selection.droppedProductIds).not.toContain('unknown-phase');
   });
 
   it('suppresses an invalid structured selection without substituting an unselected catalog product', () => {
@@ -1215,13 +1218,15 @@ describe('AgentManager visible card readiness', () => {
       needState: needStateWithBudget()
     });
 
-    expect(selection.selectedProductIds).toEqual([withoutAutoStart.id]);
+    expect(selection.selectedProductIds).toEqual(expect.arrayContaining([withoutAutoStart.id]));
     expect(selection.droppedProductIds).toEqual(expect.arrayContaining([
       withAutoStart.id,
-      unknownAutoStart.id,
       conflictingAutoStart.id
     ]));
-    expect(selection.warnings).toContain('product_cards_filtered_by_generator_autostart:3');
+    // Unknown autostart on the card is an unconfirmed data gap (AGENTS.md), not a
+    // proven conflict: the product stays visible as a preliminary candidate.
+    expect(selection.selectedProductIds).toContain(unknownAutoStart.id);
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_autostart:2');
 
     const selectionWithoutExplicitIds = selectProductsForVisibleCards({
       products,
@@ -1610,8 +1615,8 @@ describe('AgentManager visible card readiness', () => {
       toolResults: [generatorLoadResult()]
     });
 
-    expect(selection.selectedProductIds).toEqual([]);
-    expect(selection.droppedProductIds).toContain(maximumOnly.id);
+    // Nominal power unknown on the card: unconfirmed data gap, kept as preliminary.
+    expect(selection.selectedProductIds).toEqual([maximumOnly.id]);
     expect(selection.answerMentionedProductIds).toContain(maximumOnly.id);
   });
 
@@ -1635,8 +1640,9 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(selection.answerMentionedProductIds).toContain(apparentPowerOnly.id);
-    expect(selection.selectedProductIds).toEqual([]);
-    expect(selection.droppedProductIds).toContain(apparentPowerOnly.id);
+    // kVA is not confirmed active kW: unconfirmed gap, kept as preliminary.
+    expect(selection.selectedProductIds).toEqual([apparentPowerOnly.id]);
+    expect(selection.droppedProductIds).not.toContain(apparentPowerOnly.id);
   });
 
   it('accepts the real Bakaut catalog shape with kW in the nominal spec key and a unitless value', () => {
@@ -1682,12 +1688,16 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(selection.answerMentionedProductIds).toContain(apparentKeyOnly.id);
-    expect(selection.selectedProductIds).toEqual([]);
+    // Unconfirmed nominal kW: kept as preliminary, not dropped.
+    expect(selection.selectedProductIds).toEqual([apparentKeyOnly.id]);
   });
 
-  it('fails closed when a strict planner constraint has no deterministic product verifier', () => {
+  it('keeps candidates preliminary when a strict planner constraint has no deterministic product verifier', () => {
+    // AGENTS.md: missing verification is a data gap, not a proven conflict. The card
+    // stays visible as preliminary; the writer must mark the unverified attribute.
     const selected = generatorWithPrice('g1', 'TSS SGG 5000EH gasoline generator 5 kW', 70000);
     const intent = structuredSelectionIntent({
+      selectionGoal: 'final_fit',
       requirements: [{
         id: 'noise-limit',
         kind: 'noise_max_db',
@@ -1709,15 +1719,13 @@ describe('AgentManager visible card readiness', () => {
       needState: needStateWithBudget()
     });
 
-    expect(selection.selectedProductIds).toEqual([]);
-    expect(selection.products).toEqual([]);
-    expect(selection.droppedProductIds).toEqual([selected.id]);
+    expect(selection.selectedProductIds).toEqual([selected.id]);
     expect(selection.warnings).toContain(
-      'product_cards_suppressed:unsupported_or_unverifiable_strict_hard_constraint:1'
+      'product_cards_preliminary:needs_evidence:1'
     );
   });
 
-  it('keeps an explicitly product-attribute strict requirement fail-closed when the attribute is unsupported', () => {
+  it('treats an unsupported product-attribute strict requirement as unconfirmed instead of a blocker', () => {
     const intent = structuredSelectionIntent({
       requirements: [{
         id: 'verified-noise-limit',
@@ -1731,12 +1739,7 @@ describe('AgentManager visible card readiness', () => {
       }]
     });
 
-    expect(assessStrictSelectionRequirements(intent, 'generator').blockers).toEqual([
-      expect.objectContaining({
-        id: 'verified-noise-limit',
-        reason: 'unsupported_strict_requirement_kind'
-      })
-    ]);
+    expect(assessStrictSelectionRequirements(intent, 'generator').blockers).toEqual([]);
   });
 
   it('keeps web-covered unknown attributes as preliminary candidates even when final fit was requested', () => {

@@ -32,12 +32,16 @@ const toolAdjudicationSignals = [
   'requiresadjudication'
 ];
 
-const unsupportedClaimSignals = [
-  'unsupported',
-  'unverified',
-  'noevidence',
-  'hallucination'
-];
+// Blocking flags must be exact contract vocabulary, not substrings. A flag like
+// `web_fact_unverified_kept_preliminary` honestly marks a handled gap (preliminary
+// recommendation with caveat — encouraged by AGENTS.md) and must NOT kill the answer.
+// Only flags asserting a confirmed-style claim without evidence are blocking.
+const blockingUnsupportedClaimFlags = new Set([
+  'unsupportedclaim',
+  'unverifiedclaimpresentedasconfirmed',
+  'noevidenceclaim',
+  'hallucinationrisk'
+]);
 
 export function hasAdjudicationRisk(input: {
   answerRiskFlags: string[];
@@ -50,5 +54,5 @@ export function hasAdjudicationRisk(input: {
 }
 
 export function hasUnsupportedClaimRisk(riskFlags: string[]) {
-  return riskFlags.some((flag) => containsAnySignal(flag, unsupportedClaimSignals));
+  return riskFlags.some((flag) => blockingUnsupportedClaimFlags.has(normalizedSignal(flag)));
 }

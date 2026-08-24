@@ -1823,25 +1823,22 @@ describe('AgentManagerOrchestrator', () => {
 
     const repaired = repairIntentForOpenEndedRequirementWebCoverage(intent);
 
+    // 'material' has no mechanical verifier and still routes to web verification;
+    // 'two_person_loading_suitability' is an unsupported kind that now stays
+    // unconfirmed-preliminary (no blocker): it neither moves to the web request nor
+    // blocks catalog evidence, so it remains covered by the catalog request.
     expect(repaired.repairs).toEqual([{
       requestId: webRequest.id,
-      requirementIds: ['material-fit', 'loading-fit']
+      requirementIds: ['material-fit']
     }]);
-    expect(repaired.intent.toolRequests[0]?.coversRequirementIds).toEqual(['weight-limit']);
-    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual(['material-fit', 'loading-fit']);
+    expect(repaired.intent.toolRequests[0]?.coversRequirementIds).toEqual(['loading-fit', 'weight-limit']);
+    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual(['material-fit']);
     expect(repaired.intent.selectionPolicy?.requirements[0]?.verification).toEqual({
       mode: 'typed_tool',
       toolRequestId: webRequest.id,
       tool: 'web.researchProductFacts',
       verifier: 'technical_source_review',
       bindAs: 'material'
-    });
-    expect(repaired.intent.selectionPolicy?.requirements[1]?.verification).toEqual({
-      mode: 'typed_tool',
-      toolRequestId: webRequest.id,
-      tool: 'web.researchProductFacts',
-      verifier: 'technical_source_review',
-      bindAs: 'two_person_loading_suitability'
     });
     expect(repaired.intent.riskFlags).toContain('planner_repaired_open_ended_requirement_web_coverage');
   });

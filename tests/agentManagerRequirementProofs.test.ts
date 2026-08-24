@@ -302,7 +302,11 @@ describe('generic requirement proofs', () => {
       intent,
       toolResults: [catalogResult(products)]
     });
-    expect(final.selectedProductIds).toEqual([products[4]!.id]);
+    // Under final_fit, cards without a confirmed active nominal kW stay visible as
+    // preliminary candidates (unconfirmed data gap, AGENTS.md); the confirmed
+    // nominal-active match remains the only proven fit.
+    expect(final.selectedProductIds).toEqual(products.map((product) => product.id));
+    expect(final.warnings.join('\n')).toContain('preliminary');
   });
 
   it('uses exact authoritative power proof, rejects its violation, and keeps conflicting proof unknown', () => {
@@ -386,7 +390,11 @@ describe('generic requirement proofs', () => {
       intent: conflictedContract.intent,
       toolResults: [catalogResult([product]), conflictedWeb]
     });
-    expect(finalConflict.selectedProductIds).toEqual([]);
+    // Conflicting web facts mean the decisive fact is unconfirmed, not that the
+    // product provably violates the requirement (AGENTS.md): the candidate stays
+    // visible as preliminary under final_fit.
+    expect(finalConflict.selectedProductIds).toEqual([product.id]);
+    expect(finalConflict.warnings.join('\n')).toContain('preliminary');
   });
 
   it('binds an authoritative web fact to an open-ended numeric hard requirement', () => {
