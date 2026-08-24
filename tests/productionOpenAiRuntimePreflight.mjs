@@ -23,7 +23,7 @@ export async function checkProductionOpenAiRuntime({
   token = process.env.ADMIN_PASSWORD || process.env.ADMIN_API_KEY,
   fetchImpl = fetch,
   timeoutMs = 30_000,
-  expectedModel = process.env.PRODUCTION_EXPECTED_OPENAI_MODEL || 'gpt-5.6-terra'
+  expectedModel = process.env.PRODUCTION_EXPECTED_OPENAI_MODEL || 'gpt-5.6-luna'
 } = {}) {
   if (!token) {
     return {

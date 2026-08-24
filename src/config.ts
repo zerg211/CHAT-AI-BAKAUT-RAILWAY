@@ -115,7 +115,7 @@ const schema = z.object({
 const parsedConfig = schema.parse(process.env);
 const resendEmailUrl = parsedConfig.RESEND_API_KEY ? 'https://api.resend.com/emails' : undefined;
 const resendAuthHeader = parsedConfig.RESEND_API_KEY ? `Authorization: Bearer ${parsedConfig.RESEND_API_KEY}` : undefined;
-const requiredProductionManagerModel = 'gpt-5.6-terra';
+const requiredProductionManagerModel = 'gpt-5.6-luna';
 const configuredPrimaryModel = parsedConfig.OPENAI_ANSWER_MODEL
   || parsedConfig.OPENAI_MODEL
   || parsedConfig.MODEL
@@ -150,16 +150,16 @@ export const config = {
   OPENAI_FACT_MODEL: factModel,
   OPENAI_DEEP_REASONING_MODEL: deepReasoningModel,
   OPENAI_ANSWER_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
-    ? 'none' as const
+    ? 'xhigh' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
   OPENAI_PLANNER_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
-    ? 'none' as const
+    ? 'xhigh' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_PLANNER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: parsedConfig.NODE_ENV === 'production'
     ? 3200
     : parsedConfig.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
   OPENAI_FACT_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
-    ? 'none' as const
+    ? 'xhigh' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_FACT_REASONING_EFFORT || 'none')
 };
 

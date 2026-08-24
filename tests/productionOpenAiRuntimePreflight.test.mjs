@@ -27,9 +27,9 @@ describe('production OpenAI runtime preflight', () => {
       fetchImpl: async () => response(200, {
         ok: true,
         class: 'ok',
-        answerModel: 'gpt-5.6-terra',
-        plannerModel: 'gpt-5.6-terra',
-        factModel: 'gpt-5.6-terra',
+        answerModel: 'gpt-5.6-luna',
+        plannerModel: 'gpt-5.6-luna',
+        factModel: 'gpt-5.6-luna',
         outputPresent: true
       })
     });
@@ -37,10 +37,10 @@ describe('production OpenAI runtime preflight', () => {
     expect(result).toMatchObject({
       ok: true,
       class: 'ok',
-      answerModel: 'gpt-5.6-terra',
-      plannerModel: 'gpt-5.6-terra',
-      factModel: 'gpt-5.6-terra',
-      expectedModel: 'gpt-5.6-terra'
+      answerModel: 'gpt-5.6-luna',
+      plannerModel: 'gpt-5.6-luna',
+      factModel: 'gpt-5.6-luna',
+      expectedModel: 'gpt-5.6-luna'
     });
   });
 
@@ -61,7 +61,7 @@ describe('production OpenAI runtime preflight', () => {
       ok: false,
       class: 'model_mismatch',
       code: 'production_manager_model_mismatch',
-      expectedModel: 'gpt-5.6-terra'
+      expectedModel: 'gpt-5.6-luna'
     });
   });
 
@@ -71,8 +71,8 @@ describe('production OpenAI runtime preflight', () => {
       fetchImpl: async () => response(200, {
         ok: true,
         class: 'ok',
-        answerModel: 'gpt-5.6-terra',
-        plannerModel: 'gpt-5.6-terra',
+        answerModel: 'gpt-5.6-luna',
+        plannerModel: 'gpt-5.6-luna',
         factModel: 'gpt-5.4',
         outputPresent: true
       })
@@ -83,7 +83,7 @@ describe('production OpenAI runtime preflight', () => {
       class: 'model_mismatch',
       code: 'production_manager_model_mismatch',
       factModel: 'gpt-5.4',
-      expectedModel: 'gpt-5.6-terra'
+      expectedModel: 'gpt-5.6-luna'
     });
   });
 
@@ -179,9 +179,9 @@ describe('production OpenAI runtime preflight', () => {
           return response(200, {
             ok: true,
             class: 'ok',
-            answerModel: 'gpt-5.6-terra',
-            plannerModel: 'gpt-5.6-terra',
-            factModel: 'gpt-5.6-terra',
+            answerModel: 'gpt-5.6-luna',
+            plannerModel: 'gpt-5.6-luna',
+            factModel: 'gpt-5.6-luna',
             outputPresent: true
           });
         }

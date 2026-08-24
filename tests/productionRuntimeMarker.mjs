@@ -4,7 +4,7 @@ export const expectedAiManagerContractVersion =
 
 export const expectedAiManagerRuntimeVersion =
   process.env.EXPECTED_AI_MANAGER_RUNTIME_VERSION ||
-  '2026-08-11.gpt-5-6-terra-harness-v1';
+  '2026-08-24.gpt-5-6-luna-xhigh-harness-v1';
 
 export async function fetchProductionHealth(productionApiBase, timeoutMs = 30_000) {
   const controller = new AbortController();

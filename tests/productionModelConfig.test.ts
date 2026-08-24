@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 describe('production model configuration', () => {
-  it('locks every manager role to GPT-5.6 Terra despite legacy environment overrides', () => {
+  it('locks every manager role to GPT-5.6 Luna with maximal reasoning despite legacy environment overrides', () => {
     const outputMarker = '__PRODUCTION_MODEL_CONFIG__';
     const script = [
       "import { config } from './src/config.ts';",
@@ -45,15 +45,15 @@ describe('production model configuration', () => {
     const markerIndex = stdout.lastIndexOf(outputMarker);
     expect(markerIndex).toBeGreaterThanOrEqual(0);
     expect(JSON.parse(stdout.slice(markerIndex + outputMarker.length))).toEqual({
-      model: 'gpt-5.6-terra',
-      answer: 'gpt-5.6-terra',
-      answerReasoning: 'none',
-      planner: 'gpt-5.6-terra',
-      plannerReasoning: 'none',
+      model: 'gpt-5.6-luna',
+      answer: 'gpt-5.6-luna',
+      answerReasoning: 'xhigh',
+      planner: 'gpt-5.6-luna',
+      plannerReasoning: 'xhigh',
       plannerMaxOutputTokens: 3200,
-      fact: 'gpt-5.6-terra',
-      factReasoning: 'none',
-      deepReasoning: 'gpt-5.6-terra'
+      fact: 'gpt-5.6-luna',
+      factReasoning: 'xhigh',
+      deepReasoning: 'gpt-5.6-luna'
     });
   });
 });
