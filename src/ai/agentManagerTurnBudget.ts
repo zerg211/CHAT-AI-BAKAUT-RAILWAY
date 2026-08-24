@@ -38,7 +38,9 @@ export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
   maxProviderReservedOutputTokens: 80_000,
   maxProviderEstimatedTotalTokens: 1_350_000,
   maxEstimatedCostUsd: 10,
-  maxWallTimeMs: 58_000
+  // gpt-5.6-luna at xhigh reasoning needs a longer decision window; a truncated
+  // planner JSON costs more time (validation retry) than a longer first pass.
+  maxWallTimeMs: 110_000
 };
 
 export class AgentManagerTurnBudgetExceededError extends Error {

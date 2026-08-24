@@ -156,7 +156,7 @@ export const config = {
     ? 'xhigh' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_PLANNER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: parsedConfig.NODE_ENV === 'production'
-    ? 3200
+    ? 6000
     : parsedConfig.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
   OPENAI_FACT_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
     ? 'xhigh' as const

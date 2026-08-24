@@ -23,7 +23,7 @@ describe('agent manager turn budget', () => {
   it('reserves a bounded 58-second work budget with web capped inside it', () => {
     const webTimeoutMs = agentManagerToolRegistry['web.researchProductFacts'].timeoutMs;
 
-    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(58_000);
+    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(110_000);
     expect(webTimeoutMs).toBe(30_000);
     expect(webTimeoutMs).toBeLessThan(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs);
   });
@@ -40,7 +40,7 @@ describe('agent manager turn budget', () => {
 
     expect(effectiveWebTimeoutMs).toBe(30_000);
     now += effectiveWebTimeoutMs;
-    expect(budget.remainingWallTimeMs()).toBe(26_000);
+    expect(budget.remainingWallTimeMs()).toBe(78_000);
   });
 
   it('caps catalog work before the answer reserve', () => {

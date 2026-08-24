@@ -1249,7 +1249,7 @@ describe('AgentManagerOrchestrator', () => {
 
   it('keeps the recovery lease wait aligned with the bounded agent wall clock', () => {
     expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs);
-    expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(58_000);
+    expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(110_000);
   });
 
   it('repairs omitted preliminary comparison web coverage from exact catalog candidates once', () => {

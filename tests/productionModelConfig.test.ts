@@ -35,8 +35,7 @@ describe('production model configuration', () => {
         OPENAI_ANSWER_REASONING_EFFORT: 'xhigh',
         OPENAI_PLANNER_MODEL: 'gpt-5.5',
         OPENAI_PLANNER_REASONING_EFFORT: 'xhigh',
-        OPENAI_PLANNER_MAX_OUTPUT_TOKENS: '9000',
-        OPENAI_FACT_MODEL: 'gpt-5.6-luna',
+        OPENAI_PLANNER_MAX_OUTPUT_TOKENS: '9000',        OPENAI_FACT_MODEL: 'gpt-5.6-luna',
         OPENAI_FACT_REASONING_EFFORT: 'xhigh',
         OPENAI_DEEP_REASONING_MODEL: 'gpt-5.6-sol'
       }
@@ -50,7 +49,7 @@ describe('production model configuration', () => {
       answerReasoning: 'xhigh',
       planner: 'gpt-5.6-luna',
       plannerReasoning: 'xhigh',
-      plannerMaxOutputTokens: 3200,
+      plannerMaxOutputTokens: 6000,
       fact: 'gpt-5.6-luna',
       factReasoning: 'xhigh',
       deepReasoning: 'gpt-5.6-luna'
