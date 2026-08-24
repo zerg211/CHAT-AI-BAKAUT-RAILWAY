@@ -261,6 +261,30 @@ function compactHistory(history: Message[]) {
   }));
 }
 
+// Prior visible cards give the planner the FACTS needed to resolve buyer anaphora
+// ("та первая модель", "тот вариант") — mapping ids to names is deterministic data,
+// while deciding WHICH prior card the buyer means stays an LLM semantic decision.
+export function priorVisibleProductsFromHistory(history: Message[]) {
+  const byId = new Map<string, { id: string; name: string; price: number | null; brand: string | null }>();
+  for (const message of [...history].reverse()) {
+    if (message.role !== 'assistant') continue;
+    const metadata = message.metadata as { productCards?: unknown } | undefined;
+    if (!Array.isArray(metadata?.productCards)) continue;
+    for (const card of metadata!.productCards as Array<Record<string, unknown>>) {
+      const id = typeof card.id === 'string' ? card.id : '';
+      const name = typeof card.name === 'string' ? card.name : '';
+      if (!id || !name || byId.has(id)) continue;
+      byId.set(id, {
+        id,
+        name,
+        price: typeof card.price === 'number' ? card.price : null,
+        brand: typeof card.brand === 'string' ? card.brand : null
+      });
+    }
+  }
+  return [...byId.values()];
+}
+
 function compactLedger(state: ReducedDialogueLedgerState) {
   return {
     facts: Object.values(state.factsByKey).map((fact) => ({
@@ -5937,6 +5961,7 @@ function plannerSystemPromptBlock(
     'For exact technical facts about a named model that may be outside the catalog, plan web.researchProductFacts with args.productNames and comparisonAttributes. The answer should still answer the direct question if an external fact is found.',
     'If the buyer explicitly asks whether the exact model is in our catalog/available from us, asks to order/buy it, asks for price, or needs catalog alternatives, add riskFlags item "answer_policy_catalog_presence_relevant". Do not add this flag for a pure technical fact question where catalog presence would be extra noise.',
     'Fill productMentions for every named product, model, brand-model, or equipment item in the current buyer turn. Classify its semantic role: target_product when the buyer wants to buy/check that exact product; catalog_candidate for a product alternative being considered; comparison_subject for products being compared; context_load_device when it is only a consumer/load/device used to size or apply another product; compatibility_context when it is only equipment that the target product must work with; mentioned_only when no action is needed.',
+    'Resolve anaphoric product references semantically: when the buyer refers to a previously shown product without naming it ("та первая модель", "тот вариант", "та, что подешевле", "вернемся к генератору, та модель"), use priorVisibleProducts (id, name, price shown in earlier assistant cards) to identify which product they mean, and fill productMentions with role="target_product" and that exact name. If the reference is ambiguous between several prior products, prefer the one matching the buyer\'s qualifier (first/cheapest/that one with X); if still ambiguous, ask one short clarification instead of guessing. For facts about the resolved product plan catalog.getProductDetails with args.productNames=[that name] (or args.productIds=[its id] when known).',
     'Do not put context_load_device or compatibility_context names into web.researchProductFacts args.productNames. Example: in "нужен генератор для котла Baxi 24 и насоса 1,1 кВт", Baxi 24 is context_load_device, not a BAKAUT catalog target, so do not report that Baxi 24 is absent from our catalog. The target product class is the generator.',
     'Only target_product, catalog_candidate, and comparison_subject roles should drive exact target catalog presence, exact model web research, or nearby catalog alternatives.',
     'For a general technical question, answer from engineering knowledge only when the buyer did not ask for verification. When the buyer asks to check, verify, confirm facts, mentions missing catalog data, or asks for exact/current technical grounding, set grounding.sourcePolicy="web_required", grounding.taskType="technical_answer", grounding.webPurpose="technical_specs", add "web.researchProductFacts" to grounding.requiredToolKinds, and plan web.researchProductFacts even without a named model: keep args.productNames empty, put the buyer question in query and semanticQuery, and put the requested technical attributes in comparisonAttributes.',
@@ -5990,6 +6015,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           content: JSON.stringify({
             userMessage: input.userMessage,
             history: compactHistory(input.history),
+            priorVisibleProducts: priorVisibleProductsFromHistory(input.history),
             existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
             existingLedger: input.ledgerEvents.slice(-80),
             pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null,
