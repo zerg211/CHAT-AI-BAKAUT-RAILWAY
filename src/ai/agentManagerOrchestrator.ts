@@ -6138,7 +6138,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     }).promptBlock;
     const request = {
       model: config.OPENAI_ANSWER_MODEL,
-      reasoning: { effort: config.OPENAI_ANSWER_REASONING_EFFORT },
+      reasoning: { effort: input.reviewIssuesFeedback?.length
+        ? config.OPENAI_REPAIR_REASONING_EFFORT
+        : config.OPENAI_ANSWER_REASONING_EFFORT },
       max_output_tokens: config.OPENAI_MAX_OUTPUT_TOKENS,
       input: [
         {

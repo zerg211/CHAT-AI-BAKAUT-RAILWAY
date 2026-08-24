@@ -160,7 +160,12 @@ export const config = {
     : parsedConfig.OPENAI_PLANNER_MAX_OUTPUT_TOKENS,
   OPENAI_FACT_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
     ? 'xhigh' as const
-    : normalizeReasoningEffort(parsedConfig.OPENAI_FACT_REASONING_EFFORT || 'none')
+    : normalizeReasoningEffort(parsedConfig.OPENAI_FACT_REASONING_EFFORT || 'none'),
+  // Repair rewrites wording after a failed fact-check, not deep reasoning: high keeps
+  // it fast enough to fit the turn budget after a full xhigh writer pass.
+  OPENAI_REPAIR_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
+    ? 'high' as const
+    : normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT)
 };
 
 export type AppConfig = typeof config;

@@ -37,8 +37,8 @@ const generationStatusMessages = [
   'Собираю короткий ответ с выводом и ценами...'
 ];
 
-// Must exceed the turn budget wall time (110s) plus SSE delivery headroom.
-const TURN_DEADLINE_MS = 120_000;
+// Must exceed the turn budget wall time (150s) plus SSE delivery headroom.
+const TURN_DEADLINE_MS = 160_000;
 
 function remainingTurnDeadlineMs(deadlineAt: string | null | undefined) {
   const parsed = deadlineAt ? Date.parse(deadlineAt) : Number.NaN;
