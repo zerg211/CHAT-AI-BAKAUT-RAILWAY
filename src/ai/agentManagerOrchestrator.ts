@@ -6759,7 +6759,14 @@ export class AgentManagerOrchestrator {
     }
     if (!savedDelta.found && !savedIntent.found) {
       const semanticStartedAt = Date.now();
-      const structuredDeadlineAtMs = turnBudget.snapshot().usage.deadlineAtMs;
+      // Hard per-attempt cap: OpenAI latency at high effort occasionally spikes to
+      // 60-100s, which silently ate the whole turn budget and broke the writer.
+      // Each attempt gets a fresh min(turn deadline, now + cap) deadline instead.
+      const plannerAttemptDeadlineMs = () => Math.min(
+        turnBudget.snapshot().usage.deadlineAtMs,
+        Date.now() + 45_000
+      );
+      let structuredDeadlineAtMs = plannerAttemptDeadlineMs();
       if (!this.model.decideTurn) {
         throw new Error('combined_semantic_decision_required');
       }
@@ -6784,8 +6791,10 @@ export class AgentManagerOrchestrator {
         let decision: AgentSemanticDecision | undefined;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           turnBudget.consumeModelCall();
+          structuredDeadlineAtMs = plannerAttemptDeadlineMs();
           const candidate = await this.model.decideTurn({
             ...sharedModelInput,
+            structuredDeadlineAtMs,
             semanticValidationIssues: validationIssues
           });
           const validation = validateAgentSemanticDecision({
