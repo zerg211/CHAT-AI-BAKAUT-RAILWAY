@@ -46,7 +46,7 @@ describe('production model configuration', () => {
     expect(JSON.parse(stdout.slice(markerIndex + outputMarker.length))).toEqual({
       model: 'gpt-5.6-luna',
       answer: 'gpt-5.6-luna',
-      answerReasoning: 'xhigh',
+      answerReasoning: 'high',
       planner: 'gpt-5.6-luna',
       plannerReasoning: 'xhigh',
       plannerMaxOutputTokens: 6000,
