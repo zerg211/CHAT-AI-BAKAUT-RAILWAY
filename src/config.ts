@@ -75,8 +75,7 @@ const schema = z.object({
   OPENAI_PLANNER_REASONING_EFFORT: reasoningEffort.optional(),
   OPENAI_FACT_REASONING_EFFORT: reasoningEffort.optional(),
   OPENAI_EMBEDDING_MODEL: z.string().default('text-embedding-3-small'),
-  OPENAI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1200),
-  OPENAI_NEED_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(8000),
+  OPENAI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(1200),  OPENAI_NEED_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(8000),
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(3200),
   OPENAI_FACT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(700),
   EMBEDDING_MIN_COVERAGE: z.coerce.number().min(0).max(1).default(0.05),
@@ -152,6 +151,11 @@ export const config = {
   OPENAI_ANSWER_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
     ? 'high' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
+  // Writer reasoning tokens count against max_output_tokens; at high effort the
+  // reasoning alone can exceed the old 1200 default and truncate the answer JSON.
+  OPENAI_WRITER_MAX_OUTPUT_TOKENS: parsedConfig.NODE_ENV === 'production'
+    ? 4000
+    : parsedConfig.OPENAI_MAX_OUTPUT_TOKENS,
   OPENAI_PLANNER_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
     // Planning quality comes from the 50-rule typed contract prompt; xhigh there cost
     // 36-61s per decision and truncated whole turns. High keeps the contract quality

@@ -6141,7 +6141,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       reasoning: { effort: input.reviewIssuesFeedback?.length
         ? config.OPENAI_REPAIR_REASONING_EFFORT
         : config.OPENAI_ANSWER_REASONING_EFFORT },
-      max_output_tokens: config.OPENAI_MAX_OUTPUT_TOKENS,
+      max_output_tokens: input.reviewIssuesFeedback?.length
+        ? config.OPENAI_WRITER_MAX_OUTPUT_TOKENS
+        : Math.max(config.OPENAI_WRITER_MAX_OUTPUT_TOKENS, config.OPENAI_MAX_OUTPUT_TOKENS),
       input: [
         {
           role: 'system',
