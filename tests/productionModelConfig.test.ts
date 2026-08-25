@@ -48,7 +48,7 @@ describe('production model configuration', () => {
       answer: 'gpt-5.6-luna',
       answerReasoning: 'high',
       planner: 'gpt-5.6-luna',
-      plannerReasoning: 'xhigh',
+      plannerReasoning: 'high',
       plannerMaxOutputTokens: 6000,
       fact: 'gpt-5.6-luna',
       factReasoning: 'xhigh',
