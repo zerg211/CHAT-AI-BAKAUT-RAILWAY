@@ -199,7 +199,9 @@ export const agentManagerToolRegistry = {
     resultPayloadSchema: webResearchResult,
     risk: 'external_read',
     sideEffect: false,
-    timeoutMs: 30_000,
+    // Multi-tier research (catalog → official page → manual → dealers) needs more
+    // than 30s; turn budget 150s fits planner + 60s research + writer.
+    timeoutMs: 60_000,
     maxResultItems: 32,
     maxResultBytes: 300_000,
     // 2 attempts: a single network timeout must not end the search while the turn
