@@ -6004,7 +6004,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       stage: 'agent_semantic_decision',
       signal: input.signal,
       deadlineAtMs: input.structuredDeadlineAtMs,
-      minRetryRemainingMs: 25_000
+      minRetryRemainingMs: 25_000,
+      retryOutputTokenCap: Math.ceil(request.max_output_tokens * 1.5)
     });
     const direct = AgentSemanticDecisionSchema.safeParse(parsed);
     if (direct.success) return direct.data;

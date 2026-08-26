@@ -76,6 +76,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     };
     expect(input.history).toHaveLength(20);
     expect(request).toMatchObject({ max_output_tokens: 3200 });
+    expect(createStructuredJsonResponse.mock.calls[0]?.[0]).toMatchObject({ retryOutputTokenCap: 4800 });
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);
   });
 
