@@ -56,6 +56,23 @@ function abortError(signal: AbortSignal) {
     : new DOMException('The operation was aborted.', 'AbortError');
 }
 
+async function connectWithAbort(db: Pool, signal: AbortSignal) {
+  let onAbort: (() => void) | undefined;
+  const connection = db.connect().then((client) => {
+    if (signal.aborted) client.release(true);
+    return client;
+  });
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(abortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([connection, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 async function queryWithAbort<R extends QueryResultRow>(
   db: Db,
   text: string,
@@ -66,7 +83,9 @@ async function queryWithAbort<R extends QueryResultRow>(
   if (signal.aborted) throw abortError(signal);
 
   const poolDb = isPool(db);
-  const client = poolDb ? await db.connect() : db;
+  const client = poolDb
+    ? await connectWithAbort(db, signal)
+    : db;
   if (signal.aborted) {
     if (poolDb) client.release();
     throw abortError(signal);
@@ -82,14 +101,15 @@ async function queryWithAbort<R extends QueryResultRow>(
       : resolve(result as unknown as QueryResult<R>));
   });
   const cancel = () => {
+    destroyClient = true;
+    rejectQuery?.(abortError(signal));
     try {
       const cancelableClient = client as PoolClient & {
         cancel?: (target: PoolClient, query: Query<R>) => void;
       };
       cancelableClient.cancel?.(client, query);
     } catch (error) {
-      destroyClient = true;
-      rejectQuery?.(error);
+      console.warn('Postgres query cancellation failed', error);
     }
   };
   signal.addEventListener('abort', cancel, { once: true });

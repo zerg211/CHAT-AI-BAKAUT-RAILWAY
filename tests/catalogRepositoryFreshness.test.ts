@@ -209,11 +209,11 @@ describe('ProductRepository catalog freshness integration', () => {
     const pending = repository.searchProducts('generator', 4, { signal: controller.signal });
 
     await queryStarted;
-    controller.abort();
+    controller.abort(new Error('query aborted'));
 
-    await expect(pending).rejects.toThrow('query cancelled');
+    await expect(pending).rejects.toThrow('query aborted');
     expect(cancel).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledWith(false);
+    expect(release).toHaveBeenCalledWith(true);
   });
 
   it('holds an advisory lock for a sync and deactivates only inside an eligible full finalize', async () => {
