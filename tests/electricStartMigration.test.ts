@@ -19,4 +19,18 @@ describe('electric-start reconciliation migration', () => {
     expect(sql).toContain('catalog_source_hash = product.source_content_hash');
     expect(sql).not.toContain('DELETE FROM verified_product_facts');
   });
+
+  it('removes the stale starter text left in the catalog cards', async () => {
+    const sql = await fs.readFile(
+      path.join(process.cwd(), 'sql', '025_reconcile_electric_start_catalog_values.sql'),
+      'utf8'
+    );
+
+    expect(sql).toContain("jsonb_build_object('стартер', 'ручной стартер')");
+    expect(sql).toContain("value = 'ручной и электростартер'");
+    expect(sql).toContain("value = 'ручной стартер'");
+    expect(sql).toContain('embedding = NULL');
+    expect(sql).toContain('source_content_hash = encode(');
+    expect(sql).toContain('catalog_source_hash = product.source_content_hash');
+  });
 });
