@@ -13,7 +13,7 @@
     "playwright.config.ts",
     "promptfooconfig.yaml"
   ],
-  "count": 508,
+  "count": 514,
   "findings": [
     {
       "id": "evals/promptfoo/assertions.cjs|regexp_constructor_new|d045e9c4a874ab35|1",
@@ -84,6 +84,62 @@
       "kind": "regular_expression_literal",
       "hash": "c10ac4b07d20d318",
       "occurrence": 1
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|regex_test_call|1638d9e3c0d8fad7|1",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "regex_test_call",
+      "hash": "1638d9e3c0d8fad7",
+      "occurrence": 1
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|841434ef0453514a|1",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "regular_expression_literal",
+      "hash": "841434ef0453514a",
+      "occurrence": 1
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|split_regex_argument|f7910d814fe53e1a|1",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "split_regex_argument",
+      "hash": "f7910d814fe53e1a",
+      "occurrence": 1
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|f6723d9eeed2a53c|1",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "regular_expression_literal",
+      "hash": "f6723d9eeed2a53c",
+      "occurrence": 1
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|split_regex_argument|0df0e3ae5e8de283|1",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "split_regex_argument",
+      "hash": "0df0e3ae5e8de283",
+      "occurrence": 1
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|f6723d9eeed2a53c|2",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "regular_expression_literal",
+      "hash": "f6723d9eeed2a53c",
+      "occurrence": 2
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|split_regex_argument|0df0e3ae5e8de283|2",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "split_regex_argument",
+      "hash": "0df0e3ae5e8de283",
+      "occurrence": 2
+    },
+    {
+      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|f6723d9eeed2a53c|3",
+      "file": "src/ai/agentManagerOrchestrator.ts",
+      "kind": "regular_expression_literal",
+      "hash": "f6723d9eeed2a53c",
+      "occurrence": 3
     },
     {
       "id": "src/ai/loadProfile.ts|replace_regex_argument|f62c385dd2eeb732|1",
@@ -1210,20 +1266,6 @@
       "file": "src/ai/productClassifier.ts",
       "kind": "regular_expression_literal",
       "hash": "8d1fbfe5e577ad6c",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regex_test_call|3f6dad38691114f7|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regex_test_call",
-      "hash": "3f6dad38691114f7",
-      "occurrence": 1
-    },
-    {
-      "id": "src/ai/productClassifier.ts|regular_expression_literal|f0082c2a075f0686|1",
-      "file": "src/ai/productClassifier.ts",
-      "kind": "regular_expression_literal",
-      "hash": "f0082c2a075f0686",
       "occurrence": 1
     },
     {
