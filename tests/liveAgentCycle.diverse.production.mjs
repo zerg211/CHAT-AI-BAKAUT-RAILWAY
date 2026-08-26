@@ -56,10 +56,13 @@ function latestAssistant(messages) {
 }
 
 async function collectMessages(frame) {
-  return frame.locator('.message').evaluateAll((nodes) => nodes.map((node) => ({
-    role: node.classList.contains('assistant') ? 'assistant' : node.classList.contains('user') ? 'user' : 'system',
-    text: node.textContent?.replace(/\s+/g, ' ').trim() ?? ''
-  })));
+  return frame.locator('.message').evaluateAll((nodes) => nodes.map((node) => {
+    const bubble = node.querySelector('.bubble');
+    return {
+      role: node.classList.contains('assistant') ? 'assistant' : node.classList.contains('user') ? 'user' : 'system',
+      text: bubble?.textContent?.trim() ?? ''
+    };
+  }));
 }
 
 async function collectNewCards(frame, previousCount) {
@@ -76,6 +79,24 @@ async function waitInputEnabled(input, timeoutMs = 420_000) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   throw new Error('Chat input did not become enabled before timeout.');
+}
+
+async function waitForAssistantResponse(frame, previousAssistantCount, timeoutMs = 420_000) {
+  const deadline = Date.now() + timeoutMs;
+  const assistantMessages = frame.locator('.message.assistant');
+  const status = frame.locator('header .status').first();
+  const error = frame.locator('.error').first();
+  while (Date.now() < deadline) {
+    const currentCount = await assistantMessages.count().catch(() => previousAssistantCount);
+    const latestBubbleText = currentCount > previousAssistantCount
+      ? await assistantMessages.last().locator('.bubble').innerText().catch(() => '')
+      : '';
+    const statusText = cleanText(await status.innerText().catch(() => ''));
+    const errorText = cleanText(await error.innerText().catch(() => ''));
+    if (currentCount > previousAssistantCount && statusText === 'Онлайн' && (latestBubbleText.trim() || errorText)) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error('Assistant response did not finish before timeout.');
 }
 
 async function readWidgetSessionId(page) {
@@ -412,11 +433,12 @@ async function main() {
         turnIndex
       });
       if (turn.done) break;
+      const previousAssistantCount = await frame.locator('.message.assistant').count().catch(() => 0);
       await waitInputEnabled(input);
       await input.fill(turn.user);
       await input.press('Enter');
-      await waitInputEnabled(input);
-      await page.waitForTimeout(1200);
+      await waitForAssistantResponse(frame, previousAssistantCount);
+      await page.waitForTimeout(250);
 
       const messages = await collectMessages(frame);
       const assistant = cleanText(latestAssistant(messages));

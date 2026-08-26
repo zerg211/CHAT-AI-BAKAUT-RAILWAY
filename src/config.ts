@@ -157,10 +157,9 @@ export const config = {
     ? 4000
     : parsedConfig.OPENAI_MAX_OUTPUT_TOKENS,
   OPENAI_PLANNER_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
-    // Planning quality comes from the 50-rule typed contract prompt; xhigh there cost
-    // 36-61s per decision and truncated whole turns. High keeps the contract quality
-    // at a third of the time.
-    ? 'high' as const
+    // Planning quality comes from the typed contract prompt; high effort exceeded the
+    // per-attempt deadline in production and left no budget for tools and the writer.
+    ? 'low' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_PLANNER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
   OPENAI_PLANNER_MAX_OUTPUT_TOKENS: parsedConfig.NODE_ENV === 'production'
     ? 9000

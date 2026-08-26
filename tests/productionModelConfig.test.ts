@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 describe('production model configuration', () => {
-  it('locks every manager role to GPT-5.6 Luna with maximal reasoning despite legacy environment overrides', () => {
+  it('locks every manager role to GPT-5.6 Luna with bounded production planner effort despite legacy overrides', () => {
     const outputMarker = '__PRODUCTION_MODEL_CONFIG__';
     const script = [
       "import { config } from './src/config.ts';",
@@ -48,7 +48,7 @@ describe('production model configuration', () => {
       answer: 'gpt-5.6-luna',
       answerReasoning: 'high',
       planner: 'gpt-5.6-luna',
-      plannerReasoning: 'high',
+      plannerReasoning: 'low',
       plannerMaxOutputTokens: 9000,
       fact: 'gpt-5.6-luna',
       factReasoning: 'xhigh',
