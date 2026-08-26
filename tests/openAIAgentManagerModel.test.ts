@@ -416,7 +416,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       ledgerState,
       intent: intentContract,
       toolResults: [],
-      products: []
+      products: [],
+      structuredDeadlineAtMs: Date.parse(now) + 60_000
     });
 
     const plannerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_intent_contract');
@@ -427,6 +428,12 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       ?.input?.find((item) => item.role === 'system')?.content ?? '';
 
     expect(plannerPrompt).toContain('не планируй catalog.search');
+    expect(answerCall?.[0]).toMatchObject({
+      deadlineAtMs: Date.parse(now) + 60_000,
+      minRetryRemainingMs: 10_000
+    });
+    const answerRequest = answerCall?.[0]?.request as { max_output_tokens?: number };
+    expect(answerCall?.[0]?.retryOutputTokenCap).toBe(Math.ceil(Number(answerRequest.max_output_tokens) * 1.5));
     for (const prompt of [plannerPrompt, answerPrompt]) {
       expect(prompt).toContain('selection.cutter_ambiguous_material_question');
       expect(prompt).toContain('по какому материалу');

@@ -6224,7 +6224,14 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       ],
       text: answerContractFormatForEvidenceSources(availableEvidenceSources.allowedSourceIds)
     };
-    const { parsed } = await createStructuredJsonResponse({ request, stage: 'agent_answer_contract', signal: input.signal });
+    const { parsed } = await createStructuredJsonResponse({
+      request,
+      stage: 'agent_answer_contract',
+      signal: input.signal,
+      deadlineAtMs: input.structuredDeadlineAtMs,
+      minRetryRemainingMs: 10_000,
+      retryOutputTokenCap: Math.ceil(Number(request.max_output_tokens) * 1.5)
+    });
     return parseAnswerContractModelOutput(parsed);
   }
 
@@ -7657,6 +7664,7 @@ export class AgentManagerOrchestrator {
           productEvidenceRoles,
           requiredResponseClauses,
           semanticDecisionValidated,
+          structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
           signal: input.signal
         }),
         ledgerState,
@@ -7801,6 +7809,7 @@ export class AgentManagerOrchestrator {
               requiredResponseClauses,
               semanticDecisionValidated,
               reviewIssuesFeedback: review.issues.map((issue) => `${issue.code}: ${issue.message}`),
+              structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
               signal: input.signal
             }),
             ledgerState,

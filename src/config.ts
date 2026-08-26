@@ -149,10 +149,10 @@ export const config = {
   OPENAI_FACT_MODEL: factModel,
   OPENAI_DEEP_REASONING_MODEL: deepReasoningModel,
   OPENAI_ANSWER_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
-    ? 'high' as const
+    ? 'medium' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT),
-  // Writer reasoning tokens count against max_output_tokens; at high effort the
-  // reasoning alone can exceed the old 1200 default and truncate the answer JSON.
+  // Writer reasoning tokens count against max_output_tokens; medium keeps the
+  // answer contract within the turn deadline without sacrificing typed validation.
   OPENAI_WRITER_MAX_OUTPUT_TOKENS: parsedConfig.NODE_ENV === 'production'
     ? 4000
     : parsedConfig.OPENAI_MAX_OUTPUT_TOKENS,
@@ -167,10 +167,10 @@ export const config = {
   OPENAI_FACT_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
     ? 'xhigh' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_FACT_REASONING_EFFORT || 'none'),
-  // Repair rewrites wording after a failed fact-check, not deep reasoning: high keeps
-  // it fast enough to fit the turn budget after a full xhigh writer pass.
+  // Repair rewrites wording after a failed fact-check; medium keeps it inside the
+  // remaining turn budget while the typed answer contract preserves safety.
   OPENAI_REPAIR_REASONING_EFFORT: parsedConfig.NODE_ENV === 'production'
-    ? 'high' as const
+    ? 'medium' as const
     : normalizeReasoningEffort(parsedConfig.OPENAI_ANSWER_REASONING_EFFORT || parsedConfig.OPENAI_REASONING_EFFORT)
 };
 
