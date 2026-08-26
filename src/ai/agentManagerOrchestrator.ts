@@ -8626,7 +8626,7 @@ export class AgentManagerOrchestrator {
               productsFromIds.forEach((product) => requestProductsById.set(product.id, product));
             }
             const exactModelSearch = (this.products as ProductRepository & {
-              searchProductsByModelTokens?: (tokens: string[], limit?: number) => Promise<Product[]>;
+              searchProductsByModelTokens?: ProductRepository['searchProductsByModelTokens'];
             }).searchProductsByModelTokens;
             if (!requestedProductIds.length && names.length && typeof exactModelSearch === 'function') {
               for (const name of names.slice(0, 4)) {
@@ -8635,7 +8635,7 @@ export class AgentManagerOrchestrator {
                   .map((part) => compactModelText(part))
                   .filter(Boolean);
                 if (!tokens.length) continue;
-                const exactMatches = await exactModelSearch.call(this.products, tokens, 20)
+                const exactMatches = await exactModelSearch.call(this.products, tokens, 20, { signal: toolSignal })
                   .then((products) => products.filter((product) =>
                     productMatchesExactTargetIdentity(product, name)
                   ))
@@ -8707,7 +8707,7 @@ export class AgentManagerOrchestrator {
           // reported as absent merely because the request also names an
           // engine, maintenance facts, or several attributes.
           const exactModelTokenSearch = (this.products as ProductRepository & {
-            searchProductsByModelTokens?: (tokens: string[], limit?: number) => Promise<Product[]>;
+            searchProductsByModelTokens?: ProductRepository['searchProductsByModelTokens'];
           }).searchProductsByModelTokens;
           if (targetProductNames.length && typeof exactModelTokenSearch === 'function') {
             for (const targetName of targetProductNames.slice(0, 4)) {
@@ -8716,7 +8716,7 @@ export class AgentManagerOrchestrator {
                 .map((part) => compactModelText(part))
                 .filter(Boolean);
               if (!tokens.length) continue;
-              const exactMatches = await exactModelTokenSearch.call(this.products, tokens, 20)
+              const exactMatches = await exactModelTokenSearch.call(this.products, tokens, 20, { signal: toolSignal })
                 .then((products) => products.filter((product) =>
                   productMatchesExactTargetIdentity(product, targetName)
                 ))
@@ -8750,7 +8750,7 @@ export class AgentManagerOrchestrator {
                   const identity = exactProductIdentity(targetName);
                   const tokens = identity.decisiveParts.map((part) => compactModelText(part)).filter(Boolean);
                   if (!tokens.length) continue;
-                  const refreshedMatches = await exactModelTokenSearch.call(this.products, tokens, 20)
+                  const refreshedMatches = await exactModelTokenSearch.call(this.products, tokens, 20, { signal: toolSignal })
                     .then((products) => products.filter((product) => productMatchesExactTargetIdentity(product, targetName)))
                     .catch(() => []);
                   refreshedMatches.forEach((product) => productsById.set(product.id, product));
@@ -9538,7 +9538,7 @@ export class AgentManagerOrchestrator {
     };
   }
 
-  private async canUseProductEmbeddings() {
+  private async canUseProductEmbeddings(signal?: AbortSignal) {
     const coverageFn = (this.products as unknown as {
       getEmbeddingCoverage?: ProductRepository['getEmbeddingCoverage'];
     }).getEmbeddingCoverage;
@@ -9550,7 +9550,7 @@ export class AgentManagerOrchestrator {
     if (cached && cached.expiresAt > now) return cached.usable;
 
     try {
-      const coverage = await coverageFn.call(this.products, 'products', config.OPENAI_EMBEDDING_MODEL);
+      const coverage = await coverageFn.call(this.products, 'products', config.OPENAI_EMBEDDING_MODEL, { signal });
       const usable = coverage.total > 0 && coverage.coverage >= config.EMBEDDING_MIN_COVERAGE;
       this.embeddingCoverageCache.set(key, { usable, expiresAt: now + 60_000 });
       return usable;
@@ -9607,7 +9607,7 @@ export class AgentManagerOrchestrator {
       : Math.max(limit, limit * 3);
 
     try {
-      textProducts = await this.products.searchProducts(query, retrievalLimit);
+      textProducts = await this.products.searchProducts(query, retrievalLimit, { signal: input.signal });
     } catch (error) {
       firstError = error;
       warnings.push(`catalog_text_search_error:${safeError(error).code ?? safeError(error).message}`);
@@ -9616,11 +9616,11 @@ export class AgentManagerOrchestrator {
     const vectorSearchFn = (this.products as unknown as {
       vectorSearch?: ProductRepository['vectorSearch'];
     }).vectorSearch;
-    if (vectorSearchFn && await this.canUseProductEmbeddings()) {
+    if (vectorSearchFn && await this.canUseProductEmbeddings(input.signal)) {
       const embedding = await this.createCachedQueryEmbedding(embeddingQuery, input.signal);
       if (embedding) {
         try {
-          vectorProducts = await vectorSearchFn.call(this.products, embedding, retrievalLimit);
+          vectorProducts = await vectorSearchFn.call(this.products, embedding, retrievalLimit, { signal: input.signal });
         } catch (error) {
           firstError ??= error;
           warnings.push(`catalog_vector_search_error:${safeError(error).code ?? safeError(error).message}`);
@@ -9643,7 +9643,7 @@ export class AgentManagerOrchestrator {
       );
       if (!hasWithinBudget) {
         try {
-          const broadProducts = await this.products.searchProducts('', 500);
+          const broadProducts = await this.products.searchProducts('', 500, { signal: input.signal });
           let added = 0;
           for (const product of broadProducts) {
             if (!productMatchesIntent(product, productIntent)) continue;
@@ -9675,7 +9675,8 @@ export class AgentManagerOrchestrator {
         try {
           const expandedBatteryProducts = await this.products.searchProducts(
             fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446\\u0438\\u044f'),
-            Math.max(limit * 6, 80)
+            Math.max(limit * 6, 80),
+            { signal: input.signal }
           );
           sourceFilteredProducts = expandedBatteryProducts
             .filter((product) => productMatchesIntent(product, productIntent))
@@ -9728,7 +9729,7 @@ export class AgentManagerOrchestrator {
       );
       try {
         const initialStructuredEvidence = structuredEvidence;
-        const expansionPool = await this.products.searchProducts(expansionQuery, 1_000);
+        const expansionPool = await this.products.searchProducts(expansionQuery, 1_000, { signal: input.signal });
         const matchingExpansionPool = expansionPool
           .filter((product) => productMatchesIntent(product, productIntent))
           .filter((product) => productMeetsStructuredPowerSource(

@@ -1,4 +1,5 @@
-import type { Pool, PoolClient, QueryResultRow } from 'pg';
+import { Query } from 'pg';
+import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { pool } from './pool.js';
 import { config } from '../config.js';
 import type {
@@ -49,7 +50,63 @@ function isPool(db: Db): db is Pool {
     && typeof candidate.idleCount === 'number';
 }
 
+function abortError(signal: AbortSignal) {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new DOMException('The operation was aborted.', 'AbortError');
+}
+
+async function queryWithAbort<R extends QueryResultRow>(
+  db: Db,
+  text: string,
+  values: unknown[],
+  signal?: AbortSignal
+): Promise<QueryResult<R>> {
+  if (!signal) return db.query<R>(text, values as never[]);
+  if (signal.aborted) throw abortError(signal);
+
+  const poolDb = isPool(db);
+  const client = poolDb ? await db.connect() : db;
+  if (signal.aborted) {
+    if (poolDb) client.release();
+    throw abortError(signal);
+  }
+
+  let rejectQuery: ((reason?: unknown) => void) | undefined;
+  let destroyClient = false;
+  let query!: Query<R>;
+  const resultPromise = new Promise<QueryResult<R>>((resolve, reject) => {
+    rejectQuery = reject;
+    query = new Query<R>({ text, values: values as never[] }, (error, result) => error
+      ? reject(error)
+      : resolve(result as unknown as QueryResult<R>));
+  });
+  const cancel = () => {
+    try {
+      const cancelableClient = client as PoolClient & {
+        cancel?: (target: PoolClient, query: Query<R>) => void;
+      };
+      cancelableClient.cancel?.(client, query);
+    } catch (error) {
+      destroyClient = true;
+      rejectQuery?.(error);
+    }
+  };
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    client.query(query);
+    return await resultPromise;
+  } finally {
+    signal.removeEventListener('abort', cancel);
+    if (poolDb) client.release(destroyClient);
+  }
+}
+
 export type EmbeddingCoverageTarget = 'products' | 'catalog_pages' | 'troubleshooting_cases';
+
+export interface ProductQueryOptions {
+  signal?: AbortSignal;
+}
 
 export interface EmbeddingCoverage {
   target: EmbeddingCoverageTarget;
@@ -2753,21 +2810,27 @@ export class ProductRepository {
     };
   }
 
-  async getEmbeddingCoverage(target: EmbeddingCoverageTarget, model = config.OPENAI_EMBEDDING_MODEL): Promise<EmbeddingCoverage> {
+  async getEmbeddingCoverage(
+    target: EmbeddingCoverageTarget,
+    model = config.OPENAI_EMBEDDING_MODEL,
+    options: ProductQueryOptions = {}
+  ): Promise<EmbeddingCoverage> {
     const targets: Record<EmbeddingCoverageTarget, { table: string; where: string }> = {
       products: { table: 'products', where: PRODUCT_FILTER },
       catalog_pages: { table: 'catalog_pages', where: 'true' },
       troubleshooting_cases: { table: 'troubleshooting_cases', where: 'true' }
     };
     const item = targets[target];
-    const result = await this.db.query(
+    const result = await queryWithAbort(
+      this.db,
       `SELECT
          COUNT(*)::int AS total,
          COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded,
          COUNT(*) FILTER (WHERE embedding IS NOT NULL AND embedding_model = $1)::int AS usable
        FROM ${item.table}
        WHERE ${item.where}`,
-      [model]
+      [model],
+      options.signal
     );
     const row = result.rows[0] ?? {};
     const total = Number(row.total ?? 0);
@@ -3415,10 +3478,11 @@ export class ProductRepository {
     return result.rows[0] ?? null;
   }
 
-  async searchProducts(query: string, limit = 8) {
+  async searchProducts(query: string, limit = 8, options: ProductQueryOptions = {}) {
     const normalized = query.trim();
     const tokens = searchTokens(normalized);
-    const result = await this.db.query(
+    const result = await queryWithAbort(
+      this.db,
       `WITH ranked AS (
          SELECT ${PRODUCT_RESPONSE_COLUMNS},
            updated_at,
@@ -3452,7 +3516,8 @@ export class ProductRepository {
        FROM ranked
        ORDER BY retrieval_score DESC NULLS LAST, token_match_count DESC, updated_at DESC
        LIMIT $2`,
-      [normalized, limit, tokens]
+      [normalized, limit, tokens],
+      options.signal
     );
     return result.rows.map(mapProduct);
   }
@@ -3471,9 +3536,10 @@ export class ProductRepository {
     return result.rows.map(mapProduct);
   }
 
-  async searchProductsByModelTokens(tokens: string[], limit = 20) {
+  async searchProductsByModelTokens(tokens: string[], limit = 20, options: ProductQueryOptions = {}) {
     if (!tokens.length) return [];
-    const result = await this.db.query(
+    const result = await queryWithAbort(
+      this.db,
       `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1::numeric AS retrieval_score, 'exact'::text AS retrieval_source
        FROM products
        WHERE ${PRODUCT_FILTER}
@@ -3488,14 +3554,16 @@ export class ProductRepository {
          )
        ORDER BY updated_at DESC
        LIMIT $2`,
-      [tokens, limit]
+      [tokens, limit],
+      options.signal
     );
     return result.rows.map(mapProduct);
   }
 
-  async vectorSearch(embedding: number[], limit = 8) {
+  async vectorSearch(embedding: number[], limit = 8, options: ProductQueryOptions = {}) {
     const vector = `[${embedding.join(',')}]`;
-    const result = await this.db.query(
+    const result = await queryWithAbort(
+      this.db,
       `SELECT ${PRODUCT_RESPONSE_COLUMNS}, 1 - (embedding <=> $1::vector) AS retrieval_score, 'vector'::text AS retrieval_source
        FROM products
        WHERE embedding IS NOT NULL
@@ -3503,7 +3571,8 @@ export class ProductRepository {
           AND embedding_model = $3
        ORDER BY embedding <=> $1::vector
        LIMIT $2`,
-      [vector, limit, config.OPENAI_EMBEDDING_MODEL]
+      [vector, limit, config.OPENAI_EMBEDDING_MODEL],
+      options.signal
     );
     return result.rows.map(mapProduct);
   }

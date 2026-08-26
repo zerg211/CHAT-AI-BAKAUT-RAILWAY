@@ -187,6 +187,35 @@ describe('ProductRepository catalog freshness integration', () => {
     expect(query.mock.calls[3][0]).toContain('is_active IS NOT FALSE');
   });
 
+  it('cancels an aborted product search on its leased pool client', async () => {
+    let resolveQueryStarted!: () => void;
+    const queryStarted = new Promise<void>((resolve) => {
+      resolveQueryStarted = resolve;
+    });
+    const query = vi.fn((submitted: { callback?: (error: Error) => void }) => {
+      resolveQueryStarted();
+      return submitted;
+    });
+    const cancel = vi.fn((_client: unknown, submitted: { callback?: (error: Error) => void }) => {
+      submitted.callback?.(new Error('query cancelled'));
+    });
+    const release = vi.fn();
+    const repository = new ProductRepository({
+      totalCount: 1,
+      idleCount: 1,
+      connect: vi.fn(async () => ({ query, cancel, release }))
+    } as never);
+    const controller = new AbortController();
+    const pending = repository.searchProducts('generator', 4, { signal: controller.signal });
+
+    await queryStarted;
+    controller.abort();
+
+    await expect(pending).rejects.toThrow('query cancelled');
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledWith(false);
+  });
+
   it('holds an advisory lock for a sync and deactivates only inside an eligible full finalize', async () => {
     const clientQuery = vi.fn()
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ acquired: true }] })
