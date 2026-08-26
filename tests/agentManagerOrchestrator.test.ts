@@ -11,6 +11,7 @@ import {
   repairIntentForElectricStartRequirementKinds,
   repairIntentForNewNeedFinalFit,
   repairIntentForRequestedTechnicalAttributeWebCoverage,
+  repairIntentForRequiredCatalogToolExecution,
   repairIntentForTypedToolRequirementCoverage,
   productMatchesExactTargetIdentity,
   trustedPendingExhaustedTechnicalHandoffs,
@@ -1356,6 +1357,51 @@ describe('AgentManagerOrchestrator', () => {
       intent: repaired.intent,
       repairs: []
     });
+  });
+
+  it('promotes catalog requests referenced by strict typed requirements to required execution', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.toolRequests[0]!.required = false;
+    intent.toolRequests[0]!.coversRequirementIds = ['product-class', 'price'];
+    intent.selectionPolicy!.requirements = [{
+      id: 'product-class',
+      kind: 'product_class',
+      value: 'generator',
+      unit: null,
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'buyer requests a generator',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'catalog-search',
+        tool: 'catalog.search',
+        verifier: 'catalog_product_class',
+        bindAs: 'product_class'
+      }
+    }, {
+      id: 'price',
+      kind: 'price_visibility',
+      value: true,
+      unit: null,
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'buyer requests a price',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'catalog-search',
+        tool: 'catalog.search',
+        verifier: 'price_visibility',
+        bindAs: 'price_visibility'
+      }
+    }];
+
+    const repaired = repairIntentForRequiredCatalogToolExecution(intent);
+
+    expect(repaired.intent.toolRequests[0]).toMatchObject({ required: true });
+    expect(repaired.requestIds).toEqual(['catalog-search']);
+    expect(repaired.intent.riskFlags).toContain('planner_repaired_required_catalog_tool');
   });
 
   it('does not turn unbound catalog attributes into false terminal web gaps', () => {

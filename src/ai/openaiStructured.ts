@@ -37,6 +37,15 @@ export class StructuredJsonRetrySkippedError extends Error {
   }
 }
 
+export class StructuredJsonDeadlineExceededError extends Error {
+  readonly code = 'structured_json_deadline_exceeded';
+
+  constructor(readonly deadlineAtMs: number, options?: { cause?: unknown }) {
+    super('Structured JSON request exceeded its deadline', options);
+    this.name = 'StructuredJsonDeadlineExceededError';
+  }
+}
+
 export function structuredJsonRetryOutputTokenLimit(currentValue: unknown, configuredCap?: number) {
   const current = Number(currentValue);
   const normalizedCurrent = Number.isFinite(current) && current > 0
@@ -151,18 +160,37 @@ export async function createStructuredJsonResponse(input: {
 }) {
   const client = createOpenAIClient();
   if (!client) throw new Error('OpenAI client is not configured');
+  const deadlineSignal = input.deadlineAtMs === undefined
+    ? undefined
+    : AbortSignal.timeout(Math.max(1, input.deadlineAtMs - Date.now()));
+  const requestSignal = deadlineSignal && input.signal
+    ? AbortSignal.any([input.signal, deadlineSignal])
+    : deadlineSignal ?? input.signal;
   const send = (body: Record<string, unknown>) =>
     withRetry(
-      () => client.responses.create(body as any, input.signal ? { signal: input.signal } : undefined),
+      () => client.responses.create(body as any, requestSignal ? { signal: requestSignal } : undefined),
       input.transportMaxRetries ?? 2,
-      input.signal
+      requestSignal
     );
+  const sendWithinDeadline = async (body: Record<string, unknown>) => {
+    try {
+      return await send(body);
+    } catch (error) {
+      if (deadlineSignal?.aborted && !input.signal?.aborted) {
+        throw new StructuredJsonDeadlineExceededError(input.deadlineAtMs!, { cause: error });
+      }
+      throw error;
+    }
+  };
 
-  const response = await send(input.request);
+  const response = await sendWithinDeadline(input.request);
   await recordOpenAIUsageOnce(input.stage, String(input.request.model ?? config.OPENAI_MODEL), response);
   try {
     return { response, parsed: parseJsonObject(responseTextForJson(response), input.stage) };
   } catch (error) {
+    if (deadlineSignal?.aborted && !input.signal?.aborted) {
+      throw new StructuredJsonDeadlineExceededError(input.deadlineAtMs!, { cause: error });
+    }
     const retryOutputTokens = structuredJsonRetryOutputTokenLimit(
       input.request.max_output_tokens,
       input.retryOutputTokenCap
@@ -191,7 +219,7 @@ export async function createStructuredJsonResponse(input: {
       ...input.request,
       max_output_tokens: retryOutputTokens
     };
-    const retryResponse = await send(retryRequest);
+    const retryResponse = await sendWithinDeadline(retryRequest);
     await recordOpenAIUsageOnce(`${input.stage}_retry`, String(retryRequest.model ?? config.OPENAI_MODEL), retryResponse);
     return { response: retryResponse, parsed: parseJsonObject(responseTextForJson(retryResponse), input.stage) };
   }

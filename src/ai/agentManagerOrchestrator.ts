@@ -37,7 +37,11 @@ import {
 } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { compactToolResultsForModel } from './agentManagerModelContext.js';
-import { createStructuredJsonResponse } from './openaiStructured.js';
+import {
+  createStructuredJsonResponse,
+  StructuredJsonDeadlineExceededError,
+  StructuredJsonRetrySkippedError
+} from './openaiStructured.js';
 import {
   researchProductComparisonFacts,
   researchWarningsPreventSourceExhaustion,
@@ -2541,6 +2545,55 @@ function intentHasCatalogSearchRequest(intent: AgentIntentContract) {
   );
 }
 
+export function repairIntentForRequiredCatalogToolExecution(intent: AgentIntentContract) {
+  const catalogRequests = intent.toolRequests.filter((request) =>
+    request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
+  );
+  if (!catalogRequests.length || !groundingRequiresCatalogSearch(intent.grounding)) {
+    return { intent, requestIds: [] as string[] };
+  }
+
+  const referencedByStrictTypedRequirement = new Set(
+    (intent.selectionPolicy?.requirements ?? []).flatMap((requirement) => {
+      const verification = requirement.verification;
+      if (
+        requirement.role !== 'hard_constraint' ||
+        requirement.strictness !== 'strict' ||
+        verification?.mode !== 'typed_tool' ||
+        (verification.tool !== 'catalog.search' && verification.tool !== 'catalog.getProductDetails')
+      ) return [];
+      const request = catalogRequests.find((candidate) => candidate.id === verification.toolRequestId);
+      return request && request.tool === verification.tool
+        ? [request.id]
+        : [];
+    })
+  );
+  const requestIdsToPromote = new Set(
+    [...referencedByStrictTypedRequirement].filter((requestId) =>
+      catalogRequests.some((request) => request.id === requestId && !request.required)
+    )
+  );
+  if (!catalogRequests.some((request) => request.required)) {
+    const fallbackRequest = catalogRequests.find((request) => referencedByStrictTypedRequirement.has(request.id)) ??
+      catalogRequests[0]!;
+    if (!fallbackRequest.required) requestIdsToPromote.add(fallbackRequest.id);
+  }
+  if (!requestIdsToPromote.size) return { intent, requestIds: [] as string[] };
+
+  const repairedIntent: AgentIntentContract = {
+    ...intent,
+    requiresTools: true,
+    toolRequests: intent.toolRequests.map((request) =>
+      requestIdsToPromote.has(request.id) ? { ...request, required: true } : request
+    ),
+    riskFlags: uniqueStrings([...intent.riskFlags, 'planner_repaired_required_catalog_tool'])
+  };
+  return {
+    intent: repairedIntent,
+    requestIds: [...requestIdsToPromote]
+  };
+}
+
 export function repairPreliminaryExactComparisonCatalogFirst(
   intent: AgentIntentContract,
   userMessage: string
@@ -2646,10 +2699,14 @@ function repairIntentForCatalogGrounding(
     return intent;
   }
   if (intentHasCatalogSearchRequest(intent)) {
+    const requiredCatalogToolRepair = repairIntentForRequiredCatalogToolExecution(intent);
     return {
-      ...intent,
+      ...requiredCatalogToolRepair.intent,
       requiresTools: true,
-      riskFlags: uniqueStrings([...intent.riskFlags, 'grounding_policy_catalog_required'])
+      riskFlags: uniqueStrings([
+        ...requiredCatalogToolRepair.intent.riskFlags,
+        'grounding_policy_catalog_required'
+      ])
     };
   }
   const canonicalProductIntent = coerceVisibleCardIntent(
@@ -6742,11 +6799,27 @@ export class AgentManagerOrchestrator {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           turnBudget.consumeModelCall();
           structuredDeadlineAtMs = plannerAttemptDeadlineMs();
-          const candidate = await this.model.decideTurn({
-            ...sharedModelInput,
-            structuredDeadlineAtMs,
-            semanticValidationIssues: validationIssues
-          });
+          let candidate: AgentSemanticDecision;
+          try {
+            candidate = await this.model.decideTurn({
+              ...sharedModelInput,
+              structuredDeadlineAtMs,
+              semanticValidationIssues: validationIssues
+            });
+          } catch (error) {
+            const attemptTimedOut = error instanceof StructuredJsonDeadlineExceededError ||
+              (error instanceof StructuredJsonRetrySkippedError && error.retryReason === 'insufficient_time_budget');
+            if (!attemptTimedOut) throw error;
+            await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_attempt_timed_out', {
+              attempt,
+              deadlineAtMs: structuredDeadlineAtMs,
+              remainingTurnMs: turnBudget.remainingWallTimeMs()
+            });
+            if (attempt >= 2 || turnBudget.remainingWallTimeMs() < 25_000) {
+              throw new AgentManagerTurnBudgetExceededError('wall_time_budget_exceeded');
+            }
+            continue;
+          }
           const validation = validateAgentSemanticDecision({
             decision: candidate,
             previousLedgerState: ledgerContext.state,
