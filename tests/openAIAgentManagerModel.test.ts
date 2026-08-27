@@ -277,6 +277,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('catalog.getProductDetails');
     expect(plannerPrompt).toContain('ответил без конфликта');
     expect(plannerPrompt).toContain('явная просьба внешней проверки');
+    expect(plannerPrompt).toContain('для availability_or_delivery ставь required только если сначала нужно найти или идентифицировать товар в каталоге');
     const rankingSchema = plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.properties?.rankingObjectives;
     expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
     expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);
