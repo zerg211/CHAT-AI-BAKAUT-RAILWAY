@@ -48,7 +48,7 @@ const canonicalProductClassSchema = z.enum([
 ]);
 const productClassSchema = z.string().trim().min(1).max(120);
 const optionalPlaceholder = <T extends z.ZodTypeAny>(schema: T) =>
-  z.preprocess((value) => value === null ? undefined : value, schema.optional());
+  z.preprocess((value) => value === null || (typeof value === 'string' && value.trim().length === 0) ? undefined : value, schema.optional());
 const optionalText = optionalPlaceholder(nonEmptyString);
 const optionalProductClass = optionalPlaceholder(productClassSchema);
 const optionalCanonicalProductClass = optionalPlaceholder(canonicalProductClassSchema);

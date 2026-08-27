@@ -100,4 +100,29 @@ describe('semantic decision draft normalization', () => {
     }));
     expect(intent.toolRequests[0]!.rationale).toContain('catalog.search');
   });
+
+  it('treats blank optional tool arguments as omitted instead of failing the turn', () => {
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: 'buyer asks for generator candidates',
+      dialogueUnderstanding: 'the buyer supplied enough context for a preliminary catalog search',
+      nextStepRationale: 'search the generator catalog',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'catalog-search',
+        tool: 'catalog.search',
+        args: {
+          query: 'генераторы для дома',
+          reason: '',
+          notes: '   '
+        },
+        rationale: 'search the current catalog',
+        required: true
+      }],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    });
+
+    expect(intent.toolRequests[0]!.args.reason).toBeUndefined();
+    expect(intent.toolRequests[0]!.args.notes).toBeUndefined();
+  });
 });
