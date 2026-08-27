@@ -60,6 +60,23 @@ describe('adaptive production buyer', () => {
     expect(turn.user.toLocaleLowerCase('ru-RU')).toContain('генератор');
   });
 
+  it('answers a boiler clarification before requesting generator cards', async () => {
+    const turn = await nextAdaptiveBuyerTurn({
+      goal: defaultAdaptiveBuyerGoal,
+      forceOffline: true,
+      steps: [{
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный на 220 В, примерно 750 Вт.',
+        assistant: 'Какая мощность или номинальный ток указаны на шильдике котла?',
+        newCards: []
+      }]
+    });
+
+    expect(turn.phase).toBe('answer_boiler_clarification');
+    expect(turn.user.toLocaleLowerCase('ru-RU')).toContain('котел');
+    expect(turn.user.toLocaleLowerCase('ru-RU')).toContain('мощность');
+  });
+
   it('audits goal coverage rather than exact scripted turns', () => {
     const steps = [
       {

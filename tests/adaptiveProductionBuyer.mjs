@@ -158,6 +158,17 @@ function coverageFromSteps(steps) {
       /насос[^.!?\n]{0,120}(?:220\s*в|750\s*вт|0[,.]?75\s*квт|шильдик|модель|точн|не\s+помню|не\s+знаю|кВт|Вт)/iu.test(message) ||
       /(?:220\s*в|750\s*вт|0[,.]?75\s*квт|шильдик|модель|точн|не\s+помню|не\s+знаю|кВт|Вт)[^.!?\n]{0,120}насос/iu.test(message)
     ),
+    answeredBoilerDetails: userMessages.slice(1).some((message) =>
+      message.includes('кот') && [
+        'мощность котла',
+        'ток котла',
+        'шильдик котла',
+        'тип котла',
+        'мощность не знаю',
+        'мощность точно не знаю',
+        'мощность не помню'
+      ].some((signal) => message.includes(signal))
+    ),
     askedGeneratorCatalog: userMessages.some((message) =>
       /(?:покаж|вариант|модел|карточ)/iu.test(message) && /генератор/iu.test(message)
     ),
@@ -191,6 +202,12 @@ function assistantAsksPumpClarification(answer) {
     /\?/u.test(answer);
 }
 
+function assistantAsksBoilerClarification(answer) {
+  const text = lower(answer);
+  return text.includes('кот') && text.includes('?') &&
+    ['мощ', 'ток', 'шильд', 'тип'].some((signal) => text.includes(signal));
+}
+
 function fallbackDecision({ goal, steps, turnIndex }) {
   if (!steps.length) {
     return {
@@ -209,6 +226,15 @@ function fallbackDecision({ goal, steps, turnIndex }) {
       phase: 'answer_pump_clarification',
       user: 'Насос скважинный на 220 В, мощность точно не помню, вроде около 750 Вт. Котел газовый с электроникой, холодильник один, инструмент от генератора включать не планирую.',
       rationale: 'Ассистент спросил про насос, поэтому покупатель сначала отвечает на уточнение.',
+      source: 'fallback'
+    };
+  }
+
+  if (!coverage.answeredBoilerDetails && assistantAsksBoilerClarification(lastAssistant)) {
+    return {
+      phase: 'answer_boiler_clarification',
+      user: 'Котел газовый с электроникой, точную мощность не знаю. Холодильник обычный, свет и насос будут работать в обычном режиме.',
+      rationale: 'Ассистент спросил данные котла, поэтому покупатель сначала отвечает на это уточнение.',
       source: 'fallback'
     };
   }
