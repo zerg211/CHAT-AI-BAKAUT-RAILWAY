@@ -37,6 +37,7 @@ import {
 } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { compactToolResultsForModel } from './agentManagerModelContext.js';
+import { resolveProductsForEvidence, type ResolvedProduct } from './productFactResolution.js';
 import {
   createStructuredJsonResponse,
   StructuredJsonDeadlineExceededError,
@@ -1751,7 +1752,7 @@ function compactProductDescription(value: unknown, limit = 1200) {
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 
-function answerProductContext(product: Product) {
+function answerProductContext(product: ResolvedProduct) {
   return {
     id: product.id,
     name: product.name,
@@ -1760,6 +1761,9 @@ function answerProductContext(product: Product) {
     price: product.price,
     currency: product.currency,
     specs: product.specs,
+    ...(product.evidenceConflicts?.length
+      ? { evidenceConflicts: product.evidenceConflicts }
+      : {}),
     description: compactProductDescription(product.description),
     sourceUrl: product.sourceUrl
   };
@@ -6188,6 +6192,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Отвечай по-русски как живой менеджер БАКАУТ: просто, легко, без канцелярита и третьего лица, от лица магазина («у нас есть», «можем уточнить»). Простое — кратко; сложное/сравнение — сначала вывод 1-2 предложения, затем 2-4 отличия. Без роботизированных связок: «кнопочный запуск в данных не вижу», «точно не подтверждаю».',
             'Опирайся только на ledger, catalog/tool results, checked research facts и диалог. Чего нет в фактах (dB, наличие, доставка, скидка, срок) — честно «нужно уточнить», при необходимости предложи форму.',
             'Specs товара из tool result catalog.* — подтверждённые данные каталога: если вопрос покупателя о характеристике и её значение есть в specs, отвечай прямо этим значением (factsUsed с sourceEventIds=requestId инструмента). Не отказывайся отвечать и не требуй дополнительного подтверждения того, что в карточке уже написано.',
+            'evidenceConflicts в products — это неразрешённое расхождение значений одной характеристики. Не выбирай значение самостоятельно и не называй его подтвержденным; сохрани полезный вывод по остальным фактам и обозначь эту характеристику как требующую уточнения.',
             'lead.capture ok → подтверди получение и не проси повторно. not_found/error (нет имени/телефона) → НЕ подтверждай и не говори, что передано; leadAction="offer_form" и просьба недостающего контакта в форме.',
             'Без лишних вопросов; вопрос — только если он реально нужен для следующего шага.',
             'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум, не заменяй более широким классом (выше — только как запас/комфорт). Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind: без fit-заявлений; browse_catalog может показывать товары/цены без compatibility claim, preliminary_fit/final_fit — canShowProductCards=false и минимальный вопрос. bounded_basis_incomplete: без final fit, browse показывает товары, preliminary_fit — только полезные предварительные. bounded_assumption: только предварительные карточки при просьбе приблизительного подбора, допущения в answerText и missingFacts.',
@@ -7600,6 +7605,11 @@ export class AgentManagerOrchestrator {
     });
     const answerEvidenceProducts = answerModelEvidence.products;
     const productEvidenceRoles = answerModelEvidence.productEvidenceRoles;
+    const answerEvidenceResolution = resolveProductsForEvidence({
+      products: answerEvidenceProducts,
+      toolResults: selectionToolResults
+    });
+    const answerEvidenceProductsForWriter = answerEvidenceResolution.products;
 
     const historicalProductIds = new Set(historicalProducts.map((product) => product.id));
     const usingHistoricalProducts = answerProducts.some((product) => historicalProductIds.has(product.id));
@@ -7634,7 +7644,7 @@ export class AgentManagerOrchestrator {
         catalogProductNames: answerProducts.map((product) => product.name)
       } satisfies RequiredResponseClause] : []),
       ...requiredResponseClausesForRejectedComparisonReferences({
-        products: answerEvidenceProducts,
+        products: answerEvidenceProductsForWriter,
         productEvidenceRoles
       }),
       ...requiredResponseClausesForToolResults(toolResults, effectiveIntent)
@@ -7660,7 +7670,7 @@ export class AgentManagerOrchestrator {
           pendingLeadCaptureDraft: pendingLeadDraftContext,
           intent: effectiveIntent,
           toolResults: selectionToolResults,
-          products: answerEvidenceProducts,
+          products: answerEvidenceProductsForWriter,
           productEvidenceRoles,
           requiredResponseClauses,
           semanticDecisionValidated,
@@ -7775,7 +7785,7 @@ export class AgentManagerOrchestrator {
           pendingLeadCaptureDraft: pendingLeadDraftContext,
           intent: effectiveIntent,
           toolResults: selectionToolResults,
-          products: answerEvidenceProducts,
+          products: answerEvidenceProductsForWriter,
           productEvidenceRoles,
           requiredResponseClauses,
           semanticDecisionValidated,
@@ -7804,7 +7814,7 @@ export class AgentManagerOrchestrator {
               pendingLeadCaptureDraft: pendingLeadDraftContext,
               intent: effectiveIntent,
               toolResults: selectionToolResults,
-              products: answerEvidenceProducts,
+              products: answerEvidenceProductsForWriter,
               productEvidenceRoles,
               requiredResponseClauses,
               semanticDecisionValidated,
@@ -7824,7 +7834,7 @@ export class AgentManagerOrchestrator {
             pendingLeadCaptureDraft: pendingLeadDraftContext,
             intent: effectiveIntent,
             toolResults: selectionToolResults,
-            products: answerEvidenceProducts,
+            products: answerEvidenceProductsForWriter,
             productEvidenceRoles,
             requiredResponseClauses,
             semanticDecisionValidated,
@@ -8116,14 +8126,27 @@ export class AgentManagerOrchestrator {
         ? uniqueStrings([...answer.riskFlags, 'selection_readiness_blocked_cards'])
         : answer.riskFlags
     };
+    const cardEvidenceResolution = resolveProductsForEvidence({
+      products: cardSelection.products,
+      toolResults: selectionToolResults
+    });
+    const cardCaveatsByProductId: Record<string, string[]> = {
+      ...(cardSelection.productCaveatsById ?? {})
+    };
+    for (const [productId, caveats] of Object.entries(cardEvidenceResolution.caveatsByProductId)) {
+      cardCaveatsByProductId[productId] = uniqueStrings([
+        ...(cardCaveatsByProductId[productId] ?? []),
+        ...caveats
+      ]);
+    }
     const cards = productCards(
-      cardSelection.products,
+      cardEvidenceResolution.products,
       // Per-card reasons come from the writer's own selection rationale (typed
       // contract), not a canned stamp; the constant remains only as last-resort.
       finalAnswerContract.selectionRationale?.trim()
         ? [finalAnswerContract.selectionRationale.trim()]
         : ['Найдено в каталоге под текущий запрос.'],
-      cardSelection.productCaveatsById
+      cardCaveatsByProductId
     );
     const customerOutputValidation = guardCustomerOutput({
       answerText: finalText,
@@ -8204,6 +8227,14 @@ export class AgentManagerOrchestrator {
       selectionReadiness,
       answerProductEvidence,
       replacementProductEvidence,
+      answerEvidenceResolution: {
+        conflictsByProductId: answerEvidenceResolution.conflictsByProductId,
+        warnings: answerEvidenceResolution.warnings
+      },
+      cardEvidenceResolution: {
+        conflictsByProductId: cardEvidenceResolution.conflictsByProductId,
+        warnings: cardEvidenceResolution.warnings
+      },
       productCards: cards,
       needStateSnapshot,
       warnings: [
