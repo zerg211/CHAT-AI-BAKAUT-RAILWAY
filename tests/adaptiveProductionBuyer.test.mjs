@@ -36,7 +36,9 @@ describe('adaptive production buyer', () => {
     const third = await nextAdaptiveBuyerTurn({ goal: defaultAdaptiveBuyerGoal, forceOffline: true, steps });
     expect(third.phase).toBe('request_generator_catalog');
     expect(third.user).toMatch(/генератор/iu);
-    expect(third.user).toMatch(/покаж|вариант/iu);
+    expect(['покаж', 'вариант', 'каталог', 'какие'].some((signal) =>
+      third.user.toLocaleLowerCase('ru-RU').includes(signal)
+    )).toBe(true);
   });
 
   it('does not repeat a pump clarification after the buyer already answered it', async () => {

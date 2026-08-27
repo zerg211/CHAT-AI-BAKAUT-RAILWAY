@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  repairSemanticDecisionForGeneratorLoadScenario,
   validateAgentSemanticDecision,
   type AgentSemanticDecision
 } from '../src/ai/agentManagerOrchestrator.js';
@@ -330,6 +331,38 @@ describe('combined semantic decision validation', () => {
     });
 
     expect(result.issues).toContain('generator_load_scenario_fact_missing');
+  });
+
+  it('repairs a missing scenario fact only from the planner calculator payload', () => {
+    const decision = generatorDecision();
+    decision.ledgerDelta.events = decision.ledgerDelta.events.filter((event) =>
+      event.payload.factKey !== 'generator_load_scenario'
+    );
+
+    const repaired = repairSemanticDecisionForGeneratorLoadScenario({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222',
+      userMessage: 'Одновременно работают компрессор 2,2 кВт, станок 1,1 кВт и свет 300 Вт.'
+    });
+
+    expect(repaired.repaired).toBe(true);
+    expect(repaired.decision.ledgerDelta.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: 'fact.confirmed',
+        payload: expect.objectContaining({
+          factKey: 'generator_load_scenario',
+          role: 'hard_requirement'
+        })
+      })
+    ]));
+    expect(validateAgentSemanticDecision({
+      decision: repaired.decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222'
+    }).issues).toEqual([]);
   });
 
   it('rejects a stale hard requirement value in the execution intent', () => {

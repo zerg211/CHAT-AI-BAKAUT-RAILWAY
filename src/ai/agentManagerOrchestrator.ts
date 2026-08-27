@@ -816,6 +816,115 @@ function semanticLoadDeclaresPower(value: unknown) {
   );
 }
 
+function semanticLoadHasExplicitPower(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  const sourceIsUserProvided = item.source === undefined || item.source === 'explicit_user';
+  const basisSignals = Array.isArray(item.basisSignals) ? item.basisSignals : [];
+  return sourceIsUserProvided && semanticLoadDeclaresPower(item) && (
+    item.basisKind === 'exact_power' ||
+    basisSignals.includes('explicit_power') ||
+    basisSignals.includes('voltage_or_phase_known')
+  );
+}
+
+export function repairSemanticDecisionForGeneratorLoadScenario(input: {
+  decision: AgentSemanticDecision;
+  previousLedgerState: ReducedDialogueLedgerState;
+  sessionId: string;
+  turnId: string;
+  userMessage?: string;
+}) {
+  const calculatorRequest = input.decision.intent.toolRequests.find((request) =>
+    request.tool === 'calculator.generatorLoad'
+  );
+  if (!calculatorRequest) return { decision: input.decision, repaired: false };
+
+  const events = normalizeLedgerStateDeltaEvents({
+    sessionId: input.sessionId,
+    turnId: input.turnId,
+    delta: input.decision.ledgerDelta
+  });
+  const ledgerState = reduceDialogueLedger(events, input.previousLedgerState);
+  const activeNeed = [...Object.values(ledgerState.needsById)].reverse().find((need) =>
+    need.status === 'open' || need.status === 'selected'
+  );
+  if (!activeNeed) return { decision: input.decision, repaired: false };
+
+  const activeScenarioFact = activeScopedLedgerFacts(ledgerState).find((fact) =>
+    fact.factKey === 'generator_load_scenario' && fact.role === 'hard_requirement'
+  );
+  if (activeScenarioFact) return { decision: input.decision, repaired: false };
+
+  const requirement = input.decision.intent.selectionPolicy?.requirements.find((candidate) =>
+    candidate.kind === 'generator_load_scenario' &&
+    candidate.role === 'hard_constraint' &&
+    candidate.strictness === 'strict' &&
+    candidate.verification?.mode === 'typed_tool' &&
+    candidate.verification.toolRequestId === calculatorRequest.id &&
+    candidate.verification.tool === calculatorRequest.tool
+  );
+  if (!requirement) return { decision: input.decision, repaired: false };
+
+  const args = calculatorRequest.args as Record<string, unknown>;
+  const loads = Array.isArray(args.loads) ? args.loads : [];
+  if (!loads.length || !loads.some(semanticLoadHasExplicitPower)) {
+    return { decision: input.decision, repaired: false };
+  }
+
+  const previousScenarioFact = Object.values(input.previousLedgerState.factsByKey).find((fact) =>
+    fact.factKey === 'generator_load_scenario' && fact.needId === activeNeed.needId
+  );
+  const scenarioValue = {
+    loads,
+    simultaneousRunning: args.simultaneousRunning === true,
+    simultaneousStarting: args.simultaneousStarting === true
+  };
+  const evidence = [
+    typeof args.semanticQuery === 'string' ? args.semanticQuery : '',
+    typeof args.query === 'string' ? args.query : '',
+    input.userMessage ?? '',
+    calculatorRequest.rationale
+  ].find((value) => value.trim()) ?? 'Structured generator load supplied by the buyer.';
+  const event = {
+    eventId: null,
+    eventType: 'fact.confirmed' as const,
+    scope: 'need' as const,
+    payload: {
+      factKey: 'generator_load_scenario',
+      value: scenarioValue,
+      needId: activeNeed.needId,
+      productClass: activeNeed.productClass,
+      role: 'hard_requirement',
+      confidence: 1,
+      ...(previousScenarioFact ? { supersedesEventIds: [previousScenarioFact.eventId] } : {})
+    },
+    evidence,
+    source: 'llm_state_delta' as const,
+    status: 'active' as const
+  };
+  const ledgerDelta = LedgerStateDeltaSchema.parse({
+    ...input.decision.ledgerDelta,
+    events: [...input.decision.ledgerDelta.events, event]
+  });
+  return {
+    decision: {
+      ...input.decision,
+      ledgerDelta,
+      intent: {
+        ...input.decision.intent,
+        riskFlags: uniqueStrings([
+          ...input.decision.intent.riskFlags,
+          'planner_repaired_generator_load_scenario_fact'
+        ])
+      }
+    },
+    repaired: true,
+    requirementId: requirement.id,
+    calculatorRequestId: calculatorRequest.id
+  };
+}
+
 export function validateAgentSemanticDecision(input: {
   decision: AgentSemanticDecision;
   previousLedgerState: ReducedDialogueLedgerState;
@@ -6022,7 +6131,12 @@ function plannerSystemPromptBlock(
 export class OpenAIAgentManagerModel implements AgentManagerModel {
   async decideTurn(input: AgentManagerModelInput): Promise<AgentSemanticDecision> {
     const validationRepair = input.semanticValidationIssues?.length
-      ? `Предыдущий единый decision отклонён валидатором: ${input.semanticValidationIssues.join(', ')}. Исправь обе части согласованно; не удаляй подтверждённые требования ради прохождения проверки.`
+      ? [
+          `Предыдущий единый decision отклонён валидатором: ${input.semanticValidationIssues.join(', ')}. Исправь обе части согласованно; не удаляй подтверждённые требования ради прохождения проверки.`,
+          input.semanticValidationIssues.includes('generator_load_scenario_fact_missing')
+            ? 'Если в исправленном intent остаётся calculator.generatorLoad, ledgerDelta обязан содержать fact.confirmed с factKey="generator_load_scenario", role="hard_requirement", confidence=1, тем же needId и value.loads, simultaneousRunning, simultaneousStarting, согласованными с calculator args.loads и флагами. Если текущих данных недостаточно для такой структурированной нагрузки, убери calculator и задай один минимальный вопрос; не оставляй calculator без durable fact.'
+            : ''
+        ].filter(Boolean).join(' ')
       : 'Верни одно авторитетное решение: ledgerDelta и intent должны выражать одну и ту же интерпретацию текущей реплики.';
     const request = {
       model: config.OPENAI_PLANNER_MODEL,
@@ -6831,6 +6945,20 @@ export class AgentManagerOrchestrator {
               throw new AgentManagerTurnBudgetExceededError('wall_time_budget_exceeded');
             }
             continue;
+          }
+          const semanticRepair = repairSemanticDecisionForGeneratorLoadScenario({
+            decision: candidate,
+            previousLedgerState: ledgerContext.state,
+            sessionId: input.sessionId,
+            turnId: input.turnId,
+            userMessage
+          });
+          candidate = semanticRepair.decision;
+          if (semanticRepair.repaired) {
+            await this.trace(input.sessionId, input.turnId, 'intent', 'generator_load_scenario_fact_repaired', {
+              requirementId: semanticRepair.requirementId,
+              calculatorRequestId: semanticRepair.calculatorRequestId
+            });
           }
           const validation = validateAgentSemanticDecision({
             decision: candidate,

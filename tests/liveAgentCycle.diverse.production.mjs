@@ -513,20 +513,32 @@ async function main() {
         productionLeads: sessionLeads
       }, null, 2), 'utf8');
     }
-    const assistantMessages = detail?.messages?.filter((message) => message.role === 'assistant') ?? [];
     const adminTurns = detail?.turns ?? [];
-    const metadataAvailable = assistantMessages.length >= steps.length;
+    const messagesById = new Map((detail?.messages ?? []).map((message) => [message.id, message]));
+    const metadataAvailable = Boolean(detail);
 
     const auditedSteps = steps.map((step, index) => {
-      const turnError = adminTurns[index]?.errorCode
-        ? `turn error: ${adminTurns[index].errorCode}${adminTurns[index].stage ? `/${adminTurns[index].stage}` : ''}`
+      const adminTurn = adminTurns[index];
+      const turnError = adminTurn?.errorCode
+        ? `turn error: ${adminTurn.errorCode}${adminTurn.stage ? `/${adminTurn.stage}` : ''}`
         : '';
-      const code = metadataAvailable ? codeAudit(step, assistantMessages[index]) : {
-        issues: ['admin metadata недоступна или количество ходов не совпало', turnError].filter(Boolean),
-        contract: {},
-        warnings: [],
-        productCards: []
-      };
+      const assistantMessage = adminTurn?.assistantMessageId
+        ? messagesById.get(adminTurn.assistantMessageId)
+        : undefined;
+      const code = assistantMessage?.role === 'assistant'
+        ? (() => {
+            const auditedCode = codeAudit(step, assistantMessage);
+            return {
+              ...auditedCode,
+              issues: [...auditedCode.issues, turnError].filter(Boolean)
+            };
+          })()
+        : {
+            issues: [turnError || 'assistant message отсутствует в admin metadata'],
+            contract: {},
+            warnings: [],
+            productCards: []
+          };
       return { ...step, code };
     });
 
