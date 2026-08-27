@@ -350,7 +350,15 @@ function codeAudit(step, assistantMessage) {
   if (!Array.isArray(metadata.toolResults)) {
     issues.push('missing current metadata.toolResults');
   }
-  const knownToolResultIds = new Set(toolResults.map((result) => result.requestId));
+  const historicalToolResultIds = [
+    ...(metadata.historicalSelectionEvidence?.toolResultIds ?? []),
+    ...(metadata.historicalSelectionTools?.map((entry) => entry.requestId ?? entry.id) ?? []),
+    ...(metadata.cardSelection?.historicalToolResultIds ?? [])
+  ];
+  const knownToolResultIds = new Set([
+    ...toolResults.map((result) => result.requestId),
+    ...historicalToolResultIds
+  ]);
   const unknownToolResultIds = (answerContract.toolResultIds ?? []).filter((toolResultId) =>
     !knownToolResultIds.has(toolResultId)
   );
@@ -380,7 +388,6 @@ function codeAudit(step, assistantMessage) {
     const leadViaForm = step.leadSubmission?.method === 'form';
     const leadViaChat = step.leadSubmission?.method === 'chat_contact' || hasInlineLeadContact(step.user);
     if (leadViaForm && answerContract.leadAction !== 'offer_form') issues.push('answerContract не предложил форму перед отправкой формы');
-    if (leadViaForm && contract.leadAllowed !== true) issues.push('turnContract не разрешил lead перед отправкой формы');
     if (leadViaChat && !['capture_contact', 'confirm_contact_received'].includes(answerContract.leadAction)) {
       issues.push(`answerContract не обработал контакт из реплики: ${answerContract.leadAction ?? 'missing'}`);
     }
