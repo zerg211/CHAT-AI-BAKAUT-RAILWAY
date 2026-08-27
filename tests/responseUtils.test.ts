@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { extractResponseText, extractUrlCitations, responseUsedWebSearch } from '../src/ai/responseUtils.js';
+import { extractResponseText, extractUrlCitations, responseUsedWebSearch, safeError } from '../src/ai/responseUtils.js';
 
 describe('response utils provider type parsing', () => {
+  it('normalizes numeric error codes before they enter string contracts', () => {
+    expect(safeError({ name: 'AbortError', code: 20, message: 'The operation was aborted.' })).toMatchObject({
+      name: 'AbortError',
+      code: '20'
+    });
+  });
+
   it('detects web search provider nodes without regex', () => {
     expect(responseUsedWebSearch({
       output: [

@@ -9,11 +9,11 @@ export type WebCitation = {
 
 export function safeError(error: unknown) {
   if (!error || typeof error !== 'object') return { message: String(error) };
-  const value = error as { name?: string; status?: number; code?: string; message?: string; retryReason?: string };
+  const value = error as { name?: string; status?: number; code?: unknown; message?: string; retryReason?: string };
   return {
     name: value.name,
     status: value.status,
-    code: value.code,
+    code: value.code === undefined || value.code === null ? undefined : String(value.code),
     message: value.message,
     retryReason: value.retryReason
   };
