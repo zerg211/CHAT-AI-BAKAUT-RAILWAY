@@ -126,6 +126,26 @@ describe('adaptive production buyer', () => {
     expect(second.user).not.toBe(first.user);
   });
 
+  it('keeps repeated fallback catalog requests distinct while the catalog is unavailable', async () => {
+    const steps = [{
+      phase: 'answer_pump_clarification',
+      user: 'Насос скважинный 220 В, примерно 750 Вт.',
+      assistant: 'Показываю каталог генераторов.',
+      newCards: []
+    }];
+    const users = [];
+
+    for (let index = 0; index < 4; index += 1) {
+      const turn = await nextAdaptiveBuyerTurn({ goal: defaultAdaptiveBuyerGoal, forceOffline: true, steps });
+      expect(turn.phase).toBe('request_generator_catalog');
+      expect(users).not.toContain(turn.user);
+      users.push(turn.user);
+      steps.push({ ...turn, assistant: 'Карточки генераторов пока не загрузились.', newCards: [] });
+    }
+
+    expect(new Set(users).size).toBe(4);
+  });
+
   it('does not report an already-covered pump clarification as ignored', () => {
     const steps = [{
       phase: 'start_generator_need',

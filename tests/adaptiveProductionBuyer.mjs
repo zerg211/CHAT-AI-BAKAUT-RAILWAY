@@ -3,8 +3,14 @@ import OpenAI from 'openai';
 
 const fallbackDialogueVariant = crypto.randomInt(0, 1_000_000);
 
-function fallbackPhrase(variants, offset = 0) {
-  return variants[(fallbackDialogueVariant + offset) % variants.length];
+function fallbackPhrase(variants, offset = 0, usedValues = []) {
+  const used = new Set(usedValues.map((value) => lower(value)));
+  const start = (fallbackDialogueVariant + offset) % variants.length;
+  for (let index = 0; index < variants.length; index += 1) {
+    const candidate = variants[(start + index) % variants.length];
+    if (!used.has(lower(candidate))) return candidate;
+  }
+  return variants[start];
 }
 
 export const defaultAdaptiveBuyerGoal = {
@@ -248,6 +254,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
 
   const lastAssistant = steps.at(-1)?.assistant ?? '';
   const coverage = coverageFromSteps(steps);
+  const priorUserMessages = steps.map((step) => step.user);
 
   if (!coverage.answeredPumpDetails && assistantAsksPumpClarification(lastAssistant)) {
     return {
@@ -257,7 +264,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
         'Насос обычный скважинный, 220 В, ориентировочно 750 Вт; точную модель пока не нашел. Котел газовый с электроникой, холодильник один, инструмент подключать не буду.',
         'Уточню по насосу: скважинный, 220 В, примерно 750 Вт. Модель сейчас не под рукой. Котел газовый с электроникой, холодильник один, без инструмента.',
         'По насосу пока такой ориентир: скважинный 220 В и около 750 Вт, точную модель посмотрю позже. Котел газовый с электроникой, холодильник один, инструмент не планирую.'
-      ]),
+      ], 0, priorUserMessages),
       rationale: 'Ассистент спросил про насос, поэтому покупатель сначала отвечает на уточнение.',
       source: 'fallback'
     };
@@ -287,8 +294,9 @@ function fallbackDecision({ goal, steps, turnIndex }) {
       user: fallbackPhrase([
         'Покажите тогда пару нормальных генераторов из каталога, чтобы был запас под насос и котел, но без огромной переплаты.',
         'Покажите, пожалуйста, два генератора из каталога с запасом под насос и котел, но без большой переплаты.',
-        'Какие подходящие генераторы есть в каталоге для насоса и котла, если не хочется переплачивать?'
-      ], 5 + coverage.generatorCatalogRequestCount),
+        'Какие подходящие генераторы есть в каталоге для насоса и котла, если не хочется переплачивать?',
+        'Хочу еще раз сравнить доступные генераторы из каталога примерно от 3 кВт, чтобы выбрать без лишней переплаты.'
+      ], 5 + coverage.generatorCatalogRequestCount, priorUserMessages),
       rationale: 'После расчета покупатель просит конкретные варианты.',
       source: 'fallback'
     };
@@ -301,7 +309,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
         'Еще нужна виброплита для въезда под плитку. Там песок и щебень, площадь небольшая, грузить буду сам. Какой вес смотреть?',
         'Отдельно хочу подобрать виброплиту для въезда под плитку: песок и щебень, площадь небольшая, грузить буду сам. Какой вес разумнее?',
         'И по второй задаче нужна виброплита для небольшого въезда под плитку, основание из песка и щебня. Возить и грузить буду сам, какой вес взять?'
-      ], 1),
+      ], 1, priorUserMessages),
       rationale: 'Основная генераторная часть закрыта, покупатель добавляет вторую реальную задачу.',
       source: 'fallback'
     };
@@ -314,7 +322,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
         'Покажите из каталога виброплиты примерно 80-100 кг и скажите, нужен ли коврик под плитку.',
         'Покажите в каталоге виброплиты примерно на 80-100 кг и подскажите, нужен ли защитный коврик под плитку.',
         'Покажите, пожалуйста, виброплиты из каталога в районе 80-100 кг и скажите насчет коврика для плитки.'
-      ], 2 + coverage.plateCatalogRequestCount),
+      ], 2 + coverage.plateCatalogRequestCount, priorUserMessages),
       rationale: 'Покупатель просит конкретные карточки под вторую задачу.',
       source: 'fallback'
     };
@@ -327,7 +335,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
         'Если брать генератор и виброплиту, доставка до Азова у вас бывает? И наличие по этим позициям можно уточнить?',
         'Подскажите, если взять генератор и виброплиту, сможете проверить доставку до Азова и наличие обеих позиций?',
         'Как с доставкой до Азова и наличием, если оформлять вместе генератор и виброплиту? Это можно уточнить?'
-      ], 3),
+      ], 3, priorUserMessages),
       rationale: 'После подбора покупатель переходит к покупке и условиям.',
       source: 'fallback'
     };
@@ -340,7 +348,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
       'Хорошо, давайте заявку, я оставлю контакт в форме. Нужно уточнить наличие выбранного генератора, виброплиты и доставку.',
       'Тогда оставлю контакт через форму, чтобы проверить наличие генератора, виброплиты и доставку до Азова.',
       'Готов оставить заявку через форму: проверьте, пожалуйста, наличие обеих выбранных позиций и доставку.'
-    ], 4),
+    ], 4, priorUserMessages),
     rationale: 'Цель почти закрыта, покупатель готов оставить контакт для проверки наличия и доставки.',
     source: 'fallback',
     leadForm: contact
