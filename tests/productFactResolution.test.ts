@@ -91,6 +91,17 @@ describe('product fact resolution', () => {
     expect(resolution.products[0]?.evidenceConflicts).toBeUndefined();
   });
 
+  it('collapses numerically equal alias values with different unit formatting', () => {
+    const item = product({
+      центробежнаяСила: '15 кН',
+      'центробежная сила, кн': '15'
+    });
+    const resolution = resolveProductsForEvidence({ products: [item] });
+
+    expect(resolution.products[0]?.specs).toEqual({ центробежнаяСила: '15 кН' });
+    expect(resolution.conflictsByProductId).toEqual({});
+  });
+
   it('removes unresolved duplicate values instead of selecting by object order', () => {
     const item = product({
       центробежнаяСила: '15 кН',

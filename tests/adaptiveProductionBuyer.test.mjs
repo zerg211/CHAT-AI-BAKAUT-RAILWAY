@@ -39,6 +39,27 @@ describe('adaptive production buyer', () => {
     expect(third.user).toMatch(/покаж|вариант/iu);
   });
 
+  it('does not repeat a pump clarification after the buyer already answered it', async () => {
+    const turn = await nextAdaptiveBuyerTurn({
+      goal: defaultAdaptiveBuyerGoal,
+      forceOffline: true,
+      steps: [{
+        phase: 'start_generator_need',
+        user: defaultAdaptiveBuyerGoal.startUser,
+        assistant: 'Какая мощность и напряжение у насоса?',
+        newCards: []
+      }, {
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный на 220 В, примерно 750 Вт, точную модель не помню.',
+        assistant: 'Какой точный шильдик насоса?',
+        newCards: []
+      }]
+    });
+
+    expect(turn.phase).toBe('request_generator_catalog');
+    expect(turn.user.toLocaleLowerCase('ru-RU')).toContain('генератор');
+  });
+
   it('audits goal coverage rather than exact scripted turns', () => {
     const steps = [
       {

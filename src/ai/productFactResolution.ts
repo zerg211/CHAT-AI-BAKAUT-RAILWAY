@@ -129,6 +129,43 @@ function displayValue(value: unknown) {
   }
 }
 
+function standaloneNumericValue(value: unknown) {
+  const text = displayValue(value).toLocaleLowerCase('ru-RU').trim();
+  if (!text) return null;
+  let index = 0;
+  let numberText = '';
+  let decimalSeen = false;
+  let digitSeen = false;
+  for (const character of text) {
+    if (character >= '0' && character <= '9') {
+      numberText += character;
+      digitSeen = true;
+      index += 1;
+      continue;
+    }
+    if ((character === '.' || character === ',') && !decimalSeen) {
+      numberText += '.';
+      decimalSeen = true;
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  if (!digitSeen) return null;
+  const number = Number(numberText);
+  if (!Number.isFinite(number)) return null;
+  const rest = compactLabel(text.slice(index));
+  if (rest && !measurementSuffixes.includes(rest as typeof measurementSuffixes[number])) return null;
+  return { number: String(number), unit: rest };
+}
+
+function specValueKey(value: unknown, entries: SpecEntry[]) {
+  const numeric = standaloneNumericValue(value);
+  if (!numeric) return valueKey(value);
+  const groupUnits = uniqueStrings(entries.map((entry) => entry.unit ?? ''));
+  return `number:${numeric.number}:${numeric.unit || (groupUnits.length === 1 ? groupUnits[0] : '')}`;
+}
+
 function isHttpUrl(value: unknown) {
   if (typeof value !== 'string' || !value.trim()) return false;
   try {
@@ -270,9 +307,9 @@ function resolveProduct(input: {
       typeof conflict.attribute === 'string' && group.some((entry) => labelsAreAliases(entry.key, conflict.attribute as string))
     );
     const factValues = new Map<string, EvidenceFact>();
-    for (const fact of groupFacts) factValues.set(valueKey(fact.value), fact);
+    for (const fact of groupFacts) factValues.set(specValueKey(fact.value, group), fact);
     const rawValues = new Map<string, unknown>();
-    for (const entry of group) rawValues.set(valueKey(entry.value), entry.value);
+    for (const entry of group) rawValues.set(specValueKey(entry.value, group), entry.value);
     const unresolvedSourceConflict = groupSourceConflicts.some(({ adjudicated }) => !adjudicated);
 
     if (factValues.size === 1 && !unresolvedSourceConflict) {

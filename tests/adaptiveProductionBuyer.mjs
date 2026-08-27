@@ -204,7 +204,7 @@ function fallbackDecision({ goal, steps, turnIndex }) {
   const lastAssistant = steps.at(-1)?.assistant ?? '';
   const coverage = coverageFromSteps(steps);
 
-  if (assistantAsksPumpClarification(lastAssistant)) {
+  if (!coverage.answeredPumpDetails && assistantAsksPumpClarification(lastAssistant)) {
     return {
       phase: 'answer_pump_clarification',
       user: 'Насос скважинный на 220 В, мощность точно не помню, вроде около 750 Вт. Котел газовый с электроникой, холодильник один, инструмент от генератора включать не планирую.',
