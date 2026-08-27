@@ -463,7 +463,15 @@ async function main() {
       const previousAssistantCount = await frame.locator('.message.assistant').count().catch(() => 0);
       await waitInputEnabled(input);
       await input.fill(turn.user);
-      await input.press('Enter');
+      const submitButton = frame.locator('form.composer button[type="submit"]').first();
+      const submitDeadline = Date.now() + 10_000;
+      while (Date.now() < submitDeadline && !await submitButton.isEnabled().catch(() => false)) {
+        await page.waitForTimeout(50);
+      }
+      if (!await submitButton.isEnabled().catch(() => false)) {
+        throw new Error('Chat submit button did not become enabled after filling the buyer turn.');
+      }
+      await submitButton.click();
       await waitForAssistantResponse(frame, previousAssistantCount);
       await page.waitForTimeout(250);
 
