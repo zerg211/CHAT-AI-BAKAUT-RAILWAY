@@ -202,10 +202,26 @@ function assistantAsksPumpClarification(answer) {
     /\?/u.test(answer);
 }
 
-function assistantAsksBoilerClarification(answer) {
+function questionSegments(answer) {
   const text = lower(answer);
-  return text.includes('кот') && text.includes('?') &&
-    ['мощ', 'ток', 'шильд', 'тип'].some((signal) => text.includes(signal));
+  const segments = [];
+  let questionEnd = text.indexOf('?');
+  while (questionEnd >= 0) {
+    const sentenceStart = Math.max(
+      text.lastIndexOf('.', questionEnd - 1),
+      text.lastIndexOf('!', questionEnd - 1),
+      text.lastIndexOf('?', questionEnd - 1)
+    );
+    segments.push(text.slice(sentenceStart + 1, questionEnd));
+    questionEnd = text.indexOf('?', questionEnd + 1);
+  }
+  return segments;
+}
+
+function assistantAsksBoilerClarification(answer) {
+  return questionSegments(answer).some((question) =>
+    question.includes('кот') && ['мощ', 'ток', 'шильд', 'тип'].some((signal) => question.includes(signal))
+  );
 }
 
 function fallbackDecision({ goal, steps, turnIndex }) {
@@ -403,7 +419,10 @@ export function evaluateAdaptiveGoalProgress(steps, goal = defaultAdaptiveBuyerG
 
   steps.forEach((step, index) => {
     const next = steps[index + 1];
-    if (next && assistantAsksPumpClarification(step.assistant) && !/(насос|220|мощност|шильдик|кВт|Вт)/iu.test(next.user)) {
+    const coverageBeforeNextTurn = coverageFromSteps(steps.slice(0, index + 1));
+    if (next && assistantAsksPumpClarification(step.assistant) &&
+      !coverageBeforeNextTurn.answeredPumpDetails &&
+      !/(насос|220|мощност|шильдик|кВт|Вт)/iu.test(next.user)) {
       issues.push(`assistant_clarification_ignored_after_turn_${index + 1}`);
     }
   });

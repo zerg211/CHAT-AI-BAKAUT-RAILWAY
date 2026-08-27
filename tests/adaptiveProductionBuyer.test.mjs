@@ -77,6 +77,43 @@ describe('adaptive production buyer', () => {
     expect(turn.user.toLocaleLowerCase('ru-RU')).toContain('мощность');
   });
 
+  it('does not confuse a pump question mentioning boiler context with a boiler clarification', async () => {
+    const turn = await nextAdaptiveBuyerTurn({
+      goal: defaultAdaptiveBuyerGoal,
+      forceOffline: true,
+      steps: [{
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный на 220 В, мощность точно не помню, вроде около 750 Вт. Котел газовый с электроникой, холодильник один.',
+        assistant: 'Мощности холодильника и котла лучше уточнить. Можете прислать фото шильдика насоса?',
+        newCards: []
+      }]
+    });
+
+    expect(turn.phase).toBe('request_generator_catalog');
+    expect(turn.user.toLocaleLowerCase('ru-RU')).toContain('генератор');
+  });
+
+  it('does not report an already-covered pump clarification as ignored', () => {
+    const steps = [{
+      phase: 'start_generator_need',
+      user: defaultAdaptiveBuyerGoal.startUser,
+      assistant: 'Какая мощность у насоса?',
+      newCards: []
+    }, {
+      phase: 'answer_pump_clarification',
+      user: 'Насос скважинный на 220 В, примерно 750 Вт, точную модель не помню.',
+      assistant: 'Можете прислать фото шильдика насоса?',
+      newCards: []
+    }, {
+      phase: 'request_generator_catalog',
+      user: 'Покажите пару генераторов из каталога.',
+      assistant: 'Вот варианты.',
+      newCards: ['Генератор бензиновый 3 кВт']
+    }];
+
+    expect(evaluateAdaptiveGoalProgress(steps).issues).not.toContain('assistant_clarification_ignored_after_turn_2');
+  });
+
   it('audits goal coverage rather than exact scripted turns', () => {
     const steps = [
       {
