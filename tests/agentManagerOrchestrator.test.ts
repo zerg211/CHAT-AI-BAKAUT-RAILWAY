@@ -5457,6 +5457,83 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.leadCreated).toBe(true);
   });
 
+  it('allows a safe form offer when an optional lead capture has no current contact', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const userMessage = 'Хорошо, давайте заявку, я оставлю контакт в форме. Нужно уточнить наличие и доставку.';
+    conversations.messages = [message(userMessage)];
+    const leadModel = model({
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer wants a form to request availability and delivery',
+          dialogueUnderstanding: 'the buyer has not supplied contact data yet',
+          nextStepRationale: 'offer the form without claiming a lead was captured',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'lead.capture:form-offer',
+            tool: 'lead.capture',
+            args: {},
+            rationale: 'the buyer agreed to use the contact form',
+            required: false
+          }],
+          grounding: {
+            taskType: 'availability_or_delivery',
+            sourcePolicy: 'specialist_required',
+            webPurpose: 'none',
+            webRequirement: 'none',
+            requiredToolKinds: ['lead.capture'],
+            technicalAttributes: [],
+            buyerQuestion: 'Нужно уточнить наличие и доставку.',
+            rationale: 'offer a form for the explicit commercial follow-up'
+          },
+          productMentions: [],
+          selectionPolicy: currentNoProductSelectionPolicy(),
+          leadCaptureAuthorization: {
+            authorized: true,
+            contactSource: 'current_message',
+            handoffKind: 'commercial_followup',
+            purpose: 'уточнить наличие и доставку',
+            buyerQuestion: 'Нужно уточнить наличие и доставку.',
+            evidence: userMessage,
+            pendingDraftId: null
+          },
+          policyRuleIds: [],
+          mustNotAskQuestionIds: [],
+          riskFlags: ['lead']
+        };
+      },
+      async composeAnswer(input) {
+        expect(input.toolResults).toEqual([
+          expect.objectContaining({
+            requestId: 'lead.capture:form-offer',
+            status: 'denied'
+          })
+        ]);
+        return {
+          answerText: 'Оставьте имя и номер телефона в форме, и мы уточним наличие и доставку.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['lead.capture:form-offer'],
+          leadAction: 'offer_form',
+          riskFlags: []
+        };
+      }
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      leads as never,
+      leadModel
+    );
+
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+
+    expect(payload.answer).toContain('Оставьте имя и номер телефона');
+    expect(payload.leadRequested).toBe(true);
+    expect(payload.leadCreated).toBe(false);
+    expect(leads.created).toHaveLength(0);
+  });
+
   it('denies lead capture when buyerQuestion itself contains contact PII', async () => {
     const conversations = new FakeConversations();
     const leads = new FakeLeads();

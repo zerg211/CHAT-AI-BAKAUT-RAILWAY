@@ -9971,19 +9971,6 @@ export class AgentManagerOrchestrator {
         });
       }
     }
-    if (
-      leadCaptureFailed &&
-      !hasLeadContact(contactInTurn) &&
-      input.answer.leadAction === 'offer_form' &&
-      !mechanicalIssues.some((issue) => issue.code === 'lead_capture_missing_contact_offer_form')
-    ) {
-      mechanicalIssues.push({
-        code: 'lead_capture_missing_contact_offer_form',
-        severity: 'medium',
-        message: 'A commercial handoff was planned without buyer contact; rewrite to a safe form offer without promising delivery, discounts, stock, or special terms.',
-        evidence: JSON.stringify(input.toolResults.filter((result) => result.tool === 'lead.capture'))
-      });
-    }
     if (hasAdjudicationRisk({ answerRiskFlags: input.answer.riskFlags, toolResults: input.toolResults })) {
       mechanicalIssues.push({
         code: 'requires_adjudication',
