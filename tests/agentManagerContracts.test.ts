@@ -5,6 +5,7 @@ import {
   createStableLedgerEventId,
   parseAnswerContractModelOutput,
   normalizeLedgerStateDeltaEvents,
+  normalizeAgentIntentContractDraft,
   type LedgerStateDelta
 } from '../src/ai/agentManagerContracts.js';
 import { agentManagerStructuredFormats } from '../src/ai/agentManagerOrchestrator.js';
@@ -133,6 +134,41 @@ describe('agent manager contracts', () => {
         canonicalProductClass: 'виброплита'
       }
     }).success).toBe(false);
+  });
+
+  it('normalizes cross-field lead authorization drift without authorizing the lead', () => {
+    const normalized = normalizeAgentIntentContractDraft({
+      userMessageSummary: 'buyer asks how to check delivery',
+      dialogueUnderstanding: 'the buyer has not supplied contact details',
+      nextStepRationale: 'offer the contact form without claiming a handoff',
+      requiresTools: true,
+      toolRequests: [],
+      leadCaptureAuthorization: {
+        authorized: false,
+        contactSource: 'current_message',
+        handoffKind: 'commercial_followup',
+        handoffOfferMessageId: null,
+        purpose: 'check delivery',
+        buyerQuestion: 'How is delivery checked?',
+        evidence: 'the buyer asks about delivery',
+        pendingDraftId: null
+      },
+      policyRuleIds: [],
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    });
+    const parsed = AgentIntentContractSchema.parse(normalized);
+
+    expect(parsed.leadCaptureAuthorization).toMatchObject({
+      authorized: false,
+      contactSource: 'none',
+      handoffKind: 'none',
+      handoffOfferMessageId: null,
+      purpose: null,
+      buyerQuestion: null,
+      evidence: null,
+      pendingDraftId: null
+    });
   });
 
   it('requires a scoped draft id before a name-only turn may continue partial lead capture', () => {

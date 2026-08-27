@@ -212,6 +212,22 @@ export function normalizeLedgerStateDeltaDraft(value: unknown): unknown {
   return delta;
 }
 
+function normalizeLeadCaptureAuthorizationDraft(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+  const authorization = value as Record<string, unknown>;
+  if (authorization.authorized !== false) return value;
+  return {
+    ...authorization,
+    contactSource: 'none',
+    handoffKind: 'none',
+    handoffOfferMessageId: null,
+    purpose: null,
+    buyerQuestion: null,
+    evidence: null,
+    pendingDraftId: null
+  };
+}
+
 export function normalizeAgentIntentContractDraft(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const intent = { ...(value as Record<string, unknown>) };
@@ -248,6 +264,9 @@ export function normalizeAgentIntentContractDraft(value: unknown): unknown {
       record.rationale = draftTextWithFallback(record.rationale, `Executed ${String(record.tool ?? 'tool')} request.`);
       return record;
     });
+  }
+  if (intent.leadCaptureAuthorization !== undefined) {
+    intent.leadCaptureAuthorization = normalizeLeadCaptureAuthorizationDraft(intent.leadCaptureAuthorization);
   }
   return intent;
 }
