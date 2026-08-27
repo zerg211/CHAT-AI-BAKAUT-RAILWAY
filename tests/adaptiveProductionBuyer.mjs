@@ -178,11 +178,17 @@ function coverageFromSteps(steps) {
     askedGeneratorCatalog: userMessages.some((message) =>
       /(?:покаж|вариант|модел|карточ)/iu.test(message) && /генератор/iu.test(message)
     ),
+    generatorCatalogRequestCount: userMessages.filter((message) =>
+      message.includes('генератор') && ['покаж', 'вариант', 'модел', 'карточ', 'каталог'].some((signal) => message.includes(signal))
+    ).length,
     sawGeneratorCards: /генератор/iu.test(cardText),
     askedPlateNeed: /виброплит/iu.test(userText),
     askedPlateCatalog: userMessages.some((message) =>
       /(?:покаж|вариант|модел|карточ)/iu.test(message) && /виброплит/iu.test(message)
     ),
+    plateCatalogRequestCount: userMessages.filter((message) =>
+      message.includes('виброплит') && ['покаж', 'вариант', 'модел', 'карточ', 'каталог'].some((signal) => message.includes(signal))
+    ).length,
     sawPlateCards: /виброплит/iu.test(cardText),
     askedDelivery: /доставк|налич|скидк|заказ/iu.test(userText),
     submittedLead: steps.some((step) => step.leadSubmission?.submitted || step.leadForm),
@@ -278,7 +284,11 @@ function fallbackDecision({ goal, steps, turnIndex }) {
   if (!coverage.sawGeneratorCards) {
     return {
       phase: 'request_generator_catalog',
-      user: 'Покажите тогда пару нормальных генераторов из каталога, чтобы был запас под насос и котел, но без огромной переплаты.',
+      user: fallbackPhrase([
+        'Покажите тогда пару нормальных генераторов из каталога, чтобы был запас под насос и котел, но без огромной переплаты.',
+        'Покажите, пожалуйста, два генератора из каталога с запасом под насос и котел, но без большой переплаты.',
+        'Какие подходящие генераторы есть в каталоге для насоса и котла, если не хочется переплачивать?'
+      ], 5 + coverage.generatorCatalogRequestCount),
       rationale: 'После расчета покупатель просит конкретные варианты.',
       source: 'fallback'
     };
@@ -302,9 +312,9 @@ function fallbackDecision({ goal, steps, turnIndex }) {
       phase: 'request_plate_catalog',
       user: fallbackPhrase([
         'Покажите из каталога виброплиты примерно 80-100 кг и скажите, нужен ли коврик под плитку.',
-        'Какие виброплиты из каталога есть примерно на 80-100 кг? И нужен ли защитный коврик под плитку?',
-        'Подберите, пожалуйста, по каталогу виброплиты в районе 80-100 кг и подскажите насчет коврика для плитки.'
-      ], 2),
+        'Покажите в каталоге виброплиты примерно на 80-100 кг и подскажите, нужен ли защитный коврик под плитку.',
+        'Покажите, пожалуйста, виброплиты из каталога в районе 80-100 кг и скажите насчет коврика для плитки.'
+      ], 2 + coverage.plateCatalogRequestCount),
       rationale: 'Покупатель просит конкретные карточки под вторую задачу.',
       source: 'fallback'
     };

@@ -93,6 +93,37 @@ describe('adaptive production buyer', () => {
     expect(turn.user.toLocaleLowerCase('ru-RU')).toContain('генератор');
   });
 
+  it('changes a generator catalog request when the first search returns no cards', async () => {
+    const first = await nextAdaptiveBuyerTurn({
+      goal: defaultAdaptiveBuyerGoal,
+      forceOffline: true,
+      steps: [{
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный 220 В, примерно 750 Вт.',
+        assistant: 'Покажу каталог после уточнения нагрузки.',
+        newCards: []
+      }]
+    });
+    const second = await nextAdaptiveBuyerTurn({
+      goal: defaultAdaptiveBuyerGoal,
+      forceOffline: true,
+      steps: [{
+        phase: 'answer_pump_clarification',
+        user: 'Насос скважинный 220 В, примерно 750 Вт.',
+        assistant: 'Покажу каталог после уточнения нагрузки.',
+        newCards: []
+      }, {
+        ...first,
+        assistant: 'По текущему запросу карточки генераторов пока не нашлись.',
+        newCards: []
+      }]
+    });
+
+    expect(first.phase).toBe('request_generator_catalog');
+    expect(second.phase).toBe('request_generator_catalog');
+    expect(second.user).not.toBe(first.user);
+  });
+
   it('does not report an already-covered pump clarification as ignored', () => {
     const steps = [{
       phase: 'start_generator_need',
