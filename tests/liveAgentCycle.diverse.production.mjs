@@ -284,16 +284,19 @@ function codeAudit(step, assistantMessage) {
   const issues = [];
   const metadata = metadataOf(assistantMessage);
   const contract = metadata.turnContract ?? {};
+  const answerContract = metadata.answerContract ?? {};
+  const policyGate = metadata.policyGate ?? {};
+  const policyGateEnforcement = metadata.policyGateEnforcement ?? {};
+  const toolResults = Array.isArray(metadata.toolResults) ? metadata.toolResults : [];
   const warnings = [
-    ...(metadata.validatorWarnings ?? []),
+    ...(metadata.warnings ?? []),
     ...(contract.validatorWarnings ?? []),
-    ...(metadata.requirementLedger?.warnings ?? []),
-    ...(metadata.executionContract?.warnings ?? []),
-    ...(metadata.cardManifest?.warnings ?? []),
-    ...(metadata.factClaimPlanner?.warnings ?? []),
-    ...(metadata.factClaimAudit?.warnings ?? []),
-    ...(metadata.leadStateMachine?.warnings ?? []),
-    ...((metadata.postAnswerVerification?.issues ?? []).map((issue) => issue.code))
+    ...(policyGate.warnings ?? []),
+    ...(policyGateEnforcement.warnings ?? []),
+    ...(metadata.ledgerState?.warnings ?? []),
+    ...(metadata.selectionReadiness?.warnings ?? []),
+    ...(metadata.answerProductEvidence?.warnings ?? []),
+    ...(metadata.cardSelection?.warnings ?? [])
   ];
   const productCards = metadata.productCards ?? [];
   const diagnostics = metadata.aiDiagnostics ?? {};
@@ -306,6 +309,8 @@ function codeAudit(step, assistantMessage) {
     'legacySemanticFallback'
   ].filter((key) => metadata[key] !== undefined && metadata[key] !== null);
 
+  if (metadata.agentManager !== true) issues.push('agentManager metadata marker is missing');
+  if (metadata.runtimeMode !== 'agent_manager') issues.push(`runtimeMode is not agent_manager: ${metadata.runtimeMode ?? 'missing'}`);
   if (metadata.recovered === true || fallbackStage || prohibitedAnswerPathKeys.length) {
     const alternatePath = fallbackStage?.[0] ?? (
       prohibitedAnswerPathKeys.length ? prohibitedAnswerPathKeys.join(',') : 'recovered'
@@ -315,21 +320,42 @@ function codeAudit(step, assistantMessage) {
   if (metadata.preSendValidation?.verdict !== 'pass') {
     issues.push(`primary answer validation is not pass: ${metadata.preSendValidation?.verdict ?? 'missing'}`);
   }
-  if (!contract.taskType || !contract.catalogAction || !contract.productCardsPolicy) {
+  if (!contract.taskType || !contract.catalogAction || !contract.productCardsPolicy || !contract.answerTask) {
     issues.push('нет полного turnContract');
   }
   if (warnings.includes('contract_source:legacy_text_fallback')) {
     issues.push('legacy_text_fallback contract');
   }
-  if (!metadata.requirementLedger) issues.push('нет requirementLedger');
-  if (!metadata.executionContract) issues.push('нет executionContract');
-  if (productCards.length && !metadata.cardManifest) issues.push('нет cardManifest для карточек');
-  if (!metadata.factClaimPlanner) issues.push('нет factClaimPlanner');
-  if (!metadata.leadStateMachine) issues.push('нет leadStateMachine');
-  if (!metadata.factClaimAudit) issues.push('missing factClaimAudit');
-  if (!metadata.postAnswerVerification) issues.push('missing postAnswerVerification');
-  if (metadata.postAnswerVerification?.status === 'error') {
-    issues.push(`post-answer verification failed: ${JSON.stringify(metadata.postAnswerVerification.issues)}`);
+  for (const key of [
+    'ledgerState',
+    'policyGate',
+    'policyGateEnforcement',
+    'sourcePolicy',
+    'managerPolicy',
+    'answerContract',
+    'selectionReadiness',
+    'answerProductEvidence',
+    'productEvidenceRoles',
+    'cardSelection',
+    'preSendValidation'
+  ]) {
+    if (metadata[key] === undefined || metadata[key] === null) issues.push(`missing current metadata.${key}`);
+  }
+  if (policyGate.ok !== true) {
+    issues.push(`policy gate is not pass: ${JSON.stringify(policyGate.blockedReasons ?? [])}`);
+  }
+  if (policyGateEnforcement.mode === 'hard_block') {
+    issues.push(`policy gate enforcement hard-blocked: ${JSON.stringify(policyGateEnforcement.hardBlockReasons ?? [])}`);
+  }
+  if (!Array.isArray(metadata.toolResults)) {
+    issues.push('missing current metadata.toolResults');
+  }
+  const knownToolResultIds = new Set(toolResults.map((result) => result.requestId));
+  const unknownToolResultIds = (answerContract.toolResultIds ?? []).filter((toolResultId) =>
+    !knownToolResultIds.has(toolResultId)
+  );
+  if (unknownToolResultIds.length) {
+    issues.push(`answer references unknown tool results: ${unknownToolResultIds.join(', ')}`);
   }
   const visibleCardViolation = warnings.find((warning) => String(warning).startsWith('visible_card_constraint_violation:'));
   if (visibleCardViolation) issues.push(`visible card hard-constraint violation: ${visibleCardViolation}`);
@@ -351,12 +377,13 @@ function codeAudit(step, assistantMessage) {
     issues.push('metadata.productCards содержит виброплиту на генераторном ходе');
   }
   if (step.phase === 'ready_to_submit_lead' || step.leadForm) {
-    const leadState = metadata.leadStateMachine;
     const leadViaForm = step.leadSubmission?.method === 'form';
     const leadViaChat = step.leadSubmission?.method === 'chat_contact' || hasInlineLeadContact(step.user);
-    if (leadViaChat && leadState?.hasContactInTurn !== true) issues.push('leadStateMachine не распознал телефон в реплике покупателя');
-    if (leadViaForm && leadState?.leadRequested !== true) issues.push('leadStateMachine не запросил контакт перед отправкой формы');
-    if (metadata.executionContract?.leadPolicy === 'forbidden') issues.push('executionContract запретил lead на ходе, где покупатель сам оставил телефон');
+    if (leadViaForm && answerContract.leadAction !== 'offer_form') issues.push('answerContract не предложил форму перед отправкой формы');
+    if (leadViaForm && contract.leadAllowed !== true) issues.push('turnContract не разрешил lead перед отправкой формы');
+    if (leadViaChat && !['capture_contact', 'confirm_contact_received'].includes(answerContract.leadAction)) {
+      issues.push(`answerContract не обработал контакт из реплики: ${answerContract.leadAction ?? 'missing'}`);
+    }
   }
 
   return {

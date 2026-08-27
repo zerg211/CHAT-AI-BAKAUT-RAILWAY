@@ -42,10 +42,8 @@ function catalogRequired(intent: AgentIntentContract) {
     grounding?.requiredToolKinds.some((tool) =>
       tool === 'catalog.search' || tool === 'catalog.getProductDetails'
     ) === true ||
-    grounding?.taskType === 'availability_or_delivery' ||
     grounding?.taskType === 'product_selection' ||
-    grounding?.taskType === 'comparison' ||
-    intent.selectionPolicy?.selectionGoal !== undefined;
+    grounding?.taskType === 'comparison';
 }
 
 function webRequired(intent: AgentIntentContract) {
