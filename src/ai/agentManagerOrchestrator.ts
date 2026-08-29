@@ -4736,6 +4736,12 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       hasIssue('active_requirement_mismatch:generator_load_scenario')
         ? 'Для hard fact generator_load_scenario создай strict hard_constraint requirement kind="generator_load_scenario", value=true, unit=null, verification mode="typed_tool", toolRequestId равен id calculator.generatorLoad, tool="calculator.generatorLoad", verifier="generator_load_profile", bindAs="nominal_power_min_kw"; calculator request required=true и coversRequirementIds содержит id requirement.'
         : '',
+      hasIssue('active_requirement_mismatch:generator_loads')
+        ? 'Ключ generator_loads не используется: для расчёта нагрузки используй единственный hard fact generator_load_scenario с value true и typed requirement generator_load_scenario; остальные потребительские мощности — context, иначе убери hard требование.'
+        : '',
+      hasIssue('required_tool_request_missing:calculator.generatorLoad')
+        ? 'Если policy или ledger требуют расчёта нагрузки, добавь required calculator.generatorLoad с корректными loads, runningSource/startingSource, operationMode/coRunningGroup и coversRequirementIds, либо убери hard generator требование и оставь факт как context.'
+        : '',
       repairGuidanceIssues.some((issue) => issue.startsWith('required_tool_request_missing:'))
         ? 'Каждый tool из grounding.requiredToolKinds должен иметь соответствующий required toolRequest; исправь grounding и requests согласованно, сохраняя смысл rejected decision.'
         : ''

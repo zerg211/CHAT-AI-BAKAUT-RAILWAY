@@ -19,7 +19,7 @@ The implementation and all local checks are complete, but the task is not done u
 | AC6 | PASS | Full card-selection suite confirms unknown mandatory attributes remain preliminary while proven conflicts are excluded. `agentManagerCardSelection.test.ts`: 63/63 PASS. |
 | AC7 | PASS | Deterministic schema, evidence, catalog identity, filtering, ordering, arithmetic, lead authorization, persistence, checkpoints, and tool execution remain active; full release gate passes. |
 | AC8 | PASS | Writer structured output requires `selectionRationale`; pre-send review blocks selected product IDs without a non-empty LLM rationale; product cards receive only that rationale. Always-null `replacementProductEvidence` metadata was removed. |
-| AC9 | PASS | `npm run verify`, standalone no-regex guard, focused integration suites, typecheck, build, and `git diff --check` pass on current files. Full suite: 88 files, 891 tests. Agentic suite: 192 tests. |
+| AC9 | PASS | `npm run verify`, standalone no-regex guard, focused integration suites, typecheck, build, and `git diff --check` pass on current files. Full suite: 88 files, 892 tests. Agentic suite: 192 tests. |
 | AC10 | PENDING | The current repair still needs an exact matching Railway deployment and a fresh post-deploy widget dialogue with buyer/admin audit. |
 
 ## Focused Results
@@ -100,3 +100,10 @@ The second failed production session exposed a structured-schema mismatch and no
 - Eight of nine turns returned buyer-visible answers; generator and plate cards were shown. One generator-selection turn failed after three semantic attempts, so AC10 remains PENDING.
 - Trace sequence showed correction regression: attempt 1 failed research planning/typed requirement, attempt 2 repaired those but lost the pump load, and attempt 3 restored the load while reintroducing research planning failure and changing `source`.
 - Follow-up sends accumulated prior validator issues to the LLM as a non-regression constraint while validating only the current candidate. Focused suites: 2 files, 114 tests; full gate 88 files / 891 tests; agentic 192; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 822 tests, agentic 192, typecheck/build PASS. Fresh read-only verifier: PASS for AC1-AC9.
+
+## Fifth Production Audit
+
+- Exact deployed commit: `a50f70e96adb444949129ab1732c313b13f2f257`.
+- Widget session: `37924cf9-44d4-43bb-aade-fdcea4939079` on `https://bakautprof.ru/`.
+- Seven of eight turns returned buyer-visible answers; generator and plate cards were shown and lead was captured. One initial turn failed after three semantic attempts with `required_tool_request_missing:calculator.generatorLoad` and `typed_requirement_tool_mismatch:req_loads`, so AC10 remains PENDING.
+- Trace shows first attempt created hard fact `generator_loads` without matching policy, second introduced product mention hallucinations, third fixed mentions but reintroduced calculator mismatch. The follow-up adds explicit guidance for `generator_loads` vs `generator_load_scenario` and for missing calculator tool while keeping cumulative history. Focused suites: 2 files, 115 tests; full gate 88 files / 892 tests; agentic 192; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 823 tests, agentic 192, typecheck/build PASS. Fresh read-only verifier: PASS for AC1-AC9.

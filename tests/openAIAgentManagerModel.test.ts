@@ -117,6 +117,54 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);
   });
 
+  it('includes guidance for generator_loads and calculator tool mismatches', async () => {
+    const now = new Date('2026-08-13T10:00:00.000Z').toISOString();
+    const session: ConversationSession = {
+      id: '11111111-1111-4111-8111-111111111111',
+      status: 'active',
+      conversationNumber: 1,
+      title: 'Dialog #1',
+      needState: emptyNeedState(),
+      createdAt: now,
+      updatedAt: now,
+      lastHeartbeatAt: now
+    };
+    const history: Message[] = [{
+      id: '22222222-2222-4222-8222-222222222222',
+      sessionId: session.id,
+      role: 'user',
+      content: 'Здравствуйте. Нужен генератор.',
+      metadata: {},
+      createdAt: now
+    }];
+    createStructuredJsonResponse.mockResolvedValueOnce({
+      parsed: {
+        ledgerDelta: { rationale: 'test', events: [] },
+        intent: {
+          userMessageSummary: 'test',
+          dialogueUnderstanding: 'test',
+          nextStepRationale: 'test',
+          requiresTools: false,
+          toolRequests: [],
+          riskFlags: []
+        }
+      }
+    });
+    await (new OpenAIAgentManagerModel() as OpenAIAgentManagerModel & { decideTurn(input: unknown): Promise<unknown> }).decideTurn({
+      session,
+      history,
+      userMessage: history[0]!.content,
+      ledgerEvents: [],
+      ledgerState: reduceDialogueLedger([]),
+      semanticValidationIssues: ['active_requirement_mismatch:generator_loads', 'required_tool_request_missing:calculator.generatorLoad', 'typed_requirement_tool_mismatch:req_loads'],
+      semanticValidationIssueHistory: []
+    });
+    const request = createStructuredJsonResponse.mock.calls[0]?.[0]?.request as { input?: Array<{ role?: string; content?: string }> };
+    const systemPrompt = request.input?.find((item) => item.role === 'system')?.content ?? '';
+    expect(systemPrompt).toContain('generator_loads');
+    expect(systemPrompt).toContain('calculator.generatorLoad');
+  });
+
   it('serializes durable fact provenance and the same redacted pending lead draft for reducer and planner', async () => {
     const now = new Date('2026-07-15T10:00:00.000Z').toISOString();
     const session: ConversationSession = {

@@ -29,3 +29,11 @@ Commit `f7ee0ef3d6e4e9645fedbbe8ebff8ba1f3107109` deployed exactly, but widget s
 The failed turn `63e96ca0-9215-4531-81b1-4adb0d92b1f4` had enough time remaining and exhausted three semantic candidates. Validation oscillated across attempts instead of monotonically repairing: `conditional_research_plan_missing` and `active_requirement_mismatch:generator_load_scenario`; then missing/unexecutable pump load; then `conditional_research_plan_missing` plus pump `source` mismatch. The next fix gives the LLM accumulated validator issue history as a non-regression constraint while the deterministic validator continues to judge only the current candidate.
 
 Resolved locally: cumulative issue history is transported only to the LLM repair context, every current candidate is fully revalidated, and a fresh verifier returned `PASS` for AC1-AC9. AC10 remains pending until the next exact deployment and widget/admin audit.
+
+## Fifth Production Failure
+
+Commit `a50f70e96adb444949129ab1732c313b13f2f257` deployed exactly, but widget session `37924cf9-44d4-43bb-aade-fdcea4939079` still had one empty failed turn at the first clarification. The other seven turns completed, including three generator cards, four plate cards, and a successful lead capture, so the dialogue overall progressed but AC10 did not pass.
+
+The failed turn `bdab556e-a2cb-4592-8277-3534ad4685b9` exhausted three semantic candidates: attempt 1 created hard fact `generator_loads` without matching policy and missed catalog, attempt 2 fixed catalog but hallucinated five product mentions, attempt 3 fixed mentions but missed `calculator.generatorLoad` for `req_loads`. The next fix adds explicit guidance for `generator_loads` vs `generator_load_scenario` and for missing calculator tool while preserving cumulative history.
+
+Resolved locally: additional LLM-only guidance for `generator_loads` and missing calculator is staged, every candidate is still fully revalidated, and a fresh verifier returned `PASS` for AC1-AC9. AC10 remains pending until exact deployment and widget/admin audit.

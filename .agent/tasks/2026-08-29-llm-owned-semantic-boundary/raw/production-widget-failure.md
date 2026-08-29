@@ -51,3 +51,14 @@ Production traces converged to `active_requirement_mismatch:generator_load_scena
 - Buyer-visible result: one empty response among nine turns; later turns recovered and showed one generator card and two plate cards.
 
 Attempt 1 issues were `conditional_research_plan_missing` and `active_requirement_mismatch:generator_load_scenario`. Attempt 2 repaired those but produced missing/unexecutable pump load issues. Attempt 3 restored the load but reintroduced `conditional_research_plan_missing` and changed the pump `source`. Remaining wall time was 108535 ms, so this was correction regression rather than budget exhaustion.
+
+## Cumulative-history follow-up failure
+
+- Deployed commit: `a50f70e96adb444949129ab1732c313b13f2f257`
+- Session: `37924cf9-44d4-43bb-aade-fdcea4939079`
+- Failed turn: `bdab556e-a2cb-4592-8277-3534ad4685b9`
+- Buyer-visible result: one empty response at first clarification among eight turns; later seven turns recovered and showed three generator cards, four plate cards, and lead capture.
+
+Attempt 1 issues were `required_catalog_tool_missing` and `active_requirement_mismatch:generator_loads`. Attempt 2 fixed catalog but hallucinated five product mentions with `product_mention_evidence_not_in_current_message` and kept `active_requirement_mismatch:generator_loads`. Attempt 3 fixed mentions but introduced `required_tool_request_missing:calculator.generatorLoad` and `typed_requirement_tool_mismatch:req_loads` for a hard `generator_loads` fact. Remaining wall time was 109441 ms, so this was also correction oscillation, now on the initial clarification turn.
+
+Required fix: add explicit LLM guidance for `generator_loads` vs `generator_load_scenario` and for missing `calculator.generatorLoad` while keeping cumulative history and fail-closed validation.
