@@ -104,44 +104,14 @@ function positiveFinite(value: number | undefined) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function itemText(item: ProductElectricalLoadItem) {
-  return `${item.kind} ${item.name ?? ''} ${item.evidence ?? ''}`.toLowerCase();
-}
-
-function itemLabelText(item: ProductElectricalLoadItem) {
-  return `${item.kind} ${item.name ?? ''}`.toLowerCase();
-}
-
-function hasExplicitStartingEvidence(item: ProductElectricalLoadItem) {
-  return item.source === 'explicit_user' &&
-    positiveFinite(item.startingKw) !== undefined &&
-    /(?:(?:\u043f\u0443\u0441\u043a\w*|starting|surge)[^\d]{0,24}\d|\d[^\n.;]{0,24}(?:\u043f\u0443\u0441\u043a\w*|starting|surge))/iu.test(itemText(item));
-}
-
-function minimumStartingKw(item: ProductElectricalLoadItem) {
-  const runningKw = positiveFinite(item.runningKw);
-  if (!runningKw || hasExplicitStartingEvidence(item)) return positiveFinite(item.startingKw);
-  const kind = canonicalElectricalLoadKind(item.kind);
-  const label = itemLabelText(item);
-  if (kind === 'pump') return roundKw(Math.max(runningKw * 2.6, runningKw + 1.2));
-  if (kind === 'compressor' || /(?:\u043a\u043e\u043c\u043f\u0440\u0435\u0441\u0441\u043e\u0440|compressor)/iu.test(label)) {
-    return roundKw(Math.max(runningKw * 3, runningKw + 2));
-  }
-  if (kind === 'refrigerator') return roundKw(Math.max(runningKw * 3, 1));
-  if (kind === 'freezer') return roundKw(Math.max(runningKw * 3, 1.2));
-  if (['pressure_washer', 'vacuum', 'concrete_mixer'].includes(kind)) {
-    return roundKw(Math.max(runningKw * 2, runningKw + 0.8));
-  }
-  return positiveFinite(item.startingKw) ?? runningKw;
-}
-
 function normalizeLoadItem(item: ProductElectricalLoadItem): ProductElectricalLoadItem {
   const runningKw = positiveFinite(item.runningKw);
   const providedStartingKw = positiveFinite(item.startingKw);
-  const minimumStarting = minimumStartingKw(item);
-  const startingKw = providedStartingKw && minimumStarting
-    ? Math.max(providedStartingKw, minimumStarting)
-    : providedStartingKw ?? minimumStarting ?? runningKw;
+  const startingKw = providedStartingKw === undefined
+    ? runningKw
+    : runningKw === undefined
+      ? providedStartingKw
+      : Math.max(providedStartingKw, runningKw);
   return {
     ...item,
     count: Math.max(1, Math.min(12, Math.round(item.count || 1))),
@@ -156,41 +126,12 @@ function itemScenarioKey(item: ProductElectricalLoadItem) {
   return name ? `${kind}:${name}` : kind;
 }
 
-function hasOccasionalOrSeparateEvidence(item: ProductElectricalLoadItem) {
-  return /(?:\u0438\u043d\u043e\u0433\u0434\u0430|\u043f\u0435\u0440\u0438\u043e\u0434\u0438\u0447\u0435\u0441\u043a\u0438|\u0432\u0440\u0435\u043c\u044f\s+\u043e\u0442\s+\u0432\u0440\u0435\u043c\u0435\u043d\u0438|\u043f\u043e\s+\u043d\u0435\u043e\u0431\u0445\u043e\u0434\u0438\u043c\u043e\u0441\u0442\u0438|\u0431\u044b\u0432\u0430\u0435\u0442|\u043e\u0442\u0434\u0435\u043b\u044c\u043d\u043e|\u043d\u0435\s+\u0432\u043c\u0435\u0441\u0442\u0435|\u043d\u0435\s+\u043e\u0434\u043d\u043e\u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e|\u043d\u0435\s+\u0432\s+\u043e\u0434\u0438\u043d\s+\u043c\u043e\u043c\u0435\u043d\u0442|occasionally|sometimes|from\s+time\s+to\s+time|as\s+needed|optional|separate|not\s+together|not\s+simultaneously)/iu.test(itemText(item));
-}
-
-function hasContinuousEvidence(item: ProductElectricalLoadItem) {
-  return /(?:\u043f\u043e\u0441\u0442\u043e\u044f\u043d\u043d\u043e|\u0434\u043e\u043b\u0436\u0435\u043d\s+\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c|\u0434\u043e\u043b\u0436\u043d\u044b\s+\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c|\u0431\u0430\u0437\u043e\u0432|always|continuously|constant|base\s+load)/iu.test(itemText(item));
-}
-
-function isKitchenComfortKind(item: ProductElectricalLoadItem) {
-  const kind = canonicalElectricalLoadKind(item.kind);
-  if (['kettle', 'microwave', 'induction', 'induction_cooktop', 'induction_hob', 'electric_stove', 'stove', 'heating_resistive'].includes(kind)) {
-    return true;
-  }
-  return /(?:\u0447\u0430\u0439\u043d\u0438\u043a|\u043c\u0438\u043a\u0440\u043e\u0432\u043e\u043b\u043d|\u0438\u043d\u0434\u0443\u043a\u0446|\u043f\u043b\u0438\u0442\u043a|\u0432\u0430\u0440\u043e\u0447|kettle|microwave|induction|cooktop|hob)/iu.test(itemLabelText(item));
-}
-
-function isWorkshopKind(item: ProductElectricalLoadItem) {
-  const kind = canonicalElectricalLoadKind(item.kind);
-  if (['compressor', 'handheld_tool', 'pressure_washer', 'vacuum', 'concrete_mixer'].includes(kind)) return true;
-  return /(?:\u043a\u043e\u043c\u043f\u0440\u0435\u0441\u0441\u043e\u0440|\u0438\u043d\u0441\u0442\u0440\u0443\u043c\u0435\u043d\u0442|\u0431\u043e\u043b\u0433\u0430\u0440\u043a|\u0434\u0440\u0435\u043b|compressor|tool|grinder|drill|saw)/iu.test(itemLabelText(item));
-}
-
 function isScenarioOnlyLoad(
   item: ProductElectricalLoadItem,
-  simultaneousRunning: boolean,
-  simultaneousStarting: boolean,
-  simultaneousKinds: Set<string>
+  simultaneousRunning: boolean
 ) {
   if (simultaneousRunning) return false;
-  const kind = canonicalElectricalLoadKind(item.kind);
-  const stagedCandidate = isKitchenComfortKind(item) || isWorkshopKind(item);
-  if (stagedCandidate && hasOccasionalOrSeparateEvidence(item)) return true;
-  if (simultaneousStarting && (!simultaneousKinds.size || simultaneousKinds.has(kind))) return false;
-  if (stagedCandidate && !hasContinuousEvidence(item)) return true;
-  return false;
+  return item.operationMode === 'occasional' || item.operationMode === 'separate';
 }
 
 function calculateFlatScenario(
@@ -301,9 +242,7 @@ export function calculateGeneratorLoadProfile(
 
   const scenarioOnly = usable.filter((item) => isScenarioOnlyLoad(
     item,
-    Boolean(options.simultaneousRunning),
-    Boolean(options.simultaneousStarting),
-    simultaneousKinds
+    Boolean(options.simultaneousRunning)
   ));
   const base = usable.filter((item) => !scenarioOnly.includes(item));
   const baseScenarioItems = base.length ? base : [];
@@ -316,11 +255,18 @@ export function calculateGeneratorLoadProfile(
   }
 
   const baseStartupFloor = scenarios[0]?.requiredStartingKw ?? 0;
+  const scenarioGroups = new Map<string, ProductElectricalLoadItem[]>();
   for (const item of scenarioOnly) {
+    const explicitGroup = item.coRunningGroup?.trim();
+    const groupKey = explicitGroup ? `group:${explicitGroup}` : `item:${itemScenarioKey(item)}`;
+    scenarioGroups.set(groupKey, [...(scenarioGroups.get(groupKey) ?? []), item]);
+  }
+  for (const [groupKey, groupItems] of scenarioGroups) {
+    const label = groupItems.map((item) => item.name ?? item.kind).join(' + ');
     const scenario = calculateFlatScenario(
-      `scenario_${itemScenarioKey(item)}`,
-      `${item.name ?? item.kind} scenario`,
-      [...baseScenarioItems, item],
+      `scenario_${normalizeKey(groupKey)}`,
+      `${label} scenario`,
+      [...baseScenarioItems, ...groupItems],
       {
         simultaneousStarting: false,
         simultaneousStartingKinds: []

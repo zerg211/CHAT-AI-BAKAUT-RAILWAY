@@ -12,6 +12,7 @@ import type {
 } from '../src/ai/agentManagerContracts.js';
 import type { CustomerNeedState, Product } from '../src/shared/types.js';
 import { generatorPhaseProfile } from '../src/ai/productClassifier.js';
+import { buildRequirementProofs } from '../src/ai/requirementProofs.js';
 
 function emptyNeedState(): CustomerNeedState {
   return {
@@ -235,6 +236,61 @@ function select(input: {
 }
 
 describe('generic requirement proofs', () => {
+  it('binds remote-start catalog facts without treating ATS-only products as satisfied', () => {
+    const remote = generator('remote', 'BISON BS6250IE', {
+      запуск: 'ручной/электро/дистанционный'
+    });
+    const atsOnly = generator('ats-only', 'ENERGO YN143C', {
+      автозапуск: 'с автозапуском',
+      стартер: 'с электростартером'
+    });
+    const absent = generator('remote-absent', 'TEST No Remote', {
+      'remote start': false
+    });
+    const requirement: SelectionRequirement = {
+      id: 'remote-start-required',
+      kind: 'remote_start_required',
+      value: true,
+      unit: null,
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'remote command start is mandatory',
+      verification: { mode: 'product_attribute' }
+    };
+    const request: ToolRequest = {
+      id: 'catalog-search',
+      tool: 'catalog.search',
+      args: { query: 'generator remote start', productIntent: 'generator' },
+      rationale: 'verify remote-start product facts',
+      required: true,
+      coversRequirementIds: [requirement.id]
+    };
+    const intent = intentFor({ requirement, request });
+
+    const proofs = buildRequirementProofs({
+      intent,
+      products: [remote, atsOnly, absent],
+      toolResults: [catalogResult([remote, atsOnly, absent])]
+    });
+
+    expect(proofs.find((proof) => proof.productId === remote.id)).toMatchObject({
+      status: 'satisfied',
+      eligibilityStatus: 'satisfied',
+      normalizedValue: true
+    });
+    expect(proofs.find((proof) => proof.productId === atsOnly.id)).toMatchObject({
+      status: 'unverified',
+      eligibilityStatus: 'unknown',
+      normalizedValue: null
+    });
+    expect(proofs.find((proof) => proof.productId === absent.id)).toMatchObject({
+      status: 'violated',
+      eligibilityStatus: 'violated',
+      normalizedValue: false
+    });
+  });
+
   it('keeps an unknown preliminary candidate for required research and excludes only a proven power violation', () => {
     const missing = generator('power-missing', 'Генератор ИСТОК АД6-О230-ВМ131Э', {});
     const violated = generator('power-violated', 'Генератор ИСТОК АД5-О230-ВМ161Э', {

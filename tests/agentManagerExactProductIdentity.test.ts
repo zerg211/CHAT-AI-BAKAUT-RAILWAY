@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentIntentContract } from '../src/ai/agentManagerContracts.js';
 import type { ToolResult } from '../src/ai/agentManagerContracts.js';
 import {
-  exactModelNamesFromUserMessage,
   filterProductsByStructuredSelectionPolicy,
-  repairIntentForExactModelEvidence,
   requiredResponseClausesForToolResults
 } from '../src/ai/agentManagerOrchestrator.js';
 import type { Product } from '../src/shared/types.js';
@@ -72,71 +70,7 @@ function product(input: Partial<Product> & Pick<Product, 'id' | 'name'>): Produc
 }
 
 describe('structured exact-product identity', () => {
-  it('does not add external research for a pure catalog-availability question', () => {
-    const targetName = 'Wacker Neuson BPS 1550 Aw';
-    const intent: AgentIntentContract = {
-      ...exactTargetIntent(targetName),
-      userMessageSummary: `Is ${targetName} available?`,
-      dialogueUnderstanding: 'The buyer asks only whether the named model is in the BAKAUT catalog.',
-      nextStepRationale: 'Answer catalog presence from the catalog; do not research technical facts.',
-      grounding: {
-        taskType: 'availability_or_delivery',
-        sourcePolicy: 'catalog_required',
-        webPurpose: 'none',
-        webRequirement: 'none',
-        requiredToolKinds: ['catalog.search'],
-        technicalAttributes: [],
-        buyerQuestion: `Is ${targetName} available?`,
-        rationale: 'Catalog presence is sufficient for this question.'
-      },
-      toolRequests: [{
-        id: 'catalog-availability',
-        tool: 'catalog.search',
-        args: { query: targetName },
-        rationale: 'Find the exact catalog card.',
-        required: true
-      }]
-    };
-
-    const repaired = repairIntentForExactModelEvidence(intent, `Is ${targetName} available?`);
-
-    expect(repaired.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
-    expect(repaired.toolRequests.map((request) => request.tool)).toEqual([
-      'catalog.search',
-      'catalog.getProductDetails'
-    ]);
-    expect(repaired.toolRequests.at(-1)?.args.productNames).toEqual([targetName]);
-    expect(repaired.toolRequests.at(-1)?.args.comparisonAttributes).toEqual([]);
-    expect(repaired.grounding?.requiredToolKinds).toEqual([
-      'catalog.search',
-      'catalog.getProductDetails'
-    ]);
-
-    const staleWebPlannedIntent: AgentIntentContract = {
-      ...intent,
-      requiresTools: true,
-      toolRequests: [
-        ...intent.toolRequests,
-        {
-          id: 'stale-web-request',
-          tool: 'web.researchProductFacts',
-          args: { productNames: [targetName], comparisonAttributes: ['current buyer question'] },
-          rationale: 'An inconsistent planner request that must not run for catalog presence.',
-          required: true
-        }
-      ],
-      grounding: {
-        ...intent.grounding!,
-        requiredToolKinds: ['catalog.search', 'web.researchProductFacts']
-      }
-    };
-    const cleaned = repairIntentForExactModelEvidence(staleWebPlannedIntent, `Is ${targetName} available?`);
-    expect(cleaned.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
-    expect(cleaned.grounding?.requiredToolKinds).toEqual([
-      'catalog.search',
-      'catalog.getProductDetails'
-    ]);
-
+  it('does not turn an unexecuted availability research request into buyer-facing failure guidance', () => {
     const failedWebResult = {
       requestId: 'stale-web-request',
       tool: 'web.researchProductFacts',
@@ -144,49 +78,9 @@ describe('structured exact-product identity', () => {
       payload: { searchDisposition: 'timed_out' },
       warnings: []
     } as unknown as ToolResult;
-    expect(requiredResponseClausesForToolResults([failedWebResult], intent)).toEqual([]);
-  });
-
-  it('recovers split model names even when the planner omitted product mentions', () => {
-    const userMessage = 'Нужна виброплита Wacker Neuson BPS 1550 Aw с двигателем Honda GX160 QX2.';
-    expect(exactModelNamesFromUserMessage(userMessage)).toEqual(['bps 1550 aw', 'gx160 qx2']);
-
-    const intent = {
-      toolRequests: [],
-      productMentions: [],
-      riskFlags: [],
-      requiresTools: false
-    } as unknown as AgentIntentContract;
-    const repaired = repairIntentForExactModelEvidence(intent, userMessage);
-    expect(repaired.toolRequests).toHaveLength(1);
-    expect(repaired.toolRequests[0]?.tool).toBe('web.researchProductFacts');
-    expect(repaired.toolRequests[0]?.args.productNames).toEqual(['bps 1550 aw', 'gx160 qx2']);
-    expect(repaired.riskFlags).toContain('planner_repaired_exact_model_evidence');
-  });
-
-  it('does not treat a generic product class as an exact model when the planner labels it target_product', () => {
-    const userMessage = 'Нужна бензиновая виброплита для работы одному: вес 60–90 кг, бюджет до 90 000 ₽.';
-    const intent = {
-      toolRequests: [{
-        id: 'catalog-search',
-        tool: 'catalog.search',
-        args: { query: userMessage },
-        rationale: 'Find suitable catalog products.',
-        required: true
-      }],
-      productMentions: [{
-        name: 'виброплита',
-        role: 'target_product',
-        productClass: 'виброплита',
-        evidence: 'бензиновая виброплита'
-      }],
-      riskFlags: [],
-      requiresTools: true
-    } as unknown as AgentIntentContract;
-
-    const repaired = repairIntentForExactModelEvidence(intent, userMessage);
-
-    expect(repaired.toolRequests.some((request) => request.tool === 'web.researchProductFacts')).toBe(false);
+    expect(requiredResponseClausesForToolResults([
+      failedWebResult
+    ], exactTargetIntent('Wacker Neuson BPS 1550 Aw'))).toEqual([]);
   });
 
   it('does not convert an unverified refresh failure into catalog absence', () => {

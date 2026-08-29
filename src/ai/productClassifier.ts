@@ -1023,6 +1023,7 @@ export function generatorPhaseProfile(product: Product): ProductPhaseProfile {
 }
 
 export type GeneratorAutoStartProfile = 'present' | 'absent' | 'conflict' | 'unknown';
+export type GeneratorRemoteStartProfile = 'present' | 'absent' | 'conflict' | 'unknown';
 
 const generatorAutoStartSpecKeys = new Set([
   'автозапуск',
@@ -1116,6 +1117,87 @@ export function generatorAutoStartProfile(product: Product): GeneratorAutoStartP
     const normalizedKey = key.trim().toLocaleLowerCase('ru-RU');
     if (!generatorAutoStartSpecKeys.has(normalizedKey)) continue;
     const fact = normalizedGeneratorAutoStartFact(value);
+    if (fact === 'present') present = true;
+    if (fact === 'absent') absent = true;
+  }
+  if (present && absent) return 'conflict';
+  if (present) return 'present';
+  if (absent) return 'absent';
+  return 'unknown';
+}
+
+const generatorRemoteStartDirectKeys = [
+  'remote start',
+  'remote_start',
+  'дистанционный запуск',
+  'дистанционный старт',
+  'запуск с пульта',
+  'запуск с брелока'
+];
+
+const generatorStartKeys = [
+  'start',
+  'starter',
+  'запуск',
+  'стартер'
+];
+
+const generatorAutoStartKeySignals = [
+  'autostart',
+  'auto start',
+  'automatic start',
+  'автозапуск',
+  'автоматический запуск'
+];
+
+const generatorRemoteStartPresentSignals = [
+  'remote',
+  'дистанцион',
+  'пульт',
+  'брелок',
+  'брелк',
+  'key fob'
+];
+
+const generatorRemoteStartAbsentSignals = [
+  'without remote',
+  'no remote',
+  'remote absent',
+  'без дистанцион',
+  'нет дистанцион',
+  'без пульта',
+  'без брелока'
+];
+
+function generatorRemoteStartSpecKeyKind(key: string): 'direct' | 'start' | undefined {
+  const normalized = key.trim().toLocaleLowerCase('ru-RU');
+  if (normalized.includes('source') || normalized.includes('источник')) return undefined;
+  if (generatorRemoteStartDirectKeys.some((signal) => normalized.includes(signal))) return 'direct';
+  if (generatorAutoStartKeySignals.some((signal) => normalized.includes(signal))) return undefined;
+  return generatorStartKeys.some((signal) => normalized.includes(signal)) ? 'start' : undefined;
+}
+
+function normalizedGeneratorRemoteStartFact(
+  keyKind: 'direct' | 'start',
+  value: unknown
+): 'present' | 'absent' | 'unknown' {
+  if (typeof value === 'boolean') return keyKind === 'direct' ? (value ? 'present' : 'absent') : 'unknown';
+  const normalized = String(value ?? '').trim().toLocaleLowerCase('ru-RU');
+  if (!normalized) return 'unknown';
+  if (generatorRemoteStartAbsentSignals.some((signal) => normalized.includes(signal))) return 'absent';
+  if (generatorRemoteStartPresentSignals.some((signal) => normalized.includes(signal))) return 'present';
+  if (keyKind === 'direct' && ['нет', 'false', 'no', 'отсутствует'].includes(normalized)) return 'absent';
+  if (keyKind === 'direct' && ['есть', 'true', 'yes', 'да'].includes(normalized)) return 'present';
+  return 'unknown';
+}
+
+export function generatorRemoteStartProfile(product: Product): GeneratorRemoteStartProfile {
+  let present = false;
+  let absent = false;
+  for (const [key, value] of Object.entries(product.specs ?? {})) {
+    const keyKind = generatorRemoteStartSpecKeyKind(key);
+    if (!keyKind) continue;
+    const fact = normalizedGeneratorRemoteStartFact(keyKind, value);
     if (fact === 'present') present = true;
     if (fact === 'absent') absent = true;
   }

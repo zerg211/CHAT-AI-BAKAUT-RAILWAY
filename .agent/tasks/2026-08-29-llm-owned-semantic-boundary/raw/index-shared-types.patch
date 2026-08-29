@@ -1,0 +1,14 @@
+diff --git a/src/shared/types.ts b/src/shared/types.ts
+--- a/src/shared/types.ts
++++ b/src/shared/types.ts
+@@ -347,6 +347,10 @@ export interface ProductElectricalLoadItem {
+   count: number;
+   runningKw?: number;
+   startingKw?: number;
+   source: ProductElectricalLoadSource;
++  runningSource?: ProductElectricalLoadSource | 'not_provided';
++  startingSource?: ProductElectricalLoadSource | 'not_provided';
++  operationMode?: 'continuous' | 'occasional' | 'separate';
++  coRunningGroup?: string;
+   evidence?: string;
+ }

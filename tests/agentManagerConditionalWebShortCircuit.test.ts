@@ -3,10 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   allowCatalogOnlyResearchForWebRequest,
   catalogCandidatesSatisfyingConditionalWebRequest,
-  enforceSearchBeforeTechnicalSpecialist,
   filterProductsByStructuredSelectionPolicy,
   reconcileParallelIntentNeedAction,
-  repairPreliminaryExactComparisonCatalogFirst,
   sourcePolicyMetadataFromIntent,
   webResearchResultProvesSourceExhaustion,
   reconcileNewActiveNeedProductClass
@@ -142,33 +140,6 @@ function webRequest(intent: AgentIntentContract) {
   return intent.toolRequests.find((request) => request.tool === 'web.researchProductFacts')!;
 }
 
-function prematureSpecialistIntent(
-  taskType: NonNullable<AgentIntentContract['grounding']>['taskType']
-): AgentIntentContract {
-  const intent = conditionalWebIntent();
-  return {
-    ...intent,
-    requiresTools: true,
-    toolRequests: [{
-      id: 'premature-lead',
-      tool: 'lead.capture',
-      args: { reason: 'planner tried to escalate before searching' },
-      rationale: 'premature specialist handoff',
-      required: true
-    }],
-    grounding: {
-      taskType,
-      sourcePolicy: 'specialist_required',
-      webPurpose: 'none',
-      webRequirement: 'none',
-      requiredToolKinds: ['lead.capture'],
-      technicalAttributes: ['noise level'],
-      rationale: 'planner requested a specialist before exhausting sources'
-    },
-    riskFlags: []
-  };
-}
-
 function candidates(input: {
   intent: AgentIntentContract;
   products: Product[];
@@ -206,80 +177,6 @@ function openedNeed(
 }
 
 describe('conditional catalog-evidence web short-circuit', () => {
-  it('repairs a preliminary exact comparison that variably planned independent web without catalog details', () => {
-    const intent = conditionalWebIntent({
-      webRequirement: 'independent_required',
-      productNames: ['CHAMPION PC5332F', 'REDVERG RD-29140']
-    });
-    intent.grounding = {
-      ...intent.grounding!,
-      taskType: 'comparison',
-      sourcePolicy: 'web_required',
-      webPurpose: 'technical_specs',
-      technicalAttributes: ['weight_kg', 'dimensions', 'folding_handle', 'transport_wheels_or_trolley'],
-      requiredToolKinds: ['web.researchProductFacts']
-    };
-    intent.productMentions = [
-      {
-        name: 'CHAMPION PC5332F',
-        role: 'comparison_subject',
-        productClass: 'виброплита',
-        evidence: 'CHAMPION PC5332F'
-      },
-      {
-        name: 'REDVERG RD-29140',
-        role: 'comparison_subject',
-        productClass: 'виброплита',
-        evidence: 'REDVERG RD-29140'
-      }
-    ];
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      targetProductClass: 'виброплита',
-      canonicalProductClass: 'plate',
-      selectionGoal: 'preliminary_fit'
-    };
-    intent.toolRequests = [webRequest(intent)];
-
-    const repaired = repairPreliminaryExactComparisonCatalogFirst(
-      intent,
-      'Сравните CHAMPION PC5332F и REDVERG RD-29140 по массе и колёсам.'
-    );
-
-    expect(repaired.grounding).toEqual(expect.objectContaining({
-      sourcePolicy: 'catalog_required',
-      webRequirement: 'conditional_on_catalog_gap',
-      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts']
-    }));
-    expect(repaired.toolRequests.map((request) => request.tool)).toEqual([
-      'catalog.getProductDetails',
-      'web.researchProductFacts'
-    ]);
-    expect(repaired.toolRequests[0]).toEqual(expect.objectContaining({
-      tool: 'catalog.getProductDetails',
-      args: expect.objectContaining({
-        productNames: ['CHAMPION PC5332F', 'REDVERG RD-29140'],
-        comparisonAttributes: ['weight_kg', 'dimensions', 'folding_handle', 'transport_wheels_or_trolley']
-      })
-    }));
-    expect(repaired.riskFlags).toContain('preliminary_exact_comparison_catalog_first_reconciled');
-  });
-
-  it.each(['buyer_requested', 'none'] as const)(
-    'does not rewrite explicit or absent web policy %s for exact comparisons',
-    (webRequirement) => {
-      const intent = conditionalWebIntent({
-        webRequirement,
-        productNames: ['TEST DG quiet', 'TEST DG loud']
-      });
-      intent.grounding = { ...intent.grounding!, taskType: 'comparison' };
-      expect(repairPreliminaryExactComparisonCatalogFirst(
-        intent,
-        'Compare TEST DG quiet and TEST DG loud.'
-      )).toBe(intent);
-    }
-  );
-
   it('allows catalog-only LLM extraction for conditional preliminary comparisons but not independent or final checks', () => {
     const conditionalComparison = conditionalWebIntent({
       productNames: ['TEST DG quiet'],
@@ -774,155 +671,6 @@ describe('source exhaustion proof', () => {
     ]]
   ] as const)('rejects %s as exhaustion proof', (_label, attempts) => {
     expect(webResearchResultProvesSourceExhaustion(result([...attempts]))).toBe(false);
-  });
-});
-
-describe('search before technical specialist enforcement', () => {
-  it.each(['technical_answer', 'product_selection', 'comparison'] as const)(
-    'repairs premature specialist escalation for %s',
-    (taskType) => {
-      const repaired = enforceSearchBeforeTechnicalSpecialist(prematureSpecialistIntent(taskType));
-
-      expect(repaired).toMatchObject({
-        requiresTools: true,
-        grounding: {
-          taskType,
-          sourcePolicy: 'web_required',
-          webPurpose: 'technical_specs',
-          webRequirement: 'independent_required',
-          requiredToolKinds: ['web.researchProductFacts']
-        }
-      });
-      expect(repaired.toolRequests).toEqual([]);
-      expect(repaired.riskFlags).toContain('planner_repaired_premature_technical_specialist');
-    }
-  );
-
-  it('does not treat a phone in the current technical request as proof that search was already exhausted', () => {
-    const intent = {
-      ...prematureSpecialistIntent('technical_answer'),
-      leadCaptureAuthorization: {
-        authorized: true,
-        contactSource: 'current_message' as const,
-        handoffKind: 'technical_followup' as const,
-        purpose: 'answer the technical question',
-        buyerQuestion: 'What is the exact noise level? My phone is +7 900 000-00-11.',
-        evidence: '+7 900 000-00-11',
-        pendingDraftId: null
-      }
-    };
-
-    const repaired = enforceSearchBeforeTechnicalSpecialist(intent);
-
-    expect(repaired.grounding).toMatchObject({
-      sourcePolicy: 'web_required',
-      webRequirement: 'independent_required'
-    });
-    expect(repaired.toolRequests.some((request) => request.tool === 'lead.capture')).toBe(false);
-  });
-
-  it('defers an authorized lead when the same first technical turn still requires web research', () => {
-    const intent = prematureSpecialistIntent('technical_answer');
-    const currentQuestion = 'What is the exact noise level? My phone is +7 900 000-00-11.';
-    const webRequest: ToolRequest = {
-      id: 'technical-web',
-      tool: 'web.researchProductFacts',
-      args: {
-        query: 'exact generator noise level',
-        productNames: [],
-        comparisonAttributes: ['noise level'],
-        comparisonAttributeBindings: []
-      },
-      rationale: 'verify the technical fact',
-      required: true
-    };
-    const webAndLeadIntent: AgentIntentContract = {
-      ...intent,
-      toolRequests: [webRequest, ...intent.toolRequests],
-      grounding: {
-        ...intent.grounding!,
-        sourcePolicy: 'web_required',
-        webPurpose: 'technical_specs',
-        webRequirement: 'independent_required',
-        requiredToolKinds: ['web.researchProductFacts', 'lead.capture']
-      },
-      leadCaptureAuthorization: {
-        authorized: true,
-        contactSource: 'current_message',
-        handoffKind: 'technical_followup',
-        purpose: 'answer the technical question',
-        buyerQuestion: currentQuestion,
-        evidence: '+7 900 000-00-11',
-        pendingDraftId: null
-      }
-    };
-
-    const repaired = enforceSearchBeforeTechnicalSpecialist(webAndLeadIntent);
-
-    expect(repaired.toolRequests).toEqual([webRequest]);
-    expect(repaired.grounding?.requiredToolKinds).toEqual(['web.researchProductFacts']);
-    expect(repaired.riskFlags).toContain('planner_deferred_technical_lead_until_search_exhausted');
-  });
-
-  it('preserves a technical lead continuation only when prior exhausted handoff proof is supplied', () => {
-    const intent = {
-      ...prematureSpecialistIntent('technical_answer'),
-      leadCaptureAuthorization: {
-        authorized: true,
-        contactSource: 'current_message' as const,
-        handoffKind: 'technical_followup' as const,
-        purpose: 'return the exhausted research result',
-        buyerQuestion: 'What is the exact noise level?',
-        evidence: '+7 900 000-00-11',
-        pendingDraftId: null
-      }
-    };
-    const preserved = enforceSearchBeforeTechnicalSpecialist(intent, {
-      provenExhaustedHandoffContinuation: true
-    });
-
-    expect(preserved).toBe(intent);
-  });
-
-  it('repairs a first mixed technical question and phone even if the planner labels it lead_handoff', () => {
-    const intent = {
-      ...prematureSpecialistIntent('lead_handoff'),
-      leadCaptureAuthorization: {
-        authorized: true,
-        contactSource: 'current_message' as const,
-        handoffKind: 'technical_followup' as const,
-        purpose: 'answer the technical question',
-        buyerQuestion: 'What is the exact noise level?',
-        evidence: '+7 900 000-00-11',
-        pendingDraftId: null
-      }
-    };
-
-    const repaired = enforceSearchBeforeTechnicalSpecialist(intent);
-
-    expect(repaired.grounding).toMatchObject({
-      sourcePolicy: 'web_required',
-      webRequirement: 'independent_required'
-    });
-    expect(repaired.toolRequests.some((request) => request.tool === 'lead.capture')).toBe(false);
-  });
-
-  it.each(['availability_or_delivery'] as const)(
-    'preserves specialist escalation for %s',
-    (taskType) => {
-      const intent = prematureSpecialistIntent(taskType);
-      expect(enforceSearchBeforeTechnicalSpecialist(intent)).toBe(intent);
-    }
-  );
-
-  it('preserves a nontechnical commercial lead handoff', () => {
-    const intent = prematureSpecialistIntent('lead_handoff');
-    intent.grounding = {
-      ...intent.grounding!,
-      technicalAttributes: [],
-      rationale: 'buyer requests a commercial callback'
-    };
-    expect(enforceSearchBeforeTechnicalSpecialist(intent)).toBe(intent);
   });
 });
 

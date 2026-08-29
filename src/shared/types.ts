@@ -348,6 +348,10 @@ export interface ProductElectricalLoadItem {
   runningKw?: number;
   startingKw?: number;
   source: ProductElectricalLoadSource;
+  runningSource?: ProductElectricalLoadSource | 'not_provided';
+  startingSource?: ProductElectricalLoadSource | 'not_provided';
+  operationMode?: 'continuous' | 'occasional' | 'separate';
+  coRunningGroup?: string;
   evidence?: string;
 }
 

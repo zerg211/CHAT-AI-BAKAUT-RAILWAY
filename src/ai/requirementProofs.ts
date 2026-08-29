@@ -1,7 +1,7 @@
 import type { Product } from '../shared/types.js';
 import type { AgentIntentContract, SelectionRequirement, ToolResult } from './agentManagerContracts.js';
 import { modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
-import { generatorPhaseProfile, hasElectricStartSignal } from './productClassifier.js';
+import { generatorPhaseProfile, generatorRemoteStartProfile, hasElectricStartSignal } from './productClassifier.js';
 import { classifyProductResearchSource } from './productComparisonResearch.js';
 
 export type RequirementProofStatus = 'satisfied' | 'violated' | 'conflicted' | 'unverified';
@@ -42,6 +42,8 @@ const nativelyVerifiedRequirementKinds = new Set([
   'power_source',
   'auto_start_required',
   'autostart_required',
+  'remote_start',
+  'remote_start_required',
   'price_visibility',
   'comparison_scope',
   'quantity',
@@ -126,6 +128,10 @@ function canonicalAttribute(value: unknown) {
   ])) {
     return 'electric_start';
   }
+  if (
+    has('remote', 'дистанционный') && has('start', 'запуск', 'старт') ||
+    has('пульт', 'брелок', 'key fob') && has('start', 'запуск', 'старт')
+  ) return 'remote_start';
   if (has('noise', 'sound', 'шум') && !has('insulation', 'изоляция')) return 'noise';
   if (
     has('engine', 'motor', 'двигатель', 'мотор') &&
@@ -200,6 +206,10 @@ const strictBindingWordsByAttribute: Record<string, string[]> = {
   compatibility: ['compatible', 'compatibility', 'совместимость', 'совместим', 'подходит'],
   auto_start: [
     'autostart', 'auto', 'automatic', 'start', 'авто', 'автоматический', 'запуск',
+    'presence', 'наличие', 'support', 'поддержка', 'function', 'функция', 'capability', 'возможность'
+  ],
+  remote_start: [
+    'remote', 'start', 'key', 'fob', 'дистанционный', 'запуск', 'старт', 'пульт', 'брелок',
     'presence', 'наличие', 'support', 'поддержка', 'function', 'функция', 'capability', 'возможность'
   ],
   electric_start: [
@@ -360,6 +370,21 @@ function normalizeComparable(input: {
       return { value: false, unit: null };
     }
     if (textHasAny(rawText, ['with autostart', 'with auto start', 'с автозапуском'])) {
+      return { value: true, unit: null };
+    }
+  }
+
+  if (attribute === 'remote_start') {
+    const normalized = rawText.toLocaleLowerCase('ru-RU');
+    if ([
+      'without remote', 'no remote', 'remote absent', 'без дистанцион',
+      'нет дистанцион', 'без пульта', 'без брелока'
+    ].some((signal) => normalized.includes(signal))) {
+      return { value: false, unit: null };
+    }
+    if ([
+      'remote', 'дистанцион', 'пульт', 'брелок', 'key fob'
+    ].some((signal) => normalized.includes(signal))) {
       return { value: true, unit: null };
     }
   }
@@ -561,6 +586,11 @@ function catalogCandidates(input: {
             ? 'single phase 230 V and three phase 400 V'
             : null;
       if (namePhaseValue) entries.push({ path: 'name_phase_marker', value: namePhaseValue });
+    }
+    if (canonical === 'remote_start') {
+      const profile = generatorRemoteStartProfile(resultProduct);
+      if (profile === 'present') entries.push({ path: 'remote_start', value: true });
+      if (profile === 'absent') entries.push({ path: 'remote_start', value: false });
     }
     if (canonical === 'fuel_type') {
       const identityText = `${resultProduct.name} ${resultProduct.category ?? ''}`;

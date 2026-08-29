@@ -1,0 +1,41 @@
+{
+  "taskId": "2026-08-29-llm-owned-semantic-boundary",
+  "verifiedAt": "2026-08-29T10:56:17.375Z",
+  "baselineHead": "0d12930b1c1850b68ddfad5f61f36c3f624dd63b",
+  "verdict": "PENDING",
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS",
+    "AC8": "PASS",
+    "AC9": "PASS",
+    "AC10": "PENDING"
+  },
+  "checks": {
+    "releaseGate": "PASS",
+    "testFiles": 88,
+    "tests": 887,
+    "agenticTests": 190,
+    "stagedSnapshotTestFiles": 84,
+    "stagedSnapshotTests": 818,
+    "stagedSnapshotAgenticTests": 190,
+    "stagedSnapshotTypecheck": "PASS",
+    "stagedSnapshotBuild": "PASS",
+    "focusedAffectedTests": 175,
+    "searchBeforeSpecialistTests": 9,
+    "typecheck": "PASS",
+    "build": "PASS",
+    "noRegex": "PASS",
+    "dependencyAuditHigh": "PASS",
+    "diffCheck": "PASS"
+  },
+  "pending": [
+    "selective commit and push",
+    "matching Railway deployment",
+    "fresh production widget dialogue and two-sided audit"
+  ]
+}

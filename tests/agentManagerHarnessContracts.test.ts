@@ -7,8 +7,7 @@ import {
 import { evaluateAgentManagerPolicyGate } from '../src/ai/agentManagerPolicyGate.js';
 import {
   expectedResearchGuidanceText,
-  researchGuidanceSemanticallySatisfied,
-  repairIntentForStaleWebResearchTargets
+  researchGuidanceSemanticallySatisfied
 } from '../src/ai/agentManagerOrchestrator.js';
 import {
   buildPublicCustomerResponse,
@@ -239,48 +238,4 @@ describe('runtime harness contracts', () => {
     })).toBe('');
   });
 
-  it('drops a stale named web request before tool execution after the active target changes', () => {
-    const currentSelection = intent({
-      userMessageSummary: 'Choose any vibratory plate 100-120 kg under 180000 RUB.',
-      productMentions: [],
-      grounding: {
-        taskType: 'product_selection',
-        sourcePolicy: 'catalog_required',
-        webPurpose: 'technical_specs',
-        webRequirement: 'conditional_on_catalog_gap',
-        requiredToolKinds: ['catalog.search', 'web.researchProductFacts'],
-        technicalAttributes: [],
-        buyerQuestion: null,
-        rationale: 'The current selection replaced the previous exact model.'
-      },
-      toolRequests: [{
-        id: 'catalog-current-selection',
-        tool: 'catalog.search',
-        args: { query: 'vibratory plates 100-120 kg under 180000' },
-        rationale: 'Find variants for the new constraints.',
-        required: true,
-        coversRequirementIds: []
-      }, {
-        id: 'web-stale-bps1550',
-        tool: 'web.researchProductFacts',
-        args: {
-          query: 'Wacker Neuson BPS 1550 maximum compaction depth',
-          productNames: ['Wacker Neuson BPS 1550 Gw-c CE'],
-          comparisonAttributes: ['maximum compaction depth']
-        },
-        rationale: 'Stale check from the previous turn.',
-        required: true,
-        coversRequirementIds: []
-      }]
-    });
-
-    const repaired = repairIntentForStaleWebResearchTargets(currentSelection);
-
-    expect(repaired.repairs).toEqual([{
-      requestId: 'web-stale-bps1550',
-      targetProductNames: ['Wacker Neuson BPS 1550 Gw-c CE']
-    }]);
-    expect(repaired.intent.toolRequests.map((request) => request.id)).toEqual(['catalog-current-selection']);
-    expect(repaired.intent.riskFlags).toContain('stale_web_research_target_dropped_after_intent_change');
-  });
 });

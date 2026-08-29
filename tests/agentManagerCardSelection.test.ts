@@ -5,7 +5,6 @@ import {
   assessVisibleCardReadiness,
   filterGeneratorProductsByLoadProfile,
   gateStrictSelectionRequirements,
-  rankCatalogProductsByNumericFit,
   rankCatalogProductsByStructuredPreferences,
   selectProductsForVisibleCards,
   structuredSelectionRankingObjectives,
@@ -376,7 +375,7 @@ function plateWithNameAndWeight(id: string, name: string, weightKg: number): Pro
 }
 
 describe('AgentManager visible card readiness', () => {
-  it('keeps non-generator catalog cards when answer selection readiness is not applicable', () => {
+  it('blocks non-generator catalog cards when the answer contract says cards are not applicable', () => {
     const readiness = assessVisibleCardReadiness({
       cardSelection: cardSelection('plate', [plate]),
       answer: answerContract({
@@ -393,9 +392,10 @@ describe('AgentManager visible card readiness', () => {
       readiness
     });
 
-    expect(readiness.status).toBe('ready_for_cards');
-    expect(readiness.warnings).toContain('selection_readiness_not_applicable_preserved_cards');
-    expect(visible.products).toEqual([plate]);
+    expect(readiness.status).toBe('blocked_by_answer_contract');
+    expect(readiness.warnings).toContain('product_cards_suppressed:selection_readiness_contract');
+    expect(visible.products).toEqual([]);
+    expect(visible.suppressedProductIds).toEqual([plate.id]);
   });
 
   it('still blocks generator cards when load basis is unconfirmed', () => {
@@ -426,22 +426,6 @@ describe('AgentManager visible card readiness', () => {
 
     expect(readiness.status).toBe('blocked_by_tool_safety');
     expect(visible.products).toEqual([]);
-  });
-
-  it('keeps generator card ranking for explicit power ranges without regex parsing', () => {
-    const fourKw = generatorWithPower('four-kw', '4.0');
-    const fiveKw = generatorWithPower('five-kw', '5.0');
-    const eightKw = generatorWithPower('eight-kw', '8.0');
-
-    const ranked = rankCatalogProductsByNumericFit({
-      products: [eightKw, fourKw, fiveKw],
-      intent: 'generator',
-      query: 'show gasoline generator 4-6 kw',
-      semanticContext: '',
-      userMessage: ''
-    });
-
-    expect(ranked.map((product) => product.id)).toEqual(['five-kw', 'four-kw', 'eight-kw']);
   });
 
   it('ranks verified product attributes from typed preference objectives without reading buyer wording', () => {
@@ -508,6 +492,41 @@ describe('AgentManager visible card readiness', () => {
     expect(ranked.map((product) => product.id)).toEqual(['affordable', 'expensive', 'unknown-price']);
   });
 
+  it('ranks confirmed remote-start generators before ATS-only and known-absent products', () => {
+    const intent = structuredSelectionIntent({
+      requirements: [{
+        id: 'prefer-remote-start',
+        kind: 'remote_start',
+        value: true,
+        unit: null,
+        relation: 'preferred',
+        role: 'preference',
+        strictness: 'preferred',
+        evidence: 'planner identified remote command start as a buyer preference',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    const atsOnly = {
+      ...generatorWithPower('ats-only', '108'),
+      specs: { 'Nominal power': '108 kW', Autostart: 'yes', starter: 'electric' }
+    };
+    const noRemote = {
+      ...generatorWithPower('no-remote', '6'),
+      specs: { 'Nominal power': '6 kW', 'remote start': false }
+    };
+    const remote = {
+      ...generatorWithPower('remote', '5'),
+      specs: { 'Nominal power': '5 kW', запуск: 'ручной/электро/дистанционный' }
+    };
+
+    const ranked = rankCatalogProductsByStructuredPreferences({
+      products: [atsOnly, noRemote, remote],
+      intent
+    });
+
+    expect(ranked.map((product) => product.id)).toEqual(['remote', 'ats-only', 'no-remote']);
+  });
+
   it('ignores an unbound ranking objective instead of turning it into executable preference logic', () => {
     const intent = structuredSelectionIntent({
       requirements: [],
@@ -550,54 +569,6 @@ describe('AgentManager visible card readiness', () => {
       'catalog_products_filtered_by_generator_load:2',
       'catalog_search_no_generator_load_fit'
     ]));
-  });
-
-  it('keeps generator card ranking for exact decimal power requests without regex parsing', () => {
-    const fiveKw = generatorWithPower('five-kw', '5.0');
-    const fiveHalfKw = generatorWithPower('five-half-kw', '5.5');
-    const sevenKw = generatorWithPower('seven-kw', '7.0');
-
-    const ranked = rankCatalogProductsByNumericFit({
-      products: [sevenKw, fiveKw, fiveHalfKw],
-      intent: 'generator',
-      query: 'need generator 5,5 kw',
-      semanticContext: '',
-      userMessage: ''
-    });
-
-    expect(ranked.map((product) => product.id)).toEqual(['five-half-kw', 'five-kw', 'seven-kw']);
-  });
-
-  it('normalizes watt power requests before ranking generator cards', () => {
-    const pointEightKw = generatorWithPower('point-eight-kw', '0.8');
-    const oneEightKw = generatorWithPower('one-eight-kw', '1.8');
-    const fiveKw = generatorWithPower('five-kw', '5.0');
-
-    const ranked = rankCatalogProductsByNumericFit({
-      products: [fiveKw, oneEightKw, pointEightKw],
-      intent: 'generator',
-      query: 'need accumulator generator 800 watt',
-      semanticContext: '',
-      userMessage: ''
-    });
-
-    expect(ranked.map((product) => product.id)).toEqual(['point-eight-kw', 'one-eight-kw', 'five-kw']);
-  });
-
-  it('normalizes watt product specs against kilowatt range requests', () => {
-    const aps600 = batteryStationWithWatts('aps-600', 600);
-    const aps800 = batteryStationWithWatts('aps-800', 800);
-    const aps1800 = batteryStationWithWatts('aps-1800', 1800);
-
-    const ranked = rankCatalogProductsByNumericFit({
-      products: [aps600, aps800, aps1800],
-      intent: 'generator',
-      query: 'battery generator 1-1.8 kW 220 V',
-      semanticContext: '',
-      userMessage: ''
-    });
-
-    expect(ranked.map((product) => product.id)).toEqual(['aps-1800', 'aps-800', 'aps-600']);
   });
 
   it('filters visible generator cards to battery stations when the structured need requires battery power', () => {
@@ -786,53 +757,6 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.selectedProductIds).toEqual(['porcelain']);
     expect(selection.droppedProductIds).toContain('concrete');
     expect(selection.warnings).toContain('product_cards_filtered_by_diamond_material:1');
-  });
-
-  it('keeps self-loading plate card ranking without regex parsing', () => {
-    const light = plateWithWeight('light-60', 60);
-    const heavy = plateWithWeight('heavy-110', 110);
-
-    const ranked = rankCatalogProductsByNumericFit({
-      products: [heavy, light],
-      intent: 'plate',
-      query: 'сам буду грузить в машину',
-      semanticContext: '',
-      userMessage: ''
-    });
-
-    expect(ranked.map((product) => product.id)).toEqual(['light-60', 'heavy-110']);
-  });
-
-  it('keeps small-site plate card ranking without regex parsing', () => {
-    const light = plateWithWeight('light-50', 50);
-    const mid = plateWithWeight('mid-83', 83);
-    const heavy = plateWithWeight('heavy-160', 160);
-
-    const ranked = rankCatalogProductsByNumericFit({
-      products: [heavy, light, mid],
-      intent: 'plate',
-      query: 'въезд на участке, плитка и песок',
-      semanticContext: '',
-      userMessage: ''
-    });
-
-    expect(ranked.map((product) => product.id)).toEqual(['mid-83', 'light-50', 'heavy-160']);
-  });
-
-  it('keeps heavy-site signals from applying the small-site plate range', () => {
-    const light = plateWithWeight('light-50', 50);
-    const mid = plateWithWeight('mid-83', 83);
-    const heavy = plateWithWeight('heavy-160', 160);
-
-    const ranked = rankCatalogProductsByNumericFit({
-      products: [heavy, light, mid],
-      intent: 'plate',
-      query: 'въезд и плитка, но объект тяжелый, нужна реверсивная плита',
-      semanticContext: '',
-      userMessage: ''
-    });
-
-    expect(ranked.map((product) => product.id)).toEqual(['heavy-160', 'light-50', 'mid-83']);
   });
 
   it('suppresses previous 400 kg plate cards when the current task is home paving tile', () => {
@@ -1312,6 +1236,65 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(selection.selectedProductIds).toEqual([withAutoStart.id]);
+  });
+
+  it('enforces strict remote start without substituting ATS and keeps unknown data preliminary', () => {
+    const intent = structuredSelectionIntent({
+      selectionGoal: 'preliminary_fit',
+      requirements: [{
+        id: 'needs-remote-start',
+        kind: 'remote_start_required',
+        value: true,
+        unit: null,
+        relation: 'must_have',
+        role: 'hard_constraint',
+        strictness: 'strict',
+        evidence: 'the planner identified remote command start as mandatory',
+        verification: { mode: 'product_attribute' }
+      }]
+    });
+    const remote = {
+      ...generatorWithPower('remote-start', '5'),
+      name: 'BISON BS6250IE generator',
+      specs: { 'Nominal power': '5 kW', запуск: 'ручной/электро/дистанционный' }
+    };
+    const atsOnlyUnknown = {
+      ...generatorWithPower('ats-only-unknown', '108'),
+      name: 'ENERGO YN143C generator',
+      specs: { 'Nominal power': '108 kW', Autostart: 'yes', starter: 'electric' }
+    };
+    const explicitlyAbsent = {
+      ...generatorWithPower('remote-absent', '6'),
+      name: 'TEST No Remote generator',
+      specs: { 'Nominal power': '6 kW', 'remote start': false }
+    };
+    const conflicting = {
+      ...generatorWithPower('remote-conflict', '6'),
+      name: 'TEST Conflicting Remote generator',
+      specs: { 'Nominal power': '6 kW', 'remote start': false, запуск: 'дистанционный с брелока' }
+    };
+    const products = [remote, atsOnlyUnknown, explicitlyAbsent, conflicting];
+
+    const selection = selectProductsForVisibleCards({
+      products,
+      userMessage: 'structured remote-start request',
+      history: [],
+      intent,
+      answerText: products.map((product) => product.name).join(', '),
+      selectedProductIds: products.map((product) => product.id),
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([remote.id, atsOnlyUnknown.id]);
+    expect(selection.droppedProductIds).toEqual(expect.arrayContaining([
+      explicitlyAbsent.id,
+      conflicting.id
+    ]));
+    expect(selection.warnings).toContain('product_cards_filtered_by_generator_remote_start:2');
+    expect(selection.warnings).toContain('product_cards_preliminary:generator_remote_start_unconfirmed:1');
+    expect(selection.productCaveatsById[atsOnlyUnknown.id]).toContain(
+      'Запуск по команде с брелока или пульта в доступных характеристиках не подтвержден.'
+    );
   });
 
   it('rejects malformed and conflicting strict autostart requirements', () => {

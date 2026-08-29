@@ -49,10 +49,10 @@ function toolResultFromPayload(payload: ReturnType<typeof buildGeneratorLoadTool
 describe('Agent Manager generator load payload', () => {
   it('keeps every explicitly simultaneous workshop load in one running scenario', () => {
     const request = generatorLoadRequest([
-      { kind: 'compressor', name: 'compressor', count: 1, runningKw: 2.2, source: 'explicit_user', evidence: 'runs simultaneously' },
-      { kind: 'machine', name: 'machine', count: 1, runningKw: 1.1, source: 'explicit_user', evidence: 'runs simultaneously' },
-      { kind: 'lighting', name: 'lighting', count: 1, runningKw: 0.3, source: 'explicit_user', evidence: 'runs simultaneously' },
-      { kind: 'handheld_tool', name: 'angle grinder', count: 1, runningKw: 1.5, source: 'explicit_user', evidence: 'runs simultaneously' }
+      { kind: 'compressor', name: 'compressor', count: 1, runningKw: 2.2, source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided', operationMode: 'continuous', coRunningGroup: 'workshop', evidence: 'runs simultaneously' },
+      { kind: 'machine', name: 'machine', count: 1, runningKw: 1.1, source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided', operationMode: 'continuous', coRunningGroup: 'workshop', evidence: 'runs simultaneously' },
+      { kind: 'lighting', name: 'lighting', count: 1, runningKw: 0.3, source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided', operationMode: 'continuous', coRunningGroup: 'workshop', evidence: 'runs simultaneously' },
+      { kind: 'handheld_tool', name: 'angle grinder', count: 1, runningKw: 1.5, source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided', operationMode: 'continuous', coRunningGroup: 'workshop', evidence: 'runs simultaneously' }
     ]);
     request.args.simultaneousRunning = true;
     request.args.simultaneousStarting = false;
@@ -62,8 +62,8 @@ describe('Agent Manager generator load payload', () => {
 
     expect(payload.profile).toMatchObject({
       totalRunningKw: 5.1,
-      requiredStartingKw: 9.5,
-      requiredNominalKw: 9.5
+      requiredStartingKw: 5.1,
+      requiredNominalKw: 5.5
     });
     expect(payload.profile?.scenarios).toHaveLength(1);
     expect(payload.profile?.scenarios?.[0]?.itemKinds).toHaveLength(4);
@@ -76,6 +76,10 @@ describe('Agent Manager generator load payload', () => {
       count: 1,
       runningKw: 3,
       source: 'explicit_user',
+      runningSource: 'explicit_user',
+      startingSource: 'not_provided',
+      operationMode: 'continuous',
+      coRunningGroup: 'workshop',
       evidence: '3 kW welding inverter runs simultaneously'
     }]);
     request.args.simultaneousRunning = true;
@@ -90,7 +94,7 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.warnings).not.toContain('generator_load_invalid_load_kind');
   });
 
-  it('fills conservative defaults for bounded estimated loads with missing kW', () => {
+  it('does not synthesize conservative defaults for bounded estimated loads with missing kW', () => {
     const payload = buildGeneratorLoadToolPayload({
       request: generatorLoadRequest([{
         kind: 'pump',
@@ -99,6 +103,10 @@ describe('Agent Manager generator load payload', () => {
         runningKw: null,
         startingKw: null,
         source: 'estimated_average',
+        runningSource: 'not_provided',
+        startingSource: 'not_provided',
+        operationMode: 'continuous',
+        coRunningGroup: 'house',
         evidence: 'Borehole pump, 220 V, exact power unknown',
         basisKind: 'specific_type_or_function',
         basisSignals: [
@@ -111,21 +119,12 @@ describe('Agent Manager generator load payload', () => {
       userMessage: 'Насос скважинный, дом 220 В, мощность насоса не знаю.'
     });
 
-    expect(payload.loads).toEqual([
-      expect.objectContaining({
-        kind: 'pump',
-        runningKw: 1.1,
-        startingKw: 3.5,
-        source: 'estimated_average',
-        basisKind: 'specific_type_or_function'
-      })
-    ]);
-    expect(payload.profile?.requiredNominalKw).toBeGreaterThanOrEqual(3.5);
-    expect(payload.warnings).toContain('generator_load_default_bounded_estimate:pump');
-    expect(payload.warnings).toContain('generator_load_bounded_assumption');
+    expect(payload.loads).toEqual([]);
+    expect(payload.profile).toBeUndefined();
+    expect(payload.warnings).toContain('generator_load_bounded_basis_incomplete');
+    expect(payload.warnings).toContain('generator_load_unbounded_guess');
+    expect(payload.warnings).toContain('generator_load_structured_args_without_usable_kw');
     expect(payload.estimateBasis).toBe('bounded_assumption');
-    expect(payload.warnings).toContain('generator_load_bounded_assumption');
-    expect(payload.warnings).not.toContain('generator_load_unbounded_guess');
     expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
     expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(false);
   });
@@ -139,6 +138,10 @@ describe('Agent Manager generator load payload', () => {
         runningKw: null,
         startingKw: null,
         source: 'estimated_average',
+        runningSource: 'not_provided',
+        startingSource: 'not_provided',
+        operationMode: 'continuous',
+        coRunningGroup: 'house',
         evidence: 'Pump exists, but type and power are unknown',
         basisKind: 'generic_load_name',
         basisSignals: ['consumer_type_known']
@@ -169,6 +172,10 @@ describe('Agent Manager generator load payload', () => {
             count: 1,
             runningKw: 1.1,
             source: 'explicit_user',
+            runningSource: 'explicit_user',
+            startingSource: 'not_provided',
+            operationMode: 'continuous',
+            coRunningGroup: 'house',
             evidence: 'The pump nameplate says 1.1 kW and 220 V.',
             basisKind: 'exact_power',
             basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'explicit_power']
@@ -177,6 +184,10 @@ describe('Agent Manager generator load payload', () => {
             name: 'ordinary refrigerator',
             count: 1,
             source: 'explicit_user',
+            runningSource: 'not_provided',
+            startingSource: 'not_provided',
+            operationMode: 'continuous',
+            coRunningGroup: 'house',
             evidence: 'The buyer named an ordinary refrigerator but gave no wattage.',
             basisKind: 'generic_load_name',
             basisSignals: ['consumer_type_known', 'simultaneous_operation_known']
@@ -185,6 +196,10 @@ describe('Agent Manager generator load payload', () => {
             name: 'two LED lamps',
             count: 2,
             source: 'explicit_user',
+            runningSource: 'not_provided',
+            startingSource: 'not_provided',
+            operationMode: 'continuous',
+            coRunningGroup: 'house',
             evidence: 'The buyer named two LED lamps but gave no wattage.',
             basisKind: 'generic_load_name',
             basisSignals: ['consumer_type_known', 'simultaneous_operation_known']
@@ -193,6 +208,10 @@ describe('Agent Manager generator load payload', () => {
             name: 'router',
             count: 1,
             source: 'explicit_user',
+            runningSource: 'not_provided',
+            startingSource: 'not_provided',
+            operationMode: 'continuous',
+            coRunningGroup: 'house',
             evidence: 'The buyer named a router but gave no wattage.',
             basisKind: 'generic_load_name',
             basisSignals: ['consumer_type_known', 'simultaneous_operation_known']
@@ -202,22 +221,16 @@ describe('Agent Manager generator load payload', () => {
       userMessage: 'The unchanged loads are a 1.1 kW 220 V pump, refrigerator, two LED lamps and a router.'
     });
 
-    expect(payload.loads).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: 'pump', runningKw: 1.1, source: 'explicit_user' }),
-      expect.objectContaining({ kind: 'refrigerator', runningKw: 0.25, source: 'estimated_average' }),
-      expect.objectContaining({ kind: 'lighting', runningKw: 0.3, source: 'estimated_average' }),
-      expect.objectContaining({ kind: 'router', runningKw: 0.05, source: 'estimated_average' })
+    expect(payload.loads).toEqual([
+      expect.objectContaining({ kind: 'pump', runningKw: 1.1, source: 'explicit_user' })
+    ]);
+    expect(payload.profile?.requiredNominalKw).toBe(1.5);
+    expect(payload.loads).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'estimated_average' })
     ]));
-    expect(payload.profile?.requiredNominalKw).toBeGreaterThanOrEqual(4);
-    expect(payload.warnings).toEqual(expect.arrayContaining([
-      'generator_load_default_bounded_estimate:refrigerator',
-      'generator_load_default_bounded_estimate:lighting',
-      'generator_load_default_bounded_estimate:router'
-    ]));
-    expect(payload.estimateBasis).toBe('bounded_assumption');
-    expect(payload.warnings).toContain('generator_load_bounded_assumption');
-    expect(payload.warnings).not.toContain('generator_load_unbounded_guess');
+    expect(payload.estimateBasis).toBe('unbounded_guess');
+    expect(payload.warnings).not.toContain('generator_load_bounded_assumption');
     expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
-    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(false);
+    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(true);
   });
 });

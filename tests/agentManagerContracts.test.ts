@@ -5,7 +5,6 @@ import {
   createStableLedgerEventId,
   parseAnswerContractModelOutput,
   normalizeLedgerStateDeltaEvents,
-  normalizeAgentIntentContractDraft,
   type LedgerStateDelta
 } from '../src/ai/agentManagerContracts.js';
 import { agentManagerStructuredFormats } from '../src/ai/agentManagerOrchestrator.js';
@@ -136,12 +135,12 @@ describe('agent manager contracts', () => {
     }).success).toBe(false);
   });
 
-  it('normalizes cross-field lead authorization drift without authorizing the lead', () => {
-    const normalized = normalizeAgentIntentContractDraft({
+  it('rejects cross-field lead authorization drift instead of repairing planner meaning', () => {
+    const parsed = AgentIntentContractSchema.safeParse({
       userMessageSummary: 'buyer asks how to check delivery',
       dialogueUnderstanding: 'the buyer has not supplied contact details',
       nextStepRationale: 'offer the contact form without claiming a handoff',
-      requiresTools: true,
+      requiresTools: false,
       toolRequests: [],
       leadCaptureAuthorization: {
         authorized: false,
@@ -157,18 +156,8 @@ describe('agent manager contracts', () => {
       mustNotAskQuestionIds: [],
       riskFlags: []
     });
-    const parsed = AgentIntentContractSchema.parse(normalized);
 
-    expect(parsed.leadCaptureAuthorization).toMatchObject({
-      authorized: false,
-      contactSource: 'none',
-      handoffKind: 'none',
-      handoffOfferMessageId: null,
-      purpose: null,
-      buyerQuestion: null,
-      evidence: null,
-      pendingDraftId: null
-    });
+    expect(parsed.success).toBe(false);
   });
 
   it('requires a scoped draft id before a name-only turn may continue partial lead capture', () => {

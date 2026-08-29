@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState } from '../src/ai/needState.js';
-import type { ToolRequest } from '../src/ai/agentManagerContracts.js';
+import type { AgentIntentContract, ToolRequest } from '../src/ai/agentManagerContracts.js';
 import type { AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import type { ConversationSession, ConversationTurn, Message, Product, VerifiedProductFact, VerifiedProductFactInput } from '../src/shared/types.js';
 
@@ -191,6 +191,17 @@ function model(): AgentManagerModel {
           rationale: 'fill missing comparison facts and adjudicate conflicts',
           required: true
         }],
+        productMentions: [{
+          name: 'SUMEC FIRMAN 6 kW',
+          role: 'comparison_subject',
+          productClass: 'generator',
+          evidence: 'SUMEC'
+        }, {
+          name: 'BISON 6 kW',
+          role: 'comparison_subject',
+          productClass: 'generator',
+          evidence: 'BISON'
+        }],
         mustNotAskQuestionIds: [],
         riskFlags: ['comparison']
       };
@@ -219,7 +230,7 @@ const allowedToolArgKeys: Record<ToolRequest['tool'], Set<string>> = {
   ]),
   'calculator.generatorLoad': new Set([
     'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
-    'loads', 'simultaneousStarting', 'simultaneousStartingKinds', 'estimateBasis', 'reason', 'notes'
+    'loads', 'simultaneousRunning', 'simultaneousStarting', 'simultaneousStartingKinds', 'estimateBasis', 'reason', 'notes'
   ]),
   'web.researchProductFacts': new Set([
     'query', 'semanticQuery', 'productIntent', 'canonicalProductIntent', 'powerSource', 'phase',
@@ -232,15 +243,86 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
   const planTurn = implementation.planTurn;
   const strictPlanTurn = async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
     const intent = await planTurn(input);
+    const canonicalProductClass = intent.selectionPolicy?.canonicalProductClass ?? 'generator';
+    const selectionPolicy = intent.selectionPolicy ?? {
+      targetProductClass: canonicalProductClass,
+      canonicalProductClass,
+      selectionGoal: 'browse_catalog' as const,
+      needAction: 'continue' as const,
+      alternativePolicy: 'open_to_alternatives' as const,
+      reusePreviousCards: false,
+      maxCards: 4,
+      powerSource: 'any' as const,
+      phase: 'any' as const,
+      requirements: [],
+      rankingObjectives: [],
+      rationale: 'Test fixture carries an explicit no-filter selection policy.'
+    };
+    const requirementIds = new Set(selectionPolicy.requirements.map((requirement) => requirement.id));
+    const currentEvidenceForName = (name: string) => {
+      const index = input.userMessage.toLocaleLowerCase('en-US').indexOf(name.toLocaleLowerCase('en-US'));
+      return index >= 0 ? input.userMessage.slice(index, index + name.length) : null;
+    };
+    const productMentions = (intent.productMentions ?? []).map((mention) => {
+      if (input.userMessage.includes(mention.evidence)) return mention;
+      const evidence = currentEvidenceForName(mention.name);
+      return evidence ? { ...mention, evidence } : mention;
+    });
+    const mentionedNames = new Set(productMentions.map((mention) => mention.name.toLocaleLowerCase('en-US')));
+    for (const targetName of intent.toolRequests.flatMap((request) => request.args.productNames ?? [])) {
+      const evidence = currentEvidenceForName(targetName);
+      if (!evidence || mentionedNames.has(targetName.toLocaleLowerCase('en-US'))) continue;
+      productMentions.push({
+        name: targetName,
+        role: 'target_product',
+        productClass: canonicalProductClass,
+        evidence
+      });
+      mentionedNames.add(targetName.toLocaleLowerCase('en-US'));
+    }
+    const requiredTools = [...new Set(intent.toolRequests
+      .filter((request) => request.required)
+      .map((request) => request.tool))];
+    const hasCatalog = requiredTools.some((tool) => tool === 'catalog.search' || tool === 'catalog.getProductDetails');
+    const hasWeb = requiredTools.includes('web.researchProductFacts');
+    const hasNamedWebTarget = intent.toolRequests.some((request) =>
+      request.tool === 'web.researchProductFacts' && (request.args.productNames?.length ?? 0) > 0
+    );
+    const grounding = intent.grounding ?? {
+      taskType: hasCatalog || hasNamedWebTarget ? 'comparison' as const : 'technical_answer' as const,
+      buyerRequestedWeb: false,
+      catalogRequirement: hasCatalog ? 'required' as const : 'none' as const,
+      responseMode: hasCatalog || hasNamedWebTarget ? 'compare' as const : 'answer' as const,
+      sourcePolicy: hasWeb ? 'web_required' as const : hasCatalog ? 'catalog_required' as const : 'conversation_only' as const,
+      webPurpose: hasWeb ? 'technical_specs' as const : 'none' as const,
+      webRequirement: hasWeb ? 'independent_required' as const : 'none' as const,
+      requiredToolKinds: requiredTools,
+      technicalAttributes: [...new Set(intent.toolRequests.flatMap((request) => request.args.comparisonAttributes ?? []))],
+      buyerQuestion: input.userMessage,
+      rationale: 'Test fixture explicitly declares the grounding needed by its planned tools.'
+    };
     return {
       ...intent,
+      productMentions,
+      selectionPolicy,
+      grounding,
       toolRequests: intent.toolRequests.map((request) => ({
         ...request,
-        args: Object.fromEntries(Object.entries(request.args).filter(([key]) =>
-          allowedToolArgKeys[request.tool].has(key)
-        ))
+        args: {
+          ...Object.fromEntries(Object.entries(request.args).filter(([key]) =>
+            allowedToolArgKeys[request.tool].has(key)
+          )),
+          ...(
+            request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
+              ? { canonicalProductIntent: request.args.canonicalProductIntent ?? canonicalProductClass }
+              : {}
+          )
+        },
+        coversRequirementIds: (request.coversRequirementIds ?? []).filter((requirementId) =>
+          requirementIds.has(requirementId)
+        )
       })) as ToolRequest[]
-    };
+    } as AgentIntentContract;
   };
   return {
     ...implementation,
@@ -255,8 +337,12 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
 }
 
 describe('AgentManager comparison research flow', () => {
+  beforeEach(() => {
+    researchProductComparisonFacts.mockReset();
+  });
+
   it('rejects a premature handoff instead of replacing it when web execution fails', async () => {
-    researchProductComparisonFacts.mockRejectedValueOnce(
+    researchProductComparisonFacts.mockRejectedValue(
       new Error('product_comparison_research did not return a JSON object')
     );
 
@@ -594,7 +680,7 @@ describe('AgentManager comparison research flow', () => {
         researchOutcome: 'exhausted',
         sourcesExhausted: true,
         unconfirmedFacts: [expect.objectContaining({
-          requirementIds: ['req-engine-compatibility'],
+          requirementIds: [],
           attribute: 'совместимость комплекта с Hatz 1D42S',
           status: 'not_confirmed'
         })]
@@ -613,7 +699,7 @@ describe('AgentManager comparison research flow', () => {
   });
 
   it('rejects a failed web result used as a fact instead of rewriting the answer', async () => {
-    researchProductComparisonFacts.mockRejectedValueOnce(
+    researchProductComparisonFacts.mockRejectedValue(
       new Error('product_comparison_research did not return a JSON object')
     );
 
@@ -683,7 +769,7 @@ describe('AgentManager comparison research flow', () => {
     expect(conversations.assistantSaves).toEqual([]);
   });
 
-  it('repairs web-required grounding into an executable web research tool', async () => {
+  it('rejects web-required grounding when the planner omitted the web tool', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
       facts: [{
@@ -763,35 +849,18 @@ describe('AgentManager comparison research flow', () => {
       withStrictToolFixtures(groundingRepairModel)
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Explain why THD matters for an inverter generator and check facts if catalog data is missing.'
-    });
-
-    const metadata = payload.metadata as {
-      intentContract?: { toolRequests?: Array<{ id?: string; tool?: string }>; riskFlags?: string[] };
-      sourcePolicy?: { required?: string[] };
-      turnContract?: { taskType?: string };
-      toolResults?: Array<{ requestId?: string; tool?: string; status?: string }>;
-    };
-    expect(metadata.intentContract?.toolRequests).toContainEqual(expect.objectContaining({
-      id: 'auto:web-grounding',
-      tool: 'web.researchProductFacts'
-    }));
-    expect(metadata.intentContract?.riskFlags).toContain('planner_repaired_grounding_web_tool');
-    expect(metadata.sourcePolicy?.required).toContain('web');
-    expect(metadata.turnContract?.taskType).toBe('technical_answer');
-    expect(metadata.toolResults?.[0]).toMatchObject({
-      requestId: 'auto:web-grounding',
-      tool: 'web.researchProductFacts',
-      status: 'ok'
-    });
-    expect(toolResultIdsSeen).toEqual(['auto:web-grounding']);
+    })).rejects.toThrow('required_tool_request_missing:web.researchProductFacts');
+    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+    expect(toolResultIdsSeen).toEqual([]);
+    expect(conversations.assistantSaves).toEqual([]);
   });
 
   it('rejects exact-model claims that cite failed web research as fact evidence', async () => {
-    researchProductComparisonFacts.mockRejectedValueOnce(
+    researchProductComparisonFacts.mockRejectedValue(
       new Error('product_comparison_research did not return a JSON object')
     );
 
@@ -870,7 +939,7 @@ describe('AgentManager comparison research flow', () => {
   });
 
   it('preserves a useful catalog-grounded comparison when a failed web result is referenced only as status', async () => {
-    researchProductComparisonFacts.mockRejectedValueOnce(
+    researchProductComparisonFacts.mockRejectedValue(
       new Error('product_comparison_research did not return a JSON object')
     );
 
@@ -1058,14 +1127,33 @@ describe('AgentManager comparison research flow', () => {
                 loads: [{
                   kind: 'boiler',
                   name: 'Baxi 24 boiler',
+                  count: 1,
                   runningKw: 0.15,
-                  startingKw: 0.2
+                  startingKw: 0.2,
+                  source: 'estimated_average',
+                  runningSource: 'estimated_average',
+                  startingSource: 'estimated_average',
+                  operationMode: 'continuous',
+                  coRunningGroup: 'household',
+                  evidence: 'газовый котел Baxi 24',
+                  basisKind: 'specific_type_or_function',
+                  basisSignals: ['consumer_type_known', 'consumer_function_known', 'voltage_or_phase_known']
                 }, {
                   kind: 'pump',
                   name: 'deep well pump',
+                  count: 1,
                   runningKw: 1.1,
-                  startingKw: 3.3
+                  startingKw: 3.3,
+                  source: 'explicit_user',
+                  runningSource: 'explicit_user',
+                  startingSource: 'explicit_user',
+                  operationMode: 'continuous',
+                  coRunningGroup: 'household',
+                  evidence: 'насос 1,1 кВт',
+                  basisKind: 'exact_power',
+                  basisSignals: ['explicit_power', 'voltage_or_phase_known']
                 }],
+                simultaneousRunning: true,
                 simultaneousStarting: true
               },
               role: 'hard_requirement',
@@ -1101,6 +1189,10 @@ describe('AgentManager comparison research flow', () => {
                 runningKw: 0.15,
                 startingKw: 0.2,
                 source: 'estimated_average',
+                runningSource: 'estimated_average',
+                startingSource: 'estimated_average',
+                operationMode: 'continuous',
+                coRunningGroup: 'household',
                 evidence: 'газовый котел Baxi 24',
                 basisKind: 'specific_type_or_function',
                 basisSignals: ['consumer_type_known', 'consumer_function_known', 'voltage_or_phase_known']
@@ -1111,10 +1203,15 @@ describe('AgentManager comparison research flow', () => {
                 runningKw: 1.1,
                 startingKw: 3.3,
                 source: 'explicit_user',
+                runningSource: 'explicit_user',
+                startingSource: 'explicit_user',
+                operationMode: 'continuous',
+                coRunningGroup: 'household',
                 evidence: 'насос 1,1 кВт',
                 basisKind: 'exact_power',
                 basisSignals: ['explicit_power', 'voltage_or_phase_known']
               }],
+              simultaneousRunning: true,
               simultaneousStarting: true,
               simultaneousStartingKinds: ['pump'],
               estimateBasis: 'bounded_assumption',
@@ -2221,7 +2318,7 @@ describe('AgentManager comparison research flow', () => {
     expect(fakeProducts.usedVerifiedFactIds).not.toContain('legacy-name-only-button');
   });
 
-  it('repairs stale follow-up research but blocks a writer that still reuses the old model fact', async () => {
+  it('rejects a stale follow-up plan that requires web research but omitted the tool', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
       facts: [{
@@ -2291,6 +2388,16 @@ describe('AgentManager comparison research flow', () => {
             productClass: 'generator',
             evidence: 'buyer asks about this exact current model'
           }],
+          grounding: {
+            taskType: 'comparison',
+            sourcePolicy: 'web_required',
+            webPurpose: 'technical_specs',
+            webRequirement: 'independent_required',
+            requiredToolKinds: ['web.researchProductFacts'],
+            technicalAttributes: ['start_control_mechanism'],
+            buyerQuestion: 'А Firman RD3910E у вас есть? Там запуск так же через ключ/выключатель, а не кнопкой?',
+            rationale: 'The current model requires its own checked start-control evidence.'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: ['answer_policy_catalog_presence_relevant']
         };
@@ -2326,11 +2433,9 @@ describe('AgentManager comparison research flow', () => {
       sessionId,
       turnId,
       userMessage: 'А Firman RD3910E у вас есть? Там запуск так же через ключ/выключатель, а не кнопкой?'
-    })).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    })).rejects.toThrow('required_tool_request_missing:web.researchProductFacts');
 
-    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
-      targetProductNames: ['FIRMAN RD3910E']
-    }));
+    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
     expect(conversations.assistantSaves).toEqual([]);
   });
 
@@ -2443,6 +2548,18 @@ describe('AgentManager comparison research flow', () => {
             rationale: 'both exact products are present in the current catalog',
             required: true,
             coversRequirementIds: ['comparison-scope']
+          }, {
+            id: 'web:exact-comparison',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'TSS SGG 5000N BISON BS6250IE nominal power generator type',
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              productNames: ['TSS SGG 5000N', 'BISON BS6250IE'],
+              comparisonAttributes: ['nominal power', 'generator type']
+            },
+            rationale: 'check only comparison attributes left unresolved by the exact catalog cards',
+            required: true
           }],
           productMentions: [{
             name: 'TSS SGG 5000N',
@@ -2480,10 +2597,11 @@ describe('AgentManager comparison research flow', () => {
           },
           grounding: {
             sourcePolicy: 'catalog_required',
-            requiredToolKinds: ['catalog.getProductDetails'],
             taskType: 'comparison',
             technicalAttributes: ['nominal power', 'generator type'],
-            webPurpose: 'none',
+            webPurpose: 'technical_specs',
+            webRequirement: 'conditional_on_catalog_gap',
+            requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts'],
             rationale: 'the catalog contains the exact products and the facts needed for this comparison'
           },
           mustNotAskQuestionIds: [],
@@ -2513,6 +2631,7 @@ describe('AgentManager comparison research flow', () => {
           questionsAsked: [],
           toolResultIds: ['catalog:exact-comparison'],
           selectedProductIds: [tss.id, bison.id],
+          selectionRationale: 'Both exact catalog products are the planner-authorized comparison scope.',
           leadAction: 'none',
           riskFlags: [],
           selectionReadiness: {
@@ -2555,7 +2674,7 @@ describe('AgentManager comparison research flow', () => {
         sourcePolicy: 'catalog_required',
         webRequirement: 'conditional_on_catalog_gap'
       },
-      riskFlags: expect.arrayContaining(['planner_repaired_requested_attribute_conditional_web'])
+      riskFlags: expect.not.arrayContaining(['planner_repaired_requested_attribute_conditional_web'])
     });
     expect(payload.metadata?.intentContract).not.toMatchObject({
       riskFlags: expect.arrayContaining(['planner_repaired_exact_model_evidence'])
@@ -2638,6 +2757,18 @@ describe('AgentManager comparison research flow', () => {
             },
             rationale: 'read both exact current catalog cards',
             required: true
+          }, {
+            id: 'web:automatic-start-comparison',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'FIRMAN RD3910E FIRMAN RD4910E automatic start',
+              productNames: [confirmed.name, unresolved.name],
+              productIntent: 'generator',
+              canonicalProductIntent: 'generator',
+              comparisonAttributes: ['automatic start']
+            },
+            rationale: 'verify automatic start only where the exact catalog cards remain incomplete',
+            required: true
           }],
           productMentions: [confirmed, unresolved].map((item) => ({
             name: item.name,
@@ -2661,9 +2792,9 @@ describe('AgentManager comparison research flow', () => {
           grounding: {
             taskType: 'comparison',
             sourcePolicy: 'catalog_required',
-            webPurpose: 'none',
-            webRequirement: 'none',
-            requiredToolKinds: ['catalog.getProductDetails'],
+            webPurpose: 'technical_specs',
+            webRequirement: 'conditional_on_catalog_gap',
+            requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts'],
             technicalAttributes: ['automatic start'],
             buyerQuestion: 'Do both exact models support automatic start?',
             rationale: 'catalog first; missing exact technical facts require bounded external verification'
@@ -2733,7 +2864,7 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.productCards).toEqual([]);
   });
 
-  it('executes catalog details before conditional research when a preliminary exact comparison planned web only', async () => {
+  it('executes only the planner-owned web request without synthesizing a catalog tool', async () => {
     researchProductComparisonFacts.mockClear();
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: false,
@@ -2833,10 +2964,7 @@ describe('AgentManager comparison research flow', () => {
         };
       },
       async composeAnswer(input) {
-        expect(input.toolResults.map((result) => result.tool)).toEqual([
-          'catalog.getProductDetails',
-          'web.researchProductFacts'
-        ]);
+        expect(input.toolResults.map((result) => result.tool)).toEqual(['web.researchProductFacts']);
         return {
           answerText: 'Both exact models have 5.5 kW nominal power according to their current catalog cards.',
           factsUsed: [],
@@ -2871,7 +2999,7 @@ describe('AgentManager comparison research flow', () => {
     });
 
     expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
-      allowCatalogOnlyAnswer: true,
+      allowCatalogOnlyAnswer: false,
       targetProductNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'],
       products: expect.arrayContaining([
         expect.objectContaining({ id: 'sumec' }),
@@ -2881,10 +3009,10 @@ describe('AgentManager comparison research flow', () => {
     expect(payload.usedWebSearch).toBe(false);
     expect(payload.metadata?.intentContract).toMatchObject({
       grounding: {
-        sourcePolicy: 'catalog_required',
-        webRequirement: 'conditional_on_catalog_gap'
+        sourcePolicy: 'web_required',
+        webRequirement: 'independent_required'
       },
-      riskFlags: expect.arrayContaining(['preliminary_exact_comparison_catalog_first_reconciled'])
+      riskFlags: expect.not.arrayContaining(['preliminary_exact_comparison_catalog_first_reconciled'])
     });
   });
 

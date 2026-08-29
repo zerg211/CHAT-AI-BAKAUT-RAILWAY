@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractWeightKg,
   generatorAutoStartProfile,
+  generatorRemoteStartProfile,
   oilViscosities,
   parseLoosePositiveNumber,
   productLiters,
@@ -145,5 +146,37 @@ describe('productClassifier explicit generator autostart facts', () => {
     expect(generatorAutoStartProfile(product('Generator never provisioned', {
       specs: { 'Auto start': 'никогда не был предусмотрен' }
     }))).toBe('absent');
+  });
+});
+
+describe('productClassifier explicit generator remote-start facts', () => {
+  it('recognizes remote command start from structured start fields', () => {
+    expect(generatorRemoteStartProfile(product('BISON BS6250IE', {
+      specs: { запуск: 'ручной/электро/дистанционный' }
+    }))).toBe('present');
+    expect(generatorRemoteStartProfile(product('A-iPower A4000iS', {
+      specs: { starter: 'ручной/электро/АВР, дистанционный пульт до 50 м' }
+    }))).toBe('present');
+    expect(generatorRemoteStartProfile(product('SUNREKA G2200iS', {
+      specs: { стартер: 'ручной + электростартер, пульт ДУ, блок АВР' }
+    }))).toBe('present');
+  });
+
+  it('does not substitute ATS, electric start, or unrelated remote control', () => {
+    expect(generatorRemoteStartProfile(product('ATS generator', {
+      specs: { автозапуск: 'с автозапуском', стартер: 'с электростартером' }
+    }))).toBe('unknown');
+    expect(generatorRemoteStartProfile(product('Remote welding adjustment', {
+      specs: { welding: 'дистанционная регулировка тока с пульта' }
+    }))).toBe('unknown');
+  });
+
+  it('keeps explicit absence and contradictory structured facts distinct', () => {
+    expect(generatorRemoteStartProfile(product('No remote start', {
+      specs: { 'remote start': false }
+    }))).toBe('absent');
+    expect(generatorRemoteStartProfile(product('Conflicting remote start', {
+      specs: { 'remote start': false, запуск: 'дистанционный с брелока' }
+    }))).toBe('conflict');
   });
 });

@@ -15,14 +15,12 @@ import {
   fromEscaped,
   generatorAutoStartProfile,
   generatorPhaseProfile,
-  inferProductIntent,
+  generatorRemoteStartProfile,
   isBatteryPowerStation,
   isCoreEquipment,
-  parseWeightNeedRangeKg,
   productMatchesIntent,
   productMentionedInText,
-  productPowerSource,
-  requiresBatteryPowerStationFromText
+  productPowerSource
 } from './productClassifier.js';
 import {
   modelTextTokens as matchingModelTextTokens,
@@ -92,14 +90,6 @@ export function uniqueStrings(values: string[]) {
   return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
 
-function latestActiveNeedProductClass(needState: CustomerNeedState): ProductSelectionClass {
-  const classes = (needState.activeNeeds ?? [])
-    .filter((need) => need.status === 'open' || need.status === 'selected')
-    .map((need) => need.productClass)
-    .filter((value): value is ProductSelectionClass => value !== 'commercial' && value !== 'unknown');
-  return classes.length ? classes[classes.length - 1] : 'unknown';
-}
-
 function positiveFiniteNumber(value: unknown) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : undefined;
@@ -160,30 +150,6 @@ export function budgetMaxFromNeedState(needState: CustomerNeedState) {
   return undefined;
 }
 
-function effectiveVisibleCardBudgetMax(input: { needState: CustomerNeedState; userMessage: string }) {
-  // Budget semantics come from the typed planner contract (budget_max_rub). The old
-  // "70 тысяч + exclusion words" special case was a single-dialogue crutch that
-  // misfired on paraphrases; the planner now owns this judgment.
-  return budgetMaxFromNeedState(input.needState);
-}
-
-function toolRequestSemanticText(intent: AgentIntentContract) {
-  return intent.toolRequests.map((request) => {
-    const args = request.args as Record<string, unknown>;
-    const productNames = Array.isArray(args.productNames) ? args.productNames.filter((item): item is string => typeof item === 'string') : [];
-    const comparisonAttributes = Array.isArray(args.comparisonAttributes) ? args.comparisonAttributes.filter((item): item is string => typeof item === 'string') : [];
-    return [
-      request.rationale,
-      typeof args.semanticQuery === 'string' ? args.semanticQuery : '',
-      typeof args.query === 'string' ? args.query : '',
-      typeof args.reason === 'string' ? args.reason : '',
-      typeof args.notes === 'string' ? args.notes : '',
-      productNames.join(' '),
-      comparisonAttributes.join(' ')
-    ].filter(Boolean).join(' ');
-  }).join('\n');
-}
-
 export const productSelectionClasses: ProductSelectionClass[] = [
   'generator',
   'weldingGenerator',
@@ -222,11 +188,11 @@ export function toolRequestProductIntent(request: ToolRequest): ProductSelection
   return coerceProductSelectionClass(args.productIntent);
 }
 
-export function toolRequestScopedQuery(request: ToolRequest, defaultQuery: string) {
+export function toolRequestScopedQuery(request: ToolRequest) {
   const args = request.args as Record<string, unknown>;
   const query = typeof args.query === 'string' && args.query.trim()
     ? args.query.trim()
-    : defaultQuery;
+    : '';
   const semanticQuery = typeof args.semanticQuery === 'string' && args.semanticQuery.trim()
     ? args.semanticQuery.trim()
     : [
@@ -247,12 +213,7 @@ function intentFromContractToolRequests(intent: AgentIntentContract): ProductSel
 }
 
 function inferVisibleCardIntent(input: {
-  userMessage: string;
-  history: Message[];
   intent: AgentIntentContract;
-  answerText: string;
-  selectedProductIds?: string[];
-  needState: CustomerNeedState;
 }): ProductSelectionClass {
   const toolIntent = intentFromContractToolRequests(input.intent);
   if (toolIntent !== 'unknown') return toolIntent;
@@ -262,16 +223,7 @@ function inferVisibleCardIntent(input: {
     const mentionIntent = coerceProductSelectionClass(mention.productClass);
     if (mentionIntent !== 'unknown') return mentionIntent;
   }
-  if (input.intent.selectionPolicy) return 'unknown';
-  const activeNeedIntent = latestActiveNeedProductClass(input.needState);
-  if (activeNeedIntent !== 'unknown') return activeNeedIntent;
-  return inferProductIntent([
-    input.userMessage,
-    input.intent.userMessageSummary,
-    input.intent.dialogueUnderstanding,
-    input.intent.nextStepRationale,
-    input.answerText
-  ].filter(Boolean).join('\n'));
+  return 'unknown';
 }
 
 function productModelMentionedInText(product: Product, text: string) {
@@ -516,6 +468,7 @@ const generatorLoadDerivedRequirementKind = 'generator_load_scenario';
 const generatorLoadDerivedMinimumRequirementKinds = new Set(['nominal_power_min_kw', 'power_min_kw']);
 const generatorAutoStartRequirementKinds = new Set(['auto_start_required', 'autostart_required']);
 const generatorElectricStartRequirementKinds = new Set(['electric_start_required']);
+const generatorRemoteStartRequirementKinds = new Set(['remote_start', 'remote_start_required']);
 const priceVisibilityRequirementKind = 'price_visibility';
 const generatorVoltageRequirementKind = 'voltage_v';
 const supportedGeneratorVoltageUnits = new Set(['v', 'volt', 'volts', fromEscaped('\\u0432')]);
@@ -557,6 +510,7 @@ const deterministicallyVerifiableStrictKinds = new Set([
   'quantity',
   'material',
   ...generatorAutoStartRequirementKinds,
+  ...generatorRemoteStartRequirementKinds,
   generatorLoadDerivedRequirementKind
 ]);
 
@@ -684,6 +638,7 @@ export function assessStrictSelectionRequirements(
   const blockers: StrictSelectionRequirementBlocker[] = [];
   let generatorNominalPowerMinKw: number | undefined;
   let generatorAutoStartRequirement: boolean | undefined;
+  let generatorRemoteStartRequirement: boolean | undefined;
   const addBlocker = (
     requirement: NonNullable<AgentIntentContract['selectionPolicy']>['requirements'][number],
     reason: string
@@ -837,6 +792,28 @@ export function assessStrictSelectionRequirements(
         addBlocker(requirement, 'conflicting_autostart_requirements');
       } else {
         generatorAutoStartRequirement = requirement.value;
+      }
+      continue;
+    }
+
+    if (generatorRemoteStartRequirementKinds.has(requirement.kind)) {
+      if (
+        requirement.unit !== null ||
+        typeof requirement.value !== 'boolean' ||
+        !isGeneratorProductClass(productClass) ||
+        (
+          requirement.value === true && requirement.relation === 'must_not_have' ||
+          requirement.value === false && requirement.relation !== 'must_not_have'
+        )
+      ) {
+        addBlocker(requirement, 'remote_start_requirement_shape_or_product_class_mismatch');
+      } else if (
+        generatorRemoteStartRequirement !== undefined &&
+        generatorRemoteStartRequirement !== requirement.value
+      ) {
+        addBlocker(requirement, 'conflicting_remote_start_requirements');
+      } else {
+        generatorRemoteStartRequirement = requirement.value;
       }
       continue;
     }
@@ -1156,6 +1133,50 @@ export function productMeetsSupportedStrictAutoStartRequirement(
   return required ? profile === 'present' : profile === 'absent';
 }
 
+function structuredGeneratorRemoteStartRequirement(intent: AgentIntentContract) {
+  let resolved: boolean | undefined;
+  for (const requirement of intent.selectionPolicy?.requirements ?? []) {
+    if (
+      requirement.role !== 'hard_constraint' ||
+      requirement.strictness !== 'strict' ||
+      !generatorRemoteStartRequirementKinds.has(requirement.kind)
+    ) continue;
+    if (requirement.unit !== null || typeof requirement.value !== 'boolean') return 'invalid' as const;
+    if (
+      (requirement.value === true && requirement.relation === 'must_not_have') ||
+      (requirement.value === false && requirement.relation !== 'must_not_have')
+    ) return 'invalid' as const;
+    if (resolved !== undefined && resolved !== requirement.value) return 'invalid' as const;
+    resolved = requirement.value;
+  }
+  return resolved;
+}
+
+export function hasStructuredGeneratorRemoteStartPreference(intent: AgentIntentContract) {
+  return (intent.selectionPolicy?.requirements ?? []).some((requirement) =>
+    generatorRemoteStartRequirementKinds.has(requirement.kind) &&
+    requirement.value === true &&
+    requirement.unit === null &&
+    requirement.relation === 'preferred' &&
+    requirement.role === 'preference' &&
+    requirement.strictness === 'preferred' &&
+    requirement.verification?.mode === 'product_attribute'
+  );
+}
+
+export function productMeetsSupportedStrictRemoteStartRequirement(
+  product: Product,
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass
+) {
+  const required = structuredGeneratorRemoteStartRequirement(intent);
+  if (required === undefined) return true;
+  if (required === 'invalid' || !isGeneratorProductClass(productClass)) return false;
+  const profile = generatorRemoteStartProfile(product);
+  if (profile === 'unknown' || profile === 'conflict') return false;
+  return required ? profile === 'present' : profile === 'absent';
+}
+
 function structuredBudgetMax(intent: AgentIntentContract) {
   const inclusiveMax = structuredRequirementNumber(intent, ['budget_max_rub', 'price_max_rub']);
   const exclusiveReference = structuredRequirementNumber(intent, [
@@ -1176,14 +1197,13 @@ function structuredGeneratorPowerRequirement(intent: AgentIntentContract): Gener
   return minKw === undefined && maxKw === undefined ? undefined : { minKw, maxKw, requireNominal: true };
 }
 
-function structuredPlateWeightRange(intent: AgentIntentContract): PlateWeightRange | undefined {
+function structuredPlateWeightRange(intent: AgentIntentContract): { min: number; max: number } | undefined {
   const min = structuredRequirementNumber(intent, ['weight_min_kg']);
   const max = structuredRequirementNumber(intent, ['weight_max_kg']);
   if (min === undefined && max === undefined) return undefined;
   return {
     min: min ?? 0,
-    max: max ?? Number.MAX_SAFE_INTEGER,
-    source: 'planner'
+    max: max ?? Number.MAX_SAFE_INTEGER
   };
 }
 
@@ -1611,282 +1631,11 @@ export function filterGeneratorProductsByLoadProfile(products: Product[], requir
   };
 }
 
-const selfLoadingPlateFragments = [
-  'self-loading',
-  'self loading',
-  'selfloading',
-  'load it myself',
-  'loading it myself',
-  'load myself',
-  'loading myself',
-  'one-person',
-  'one person',
-  'oneperson',
-  'в одного',
-  'одному'
-];
-
-const smallPlateSiteFragments = [
-  'small site',
-  'small area',
-  'small driveway',
-  'driveway',
-  'paving',
-  'slab',
-  'sand',
-  'crushed stone',
-  'garden',
-  'yard',
-  'въезд',
-  'плитк',
-  'песок',
-  'щеб',
-  'двор',
-  'дорож'
-];
-
-const heavyPlateSiteFragments = [
-  'reversible',
-  'heavy-duty',
-  'heavy duty',
-  'industrial',
-  'road base',
-  'parking',
-  'crew',
-  'реверсив',
-  'тяж',
-  'дорог',
-  'парков',
-  'каток',
-  'бригад',
-  'объект'
-];
-
-function isHintWhitespace(char: string) {
-  return char === ' ' || char === '\t' || char === '\r' || char === '\n' || char === '\f' || char === '\v' || char === '\u00a0';
-}
-
-function normalizedHintText(text: string) {
-  const source = text.toLocaleLowerCase('ru-RU').split('ё').join('е');
-  let normalized = '';
-  let previousWasSpace = false;
-  for (const char of source) {
-    if (isHintWhitespace(char)) {
-      if (!previousWasSpace) normalized += ' ';
-      previousWasSpace = true;
-      continue;
-    }
-    normalized += char;
-    previousWasSpace = false;
-  }
-  return normalized.trim();
-}
-
-function hintTextContainsAny(normalizedText: string, fragments: string[]) {
-  return fragments.some((fragment) => normalizedText.includes(normalizedHintText(fragment)));
-}
-
-function hintTextContainsAll(normalizedText: string, fragments: string[]) {
-  return fragments.every((fragment) => normalizedText.includes(normalizedHintText(fragment)));
-}
-
-function isSelfLoadingPlateText(text: string) {
-  const normalized = normalizedHintText(text);
-  return hintTextContainsAny(normalized, selfLoadingPlateFragments) ||
-    hintTextContainsAll(normalized, ['груз', 'сам']);
-}
-
-function isSmallPlateSiteText(text: string) {
-  const normalized = normalizedHintText(text);
-  return hintTextContainsAny(normalized, smallPlateSiteFragments) ||
-    hintTextContainsAll(normalized, ['небольш', 'площад']);
-}
-
-function isHeavyPlateSiteText(text: string) {
-  return hintTextContainsAny(normalizedHintText(text), heavyPlateSiteFragments);
-}
-
-type PlateTaskWeightPolicy = {
-  min: number;
-  max: number;
-  source: 'self_loading' | 'small_site';
-  maxPracticalWeightKg: number;
-  reason: string;
-};
-
-type PlateWeightRange = {
-  min: number;
-  max: number;
-  source: 'explicit_user' | 'planner' | PlateTaskWeightPolicy['source'];
-};
-
-export type PlateTaskProductFilter = {
-  products: Product[];
-  droppedProductIds: string[];
-  warnings: string[];
-  policy?: PlateTaskWeightPolicy;
-};
-
-function plateTaskWeightPolicy(input: {
-  userMessage: string;
-  query: string;
-  semanticContext: string;
-}): PlateTaskWeightPolicy | undefined {
-  const joined = [input.userMessage, input.query, input.semanticContext].join('\n');
-  if (isSelfLoadingPlateText(joined)) {
-    return {
-      min: 40,
-      max: 75,
-      source: 'self_loading',
-      maxPracticalWeightKg: 90,
-      reason: 'one-person loading or transport requires a light plate class'
-    };
-  }
-  if (isSmallPlateSiteText(joined) && !isHeavyPlateSiteText(joined)) {
-    return {
-      min: 45,
-      max: 95,
-      source: 'small_site',
-      maxPracticalWeightKg: 120,
-      reason: 'home paving, yard, paths, or paving tile require a small/light plate class'
-    };
-  }
-  return undefined;
-}
-
-function requestedPlateWeightRangeKg(input: {
-  userMessage: string;
-  query: string;
-  semanticContext: string;
-}): PlateWeightRange | undefined {
-  const taskPolicy = plateTaskWeightPolicy(input);
-  const userExplicit = parseWeightNeedRangeKg(input.userMessage);
-  if (taskPolicy && userExplicit && userExplicit.min > taskPolicy.maxPracticalWeightKg) {
-    return { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source };
-  }
-  if (userExplicit) return { ...userExplicit, source: 'explicit_user' as const };
-  const plannerExplicit = parseWeightNeedRangeKg(input.query) ?? parseWeightNeedRangeKg(input.semanticContext);
-  if (taskPolicy && plannerExplicit && plannerExplicit.min > taskPolicy.maxPracticalWeightKg) {
-    return { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source };
-  }
-  if (plannerExplicit) return { ...plannerExplicit, source: 'planner' as const };
-  if (taskPolicy) return { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source };
-  return undefined;
-}
-
-export function filterPlateProductsByCurrentTask(input: {
-  products: Product[];
-  userMessage: string;
-  query: string;
-  semanticContext: string;
-}): PlateTaskProductFilter {
-  const policy = plateTaskWeightPolicy(input);
-  if (!policy || !input.products.length) {
-    return {
-      products: input.products,
-      droppedProductIds: [],
-      warnings: []
-    };
-  }
-  const filtered = input.products.filter((product) => {
-    const weight = extractWeightKg(product);
-    return weight === undefined || weight <= policy.maxPracticalWeightKg;
-  });
-  const keptIds = new Set(filtered.map((product) => product.id));
-  const droppedProductIds = input.products
-    .filter((product) => !keptIds.has(product.id))
-    .map((product) => product.id);
-  return {
-    products: filtered,
-    droppedProductIds,
-    warnings: droppedProductIds.length ? [`product_cards_suppressed:plate_task_weight_mismatch:${droppedProductIds.length}`] : [],
-    policy
-  };
-}
-
-function productAllowedByPlateTaskPolicy(product: Product, policy?: { maxPracticalWeightKg: number }) {
-  if (!policy) return true;
-  const weight = extractWeightKg(product);
-  return weight === undefined || weight <= policy.maxPracticalWeightKg;
-}
-
-function plateWeightFitScore(product: Product, range: { min: number; max: number; source: string }) {
-  const weight = extractWeightKg(product);
-  if (weight === undefined) return range.source === 'self_loading' ? -25 : 0;
-
-  const target = range.source === 'self_loading'
-    ? Math.min(62, Math.max(range.min, (range.min + range.max) / 2))
-    : (range.min + range.max) / 2;
-  let score = 120 - Math.abs(weight - target);
-  if (weight >= range.min && weight <= range.max) score += 80;
-  if (weight < range.min) score -= (range.min - weight) * 2;
-  if (weight > range.max) score -= (weight - range.max) * (range.source === 'self_loading' ? 10 : 5);
-  if (range.source === 'self_loading' && weight > 90) score -= 300;
-  if (range.source === 'self_loading' && weight > 120) score -= 1_000;
-  return score;
-}
-
 function productsWithinPlateWeightRange(products: Product[], range: { min: number; max: number }) {
   return products.filter((product) => {
     const weight = extractWeightKg(product);
     return weight !== undefined && weight >= range.min && weight <= range.max;
   });
-}
-
-function requestedVisibleCardLimit(input: { userMessage: string; semanticContext: string }) {
-  const normalized = normalizedHintText([input.userMessage, input.semanticContext].join(' '));
-  if (hintTextContainsAny(normalized, ['две самые', 'два самых', '2 самые', '2 самых', 'только две', 'только два', 'оставьте две', 'оставьте два', 'сведите к двум', 'свести к двум', 'до двух'])) {
-    return 2;
-  }
-  if (hintTextContainsAny(normalized, ['три самые', 'три самых', '3 самые', '3 самых', 'только три', 'оставьте три'])) {
-    return 3;
-  }
-  return undefined;
-}
-
-function allowsHeavierPlateTradeoff(input: { userMessage: string; semanticContext: string }) {
-  const normalized = normalizedHintText([input.userMessage, input.semanticContext].join(' '));
-  const asksForLightOption = hintTextContainsAny(normalized, ['легк', 'перенос', 'перекат', 'грузить', 'одному']);
-  const asksForStrongerOption = hintTextContainsAny(normalized, ['уверенн', 'сильн', 'мощн', 'запас', 'щеб', 'песок']);
-  const asksForSplitChoice = hintTextContainsAny(normalized, ['две позиции', 'два варианта', 'одну', 'вторую', 'один', 'второй']);
-  const explicitlyRemovesHeavy = hintTextContainsAny(normalized, ['уберите 72', 'без 72', '72 кг пока уберите', 'только 54', 'только 60']);
-  return asksForLightOption && asksForStrongerOption && asksForSplitChoice && !explicitlyRemovesHeavy;
-}
-
-export function rankCatalogProductsByNumericFit(input: {
-  products: Product[];
-  intent: ProductSelectionClass;
-  query: string;
-  semanticContext: string;
-  userMessage: string;
-}) {
-  if (input.intent === 'plate') {
-    const range = requestedPlateWeightRangeKg(input);
-    if (!range) return input.products;
-    const taskPolicy = plateTaskWeightPolicy(input);
-    const scoringRange = taskPolicy?.source === 'self_loading'
-      ? { min: taskPolicy.min, max: taskPolicy.max, source: taskPolicy.source }
-      : range;
-    return input.products
-      .map((product, index) => ({
-        product,
-        index,
-        score: plateWeightFitScore(product, scoringRange)
-      }))
-      .sort((left, right) => right.score - left.score || left.index - right.index)
-      .map((item) => item.product);
-  }
-  if (input.intent !== 'generator' && input.intent !== 'weldingGenerator') return input.products;
-  const range = requestedPowerRangeKw(input.query) ?? requestedPowerRangeKw(input.semanticContext);
-  if (!range) return input.products;
-  return input.products
-    .map((product, index) => ({
-      product,
-      index,
-      score: generatorPowerFitScore(product, range)
-    }))
-    .sort((left, right) => right.score - left.score || left.index - right.index)
-    .map((item) => item.product);
 }
 
 export type ExecutableSelectionRankingObjective = {
@@ -1937,15 +1686,28 @@ function structuredRankingAttributeValue(
   return qualifiedNominalActivePowerKw(product);
 }
 
+function generatorRemoteStartPreferenceRank(product: Product) {
+  const profile = generatorRemoteStartProfile(product);
+  if (profile === 'present') return 0;
+  if (profile === 'absent') return 2;
+  return 1;
+}
+
 export function rankCatalogProductsByStructuredPreferences(input: {
   products: Product[];
   intent: AgentIntentContract;
 }) {
   const objectives = structuredSelectionRankingObjectives(input.intent);
-  if (!objectives.length || input.products.length <= 1) return input.products;
+  const remoteStartPreferred = hasStructuredGeneratorRemoteStartPreference(input.intent);
+  if ((!objectives.length && !remoteStartPreferred) || input.products.length <= 1) return input.products;
   return input.products
     .map((product, index) => ({ product, index }))
     .sort((left, right) => {
+      if (remoteStartPreferred) {
+        const remoteStartOrder = generatorRemoteStartPreferenceRank(left.product) -
+          generatorRemoteStartPreferenceRank(right.product);
+        if (remoteStartOrder !== 0) return remoteStartOrder;
+      }
       for (const objective of objectives) {
         const leftValue = structuredRankingAttributeValue(left.product, objective.attribute);
         const rightValue = structuredRankingAttributeValue(right.product, objective.attribute);
@@ -1965,30 +1727,6 @@ export function rankCatalogProductsByStructuredPreferences(input: {
 function sameIntentProducts(products: Product[], cardIntent: ProductSelectionClass) {
   if (cardIntent === 'unknown') return products.filter((product) => isCoreEquipment(product));
   return products.filter((product) => productMatchesIntent(product, cardIntent));
-}
-
-function buyerRequirementTextForCardSelection(input: {
-  userMessage: string;
-  intent: AgentIntentContract;
-  needState: CustomerNeedState;
-}) {
-  return [
-    input.userMessage,
-    input.intent.userMessageSummary,
-    input.intent.dialogueUnderstanding,
-    input.intent.nextStepRationale,
-    toolRequestSemanticText(input.intent),
-    input.needState.lastSummary,
-    ...(input.needState.activeNeeds ?? []).flatMap((need) => [
-      need.summary,
-      ...(need.constraints ?? []),
-      ...(need.openQuestions ?? [])
-    ]),
-    ...(input.needState.confirmedFacts ?? []).map((fact) => fact.value),
-    ...(input.needState.constraints ?? []).map((constraint) => constraint.value),
-    ...(input.needState.selectionState?.hardConstraints.mustHaveTraits ?? []),
-    ...(input.needState.selectionState?.softPreferences.mustHaveTraits ?? [])
-  ].filter(Boolean).join('\n');
 }
 
 export function selectProductsForVisibleCards(input: {
@@ -2125,7 +1863,6 @@ export function selectProductsForVisibleCards(input: {
 
   let powerSourceFilteredCount = 0;
   let powerSourceNoFit = false;
-  const buyerRequirementText = buyerRequirementTextForCardSelection(input);
   const structuredPowerSource = input.intent.selectionPolicy?.powerSource;
   const batteryPowerSourceRequired = structuredPowerSource === 'battery';
   const strictFuelRequirement = structuredGeneratorFuelRequirement(input.intent);
@@ -2256,43 +1993,48 @@ export function selectProductsForVisibleCards(input: {
     generatorAutoStartNoFit = selected.length === 0;
   }
 
+  let generatorRemoteStartFilteredCount = 0;
+  let generatorRemoteStartNoFit = false;
+  let generatorRemoteStartUnknownKeptCount = 0;
+  const generatorRemoteStartRequirement = input.intent.selectionPolicy && isGeneratorProductClass(cardIntent)
+    ? structuredGeneratorRemoteStartRequirement(input.intent)
+    : undefined;
+  if (generatorRemoteStartRequirement !== undefined && selected.length) {
+    const remoteStartMatchingSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
+      proofs: requirementProofs,
+      productId: product.id,
+      intent: input.intent,
+      kinds: [...generatorRemoteStartRequirementKinds],
+      nativeMatch: productMeetsSupportedStrictRemoteStartRequirement(product, input.intent, cardIntent),
+      nativeKnown: generatorRemoteStartProfile(product) !== 'unknown'
+    }));
+    generatorRemoteStartFilteredCount = selected.length - remoteStartMatchingSelected.length;
+    selected = remoteStartMatchingSelected;
+    generatorRemoteStartNoFit = selected.length === 0;
+    generatorRemoteStartUnknownKeptCount = selected.filter((product) =>
+      generatorRemoteStartProfile(product) === 'unknown'
+    ).length;
+    for (const product of selected) {
+      if (generatorRemoteStartProfile(product) !== 'unknown') continue;
+      productCaveatsById[product.id] = uniqueStrings([
+        ...(productCaveatsById[product.id] ?? []),
+        'Запуск по команде с брелока или пульта в доступных характеристиках не подтвержден.'
+      ]);
+    }
+  }
+
   const budgetMax = structuredBudgetMax(input.intent);
   let budgetFilteredCount = 0;
   let budgetNoFit = false;
-  let budgetCompromiseCount = 0;
   if (budgetMax !== undefined && selected.length) {
-    const withinBudget = selected.filter((product) =>
-      typeof product.price === 'number' &&
-      Number.isFinite(product.price) &&
+    const withinBudgetOrUnknown = selected.filter((product) =>
+      typeof product.price !== 'number' ||
+      !Number.isFinite(product.price) ||
       product.price <= budgetMax
     );
-    if (withinBudget.length) {
-      budgetFilteredCount = selected.length - withinBudget.length;
-      selected = withinBudget;
-    } else {
-      const allowBudgetCompromise = input.intent.selectionPolicy?.alternativePolicy !== 'exact_only';
-      if (allowBudgetCompromise) {
-        const softBudgetMax = budgetMax * 1.15;
-        const pricedOverBudget = selected
-          .filter((product) => typeof product.price === 'number' && Number.isFinite(product.price) && product.price > budgetMax && product.price <= softBudgetMax)
-          .sort((a, b) => (a.price ?? 0) - (b.price ?? 0))
-          .slice(0, 3);
-        if (pricedOverBudget.length) {
-          budgetCompromiseCount = pricedOverBudget.length;
-          budgetFilteredCount = selected.length - pricedOverBudget.length;
-          selected = pricedOverBudget;
-        } else {
-          // No over-budget within +15% — keep hard block, do not substitute unselected products
-          budgetFilteredCount = selected.length;
-          budgetNoFit = true;
-          selected = [];
-        }
-      } else {
-        budgetFilteredCount = selected.length;
-        budgetNoFit = true;
-        selected = [];
-      }
-    }
+    budgetFilteredCount = selected.length - withinBudgetOrUnknown.length;
+    selected = withinBudgetOrUnknown;
+    budgetNoFit = selected.length === 0;
   }
 
   let numericFitFilteredCount = 0;
@@ -2301,7 +2043,6 @@ export function selectProductsForVisibleCards(input: {
   const plateWeightRange = cardIntent === 'plate'
     ? structuredPlateWeightRange(input.intent)
     : undefined;
-  const plateTaskPolicyForSelection = undefined;
   if (plateWeightRange && selected.length) {
     const nativeWeightMatches = new Set(
       productsWithinPlateWeightRange(selected, plateWeightRange).map((product) => product.id)
@@ -2314,42 +2055,14 @@ export function selectProductsForVisibleCards(input: {
         kinds: ['weight_min_kg', 'weight_max_kg'],
         nativeMatch: nativeWeightMatches.has(product.id),
         nativeKnown: extractWeightKg(product) !== undefined
-      }))
-      .filter((product) => productAllowedByPlateTaskPolicy(product, plateTaskPolicyForSelection));
+      }));
     if (selectedWithinRange.length) {
       numericFitFilteredCount = selected.length - selectedWithinRange.length;
       selected = selectedWithinRange;
     } else {
-      const allowWeightCompromise = input.intent.selectionPolicy?.alternativePolicy !== 'exact_only';
-      if (allowWeightCompromise) {
-        const targetWeight = (plateWeightRange.min + plateWeightRange.max) / 2;
-        const ranked = [...selected].sort((a, b) => {
-          const wa = extractWeightKg(a);
-          const wb = extractWeightKg(b);
-          if (wa === undefined && wb === undefined) return 0;
-          if (wa === undefined) return 1;
-          if (wb === undefined) return -1;
-          return Math.abs(wa - targetWeight) - Math.abs(wb - targetWeight);
-        });
-        const reasonable = ranked.filter((product) => {
-          const w = extractWeightKg(product);
-          if (w === undefined) return false;
-          return w >= plateWeightRange.min - 30 && w <= plateWeightRange.max + 50;
-        }).slice(0, 3);
-        if (reasonable.length) {
-          numericFitFilteredCount = selected.length - reasonable.length;
-          plateTaskWarnings = [`product_cards_compromise:weight_no_fit:${reasonable.length}`];
-          selected = reasonable;
-        } else {
-          numericFitFilteredCount = selected.length;
-          plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
-          selected = [];
-        }
-      } else {
-        numericFitFilteredCount = selected.length;
-        plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
-        selected = [];
-      }
+      numericFitFilteredCount = selected.length;
+      plateTaskWarnings = ['product_cards_suppressed:structured_weight_no_fit'];
+      selected = [];
     }
   }
 
@@ -2407,7 +2120,6 @@ export function selectProductsForVisibleCards(input: {
       ? [`product_cards_suppressed:selected_id_not_grounded_mentioned_or_fit:${structuredSuppressedCount}`]
       : []),
     ...(budgetFilteredCount > 0 ? [`product_cards_filtered_by_budget:${budgetFilteredCount}`] : []),
-    ...(budgetCompromiseCount > 0 ? [`product_cards_compromise:budget_over_limit:${budgetCompromiseCount}`] : []),
     ...(budgetNoFit ? ['product_cards_suppressed:budget_no_fit'] : []),
     ...(priceVisibilityFilteredCount > 0
       ? [`product_cards_filtered_by_price_visibility:${priceVisibilityFilteredCount}`]
@@ -2435,6 +2147,9 @@ export function selectProductsForVisibleCards(input: {
     ...(generatorPhaseNoFit ? ['product_cards_suppressed:generator_phase_no_fit'] : []),
     ...(generatorAutoStartFilteredCount > 0 ? [`product_cards_filtered_by_generator_autostart:${generatorAutoStartFilteredCount}`] : []),
     ...(generatorAutoStartNoFit ? ['product_cards_suppressed:generator_autostart_no_fit'] : []),
+    ...(generatorRemoteStartFilteredCount > 0 ? [`product_cards_filtered_by_generator_remote_start:${generatorRemoteStartFilteredCount}`] : []),
+    ...(generatorRemoteStartNoFit ? ['product_cards_suppressed:generator_remote_start_no_fit'] : []),
+    ...(generatorRemoteStartUnknownKeptCount > 0 ? [`product_cards_preliminary:generator_remote_start_unconfirmed:${generatorRemoteStartUnknownKeptCount}`] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
     ...(diamondMaterialFilteredCount > 0 ? [`product_cards_filtered_by_diamond_material:${diamondMaterialFilteredCount}`] : []),
@@ -2455,22 +2170,7 @@ export function selectProductsForVisibleCards(input: {
   };
 }
 
-const ambiguousCutterTerms = ['резчик', 'резак', 'резки', 'резку', 'шовнарез', 'бензорез', 'cutter', 'cutoff saw'];
-const cutterMaterialOrWorkTerms = [
-  'бетон', 'асфальт', 'металл', 'кирпич', 'труб', 'рельс', 'камень', 'плит', 'пол', 'шв',
-  'проем', 'двер', 'окн', 'мокр', 'сух', 'помещ', 'улиц', 'дорог', 'алмаз', 'диск'
-];
-
-function textContainsAnyFragment(text: string, fragments: string[]) {
-  const normalized = text.toLocaleLowerCase('ru');
-  return fragments.some((fragment) => normalized.includes(fragment));
-}
-
-export function ambiguousCutterRequestNeedsMaterialClarification(text: string) {
-  const normalized = text.toLocaleLowerCase('ru');
-  if (!textContainsAnyFragment(normalized, ambiguousCutterTerms)) return false;
-  return !textContainsAnyFragment(normalized, cutterMaterialOrWorkTerms);
-}type VisibleCardSelection = Omit<
+type VisibleCardSelection = Omit<
   ReturnType<typeof selectProductsForVisibleCards>,
   'semanticAuthority' | 'requirementProofs' | 'productCaveatsById'
 > & {
@@ -2496,20 +2196,6 @@ export function assessVisibleCardReadiness(input: {
   intent?: AgentIntentContract;
 }): VisibleCardReadiness {
   const productClass = input.cardSelection.intent;
-  if (
-    input.cardSelection.semanticAuthority !== 'llm_contract' &&
-    input.userMessage &&
-    ambiguousCutterRequestNeedsMaterialClarification(input.userMessage)
-  ) {
-    return {
-      status: 'blocked_by_tool_safety',
-      productClass,
-      missingFacts: ['cutter_material_or_work'],
-      rationale: 'The buyer used ambiguous cutter wording without material/work, so product cards would mix different cutter classes.',
-      warnings: ['product_cards_suppressed:cutter_ambiguous_material_or_work'],
-      decision: input.answer.selectionReadiness
-    };
-  }
   const selectionGoal = input.intent?.selectionPolicy?.selectionGoal ?? 'final_fit';
   const generatorLoadBlocksCards = selectionGoal === 'browse_catalog'
     ? false
@@ -2544,28 +2230,11 @@ export function assessVisibleCardReadiness(input: {
   const decision = input.answer.selectionReadiness;
   if (!decision) {
     return {
-      status: 'ready_for_cards',
+      status: 'blocked_by_answer_contract',
       productClass,
-      missingFacts: [],
-      rationale: 'Selection readiness contract was not provided; preserving legacy card behavior.',
-      warnings: []
-    };
-  }
-
-  if (
-    decision.status === 'not_applicable' &&
-    !decision.canShowProductCards &&
-    productClass !== 'unknown' &&
-    !isGeneratorProductClass(productClass) &&
-    input.cardSelection.products.length > 0
-  ) {
-    return {
-      status: 'ready_for_cards',
-      productClass,
-      missingFacts: decision.missingFacts,
-      rationale: `${decision.rationale} Selection readiness was marked not_applicable, so non-generator catalog cards stay visible.`,
-      warnings: ['selection_readiness_not_applicable_preserved_cards'],
-      decision
+      missingFacts: ['selection_readiness_contract'],
+      rationale: 'Selection readiness contract was not provided.',
+      warnings: ['product_cards_suppressed:selection_readiness_contract']
     };
   }
 

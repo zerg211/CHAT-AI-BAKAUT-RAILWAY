@@ -148,29 +148,7 @@ function textIncludesAny(value: unknown, fragments: string[]) {
   });
 }
 
-const startControlNeedles = [
-  'starter',
-  'start',
-  'ignition',
-  'key',
-  'button',
-  'manual',
-  'recoil',
-  'стартер',
-  'запуск',
-  'пуск',
-  'ключ',
-  'кноп',
-  'ручн',
-  'электростартер'
-];
-
 const manualStarterNeedles = ['manual starter', 'recoil starter', 'manual recoil', 'ручной стартер', 'ручной запуск', 'ручн'];
-const starterFieldNeedles = ['starter', 'start', 'пуск', 'запуск', 'стартер'];
-
-function startControlQuestionRelevant(userMessage: string, comparisonAttributes: string[]) {
-  return textIncludesAny([userMessage, ...comparisonAttributes].join(' '), startControlNeedles);
-}
 
 const electricStarterNeedles = [
   'electric starter',
@@ -202,20 +180,7 @@ const practicalStartControlNeedles = [
   'тумблер',
   'кноп'
 ];
-const controlSearchQuestionNeedles = [
-  'key',
-  'button',
-  'push button',
-  'ignition',
-  'switch',
-  'control',
-  'ключ',
-  'кноп',
-  'зажиган',
-  'замок',
-  'выключател',
-  'тумблер'
-];
+const startControlMechanismAttribute = 'start_control_mechanism';
 
 const sourceBackedStartKinds = ['key_start', 'button_start', 'switch_start', 'electric_start', 'manual_starter'] as const;
 type SourceBackedStartKind = typeof sourceBackedStartKinds[number];
@@ -269,8 +234,8 @@ const switchStartNeedles = [
   'тумблер'
 ];
 
-function startControlMechanismQuestionRelevant(userMessage: string, comparisonAttributes: string[]) {
-  return textIncludesAny([userMessage, ...comparisonAttributes].join(' '), controlSearchQuestionNeedles);
+function startControlMechanismQuestionRelevant(comparisonAttributes: string[]) {
+  return comparisonAttributes.some((attribute) => normalizedText(attribute).trim() === startControlMechanismAttribute);
 }
 
 function coverageItemText(item: ResearchCoverageItem) {
@@ -299,10 +264,9 @@ function resultConfirmsPracticalStartControl(result: ProductComparisonResearchRe
 
 function needsElectricStarterControlSearch(input: {
   result: ProductComparisonResearchResult;
-  userMessage: string;
   comparisonAttributes: string[];
 }) {
-  return startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes) &&
+  return startControlMechanismQuestionRelevant(input.comparisonAttributes) &&
     resultConfirmsElectricStarter(input.result) &&
     !resultConfirmsPracticalStartControl(input.result);
 }
@@ -326,32 +290,6 @@ function scalarCatalogEntries(value: unknown, prefix: string): Array<{ path: str
     );
   }
   return [];
-}
-
-function manualStarterEvidenceFromProduct(product: Product) {
-  const evidence: string[] = [];
-  for (const entry of scalarCatalogEntries(product.specs, 'specs')) {
-    const combined = `${entry.path} ${entry.value}`;
-    if (textIncludesAny(combined, starterFieldNeedles) && textIncludesAny(combined, manualStarterNeedles)) {
-      evidence.push(`${entry.path}: ${compactEvidence(entry.value)}`);
-    }
-  }
-  if (
-    typeof product.description === 'string' &&
-    textIncludesAny(product.description, starterFieldNeedles) &&
-    textIncludesAny(product.description, manualStarterNeedles)
-  ) {
-    evidence.push(`description: ${compactEvidence(product.description)}`);
-  }
-  return uniqueStrings(evidence);
-}
-
-function resultAlreadyHasSeparateManualStarterFact(result: ProductComparisonResearchResult) {
-  const factTexts = result.facts.map((fact) => [fact.attribute, fact.value].join(' '));
-  const coverageTexts = result.answerGuidance.coverage
-    .filter((item) => item.status === 'confirmed')
-    .map((item) => [item.attribute, item.value].join(' '));
-  return [...factTexts, ...coverageTexts].some((text) => textIncludesAny(text, manualStarterNeedles));
 }
 
 function factKey(fact: ProductComparisonResearchFact) {
@@ -1446,44 +1384,6 @@ function confirmedStartKinds(result: ProductComparisonResearchResult) {
   return new Set(sourceBackedStartKinds.filter((kind) => kinds.includes(kind)));
 }
 
-function sourceBackedStartDirectAnswer(result: ProductComparisonResearchResult) {
-  const kinds = confirmedStartKinds(result);
-  const hasElectric = kinds.has('electric_start');
-  const hasManual = kinds.has('manual_starter');
-  if (kinds.has('key_start')) {
-    return hasManual
-      ? 'Запускается с ключа, через электростартер. Ручной запуск тоже есть.'
-      : 'Запускается с ключа, через электростартер.';
-  }
-  if (kinds.has('button_start')) {
-    return hasManual
-      ? 'Кнопочный запуск подтвержден. Ручной запуск тоже есть.'
-      : 'Кнопочный запуск подтвержден.';
-  }
-  if (kinds.has('switch_start')) {
-    return hasManual
-      ? 'Электростартер включается через переключатель/выключатель START. Ручной запуск тоже есть.'
-      : 'Электростартер включается через переключатель/выключатель START.';
-  }
-  if (hasElectric && hasManual) {
-    return 'Электростартер есть, ручной запуск тоже есть. А вот чем включается электростартер — ключом, кнопкой или переключателем — источники не подтвердили.';
-  }
-  if (hasElectric) {
-    return 'Электростартер есть. А вот чем он включается — ключом, кнопкой или переключателем — источники не подтвердили.';
-  }
-  if (hasManual) {
-    return 'Ручной запуск есть. Электрозапуск и его управление источники не подтвердили.';
-  }
-  return 'По точному способу запуска источники не дали подтверждения.';
-}
-
-function sourceBackedStartCompleteness(result: ProductComparisonResearchResult) {
-  const kinds = confirmedStartKinds(result);
-  if (kinds.has('key_start') || kinds.has('button_start') || kinds.has('switch_start')) return 'answered';
-  if (kinds.has('electric_start') || kinds.has('manual_starter')) return 'partially_answered';
-  return 'not_answered';
-}
-
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
   limit: number,
@@ -1508,7 +1408,6 @@ async function validateSourceBackedResult(input: {
   result: ProductComparisonResearchResult;
   products: Product[];
   targetProductNames: string[];
-  userMessage: string;
   comparisonAttributes: string[];
   cache?: SourceTextCache;
   signal?: AbortSignal;
@@ -1659,7 +1558,7 @@ async function validateSourceBackedResult(input: {
     fact.sourceType !== 'conflict' && (fact.confidence === 'high' || fact.confidence === 'medium')
   ) || adjusted.answerGuidance.coverage.some((item) => item.status === 'confirmed');
 
-  if (startControlMechanismQuestionRelevant(input.userMessage, input.comparisonAttributes)) {
+  if (startControlMechanismQuestionRelevant(input.comparisonAttributes)) {
     const directAnswerKinds = startClaimKindsFromText(adjusted.answerGuidance.directAnswer);
     const directAnswerClaimsInvalidFact = [...invalidKinds].some((kind) => directAnswerKinds.includes(kind));
     const confirmedKindsSet = confirmedStartKinds(adjusted);
@@ -1676,12 +1575,13 @@ async function validateSourceBackedResult(input: {
     ) {
       adjusted.answerGuidance = {
         ...adjusted.answerGuidance,
-        directAnswer: sourceBackedStartDirectAnswer(adjusted),
-        completeness: sourceBackedStartCompleteness(adjusted)
+        directAnswer: '',
+        completeness: hasValidatedGenericSupport ? 'partially_answered' : 'not_answered'
       };
+      adjusted.summaryForAnswer = '';
       adjusted.warnings = uniqueStrings([
         ...adjusted.warnings,
-        'answer_guidance_rewritten_after_source_validation'
+        'answer_guidance_invalidated_after_source_validation'
       ]);
     }
   } else {
@@ -1716,53 +1616,6 @@ async function validateSourceBackedResult(input: {
   }
 
   return adjusted;
-}
-
-function augmentCatalogStarterFacts(input: {
-  result: ProductComparisonResearchResult;
-  products: Product[];
-  userMessage: string;
-  comparisonAttributes: string[];
-}) {
-  if (!startControlQuestionRelevant(input.userMessage, input.comparisonAttributes)) return input.result;
-  if (resultAlreadyHasSeparateManualStarterFact(input.result)) return input.result;
-
-  const additions = input.products.flatMap((product) =>
-    manualStarterEvidenceFromProduct(product).map((evidence) => ({
-      product,
-      evidence
-    }))
-  );
-  if (!additions.length) return input.result;
-
-  const facts = additions.map(({ product, evidence }): ProductComparisonResearchFact => ({
-    productName: product.name,
-    attribute: 'manual starter',
-    value: 'есть',
-    sourceType: 'catalog',
-    confidence: 'high',
-    evidence,
-    sourceUrl: product.sourceUrl ?? undefined,
-    sourceTitle: product.name
-  }));
-  const coverage = additions.map(({ product, evidence }): ResearchCoverageItem => ({
-    attribute: 'manual starter',
-    status: 'confirmed',
-    value: 'есть',
-    evidence,
-    sourceUrl: product.sourceUrl ?? undefined,
-    sourceTitle: product.name
-  }));
-
-  return {
-    ...input.result,
-    facts: uniqueFacts([...input.result.facts, ...facts]),
-    answerGuidance: {
-      ...input.result.answerGuidance,
-      coverage: uniqueCoverage([...input.result.answerGuidance.coverage, ...coverage])
-    },
-    warnings: uniqueStrings([...input.result.warnings, 'catalog_starter_specs_extracted'])
-  };
 }
 
 function productComparisonResearchJsonFormat(name: string) {
@@ -2316,17 +2169,14 @@ async function extractCompactExactCatalogProductFacts(input: {
     minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
     transportMaxRetries: 0
   });
-  const extracted = augmentCatalogStarterFacts({
-    result: compactCatalogExtractionToResearchResult(parsed as unknown as CompactCatalogFactExtraction, input.products),
-    products: input.products,
-    userMessage: input.userMessage,
-    comparisonAttributes: input.comparisonAttributes
-  });
+  const extracted = compactCatalogExtractionToResearchResult(
+    parsed as unknown as CompactCatalogFactExtraction,
+    input.products
+  );
   return validateSourceBackedResult({
     result: extracted,
     products: input.products,
     targetProductNames: input.targetProductNames,
-    userMessage: input.userMessage,
     comparisonAttributes: input.comparisonAttributes,
     cache: input.cache,
     signal: input.signal,
@@ -2399,19 +2249,11 @@ async function extractExactCatalogProductFacts(input: {
     minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
     transportMaxRetries: 0
   });
-  const extracted = augmentCatalogStarterFacts({
-    result: {
-      ...normalizeResearchParsed(parsed)
-    },
-    products: input.products,
-    userMessage: input.userMessage,
-    comparisonAttributes: input.comparisonAttributes
-  });
+  const extracted = normalizeResearchParsed(parsed);
   return validateSourceBackedResult({
     result: extracted,
     products: input.products,
     targetProductNames: input.targetProductNames,
-    userMessage: input.userMessage,
     comparisonAttributes: input.comparisonAttributes,
     cache: input.cache,
     signal: input.signal,
@@ -2700,7 +2542,6 @@ export async function researchProductComparisonFacts(input: {
     result: normalizedPrimaryResult,
     products: exactCatalogProducts,
     targetProductNames,
-    userMessage: input.userMessage,
     comparisonAttributes,
     cache: sourceTextCache,
     signal: input.signal,
@@ -2715,7 +2556,6 @@ export async function researchProductComparisonFacts(input: {
   });
   const electricControlRetryRequired = needsElectricStarterControlSearch({
     result: combinedPrimaryResult,
-    userMessage: input.userMessage,
     comparisonAttributes
   });
 
@@ -2801,7 +2641,6 @@ export async function researchProductComparisonFacts(input: {
       result: normalizedRetryResult,
       products: exactCatalogProducts,
       targetProductNames,
-      userMessage: input.userMessage,
       comparisonAttributes,
       cache: sourceTextCache,
       signal: input.signal,
@@ -2810,7 +2649,6 @@ export async function researchProductComparisonFacts(input: {
     const combinedRetryResult = mergeCatalogAndWebResearch(catalogResultForResearch, retryResult);
     const electricControlStillUnresolved = electricControlRetryRequired && needsElectricStarterControlSearch({
       result: combinedRetryResult,
-      userMessage: input.userMessage,
       comparisonAttributes
     });
     const deepMissingFactStillUnresolved = deepMissingFactRetryRequired && needsDeepMissingFactSearch({
@@ -2945,7 +2783,6 @@ export async function researchProductComparisonFacts(input: {
       result: normalizedGenericRetry,
       products: input.products,
       targetProductNames,
-      userMessage: input.userMessage,
       comparisonAttributes,
       cache: sourceTextCache,
       signal: input.signal,

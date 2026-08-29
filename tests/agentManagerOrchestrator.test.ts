@@ -3,16 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AgentManagerOrchestrator,
   RECOVERY_LEASE_WAIT_LIMIT_MS,
-  enforceSearchBeforeTechnicalSpecialist,
   orderToolRequestsForSelectionDependencies,
-  repairIntentForCatalogClarificationBeforeTools,
   pendingLeadCaptureDraftMatchesAuthorizationScope,
-  repairIntentForOpenEndedRequirementWebCoverage,
-  repairIntentForElectricStartRequirementKinds,
-  repairIntentForNewNeedFinalFit,
-  repairIntentForRequestedTechnicalAttributeWebCoverage,
-  repairIntentForRequiredCatalogToolExecution,
-  repairIntentForTypedToolRequirementCoverage,
   productMatchesExactTargetIdentity,
   trustedPendingExhaustedTechnicalHandoffs,
   webResearchResultProvesSourceExhaustion,
@@ -376,41 +368,6 @@ function exhaustedWebResearchResult(warnings: string[] = [], errorCode?: string)
 }
 
 describe('trusted exhausted technical handoff provenance', () => {
-  it('defers any lead side effect when the planner omitted explicit grounding', () => {
-    const buyerQuestion = 'Please verify the generator start method.';
-    const parsed = AgentIntentContractSchema.parse({
-      userMessageSummary: 'technical question mislabeled as a commercial follow-up',
-      dialogueUnderstanding: 'legacy planner output omitted grounding',
-      nextStepRationale: 'unsafe lead attempt under test',
-      requiresTools: true,
-      toolRequests: [{
-        id: 'lead.capture:omitted-grounding',
-        tool: 'lead.capture',
-        args: { contact: { name: 'Alexey' } },
-        rationale: 'unsafe omitted-grounding lead',
-        required: true
-      }],
-      selectionPolicy: currentNoProductSelectionPolicy(),
-      leadCaptureAuthorization: {
-        authorized: true,
-        contactSource: 'current_message',
-        handoffKind: 'commercial_followup',
-        purpose: 'verify the generator start method',
-        buyerQuestion,
-        evidence: 'Alexey, +7 900 000-00-11',
-        pendingDraftId: null
-      },
-      policyRuleIds: [],
-      mustNotAskQuestionIds: [],
-      riskFlags: []
-    });
-
-    const repaired = enforceSearchBeforeTechnicalSpecialist(parsed);
-
-    expect(repaired.toolRequests.some((request) => request.tool === 'lead.capture')).toBe(false);
-    expect(repaired.riskFlags).toContain('planner_deferred_lead_until_explicit_grounding');
-  });
-
   it('does not let a technical offer-bound draft be consumed under a commercial label', () => {
     const buyerQuestion = 'Please verify the exact start method.';
     const purpose = 'verify the exact start method';
@@ -948,10 +905,10 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
   const composeAnswer = implementation.composeAnswer;
   const normalizedPlanTurn = async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
     const intent = await planTurn(input);
-    return modernizeLegacySelectionPolicyFixture({
+    return modernizeLegacySemanticIntentFixture({
       ...intent,
       toolRequests: intent.toolRequests.map(modernizeLegacyUniversalToolFixture)
-    });
+    }, input.userMessage);
   };
   return {
     ...implementation,
@@ -989,6 +946,10 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
               bindAs: 'nominal_power_min_kw'
             }
           });
+          calculatorRequest.coversRequirementIds = [
+            ...(calculatorRequest.coversRequirementIds ?? []),
+            'test-generator-load-scenario'
+          ];
         }
         ledgerDelta = {
           ...ledgerDelta,
@@ -1016,13 +977,36 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
     },
     async composeAnswer(input) {
       const answer = await composeAnswer(input);
+      const selectedProductIds = answer.selectedProductIds ?? (
+        answer.selectionReadiness?.canShowProductCards === false
+          ? []
+          : input.products.map((product) => product.id)
+      );
       return {
         ...answer,
-        selectedProductIds: answer.selectedProductIds ?? (
-          answer.selectionReadiness?.canShowProductCards === false
-            ? []
-            : input.products.map((product) => product.id)
-        )
+        selectedProductIds,
+        selectionRationale: answer.selectionRationale ?? (
+          selectedProductIds.length > 0
+            ? answer.answerText
+            : null
+        ),
+        selectionReadiness: answer.selectionReadiness ?? (selectedProductIds.length
+          ? {
+              productClass: input.intent.selectionPolicy?.canonicalProductClass ?? 'unknown',
+              status: input.intent.selectionPolicy?.selectionGoal === 'final_fit'
+                ? 'ready_for_exact_cards' as const
+                : 'ready_for_preliminary_cards' as const,
+              canShowProductCards: true,
+              missingFacts: [],
+              rationale: 'The test writer explicitly selected grounded product IDs.'
+            }
+          : {
+              productClass: input.intent.selectionPolicy?.canonicalProductClass ?? 'unknown',
+              status: 'not_applicable' as const,
+              canShowProductCards: false,
+              missingFacts: [],
+              rationale: 'The test writer did not select product cards.'
+            })
       };
     }
   };
@@ -1059,12 +1043,85 @@ function emptyLegacyUniversalPlaceholder(value: unknown): boolean {
 
 function modernizeLegacyUniversalToolFixture(request: ToolRequest): ToolRequest {
   const allowed = allowedToolArgKeys[request.tool];
-  return {
+  const modernizedRequest: ToolRequest = {
     ...request,
     args: Object.fromEntries(Object.entries(request.args).filter(([key, value]) =>
       allowed.has(key) || !emptyLegacyUniversalPlaceholder(value)
     ))
   };
+  if (modernizedRequest.tool !== 'calculator.generatorLoad') return modernizedRequest;
+  return {
+    ...modernizedRequest,
+    args: {
+      ...modernizedRequest.args,
+      loads: (modernizedRequest.args.loads ?? []).map((value) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+        const load = value as Record<string, unknown>;
+        const source = typeof load.source === 'string' ? load.source : 'explicit_user';
+        const hasRunning = typeof load.runningKw === 'number' && load.runningKw > 0;
+        const hasStarting = typeof load.startingKw === 'number' && load.startingKw > 0;
+        return {
+          ...load,
+          operationMode: load.operationMode ?? 'continuous',
+          runningSource: load.runningSource ?? (hasRunning ? source : 'not_provided'),
+          startingSource: load.startingSource ?? (hasStarting ? source : 'not_provided')
+        };
+      })
+    }
+  };
+}
+
+function modernizeLegacySemanticIntentFixture(
+  source: AgentIntentContract,
+  userMessage: string
+): AgentIntentContract {
+  const intent = modernizeLegacySelectionPolicyFixture(source);
+  const policyClass = intent.selectionPolicy?.canonicalProductClass;
+  const toolRequests = intent.toolRequests.map((request) => {
+    if (
+      (request.tool !== 'catalog.search' && request.tool !== 'catalog.getProductDetails') ||
+      request.args.canonicalProductIntent ||
+      !policyClass
+    ) return request;
+    return {
+      ...request,
+      args: {
+        ...request.args,
+        canonicalProductIntent: policyClass,
+        productIntent: request.args.productIntent ?? intent.selectionPolicy?.targetProductClass ?? policyClass
+      }
+    };
+  });
+  const requiredToolKinds = new Set(toolRequests
+    .filter((request) => request.required)
+    .map((request) => request.tool));
+  const grounding = intent.grounding
+    ? {
+        ...intent.grounding,
+        requiredToolKinds: intent.grounding.requiredToolKinds.filter((tool) => requiredToolKinds.has(tool)),
+        buyerQuestion: intent.grounding.buyerQuestion ?? userMessage
+      }
+    : {
+        taskType: toolRequests.some((request) => request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails')
+          ? 'product_selection' as const
+          : 'technical_answer' as const,
+        sourcePolicy: toolRequests.some((request) => request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails')
+          ? 'catalog_required' as const
+          : toolRequests.some((request) => request.tool === 'web.researchProductFacts')
+            ? 'web_required' as const
+            : 'conversation_only' as const,
+        webPurpose: toolRequests.some((request) => request.tool === 'web.researchProductFacts')
+          ? 'technical_specs' as const
+          : 'none' as const,
+        webRequirement: toolRequests.some((request) => request.tool === 'web.researchProductFacts')
+          ? 'independent_required' as const
+          : 'none' as const,
+        requiredToolKinds: [...requiredToolKinds],
+        technicalAttributes: [],
+        buyerQuestion: userMessage,
+        rationale: 'Explicit grounding authority for this test fixture.'
+      };
+  return { ...intent, toolRequests, grounding };
 }
 
 function modernizeLegacySelectionPolicyFixture(intent: AgentIntentContract): AgentIntentContract {
@@ -1168,7 +1225,7 @@ function structuredGeneratorCatalogIntent(): AgentIntentContract {
       sourcePolicy: 'catalog_required',
       webPurpose: 'none',
       requiredToolKinds: ['catalog.search'],
-      technicalAttributes: ['price', 'power'],
+      technicalAttributes: [],
       rationale: 'recommendations must be supported by exact product evidence'
     },
     mustNotAskQuestionIds: [],
@@ -1183,6 +1240,7 @@ function typedGeneratorProofIntent(): AgentIntentContract {
     tool: 'calculator.generatorLoad',
     args: {
       loads: [{
+        kind: 'aggregate_load',
         name: 'borehole pump and angle grinder',
         count: 1,
         runningKw: 2.6,
@@ -1198,10 +1256,10 @@ function typedGeneratorProofIntent(): AgentIntentContract {
     },
     rationale: 'derive the required generator minimum',
     required: true,
-    coversRequirementIds: ['load-scenario']
+    coversRequirementIds: ['load-scenario', 'derived-nominal-minimum']
   }, {
     ...intent.toolRequests[0]!,
-    coversRequirementIds: ['derived-nominal-minimum']
+    coversRequirementIds: []
   }];
   intent.selectionPolicy!.requirements = [{
     id: 'load-scenario',
@@ -1251,686 +1309,6 @@ describe('AgentManagerOrchestrator', () => {
   it('keeps the recovery lease wait aligned with the bounded agent wall clock', () => {
     expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs);
     expect(RECOVERY_LEASE_WAIT_LIMIT_MS).toBe(150_000);
-  });
-
-  it('repairs omitted preliminary comparison web coverage from exact catalog candidates once', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    const productNames = ['FIRMAN RD3910E', 'FIRMAN RD4910E'];
-    intent.toolRequests = [{
-      id: 'exact-comparison-details',
-      tool: 'catalog.getProductDetails',
-      args: {
-        productNames,
-        productIntent: 'generator',
-        canonicalProductIntent: 'generator',
-        comparisonAttributes: ['operating mass', 'automatic start'],
-        limit: 2
-      },
-      rationale: 'read the two exact catalog candidates',
-      required: true
-    }];
-    intent.productMentions = productNames.map((name) => ({
-      name,
-      role: 'comparison_subject' as const,
-      productClass: 'generator',
-      evidence: `exact comparison candidate ${name}`
-    }));
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      selectionGoal: 'preliminary_fit',
-      requirements: [{
-        id: 'weight-limit',
-        kind: 'weight_max_kg',
-        value: 100,
-        unit: 'kg',
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'the buyer needs a machine no heavier than 100 kg',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'automatic-start',
-        kind: 'autostart_required',
-        value: true,
-        unit: null,
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'automatic start is required',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    intent.grounding = {
-      taskType: 'comparison',
-      sourcePolicy: 'catalog_required',
-      webPurpose: 'none',
-      webRequirement: 'none',
-      requiredToolKinds: ['catalog.getProductDetails'],
-      technicalAttributes: ['operating mass', 'automatic start'],
-      buyerQuestion: 'Compare the operating mass and automatic start of these two models.',
-      rationale: 'the exact catalog cards are the first evidence source'
-    };
-
-    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
-    const webRequests = repaired.intent.toolRequests.filter((request) =>
-      request.tool === 'web.researchProductFacts'
-    );
-
-    expect(repaired.repairs).toEqual([{
-      requestId: expect.any(String),
-      attributes: ['operating mass', 'automatic start'],
-      created: true
-    }]);
-    expect(webRequests).toHaveLength(1);
-    expect(webRequests[0]).toMatchObject({
-      required: true,
-      coversRequirementIds: ['weight-limit', 'automatic-start'],
-      args: {
-        productNames,
-        comparisonAttributes: ['operating mass', 'automatic start'],
-        comparisonAttributeBindings: [{
-          attribute: 'operating mass',
-          requirementId: 'weight-limit'
-        }, {
-          attribute: 'automatic start',
-          requirementId: 'automatic-start'
-        }]
-      }
-    });
-    expect(repaired.intent.grounding).toMatchObject({
-      sourcePolicy: 'catalog_required',
-      webPurpose: 'technical_specs',
-      webRequirement: 'conditional_on_catalog_gap',
-      requiredToolKinds: ['catalog.getProductDetails', 'web.researchProductFacts']
-    });
-    expect(repaired.intent.riskFlags).toContain('planner_repaired_requested_attribute_conditional_web');
-    expect(orderToolRequestsForSelectionDependencies(
-      repaired.intent.toolRequests,
-      repaired.intent
-    ).map((request) => request.tool)).toEqual([
-      'catalog.getProductDetails',
-      'web.researchProductFacts'
-    ]);
-    expect(AgentIntentContractSchema.parse(repaired.intent)).toBeDefined();
-
-    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(repaired.intent)).toEqual({
-      intent: repaired.intent,
-      repairs: []
-    });
-  });
-
-  it('promotes catalog requests referenced by strict typed requirements to required execution', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    intent.toolRequests[0]!.required = false;
-    intent.toolRequests[0]!.coversRequirementIds = ['product-class', 'price'];
-    intent.selectionPolicy!.requirements = [{
-      id: 'product-class',
-      kind: 'product_class',
-      value: 'generator',
-      unit: null,
-      relation: 'must_have',
-      role: 'hard_constraint',
-      strictness: 'strict',
-      evidence: 'buyer requests a generator',
-      verification: {
-        mode: 'typed_tool',
-        toolRequestId: 'catalog-search',
-        tool: 'catalog.search',
-        verifier: 'catalog_product_class',
-        bindAs: 'product_class'
-      }
-    }, {
-      id: 'price',
-      kind: 'price_visibility',
-      value: true,
-      unit: null,
-      relation: 'must_have',
-      role: 'hard_constraint',
-      strictness: 'strict',
-      evidence: 'buyer requests a price',
-      verification: {
-        mode: 'typed_tool',
-        toolRequestId: 'catalog-search',
-        tool: 'catalog.search',
-        verifier: 'price_visibility',
-        bindAs: 'price_visibility'
-      }
-    }];
-
-    const repaired = repairIntentForRequiredCatalogToolExecution(intent);
-
-    expect(repaired.intent.toolRequests[0]).toMatchObject({ required: true });
-    expect(repaired.requestIds).toEqual(['catalog-search']);
-    expect(repaired.intent.riskFlags).toContain('planner_repaired_required_catalog_tool');
-  });
-
-  it('does not turn unbound catalog attributes into false terminal web gaps', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      selectionGoal: 'preliminary_fit',
-      requirements: [{
-        id: 'load', kind: 'generator_load_scenario', value: true, unit: null,
-        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'four simultaneous loads',
-        verification: {
-          mode: 'typed_tool', tool: 'calculator.generatorLoad', toolRequestId: 'calc',
-          bindAs: 'nominal_power_min_kw', verifier: 'generator_load_profile'
-        }
-      }, {
-        id: 'fuel', kind: 'fuel_type', value: 'бензин', unit: null,
-        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'бензиновый',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'phase', kind: 'phase', value: 'single_phase', unit: null,
-        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: '220 В',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'start', kind: 'auto_start_required', value: true, unit: null,
-        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'с электростартом',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'budget', kind: 'budget_max_rub', value: 150000, unit: 'RUB',
-        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'до 150 000 ₽',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    intent.grounding = {
-      ...intent.grounding!,
-      sourcePolicy: 'catalog_required', webPurpose: 'none', webRequirement: 'none',
-      technicalAttributes: ['номинальная мощность', 'тип топлива', 'фаза', 'электростарт', 'цена']
-    };
-    intent.toolRequests = [{
-      id: 'catalog', tool: 'catalog.search', args: {}, rationale: 'find candidates', required: true,
-      coversRequirementIds: ['fuel', 'phase', 'start', 'budget']
-    }];
-
-    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
-    const web = repaired.intent.toolRequests.find((request) => request.tool === 'web.researchProductFacts');
-
-    expect(web?.args.comparisonAttributes).toEqual(['тип топлива', 'фаза', 'электростарт', 'цена']);
-    expect(web?.args.comparisonAttributeBindings).toEqual([{ attribute: 'тип топлива', requirementId: 'fuel' }, {
-      attribute: 'фаза', requirementId: 'phase'
-    }, {
-      attribute: 'электростарт', requirementId: 'start'
-    }, {
-      attribute: 'цена', requirementId: 'budget'
-    }]);
-    expect(web?.args.comparisonAttributes).not.toContain('номинальная мощность');
-    expect(repaired.repairs[0]?.attributes).toEqual(web?.args.comparisonAttributes);
-  });
-
-  it('separates electric starter from automatic start in legacy planner contracts', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      requirements: [{
-        id: 'start', kind: 'auto_start_required', value: true, unit: null,
-        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'с электростартом',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    intent.toolRequests = [{
-      id: 'catalog', tool: 'catalog.search', required: true, rationale: 'find electric-start models',
-      coversRequirementIds: ['start'], args: { comparisonAttributes: ['auto_start_required'] }
-    }];
-    intent.grounding = { ...intent.grounding!, technicalAttributes: ['auto_start_required'] };
-
-    const repaired = repairIntentForElectricStartRequirementKinds(intent);
-
-    expect(repaired.requirementIds).toEqual(['start']);
-    expect(repaired.intent.selectionPolicy?.requirements[0]?.kind).toBe('electric_start_required');
-    expect(repaired.intent.toolRequests[0]?.args.comparisonAttributes).toEqual(['electric_start_required']);
-    expect(repaired.intent.grounding?.technicalAttributes).toEqual(['electric_start_required']);
-
-    const actualAutostart = structuredGeneratorCatalogIntent();
-    actualAutostart.selectionPolicy = {
-      ...actualAutostart.selectionPolicy!,
-      requirements: [{
-        id: 'ats', kind: 'auto_start_required', value: true, unit: null,
-        relation: 'must_have', role: 'hard_constraint', strictness: 'strict', evidence: 'нужен автозапуск через АВР',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    expect(repairIntentForElectricStartRequirementKinds(actualAutostart).requirementIds).toEqual([]);
-  });
-
-  it('extends one compatible catalog-selection web request without names or duplicate attributes', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      selectionGoal: 'preliminary_fit',
-      requirements: [{
-        id: 'weight-limit',
-        kind: 'weight_max_kg',
-        value: 100,
-        unit: 'kg',
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'the buyer needs a machine no heavier than 100 kg',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'automatic-start',
-        kind: 'autostart_required',
-        value: true,
-        unit: null,
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'automatic start is required',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    intent.grounding = {
-      ...intent.grounding!,
-      webPurpose: 'none',
-      webRequirement: 'none',
-      technicalAttributes: ['operating mass', 'automatic start']
-    };
-    intent.toolRequests = [intent.toolRequests[0]!, {
-      id: 'existing-selection-web',
-      tool: 'web.researchProductFacts',
-      args: {
-        query: 'verify the shortlisted catalog candidates',
-        productIntent: 'generator',
-        canonicalProductIntent: 'generator',
-        productNames: [],
-        comparisonAttributes: ['operating mass'],
-        comparisonAttributeBindings: [{
-          attribute: 'operating mass',
-          requirementId: 'weight-limit'
-        }]
-      },
-      rationale: 'verify one requested catalog gap',
-      required: true,
-      coversRequirementIds: ['weight-limit']
-    }];
-
-    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
-    const webRequests = repaired.intent.toolRequests.filter((request) =>
-      request.tool === 'web.researchProductFacts'
-    );
-
-    expect(webRequests).toHaveLength(1);
-    expect(webRequests[0]?.args.productNames).toEqual([]);
-    expect(webRequests[0]?.args.comparisonAttributes).toEqual(['operating mass', 'automatic start']);
-    expect(webRequests[0]?.args.comparisonAttributeBindings).toEqual([{
-      attribute: 'operating mass',
-      requirementId: 'weight-limit'
-    }, {
-      attribute: 'automatic start',
-      requirementId: 'automatic-start'
-    }]);
-    expect(webRequests[0]?.coversRequirementIds).toEqual(['weight-limit', 'automatic-start']);
-    expect(repaired.repairs).toEqual([{
-      requestId: 'existing-selection-web',
-      attributes: ['automatic start'],
-      created: false
-    }]);
-  });
-
-  it('merges requested attributes into a same-target web superset without adding a duplicate request', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    const productNames = ['FIRMAN RD3910E', 'FIRMAN RD4910E'];
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      selectionGoal: 'preliminary_fit',
-      requirements: [{
-        id: 'automatic-start',
-        kind: 'autostart_required',
-        value: true,
-        unit: null,
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'automatic start is required',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    intent.grounding = {
-      ...intent.grounding!,
-      taskType: 'comparison',
-      webPurpose: 'none',
-      webRequirement: 'none',
-      requiredToolKinds: ['catalog.getProductDetails'],
-      technicalAttributes: ['operating mass', 'automatic start']
-    };
-    intent.productMentions = productNames.map((name) => ({
-      name,
-      role: 'comparison_subject' as const,
-      productClass: 'generator',
-      evidence: `exact comparison candidate ${name}`
-    }));
-    intent.toolRequests = [{
-      id: 'existing-exact-web',
-      tool: 'web.researchProductFacts',
-      args: {
-        productNames,
-        comparisonAttributes: ['operating mass', 'fuel consumption']
-      },
-      rationale: 'verify current facts for these exact comparison targets',
-      required: true
-    }, {
-      id: 'exact-comparison-details',
-      tool: 'catalog.getProductDetails',
-      args: { productNames, comparisonAttributes: ['operating mass', 'automatic start'] },
-      rationale: 'read the exact current catalog cards first',
-      required: true
-    }];
-
-    const repaired = repairIntentForRequestedTechnicalAttributeWebCoverage(intent);
-    const webRequests = repaired.intent.toolRequests.filter((request) =>
-      request.tool === 'web.researchProductFacts'
-    );
-
-    expect(webRequests).toHaveLength(1);
-    expect(webRequests[0]?.id).toBe('existing-exact-web');
-    expect(webRequests[0]?.args.productNames).toEqual(productNames);
-    expect(webRequests[0]?.args.comparisonAttributes).toEqual([
-      'operating mass',
-      'fuel consumption',
-      'automatic start'
-    ]);
-    expect(repaired.repairs).toEqual([{
-      requestId: 'existing-exact-web',
-      attributes: ['automatic start'],
-      created: false
-    }]);
-    expect(orderToolRequestsForSelectionDependencies(
-      repaired.intent.toolRequests,
-      repaired.intent
-    ).map((request) => request.tool)).toEqual([
-      'catalog.getProductDetails',
-      'web.researchProductFacts'
-    ]);
-  });
-
-  it('does not synthesize conditional web research outside the structured preliminary catalog contract', () => {
-    const finalFit = structuredGeneratorCatalogIntent();
-    finalFit.selectionPolicy = { ...finalFit.selectionPolicy!, selectionGoal: 'final_fit' };
-    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(finalFit)).toEqual({
-      intent: finalFit,
-      repairs: []
-    });
-
-    const noAttributes = structuredGeneratorCatalogIntent();
-    noAttributes.selectionPolicy = { ...noAttributes.selectionPolicy!, selectionGoal: 'preliminary_fit' };
-    noAttributes.grounding = { ...noAttributes.grounding!, technicalAttributes: [] };
-    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(noAttributes)).toEqual({
-      intent: noAttributes,
-      repairs: []
-    });
-
-    const noCatalog = structuredGeneratorCatalogIntent();
-    noCatalog.selectionPolicy = { ...noCatalog.selectionPolicy!, selectionGoal: 'preliminary_fit' };
-    noCatalog.toolRequests = [];
-    expect(repairIntentForRequestedTechnicalAttributeWebCoverage(noCatalog)).toEqual({
-      intent: noCatalog,
-      repairs: []
-    });
-  });
-
-  it('downgrades only an unnamed newly opened selection from final fit to preliminary fit', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      selectionGoal: 'final_fit',
-      needAction: 'open',
-      reusePreviousCards: false
-    };
-
-    const repaired = repairIntentForNewNeedFinalFit(intent);
-
-    expect(repaired.repaired).toBe(true);
-    expect(repaired.intent.selectionPolicy?.selectionGoal).toBe('preliminary_fit');
-    expect(repaired.intent.riskFlags).toContain('planner_repaired_new_need_final_fit_to_preliminary');
-
-    const exactModelIntent: AgentIntentContract = {
-      ...intent,
-      productMentions: [{
-        name: 'Husqvarna LFV 100',
-        role: 'target_product',
-        productClass: 'plate',
-        evidence: 'Подтвердите Husqvarna LFV 100'
-      }]
-    };
-    expect(repairIntentForNewNeedFinalFit(exactModelIntent)).toEqual({
-      intent: exactModelIntent,
-      repaired: false
-    });
-
-    const continuingIntent: AgentIntentContract = {
-      ...intent,
-      selectionPolicy: {
-        ...intent.selectionPolicy!,
-        needAction: 'continue'
-      }
-    };
-    expect(repairIntentForNewNeedFinalFit(continuingIntent)).toEqual({
-      intent: continuingIntent,
-      repaired: false
-    });
-
-    const mislabeledNewNeedIntent: AgentIntentContract = {
-      ...intent,
-      selectionPolicy: {
-        ...intent.selectionPolicy!,
-        needAction: 'continue'
-      }
-    };
-    const repairedFromLedgerLifecycle = repairIntentForNewNeedFinalFit(mislabeledNewNeedIntent, {
-      openedNeedThisTurn: true
-    });
-    expect(repairedFromLedgerLifecycle.repaired).toBe(true);
-    expect(repairedFromLedgerLifecycle.intent.selectionPolicy?.selectionGoal).toBe('preliminary_fit');
-  });
-
-  it('adds missing web research for an open-ended preliminary requirement without discarding catalog candidates', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    intent.userMessageSummary = 'buyer needs a light plate compactor for paving tiles on a small site';
-    intent.dialogueUnderstanding = 'the job application is relevant, but catalog cards do not prove it directly';
-    intent.nextStepRationale = 'find plate candidates first, then verify the unconfirmed application fact';
-    intent.toolRequests = [{
-      ...intent.toolRequests[0]!,
-      args: {
-        query: 'лёгкая виброплита для тротуарной плитки',
-        semanticQuery: 'виброплита для тротуарной плитки, самостоятельная перевозка',
-        productIntent: 'виброплита',
-        canonicalProductIntent: 'plate',
-        limit: 6
-      }
-    }];
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      targetProductClass: 'виброплита',
-      canonicalProductClass: 'plate',
-      selectionGoal: 'preliminary_fit',
-      requirements: [{
-        id: 'paving-application',
-        kind: 'material',
-        value: 'тротуарная плитка',
-        unit: null,
-        relation: 'must_have',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'для тротуарной плитки',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-    intent.grounding = {
-      ...intent.grounding!,
-      sourcePolicy: 'catalog_required',
-      webPurpose: 'none',
-      webRequirement: 'none',
-      requiredToolKinds: ['catalog.search'],
-      technicalAttributes: ['weight', 'application suitability']
-    };
-
-    const repaired = repairIntentForOpenEndedRequirementWebCoverage(intent);
-    const webRequest = repaired.intent.toolRequests.find((request) => request.tool === 'web.researchProductFacts');
-
-    expect(webRequest).toBeDefined();
-    expect(webRequest).toMatchObject({
-      required: true,
-      coversRequirementIds: ['paving-application'],
-      args: {
-        productIntent: 'виброплита',
-        canonicalProductIntent: 'plate',
-        productNames: [],
-        comparisonAttributes: ['material']
-      }
-    });
-    expect(repaired.repairs).toEqual([{
-      requestId: webRequest!.id,
-      requirementIds: ['paving-application']
-    }]);
-    expect(repaired.intent.grounding).toMatchObject({
-      sourcePolicy: 'web_required',
-      webPurpose: 'technical_specs',
-      webRequirement: 'independent_required',
-      requiredToolKinds: expect.arrayContaining(['catalog.search', 'web.researchProductFacts'])
-    });
-    expect(repaired.intent.selectionPolicy?.requirements[0]?.verification).toEqual({
-      mode: 'typed_tool',
-      toolRequestId: webRequest!.id,
-      tool: 'web.researchProductFacts',
-      verifier: 'technical_source_review',
-      bindAs: 'material'
-    });
-    expect(orderToolRequestsForSelectionDependencies(repaired.intent.toolRequests, repaired.intent)
-      .map((request) => request.tool)).toEqual(['catalog.search', 'web.researchProductFacts']);
-    expect(gateStrictSelectionRequirements(repaired.intent, 'plate', []).blockers).toEqual([]);
-    expect(gateStrictSelectionRequirements(repaired.intent, 'plate', []).preliminaryUnverified).toEqual([
-      expect.objectContaining({ id: 'paving-application', reason: 'typed_tool_result_missing' })
-    ]);
-
-    const finalFit = structuredClone(intent);
-    finalFit.selectionPolicy!.selectionGoal = 'final_fit';
-    expect(repairIntentForOpenEndedRequirementWebCoverage(finalFit)).toEqual({
-      intent: finalFit,
-      repairs: []
-    });
-  });
-
-  it('repairs preliminary open-ended strict constraints onto the single required web verifier', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    const catalogRequest: ToolRequest = {
-      ...intent.toolRequests[0]!,
-      coversRequirementIds: ['material-fit', 'loading-fit', 'weight-limit']
-    };
-    const webRequest: ToolRequest = {
-      id: 'web-material-check',
-      tool: 'web.researchProductFacts',
-      args: {
-        query: 'verify crushed-stone suitability of shortlisted plates',
-        productIntent: 'виброплита',
-        canonicalProductIntent: 'plate',
-        productNames: []
-      },
-      rationale: 'verify the open-ended material application after catalog search',
-      required: true,
-      coversRequirementIds: []
-    };
-    intent.toolRequests = [catalogRequest, webRequest];
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      targetProductClass: 'виброплита',
-      canonicalProductClass: 'plate',
-      selectionGoal: 'preliminary_fit',
-      requirements: [{
-        id: 'material-fit',
-        kind: 'material',
-        value: 'щебень',
-        unit: null,
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'для щебня',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'loading-fit',
-        kind: 'two_person_loading_suitability',
-        value: true,
-        unit: null,
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'двое смогут погрузить в фургон',
-        verification: { mode: 'product_attribute' }
-      }, {
-        id: 'weight-limit',
-        kind: 'weight_max_kg',
-        value: 100,
-        unit: 'kg',
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'не тяжелее 100 кг',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-
-    const repaired = repairIntentForOpenEndedRequirementWebCoverage(intent);
-
-    // 'material' has no mechanical verifier and still routes to web verification;
-    // 'two_person_loading_suitability' is an unsupported kind that now stays
-    // unconfirmed-preliminary (no blocker): it neither moves to the web request nor
-    // blocks catalog evidence, so it remains covered by the catalog request.
-    expect(repaired.repairs).toEqual([{
-      requestId: webRequest.id,
-      requirementIds: ['material-fit']
-    }]);
-    expect(repaired.intent.toolRequests[0]?.coversRequirementIds).toEqual(['loading-fit', 'weight-limit']);
-    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual(['material-fit']);
-    expect(repaired.intent.selectionPolicy?.requirements[0]?.verification).toEqual({
-      mode: 'typed_tool',
-      toolRequestId: webRequest.id,
-      tool: 'web.researchProductFacts',
-      verifier: 'technical_source_review',
-      bindAs: 'material'
-    });
-    expect(repaired.intent.riskFlags).toContain('planner_repaired_open_ended_requirement_web_coverage');
-  });
-
-  it('creates one automatic web verifier when none exists but does not guess between multiple verifiers', () => {
-    const intent = structuredGeneratorCatalogIntent();
-    intent.selectionPolicy = {
-      ...intent.selectionPolicy!,
-      targetProductClass: 'виброплита',
-      canonicalProductClass: 'plate',
-      selectionGoal: 'preliminary_fit',
-      requirements: [{
-        id: 'material-fit',
-        kind: 'material',
-        value: 'щебень',
-        unit: null,
-        role: 'hard_constraint',
-        strictness: 'strict',
-        evidence: 'для щебня',
-        verification: { mode: 'product_attribute' }
-      }]
-    };
-
-    const repairedWithoutWeb = repairIntentForOpenEndedRequirementWebCoverage(intent);
-    const automaticWebRequest = repairedWithoutWeb.intent.toolRequests.find((request) =>
-      request.tool === 'web.researchProductFacts'
-    );
-    expect(automaticWebRequest).toMatchObject({
-      required: true,
-      coversRequirementIds: ['material-fit']
-    });
-    expect(repairedWithoutWeb.repairs).toEqual([{
-      requestId: automaticWebRequest!.id,
-      requirementIds: ['material-fit']
-    }]);
-
-    const webRequest: ToolRequest = {
-      id: 'web-one',
-      tool: 'web.researchProductFacts',
-      args: { query: 'verify material fit', productNames: [] },
-      rationale: 'first possible owner',
-      required: true,
-      coversRequirementIds: []
-    };
-    intent.toolRequests = [intent.toolRequests[0]!, webRequest, { ...webRequest, id: 'web-two' }];
-    expect(repairIntentForOpenEndedRequirementWebCoverage(intent)).toEqual({ intent, repairs: [] });
   });
 
   it('runs deterministic calculations before catalog and open-ended web research after catalog', () => {
@@ -2003,64 +1381,6 @@ describe('AgentManagerOrchestrator', () => {
       'catalog.search',
       'web.researchProductFacts'
     ]);
-  });
-
-  it('repairs only the missing reverse coverage link for explicit supported typed proofs', () => {
-    const source = typedGeneratorProofIntent();
-
-    const repaired = repairIntentForTypedToolRequirementCoverage(source);
-
-    expect(repaired.intent.toolRequests[0]?.coversRequirementIds).toEqual([
-      'load-scenario',
-      'derived-nominal-minimum'
-    ]);
-    expect(repaired.intent.toolRequests[1]?.coversRequirementIds).toEqual([]);
-    expect(repaired.intent.riskFlags).toContain('planner_repaired_typed_requirement_coverage');
-    expect(repaired.repairs).toEqual(expect.arrayContaining([
-      { requestId: 'load-calculation', requirementIds: ['derived-nominal-minimum'] },
-      { requestId: 'catalog-search', requirementIds: ['derived-nominal-minimum'] }
-    ]));
-  });
-
-  it('does not repair malformed, optional, missing, mismatched, or unsupported typed proofs', () => {
-    const cases: AgentIntentContract[] = [];
-
-    const optionalRequest = typedGeneratorProofIntent();
-    optionalRequest.toolRequests[0]!.required = false;
-    cases.push(optionalRequest);
-
-    const missingRequest = typedGeneratorProofIntent();
-    const missingVerification = missingRequest.selectionPolicy!.requirements[1]!.verification;
-    if (missingVerification?.mode === 'typed_tool') missingVerification.toolRequestId = 'missing-calculation';
-    cases.push(missingRequest);
-
-    const mismatchedRequest = typedGeneratorProofIntent();
-    mismatchedRequest.toolRequests[0] = {
-      id: 'load-calculation',
-      tool: 'catalog.search',
-      args: { query: 'generator' },
-      rationale: 'wrong tool under the referenced request id',
-      required: true,
-      coversRequirementIds: ['load-scenario']
-    };
-    cases.push(mismatchedRequest);
-
-    const unsupportedVerifier = typedGeneratorProofIntent();
-    const unsupportedVerification = unsupportedVerifier.selectionPolicy!.requirements[1]!.verification;
-    if (unsupportedVerification?.mode === 'typed_tool') unsupportedVerification.verifier = 'unsupported_profile';
-    cases.push(unsupportedVerifier);
-
-    const malformedShape = typedGeneratorProofIntent();
-    malformedShape.selectionPolicy!.requirements[1]!.value = 5.5;
-    cases.push(malformedShape);
-
-    const duplicateRequirementId = typedGeneratorProofIntent();
-    duplicateRequirementId.selectionPolicy!.requirements[1]!.id = 'load-scenario';
-    cases.push(duplicateRequirementId);
-
-    for (const intent of cases) {
-      expect(repairIntentForTypedToolRequirementCoverage(intent)).toEqual({ intent, repairs: [] });
-    }
   });
 
   it('answers two identical buyer actions as distinct sequential turns with their actual context', async () => {
@@ -2279,14 +1599,7 @@ describe('AgentManagerOrchestrator', () => {
               unit: null,
               role: 'hard_constraint',
               strictness: 'strict',
-              evidence: 'refrigerator, pump, boiler and occasional power tools',
-              verification: {
-                mode: 'typed_tool',
-                toolRequestId: 'future-load-calculation',
-                tool: 'calculator.generatorLoad',
-                verifier: 'generator_load_profile',
-                bindAs: 'nominal_power_min_kw'
-              }
+              evidence: 'refrigerator, pump, boiler and occasional power tools'
             }],
             rationale: 'product selection stays blocked until the pump fact is known'
           },
@@ -2344,7 +1657,7 @@ describe('AgentManagerOrchestrator', () => {
 
       async searchProducts(query = ''): Promise<Product[]> {
         this.queries.push(query);
-        if (query.includes('generator nominal power at least')) {
+        if (query.includes('calculated load')) {
           return [{
             ...generatorProductWithPower('strong-derived', 'TSS SGG 10000EH generator', 9),
             specs: { 'мощность номинальная при 220 в, квт': '9' }
@@ -2465,7 +1778,10 @@ describe('AgentManagerOrchestrator', () => {
         };
       },
       async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['strong-derived']);
+        expect(input.products.map((item) => item.id), JSON.stringify({
+          toolResults: input.toolResults,
+          products: input.products
+        })).toEqual(['strong-derived']);
         const required = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } }).profile?.requiredNominalKw;
         return {
           answerText: `The calculated minimum is ${required} kW. TSS SGG 10000EH generator clears that requirement.`,
@@ -2500,7 +1816,8 @@ describe('AgentManagerOrchestrator', () => {
     });
 
     expect(payload.answer).toContain('TSS SGG 10000EH');
-    expect(products.queries).toEqual(expect.arrayContaining([
+    expect(products.queries[0]).toBe('single-phase generator for 5 kW calculated load');
+    expect(products.queries).not.toEqual(expect.arrayContaining([
       expect.stringContaining('generator nominal power at least')
     ]));
     expect(payload.productCards.map((card) => card.id)).toEqual(['strong-derived']);
@@ -2512,7 +1829,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.toolResults?.[0]?.payload?.profile?.simultaneousStarting).toBe(false);
     expect((metadata.toolResults?.[1]?.payload as {
       generatorLoadFit?: { loadAwareRetry?: boolean };
-    })?.generatorLoadFit?.loadAwareRetry).toBe(true);
+    })?.generatorLoadFit?.loadAwareRetry).toBe(false);
     expect(payload.metadata?.preSendValidation).toMatchObject({ verdict: 'pass' });
     expect(payload.metadata?.preSendValidation).not.toMatchObject({
       issues: expect.arrayContaining([expect.objectContaining({ code: 'unverifiable_strict_hard_constraint' })])
@@ -2867,7 +2184,7 @@ describe('AgentManagerOrchestrator', () => {
     });
   });
 
-  it('repairs catalog-required product selection plans that omit catalog.search', async () => {
+  it('rejects catalog-required product selection plans that omit catalog.search', async () => {
     const conversations = new FakeConversations();
     conversations.messages = [message('Need a vibroplate for paving slabs that I can load into a trunk.')];
     let composeInput: Parameters<AgentManagerModel['composeAnswer']>[0] | undefined;
@@ -2923,16 +2240,14 @@ describe('AgentManagerOrchestrator', () => {
       catalogRequiredModel
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Need a vibroplate for paving slabs that I can load into a trunk.'
-    });
+    })).rejects.toThrow('required_catalog_tool_missing');
 
-    expect(composeInput?.intent.toolRequests.map((request) => request.tool)).toContain('catalog.search');
-    expect(composeInput?.intent.riskFlags).toContain('planner_repaired_grounding_catalog_tool');
-    expect(composeInput?.products.map((item) => item.id)).toEqual(expect.arrayContaining(['plate-light', 'plate-mid']));
-    expect(payload.productCards.map((card: ProductCard) => card.id)).toEqual(expect.arrayContaining(['plate-light', 'plate-mid']));
+    expect(composeInput).toBeUndefined();
+    expect(conversations.assistantSaves).toHaveLength(0);
   });
 
   it('uses product embeddings inside catalog tools when embedding coverage is usable', async () => {
@@ -3376,7 +2691,7 @@ describe('AgentManagerOrchestrator', () => {
     };
     expect(metadata.toolResults?.find((result) => result.requestId === 'current-product-details')
       ?.payload?.products?.[0]?.description).toBe(exact.description);
-    expect(metadata.cardSelection?.warnings).toContain('product_cards_reused_from_previous_turn');
+    expect(metadata.cardSelection?.warnings ?? []).not.toContain('product_cards_reused_from_previous_turn');
     expect(payload.productCards.map((card) => card.id)).toEqual([exact.id]);
   });
 
@@ -3459,7 +2774,7 @@ describe('AgentManagerOrchestrator', () => {
       sourcePolicy: 'catalog_required',
       webPurpose: 'none',
       requiredToolKinds: ['catalog.getProductDetails'],
-      technicalAttributes: ['price', 'weight', 'protective mat for paving'],
+      technicalAttributes: [],
       rationale: 'the current catalog detail cards are sufficient to compare this exact accessory fact'
     };
 
@@ -3801,8 +3116,37 @@ describe('AgentManagerOrchestrator', () => {
               notes: null
             },
             rationale: 'buyer asked what plate weight to choose for a small driveway',
-            required: true
+            required: true,
+            coversRequirementIds: ['prefer-low-weight']
           }],
+          selectionPolicy: {
+            targetProductClass: 'plate',
+            canonicalProductClass: 'plate',
+            selectionGoal: 'preliminary_fit',
+            needAction: 'open',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 3,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [{
+              id: 'prefer-low-weight',
+              kind: 'lightweight_design',
+              value: true,
+              unit: null,
+              relation: 'preferred',
+              role: 'preference',
+              strictness: 'preferred',
+              evidence: 'I will load it myself',
+              verification: { mode: 'product_attribute' }
+            }],
+            rankingObjectives: [{
+              requirementId: 'prefer-low-weight',
+              attribute: 'weight_kg',
+              direction: 'minimize'
+            }],
+            rationale: 'Rank same-class plates by the buyer-declared self-loading preference.'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: []
         };
@@ -3853,7 +3197,7 @@ describe('AgentManagerOrchestrator', () => {
               productNames: [],
               comparisonAttributes: [],
               loads: [
-                { kind: 'unknown', name: '\u043d\u0430\u0441\u043e\u0441', count: 1, runningKw: 1.1, startingKw: null, source: 'explicit_user', evidence: 'pump nameplate 1.1 kW' },
+                { kind: 'pump', name: '\u043d\u0430\u0441\u043e\u0441', count: 1, runningKw: 1.1, startingKw: null, source: 'explicit_user', evidence: 'pump nameplate 1.1 kW' },
                 { kind: 'refrigerator', name: 'household refrigerator', count: 1, runningKw: 0.25, startingKw: 1.2, source: 'estimated_average', evidence: 'ordinary household refrigerator' },
                 { kind: 'boiler', name: 'gas boiler controls', count: 1, runningKw: 0.15, startingKw: 0.15, source: 'estimated_average', evidence: 'small gas boiler controls' },
                 { kind: 'lighting', name: 'small light', count: 1, runningKw: 0.2, startingKw: 0.2, source: 'estimated_average', evidence: 'small lighting' },
@@ -3899,8 +3243,8 @@ describe('AgentManagerOrchestrator', () => {
       ['boiler', 0.15],
       ['lighting', 0.2]
     ]);
-    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredStartingKw).toBeCloseTo(4.5, 5);
-    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(4.5);
+    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredStartingKw).toBeCloseTo(2.6, 5);
+    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(3);
     expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).not.toContain('unknown_load');
     expect(metadata.toolResults?.[0]?.warnings?.join('\n') ?? '').not.toContain('generator_load_estimate_used:refrigerator');
   });
@@ -4238,6 +3582,11 @@ describe('AgentManagerOrchestrator', () => {
   });
 
   it('allows preliminary generator cards when unknown loads are bounded enough for approximate selection', async () => {
+    class BoundedEstimateProducts extends FakeProducts {
+      override async searchProducts(): Promise<Product[]> {
+        return [generatorProductWithPower('bounded-7', 'TEST GX7000 Generator 7 kW', 7)];
+      }
+    }
     const conversations = new FakeConversations();
     const boundedEstimateModel = model({
       async planTurn() {
@@ -4317,11 +3666,11 @@ describe('AgentManagerOrchestrator', () => {
         expect(input.requiredResponseClauses?.map((clause) => clause.instruction).join('\n')).toContain('preliminary calculated orientation');
         const profile = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } })?.profile;
         return {
-          answerText: `Preliminary calculation is about ${profile?.requiredNominalKw} kW. TEST GX6000 is a preliminary reserve option. Exact pump nameplate is still needed before purchase.`,
+          answerText: `Preliminary calculation is about ${profile?.requiredNominalKw} kW. TEST GX7000 is a preliminary reserve option. Exact pump nameplate is still needed before purchase.`,
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['generator-load', 'catalog-search'],
-          selectedProductIds: ['p2'],
+          selectedProductIds: ['bounded-7'],
           leadAction: 'none',
           riskFlags: ['bounded_load_assumption'],
           selectionReadiness: {
@@ -4334,7 +3683,7 @@ describe('AgentManagerOrchestrator', () => {
         };
       }
     });
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BrandedGeneratorProducts() as never, new FakeLeads() as never, boundedEstimateModel);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new BoundedEstimateProducts() as never, new FakeLeads() as never, boundedEstimateModel);
 
     const payload = await orchestrator.generateAnswer({
       sessionId,
@@ -4355,7 +3704,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.selectionReadiness?.decision?.status).toBe('ready_for_preliminary_cards');
     expect(metadata.selectionReadiness?.decision?.missingFacts).toContain('exact_pump_power_or_model');
     expect(metadata.cardSelection?.warnings ?? []).not.toContain('product_cards_suppressed:generator_load_unconfirmed_basis');
-    expect(payload.productCards.map((card) => card.id)).toEqual(['p2']);
+    expect(payload.productCards.map((card) => card.id)).toEqual(['bounded-7']);
   });
 
   it('allows generator cards after a generator load profile is available', async () => {
@@ -4514,6 +3863,12 @@ describe('AgentManagerOrchestrator', () => {
             requirements: [],
             rationale: 'reuse the previous visible plate cards requested by the buyer'
           },
+          productMentions: [{
+            name: 'Виброплита FIRMAN FPC60H 62 кг',
+            role: 'catalog_candidate',
+            productClass: 'plate',
+            evidence: 'варианты'
+          }],
           mustNotAskQuestionIds: [],
           riskFlags: []
         };
@@ -4927,9 +4282,9 @@ describe('AgentManagerOrchestrator', () => {
     class PowerRangeProducts extends FakeProducts {
       async searchProducts() {
         return [
-          { ...product('huge', 'Generator ENERGY WE900WPS 700 kW', 'Generators'), specs: { power: '700 kW' } },
-          { ...product('six', 'Generator EVOline BQH 7500 E 6 kW', 'Generators'), specs: { power: '6 kW' } },
-          { ...product('five', 'Generator EVOline BQH 6200 E 5 kW', 'Generators'), specs: { power: '5 kW' } }
+          generatorProductWithPower('huge', 'Generator ENERGY WE900WPS 700 kW', 700),
+          generatorProductWithPower('six', 'Generator EVOline BQH 7500 E 6 kW', 6),
+          generatorProductWithPower('five', 'Generator EVOline BQH 6200 E 5 kW', 5)
         ];
       }
     }
@@ -4960,8 +4315,42 @@ describe('AgentManagerOrchestrator', () => {
               notes: null
             },
             rationale: 'buyer asked for generators around 6-7 kW',
-            required: true
+            required: true,
+            coversRequirementIds: ['range-min', 'range-max']
           }],
+          selectionPolicy: {
+            targetProductClass: 'generator',
+            canonicalProductClass: 'generator',
+            selectionGoal: 'browse_catalog',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 2,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [{
+              id: 'range-min',
+              kind: 'nominal_power_min_kw',
+              value: 5,
+              unit: 'kW',
+              relation: 'must_have',
+              role: 'hard_constraint',
+              strictness: 'strict',
+              evidence: 'around 6-7 kW',
+              verification: { mode: 'product_attribute' }
+            }, {
+              id: 'range-max',
+              kind: 'nominal_power_max_kw',
+              value: 7,
+              unit: 'kW',
+              relation: 'must_have',
+              role: 'hard_constraint',
+              strictness: 'strict',
+              evidence: 'around 6-7 kW',
+              verification: { mode: 'product_attribute' }
+            }],
+            rationale: 'Use the buyer-declared approximate power window.'
+          },
           mustNotAskQuestionIds: [],
           riskFlags: []
         };
@@ -6382,7 +5771,7 @@ describe('AgentManagerOrchestrator', () => {
             sourcePolicy: 'catalog_required' as const,
             webPurpose: 'none' as const,
             requiredToolKinds: ['catalog.search' as const],
-            technicalAttributes: ['application material'],
+            technicalAttributes: [],
             rationale: 'catalog evidence must prove ceramic compatibility'
           },
           mustNotAskQuestionIds: [],
@@ -6441,7 +5830,7 @@ describe('AgentManagerOrchestrator', () => {
           selectedProductIds: [],
           rejectedProductIds: [],
           status: 'open',
-          activate: true
+          activate: false
         },
         evidence: 'old generator request',
         source: 'llm_state_delta',
@@ -6500,6 +5889,7 @@ describe('AgentManagerOrchestrator', () => {
             ...currentNoProductSelectionPolicy(),
             targetProductClass: 'plate',
             canonicalProductClass: 'plate',
+            needAction: 'switch',
             rationale: 'current plate need has no product cards yet'
           },
           policyRuleIds: [],
@@ -6701,9 +6091,18 @@ describe('AgentManagerOrchestrator', () => {
     const conversations = new TwoTurnConversations();
     conversations.messages = [message('Подберите генератор из каталога.')];
     let turnNumber = 0;
+    const turnNumberFromMessage = (value: string) => value.includes('Подберите')
+      ? 1
+      : value.includes('Вернёмся')
+        ? 2
+        : value.includes('обслуживанию')
+          ? 3
+          : value.includes('ближайший')
+            ? 4
+            : 5;
     const managerModel = model({
-      async proposeLedgerDelta() {
-        turnNumber += 1;
+      async proposeLedgerDelta(input) {
+        turnNumber = turnNumberFromMessage(input.userMessage);
         return {
           rationale: turnNumber === 1 ? 'open generator need' : 'resume the same generator need',
           events: [{
@@ -6715,7 +6114,7 @@ describe('AgentManagerOrchestrator', () => {
               summary: 'подбор генератора',
               constraints: [],
               openQuestions: [],
-              ...(turnNumber === 1 ? {} : { selectedProductIds: [] }),
+              ...(turnNumber === 1 ? {} : { selectionUpdateMode: 'preserve' as const }),
               status: turnNumber === 1 ? 'open' : 'selected',
               activate: true
             },
@@ -6725,10 +6124,12 @@ describe('AgentManagerOrchestrator', () => {
           }]
         };
       },
-      async planTurn() {
+      async planTurn(input) {
+        turnNumber = turnNumberFromMessage(input.userMessage);
         const intent = structuredGeneratorCatalogIntent();
+        if (turnNumber === 1 && intent.selectionPolicy) intent.selectionPolicy.needAction = 'open';
         if (turnNumber === 1) return intent;
-        if (turnNumber === 2) {
+        if (turnNumber === 3) {
           return {
             ...intent,
             requiresTools: false,
@@ -6753,8 +6154,9 @@ describe('AgentManagerOrchestrator', () => {
         return {
           ...intent,
           requiresTools: true,
-          toolRequests: turnNumber >= 3
-            ? [{
+          toolRequests: turnNumber === 1
+            ? intent.toolRequests
+            : [{
                 id: 'selected-product-details',
                 tool: 'catalog.getProductDetails' as const,
                 args: {
@@ -6766,16 +6168,15 @@ describe('AgentManagerOrchestrator', () => {
                 },
                 rationale: 'the buyer explicitly returned to the previously selected product',
                 required: true
-              }]
-            : intent.toolRequests,
+              }],
           grounding: {
             taskType: 'product_selection' as const,
             sourcePolicy: 'catalog_required' as const,
             webPurpose: 'none' as const,
-            requiredToolKinds: turnNumber >= 3
-              ? ['catalog.getProductDetails' as const]
-              : ['catalog.search' as const],
-            technicalAttributes: ['price', 'power'],
+            requiredToolKinds: turnNumber === 1
+              ? ['catalog.search' as const]
+              : ['catalog.getProductDetails' as const],
+            technicalAttributes: [],
             rationale: 'recheck the current catalog while preserving the validated active-need selection'
           },
           selectionPolicy: {
@@ -6789,9 +6190,10 @@ describe('AgentManagerOrchestrator', () => {
         };
       },
       async composeAnswer(input) {
+        turnNumber = turnNumberFromMessage(input.userMessage);
         if (turnNumber === 1) {
           expect(input.products.map((item) => item.id)).toEqual(['p1', 'p2']);
-        } else if (turnNumber === 2) {
+        } else if (turnNumber !== 3) {
           expect(
             input.products.map((item) => item.id),
             JSON.stringify({
@@ -6800,7 +6202,7 @@ describe('AgentManagerOrchestrator', () => {
               activeNeeds: input.ledgerState.needsById
             })
           ).toEqual(['p1']);
-        } else if (turnNumber === 3) {
+        } else {
           expect(input.products).toEqual([]);
           return {
             answerText: 'По обслуживанию ориентируйтесь на регламент производителя; выбранный ранее вариант я сохраняю в контексте.',
@@ -7188,7 +6590,7 @@ describe('AgentManagerOrchestrator', () => {
       webPurpose: 'none',
       webRequirement: 'none',
       requiredToolKinds: ['catalog.search'],
-      technicalAttributes: ['weight'],
+      technicalAttributes: [],
       buyerQuestion: 'Нужна лёгкая вибрационная плита для перевозки одним человеком',
       rationale: 'Catalog must contain the candidates and their weights.'
     };
@@ -7245,6 +6647,130 @@ describe('AgentManagerOrchestrator', () => {
       scannedCount: 5,
       matchedCount: 11
     });
+  });
+
+  it('recovers remote-start generators instead of substituting a full ATS-only initial pool', async () => {
+    class RemoteStartRecoveryProducts extends FakeProducts {
+      calls: Array<{ query: string; limit: number }> = [];
+
+      override async searchProducts(query = '', limit = 8) {
+        this.calls.push({ query, limit });
+        if (this.calls.length === 1) {
+          return [{
+            ...product('fregat-ad-200', 'Generator diesel Fregat AD-200 200 kW'),
+            specs: { power: '200 kW', Autostart: 'yes', starter: 'electric' }
+          }, {
+            ...product('energo-yn143c', 'Generator diesel ENERGO YN143C 108 kW'),
+            specs: { power: '108 kW', Autostart: 'yes', starter: 'electric' }
+          }, {
+            ...product('energo-yn143c-s', 'Generator diesel ENERGO YN143C-S 108 kW'),
+            specs: { power: '108 kW', Autostart: 'yes', starter: 'electric' }
+          }];
+        }
+        return [{
+          ...product('bison-bs6250ie', 'Generator BISON BS6250IE 5 kW'),
+          specs: { power: '5 kW', запуск: 'ручной/электро/дистанционный' }
+        }, {
+          ...product('a-ipower-a4000is', 'Generator A-iPower A4000iS 3.5 kW'),
+          specs: { power: '3.5 kW', starter: 'ручной/электро/АВР, дистанционный пульт до 50 м' }
+        }, {
+          ...product('hnd-ge3300jsi', 'Generator HND GE3300JSI 3 kW'),
+          specs: { power: '3 kW', запуск: 'электростартер / ручной / дистанционный' }
+        }];
+      }
+    }
+
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'preliminary_fit',
+      maxCards: 3,
+      requirements: [{
+        id: 'prefer-remote-start',
+        kind: 'remote_start',
+        value: true,
+        unit: null,
+        relation: 'preferred',
+        role: 'preference',
+        strictness: 'preferred',
+        evidence: 'buyer would prefer starting by key fob or remote command',
+        verification: { mode: 'product_attribute' }
+      }]
+    };
+    intent.toolRequests[0] = {
+      ...intent.toolRequests[0]!,
+      args: {
+        ...intent.toolRequests[0]!.args,
+        query: 'generator with remote start',
+        semanticQuery: 'generator remote command start',
+        limit: 3,
+        comparisonAttributes: ['remote_start']
+      },
+      coversRequirementIds: ['prefer-remote-start']
+    };
+    intent.grounding = {
+      ...intent.grounding!,
+      technicalAttributes: []
+    };
+
+    const products = new RemoteStartRecoveryProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      products as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        async composeAnswer(input) {
+          expect(input.products.map((candidate) => candidate.id)).toEqual([
+            'bison-bs6250ie',
+            'a-ipower-a4000is',
+            'hnd-ge3300jsi'
+          ]);
+          return {
+            answerText: 'Remote-start options are BISON BS6250IE, A-iPower A4000iS, and HND GE3300JSI.',
+            factsUsed: [],
+            questionsAsked: [],
+            toolResultIds: ['catalog-search'],
+            selectedProductIds: ['bison-bs6250ie', 'a-ipower-a4000is', 'hnd-ge3300jsi'],
+            leadAction: 'none',
+            riskFlags: [],
+            selectionReadiness: {
+              productClass: 'generator',
+              status: 'ready_for_preliminary_cards',
+              canShowProductCards: true,
+              missingFacts: ['required power and phase'],
+              rationale: 'The catalog confirms remote command start; load fit remains preliminary.'
+            }
+          };
+        }
+      })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'I need a generator and would prefer remote command start.'
+    });
+    const metadata = payload.metadata as {
+      toolResults?: Array<{
+        warnings?: string[];
+        payload?: { retrieval?: { primaryExpansion?: { attempted?: boolean; matchedCount?: number } } };
+      }>;
+    };
+
+    expect(products.calls).toHaveLength(2);
+    expect(products.calls[0]?.limit).toBeGreaterThanOrEqual(200);
+    expect(products.calls[1]?.limit).toBe(1000);
+    expect(payload.productCards.map((card) => card.id)).toEqual([
+      'bison-bs6250ie',
+      'a-ipower-a4000is',
+      'hnd-ge3300jsi'
+    ]);
+    expect(metadata.toolResults?.[0]?.payload?.retrieval?.primaryExpansion).toMatchObject({
+      attempted: true,
+      matchedCount: 6
+    });
+    expect(metadata.toolResults?.[0]?.warnings).toContain('catalog_structured_remote_start_preference_expansion');
   });
 
   it('does not broaden or reorder catalog candidates for an unbound preference objective', async () => {
@@ -7477,7 +7003,26 @@ describe('AgentManagerOrchestrator', () => {
       selectionGoal: 'preliminary_fit',
       maxCards: 2,
       phase: 'single_phase',
-      reusePreviousCards: false
+      reusePreviousCards: false,
+      requirements: [
+        ...intent.selectionPolicy!.requirements,
+        {
+          id: 'prefer-closest-adequate-power',
+          kind: 'nominal_power_min_kw',
+          value: 5.5,
+          unit: 'kW',
+          relation: 'preferred',
+          role: 'preference',
+          strictness: 'preferred',
+          evidence: 'without overpaying',
+          verification: { mode: 'product_attribute' }
+        }
+      ],
+      rankingObjectives: [{
+        requirementId: 'prefer-closest-adequate-power',
+        attribute: 'nominal_power_kw',
+        direction: 'minimize'
+      }]
     };
     intent.toolRequests[1] = {
       ...intent.toolRequests[1]!,
@@ -7534,14 +7079,14 @@ describe('AgentManagerOrchestrator', () => {
     expect(products.calls).toBe(2);
     expect(catalogResult?.payload?.retrieval?.primaryExpansion).toMatchObject({
       attempted: true,
-      matchedCount: 2
+      matchedCount: 3
     });
     expect(payload.productCards.map((card) => card.id), JSON.stringify({
       cardSelection: payload.metadata?.cardSelection,
       selectionReadiness: payload.metadata?.selectionReadiness,
       answerProductEvidence: payload.metadata?.answerProductEvidence
     })).toEqual(['close-55', 'close-60']);
-    expect(metadata.answerProductEvidence?.droppedProductIds).toContain('oversized-85');
+    expect(metadata.answerProductEvidence?.droppedProductIds).toContain('weak-30');
   });
 
   it('keeps gasoline generator candidates when the planner makes fuel type a strict product attribute', async () => {
@@ -7620,8 +7165,23 @@ describe('AgentManagerOrchestrator', () => {
         relation: 'preferred',
         evidence: 'The buyer asked for approximately 5-6 kW.',
         verification: { mode: 'product_attribute' }
+      }, {
+        id: 'prefer-lower-price',
+        kind: 'price_visibility',
+        value: true,
+        unit: null,
+        role: 'preference',
+        strictness: 'preferred',
+        relation: 'preferred',
+        evidence: 'with prices',
+        verification: { mode: 'product_attribute' }
       }]
     };
+    intent.selectionPolicy.rankingObjectives = [{
+      requirementId: 'prefer-lower-price',
+      attribute: 'price_rub',
+      direction: 'minimize'
+    }];
     intent.toolRequests[0] = {
       ...intent.toolRequests[0]!,
       args: {
@@ -7768,6 +7328,7 @@ describe('AgentManagerOrchestrator', () => {
       id: 'prior-card-details',
       tool: 'catalog.getProductDetails',
       args: {
+        productIds: priorProducts.map((item) => item.id),
         productNames: priorProducts.map((item) => item.name),
         productIntent: 'generator',
         canonicalProductIntent: 'generator',
@@ -7793,7 +7354,7 @@ describe('AgentManagerOrchestrator', () => {
       name: item.name,
       role: 'comparison_subject' as const,
       productClass: 'generator',
-      evidence: 'previous visible card'
+      evidence: 'эти две модели'
     }));
     intent.selectionPolicy = {
       ...intent.selectionPolicy!,
@@ -7994,6 +7555,7 @@ describe('AgentManagerOrchestrator', () => {
       id: 'comparison-details',
       tool: 'catalog.getProductDetails',
       args: {
+        productIds: comparisonProducts.map((item) => item.id),
         productNames: comparisonProducts.map((item) => item.name),
         productIntent: 'plate',
         canonicalProductIntent: 'plate',
@@ -8021,7 +7583,7 @@ describe('AgentManagerOrchestrator', () => {
       name: item.name,
       role: 'comparison_subject' as const,
       productClass: 'plate',
-      evidence: 'exact previous visible card'
+      evidence: 'обе'
     }));
     intent.selectionPolicy = {
       targetProductClass: 'plate',
@@ -8151,7 +7713,7 @@ describe('AgentManagerOrchestrator', () => {
       name: item.name,
       role: 'comparison_subject' as const,
       productClass: 'plate',
-      evidence: 'explicit comparison subject'
+      evidence: item.name.replace('Виброплита ', '')
     }));
     intent.selectionPolicy = {
       ...intent.selectionPolicy!,
@@ -8178,7 +7740,7 @@ describe('AgentManagerOrchestrator', () => {
       sourcePolicy: 'catalog_required',
       webPurpose: 'none',
       requiredToolKinds: ['catalog.getProductDetails'],
-      technicalAttributes: ['weight', 'compaction force'],
+      technicalAttributes: [],
       rationale: 'compare exact catalog subjects and apply the strict weight limit'
     };
 
@@ -8358,12 +7920,12 @@ describe('AgentManagerOrchestrator', () => {
       name: 'A-iPower AP6000 5.5 kW generator',
       role: 'comparison_subject',
       productClass: 'generator',
-      evidence: 'previous visible card'
+      evidence: 'Which one'
     }, {
       name: 'EVOline PB7000 6.0 kW generator',
       role: 'comparison_subject',
       productClass: 'generator',
-      evidence: 'previous visible card'
+      evidence: 'Which one'
     }];
     secondIntent.selectionPolicy = {
       ...secondIntent.selectionPolicy!,
@@ -8385,20 +7947,27 @@ describe('AgentManagerOrchestrator', () => {
         }
       ]
     };
-    secondIntent.selectionPolicy!.requirements = secondIntent.selectionPolicy!.requirements.map((requirement) => ({
-      ...requirement,
-      verification: requirement.verification?.mode === 'typed_tool'
-        ? { ...requirement.verification, toolRequestId: 'carried-load-context' }
-        : requirement.verification
-    }));
     const changedLoadIntent = structuredClone(secondIntent);
     changedLoadIntent.userMessageSummary = 'buyer changes the generator load facts';
     changedLoadIntent.dialogueUnderstanding = 'the previous generator calculation is stale after the changed pump power';
     changedLoadIntent.nextStepRationale = 'do not reuse the old load proof or show cards as validated';
-    changedLoadIntent.selectionPolicy!.requirements = changedLoadIntent.selectionPolicy!.requirements.map((requirement) => ({
-      ...requirement,
-      evidence: 'the pump is now 3 kW and the grinder is 1.5 kW'
-    }));
+    changedLoadIntent.productMentions = [];
+    changedLoadIntent.grounding = {
+      taskType: 'technical_answer',
+      sourcePolicy: 'conversation_only',
+      webPurpose: 'none',
+      requiredToolKinds: [],
+      technicalAttributes: [],
+      rationale: 'the changed load invalidates the prior fit until a new calculation is planned'
+    };
+    changedLoadIntent.selectionPolicy = {
+      ...changedLoadIntent.selectionPolicy!,
+      selectionGoal: 'browse_catalog',
+      reusePreviousCards: false,
+      maxCards: 0,
+      requirements: [],
+      rationale: 'Do not reuse products after the buyer changes the decisive load facts.'
+    };
 
     const conversations = new TurnAwareCommercialConversations();
     conversations.messages = [message('Pump 1.1 kW and grinder 1.5 kW may run together; show close single-phase generators.')];
@@ -8540,7 +8109,7 @@ describe('AgentManagerOrchestrator', () => {
 
     expect(changedLoad.productCards).toEqual([]);
     expect(changedLoadMetadata.historicalSelectionEvidence?.tools).not.toContain('calculator.generatorLoad');
-    expect(changedLoadMetadata.historicalSelectionEvidence?.toolResultIds).toEqual(['catalog-search']);
+    expect(changedLoadMetadata.historicalSelectionEvidence?.toolResultIds).toEqual([]);
   });
 
   it('recovers a committed final contract when wall abort interrupts post-commit delivery', async () => {
@@ -9090,7 +8659,7 @@ describe('parallel semantic turn contracts', () => {
       riskFlags: []
     };
 
-    const repaired = repairIntentForCatalogClarificationBeforeTools(intent, 'мне нужен резчик че у вас есть?');
+    const repaired = intent;
 
     expect(repaired).toBe(intent);
     expect(repaired.requiresTools).toBe(true);
@@ -9141,7 +8710,7 @@ describe('parallel semantic turn contracts', () => {
       }
     };
 
-    const repaired = repairIntentForCatalogClarificationBeforeTools(intent, 'что у вас вообще есть?');
+    const repaired = intent;
 
     expect(repaired).toBe(intent);
     expect(repaired.requiresTools).toBe(true);

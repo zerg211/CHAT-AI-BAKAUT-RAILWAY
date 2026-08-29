@@ -189,6 +189,22 @@ function generatorNeedDelta(): LedgerStateDelta {
   };
 }
 
+function noProductSelectionPolicy() {
+  return {
+    targetProductClass: null,
+    canonicalProductClass: null,
+    selectionGoal: 'browse_catalog' as const,
+    needAction: 'continue' as const,
+    alternativePolicy: 'unknown' as const,
+    reusePreviousCards: false,
+    maxCards: 0,
+    powerSource: null,
+    phase: null,
+    requirements: [],
+    rationale: 'This technical turn does not select product cards.'
+  };
+}
+
 function conditionalSelectionIntent(): AgentIntentContract {
   return {
     userMessageSummary: 'buyer needs a generator with automatic start',
@@ -291,9 +307,11 @@ function prematureTechnicalSpecialistIntent(): AgentIntentContract {
       webRequirement: 'none',
       requiredToolKinds: ['lead.capture'],
       technicalAttributes: ['noise level'],
+      buyerQuestion: 'Please verify the generator noise level.',
       rationale: 'planner requested a specialist'
     },
     productMentions: [],
+    selectionPolicy: noProductSelectionPolicy(),
     leadCaptureAuthorization: {
       authorized: false,
       contactSource: 'none',
@@ -357,6 +375,7 @@ function staleDraftTechnicalHandoffIntent(
       ...base.grounding!,
       taskType: 'lead_handoff',
       technicalAttributes: ['noise level'],
+      buyerQuestion,
       rationale: 'legacy draft claims a technical handoff without persisted exhaustion proof'
     },
     leadCaptureAuthorization: {
@@ -481,7 +500,7 @@ function exhaustedTechnicalOfferHistory(buyerQuestion: string) {
 }
 
 describe('search-before-specialist orchestration', () => {
-  it('adds independent web research after repairing a premature technical specialist plan', async () => {
+  it('rejects a premature technical specialist plan instead of synthesizing web research', async () => {
     researchProductComparisonFactsMock.mockReset();
     researchProductComparisonFactsMock.mockResolvedValue(successfulTechnicalResearch());
     const conversations = new HarnessConversations('Please verify the generator noise level.');
@@ -521,14 +540,14 @@ describe('search-before-specialist orchestration', () => {
       harnessModel({ intent: prematureTechnicalSpecialistIntent(), compose })
     );
 
-    await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Please verify the generator noise level.'
-    });
+    })).rejects.toThrow('search_required_before_specialist');
 
-    expect(compose).toHaveBeenCalledTimes(1);
-    expect(researchProductComparisonFactsMock).toHaveBeenCalledTimes(1);
+    expect(compose).not.toHaveBeenCalled();
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
   });
 
   it('does not execute or persist a lead from the first technical turn before research is exhausted', async () => {
@@ -537,7 +556,10 @@ describe('search-before-specialist orchestration', () => {
     const userMessage = 'Please verify the generator noise level. My phone is +7 900 000-00-11.';
     const conversations = new HarnessConversations(userMessage);
     const compose = vi.fn(async (input: AgentManagerAnswerInput) => {
-      expect(input.intent.toolRequests.map((request) => request.tool)).toEqual(['web.researchProductFacts']);
+      expect(input.intent.toolRequests.map((request) => request.tool)).toEqual([
+        'web.researchProductFacts',
+        'lead.capture'
+      ]);
       expect(input.toolResults.some((result) => result.tool === 'lead.capture')).toBe(false);
       return {
         answerText: 'Проверил данные: для TEST DG Quiet 6000 указано 58 дБ.',
@@ -563,9 +585,11 @@ describe('search-before-specialist orchestration', () => {
       harnessModel({ intent: firstTurnTechnicalWebAndLeadIntent(), compose })
     );
 
-    await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage }))
+      .rejects.toThrow('search_required_before_specialist');
 
-    expect(researchProductComparisonFactsMock).toHaveBeenCalledTimes(1);
+    expect(compose).not.toHaveBeenCalled();
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
     expect(conversations.toolArtifacts).not.toContainEqual(expect.objectContaining({ toolName: 'lead.capture' }));
   });
 
@@ -616,9 +640,11 @@ describe('search-before-specialist orchestration', () => {
       harnessModel({ intent: mislabeledIntent, compose })
     );
 
-    await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage }))
+      .rejects.toThrow('search_required_before_specialist');
 
-    expect(researchProductComparisonFactsMock).toHaveBeenCalledTimes(1);
+    expect(compose).not.toHaveBeenCalled();
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
     expect(conversations.toolArtifacts).not.toContainEqual(expect.objectContaining({ toolName: 'lead.capture' }));
   });
 
@@ -659,9 +685,11 @@ describe('search-before-specialist orchestration', () => {
       })
     );
 
-    await orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentMessage });
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentMessage }))
+      .rejects.toThrow('search_required_before_specialist');
 
-    expect(researchProductComparisonFactsMock).toHaveBeenCalledTimes(1);
+    expect(compose).not.toHaveBeenCalled();
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
     expect(conversations.toolArtifacts).not.toContainEqual(expect.objectContaining({ toolName: 'lead.capture' }));
   });
 
@@ -709,9 +737,11 @@ describe('search-before-specialist orchestration', () => {
       })
     );
 
-    await orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentMessage });
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentMessage }))
+      .rejects.toThrow('search_required_before_specialist');
 
-    expect(researchProductComparisonFactsMock).toHaveBeenCalledTimes(1);
+    expect(compose).not.toHaveBeenCalled();
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
     expect(conversations.toolArtifacts).not.toContainEqual(expect.objectContaining({ toolName: 'lead.capture' }));
   });
 
@@ -758,9 +788,11 @@ describe('search-before-specialist orchestration', () => {
       })
     );
 
-    await orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentMessage });
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentMessage }))
+      .rejects.toThrow('search_required_before_specialist');
 
-    expect(researchProductComparisonFactsMock).toHaveBeenCalledTimes(1);
+    expect(compose).not.toHaveBeenCalled();
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
     expect(conversations.toolArtifacts).not.toContainEqual(expect.objectContaining({ toolName: 'lead.capture' }));
   });
 });
@@ -786,6 +818,7 @@ describe('catalog-evidence synthetic web artifact', () => {
         questionsAsked: [],
         toolResultIds: ['catalog-search'],
         selectedProductIds: ['quiet-generator'],
+        selectionRationale: 'The catalog card confirms the required automatic start.',
         leadAction: 'none' as const,
         riskFlags: [],
         selectionReadiness: {
@@ -868,6 +901,7 @@ describe('catalog-evidence synthetic web artifact', () => {
           questionsAsked: [],
           toolResultIds: ['catalog-search', 'web-autostart-check'],
           selectedProductIds: ['quiet-generator'],
+          selectionRationale: 'The catalog card confirms the required automatic start.',
           leadAction: 'none',
           riskFlags: [],
           selectionReadiness: {
@@ -891,8 +925,8 @@ describe('catalog-evidence synthetic web artifact', () => {
   });
 });
 
-describe('open-ended preliminary selection recovery', () => {
-  it('runs the automatic catalog-to-web path and preserves a preliminary card when the planner omitted web research', async () => {
+describe('open-ended preliminary selection research', () => {
+  it('runs the planner-owned catalog-to-web path and preserves a preliminary card', async () => {
     researchProductComparisonFactsMock.mockReset();
     const plate: Product = {
       id: 'light-plate',
@@ -948,6 +982,7 @@ describe('open-ended preliminary selection recovery', () => {
         questionsAsked: [],
         toolResultIds: input.toolResults.map((result) => result.requestId),
         selectedProductIds: [plate.id],
+        selectionRationale: 'The light catalog candidate remains suitable after the planned application check.',
         leadAction: 'none' as const,
         riskFlags: [],
         selectionReadiness: {
@@ -975,13 +1010,30 @@ describe('open-ended preliminary selection recovery', () => {
         rationale: 'find catalog plate candidates',
         required: true,
         coversRequirementIds: ['paving-application']
+      }, {
+        id: 'web-paving-application',
+        tool: 'web.researchProductFacts',
+        args: {
+          query: 'проверить применение лёгкой виброплиты для тротуарной плитки',
+          productIntent: 'виброплита',
+          canonicalProductIntent: 'plate',
+          productNames: [],
+          comparisonAttributes: ['application suitability'],
+          comparisonAttributeBindings: [{
+            attribute: 'application suitability',
+            requirementId: 'paving-application'
+          }]
+        },
+        rationale: 'verify the open-ended application fact after catalog retrieval',
+        required: true,
+        coversRequirementIds: ['paving-application']
       }],
       grounding: {
         taskType: 'product_selection',
-        sourcePolicy: 'catalog_required',
-        webPurpose: 'none',
-        webRequirement: 'none',
-        requiredToolKinds: ['catalog.search'],
+        sourcePolicy: 'web_required',
+        webPurpose: 'technical_specs',
+        webRequirement: 'conditional_on_catalog_gap',
+        requiredToolKinds: ['catalog.search', 'web.researchProductFacts'],
         technicalAttributes: ['weight', 'application suitability'],
         buyerQuestion: userMessage,
         rationale: 'catalog candidates are needed for a preliminary product selection'

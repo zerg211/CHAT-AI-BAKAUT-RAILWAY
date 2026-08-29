@@ -23,16 +23,6 @@ const generatorLoadBasisKinds = new Set([
   'unknown'
 ]);
 const motorLikeLoadKinds = new Set(['pump', 'compressor', 'pressure_washer', 'vacuum', 'concrete_mixer']);
-const boundedEstimatedLoadDefaults: Record<string, { runningKw: number; startingKw: number }> = {
-  pump: { runningKw: 1.1, startingKw: 3.5 },
-  refrigerator: { runningKw: 0.25, startingKw: 1.2 },
-  lighting: { runningKw: 0.3, startingKw: 0.3 },
-  boiler: { runningKw: 0.2, startingKw: 0.4 },
-  router: { runningKw: 0.05, startingKw: 0.05 },
-  television: { runningKw: 0.15, startingKw: 0.15 },
-  laptop: { runningKw: 0.1, startingKw: 0.1 }
-};
-
 type GeneratorLoadToolItem = ProductElectricalLoadItem & {
   basisSignals?: string[];
   basisKind?: string;
@@ -57,7 +47,7 @@ function countFromToolArg(value: unknown) {
     : 1;
 }
 
-function canonicalToolLoadKind(kind: unknown, name: unknown) {
+function canonicalToolLoadKind(kind: unknown) {
   const canonicalKind = canonicalElectricalLoadKind(typeof kind === 'string' ? kind : undefined);
   if (
     canonicalKind &&
@@ -67,13 +57,26 @@ function canonicalToolLoadKind(kind: unknown, name: unknown) {
   ) {
     return canonicalKind;
   }
-  return canonicalElectricalLoadKind(typeof name === 'string' ? name : undefined);
+  return undefined;
 }
 
-function sourceFromToolArg(value: unknown): ProductElectricalLoadItem['source'] {
+function sourceFromToolArg(value: unknown): ProductElectricalLoadItem['source'] | undefined {
   return value === 'web_average' || value === 'catalog_fact' || value === 'estimated_average'
     ? value
-    : 'explicit_user';
+    : value === 'explicit_user' ? value : undefined;
+}
+
+function powerSourceFromToolArg(value: unknown) {
+  return value === 'web_average' || value === 'catalog_fact' || value === 'estimated_average' ||
+    value === 'explicit_user' || value === 'not_provided'
+    ? value
+    : undefined;
+}
+
+function operationModeFromToolArg(value: unknown) {
+  return value === 'continuous' || value === 'occasional' || value === 'separate'
+    ? value
+    : undefined;
 }
 
 function estimateBasisFromToolArg(value: unknown) {
@@ -95,19 +98,6 @@ function basisKindFromToolArg(value: unknown) {
     : undefined;
 }
 
-function generatorLoadEvidenceForToolRequest(request: ToolRequest, userMessage: string) {
-  return [
-    userMessage,
-    typeof request.args.semanticQuery === 'string' ? request.args.semanticQuery : '',
-    typeof request.args.query === 'string' ? request.args.query : '',
-    typeof request.args.reason === 'string' ? request.args.reason : '',
-    request.rationale,
-    Array.isArray(request.args.simultaneousStartingKinds)
-      ? request.args.simultaneousStartingKinds.filter((item): item is string => typeof item === 'string').join(' ')
-      : ''
-  ].filter(Boolean).join('\n');
-}
-
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -121,7 +111,7 @@ function isConcreteWeldingInverterLoad(kind: unknown, name: unknown) {
     canonicalElectricalLoadKind(typeof name === 'string' ? name : undefined) === 'welding_inverter';
 }
 
-function loadsFromArgs(args: { loads?: unknown[] }, fallbackEvidence: string): {
+function loadsFromArgs(args: { loads?: unknown[] }): {
   loads: GeneratorLoadToolItem[];
   warnings: string[];
 } {
@@ -135,37 +125,35 @@ function loadsFromArgs(args: { loads?: unknown[] }, fallbackEvidence: string): {
       warnings.add('generator_load_invalid_load_kind');
       continue;
     }
+    const kind = isConcreteWeldingInverterLoad(item.kind, item.name)
+      ? 'welding_inverter'
+      : canonicalToolLoadKind(item.kind);
+    const source = sourceFromToolArg(item.source);
+    const operationMode = operationModeFromToolArg(item.operationMode);
+    const evidence = typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : undefined;
+    if (!kind || !source || !operationMode || !evidence) {
+      warnings.add('generator_load_missing_llm_semantic_fields');
+      continue;
+    }
     const load: GeneratorLoadToolItem = {
-      kind: canonicalToolLoadKind(item.kind, item.name),
+      kind,
       name: typeof item.name === 'string' && item.name.trim() ? item.name : undefined,
       count: countFromToolArg(item.count),
       runningKw: positiveNumberFromToolArg(item.runningKw),
       startingKw: positiveNumberFromToolArg(item.startingKw),
-      source: sourceFromToolArg(item.source),
-      evidence: typeof item.evidence === 'string' && item.evidence.trim() ? item.evidence : fallbackEvidence,
+      source,
+      runningSource: powerSourceFromToolArg(item.runningSource),
+      startingSource: powerSourceFromToolArg(item.startingSource),
+      operationMode,
+      coRunningGroup: typeof item.coRunningGroup === 'string' && item.coRunningGroup.trim()
+        ? item.coRunningGroup.trim()
+        : undefined,
+      evidence,
       basisSignals: basisSignalsFromToolArg(item.basisSignals),
       basisKind: basisKindFromToolArg(item.basisKind)
     };
     if (load.runningKw !== undefined || load.startingKw !== undefined) {
       loads.push(load);
-      continue;
-    }
-    // `source` describes the source of the numeric power, not the source of
-    // the device name. If both kW fields are absent, any value supplied here
-    // is necessarily an estimate even when the buyer named the device.
-    const estimatedLoad: GeneratorLoadToolItem = {
-      ...load,
-      source: 'estimated_average'
-    };
-    const boundedDefault = boundedDefaultEstimateForLoad(estimatedLoad);
-    if (boundedDefault) {
-      warnings.add(`generator_load_default_bounded_estimate:${boundedDefault.kind}`);
-      loads.push({
-        ...estimatedLoad,
-        runningKw: boundedDefault.runningKw,
-        startingKw: boundedDefault.startingKw,
-        evidence: `${estimatedLoad.evidence} Preliminary bounded average was used; exact nameplate power is still missing.`
-      });
       continue;
     }
     const loadKind = canonicalElectricalLoadKind(load.kind);
@@ -208,14 +196,6 @@ function hasBoundedEstimatedLoadBasis(load: GeneratorLoadToolItem) {
       hasAnyBasisSignal(load, ['usage_scope_known', 'simultaneous_operation_known']);
   }
   return hasAnyBasisSignal(load, ['consumer_type_known', 'consumer_function_known', 'usage_scope_known']);
-}
-
-function boundedDefaultEstimateForLoad(load: GeneratorLoadToolItem) {
-  if (load.source !== 'estimated_average') return null;
-  const kind = canonicalElectricalLoadKind(load.kind);
-  const defaults = boundedEstimatedLoadDefaults[kind];
-  if (!defaults || !hasBoundedEstimatedLoadBasis(load)) return null;
-  return { kind, ...defaults };
 }
 
 function hasBoundedAssumptionBasis(loads: GeneratorLoadToolItem[]) {
@@ -284,8 +264,7 @@ export function buildGeneratorLoadToolPayload(input: {
   request: ToolRequest;
   userMessage: string;
 }) {
-  const loadEvidence = generatorLoadEvidenceForToolRequest(input.request, input.userMessage);
-  const { loads, warnings } = loadsFromArgs(input.request.args, loadEvidence);
+  const { loads, warnings } = loadsFromArgs(input.request.args);
   const requestedEstimateBasis = estimateBasisFromToolArg(input.request.args.estimateBasis);
   const hasEstimatedLoads = loads.some((load) => load.source === 'estimated_average');
   const boundedEstimateBasis = hasEstimatedLoads && hasBoundedAssumptionBasis(loads);

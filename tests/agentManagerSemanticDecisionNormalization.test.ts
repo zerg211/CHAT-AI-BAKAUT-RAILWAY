@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
+
 import {
   AgentIntentContractSchema,
   AgentSemanticDecisionSchema,
-  LedgerStateDeltaSchema,
-  normalizeAgentIntentContractDraft,
-  normalizeLedgerStateDeltaDraft,
-  normalizeSemanticDecisionDraft
+  LedgerStateDeltaSchema
 } from '../src/ai/agentManagerContracts.js';
 
-describe('semantic decision draft normalization', () => {
-  it('fills empty planner rationale fields so a greeting does not fail the contract', () => {
+describe('strict semantic decision contracts', () => {
+  it('rejects blank planner semantics instead of filling canned defaults', () => {
     const draft = {
       ledgerDelta: { rationale: '', events: [] },
       intent: {
@@ -45,32 +43,10 @@ describe('semantic decision draft normalization', () => {
     };
 
     expect(AgentSemanticDecisionSchema.safeParse(draft).success).toBe(false);
-    const parsed = AgentSemanticDecisionSchema.parse(normalizeSemanticDecisionDraft(draft));
-    expect(parsed.ledgerDelta.rationale.length).toBeGreaterThan(0);
-    expect(parsed.intent.userMessageSummary.length).toBeGreaterThan(0);
-    expect(parsed.intent.dialogueUnderstanding.length).toBeGreaterThan(0);
-    expect(parsed.intent.nextStepRationale.length).toBeGreaterThan(0);
-    expect(parsed.intent.grounding!.rationale.length).toBeGreaterThan(0);
-    expect(parsed.intent.selectionPolicy!.rationale.length).toBeGreaterThan(0);
   });
 
-  it('keeps already valid drafts unchanged', () => {
-    const draft = {
-      ledgerDelta: { rationale: 'ok', events: [] },
-      intent: {
-        userMessageSummary: 's',
-        dialogueUnderstanding: 'u',
-        nextStepRationale: 'n',
-        requiresTools: false,
-        toolRequests: []
-      }
-    };
-    expect(AgentSemanticDecisionSchema.safeParse(draft).success).toBe(true);
-    expect(normalizeSemanticDecisionDraft(draft)).toEqual(draft);
-  });
-
-  it('normalizes standalone ledger delta and intent drafts with fallback evidence and tool rationale', () => {
-    const delta = LedgerStateDeltaSchema.parse(normalizeLedgerStateDeltaDraft({
+  it('rejects missing ledger evidence and tool rationale', () => {
+    expect(LedgerStateDeltaSchema.safeParse({
       rationale: '',
       events: [{
         eventType: 'fact.observed',
@@ -80,28 +56,26 @@ describe('semantic decision draft normalization', () => {
         source: 'llm_state_delta',
         status: 'active'
       }]
-    }));
-    expect(delta.rationale.length).toBeGreaterThan(0);
-    expect(delta.events[0]!.evidence.length).toBeGreaterThan(0);
+    }).success).toBe(false);
 
-    const intent = AgentIntentContractSchema.parse(normalizeAgentIntentContractDraft({
-      userMessageSummary: '',
-      dialogueUnderstanding: '',
-      nextStepRationale: '',
+    expect(AgentIntentContractSchema.safeParse({
+      userMessageSummary: 'buyer asks for generator candidates',
+      dialogueUnderstanding: 'the buyer supplied enough context for a preliminary catalog search',
+      nextStepRationale: 'search the generator catalog',
       requiresTools: true,
-      grounding: undefined,
       toolRequests: [{
-        id: 'r1',
+        id: 'catalog-search',
         tool: 'catalog.search',
-        args: {},
-        rationale: ''
+        args: { query: 'generators' },
+        rationale: '',
+        required: true
       }],
-      selectionPolicy: undefined
-    }));
-    expect(intent.toolRequests[0]!.rationale).toContain('catalog.search');
+      mustNotAskQuestionIds: [],
+      riskFlags: []
+    }).success).toBe(false);
   });
 
-  it('treats blank optional tool arguments as omitted instead of failing the turn', () => {
+  it('treats blank optional tool arguments as omitted', () => {
     const intent = AgentIntentContractSchema.parse({
       userMessageSummary: 'buyer asks for generator candidates',
       dialogueUnderstanding: 'the buyer supplied enough context for a preliminary catalog search',
@@ -111,7 +85,7 @@ describe('semantic decision draft normalization', () => {
         id: 'catalog-search',
         tool: 'catalog.search',
         args: {
-          query: 'генераторы для дома',
+          query: 'generators',
           reason: '',
           notes: '   '
         },

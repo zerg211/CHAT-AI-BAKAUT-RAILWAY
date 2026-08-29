@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  repairSemanticDecisionForGeneratorLoadScenario,
   validateAgentSemanticDecision,
   type AgentSemanticDecision
 } from '../src/ai/agentManagerOrchestrator.js';
@@ -15,7 +14,21 @@ function generatorDecision(): AgentSemanticDecision {
     { kind: 'machine', name: 'machine', runningKw: 1.1 },
     { kind: 'lighting', name: 'lighting', runningKw: 0.3 },
     { kind: 'handheld_tool', name: 'angle grinder', runningKw: 1.5 }
-  ];
+  ].map((load) => ({
+    ...load,
+    count: 1,
+    startingKw: load.runningKw,
+    source: 'explicit_user' as const,
+    runningSource: 'explicit_user' as const,
+    startingSource: 'explicit_user' as const,
+    operationMode: 'continuous' as const,
+    coRunningGroup: 'workshop',
+    evidence: `${load.name} runs simultaneously`,
+    basisKind: 'exact_power' as const,
+    basisSignals: ['explicit_power', 'simultaneous_operation_known'] as Array<
+      'explicit_power' | 'simultaneous_operation_known'
+    >
+  }));
   return {
     ledgerDelta: {
       rationale: 'preserve the corrected workshop generator need',
@@ -47,7 +60,7 @@ function generatorDecision(): AgentSemanticDecision {
         payload: {
           factKey: 'generator_load_scenario',
           value: {
-            loads,
+            loads: loads.map((load) => ({ ...load, basisSignals: [...load.basisSignals] })),
             simultaneousRunning: true,
             simultaneousStarting: false
           },
@@ -84,15 +97,7 @@ function generatorDecision(): AgentSemanticDecision {
         id: 'load-calculation',
         tool: 'calculator.generatorLoad',
         args: {
-          loads: loads.map((load) => ({
-            ...load,
-            count: 1,
-            startingKw: load.runningKw,
-            source: 'explicit_user',
-            evidence: `${load.name} runs simultaneously`,
-            basisKind: 'exact_power',
-            basisSignals: ['explicit_power', 'simultaneous_operation_known']
-          })),
+          loads: loads.map((load) => ({ ...load, basisSignals: [...load.basisSignals] })),
           simultaneousRunning: true,
           simultaneousStarting: false,
           simultaneousStartingKinds: [],
@@ -101,6 +106,19 @@ function generatorDecision(): AgentSemanticDecision {
         rationale: 'calculate every declared simultaneous load',
         required: true,
         coversRequirementIds: ['load-scenario']
+      }, {
+        id: 'catalog-search',
+        tool: 'catalog.search',
+        args: {
+          query: 'single-phase fuel generators for workshop load',
+          productIntent: 'generator',
+          canonicalProductIntent: 'generator',
+          powerSource: 'fuel',
+          phase: 'single_phase'
+        },
+        rationale: 'find catalog products after calculating the required load',
+        required: true,
+        coversRequirementIds: ['budget']
       }],
       productMentions: [],
       selectionPolicy: {
@@ -162,7 +180,7 @@ function generatorDecision(): AgentSemanticDecision {
         sourcePolicy: 'catalog_required',
         webPurpose: 'none',
         webRequirement: 'none',
-        requiredToolKinds: ['calculator.generatorLoad'],
+        requiredToolKinds: ['calculator.generatorLoad', 'catalog.search'],
         technicalAttributes: [],
         buyerQuestion: 'Recalculate and show options.',
         rationale: 'calculation and catalog evidence are required'
@@ -278,7 +296,7 @@ describe('combined semantic decision validation', () => {
     expect(result.issues).toContain('generator_load_scenario_simultaneous_running_mismatch');
   });
 
-  it('rejects a semantic load that the deterministic calculator would discard', () => {
+  it('rejects a calculator plan that replaces a declared load with a product class', () => {
     const decision = generatorDecision();
     const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;
     const grinder = request.args.loads?.find((load: unknown) => (load as { name?: string }).name === 'angle grinder') as Record<string, unknown>;
@@ -293,10 +311,10 @@ describe('combined semantic decision validation', () => {
       userMessage: 'All loads run simultaneously.'
     });
 
-    expect(result.issues).toContain('generator_load_scenario_unexecutable_load:handheld_tool:angle grinder');
+    expect(result.issues).toContain('generator_load_scenario_missing_load:handheld_tool:angle grinder');
   });
 
-  it('accepts an explicit numeric load after the calculator canonicalizes an unknown kind from its name', () => {
+  it('rejects an unknown load kind instead of inferring its meaning from the name', () => {
     const decision = generatorDecision();
     const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;
     const machine = request.args.loads?.find((load: unknown) => (load as { name?: string }).name === 'machine') as Record<string, unknown>;
@@ -313,8 +331,7 @@ describe('combined semantic decision validation', () => {
       userMessage: 'The machine is explicitly rated at 1.1 kW.'
     });
 
-    expect(result.issues).not.toContain('generator_load_scenario_unexecutable_load:machine:machine');
-    expect(result.issues).not.toContain('generator_load_scenario_unexecutable_load:unknown_load:machine');
+    expect(result.issues).toContain('generator_load_scenario_unexecutable_load:unknown_load:machine');
   });
 
   it('rejects calculator execution without a persisted structured load scenario', () => {
@@ -331,38 +348,6 @@ describe('combined semantic decision validation', () => {
     });
 
     expect(result.issues).toContain('generator_load_scenario_fact_missing');
-  });
-
-  it('repairs a missing scenario fact only from the planner calculator payload', () => {
-    const decision = generatorDecision();
-    decision.ledgerDelta.events = decision.ledgerDelta.events.filter((event) =>
-      event.payload.factKey !== 'generator_load_scenario'
-    );
-
-    const repaired = repairSemanticDecisionForGeneratorLoadScenario({
-      decision,
-      previousLedgerState: reduceDialogueLedger([]),
-      sessionId: '11111111-1111-4111-8111-111111111111',
-      turnId: '22222222-2222-4222-8222-222222222222',
-      userMessage: 'Одновременно работают компрессор 2,2 кВт, станок 1,1 кВт и свет 300 Вт.'
-    });
-
-    expect(repaired.repaired).toBe(true);
-    expect(repaired.decision.ledgerDelta.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        eventType: 'fact.confirmed',
-        payload: expect.objectContaining({
-          factKey: 'generator_load_scenario',
-          role: 'hard_requirement'
-        })
-      })
-    ]));
-    expect(validateAgentSemanticDecision({
-      decision: repaired.decision,
-      previousLedgerState: reduceDialogueLedger([]),
-      sessionId: '11111111-1111-4111-8111-111111111111',
-      turnId: '22222222-2222-4222-8222-222222222222'
-    }).issues).toEqual([]);
   });
 
   it('rejects a stale hard requirement value in the execution intent', () => {

@@ -891,7 +891,7 @@ describe('product comparison research', () => {
       parsed: compactCatalogResult({
         missing: [{
           productName: 'FIRMAN RD3910E',
-          attribute: 'start control',
+          attribute: 'start_control_mechanism',
           reason: 'Карточка указывает электростартер, но не описывает орган управления.'
         }],
         directAnswer: 'В карточке подтверждён электростартер, но не ключ или кнопка.',
@@ -903,7 +903,7 @@ describe('product comparison research', () => {
         usedWebSearch: true,
         facts: [{
           productName: 'FIRMAN RD3910E',
-          attribute: 'start control',
+          attribute: 'start_control_mechanism',
           value: 'ignition key electric starter',
           sourceType: 'web',
           confidence: 'high',
@@ -912,10 +912,10 @@ describe('product comparison research', () => {
           sourceTitle: 'FIRMAN RD3910E'
         }],
         answerGuidance: {
-          directAnswer: 'RD3910E запускается с ключа через электростартер.',
+          directAnswer: 'RD3910E запускается ключом электростартера.',
           completeness: 'answered',
           coverage: [{
-            attribute: 'start control',
+            attribute: 'start_control_mechanism',
             status: 'confirmed',
             value: 'ignition key electric starter',
             evidence: exactQuote,
@@ -930,7 +930,7 @@ describe('product comparison research', () => {
       userMessage: 'Firman RD3910E заводится с ключа или с кнопки?',
       products: [product({ description: 'В карточке указан только электростартер.' })],
       targetProductNames: ['FIRMAN RD3910E'],
-      comparisonAttributes: ['start control'],
+      comparisonAttributes: ['start_control_mechanism'],
       allowCatalogOnlyAnswer: true,
       deadlineAtMs: Date.now() + 20_000
     });
@@ -1320,7 +1320,7 @@ describe('product comparison research', () => {
       parsed: compactCatalogResult({
         missing: [{
           productName: 'FIRMAN RD3910E',
-          attribute: 'start control',
+          attribute: 'start_control_mechanism',
           reason: 'The catalog does not confirm the requested control.'
         }],
         completeness: 'not_answered'
@@ -1361,19 +1361,22 @@ describe('product comparison research', () => {
   });
 
   it('adjudicates catalog conflicts with corroborated exact-target external sources', async () => {
+    const manufacturerQuote = 'SUNREKA G7000iS. Starting system: manual starter, electric starter. Start with START push button.';
+    const independentQuote = 'SUNREKA G7000iS inverter generator. Manual starter and electric starter, START push button.';
+    const secondIndependentQuote = 'SUNREKA G7000iS. Electric start by START push button, manual recoil starter also available.';
     fetchMock
-      .mockResolvedValueOnce(sourceResponse('<html><body>SUNREKA G7000iS. Starting system: manual starter, electric starter. Start with START push button.</body></html>'))
-      .mockResolvedValueOnce(sourceResponse('<html><body>SUNREKA G7000iS inverter generator. Manual starter and electric starter, START push button.</body></html>'))
-      .mockResolvedValueOnce(sourceResponse('<html><body>SUNREKA G7000iS. Electric start by START push button, manual recoil starter also available.</body></html>'));
+      .mockResolvedValueOnce(sourceResponse(`<html><body>${manufacturerQuote}</body></html>`))
+      .mockResolvedValueOnce(sourceResponse(`<html><body>${independentQuote}</body></html>`))
+      .mockResolvedValueOnce(sourceResponse(`<html><body>${secondIndependentQuote}</body></html>`));
     createStructuredJsonResponse.mockResolvedValueOnce({
       parsed: result({
         facts: [{
           productName: 'SUNREKA G7000iS',
-          attribute: 'starting method',
-          value: 'manual starter only',
+          attribute: 'start_control_mechanism',
+          value: 'manual starter',
           sourceType: 'catalog',
           confidence: 'high',
-          evidence: 'catalog specs list manual starter',
+          evidence: 'Starter: manual starter.',
           sourceUrl: 'https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g7000is_6_0_kvt/',
           sourceTitle: 'SUNREKA G7000iS'
         }],
@@ -1381,10 +1384,10 @@ describe('product comparison research', () => {
           directAnswer: 'G7000iS has manual starter. Electric start is not confirmed.',
           completeness: 'answered',
           coverage: [{
-            attribute: 'manual starter',
+            attribute: 'start_control_mechanism',
             status: 'confirmed',
-            value: 'manual starter only',
-            evidence: 'catalog specs list manual starter',
+            value: 'manual starter',
+            evidence: 'Starter: manual starter.',
             sourceUrl: 'https://bakautprof.ru/catalog/invertornye_generatory/generator_benzinovyy_invertornyy_sunreka_g7000is_6_0_kvt/',
             sourceTitle: 'SUNREKA G7000iS'
           }]
@@ -1396,17 +1399,17 @@ describe('product comparison research', () => {
         usedWebSearch: true,
         facts: [{
           productName: 'SUNREKA G7000iS',
-          attribute: 'button electric start',
+          attribute: 'start_control_mechanism',
           value: 'manual starter, electric starter, START push button',
           sourceType: 'web',
           confidence: 'high',
-          evidence: 'manufacturer page says SUNREKA G7000iS has manual starter, electric starter, and START push button',
+          evidence: manufacturerQuote,
           sourceUrl: 'https://sunreka.group/market/invertornye-generatory/invertornyj-benzinovyj-generator-7-kvt-sunreko-g7000is/',
           sourceTitle: 'SUNREKA G7000iS manufacturer'
         }],
         conflicts: [{
           productName: 'SUNREKA G7000iS',
-          attribute: 'starting method',
+          attribute: 'start_control_mechanism',
           catalogValue: 'manual starter only',
           webValues: ['manual starter, electric starter, START push button'],
           resolution: 'manufacturer exact-target source conflicts with catalog, needs independent corroboration'
@@ -1415,10 +1418,10 @@ describe('product comparison research', () => {
           directAnswer: 'G7000iS starts from the START button; manual starter is also available.',
           completeness: 'answered',
           coverage: [{
-            attribute: 'button electric start',
+            attribute: 'start_control_mechanism',
             status: 'confirmed',
             value: 'START push button plus manual starter',
-            evidence: 'manufacturer page says SUNREKA G7000iS has START push button and manual starter',
+            evidence: manufacturerQuote,
             sourceUrl: 'https://sunreka.group/market/invertornye-generatory/invertornyj-benzinovyj-generator-7-kvt-sunreko-g7000is/',
             sourceTitle: 'SUNREKA G7000iS manufacturer'
           }]
@@ -1431,28 +1434,28 @@ describe('product comparison research', () => {
         facts: [
           {
             productName: 'SUNREKA G7000iS',
-            attribute: 'button electric start',
+            attribute: 'start_control_mechanism',
             value: 'manual starter, electric starter, START push button',
             sourceType: 'web',
             confidence: 'medium',
-            evidence: 'independent exact model listing says SUNREKA G7000iS has manual starter, electric starter, START push button',
+            evidence: independentQuote,
             sourceUrl: 'https://masterts.ru/products/683477/',
             sourceTitle: 'SUNREKA G7000iS listing'
           },
           {
             productName: 'SUNREKA G7000iS',
-            attribute: 'button electric start',
+            attribute: 'start_control_mechanism',
             value: 'electric start by START push button and manual recoil starter',
             sourceType: 'web',
             confidence: 'medium',
-            evidence: 'second exact model listing says SUNREKA G7000iS has electric start by START push button and manual recoil starter',
+            evidence: secondIndependentQuote,
             sourceUrl: 'https://sunreka-tools.ru/product/sunreka-g7000is',
             sourceTitle: 'SUNREKA G7000iS tools listing'
           }
         ],
         conflicts: [{
           productName: 'SUNREKA G7000iS',
-          attribute: 'starting method',
+          attribute: 'start_control_mechanism',
           catalogValue: 'manual starter only',
           webValues: [
             'manufacturer: manual starter, electric starter, START push button',
@@ -1462,13 +1465,13 @@ describe('product comparison research', () => {
           resolution: 'external exact-target sources corroborate electric/button start, so catalog manual-only value is incomplete'
         }],
         answerGuidance: {
-          directAnswer: 'G7000iS запускается кнопкой START, ручной стартер тоже есть.',
+          directAnswer: 'G7000iS запускается нажатием кнопки START, ручной стартер тоже есть.',
           completeness: 'answered',
           coverage: [{
-            attribute: 'button electric start',
+            attribute: 'start_control_mechanism',
             status: 'confirmed',
             value: 'START push button plus manual starter',
-            evidence: 'two independent exact model listings corroborate START push button and manual starter',
+            evidence: independentQuote,
             sourceUrl: 'https://masterts.ru/products/683477/',
             sourceTitle: 'SUNREKA G7000iS listing'
           }]
@@ -1490,7 +1493,7 @@ describe('product comparison research', () => {
         description: 'Starter: manual starter. Autostart: no autostart. Battery: not included.'
       })],
       targetProductNames: ['SUNREKA G7000iS'],
-      comparisonAttributes: ['start method', 'button start', 'manual starter']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(researchCalls()).toHaveLength(3);
@@ -1498,10 +1501,16 @@ describe('product comparison research', () => {
     expect(researchCalls()[2].request.input[0].content).toContain('source adjudication');
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(actual.usedWebSearch).toBe(true);
-    expect(actual.answerGuidance.directAnswer).toContain('Кнопочный');
-    expect(actual.answerGuidance.directAnswer).toContain('Ручной');
+    expect(actual.answerGuidance.completeness).toBe('answered');
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        attribute: 'start_control_mechanism',
+        status: 'confirmed',
+        value: expect.stringContaining('START push button')
+      })
+    ]));
     expect(actual.conflicts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ productName: 'SUNREKA G7000iS', attribute: 'starting method' })
+      expect.objectContaining({ productName: 'SUNREKA G7000iS', attribute: 'start_control_mechanism' })
     ]));
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'missing_fact_deep_search_retry_used',
@@ -1512,14 +1521,15 @@ describe('product comparison research', () => {
   });
 
   it('broadens to web only when exact catalog extraction is incomplete', async () => {
-    fetchMock.mockResolvedValueOnce(sourceResponse('<html><body>FIRMAN RD3910E ignition key electric starter manual starter.</body></html>'));
+    const exactQuote = 'FIRMAN RD3910E ignition key electric starter manual starter.';
+    fetchMock.mockResolvedValueOnce(sourceResponse(`<html><body>${exactQuote}</body></html>`));
     queueResearchResponse({
         parsed: result({
           answerGuidance: {
             directAnswer: '',
             completeness: 'not_answered',
             coverage: [{
-              attribute: 'button start',
+              attribute: 'start_control_mechanism',
               status: 'not_found',
               value: '',
               evidence: 'catalog.description/specs do not answer',
@@ -1535,22 +1545,22 @@ describe('product comparison research', () => {
           usedWebSearch: true,
           facts: [{
             productName: 'FIRMAN RD3910E',
-            attribute: 'key start',
+            attribute: 'start_control_mechanism',
             value: 'ignition key electric start',
             sourceType: 'web',
             confidence: 'medium',
-            evidence: 'official page names exact model, electrostarter, and ignition key start',
+            evidence: exactQuote,
             sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
             sourceTitle: 'FIRMAN RD3910E'
           }],
           answerGuidance: {
-            directAnswer: 'По найденным источникам RD3910E запускается электростартером с ключа; кнопочный запуск не подтвержден.',
+            directAnswer: 'По найденным источникам RD3910E запускается ключом электростартера; кнопочный запуск не подтвержден.',
             completeness: 'answered',
             coverage: [{
-              attribute: 'key start',
+              attribute: 'start_control_mechanism',
               status: 'confirmed',
               value: 'ignition key electric start',
-              evidence: 'official exact model page',
+              evidence: exactQuote,
               sourceUrl: 'https://www.firman.biz/catalog/benzinovye-generatory-RD/FIRMAN-RD3910E',
               sourceTitle: 'FIRMAN RD3910E'
             }]
@@ -1558,37 +1568,25 @@ describe('product comparison research', () => {
           summaryForAnswer: 'Web research filled missing start-control evidence.'
         })
       });
-    queueResearchResponse({
-      parsed: result({
-        usedWebSearch: true,
-        answerGuidance: {
-          directAnswer: '',
-          completeness: 'not_answered',
-          coverage: []
-        },
-        warnings: ['exact_target_external_fact_not_found']
-      })
-    });
-
     const actual = await researchProductComparisonFacts({
       userMessage: 'Firman RD3910E заводится с ключа или с кнопки?',
       products: [product({ description: 'В описании есть только общие преимущества генератора.' })],
       targetProductNames: ['FIRMAN RD3910E'],
-      comparisonAttributes: ['key start', 'push-button start']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(actual.usedWebSearch).toBe(true);
     expect(actual.facts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceType: 'catalog', attribute: 'manual starter', value: 'есть' })
+      expect.objectContaining({ sourceType: 'web', attribute: 'start_control_mechanism', value: 'ignition key electric start' })
     ]));
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
-      expect.objectContaining({ attribute: 'manual starter', status: 'confirmed', value: 'есть' })
+      expect.objectContaining({ attribute: 'start_control_mechanism', status: 'confirmed' })
     ]));
+    expect(actual.answerGuidance.completeness).toBe('answered');
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'catalog_fact_missing_needs_web_research',
       'catalog_fact_extraction_used',
-      'catalog_fact_extraction_needed_web_research',
-      'catalog_starter_specs_extracted'
+      'catalog_fact_extraction_needed_web_research'
     ]));
     expect(researchCalls()).toHaveLength(2);
     const webCall = researchCalls()[1];
@@ -1611,7 +1609,7 @@ describe('product comparison research', () => {
           usedWebSearch: true,
           facts: [{
             productName: 'FIRMAN RD4910E',
-            attribute: 'starting method',
+            attribute: 'start_control_mechanism',
             value: 'manual starter / electric starter',
             sourceType: 'web',
             confidence: 'high',
@@ -1624,7 +1622,7 @@ describe('product comparison research', () => {
             completeness: 'answered',
             coverage: [
               {
-                attribute: 'electric start',
+                attribute: 'start_control_mechanism',
                 status: 'confirmed',
                 value: 'electric starter',
                 evidence: 'official exact model page',
@@ -1632,7 +1630,7 @@ describe('product comparison research', () => {
                 sourceTitle: 'FIRMAN RD4910E'
               },
               {
-                attribute: 'key start',
+                attribute: 'start_control_mechanism',
                 status: 'not_confirmed',
                 value: '',
                 evidence: 'first pass found electric starter but not the control',
@@ -1640,7 +1638,7 @@ describe('product comparison research', () => {
                 sourceTitle: null
               },
               {
-                attribute: 'button start',
+                attribute: 'start_control_mechanism',
                 status: 'not_confirmed',
                 value: '',
                 evidence: 'first pass found electric starter but not the control',
@@ -1657,7 +1655,7 @@ describe('product comparison research', () => {
           usedWebSearch: true,
           facts: [{
             productName: 'FIRMAN RD4910E',
-            attribute: 'key start',
+            attribute: 'start_control_mechanism',
             value: 'ignition key / START switch',
             sourceType: 'web',
             confidence: 'high',
@@ -1670,7 +1668,7 @@ describe('product comparison research', () => {
             completeness: 'answered',
             coverage: [
               {
-                attribute: 'key start',
+                attribute: 'start_control_mechanism',
                 status: 'confirmed',
                 value: 'ignition key / START switch',
                 evidence: 'text listing and manual label the ignition key START switch for exact model RD4910E',
@@ -1678,7 +1676,7 @@ describe('product comparison research', () => {
                 sourceTitle: 'FIRMAN RD4910E listing'
               },
               {
-                attribute: 'button start',
+                attribute: 'start_control_mechanism',
                 status: 'not_confirmed',
                 value: '',
                 evidence: 'dedicated control search did not find a push button',
@@ -1695,7 +1693,7 @@ describe('product comparison research', () => {
       userMessage: 'Firman RD4910E заводится с ключа или с кнопки?',
       products: [product({ name: 'Генератор бензиновый FIRMAN RD3910E 2.5 кВт' })],
       targetProductNames: ['FIRMAN RD4910E'],
-      comparisonAttributes: ['key start', 'push-button start']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(researchCalls()).toHaveLength(2);
@@ -1706,9 +1704,9 @@ describe('product comparison research', () => {
     expect(researchCalls()[1].request.input[0].content).toContain('missing-fact slot');
     expect(researchCalls()[1].request.input[0].content).toContain('Do not reduce the task to a fixed phrase list');
     expect(String(researchCalls()[0].request.input[1].content)).not.toContain('FIRMAN RD3910E');
-    expect(actual.answerGuidance.directAnswer).toContain('с ключа');
+    expect(actual.answerGuidance.directAnswer).toBe('');
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
-      expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
+      expect.objectContaining({ attribute: 'start_control_mechanism', status: 'confirmed' })
     ]));
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'exact_target_external_retry_used',
@@ -1730,7 +1728,7 @@ describe('product comparison research', () => {
           facts: [
             {
               productName: 'FIRMAN RD4910E',
-              attribute: 'starting method',
+              attribute: 'start_control_mechanism',
               value: 'manual starter / electric starter',
               sourceType: 'web',
               confidence: 'high',
@@ -1740,7 +1738,7 @@ describe('product comparison research', () => {
             },
             {
               productName: 'FIRMAN RD4910E',
-              attribute: 'key start',
+              attribute: 'start_control_mechanism',
               value: 'starts with an ignition key',
               sourceType: 'web',
               confidence: 'high',
@@ -1754,7 +1752,7 @@ describe('product comparison research', () => {
             completeness: 'answered',
             coverage: [
               {
-                attribute: 'electric start',
+                attribute: 'start_control_mechanism',
                 status: 'confirmed',
                 value: 'electric starter',
                 evidence: 'official exact model page',
@@ -1762,7 +1760,7 @@ describe('product comparison research', () => {
                 sourceTitle: 'FIRMAN RD4910E'
               },
               {
-                attribute: 'manual starter',
+                attribute: 'start_control_mechanism',
                 status: 'confirmed',
                 value: 'manual starter',
                 evidence: 'official exact model page',
@@ -1770,7 +1768,7 @@ describe('product comparison research', () => {
                 sourceTitle: 'FIRMAN RD4910E'
               },
               {
-                attribute: 'key start',
+                attribute: 'start_control_mechanism',
                 status: 'confirmed',
                 value: 'ignition key',
                 evidence: 'research result claimed the source says to turn the key',
@@ -1787,7 +1785,7 @@ describe('product comparison research', () => {
           usedWebSearch: true,
           facts: [{
             productName: 'FIRMAN RD4910E',
-            attribute: 'key start',
+            attribute: 'start_control_mechanism',
             value: 'starts with an ignition key',
             sourceType: 'web',
             confidence: 'high',
@@ -1799,7 +1797,7 @@ describe('product comparison research', () => {
             directAnswer: 'RD4910E starts with a key.',
             completeness: 'answered',
             coverage: [{
-              attribute: 'key start',
+              attribute: 'start_control_mechanism',
               status: 'confirmed',
               value: 'ignition key',
               evidence: 'retry claimed key start from the PDF',
@@ -1815,21 +1813,21 @@ describe('product comparison research', () => {
       userMessage: 'Does Firman RD4910E start with a key or a button?',
       products: [],
       targetProductNames: ['FIRMAN RD4910E'],
-      comparisonAttributes: ['key start', 'push-button start']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(researchCalls()).toHaveLength(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(actual.answerGuidance.coverage.some((item) =>
-      item.attribute === 'key start' && item.status === 'confirmed'
+      item.status === 'confirmed' && normalized([item.value, item.evidence].join(' ')).includes('key')
     )).toBe(false);
     expect(actual.answerGuidance.directAnswer).not.toContain('starts with a key');
-    expect(actual.answerGuidance.directAnswer).toContain('источники');
+    expect(actual.answerGuidance.directAnswer).toBe('');
     expect(actual.sourcesExhausted).toBe(false);
     expect(actual.warnings).toEqual(expect.arrayContaining([
       'source_evidence_validation_failed:key_start',
       'source_evidence_pdf_parse_failed',
-      'answer_guidance_rewritten_after_source_validation',
+      'answer_guidance_invalidated_after_source_validation',
       'electric_start_control_not_confirmed_after_retry'
     ]));
   });
@@ -2035,9 +2033,9 @@ describe('product comparison research', () => {
   it('does not verify a web fact without an HTTP(S) source by falling back to the catalog card', async () => {
     const titleOnlyWebFact = result({
       usedWebSearch: true,
-      facts: [{
-        productName: 'FIRMAN RD3910E',
-        attribute: 'start control',
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start_control_mechanism',
         value: 'поворотом ключа',
         sourceType: 'web',
         confidence: 'high',
@@ -2048,8 +2046,8 @@ describe('product comparison research', () => {
       answerGuidance: {
         directAnswer: 'Запускается поворотом ключа.',
         completeness: 'answered',
-        coverage: [{
-          attribute: 'start control',
+          coverage: [{
+            attribute: 'start_control_mechanism',
           status: 'confirmed',
           value: 'поворотом ключа',
           evidence: 'Запуск двигателя осуществляется поворотом ключа электростартера.',
@@ -2075,7 +2073,7 @@ describe('product comparison research', () => {
       userMessage: 'FIRMAN RD3910E starts with a key or a button?',
       products: [product()],
       targetProductNames: ['FIRMAN RD3910E'],
-      comparisonAttributes: ['start control'],
+      comparisonAttributes: ['start_control_mechanism'],
       deadlineAtMs: Date.now() + 60_000
     });
 
@@ -2353,7 +2351,7 @@ describe('product comparison research', () => {
         usedWebSearch: true,
         facts: [{
           productName: 'FIRMAN RD4910E',
-          attribute: 'key start',
+          attribute: 'start_control_mechanism',
           value: 'turn the key to START',
           sourceType: 'web',
           confidence: 'high',
@@ -2365,7 +2363,7 @@ describe('product comparison research', () => {
           directAnswer: 'RD4910E starts with a key; manual start is also available.',
           completeness: 'answered',
           coverage: [{
-            attribute: 'key start',
+            attribute: 'start_control_mechanism',
             status: 'confirmed',
             value: 'turn the key to START',
             evidence: 'source says turn the key to START',
@@ -2381,12 +2379,12 @@ describe('product comparison research', () => {
       userMessage: 'Does Firman RD4910E start with a key or a button?',
       products: [],
       targetProductNames: ['FIRMAN RD4910E'],
-      comparisonAttributes: ['key start', 'push-button start']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(researchCalls()).toHaveLength(1);
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
-      expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
+      expect.objectContaining({ attribute: 'start_control_mechanism', status: 'confirmed' })
     ]));
     expect(actual.answerGuidance.directAnswer).toContain('starts with a key');
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:key_start');
@@ -2399,7 +2397,7 @@ describe('product comparison research', () => {
         usedWebSearch: true,
         facts: [{
           productName: 'FIRMAN RD4910E',
-          attribute: 'key start',
+          attribute: 'start_control_mechanism',
           value: 'заводится от ключа',
           sourceType: 'web',
           confidence: 'medium',
@@ -2411,7 +2409,7 @@ describe('product comparison research', () => {
           directAnswer: 'RD4910E заводится от ключа. Ручной запуск тоже есть.',
           completeness: 'answered',
           coverage: [{
-            attribute: 'key start',
+            attribute: 'start_control_mechanism',
             status: 'confirmed',
             value: 'заводится от ключа',
             evidence: 'source text says FIRMAN RD 4910E: ЗАВОДИТСЯ ОТ КЛЮЧА',
@@ -2427,13 +2425,13 @@ describe('product comparison research', () => {
       userMessage: 'Firman RD4910E заводится с ключа или с кнопки?',
       products: [],
       targetProductNames: ['FIRMAN RD4910E'],
-      comparisonAttributes: ['key start', 'push-button start']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(researchCalls()).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
-      expect.objectContaining({ attribute: 'key start', status: 'confirmed' })
+      expect.objectContaining({ attribute: 'start_control_mechanism', status: 'confirmed' })
     ]));
     expect(actual.answerGuidance.directAnswer).toContain('ключ');
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:key_start');
@@ -2448,7 +2446,7 @@ describe('product comparison research', () => {
           usedWebSearch: true,
           facts: [{
             productName: 'FIRMAN RD4910E',
-            attribute: 'starting method',
+            attribute: 'start_control_mechanism',
             value: 'ручной / электрический стартер',
             sourceType: 'web',
             confidence: 'high',
@@ -2461,7 +2459,7 @@ describe('product comparison research', () => {
             completeness: 'partially_answered',
             coverage: [
               {
-                attribute: 'starting method',
+                attribute: 'start_control_mechanism',
                 status: 'confirmed',
                 value: 'ручной / электрический стартер',
                 evidence: 'source says Способ запуска: Ручной/электро',
@@ -2469,7 +2467,7 @@ describe('product comparison research', () => {
                 sourceTitle: 'FIRMAN RD4910E manual'
               },
               {
-                attribute: 'key start',
+                attribute: 'start_control_mechanism',
                 status: 'not_confirmed',
                 value: '',
                 evidence: 'source does not identify key actuation',
@@ -2477,7 +2475,7 @@ describe('product comparison research', () => {
                 sourceTitle: null
               },
               {
-                attribute: 'button start',
+                attribute: 'start_control_mechanism',
                 status: 'not_confirmed',
                 value: '',
                 evidence: 'source does not identify button actuation',
@@ -2505,13 +2503,14 @@ describe('product comparison research', () => {
       userMessage: 'Does Firman RD4910E start with a key or a button?',
       products: [],
       targetProductNames: ['FIRMAN RD4910E'],
-      comparisonAttributes: ['key start', 'push-button start']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(researchCalls()).toHaveLength(2);
-    expect(actual.answerGuidance.directAnswer).toContain('Электростартер есть');
-    expect(actual.answerGuidance.directAnswer).toContain('ручной запуск тоже есть');
-    expect(actual.answerGuidance.directAnswer).toContain('источники не подтвердили');
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ attribute: 'start_control_mechanism', status: 'confirmed' })
+    ]));
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:electric_start');
   });
 
@@ -2690,7 +2689,7 @@ describe('product comparison research', () => {
     });
     const facts = Array.from({ length: 12 }, (_item, index) => ({
       productName: 'FIRMAN RD4910E',
-      attribute: `key start evidence ${index}`,
+      attribute: 'start_control_mechanism',
       value: 'ignition key',
       sourceType: 'web',
       confidence: 'high',
@@ -2721,7 +2720,7 @@ describe('product comparison research', () => {
       userMessage: 'Does FIRMAN RD4910E start with a key?',
       products: [],
       targetProductNames: ['FIRMAN RD4910E'],
-      comparisonAttributes: ['key start']
+      comparisonAttributes: ['start_control_mechanism']
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(12);
