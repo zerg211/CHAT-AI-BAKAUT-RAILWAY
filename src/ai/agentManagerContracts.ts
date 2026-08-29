@@ -86,17 +86,17 @@ export const ProductDetailsToolArgsSchema = z.object({
 }).strict();
 
 const generatorLoadItemSchema = z.object({
-  kind: optionalText,
+  kind: nonEmptyString,
   name: optionalText,
   count: optionalPlaceholder(z.number().positive()),
   runningKw: optionalPlaceholder(z.number().nonnegative()),
   startingKw: optionalPlaceholder(z.number().nonnegative()),
-  source: optionalPlaceholder(z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average'])),
-  runningSource: optionalPlaceholder(z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided'])),
-  startingSource: optionalPlaceholder(z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided'])),
-  operationMode: optionalPlaceholder(z.enum(['continuous', 'occasional', 'separate'])),
+  source: z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average']),
+  runningSource: z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided']),
+  startingSource: z.enum(['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided']),
+  operationMode: z.enum(['continuous', 'occasional', 'separate']),
   coRunningGroup: optionalText,
-  evidence: optionalText,
+  evidence: nonEmptyString,
   basisKind: optionalPlaceholder(z.enum(['exact_power', 'checked_fact', 'specific_type_or_function', 'generic_load_name', 'unknown'])),
   basisSignals: z.array(z.enum([
     'consumer_type_known',

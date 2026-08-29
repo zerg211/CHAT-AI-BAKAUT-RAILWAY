@@ -423,6 +423,42 @@ describe('agent manager contracts', () => {
     expect(legacy.selectionPolicy?.requirements[0]?.verification).toBeUndefined();
   });
 
+  it('rejects generator load items without executable semantic provenance', () => {
+    const result = AgentIntentContractSchema.safeParse({
+      userMessageSummary: 'calculate a generator load',
+      dialogueUnderstanding: 'the pump power has mixed provenance',
+      nextStepRationale: 'run the typed calculator',
+      requiresTools: true,
+      toolRequests: [{
+        id: 'load-calculation',
+        tool: 'calculator.generatorLoad',
+        args: {
+          loads: [{
+            kind: 'pump',
+            name: 'well pump',
+            count: 1,
+            runningKw: 0.75,
+            startingKw: 2.25,
+            source: null,
+            runningSource: 'explicit_user',
+            startingSource: 'estimated_average',
+            operationMode: 'continuous',
+            coRunningGroup: null,
+            evidence: '750 W well pump',
+            basisKind: 'specific_type_or_function',
+            basisSignals: ['consumer_type_known', 'voltage_or_phase_known', 'explicit_power']
+          }]
+        },
+        rationale: 'calculate the load',
+        required: true,
+        coversRequirementIds: []
+      }],
+      riskFlags: []
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it('creates stable event ids from sorted semantic content', () => {
     const left = createStableLedgerEventId({
       sessionId,

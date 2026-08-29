@@ -26,3 +26,11 @@ The traces show different issue sets on the first and correction attempts. The c
 ## Required fix
 
 Pass the rejected `AgentSemanticDecision` together with validator issues to the one bounded LLM correction attempt. Keep all validators fail-closed and do not mutate the planner decision in deterministic code.
+
+## Follow-up failure
+
+- Deployed commit: `71c30a070f4d3b985bd88c84d99898569fbab946`
+- Session: `359b8cf9-0a20-45ae-9ca7-4fd48bde957e`
+- Result: turns 2-9 failed with no assistant message.
+
+The rejected decision was now available to correction, but recurring errors showed that structured output still allowed `source=null` even though validation and generator execution require non-null provenance. Other corrections changed the right object but lacked actionable descriptions for requirement mirroring, exact load-scenario equality, conditional web planning, and current-message product evidence.

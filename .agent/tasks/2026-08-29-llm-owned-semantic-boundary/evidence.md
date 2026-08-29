@@ -53,6 +53,17 @@ The failed production audit exposed that a bounded LLM correction received valid
 - Typecheck, build, no-regex guard, dependency audit, and diff check: PASS.
 - New production deployment and widget audit: PENDING.
 
+## Second Post-Live Fix Verification
+
+The second failed production session exposed a structured-schema mismatch and non-actionable correction diagnostics. Generator-load semantic fields required by validation/execution are now required by the model contract, and rejected decisions receive field-specific invariant guidance without any deterministic semantic rewrite.
+
+- Focused affected suites: 4 files, 134 tests.
+- Full release gate: 88 files, 888 tests.
+- Agentic suite: 191 tests.
+- Exact staged snapshot without `.env`: 84 files, 819 tests; agentic 191; typecheck/build PASS.
+- Typecheck, build, no-regex guard, dependency audit, and diff check: PASS.
+- New production deployment and widget audit: PENDING.
+
 ## Artifacts
 
 - `raw/local-verification.md`

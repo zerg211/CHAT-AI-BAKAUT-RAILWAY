@@ -3901,17 +3901,17 @@ const generatorLoadScenarioLedgerValueJsonSchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          kind: nullableStringJsonSchema,
+          kind: { type: 'string', minLength: 1 },
           name: nullableStringJsonSchema,
           count: nullableNumberJsonSchema,
           runningKw: nullableNumberJsonSchema,
           startingKw: nullableNumberJsonSchema,
-          source: { type: ['string', 'null'], enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', null] },
+          source: { type: 'string', enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average'] },
           runningSource: { type: 'string', enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided'] },
           startingSource: { type: 'string', enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided'] },
           operationMode: { type: 'string', enum: ['continuous', 'occasional', 'separate'] },
           coRunningGroup: nullableStringJsonSchema,
-          evidence: nullableStringJsonSchema,
+          evidence: { type: 'string', minLength: 1 },
           basisKind: {
             type: ['string', 'null'],
             enum: ['exact_power', 'checked_fact', 'specific_type_or_function', 'generic_load_name', 'unknown', null]
@@ -4066,12 +4066,12 @@ const loadItemArgsJsonSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    kind: nullableStringJsonSchema,
+    kind: { type: 'string', minLength: 1 },
     name: nullableStringJsonSchema,
     count: nullableNumberJsonSchema,
     runningKw: nullableNumberJsonSchema,
     startingKw: nullableNumberJsonSchema,
-    source: { type: ['string', 'null'], enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', null] },
+    source: { type: 'string', enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average'] },
     runningSource: {
       type: 'string',
       enum: ['explicit_user', 'estimated_average', 'catalog_fact', 'web_average', 'not_provided']
@@ -4082,7 +4082,7 @@ const loadItemArgsJsonSchema = {
     },
     operationMode: { type: 'string', enum: ['continuous', 'occasional', 'separate'] },
     coRunningGroup: nullableStringJsonSchema,
-    evidence: nullableStringJsonSchema,
+    evidence: { type: 'string', minLength: 1 },
     basisKind: {
       type: ['string', 'null'],
       enum: ['exact_power', 'checked_fact', 'specific_type_or_function', 'generic_load_name', 'unknown', null]
@@ -4684,10 +4684,50 @@ function plannerSystemPromptBlock(
 
 export class OpenAIAgentManagerModel implements AgentManagerModel {
   async decideTurn(input: AgentManagerModelInput): Promise<AgentSemanticDecision> {
-    const validationRepair = input.semanticValidationIssues?.length
+    const semanticValidationIssues = input.semanticValidationIssues ?? [];
+    const hasIssue = (prefix: string) => semanticValidationIssues.some((issue) =>
+      issue === prefix || issue.startsWith(`${prefix}:`)
+    );
+    const issueGuidance = [
+      hasIssue('product_mention_evidence_not_in_current_message')
+        ? 'productMentions.evidence должен быть точной непрерывной подстрокой текущего userMessage; исправь evidence или убери mention, которого в текущей реплике нет.'
+        : '',
+      hasIssue('required_catalog_tool_missing') || hasIssue('required_tool_request_missing:catalog.search')
+        ? 'Если grounding требует каталог, добавь required catalog.search с непустым args.query и canonicalProductIntent; не убирай каталог из grounding только ради validator.'
+        : '',
+      hasIssue('required_web_tool_missing') || hasIssue('required_tool_request_missing:web.researchProductFacts') || hasIssue('conditional_research_plan_missing')
+        ? 'Для product_selection/comparison с решающими technicalAttributes запланируй required web.researchProductFacts после catalog request: webRequirement="conditional_on_catalog_gap", requiredToolKinds и toolRequests должны согласованно содержать web; неизвестные заранее модели означают productNames=[] и непустой query.'
+        : '',
+      hasIssue('catalog_search_query_missing')
+        ? 'Каждый catalog.search обязан иметь непустой args.query, описывающий typed потребность без добавления новых ограничений.'
+        : '',
+      hasIssue('generator_load_source_missing') || hasIssue('generator_load_running_source_missing') || hasIssue('generator_load_starting_source_missing') || hasIssue('generator_load_running_provenance_mismatch') || hasIssue('generator_load_starting_provenance_mismatch')
+        ? 'У каждого generator load обязательны source, runningSource и startingSource. source не null: explicit_user только когда оба числа явно даны; при смешанной или оценочной мощности используй estimated_average. Число отсутствует только вместе с соответствующим *Source="not_provided".'
+        : '',
+      hasIssue('generator_load_scenario_fact_missing')
+        ? 'Если intent содержит calculator.generatorLoad, ledgerDelta обязан сохранить fact.confirmed generator_load_scenario с тем же needId и полным structured value.'
+        : '',
+      semanticValidationIssues.some((issue) => issue.startsWith('generator_load_scenario_missing_load:') || issue.startsWith('generator_load_scenario_load_semantics_mismatch:') || issue.startsWith('generator_load_scenario_unexecutable_load:'))
+        ? 'Сделай value.loads факта generator_load_scenario и calculator.generatorLoad args.loads идентичными поле-в-поле: не меняй kind, name, числа, provenance, operationMode, coRunningGroup, basisKind или basisSignals между ledger и tool request.'
+        : '',
+      hasIssue('typed_requirement_coverage_missing') || hasIssue('typed_requirement_tool_mismatch')
+        ? 'Каждый typed_tool requirement должен ссылаться на существующий required request с тем же id/tool, а request.coversRequirementIds обязан содержать id этого requirement.'
+        : '',
+      hasIssue('tool_covers_unknown_requirement')
+        ? 'Удали из coversRequirementIds ссылки, которых нет в selectionPolicy.requirements; не создавай фиктивные requirements ради покрытия.'
+        : '',
+      hasIssue('active_requirement_mismatch')
+        ? 'Каждый новый ledger hard_requirement должен иметь точное отражение в strict selectionPolicy requirement с тем же factKey/kind и value. Факты о мощности потребителя, типе котла и других входах калькулятора сохраняй как context, если покупатель не делал их ограничением самого выбираемого товара; hard requirement расчёта представляет generator_load_scenario.'
+        : '',
+      semanticValidationIssues.some((issue) => issue.startsWith('required_tool_request_missing:'))
+        ? 'Каждый tool из grounding.requiredToolKinds должен иметь соответствующий required toolRequest; исправь grounding и requests согласованно, сохраняя смысл rejected decision.'
+        : ''
+    ].filter(Boolean).join(' ');
+    const validationRepair = semanticValidationIssues.length
       ? [
-          `Переданный rejectedSemanticDecision отклонён валидатором: ${input.semanticValidationIssues.join(', ')}. Исправь именно этот decision точечно, сохрани его согласованные поля и смысл реплики; не создавай независимую интерпретацию и не удаляй подтверждённые требования ради прохождения проверки.`,
-          input.semanticValidationIssues.includes('generator_load_scenario_fact_missing')
+          `Переданный rejectedSemanticDecision отклонён валидатором: ${semanticValidationIssues.join(', ')}. Исправь именно этот decision точечно, сохрани его согласованные поля и смысл реплики; не создавай независимую интерпретацию и не удаляй подтверждённые требования ради прохождения проверки.`,
+          issueGuidance,
+          semanticValidationIssues.includes('generator_load_scenario_fact_missing')
             ? 'Если в исправленном intent остаётся calculator.generatorLoad, ledgerDelta обязан содержать fact.confirmed с factKey="generator_load_scenario", role="hard_requirement", confidence=1, тем же needId и value.loads, simultaneousRunning, simultaneousStarting, согласованными с calculator args.loads и флагами. Если текущих данных недостаточно для такой структурированной нагрузки, убери calculator и задай один минимальный вопрос; не оставляй calculator без durable fact.'
             : ''
         ].filter(Boolean).join(' ')
@@ -4723,7 +4763,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             pendingExhaustedTechnicalHandoffs: input.pendingExhaustedTechnicalHandoffs ??
               trustedPendingExhaustedTechnicalHandoffs(input.history),
             rejectedSemanticDecision: input.rejectedSemanticDecision ?? null,
-            semanticValidationIssues: input.semanticValidationIssues ?? []
+            semanticValidationIssues
           })
         }
       ],

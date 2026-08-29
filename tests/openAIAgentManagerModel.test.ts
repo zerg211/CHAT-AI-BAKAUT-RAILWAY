@@ -71,7 +71,15 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       ledgerEvents: [],
       ledgerState: reduceDialogueLedger([]),
       rejectedSemanticDecision,
-      semanticValidationIssues: ['required_catalog_tool_missing']
+      semanticValidationIssues: [
+        'required_catalog_tool_missing',
+        'conditional_research_plan_missing',
+        'generator_load_source_missing:1',
+        'generator_load_scenario_load_semantics_mismatch:pump:well pump',
+        'typed_requirement_coverage_missing:req_load:calc_load',
+        'active_requirement_mismatch:pump_rated_power_kw',
+        'product_mention_evidence_not_in_current_message:0'
+      ]
     });
 
     expect(decision).toMatchObject({
@@ -90,6 +98,11 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     };
     expect(input.history).toHaveLength(20);
     expect(input.rejectedSemanticDecision).toEqual(rejectedSemanticDecision);
+    const systemPrompt = request.input?.find((item) => item.role === 'system')?.content ?? '';
+    expect(systemPrompt).toContain('Исправь именно этот decision точечно');
+    expect(systemPrompt).toContain('value.loads факта generator_load_scenario');
+    expect(systemPrompt).toContain('Факты о мощности потребителя');
+    expect(systemPrompt).toContain('productMentions.evidence');
     expect(request).toMatchObject({ max_output_tokens: 3200 });
     expect(createStructuredJsonResponse.mock.calls[0]?.[0]).toMatchObject({ retryOutputTokenCap: 4800 });
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);
