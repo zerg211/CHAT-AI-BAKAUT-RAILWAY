@@ -9,6 +9,7 @@
 - Each semantic attempt receives a deadline from the shared turn budget that preserves 45 seconds for downstream tools and answer composition.
 - Each correction receives the current rejected decision/current issues plus accumulated prior issue codes as an LLM non-regression constraint. Only current-candidate validation decides success or failure; code does not repair semantic fields.
 - Additional repair guidance for `generator_loads` vs `generator_load_scenario` and for missing `calculator.generatorLoad` is also LLM-only; no deterministic semantic rewrite is added.
+- Writer `factsUsed` sanitization filters empty `sourceEventIds` deterministically to keep `AnswerContractSchema` valid without semantic inference; planner validation remains fail-closed.
 
 ## Removed Semantic Repair Paths
 

@@ -500,9 +500,10 @@ export const AnswerContractSchema = z.object({
 }).strict();
 
 export function parseAnswerContractModelOutput(value: unknown) {
-  let normalized = value;
+  let normalized: unknown = value;
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const contract = value as Record<string, unknown>;
+    let nextContract: Record<string, unknown> = { ...contract };
     const readiness = contract.selectionReadiness;
     if (readiness && typeof readiness === 'object' && !Array.isArray(readiness)) {
       const fields = readiness as Record<string, unknown>;
@@ -511,8 +512,8 @@ export function parseAnswerContractModelOutput(value: unknown) {
         typeof fields.productClass === 'string' &&
         fields.productClass.trim().length === 0
       ) {
-        normalized = {
-          ...contract,
+        nextContract = {
+          ...nextContract,
           selectionReadiness: {
             ...fields,
             productClass: 'unknown'
@@ -520,6 +521,18 @@ export function parseAnswerContractModelOutput(value: unknown) {
         };
       }
     }
+    if (Array.isArray(contract.factsUsed)) {
+      const sanitizedFactsUsed = (contract.factsUsed as unknown[]).filter((entry) => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+        const fact = entry as Record<string, unknown>;
+        const ids = fact.sourceEventIds;
+        return Array.isArray(ids) && ids.length > 0 && ids.every((id) => typeof id === 'string' && id.trim().length > 0);
+      });
+      if (sanitizedFactsUsed.length !== (contract.factsUsed as unknown[]).length) {
+        nextContract = { ...nextContract, factsUsed: sanitizedFactsUsed };
+      }
+    }
+    normalized = nextContract;
   }
   return AnswerContractSchema.parse(normalized);
 }

@@ -37,3 +37,11 @@ Commit `a50f70e96adb444949129ab1732c313b13f2f257` deployed exactly, but widget s
 The failed turn `bdab556e-a2cb-4592-8277-3534ad4685b9` exhausted three semantic candidates: attempt 1 created hard fact `generator_loads` without matching policy and missed catalog, attempt 2 fixed catalog but hallucinated five product mentions, attempt 3 fixed mentions but missed `calculator.generatorLoad` for `req_loads`. The next fix adds explicit guidance for `generator_loads` vs `generator_load_scenario` and for missing calculator tool while preserving cumulative history.
 
 Resolved locally: additional LLM-only guidance for `generator_loads` and missing calculator is staged, every candidate is still fully revalidated, and a fresh verifier returned `PASS` for AC1-AC9. AC10 remains pending until exact deployment and widget/admin audit.
+
+## Sixth Production Failure
+
+Commit `7908deb8a8bd492072bb22a4e83a1248cf99930b` deployed exactly, but widget session `79ba351c-d491-41cd-8e2e-5e8df1126d0a` still had one empty failed turn at the plate switch. The other eight turns completed, including two generator cards, two plate cards, and a successful lead capture.
+
+The failed turn `5532bcff-d90e-4e4c-ba2b-37a79d661534` succeeded on semantic decision (attempt 1 valid) but writer produced 3 `factsUsed` entries with empty `sourceEventIds`, failing `AnswerContractSchema` validation (`too_small` at `factsUsed.*.sourceEventIds`). Remaining wall time was ample, so this was writer schema hallucination, not budget exhaustion. The next fix sanitizes writer `factsUsed` by filtering entries with empty `sourceEventIds` in `parseAnswerContractModelOutput`, keeping planner validation fail-closed.
+
+Resolved locally: writer factsUsed sanitization filters empty sourceEventIds, every candidate still fully revalidated, and a fresh verifier returned `PASS` for AC1-AC9. AC10 remains pending until exact deployment and widget/admin audit.

@@ -62,3 +62,12 @@ Attempt 1 issues were `conditional_research_plan_missing` and `active_requiremen
 Attempt 1 issues were `required_catalog_tool_missing` and `active_requirement_mismatch:generator_loads`. Attempt 2 fixed catalog but hallucinated five product mentions with `product_mention_evidence_not_in_current_message` and kept `active_requirement_mismatch:generator_loads`. Attempt 3 fixed mentions but introduced `required_tool_request_missing:calculator.generatorLoad` and `typed_requirement_tool_mismatch:req_loads` for a hard `generator_loads` fact. Remaining wall time was 109441 ms, so this was also correction oscillation, now on the initial clarification turn.
 
 Required fix: add explicit LLM guidance for `generator_loads` vs `generator_load_scenario` and for missing `calculator.generatorLoad` while keeping cumulative history and fail-closed validation.
+
+## Writer FactsUsed Follow-up Failure
+
+- Deployed commit: `7908deb8a8bd492072bb22a4e83a1248cf99930b`
+- Session: `79ba351c-d491-41cd-8e2e-5e8df1126d0a`
+- Failed turn: `5532bcff-d90e-4e4c-ba2b-37a79d661534`
+- Buyer-visible result: one empty response at plate switch among nine turns; later turns recovered and showed two generator cards, two plate cards, and lead capture.
+
+Writer produced 3 `factsUsed` entries with empty `sourceEventIds`, failing `AnswerContractSchema` validation (`too_small` at `factsUsed.*.sourceEventIds`) even though semantic decision was valid on first attempt. Remaining wall time was ample. Required fix: sanitize writer `factsUsed` by filtering entries with empty `sourceEventIds` in `parseAnswerContractModelOutput`, keeping planner validation fail-closed.
