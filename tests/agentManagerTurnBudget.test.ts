@@ -67,12 +67,27 @@ describe('agent manager turn budget', () => {
       .toThrow(AgentManagerTurnBudgetExceededError);
   });
 
-  it('reserves semantic decision, answer composition, and one bounded semantic correction', () => {
+  it('reserves semantic decision, answer composition, and two bounded semantic corrections', () => {
     const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS);
-    for (let call = 0; call < 3; call += 1) budget.consumeModelCall();
+    for (let call = 0; call < 4; call += 1) budget.consumeModelCall();
 
-    expect(budget.snapshot().usage.modelCalls).toBe(3);
+    expect(budget.snapshot().usage.modelCalls).toBe(4);
     expect(() => budget.consumeModelCall()).toThrow('model_call_budget_exceeded');
+  });
+
+  it('bounds three semantic attempts before a downstream tools and writer reserve', () => {
+    let now = 1_000;
+    const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS, () => now);
+
+    expect(budget.deadlineForStage(45_000, 45_000)).toBe(46_000);
+    now += 45_000;
+    expect(budget.deadlineForStage(45_000, 45_000)).toBe(91_000);
+    now += 45_000;
+    expect(budget.deadlineForStage(45_000, 45_000)).toBe(106_000);
+    now += 15_000;
+    expect(() => budget.deadlineForStage(45_000, 45_000))
+      .toThrow('wall_time_budget_exceeded');
+    expect(budget.remainingWallTimeMs()).toBe(45_000);
   });
 
   it('counts every physical provider call, including nested calls and retries', async () => {

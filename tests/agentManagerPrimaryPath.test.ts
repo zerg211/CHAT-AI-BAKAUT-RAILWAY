@@ -33,6 +33,7 @@ describe('agent manager primary answer path', () => {
     // One call belongs to the explicit exact-turn continuation endpoint.
     expect(recoverCallCount).toBe(1);
     expect(route).not.toContain('semanticRecoveryAttempted');
+    expect(route).toContain('!(firstError instanceof AgentSemanticDecisionIncoherentError)');
   });
 
   it('requires structured LLM authority for visible card selection', async () => {

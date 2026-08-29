@@ -34,3 +34,11 @@ Pass the rejected `AgentSemanticDecision` together with validator issues to the 
 - Result: turns 2-9 failed with no assistant message.
 
 The rejected decision was now available to correction, but recurring errors showed that structured output still allowed `source=null` even though validation and generator execution require non-null provenance. Other corrections changed the right object but lacked actionable descriptions for requirement mirroring, exact load-scenario equality, conditional web planning, and current-message product evidence.
+
+## Schema/guidance follow-up failure
+
+- Deployed commit: `08eebebed0dd8474d9d93960d24b745972ab399f`
+- Session: `7c53864a-4e20-4f67-ba61-774210229ec8`
+- Result: clarification turns 2-3 completed, but selection turns failed.
+
+Production traces converged to `active_requirement_mismatch:generator_load_scenario` and `generator_load_scenario_load_semantics_mismatch:boiler:газовый котёл с электроникой`. One correction often repaired conditional research and exposed the deeper invariant only on its result, so a second bounded correction is required. The mismatch diagnostic also needs exact field names rather than only the load identity.

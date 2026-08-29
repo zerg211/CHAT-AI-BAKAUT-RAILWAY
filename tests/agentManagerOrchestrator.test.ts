@@ -8238,7 +8238,7 @@ describe('parallel semantic turn contracts', () => {
     }));
   });
 
-  it('allows exactly one semantic correction attempt before execution', async () => {
+  it('passes the rejected decision into a bounded semantic correction before execution', async () => {
     const conversations = new FakeConversations();
     const coherentIntent = noToolIntent('corrected semantic decision');
     const decideTurn = vi.fn(async (
@@ -8335,7 +8335,7 @@ describe('parallel semantic turn contracts', () => {
     )).toHaveLength(1);
   });
 
-  it('rejects a second incoherent semantic decision without a buyer answer', async () => {
+  it('rejects after two incoherent semantic corrections without a buyer answer', async () => {
     const conversations = new FakeConversations();
     const badIntent = noToolIntent('incoherent semantic decision');
     const decideTurn = vi.fn(async (
@@ -8374,7 +8374,7 @@ describe('parallel semantic turn contracts', () => {
       userMessage: conversations.messages[0]!.content
     })).rejects.toThrow('semantic_decision_incoherent:active_requirement_mismatch:budget_max_rub');
 
-    expect(decideTurn).toHaveBeenCalledTimes(2);
+    expect(decideTurn).toHaveBeenCalledTimes(3);
     expect(composeAnswer).not.toHaveBeenCalled();
     expect(conversations.assistantSaves).toHaveLength(0);
     expect(conversations.checkpoints).toContainEqual(expect.objectContaining({
@@ -8383,6 +8383,61 @@ describe('parallel semantic turn contracts', () => {
       errorCode: 'semantic_decision_incoherent',
       payload: { issues: expect.arrayContaining(['active_requirement_mismatch:budget_max_rub']) }
     }));
+  });
+
+  it('composes the answer after the second semantic correction succeeds', async () => {
+    const conversations = new FakeConversations();
+    const badIntent = noToolIntent('incoherent semantic decision');
+    let attempt = 0;
+    const decideTurn = vi.fn(async (
+      _input: import('../src/ai/agentManagerOrchestrator.js').AgentManagerModelInput
+    ): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => {
+      attempt += 1;
+      if (attempt === 3) {
+        return {
+          ledgerDelta: { rationale: 'second correction is coherent', events: [] },
+          intent: noToolIntent('coherent corrected semantic decision') as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+        };
+      }
+      return {
+        ledgerDelta: {
+          rationale: 'creates a hard budget that execution ignores',
+          events: [{
+            eventType: 'fact.confirmed',
+            scope: 'need',
+            payload: {
+              factKey: 'budget_max_rub',
+              value: 180000,
+              productClass: 'generator',
+              role: 'hard_requirement',
+              confidence: 1
+            },
+            evidence: 'budget is 180000 RUB',
+            source: 'llm_state_delta',
+            status: 'active'
+          }]
+        },
+        intent: badIntent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+      };
+    });
+    const composeAnswer = vi.fn(model().composeAnswer);
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn, composeAnswer })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: conversations.messages[0]!.content
+    });
+
+    expect(decideTurn).toHaveBeenCalledTimes(3);
+    expect(composeAnswer).toHaveBeenCalledTimes(1);
+    expect(payload.metadata?.turnBudget).toMatchObject({ usage: { modelCalls: 4 } });
+    expect(conversations.assistantSaves).toHaveLength(1);
   });
 
 

@@ -29,7 +29,7 @@ export type AgentManagerStopReason =
   | ProviderBudgetEstimationStopReason;
 
 export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
-  maxModelCalls: 3,
+  maxModelCalls: 4,
   maxProviderCalls: 60,
   maxToolCalls: 8,
   maxWebCalls: 2,
@@ -38,8 +38,8 @@ export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
   maxProviderReservedOutputTokens: 80_000,
   maxProviderEstimatedTotalTokens: 1_350_000,
   maxEstimatedCostUsd: 10,
-  // gpt-5.6-luna at xhigh reasoning: decision ~26s + tools ~35s + writer ~50s and a
-  // possible high-effort repair must fit; a truncated turn costs more than a wait.
+  // The normal path uses decision + writer. Two bounded decision corrections remain
+  // available for invalid contracts before tools; all stages still share this deadline.
   maxWallTimeMs: 150_000
 };
 
@@ -86,6 +86,16 @@ export class AgentManagerTurnBudget {
 
   remainingWallTimeMs() {
     return Math.max(0, this.deadlineAtMs - this.now());
+  }
+
+  deadlineForStage(maxDurationMs: number, downstreamReserveMs = 0) {
+    this.assertWallTime();
+    const now = this.now();
+    const latestStageDeadlineAtMs = this.deadlineAtMs - Math.max(0, downstreamReserveMs);
+    if (now >= latestStageDeadlineAtMs) {
+      throw new AgentManagerTurnBudgetExceededError('wall_time_budget_exceeded');
+    }
+    return Math.min(latestStageDeadlineAtMs, now + Math.max(1, maxDurationMs));
   }
 
   createWallTimeAbortSignal() {

@@ -4,7 +4,9 @@
 
 - `src/routes/chat.ts` delegates generation/recovery to `AssistantService`.
 - In the staged production snapshot, `AssistantService` delegates directly to its `AgentManagerOrchestrator` instance.
-- `AgentManagerOrchestrator` requires `model.decideTurn`, validates one combined `AgentSemanticDecision`, allows one bounded correction attempt, and fails before tool execution when validation still fails.
+- `AgentManagerOrchestrator` requires `model.decideTurn`, validates one combined `AgentSemanticDecision`, allows up to two bounded correction attempts, and fails before tool execution when validation still fails.
+- `src/routes/chat.ts` treats exhausted semantic-decision validation as non-transient, so the generic transport retry cannot create a fresh semantic/model/provider budget.
+- Each semantic attempt receives a deadline from the shared turn budget that preserves 45 seconds for downstream tools and answer composition.
 
 ## Removed Semantic Repair Paths
 
@@ -31,7 +33,7 @@ Current search across `src/**/*.ts` also returns no `planner_repaired_*` marker.
 - `orderToolRequestsForSelectionDependencies` orders planner-owned requests without adding or changing semantic requests.
 - `productMatchesIntent` classifies catalog records against a typed product class; it does not infer buyer intent.
 - Requirement proof, confirmed-conflict filtering, card readiness, source exhaustion validation, contact authorization, arithmetic, idempotency, and persistence remain deterministic.
-- `inferProductIntent` remains exported in `productClassifier.ts` but has no production or test caller.
+- `inferProductIntent` remains exported in `productClassifier.ts` with no production caller; its only remaining use is a legacy test-fixture adapter.
 - `inferVisibleCardIntent` derives a product class only from typed tool arguments, `selectionPolicy`, or typed product mentions.
 
 ## Specialist Boundary

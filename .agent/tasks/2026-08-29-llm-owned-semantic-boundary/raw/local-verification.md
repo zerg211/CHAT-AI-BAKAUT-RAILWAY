@@ -81,3 +81,28 @@ Agentic Tests 191 passed (191)
 Typecheck/build/no-regex/dependency audit: PASS
 Exact staged snapshot without .env: 84 files / 819 tests, agentic 191, typecheck/build PASS
 ```
+
+## Third Post-Live Diagnostic and Repair-Budget Fix
+
+```text
+Focused affected suites: PASS, 4 files / 134 tests
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 889 passed (889)
+Agentic Tests 191 passed (191)
+Typecheck/build/no-regex/dependency audit: PASS
+Exact staged snapshot without .env: 84 files / 820 tests, agentic 191, typecheck/build PASS
+```
+
+## Fresh-Verifier Budget Fix
+
+```text
+Focused affected suites: PASS, 5 files / 140 tests
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 891 passed (891)
+Agentic Tests 192 passed (192)
+Typecheck/build/no-regex/dependency audit: PASS
+Exact staged snapshot without .env: 84 files / 822 tests, agentic 192, typecheck/build PASS
+Fresh read-only verifier: PASS for AC1-AC9; AC10 PENDING
+```

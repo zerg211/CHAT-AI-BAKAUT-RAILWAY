@@ -296,6 +296,27 @@ describe('combined semantic decision validation', () => {
     expect(result.issues).toContain('generator_load_scenario_simultaneous_running_mismatch');
   });
 
+  it('reports the exact generator load semantic fields that differ', () => {
+    const decision = generatorDecision();
+    const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;
+    const compressor = request.args.loads?.find((load: unknown) =>
+      (load as { kind?: string }).kind === 'compressor'
+    ) as Record<string, unknown>;
+    compressor.operationMode = 'separate';
+    compressor.coRunningGroup = 'separate-load';
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222'
+    });
+
+    expect(result.issues).toContain(
+      'generator_load_scenario_load_semantics_mismatch:compressor:compressor:operationMode|coRunningGroup'
+    );
+  });
+
   it('rejects a calculator plan that replaces a declared load with a product class', () => {
     const decision = generatorDecision();
     const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;

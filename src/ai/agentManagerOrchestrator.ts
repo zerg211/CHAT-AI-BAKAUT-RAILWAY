@@ -1039,11 +1039,17 @@ export function validateAgentSemanticDecision(input: {
         const actualLoad = (calculatorArgs.loads ?? []).find((candidate) =>
           semanticLoadIdentity(candidate) === identity
         );
-        if (
-          identity &&
-          JSON.stringify(semanticLoadExecutionFields(load)) !== JSON.stringify(semanticLoadExecutionFields(actualLoad))
-        ) {
-          issues.push(`generator_load_scenario_load_semantics_mismatch:${identity}`);
+        const expectedFields = semanticLoadExecutionFields(load);
+        const actualFields = semanticLoadExecutionFields(actualLoad);
+        if (identity && JSON.stringify(expectedFields) !== JSON.stringify(actualFields)) {
+          const mismatchedFields = expectedFields && actualFields
+            ? Object.entries(expectedFields)
+                .filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(
+                  actualFields[key as keyof typeof actualFields]
+                ))
+                .map(([key]) => key)
+            : ['load'];
+          issues.push(`generator_load_scenario_load_semantics_mismatch:${identity}:${mismatchedFields.join('|')}`);
         }
       }
       if (
@@ -1538,6 +1544,8 @@ const TURN_COMMIT_RESERVE_MS = 5_000;
 const WEB_ANSWER_RESERVE_MS = 14_000;
 const WEB_MIN_EXECUTION_MS = 6_000;
 const CATALOG_ANSWER_RESERVE_MS = 8_000;
+const SEMANTIC_DECISION_ATTEMPT_TIMEOUT_MS = 45_000;
+const SEMANTIC_DECISION_DOWNSTREAM_RESERVE_MS = 45_000;
 
 export function effectiveAgentToolTimeoutMs(input: {
   tool: ToolRequest['tool'];
@@ -3587,7 +3595,7 @@ function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentInt
   ));
 }
 
-class AgentSemanticDecisionIncoherentError extends Error {
+export class AgentSemanticDecisionIncoherentError extends Error {
   constructor(readonly issues: string[]) {
     super(`semantic_decision_incoherent:${issues.join(',')}`);
     this.name = 'AgentSemanticDecisionIncoherentError';
@@ -4693,10 +4701,10 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         ? 'productMentions.evidence должен быть точной непрерывной подстрокой текущего userMessage; исправь evidence или убери mention, которого в текущей реплике нет.'
         : '',
       hasIssue('required_catalog_tool_missing') || hasIssue('required_tool_request_missing:catalog.search')
-        ? 'Если grounding требует каталог, добавь required catalog.search с непустым args.query и canonicalProductIntent; не убирай каталог из grounding только ради validator.'
+        ? 'Если rejected decision действительно выбирает/ищет товар сейчас, добавь required catalog.search с непустым args.query и canonicalProductIntent. Если следующий шаг по смыслу только уточнение до подбора, согласованно исправь taskType/responseMode/catalogRequirement/requiredToolKinds/toolRequests, не оставляя product_selection без каталога.'
         : '',
       hasIssue('required_web_tool_missing') || hasIssue('required_tool_request_missing:web.researchProductFacts') || hasIssue('conditional_research_plan_missing')
-        ? 'Для product_selection/comparison с решающими technicalAttributes запланируй required web.researchProductFacts после catalog request: webRequirement="conditional_on_catalog_gap", requiredToolKinds и toolRequests должны согласованно содержать web; неизвестные заранее модели означают productNames=[] и непустой query.'
+        ? 'Для product_selection/comparison с решающими technicalAttributes запланируй required web.researchProductFacts после catalog request: webRequirement="conditional_on_catalog_gap", requiredToolKinds и toolRequests должны согласованно содержать web; неизвестные заранее модели означают productNames=[] и непустой query. Если ход по смыслу только уточняет вводные и не делает подбор/сравнение сейчас, согласованно выбери clarify contract без ложной обязанности catalog/web.'
         : '',
       hasIssue('catalog_search_query_missing')
         ? 'Каждый catalog.search обязан иметь непустой args.query, описывающий typed потребность без добавления новых ограничений.'
@@ -4718,6 +4726,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         : '',
       hasIssue('active_requirement_mismatch')
         ? 'Каждый новый ledger hard_requirement должен иметь точное отражение в strict selectionPolicy requirement с тем же factKey/kind и value. Факты о мощности потребителя, типе котла и других входах калькулятора сохраняй как context, если покупатель не делал их ограничением самого выбираемого товара; hard requirement расчёта представляет generator_load_scenario.'
+        : '',
+      hasIssue('active_requirement_mismatch:generator_load_scenario')
+        ? 'Для hard fact generator_load_scenario создай strict hard_constraint requirement kind="generator_load_scenario", value=true, unit=null, verification mode="typed_tool", toolRequestId равен id calculator.generatorLoad, tool="calculator.generatorLoad", verifier="generator_load_profile", bindAs="nominal_power_min_kw"; calculator request required=true и coversRequirementIds содержит id requirement.'
         : '',
       semanticValidationIssues.some((issue) => issue.startsWith('required_tool_request_missing:'))
         ? 'Каждый tool из grounding.requiredToolKinds должен иметь соответствующий required toolRequest; исправь grounding и requests согласованно, сохраняя смысл rejected decision.'
@@ -5484,9 +5495,9 @@ export class AgentManagerOrchestrator {
       // Hard per-attempt cap: OpenAI latency at high effort occasionally spikes to
       // 60-100s, which silently ate the whole turn budget and broke the writer.
       // Each attempt gets a fresh min(turn deadline, now + cap) deadline instead.
-      const plannerAttemptDeadlineMs = () => Math.min(
-        turnBudget.snapshot().usage.deadlineAtMs,
-        Date.now() + 45_000
+      const plannerAttemptDeadlineMs = () => turnBudget.deadlineForStage(
+        SEMANTIC_DECISION_ATTEMPT_TIMEOUT_MS,
+        SEMANTIC_DECISION_DOWNSTREAM_RESERVE_MS
       );
       let structuredDeadlineAtMs = plannerAttemptDeadlineMs();
       if (!this.model.decideTurn) {
@@ -5512,9 +5523,9 @@ export class AgentManagerOrchestrator {
         let validationIssues: string[] = [];
         let decision: AgentSemanticDecision | undefined;
         let rejectedSemanticDecision: AgentSemanticDecision | undefined;
-        for (let attempt = 1; attempt <= 2; attempt += 1) {
-          turnBudget.consumeModelCall();
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
           structuredDeadlineAtMs = plannerAttemptDeadlineMs();
+          turnBudget.consumeModelCall();
           let candidate: AgentSemanticDecision;
           try {
             candidate = await this.model.decideTurn({
@@ -5533,7 +5544,7 @@ export class AgentManagerOrchestrator {
                 issues: validationIssues,
                 remainingTurnMs: turnBudget.remainingWallTimeMs()
               });
-              if (attempt >= 2) break;
+              if (attempt >= 3) break;
               continue;
             }
             const attemptTimedOut = error instanceof StructuredJsonDeadlineExceededError ||
@@ -5544,7 +5555,7 @@ export class AgentManagerOrchestrator {
               deadlineAtMs: structuredDeadlineAtMs,
               remainingTurnMs: turnBudget.remainingWallTimeMs()
             });
-            if (attempt >= 2 || turnBudget.remainingWallTimeMs() < 25_000) {
+            if (attempt >= 3) {
               throw new AgentManagerTurnBudgetExceededError('wall_time_budget_exceeded');
             }
             continue;

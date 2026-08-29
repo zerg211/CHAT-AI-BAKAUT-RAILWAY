@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
-import { RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
+import { AgentSemanticDecisionIncoherentError, RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudgetExceededError } from '../ai/agentManagerTurnBudget.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { buildPublicCustomerResponse } from '../ai/agentManagerOutputGuard.js';
@@ -271,6 +271,7 @@ export async function registerChatRoutes(
         }));
       } catch (firstError) {
         const isTransient = !(firstError instanceof TurnExecutionInProgressError) &&
+          !(firstError instanceof AgentSemanticDecisionIncoherentError) &&
           !(firstError instanceof AgentManagerTurnBudgetExceededError) &&
           !controller.signal.aborted;
         if (isTransient) {
