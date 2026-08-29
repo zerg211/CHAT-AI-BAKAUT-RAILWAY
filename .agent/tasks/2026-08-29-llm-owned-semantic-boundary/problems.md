@@ -1,10 +1,12 @@
 # Verification Problems
 
-## AC10 Pending
+## AC10 Failed Production Audit
 
-The code is locally verified, but AC10 cannot pass before the intended task files are selectively committed and pushed, Railway deploys that exact commit, and a fresh adaptive dialogue is completed through the embedded widget on `https://bakautprof.ru/`.
+Commit `af020f228e2058612ffc02c39f6e60070cdd2dd9` deployed successfully, but the fresh widget session `78cf118b-fd3b-45bf-b654-1cd143f4e1fb` failed AC10. Turns 4-8 ended with `agent_manager_generation_failed`; no assistant message or cards were visible on those turns.
 
-This is a completion blocker, not a local code failure. No manual Railway deployment or localhost/OpenAI behavior run may substitute for the required production widget audit.
+Admin traces show that the strict validator correctly rejected incoherent decisions. The bounded correction call received only issue codes, not the rejected typed decision, so it generated a new independent interpretation rather than repairing the invalid fields. Across the failed attempts this changed errors between missing catalog/web requests, missing generator-load provenance, requirement coverage mismatches, and ledger/intent mismatches.
+
+AC10 remains blocked until the rejected decision is supplied to the LLM correction call, the minimal fix is locally verified and deployed, and a new widget dialogue plus admin audit passes with zero buyer/code issues.
 
 ## Worktree Isolation
 

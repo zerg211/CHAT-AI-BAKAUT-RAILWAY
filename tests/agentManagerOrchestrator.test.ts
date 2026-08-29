@@ -8318,6 +8318,14 @@ describe('parallel semantic turn contracts', () => {
     expect(decideTurn.mock.calls[1]?.[0].semanticValidationIssues).toContain(
       'active_requirement_mismatch:budget_max_rub'
     );
+    expect(decideTurn.mock.calls[1]?.[0].rejectedSemanticDecision).toMatchObject({
+      ledgerDelta: { rationale: 'incorrectly mixes two active product classes' },
+      intent: {
+        selectionPolicy: {
+          canonicalProductClass: 'plate'
+        }
+      }
+    });
     expect(conversations.traces).toContainEqual(expect.objectContaining({
       eventType: 'semantic_decision_validated',
       payload: expect.objectContaining({ attempt: 1, valid: false })

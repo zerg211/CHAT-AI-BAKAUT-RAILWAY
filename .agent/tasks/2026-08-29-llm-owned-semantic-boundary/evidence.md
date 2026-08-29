@@ -42,6 +42,17 @@ The exact Git index was exported to a clean temporary snapshot with no `.env` an
 
 The release wrapper itself could not run in the exported directory because it intentionally had no `.git` metadata for the no-regex baseline lookup. The standalone no-regex guard passed in the repository, and the staged changes are a subset of that audited diff.
 
+## Post-Live Fix Verification
+
+The failed production audit exposed that a bounded LLM correction received validator issue codes but not the rejected typed decision. The follow-up keeps all validators and the two-attempt bound unchanged, and supplies the rejected decision to the correction call for a targeted LLM-owned repair.
+
+- Focused correction transport tests: 2 files, 113 tests.
+- Full release gate: 88 files, 887 tests.
+- Exact follow-up index snapshot without `.env`: 84 files, 818 tests; agentic 190; typecheck/build PASS.
+- Agentic suite: 190 tests.
+- Typecheck, build, no-regex guard, dependency audit, and diff check: PASS.
+- New production deployment and widget audit: PENDING.
+
 ## Artifacts
 
 - `raw/local-verification.md`

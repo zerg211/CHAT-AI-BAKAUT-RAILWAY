@@ -55,3 +55,17 @@ npm run build: PASS
 ```
 
 `npm run verify` could not execute only its Git-relative no-regex baseline step because `git checkout-index` exports files without `.git`. The same staged diff is a subset of the repository diff for which `npm run lint:no-regex` passed.
+
+## Post-Live Correction Transport Fix
+
+```text
+npx vitest run tests/agentManagerOrchestrator.test.ts tests/openAIAgentManagerModel.test.ts --fileParallelism=false: PASS
+Test Files 2 passed (2)
+Tests 113 passed (113)
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 887 passed (887)
+Agentic Tests 190 passed (190)
+Typecheck/build/no-regex/dependency audit: PASS
+Exact staged snapshot without .env: 84 files / 818 tests, agentic 190, typecheck/build PASS
+```

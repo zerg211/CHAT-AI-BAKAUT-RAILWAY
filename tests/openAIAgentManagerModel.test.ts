@@ -51,6 +51,17 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       }
     });
 
+    const rejectedSemanticDecision = {
+      ledgerDelta: { rationale: 'rejected interpretation', events: [] },
+      intent: {
+        userMessageSummary: 'rejected summary',
+        dialogueUnderstanding: 'rejected understanding',
+        nextStepRationale: 'rejected next step',
+        requiresTools: false,
+        toolRequests: [],
+        riskFlags: []
+      }
+    };
     const decision = await (new OpenAIAgentManagerModel() as OpenAIAgentManagerModel & {
       decideTurn(input: unknown): Promise<{ ledgerDelta: unknown; intent: unknown }>;
     }).decideTurn({
@@ -58,7 +69,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       history,
       userMessage: history.at(-1)!.content,
       ledgerEvents: [],
-      ledgerState: reduceDialogueLedger([])
+      ledgerState: reduceDialogueLedger([]),
+      rejectedSemanticDecision,
+      semanticValidationIssues: ['required_catalog_tool_missing']
     });
 
     expect(decision).toMatchObject({
@@ -73,8 +86,10 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     };
     const input = JSON.parse(request.input?.find((item) => item.role === 'user')?.content ?? '{}') as {
       history?: unknown[];
+      rejectedSemanticDecision?: unknown;
     };
     expect(input.history).toHaveLength(20);
+    expect(input.rejectedSemanticDecision).toEqual(rejectedSemanticDecision);
     expect(request).toMatchObject({ max_output_tokens: 3200 });
     expect(createStructuredJsonResponse.mock.calls[0]?.[0]).toMatchObject({ retryOutputTokenCap: 4800 });
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);

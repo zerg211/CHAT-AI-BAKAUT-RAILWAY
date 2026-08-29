@@ -187,6 +187,7 @@ export interface AgentManagerModelInput {
   structuredOutputTokenCap?: number;
   structuredDeadlineAtMs?: number;
   semanticValidationIssues?: string[];
+  rejectedSemanticDecision?: AgentSemanticDecision;
   signal?: AbortSignal;
 }
 
@@ -4685,7 +4686,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
   async decideTurn(input: AgentManagerModelInput): Promise<AgentSemanticDecision> {
     const validationRepair = input.semanticValidationIssues?.length
       ? [
-          `Предыдущий единый decision отклонён валидатором: ${input.semanticValidationIssues.join(', ')}. Исправь обе части согласованно; не удаляй подтверждённые требования ради прохождения проверки.`,
+          `Переданный rejectedSemanticDecision отклонён валидатором: ${input.semanticValidationIssues.join(', ')}. Исправь именно этот decision точечно, сохрани его согласованные поля и смысл реплики; не создавай независимую интерпретацию и не удаляй подтверждённые требования ради прохождения проверки.`,
           input.semanticValidationIssues.includes('generator_load_scenario_fact_missing')
             ? 'Если в исправленном intent остаётся calculator.generatorLoad, ledgerDelta обязан содержать fact.confirmed с factKey="generator_load_scenario", role="hard_requirement", confidence=1, тем же needId и value.loads, simultaneousRunning, simultaneousStarting, согласованными с calculator args.loads и флагами. Если текущих данных недостаточно для такой структурированной нагрузки, убери calculator и задай один минимальный вопрос; не оставляй calculator без durable fact.'
             : ''
@@ -4721,6 +4722,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null,
             pendingExhaustedTechnicalHandoffs: input.pendingExhaustedTechnicalHandoffs ??
               trustedPendingExhaustedTechnicalHandoffs(input.history),
+            rejectedSemanticDecision: input.rejectedSemanticDecision ?? null,
             semanticValidationIssues: input.semanticValidationIssues ?? []
           })
         }
@@ -5469,6 +5471,7 @@ export class AgentManagerOrchestrator {
         });
         let validationIssues: string[] = [];
         let decision: AgentSemanticDecision | undefined;
+        let rejectedSemanticDecision: AgentSemanticDecision | undefined;
         for (let attempt = 1; attempt <= 2; attempt += 1) {
           turnBudget.consumeModelCall();
           structuredDeadlineAtMs = plannerAttemptDeadlineMs();
@@ -5477,7 +5480,8 @@ export class AgentManagerOrchestrator {
             candidate = await this.model.decideTurn({
               ...sharedModelInput,
               structuredDeadlineAtMs,
-              semanticValidationIssues: validationIssues
+              semanticValidationIssues: validationIssues,
+              rejectedSemanticDecision
             });
           } catch (error) {
             if (error instanceof ZodError) {
@@ -5530,6 +5534,7 @@ export class AgentManagerOrchestrator {
             decision = candidate;
             break;
           }
+          rejectedSemanticDecision = candidate;
         }
         if (!decision) {
           await this.conversations.upsertTurnCheckpoint({
