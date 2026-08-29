@@ -42,3 +42,12 @@ The rejected decision was now available to correction, but recurring errors show
 - Result: clarification turns 2-3 completed, but selection turns failed.
 
 Production traces converged to `active_requirement_mismatch:generator_load_scenario` and `generator_load_scenario_load_semantics_mismatch:boiler:газовый котёл с электроникой`. One correction often repaired conditional research and exposed the deeper invariant only on its result, so a second bounded correction is required. The mismatch diagnostic also needs exact field names rather than only the load identity.
+
+## Repair-budget follow-up failure
+
+- Deployed commit: `f7ee0ef3d6e4e9645fedbbe8ebff8ba1f3107109`
+- Session: `990bb45f-d0e3-4139-9c10-b0dccf25da49`
+- Failed turn: `63e96ca0-9215-4531-81b1-4adb0d92b1f4`
+- Buyer-visible result: one empty response among nine turns; later turns recovered and showed one generator card and two plate cards.
+
+Attempt 1 issues were `conditional_research_plan_missing` and `active_requirement_mismatch:generator_load_scenario`. Attempt 2 repaired those but produced missing/unexecutable pump load issues. Attempt 3 restored the load but reintroduced `conditional_research_plan_missing` and changed the pump `source`. Remaining wall time was 108535 ms, so this was correction regression rather than budget exhaustion.

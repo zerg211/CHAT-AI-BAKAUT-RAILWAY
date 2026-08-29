@@ -92,3 +92,11 @@ The second failed production session exposed a structured-schema mismatch and no
 - `raw/static-audit.md`
 - `problems.md`
 - `spec.md`
+
+## Fourth Production Audit
+
+- Exact deployed commit: `f7ee0ef3d6e4e9645fedbbe8ebff8ba1f3107109`.
+- Widget session: `990bb45f-d0e3-4139-9c10-b0dccf25da49` on `https://bakautprof.ru/`.
+- Eight of nine turns returned buyer-visible answers; generator and plate cards were shown. One generator-selection turn failed after three semantic attempts, so AC10 remains PENDING.
+- Trace sequence showed correction regression: attempt 1 failed research planning/typed requirement, attempt 2 repaired those but lost the pump load, and attempt 3 restored the load while reintroducing research planning failure and changing `source`.
+- Follow-up sends accumulated prior validator issues to the LLM as a non-regression constraint while validating only the current candidate. Focused suites: 2 files, 114 tests; full gate 88 files / 891 tests; agentic 192; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 822 tests, agentic 192, typecheck/build PASS. Fresh read-only verifier: PASS for AC1-AC9.

@@ -21,3 +21,11 @@ The repository contains many unrelated modified and untracked files from paralle
 The first fresh verification of the three-attempt patch returned `NOT_PASS`: `AgentSemanticDecisionIncoherentError` was still eligible for the generic HTTP-route retry, which could create a fresh budget, and three 45-second planner attempts did not reserve downstream tools/writer time. The minimal fix makes semantic incoherence non-retryable and derives every planner deadline from the shared turn budget with a 45-second downstream reserve. Focused tests and the full release gate now pass; exact-index and fresh re-verification remain required before commit.
 
 Resolved locally: the exact staged snapshot passed 84 files / 822 tests, agentic 192, typecheck and build, and a second fresh verifier returned `PASS` for AC1-AC9. AC10 remains pending until exact deployment and widget/admin audit.
+
+## Fourth Production Failure
+
+Commit `f7ee0ef3d6e4e9645fedbbe8ebff8ba1f3107109` deployed exactly, but widget session `990bb45f-d0e3-4139-9c10-b0dccf25da49` still had one empty failed turn. The other eight turns completed, including generator and plate cards, so the prior systemic empty-turn failure was substantially reduced but AC10 did not pass.
+
+The failed turn `63e96ca0-9215-4531-81b1-4adb0d92b1f4` had enough time remaining and exhausted three semantic candidates. Validation oscillated across attempts instead of monotonically repairing: `conditional_research_plan_missing` and `active_requirement_mismatch:generator_load_scenario`; then missing/unexecutable pump load; then `conditional_research_plan_missing` plus pump `source` mismatch. The next fix gives the LLM accumulated validator issue history as a non-regression constraint while the deterministic validator continues to judge only the current candidate.
+
+Resolved locally: cumulative issue history is transported only to the LLM repair context, every current candidate is fully revalidated, and a fresh verifier returned `PASS` for AC1-AC9. AC10 remains pending until the next exact deployment and widget/admin audit.

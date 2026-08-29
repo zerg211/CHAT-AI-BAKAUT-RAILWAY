@@ -187,6 +187,7 @@ export interface AgentManagerModelInput {
   structuredOutputTokenCap?: number;
   structuredDeadlineAtMs?: number;
   semanticValidationIssues?: string[];
+  semanticValidationIssueHistory?: string[];
   rejectedSemanticDecision?: AgentSemanticDecision;
   signal?: AbortSignal;
 }
@@ -4693,7 +4694,12 @@ function plannerSystemPromptBlock(
 export class OpenAIAgentManagerModel implements AgentManagerModel {
   async decideTurn(input: AgentManagerModelInput): Promise<AgentSemanticDecision> {
     const semanticValidationIssues = input.semanticValidationIssues ?? [];
-    const hasIssue = (prefix: string) => semanticValidationIssues.some((issue) =>
+    const semanticValidationIssueHistory = uniqueStrings(input.semanticValidationIssueHistory ?? []);
+    const repairGuidanceIssues = uniqueStrings([
+      ...semanticValidationIssueHistory,
+      ...semanticValidationIssues
+    ]);
+    const hasIssue = (prefix: string) => repairGuidanceIssues.some((issue) =>
       issue === prefix || issue.startsWith(`${prefix}:`)
     );
     const issueGuidance = [
@@ -4715,7 +4721,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       hasIssue('generator_load_scenario_fact_missing')
         ? 'Если intent содержит calculator.generatorLoad, ledgerDelta обязан сохранить fact.confirmed generator_load_scenario с тем же needId и полным structured value.'
         : '',
-      semanticValidationIssues.some((issue) => issue.startsWith('generator_load_scenario_missing_load:') || issue.startsWith('generator_load_scenario_load_semantics_mismatch:') || issue.startsWith('generator_load_scenario_unexecutable_load:'))
+      repairGuidanceIssues.some((issue) => issue.startsWith('generator_load_scenario_missing_load:') || issue.startsWith('generator_load_scenario_load_semantics_mismatch:') || issue.startsWith('generator_load_scenario_unexecutable_load:'))
         ? 'Сделай value.loads факта generator_load_scenario и calculator.generatorLoad args.loads идентичными поле-в-поле: не меняй kind, name, числа, provenance, operationMode, coRunningGroup, basisKind или basisSignals между ledger и tool request.'
         : '',
       hasIssue('typed_requirement_coverage_missing') || hasIssue('typed_requirement_tool_mismatch')
@@ -4730,13 +4736,16 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       hasIssue('active_requirement_mismatch:generator_load_scenario')
         ? 'Для hard fact generator_load_scenario создай strict hard_constraint requirement kind="generator_load_scenario", value=true, unit=null, verification mode="typed_tool", toolRequestId равен id calculator.generatorLoad, tool="calculator.generatorLoad", verifier="generator_load_profile", bindAs="nominal_power_min_kw"; calculator request required=true и coversRequirementIds содержит id requirement.'
         : '',
-      semanticValidationIssues.some((issue) => issue.startsWith('required_tool_request_missing:'))
+      repairGuidanceIssues.some((issue) => issue.startsWith('required_tool_request_missing:'))
         ? 'Каждый tool из grounding.requiredToolKinds должен иметь соответствующий required toolRequest; исправь grounding и requests согласованно, сохраняя смысл rejected decision.'
         : ''
     ].filter(Boolean).join(' ');
     const validationRepair = semanticValidationIssues.length
       ? [
           `Переданный rejectedSemanticDecision отклонён валидатором: ${semanticValidationIssues.join(', ')}. Исправь именно этот decision точечно, сохрани его согласованные поля и смысл реплики; не создавай независимую интерпретацию и не удаляй подтверждённые требования ради прохождения проверки.`,
+          semanticValidationIssueHistory.length
+            ? `Предыдущие correction attempts уже нарушали инварианты: ${semanticValidationIssueHistory.join(', ')}. Не возвращай ни одно из этих нарушений: сохрани исправленные grounding, toolRequests, requirements и ledger/tool field equality, меняя только поля, связанные с текущими issues.`
+            : '',
           issueGuidance,
           semanticValidationIssues.includes('generator_load_scenario_fact_missing')
             ? 'Если в исправленном intent остаётся calculator.generatorLoad, ledgerDelta обязан содержать fact.confirmed с factKey="generator_load_scenario", role="hard_requirement", confidence=1, тем же needId и value.loads, simultaneousRunning, simultaneousStarting, согласованными с calculator args.loads и флагами. Если текущих данных недостаточно для такой структурированной нагрузки, убери calculator и задай один минимальный вопрос; не оставляй calculator без durable fact.'
@@ -4774,7 +4783,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             pendingExhaustedTechnicalHandoffs: input.pendingExhaustedTechnicalHandoffs ??
               trustedPendingExhaustedTechnicalHandoffs(input.history),
             rejectedSemanticDecision: input.rejectedSemanticDecision ?? null,
-            semanticValidationIssues
+            semanticValidationIssues,
+            semanticValidationIssueHistory
           })
         }
       ],
@@ -5521,6 +5531,7 @@ export class AgentManagerOrchestrator {
           remainingTurnMs: turnBudget.remainingWallTimeMs()
         });
         let validationIssues: string[] = [];
+        let validationIssueHistory: string[] = [];
         let decision: AgentSemanticDecision | undefined;
         let rejectedSemanticDecision: AgentSemanticDecision | undefined;
         for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -5532,6 +5543,7 @@ export class AgentManagerOrchestrator {
               ...sharedModelInput,
               structuredDeadlineAtMs,
               semanticValidationIssues: validationIssues,
+              semanticValidationIssueHistory: validationIssueHistory,
               rejectedSemanticDecision
             });
           } catch (error) {
@@ -5539,6 +5551,7 @@ export class AgentManagerOrchestrator {
               validationIssues = error.issues.map((issue) =>
                 `semantic_contract_schema_invalid:${issue.path.join('.') || 'root'}:${issue.message}`
               );
+              validationIssueHistory = uniqueStrings([...validationIssueHistory, ...validationIssues]);
               await this.trace(input.sessionId, input.turnId, 'intent', 'semantic_decision_schema_invalid', {
                 attempt,
                 issues: validationIssues,
@@ -5585,6 +5598,7 @@ export class AgentManagerOrchestrator {
             decision = candidate;
             break;
           }
+          validationIssueHistory = uniqueStrings([...validationIssueHistory, ...validationIssues]);
           rejectedSemanticDecision = candidate;
         }
         if (!decision) {

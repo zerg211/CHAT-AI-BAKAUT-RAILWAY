@@ -79,6 +79,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         'typed_requirement_coverage_missing:req_load:calc_load',
         'active_requirement_mismatch:pump_rated_power_kw',
         'product_mention_evidence_not_in_current_message:0'
+      ],
+      semanticValidationIssueHistory: [
+        'active_requirement_mismatch:generator_load_scenario'
       ]
     });
 
@@ -95,14 +98,20 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     const input = JSON.parse(request.input?.find((item) => item.role === 'user')?.content ?? '{}') as {
       history?: unknown[];
       rejectedSemanticDecision?: unknown;
+      semanticValidationIssueHistory?: string[];
     };
     expect(input.history).toHaveLength(20);
     expect(input.rejectedSemanticDecision).toEqual(rejectedSemanticDecision);
+    expect(input.semanticValidationIssueHistory).toEqual([
+      'active_requirement_mismatch:generator_load_scenario'
+    ]);
     const systemPrompt = request.input?.find((item) => item.role === 'system')?.content ?? '';
     expect(systemPrompt).toContain('Исправь именно этот decision точечно');
     expect(systemPrompt).toContain('value.loads факта generator_load_scenario');
     expect(systemPrompt).toContain('Факты о мощности потребителя');
     expect(systemPrompt).toContain('productMentions.evidence');
+    expect(systemPrompt).toContain('Не возвращай ни одно из этих нарушений');
+    expect(systemPrompt).toContain('active_requirement_mismatch:generator_load_scenario');
     expect(request).toMatchObject({ max_output_tokens: 3200 });
     expect(createStructuredJsonResponse.mock.calls[0]?.[0]).toMatchObject({ retryOutputTokenCap: 4800 });
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);

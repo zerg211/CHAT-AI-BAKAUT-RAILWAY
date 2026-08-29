@@ -8399,6 +8399,15 @@ describe('parallel semantic turn contracts', () => {
           intent: noToolIntent('coherent corrected semantic decision') as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
         };
       }
+      if (attempt === 2) {
+        return {
+          ledgerDelta: { rationale: 'first correction introduces a different invariant failure', events: [] },
+          intent: {
+            ...noToolIntent('first correction needs another repair'),
+            requiresTools: true
+          } as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+        };
+      }
       return {
         ledgerDelta: {
           rationale: 'creates a hard budget that execution ignores',
@@ -8435,6 +8444,11 @@ describe('parallel semantic turn contracts', () => {
     });
 
     expect(decideTurn).toHaveBeenCalledTimes(3);
+    expect(decideTurn.mock.calls[2]?.[0].semanticValidationIssues).toContain('requires_tools_mismatch');
+    expect(decideTurn.mock.calls[2]?.[0].semanticValidationIssueHistory).toEqual(expect.arrayContaining([
+      'active_requirement_mismatch:budget_max_rub',
+      'requires_tools_mismatch'
+    ]));
     expect(composeAnswer).toHaveBeenCalledTimes(1);
     expect(payload.metadata?.turnBudget).toMatchObject({ usage: { modelCalls: 4 } });
     expect(conversations.assistantSaves).toHaveLength(1);
