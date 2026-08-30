@@ -71,3 +71,13 @@ Required fix: add explicit LLM guidance for `generator_loads` vs `generator_load
 - Buyer-visible result: one empty response at plate switch among nine turns; later turns recovered and showed two generator cards, two plate cards, and lead capture.
 
 Writer produced 3 `factsUsed` entries with empty `sourceEventIds`, failing `AnswerContractSchema` validation (`too_small` at `factsUsed.*.sourceEventIds`) even though semantic decision was valid on first attempt. Remaining wall time was ample. Required fix: sanitize writer `factsUsed` by filtering entries with empty `sourceEventIds` in `parseAnswerContractModelOutput`, keeping planner validation fail-closed.
+
+## Preliminary Load Follow-up Failure
+
+- Deployed commit: `f8d0baae77f3c31007d7a2dd86680f35cd6be3c5`
+- Session: `5de0bdbc-c227-4204-8bf4-f2187ff60fc0`
+- Buyer-visible result: six answers without generator cards, followed by three timed-out catalog turns. The 20-minute harness command ended before a protocol could be completed.
+
+Admin audit found two upstream causes. The first selection used `nominal_power_kw` as a strict numeric product attribute with `value=true`; semantic validation did not reject that malformed shape, and catalog filtering suppressed every candidate. Later selections had a bounded estimate for the pump, boiler, and refrigerator plus lighting with no numeric value. `loadsFromArgs` added both `generator_load_bounded_basis_incomplete` and `generator_load_unbounded_guess`, causing deterministic preliminary-card suppression even though missing lighting power was not a proven conflict. The final three traces stop at `tool_started:catalog.search` and the turns later fail with `agent_manager_generation_aborted_or_timeout`.
+
+Required fix: reject structurally invalid strict requirements before tool execution so the LLM correction loop repairs them, and classify omitted load values as incomplete rather than unbounded. Keep final-fit validation blocked until all required load facts are confirmed.

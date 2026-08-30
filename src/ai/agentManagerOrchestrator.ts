@@ -90,6 +90,7 @@ import {
   qualifiedNominalActivePowerKw,
   rankCatalogProductsByStructuredPreferences,
   selectProductsForVisibleCards,
+  strictSelectionRequirementShapeBlockers,
   structuredSelectionRankingObjectives,
   suppressVisibleCardsForReadiness,
   toolRequestProductIntent,
@@ -839,6 +840,12 @@ function semanticAuthorityIssues(input: {
   }
 
   const requiredRequests = intent.toolRequests.filter((request) => request.required);
+  const policyProductClass = coerceVisibleCardIntent(policy?.canonicalProductClass);
+  if (policy) {
+    for (const blocker of strictSelectionRequirementShapeBlockers(intent, policyProductClass)) {
+      issues.push(`strict_requirement_shape_invalid:${blocker.id}:${blocker.reason}`);
+    }
+  }
   for (const requiredTool of grounding?.requiredToolKinds ?? []) {
     if (!requiredRequests.some((request) => request.tool === requiredTool)) {
       issues.push(`required_tool_request_missing:${requiredTool}`);
@@ -4729,6 +4736,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         : '',
       hasIssue('tool_covers_unknown_requirement')
         ? 'Удали из coversRequirementIds ссылки, которых нет в selectionPolicy.requirements; не создавай фиктивные requirements ради покрытия.'
+        : '',
+      hasIssue('strict_requirement_shape_invalid')
+        ? 'Исправь форму указанного strict requirement, не меняя смысл покупателя: числовые product_attribute requirements требуют конечное числовое value и подходящую unit. Не дублируй результат calculator.generatorLoad как nominal_power_kw=true; производный минимум задаётся через generator_load_scenario с typed_tool binding.'
         : '',
       hasIssue('active_requirement_mismatch')
         ? 'Каждый новый ledger hard_requirement должен иметь точное отражение в strict selectionPolicy requirement с тем же factKey/kind и value. Факты о мощности потребителя, типе котла и других входах калькулятора сохраняй как context, если покупатель не делал их ограничением самого выбираемого товара; hard requirement расчёта представляет generator_load_scenario.'

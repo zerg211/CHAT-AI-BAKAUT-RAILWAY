@@ -154,4 +154,19 @@ Typecheck/build/no-regex/dependency audit: PASS
 Exact staged snapshot without .env: 84 files / 823 tests, agentic 192, typecheck/build PASS
 Fresh read-only verifier: PASS for AC1-AC9; AC10 PENDING
 ```
+
+## Preliminary Load And Strict Requirement Shape Follow-Up
+
+```text
+npx vitest run tests/agentManagerSearchBeforeSpecialistIntegration.test.ts tests/agentManagerGeneratorLoad.test.ts tests/agentManagerSemanticDecision.test.ts tests/openAIAgentManagerModel.test.ts tests/agentManagerCardSelection.test.ts tests/agentManagerOrchestrator.test.ts --fileParallelism=false: PASS
+Test Files 6 passed (6)
+Tests 204 passed (204)
+npm run typecheck: PASS
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 894 passed (894)
+Agentic Tests 192 passed (192)
+Typecheck/build/no-regex/dependency audit: PASS
+Exact staged snapshot without .env: 84 files / 825 tests, agentic 192, typecheck/build PASS
+Fresh read-only verifier: PASS for AC1-AC9; AC10 PENDING
 ```

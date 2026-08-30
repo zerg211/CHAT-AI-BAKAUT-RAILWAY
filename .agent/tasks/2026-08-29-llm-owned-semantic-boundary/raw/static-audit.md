@@ -10,6 +10,8 @@
 - Each correction receives the current rejected decision/current issues plus accumulated prior issue codes as an LLM non-regression constraint. Only current-candidate validation decides success or failure; code does not repair semantic fields.
 - Additional repair guidance for `generator_loads` vs `generator_load_scenario` and for missing `calculator.generatorLoad` is also LLM-only; no deterministic semantic rewrite is added.
 - Writer `factsUsed` sanitization filters empty `sourceEventIds` deterministically to keep `AnswerContractSchema` valid without semantic inference; planner validation remains fail-closed.
+- Pre-tool validation rejects mechanically invalid strict requirement shapes and returns issue codes to the bounded LLM correction loop; code does not rewrite the requirement.
+- Missing numeric values on declared generator loads remain explicit incomplete facts. They no longer label the bounded known-load calculation as an unbounded guess, so preliminary candidates remain eligible while final-fit safety still blocks unconfirmed load bases.
 
 ## Removed Semantic Repair Paths
 

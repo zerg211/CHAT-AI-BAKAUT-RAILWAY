@@ -77,6 +77,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         'generator_load_source_missing:1',
         'generator_load_scenario_load_semantics_mismatch:pump:well pump',
         'typed_requirement_coverage_missing:req_load:calc_load',
+        'strict_requirement_shape_invalid:req_nominal:invalid_numeric_value',
         'active_requirement_mismatch:pump_rated_power_kw',
         'product_mention_evidence_not_in_current_message:0'
       ],
@@ -110,6 +111,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(systemPrompt).toContain('value.loads факта generator_load_scenario');
     expect(systemPrompt).toContain('Факты о мощности потребителя');
     expect(systemPrompt).toContain('productMentions.evidence');
+    expect(systemPrompt).toContain('nominal_power_kw=true');
     expect(systemPrompt).toContain('Не возвращай ни одно из этих нарушений');
     expect(systemPrompt).toContain('active_requirement_mismatch:generator_load_scenario');
     expect(request).toMatchObject({ max_output_tokens: 3200 });

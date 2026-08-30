@@ -899,6 +899,21 @@ export function strictSelectionRequirementBlockers(
   return assessStrictSelectionRequirements(intent, productClass, toolResults).blockers;
 }
 
+const deferredStrictRequirementBlockerReasons = new Set([
+  ...webVerifiablePreliminaryBlockerReasons,
+  'typed_tool_result_missing',
+  'typed_tool_carried_result_missing'
+]);
+
+export function strictSelectionRequirementShapeBlockers(
+  intent: AgentIntentContract,
+  productClass: ProductSelectionClass
+) {
+  return assessStrictSelectionRequirements(intent, productClass).blockers.filter((blocker) =>
+    !deferredStrictRequirementBlockerReasons.has(blocker.reason)
+  );
+}
+
 export function gateStrictSelectionRequirements(
   intent: AgentIntentContract,
   productClass: ProductSelectionClass,

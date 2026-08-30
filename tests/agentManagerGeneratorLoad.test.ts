@@ -122,7 +122,7 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.loads).toEqual([]);
     expect(payload.profile).toBeUndefined();
     expect(payload.warnings).toContain('generator_load_bounded_basis_incomplete');
-    expect(payload.warnings).toContain('generator_load_unbounded_guess');
+    expect(payload.warnings).not.toContain('generator_load_unbounded_guess');
     expect(payload.warnings).toContain('generator_load_structured_args_without_usable_kw');
     expect(payload.estimateBasis).toBe('bounded_assumption');
     expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
@@ -152,8 +152,50 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.loads).toEqual([]);
     expect(payload.profile).toBeUndefined();
     expect(payload.warnings).toContain('generator_load_bounded_basis_incomplete');
-    expect(payload.warnings).toContain('generator_load_unbounded_guess');
+    expect(payload.warnings).not.toContain('generator_load_unbounded_guess');
     expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
+  });
+
+  it('keeps a bounded partial household calculation eligible for preliminary cards', () => {
+    const payload = buildGeneratorLoadToolPayload({
+      request: generatorLoadRequest([{
+        kind: 'pump',
+        name: 'borehole pump',
+        count: 1,
+        runningKw: 0.75,
+        startingKw: 3,
+        source: 'estimated_average',
+        runningSource: 'estimated_average',
+        startingSource: 'estimated_average',
+        operationMode: 'continuous',
+        coRunningGroup: 'house',
+        evidence: 'Borehole pump, 220 V, approximately 750 W',
+        basisKind: 'specific_type_or_function',
+        basisSignals: ['consumer_type_known', 'consumer_function_known', 'voltage_or_phase_known']
+      }, {
+        kind: 'lighting',
+        name: 'house lighting',
+        count: 1,
+        runningKw: null,
+        startingKw: null,
+        source: 'estimated_average',
+        runningSource: 'not_provided',
+        startingSource: 'not_provided',
+        operationMode: 'continuous',
+        coRunningGroup: 'house',
+        evidence: 'Lighting power is not provided',
+        basisKind: 'generic_load_name',
+        basisSignals: ['consumer_type_known']
+      }]),
+      userMessage: 'Насос 220 В около 750 Вт, мощность света не знаю.'
+    });
+
+    expect(payload.profile?.requiredNominalKw).toBeGreaterThan(0);
+    expect(payload.warnings).toContain('generator_load_bounded_basis_incomplete');
+    expect(payload.warnings).toContain('generator_load_bounded_assumption');
+    expect(payload.warnings).not.toContain('generator_load_unbounded_guess');
+    expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
+    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(false);
   });
 
   it('does not treat buyer-named household loads without kW as explicit power facts', () => {
@@ -231,6 +273,6 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.estimateBasis).toBe('unbounded_guess');
     expect(payload.warnings).not.toContain('generator_load_bounded_assumption');
     expect(hasUnconfirmedGeneratorLoadBasisResult([toolResultFromPayload(payload)])).toBe(true);
-    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(true);
+    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResultFromPayload(payload)])).toBe(false);
   });
 });

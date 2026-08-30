@@ -113,3 +113,10 @@ The second failed production session exposed a structured-schema mismatch and no
 - Exact deployed commit: `7908deb8a8bd492072bb22a4e83a1248cf99930b` had one empty turn due to writer `factsUsed` empty `sourceEventIds`.
 - Widget session: `79ba351c-d491-41cd-8e2e-5e8df1126d0a` on `https://bakautprof.ru/`.
 - Eight of nine turns returned buyer-visible answers; plate switch turn failed after semantic decision succeeded, with ZodError for `factsUsed` `sourceEventIds` `too_small`. The follow-up sanitizes writer `factsUsed` by filtering entries with empty `sourceEventIds` in `parseAnswerContractModelOutput`, keeping deterministic planner validation fail-closed. Focused suites: 3 files, 131 tests; full gate 88 files / 892 tests; agentic 192; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 823 tests, agentic 192, typecheck/build PASS. Fresh read-only verifier: PASS for AC1-AC9.
+
+## Preliminary Load And Requirement Shape Follow-Up
+
+- Exact deployed commit `f8d0baae77f3c31007d7a2dd86680f35cd6be3c5` was exercised through the widget in session `5de0bdbc-c227-4204-8bf4-f2187ff60fc0`.
+- Six turns returned answers without generator cards; three later catalog turns timed out, so AC10 remains PENDING.
+- Admin metadata showed an invalid numeric strict requirement (`nominal_power_kw=true`) escaped pre-tool validation. Later valid preliminary decisions were blocked because one omitted lighting value incorrectly marked the otherwise bounded calculation as `generator_load_unbounded_guess`.
+- The follow-up rejects invalid strict requirement shapes before tools and keeps omitted load values as incomplete, not unbounded. Final-fit safety remains fail-closed; incomplete preliminary calculations retain explicit caveats. Focused suites: 6 files / 204 tests; full gate: 88 files / 894 tests; agentic 192; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 825 tests, agentic 192, typecheck/build PASS. Fresh read-only verifier: PASS for AC1-AC9.

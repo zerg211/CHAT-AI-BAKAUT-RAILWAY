@@ -192,6 +192,23 @@ function generatorDecision(): AgentSemanticDecision {
 }
 
 describe('combined semantic decision validation', () => {
+  it('rejects invalid numeric strict requirement shapes before tools run', () => {
+    const decision = generatorDecision();
+    const budget = decision.intent.selectionPolicy?.requirements.find((requirement) => requirement.id === 'budget');
+    if (!budget) throw new Error('budget requirement missing');
+    budget.value = true;
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222',
+      userMessage: 'Budget is up to 180000 RUB.'
+    });
+
+    expect(result.issues).toContain('strict_requirement_shape_invalid:budget:invalid_numeric_value');
+  });
+
   it('rejects a calculator plan that drops a load from the semantic scenario', () => {
     const decision = generatorDecision();
     const calculation = decision.intent.toolRequests.find((request) => request.tool === 'calculator.generatorLoad');

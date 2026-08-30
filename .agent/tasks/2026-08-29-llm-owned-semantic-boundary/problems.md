@@ -45,3 +45,11 @@ Commit `7908deb8a8bd492072bb22a4e83a1248cf99930b` deployed exactly, but widget s
 The failed turn `5532bcff-d90e-4e4c-ba2b-37a79d661534` succeeded on semantic decision (attempt 1 valid) but writer produced 3 `factsUsed` entries with empty `sourceEventIds`, failing `AnswerContractSchema` validation (`too_small` at `factsUsed.*.sourceEventIds`). Remaining wall time was ample, so this was writer schema hallucination, not budget exhaustion. The next fix sanitizes writer `factsUsed` by filtering entries with empty `sourceEventIds` in `parseAnswerContractModelOutput`, keeping planner validation fail-closed.
 
 Resolved locally: writer factsUsed sanitization filters empty sourceEventIds, every candidate still fully revalidated, and a fresh verifier returned `PASS` for AC1-AC9. AC10 remains pending until exact deployment and widget/admin audit.
+
+## Seventh Production Failure
+
+Commit `f8d0baae77f3c31007d7a2dd86680f35cd6be3c5` deployed exactly, but widget session `5de0bdbc-c227-4204-8bf4-f2187ff60fc0` did not complete the buyer goal. Six turns returned answers without generator cards, then three catalog turns failed with `agent_manager_generation_aborted_or_timeout`; the live command was stopped after 20 minutes without a completed protocol.
+
+The first selection decision contained an invalid strict numeric requirement (`nominal_power_kw` with `value=true`) that was not rejected before tools and caused every candidate to be suppressed. Later turns used a bounded estimate for known loads plus an unknown lighting value; `loadsFromArgs` incorrectly added `generator_load_unbounded_guess` for the omitted lighting value, so deterministic readiness suppressed all preliminary cards despite `selectionGoal=preliminary_fit`. Repeated catalog requests eventually stalled after `tool_started:catalog.search`; no writer failure occurred.
+
+Resolved locally: omitted values now remain `generator_load_bounded_basis_incomplete` without falsely marking the calculated known loads unbounded, while final fit remains blocked. Invalid strict requirement shapes are rejected before tools and returned to the bounded LLM correction loop with explicit guidance. Focused/full gates, the exact staged snapshot, and a fresh verifier pass. AC10 still requires exact deployment and a successful widget/admin audit.

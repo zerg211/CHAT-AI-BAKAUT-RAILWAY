@@ -163,7 +163,6 @@ function loadsFromArgs(args: { loads?: unknown[] }): {
       (loadKind !== undefined && motorLikeLoadKinds.has(loadKind))
     ) {
       warnings.add('generator_load_bounded_basis_incomplete');
-      warnings.add('generator_load_unbounded_guess');
     }
   }
 
