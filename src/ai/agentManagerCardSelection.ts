@@ -173,6 +173,14 @@ function coerceProductSelectionClass(value: unknown): ProductSelectionClass {
     : 'unknown';
 }
 
+function typedProductClassKey(canonicalValue: unknown, fallbackValue: unknown) {
+  const canonicalClass = coerceProductSelectionClass(canonicalValue);
+  if (canonicalClass !== 'unknown') return canonicalClass;
+  if (typeof fallbackValue !== 'string' || !fallbackValue.trim()) return null;
+  const fallbackClass = fallbackValue.trim().toLocaleLowerCase('ru-RU');
+  return fallbackClass === 'unknown' ? null : fallbackClass;
+}
+
 function productMatchesExactNamedTarget(product: Product, targetName: string) {
   const targetTokens = extractModelTokens(targetName).map(compactModelText).filter(Boolean);
   const productTokens = new Set(extractModelTokens(product.name).map(compactModelText).filter(Boolean));
@@ -215,15 +223,51 @@ function intentFromContractToolRequests(intent: AgentIntentContract): ProductSel
 function inferVisibleCardIntent(input: {
   intent: AgentIntentContract;
 }): ProductSelectionClass {
-  const toolIntent = intentFromContractToolRequests(input.intent);
-  if (toolIntent !== 'unknown') return toolIntent;
   const policyIntent = coerceProductSelectionClass(input.intent.selectionPolicy?.canonicalProductClass);
   if (policyIntent !== 'unknown') return policyIntent;
+  if (typedProductClassKey(
+    input.intent.selectionPolicy?.canonicalProductClass,
+    input.intent.selectionPolicy?.targetProductClass
+  ) !== null) return 'unknown';
+  const toolIntent = intentFromContractToolRequests(input.intent);
+  if (toolIntent !== 'unknown') return toolIntent;
   for (const mention of input.intent.productMentions ?? []) {
     const mentionIntent = coerceProductSelectionClass(mention.productClass);
     if (mentionIntent !== 'unknown') return mentionIntent;
   }
   return 'unknown';
+}
+
+function unfamiliarPrimaryProductIds(intent: AgentIntentContract, toolResults: ToolResult[]) {
+  const canonicalPolicyClass = coerceProductSelectionClass(intent.selectionPolicy?.canonicalProductClass);
+  if (canonicalPolicyClass !== 'unknown') return null;
+  const primaryClassKey = typedProductClassKey(
+    intent.selectionPolicy?.canonicalProductClass,
+    intent.selectionPolicy?.targetProductClass
+  );
+  if (primaryClassKey === null) return null;
+  const primaryRequestIds = new Set(intent.toolRequests
+    .filter((request) =>
+      (request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails') &&
+      typedProductClassKey(request.args.canonicalProductIntent, request.args.productIntent) === primaryClassKey
+    )
+    .map((request) => request.id));
+  const productIds = new Set<string>();
+  for (const result of toolResults) {
+    if (!primaryRequestIds.has(result.requestId) || result.status !== 'ok') continue;
+    const payload = result.payload as { productIds?: unknown; products?: unknown };
+    if (Array.isArray(payload.productIds)) {
+      for (const id of payload.productIds) if (typeof id === 'string') productIds.add(id);
+    }
+    if (Array.isArray(payload.products)) {
+      for (const product of payload.products) {
+        if (product && typeof product === 'object' && typeof (product as { id?: unknown }).id === 'string') {
+          productIds.add((product as { id: string }).id);
+        }
+      }
+    }
+  }
+  return productIds;
 }
 
 function productModelMentionedInText(product: Product, text: string) {
@@ -1818,6 +1862,10 @@ export function selectProductsForVisibleCards(input: {
 
   const requestedIds = new Set(input.selectedProductIds ?? []);
   let selected = unique.filter((product) => requestedIds.has(product.id));
+  const unfamiliarPrimaryIds = unfamiliarPrimaryProductIds(input.intent, input.toolResults ?? []);
+  if (unfamiliarPrimaryIds !== null) {
+    selected = selected.filter((product) => unfamiliarPrimaryIds.has(product.id));
+  }
   if (input.intent.selectionPolicy?.alternativePolicy === 'exact_only') {
     const exactTargetNames = (input.intent.productMentions ?? [])
       .filter((mention) => mention.role === 'target_product' || mention.role === 'comparison_subject')

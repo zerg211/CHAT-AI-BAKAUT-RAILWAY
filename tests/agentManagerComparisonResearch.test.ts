@@ -243,10 +243,13 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
   const planTurn = implementation.planTurn;
   const strictPlanTurn = async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
     const intent = await planTurn(input);
-    const canonicalProductClass = intent.selectionPolicy?.canonicalProductClass ?? 'generator';
+    const canonicalProductClass = intent.selectionPolicy
+      ? intent.selectionPolicy.canonicalProductClass
+      : 'generator';
+    const targetProductClass = intent.selectionPolicy?.targetProductClass ?? canonicalProductClass ?? 'generator';
     const selectionPolicy = intent.selectionPolicy ?? {
-      targetProductClass: canonicalProductClass,
-      canonicalProductClass,
+      targetProductClass,
+      canonicalProductClass: canonicalProductClass ?? 'generator',
       selectionGoal: 'browse_catalog' as const,
       needAction: 'continue' as const,
       alternativePolicy: 'open_to_alternatives' as const,
@@ -275,7 +278,7 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
       productMentions.push({
         name: targetName,
         role: 'target_product',
-        productClass: canonicalProductClass,
+        productClass: targetProductClass,
         evidence
       });
       mentionedNames.add(targetName.toLocaleLowerCase('en-US'));
@@ -313,7 +316,9 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
             allowedToolArgKeys[request.tool].has(key)
           )),
           ...(
-            request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
+            request.tool === 'catalog.search' ||
+            request.tool === 'catalog.getProductDetails' ||
+            request.tool === 'web.researchProductFacts'
               ? { canonicalProductIntent: request.args.canonicalProductIntent ?? canonicalProductClass }
               : {}
           )
@@ -457,6 +462,7 @@ describe('AgentManager comparison research flow', () => {
               query: 'filter kit Hatz 1D42S compatibility',
               semanticQuery: 'exact compatibility with Hatz 1D42S',
               productIntent: 'plateAccessory',
+              canonicalProductIntent: 'plateAccessory',
               productNames: ['Filter kit KA-00042730'],
               comparisonAttributes: ['совместимость с Hatz 1D42S'],
               limit: 4
@@ -464,6 +470,12 @@ describe('AgentManager comparison research flow', () => {
             rationale: 'the decisive compatibility fact is still missing',
             required: true,
             coversRequirementIds: ['req-partial-compatibility']
+          }],
+          productMentions: [{
+            name: 'Filter kit KA-00042730',
+            role: 'target_product',
+            productClass: 'plateAccessory',
+            evidence: 'комплект'
           }],
           mustNotAskQuestionIds: [],
           riskFlags: ['web_required']
@@ -629,6 +641,7 @@ describe('AgentManager comparison research flow', () => {
               query: 'filter kit compatibility Hatz 1D42S',
               semanticQuery: 'exact filter kit compatibility with Hatz 1D42S engine',
               productIntent: 'plateAccessory',
+              canonicalProductIntent: 'plateAccessory',
               productNames: ['Filter kit KA-00042730'],
               comparisonAttributes: ['совместимость комплекта с Hatz 1D42S'],
               limit: 4
@@ -636,6 +649,12 @@ describe('AgentManager comparison research flow', () => {
             rationale: 'compatibility is decision-critical',
             required: true,
             coversRequirementIds: ['req-engine-compatibility']
+          }],
+          productMentions: [{
+            name: 'Filter kit KA-00042730',
+            role: 'target_product',
+            productClass: 'plateAccessory',
+            evidence: 'комплект фильтров'
           }],
           mustNotAskQuestionIds: [],
           riskFlags: ['web_required']
@@ -3059,5 +3078,162 @@ describe('AgentManager comparison research flow', () => {
       issueType: 'web_catalog_conflict',
       fieldName: 'noiseDb'
     })]);
+  });
+
+  it('uses typed request provenance when web research follows another unfamiliar product class', async () => {
+    const trackProducts: Product[] = [{
+      ...product('track-1', 'Гусеница 180 мм', {}, 'Accessory for a mini dumper'),
+      category: 'Гусеницы для мини-думперов'
+    }, {
+      ...product('track-2', 'Гусеница 200 мм', {}, 'Accessory for a mini dumper'),
+      category: 'Гусеницы для мини-думперов'
+    }];
+    const miniDumper: Product = {
+      ...product('mini-dumper-1', 'Мини-думпер TEST 500', { payloadKg: 500 }),
+      category: 'Мини-думперы'
+    };
+    class UnfamiliarClassProducts extends FakeProducts {
+      queries: string[] = [];
+      explicitPrimaryCalls = 0;
+      webPrimaryCalls = 0;
+      override async searchProducts(query?: string) {
+        this.queries.push(query ?? '');
+        if (query?.includes('гусениц')) return trackProducts;
+        if (query?.trim() === 'мини-думперы') {
+          this.explicitPrimaryCalls += 1;
+          throw new Error('explicit primary catalog lookup temporarily unavailable');
+        }
+        this.webPrimaryCalls += 1;
+        return [miniDumper];
+      }
+    }
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      sourceAttempts: [{ tier: 'catalog', outcome: 'confirmed' }],
+      facts: [],
+      conflicts: [],
+      summaryForAnswer: 'Mini dumper facts were researched without accessory candidates.',
+      warnings: []
+    });
+    const unfamiliarModel: AgentManagerModel = {
+      ...model(),
+      async proposeLedgerDelta() {
+        return { rationale: 'continue the current unfamiliar product request', events: [] };
+      },
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer requests a mini dumper and asks about a track accessory',
+          dialogueUnderstanding: 'mini dumper is primary; the track is a separate unfamiliar product class',
+          nextStepRationale: 'search each typed class separately and research only the primary class',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'catalog:track-first',
+            tool: 'catalog.search',
+            args: {
+              query: 'гусеница для мини-думпера',
+              productIntent: 'гусеница для мини-думпера'
+            },
+            rationale: 'find the separately requested accessory',
+            required: true
+          }, {
+            id: 'web:mini-dumper',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'мини-думпер грузоподъемность',
+              productIntent: 'мини-думпер',
+              productNames: [],
+              comparisonAttributes: ['грузоподъемность']
+            },
+            rationale: 'research only the primary unfamiliar product class',
+            required: true
+          }, {
+            id: 'catalog:mini-dumper-after-web',
+            tool: 'catalog.search',
+            args: {
+              query: 'мини-думперы',
+              productIntent: 'мини-думпер'
+            },
+            rationale: 'satisfy the primary catalog requirement',
+            required: true
+          }],
+          productMentions: [{
+            name: 'гусеница для мини-думпера',
+            role: 'target_product',
+            productClass: 'гусеница для мини-думпера',
+            evidence: 'гусеницу для мини-думпера'
+          }],
+          selectionPolicy: {
+            targetProductClass: 'мини-думпер',
+            canonicalProductClass: null,
+            selectionGoal: 'browse_catalog',
+            needAction: 'continue',
+            alternativePolicy: 'same_class_only',
+            reusePreviousCards: false,
+            maxCards: 4,
+            powerSource: 'any',
+            phase: 'any',
+            requirements: [],
+            rationale: 'keep the unfamiliar primary and accessory classes distinct'
+          },
+          grounding: {
+            taskType: 'product_selection',
+            sourcePolicy: 'web_required',
+            webPurpose: 'technical_specs',
+            webRequirement: 'independent_required',
+            catalogRequirement: 'required',
+            requiredToolKinds: ['catalog.search', 'web.researchProductFacts'],
+            technicalAttributes: ['грузоподъемность'],
+            rationale: 'catalog and web facts are required for the unfamiliar primary class'
+          },
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer() {
+        return {
+          answerText: 'Мини-думпер найден отдельно от гусениц.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['catalog:track-first', 'web:mini-dumper', 'catalog:mini-dumper-after-web'],
+          selectedProductIds: [],
+          leadAction: 'none',
+          riskFlags: [],
+          selectionReadiness: {
+            productClass: 'unknown',
+            status: 'needs_more_info',
+            canShowProductCards: false,
+            missingFacts: [],
+            rationale: 'The test verifies execution scoping rather than card classification.'
+          }
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    const userMessage = 'Покажите мини-думперы и гусеницу для мини-думпера.';
+    conversations.messages = [message(userMessage)];
+    const products = new UnfamiliarClassProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      {} as never,
+      withStrictToolFixtures(unfamiliarModel)
+    );
+
+    await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      products: [expect.objectContaining({ id: miniDumper.id })],
+      targetProductNames: [],
+      comparisonAttributes: ['грузоподъемность'],
+      catalogSearchAttempted: true,
+      catalogProductsFound: true
+    }));
+    expect(researchProductComparisonFacts.mock.calls[0]?.[0].products).not.toEqual(
+      expect.arrayContaining(trackProducts.map((item) => expect.objectContaining({ id: item.id })))
+    );
+    expect(products.explicitPrimaryCalls).toBeGreaterThan(0);
+    expect(products.webPrimaryCalls).toBeGreaterThan(0);
   });
 });

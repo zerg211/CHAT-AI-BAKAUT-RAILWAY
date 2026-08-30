@@ -94,3 +94,16 @@ Required fix: reject structurally invalid strict requirements before tool execut
 The turn returned no assistant message. Attempt 1 was schema-invalid because an unauthorized lead carried authorization fields. Attempt 2 failed `product_mention_evidence_not_in_current_message:1`. Attempt 3 failed `opened_need_action_mismatch:continue` and `required_tool_request_missing:lead.capture`, with 120563 ms still remaining. The next buyer turn correctly produced a form offer and the subsequent lead was captured, confirming that the defect is the semantic correction guidance for the pre-contact handoff rather than execution or persistence.
 
 Required fix: tell the LLM correction to remove `lead.capture` from `requiredToolKinds/toolRequests` when contact authorization is absent and preserve an availability/delivery handoff for writer `leadAction="offer_form"`; add exact guidance for reconciling `need.opened` with `needAction`. Do not infer buyer meaning or rewrite the decision in code.
+
+## Multi-class Catalog Follow-up Failure
+
+- Date: 2026-08-30
+- Deployed commit: `8fe9d7759af90bf72a1f56ebab5f3a22364ca08a`
+- Session: `4fa03331-1802-43d9-baca-8132f636b7fd`
+- Failed turn: `3d12b999-229f-48ec-9c15-6eeaebf7553f`
+- Buyer message: `Покажите, пожалуйста, виброплиты из каталога в районе 80-100 кг и скажите насчет коврика для плитки.`
+- Buyer/code audit: 1 issue each; buyer goal and lead audit passed.
+
+The prior availability/delivery defect is resolved in this session: the corresponding turn returned a correct form offer, and lead capture completed. The plate-plus-accessory turn produced no assistant message. Attempt 1 issues were `conditional_research_plan_missing` and `catalog_tool_product_class_mismatch:mat_search:plateAccessory:plate`; attempts 2 and 3 retained only the class mismatch. The planner consistently represented a primary plate search and a separate accessory search, but deterministic validation assumed all catalog requests had to equal the single primary selection class.
+
+Required fix: preserve one primary selection policy while allowing a secondary catalog class only when the LLM contract supplies a current-message exact-target product mention for that class. Continue rejecting unexplained cross-class requests and validating mention evidence; do not infer accessory meaning from buyer text in code.

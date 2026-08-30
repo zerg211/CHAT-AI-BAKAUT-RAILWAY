@@ -124,6 +124,16 @@ const plate: Product = {
   specs: {}
 };
 
+const plateAccessory: Product = {
+  id: 'plate-accessory-1',
+  name: 'Коврик полиуретановый для виброплиты',
+  brand: 'ТСС',
+  category: 'Комплектующие для виброплит',
+  price: 12000,
+  currency: 'RUB',
+  specs: {}
+};
+
 const overBudgetPlate: Product = {
   id: 'plate-over-budget',
   name: 'Виброплита TSS-WP60TH 72 кг',
@@ -375,6 +385,124 @@ function plateWithNameAndWeight(id: string, name: string, weightKg: number): Pro
 }
 
 describe('AgentManager visible card readiness', () => {
+  it('keeps visible cards scoped to the primary policy class when a secondary request runs first', () => {
+    const intent = structuredSelectionIntentForClass('plate');
+    intent.toolRequests = [{
+      id: 'accessory-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'коврик для виброплиты',
+        productIntent: 'plateAccessory',
+        canonicalProductIntent: 'plateAccessory'
+      },
+      rationale: 'find the requested accessory',
+      required: true
+    }, {
+      id: 'plate-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'виброплита',
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate'
+      },
+      rationale: 'find the primary equipment',
+      required: true
+    }];
+    intent.productMentions = [{
+      name: 'коврик для виброплиты',
+      evidence: 'коврик для виброплиты',
+      role: 'target_product',
+      productClass: 'plateAccessory'
+    }];
+
+    const selection = selectProductsForVisibleCards({
+      products: [plateAccessory, plate],
+      userMessage: 'Покажите виброплиту и коврик для виброплиты.',
+      history: [],
+      intent,
+      answerText: 'Виброплита и коврик найдены.',
+      selectedProductIds: [plateAccessory.id, plate.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.intent).toBe('plate');
+    expect(selection.selectedProductIds).toEqual([plate.id]);
+    expect(selection.droppedProductIds).toContain(plateAccessory.id);
+  });
+
+  it('uses primary tool-result provenance when the policy class is unfamiliar', () => {
+    const miniDumper: Product = {
+      id: 'mini-dumper-primary',
+      name: 'Мини-думпер TEST 500',
+      brand: 'TEST',
+      category: 'Мини-думперы',
+      price: 250000,
+      currency: 'RUB',
+      specs: { payloadKg: 500 }
+    };
+    const intent = structuredSelectionIntentForClass('plate');
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'мини-думпер',
+      canonicalProductClass: null,
+      selectionGoal: 'browse_catalog'
+    };
+    intent.toolRequests = [{
+      id: 'known-secondary-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'виброплиты',
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate'
+      },
+      rationale: 'find the separately requested plate',
+      required: true
+    }, {
+      id: 'unfamiliar-primary-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'мини-думперы',
+        productIntent: 'мини-думпер'
+      },
+      rationale: 'find the primary unfamiliar class',
+      required: true
+    }];
+    intent.productMentions = [{
+      name: 'виброплита',
+      evidence: 'виброплиту',
+      role: 'target_product',
+      productClass: 'plate'
+    }];
+    const toolResults: ToolResult[] = [{
+      requestId: 'known-secondary-search',
+      tool: 'catalog.search',
+      status: 'ok',
+      payload: { productIds: [plate.id], products: [plate] },
+      warnings: []
+    }, {
+      requestId: 'unfamiliar-primary-search',
+      tool: 'catalog.search',
+      status: 'ok',
+      payload: { productIds: [miniDumper.id], products: [miniDumper] },
+      warnings: []
+    }];
+
+    const selection = selectProductsForVisibleCards({
+      products: [plate, miniDumper],
+      userMessage: 'Покажите мини-думперы и виброплиту.',
+      history: [],
+      intent,
+      answerText: 'Мини-думпер и виброплита найдены.',
+      selectedProductIds: [plate.id, miniDumper.id],
+      needState: needStateWithBudget(),
+      toolResults
+    });
+
+    expect(selection.intent).toBe('unknown');
+    expect(selection.selectedProductIds).toEqual([miniDumper.id]);
+    expect(selection.droppedProductIds).toContain(plate.id);
+  });
+
   it('blocks non-generator catalog cards when the answer contract says cards are not applicable', () => {
     const readiness = assessVisibleCardReadiness({
       cardSelection: cardSelection('plate', [plate]),

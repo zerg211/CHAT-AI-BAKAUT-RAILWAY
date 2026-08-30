@@ -841,6 +841,14 @@ function semanticAuthorityIssues(input: {
 
   const requiredRequests = intent.toolRequests.filter((request) => request.required);
   const policyProductClass = coerceVisibleCardIntent(policy?.canonicalProductClass);
+  const policyProductClassKey = typedProductClassKey(
+    policy?.canonicalProductClass,
+    policy?.targetProductClass
+  );
+  const explicitlyTargetedProductClassKeys = new Set((intent.productMentions ?? [])
+    .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+    .map((mention) => typedProductClassKey(mention.productClass, mention.productClass))
+    .filter((productClass): productClass is string => productClass !== null));
   if (policy) {
     for (const blocker of strictSelectionRequirementShapeBlockers(intent, policyProductClass)) {
       issues.push(`strict_requirement_shape_invalid:${blocker.id}:${blocker.reason}`);
@@ -860,6 +868,16 @@ function semanticAuthorityIssues(input: {
     grounding?.taskType === 'product_selection';
   if (catalogRequired && !catalogRequests.length && policy?.reusePreviousCards !== true) {
     issues.push('required_catalog_tool_missing');
+  }
+  if (
+    catalogRequired &&
+    policyProductClassKey !== null &&
+    !catalogRequests.some((request) =>
+      typedProductClassKey(request.args.canonicalProductIntent, request.args.productIntent) === policyProductClassKey
+    ) &&
+    policy?.reusePreviousCards !== true
+  ) {
+    issues.push(`required_primary_catalog_tool_missing:${policyProductClassKey}`);
   }
   const webRequired = grounding?.sourcePolicy === 'web_required' ||
     grounding?.webRequirement === 'buyer_requested' ||
@@ -892,11 +910,18 @@ function semanticAuthorityIssues(input: {
 
   for (const request of intent.toolRequests) {
     if (request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails') {
-      const requestClass = coerceVisibleCardIntent(request.args.canonicalProductIntent);
-      const policyClass = coerceVisibleCardIntent(policy?.canonicalProductClass);
-      if (requestClass === 'unknown') issues.push(`catalog_tool_canonical_product_class_missing:${request.id}`);
-      if (policyClass !== 'unknown' && requestClass !== 'unknown' && requestClass !== policyClass) {
-        issues.push(`catalog_tool_product_class_mismatch:${request.id}:${requestClass}:${policyClass}`);
+      const requestClassKey = typedProductClassKey(
+        request.args.canonicalProductIntent,
+        request.args.productIntent
+      );
+      if (requestClassKey === null) issues.push(`catalog_tool_canonical_product_class_missing:${request.id}`);
+      if (
+        policyProductClassKey !== null &&
+        requestClassKey !== null &&
+        requestClassKey !== policyProductClassKey &&
+        !explicitlyTargetedProductClassKeys.has(requestClassKey)
+      ) {
+        issues.push(`catalog_tool_product_class_mismatch:${request.id}:${requestClassKey}:${policyProductClassKey}`);
       }
       if (request.tool === 'catalog.search' && !request.args.query?.trim()) {
         issues.push(`catalog_search_query_missing:${request.id}`);
@@ -913,11 +938,39 @@ function semanticAuthorityIssues(input: {
     issues.push(...generatorLoadSemanticFieldIssues(request));
     if (request.tool === 'web.researchProductFacts') {
       const names = requestStringArray(request.args.productNames);
+      const requestClassKey = typedProductClassKey(
+        request.args.canonicalProductIntent,
+        request.args.productIntent
+      );
+      if (
+        requestClassKey === null &&
+        (names.length > 0 || catalogRequests.length > 0 ||
+          grounding?.taskType === 'product_selection' || grounding?.taskType === 'comparison')
+      ) {
+        issues.push(`web_research_product_class_missing:${request.id}`);
+      }
       if (!request.args.query?.trim() && !names.length) {
         issues.push(`web_research_query_or_targets_missing:${request.id}`);
       }
+      if (
+        requestClassKey !== null &&
+        requestClassKey !== policyProductClassKey &&
+        !explicitlyTargetedProductClassKeys.has(requestClassKey)
+      ) {
+        issues.push(`web_research_product_class_not_authorized:${request.id}:${requestClassKey}`);
+      }
       if (names.length && !webResearchTargetsCurrentIntent(names, intent)) {
         issues.push(`web_research_target_not_authorized_by_product_mentions:${request.id}`);
+      }
+      if (
+        names.filter((name) => productNameAllowedAsExactTarget({ intent, productName: name }))
+          .some((name) => !(intent.productMentions ?? []).some((mention) =>
+          exactTargetProductMentionRoles.has(mention.role) &&
+          productMentionMatchesName(mention.name, name) &&
+          typedProductClassKey(mention.productClass, mention.productClass) === requestClassKey
+          ))
+      ) {
+        issues.push(`web_research_target_product_class_mismatch:${request.id}`);
       }
     }
   }
@@ -1335,6 +1388,14 @@ function requestStringArray(value: unknown) {
     : [];
 }
 
+function typedProductClassKey(canonicalValue: unknown, fallbackValue: unknown) {
+  const canonicalClass = coerceVisibleCardIntent(canonicalValue);
+  if (canonicalClass !== 'unknown') return canonicalClass;
+  if (typeof fallbackValue !== 'string' || !fallbackValue.trim()) return null;
+  const fallbackClass = fallbackValue.trim().toLocaleLowerCase('ru-RU');
+  return fallbackClass === 'unknown' ? null : fallbackClass;
+}
+
 const exactTargetProductMentionRoles = new Set<ProductMentionRole>([
   'target_product',
   'catalog_candidate',
@@ -1509,7 +1570,33 @@ function canonicalProductClassFromIntent(intent: AgentIntentContract): ProductSe
 function resolvedToolProductIntent(request: ToolRequest, intent: AgentIntentContract) {
   const requestClass = toolRequestProductIntent(request);
   if (requestClass !== 'unknown') return requestClass;
+  if (typedProductClassKey(request.args.canonicalProductIntent, request.args.productIntent) !== null) {
+    return 'unknown';
+  }
   return canonicalProductClassFromIntent(intent);
+}
+
+function toolRequestTargetsPrimarySelectionClass(request: ToolRequest, intent: AgentIntentContract) {
+  const requestClassKey = typedProductClassKey(
+    request.args.canonicalProductIntent,
+    request.args.productIntent
+  );
+  const policyClassKey = typedProductClassKey(
+    intent.selectionPolicy?.canonicalProductClass,
+    intent.selectionPolicy?.targetProductClass
+  );
+  return requestClassKey === null || policyClassKey === null || requestClassKey === policyClassKey;
+}
+
+export function productsMatchingToolRequestIntent(input: {
+  products: Product[];
+  request: ToolRequest;
+  intent: AgentIntentContract;
+}) {
+  const productIntent = resolvedToolProductIntent(input.request, input.intent);
+  return productIntent === 'unknown'
+    ? input.products
+    : input.products.filter((product) => productMatchesIntent(product, productIntent));
 }
 
 function resolvedToolPowerSource(request: ToolRequest, intent: AgentIntentContract) {
@@ -4689,7 +4776,7 @@ function plannerSystemPromptBlock(
     'loads.kind — канонические: pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop, unknown_load; описания — в name/evidence.',
     'Для generator_load_scenario сохрани полный structured value: loads со всеми operationMode/coRunningGroup/provenance полями, simultaneousRunning, simultaneousStarting; каждый load из ledgerDelta присутствует в args.loads.',
     'preliminary_fit: unbounded guess → не заявляй fit, спроси тип/функцию/сценарий. browse_catalog: unbounded расчет не блокирует показ диапазона мощности/моделей/цен без обещания совместимости. Достаточный контекст для bounded оценки → calculator + catalog; слишком vague → уточнение вместо поиска.',
-    'productMentions для каждой названной модели/товара с ролью: target_product (хочет купить/проверить), catalog_candidate (рассматриваемая альтернатива), comparison_subject (сравнение), context_load_device (потребитель для расчета), compatibility_context (оборудование-партнер), mentioned_only. evidence копируй как точный непустой фрагмент текущего userMessage; для разрешённой анафоры evidence — точная фраза-ссылка из текущей реплики. context_load_device/compatibility_context не попадают в web args.productNames (котёл Baxi в «генератор для котла Baxi» — не цель). Только target_product/catalog_candidate/comparison_subject движут presence/web/nearby.',
+    'productMentions для каждой названной модели/товара с ролью: target_product (хочет купить/проверить), catalog_candidate (рассматриваемая альтернатива), comparison_subject (сравнение), context_load_device (потребитель для расчета), compatibility_context (оборудование-партнер), mentioned_only. evidence копируй как точный непустой фрагмент текущего userMessage; для разрешённой анафоры evidence — точная фраза-ссылка из текущей реплики. context_load_device/compatibility_context не попадают в web args.productNames (котёл Baxi в «генератор для котла Baxi» — не цель). Только target_product/catalog_candidate/comparison_subject движут presence/web/nearby. Если в одном ходе явно запрошены разные классы товаров, selectionPolicy описывает главный класс и required catalog request этого же класса обязателен, а каждый дополнительный искомый класс получает отдельный target_product productMention с точным evidence/productClass и отдельный catalog request; не своди аксессуар к классу основного товара. Каждый web request также несёт свой canonicalProductIntent и исследует только товары этого класса.',
     'Анафора («та первая модель», «тот вариант», «вернемся к той») — разреши через priorVisibleProducts (id, name, price прежних карточек): productMentions role="target_product" с точным именем; квалификатор (первый/дешевле/с X) выбирает между несколькими; при неоднозначности — один короткий вопрос. Для фактов — catalog.getProductDetails с productNames=[имя] (или productIds=[id]).',
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
     'Новая модель в текущем ходе → не переиспользуй факты прежней модели, даже при «same», без evidence scoped к тому же идентификатору.',
@@ -4713,7 +4800,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       hasIssue('product_mention_evidence_not_in_current_message')
         ? 'productMentions.evidence должен быть точной непрерывной подстрокой текущего userMessage; исправь evidence или убери mention, которого в текущей реплике нет.'
         : '',
-      hasIssue('required_catalog_tool_missing') || hasIssue('required_tool_request_missing:catalog.search')
+      hasIssue('required_catalog_tool_missing') || hasIssue('required_primary_catalog_tool_missing') || hasIssue('required_tool_request_missing:catalog.search')
         ? 'Если rejected decision действительно выбирает/ищет товар сейчас, добавь required catalog.search с непустым args.query и canonicalProductIntent. Если следующий шаг по смыслу только уточнение до подбора, согласованно исправь taskType/responseMode/catalogRequirement/requiredToolKinds/toolRequests, не оставляя product_selection без каталога.'
         : '',
       hasIssue('required_web_tool_missing') || hasIssue('required_tool_request_missing:web.researchProductFacts') || hasIssue('conditional_research_plan_missing')
@@ -4721,6 +4808,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         : '',
       hasIssue('catalog_search_query_missing')
         ? 'Каждый catalog.search обязан иметь непустой args.query, описывающий typed потребность без добавления новых ограничений.'
+        : '',
+      hasIssue('catalog_tool_product_class_mismatch')
+        ? 'Исправь класс catalog request по typed смыслу rejected decision. Если request ищет второй явно запрошенный в текущей реплике класс товара, сохрани основной selectionPolicy и добавь для второго класса target_product productMention с точными evidence и productClass. Если второго класса покупатель не запрашивал, выровняй canonicalProductIntent с selectionPolicy или удали лишний request.'
         : '',
       hasIssue('generator_load_source_missing') || hasIssue('generator_load_running_source_missing') || hasIssue('generator_load_starting_source_missing') || hasIssue('generator_load_running_provenance_mismatch') || hasIssue('generator_load_starting_provenance_mismatch')
         ? 'У каждого generator load обязательны source, runningSource и startingSource. source не null: explicit_user только когда оба числа явно даны; при смешанной или оценочной мощности используй estimated_average. Число отсутствует только вместе с соответствующим *Source="not_provided".'
@@ -6621,7 +6711,6 @@ export class AgentManagerOrchestrator {
   }) {
     const productsById = new Map<string, Product>();
     const toolResults: ToolResult[] = [];
-    let inlineCatalogLookupCompleted = false;
     const technicalLeadRequiresExhaustionProof = intentRequiresSearchBeforeSpecialist(input.intent) &&
       input.intent.toolRequests.some((request) => request.tool === 'lead.capture');
     const technicalHandoffContinuationProven =
@@ -6844,7 +6933,7 @@ export class AgentManagerOrchestrator {
               powerSource: resolvedToolPowerSource(request, input.intent),
               embeddingQuery: semanticQuery,
               budgetMax,
-              intent: input.intent,
+              intent: toolRequestTargetsPrimarySelectionClass(request, input.intent) ? input.intent : undefined,
               toolResults
             });
             const loadRequirementKw = isGeneratorProductClass(productIntent)
@@ -6932,12 +7021,19 @@ export class AgentManagerOrchestrator {
                 powerSource: resolvedToolPowerSource(request, input.intent),
                 embeddingQuery: semanticQuery,
                 budgetMax,
-                intent: input.intent,
+                intent: toolRequestTargetsPrimarySelectionClass(request, input.intent) ? input.intent : undefined,
                 toolResults,
                 allowPrimaryExpansion: false
               });
               found.products.forEach((product) => requestProductsById.set(product.id, product));
             }
+            const scopedProducts = productsMatchingToolRequestIntent({
+              products: [...requestProductsById.values()],
+              request,
+              intent: input.intent
+            });
+            requestProductsById.clear();
+            scopedProducts.forEach((product) => requestProductsById.set(product.id, product));
             requestProductsById.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
               requestId: request.id,
@@ -6965,10 +7061,46 @@ export class AgentManagerOrchestrator {
           let targetProductNames = targetProductNamesForRequest(request, input.intent);
           const suppressedTargetProductNames = suppressedContextTargetProductNamesForRequest(request, input.intent);
           const comparisonAttributes = comparisonAttributesForRequest(request);
-          const catalogCandidatesBeforeWeb = [...productsById.values()];
+          const webProductClassKey = typedProductClassKey(
+            request.args.canonicalProductIntent,
+            request.args.productIntent
+          );
+          const webProductIntent = resolvedToolProductIntent(request, input.intent);
+          const webLookupProductIds = new Set<string>();
+          const requestMatchesWebIntent = (requestId: string) => {
+            const sourceRequest = input.intent.toolRequests.find((candidate) => candidate.id === requestId);
+            if (!sourceRequest) return false;
+            const sourceProductClassKey = typedProductClassKey(
+              sourceRequest.args.canonicalProductIntent,
+              sourceRequest.args.productIntent
+            );
+            return webProductClassKey !== null && sourceProductClassKey === webProductClassKey;
+          };
+          const scopedProductsForWeb = () => {
+            const products = productsMatchingToolRequestIntent({
+              products: [...productsById.values()],
+              request,
+              intent: input.intent
+            });
+            if (webProductIntent !== 'unknown') return products;
+            if (webProductClassKey === null) {
+              return products.filter((product) => webLookupProductIds.has(product.id));
+            }
+            const matchingCatalogProductIds = new Set(toolResults
+              .filter((toolResult) =>
+                (toolResult.tool === 'catalog.search' || toolResult.tool === 'catalog.getProductDetails') &&
+                requestMatchesWebIntent(toolResult.requestId)
+              )
+              .flatMap((toolResult) => productsFromPersistedToolResult(toolResult).map((product) => product.id)));
+            return products.filter((product) =>
+              matchingCatalogProductIds.has(product.id) || webLookupProductIds.has(product.id)
+            );
+          };
+          const catalogCandidatesBeforeWeb = scopedProductsForWeb();
           const precedingCatalogSucceeded = toolResults.some((result) =>
             (result.tool === 'catalog.search' || result.tool === 'catalog.getProductDetails') &&
-            result.status === 'ok'
+            result.status === 'ok' &&
+            requestMatchesWebIntent(result.requestId)
           );
           if (!targetProductNames.length && precedingCatalogSucceeded && catalogCandidatesBeforeWeb.length) {
             targetProductNames = catalogCandidatesBeforeWeb.slice(0, 4).map((product) => product.name);
@@ -6998,7 +7130,10 @@ export class AgentManagerOrchestrator {
                   productMatchesExactTargetIdentity(product, targetName)
                 ))
                 .catch(() => []);
-              exactMatches.forEach((product) => productsById.set(product.id, product));
+              exactMatches.forEach((product) => {
+                productsById.set(product.id, product);
+                webLookupProductIds.add(product.id);
+              });
             }
           }
           let exactCatalogRefreshWarnings: string[] = [];
@@ -7007,7 +7142,7 @@ export class AgentManagerOrchestrator {
           // fetched and contained no exact candidate URL. Any skipped refresh,
           // empty inventory, or failed crawl remains explicitly unknown.
           let exactCatalogAbsenceVerified = false;
-          let catalogCandidatesAfterExactModelLookup = [...productsById.values()];
+          let catalogCandidatesAfterExactModelLookup = scopedProductsForWeb();
           let exactTargetsPresentAfterModelLookup = targetProductNames.length > 0 && targetProductNames.every((targetName) =>
             catalogCandidatesAfterExactModelLookup.some((product) => productMatchesExactTargetIdentity(product, targetName))
           );
@@ -7030,10 +7165,13 @@ export class AgentManagerOrchestrator {
                   const refreshedMatches = await exactModelTokenSearch.call(this.products, tokens, 20, { signal: toolSignal })
                     .then((products) => products.filter((product) => productMatchesExactTargetIdentity(product, targetName)))
                     .catch(() => []);
-                  refreshedMatches.forEach((product) => productsById.set(product.id, product));
+                  refreshedMatches.forEach((product) => {
+                    productsById.set(product.id, product);
+                    webLookupProductIds.add(product.id);
+                  });
                 }
               }
-              catalogCandidatesAfterExactModelLookup = [...productsById.values()];
+              catalogCandidatesAfterExactModelLookup = scopedProductsForWeb();
               exactTargetsPresentAfterModelLookup = targetProductNames.every((targetName) =>
                 catalogCandidatesAfterExactModelLookup.some((product) => productMatchesExactTargetIdentity(product, targetName))
               );
@@ -7042,11 +7180,16 @@ export class AgentManagerOrchestrator {
               exactCatalogAbsenceVerified = false;
             }
           }
-          const priorCatalogLookupCompleted = inlineCatalogLookupCompleted || toolResults.some((toolResult) => {
-            if (toolResult.tool === 'catalog.search') {
-              return toolResult.status === 'ok' || toolResult.status === 'not_found';
+          const priorCatalogLookupCompleted = toolResults.some((toolResult) => {
+            if (toolResult.tool === 'catalog.search' || toolResult.tool === 'catalog.getProductDetails') {
+              return requestMatchesWebIntent(toolResult.requestId) &&
+                (toolResult.status === 'ok' || toolResult.status === 'not_found');
             }
-            if (toolResult.tool !== 'web.researchProductFacts' || toolResult.status !== 'ok') return false;
+            if (
+              toolResult.tool !== 'web.researchProductFacts' ||
+              toolResult.status !== 'ok' ||
+              !requestMatchesWebIntent(toolResult.requestId)
+            ) return false;
             const sourceAttempts = (toolResult.payload as { sourceAttempts?: unknown }).sourceAttempts;
             return Array.isArray(sourceAttempts) && sourceAttempts.some((attempt) => {
               if (!attempt || typeof attempt !== 'object') return false;
@@ -7055,11 +7198,12 @@ export class AgentManagerOrchestrator {
                 (sourceAttempt.outcome === 'confirmed' || sourceAttempt.outcome === 'not_found');
             });
           });
-          const needsCatalogLookup = !priorCatalogLookupCompleted || productsById.size === 0 || (
+          const needsCatalogLookup = !priorCatalogLookupCompleted || catalogCandidatesAfterExactModelLookup.length === 0 || (
             targetProductNames.length > 0
               ? !(allExplicitTargetsPresent || exactTargetsPresentAfterModelLookup)
-              : productsById.size < 2
+              : catalogCandidatesAfterExactModelLookup.length < 2
           );
+          let currentWebCatalogLookupCompleted = false;
           if (needsCatalogLookup) {
             const scopedQuery = toolRequestScopedQuery(request);
             const lookupQuery = targetProductNames.length
@@ -7074,10 +7218,13 @@ export class AgentManagerOrchestrator {
               embeddingQuery: scopedQuery.semanticQuery,
               budgetMax
             });
-            inlineCatalogLookupCompleted = true;
-            found.products.forEach((product) => productsById.set(product.id, product));
+            currentWebCatalogLookupCompleted = true;
+            found.products.forEach((product) => {
+              productsById.set(product.id, product);
+              webLookupProductIds.add(product.id);
+            });
           }
-          const allSelectedProducts = [...productsById.values()];
+          const allSelectedProducts = scopedProductsForWeb();
           const exactTargetProducts = targetProductNames.length
             ? allSelectedProducts.filter((product) =>
                 targetProductNames.some((targetName) => productMatchesTargetName(product, targetName))
@@ -7098,7 +7245,7 @@ export class AgentManagerOrchestrator {
               targetProductNames,
               comparisonAttributes,
               allowCatalogOnlyAnswer: allowCatalogOnlyResearchForWebRequest(input.intent, request),
-              catalogSearchAttempted: priorCatalogLookupCompleted || inlineCatalogLookupCompleted,
+              catalogSearchAttempted: priorCatalogLookupCompleted || currentWebCatalogLookupCompleted,
               catalogProductsFound: selectedProducts.length > 0,
               signal: toolSignal,
               deadlineAtMs: startedAt + effectiveTimeoutMs

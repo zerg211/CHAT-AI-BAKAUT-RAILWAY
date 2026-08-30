@@ -1,0 +1,70 @@
+{
+  "taskId": "2026-08-29-llm-owned-semantic-boundary",
+  "verifiedAt": "2026-08-30T14:08:05.6503473+03:00",
+  "verifier": "fresh-task-verifier-current-git-index",
+  "verdict": "PENDING",
+  "localReleaseReadiness": "PASS",
+  "acceptanceCriteria": {
+    "AC1": "PASS",
+    "AC2": "PASS",
+    "AC3": "PASS",
+    "AC4": "PASS",
+    "AC5": "PASS",
+    "AC6": "PASS",
+    "AC7": "PASS",
+    "AC8": "PASS",
+    "AC9": "PASS",
+    "AC10": "UNKNOWN"
+  },
+  "findings": [],
+  "verification": {
+    "stagedSnapshot": "C:\\Users\\8523~1\\AppData\\Local\\Temp\\opencode\\llm-boundary-snapshot-20260830-1253",
+    "stagedFilesMatchSnapshot": true,
+    "focusedTests": {
+      "status": "PASS",
+      "files": 5,
+      "tests": 263
+    },
+    "snapshotFullTests": {
+      "status": "PASS",
+      "files": 84,
+      "tests": 837
+    },
+    "snapshotAgenticTests": {
+      "status": "PASS",
+      "files": 4,
+      "tests": 203
+    },
+    "snapshotTypecheck": "PASS",
+    "snapshotBuild": "PASS",
+    "noRegexGuard": "PASS",
+    "productionDependencyAuditHigh": "PASS",
+    "cachedDiffCheck": "PASS",
+    "repositoryReleaseGate": {
+      "status": "PASS",
+      "files": 88,
+      "tests": 906,
+      "agenticTests": 203
+    }
+  },
+  "semanticBoundaryAudit": {
+    "llmOwned": [
+      "buyer meaning and product roles",
+      "primary and secondary typed product classes",
+      "selection policy and alternatives",
+      "research targets",
+      "generator load semantics",
+      "lead intent"
+    ],
+    "deterministicAuthority": [
+      "typed contract validation and bounded repair",
+      "catalog identity and confirmed-fact filtering",
+      "per-class catalog and web provenance",
+      "ordering and visible-card scoping",
+      "arithmetic, safety, business rules, persistence, and tool execution"
+    ],
+    "rawTextSemanticFallbackFound": false
+  },
+  "blockingReason": "AC10 requires the exact staged code to be committed, pushed, deployed by Railway from GitHub, and audited through a fresh adaptive bakautprof.ru widget dialogue plus admin metadata. That pre-deployment production proof is not locally available.",
+  "problemsFileModified": false
+}

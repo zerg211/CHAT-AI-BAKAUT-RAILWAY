@@ -107,6 +107,63 @@ Exact staged snapshot without .env: 84 files / 822 tests, agentic 192, typecheck
 Fresh read-only verifier: PASS for AC1-AC9; AC10 PENDING
 ```
 
+## Typed Multi-class Catalog Authorization
+
+```text
+npm test -- --run tests/openAIAgentManagerModel.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerCardSelection.test.ts tests/agentManagerConditionalWebShortCircuit.test.ts: PASS
+Test Files 4 passed (4)
+Tests 232 passed (232)
+npm run typecheck: PASS
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 899 passed (899)
+Agentic Tests 197 passed (197)
+Typecheck/build/no-regex/dependency audit: PASS
+First fresh verifier: NOT_PASS; primary catalog, card-order, and mixed-class web scoping gaps fixed
+Exact staged snapshot without .env after verifier fixes: 84 files / 830 tests, agentic 197, typecheck/build PASS
+Fresh verifier: PENDING
+```
+
+## Typed Class Identity And Web Provenance Follow-Up
+
+```text
+Second fresh verifier: NOT_PASS
+Findings: catalog.getProductDetails trusted its declared class without filtering returned identity; unfamiliar typed classes were rejected despite prompt guidance; named and empty-name web requests were not fully bound to their typed request class; execution-level regressions were missing.
+Focused affected suites: PASS, 5 files / 260 tests
+npm run typecheck: PASS
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 903 passed (903)
+Agentic Tests 200 passed (200)
+Typecheck/build/no-regex/dependency audit: PASS
+Exact staged snapshot without .env: 84 files / 834 tests, agentic 200, typecheck/build PASS
+Third fresh verifier: NOT_PASS; null-class web requests still had wildcard execution semantics and mixed execution coverage remained incomplete
+Null-class wildcard and mixed execution follow-up: PASS
+Focused affected suites: 5 files / 261 tests
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 904 passed (904)
+Agentic Tests 201 passed (201)
+Exact staged snapshot without .env: 84 files / 835 tests, agentic 201, typecheck/build PASS
+Fourth fresh verifier: PENDING
+```
+
+## Unfamiliar-Class Execution And Card Provenance Follow-Up
+
+```text
+Fourth fresh verifier: NOT_PASS
+Findings: unfamiliar secondary catalog execution inherited the known primary intent; unfamiliar-primary card scoping could adopt a known secondary tool class.
+Focused affected suites: PASS, 5 files / 263 tests
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 906 passed (906)
+Agentic Tests 203 passed (203)
+Typecheck/build/no-regex/dependency audit: PASS
+git diff --cached --check: PASS
+Exact staged snapshot without .env: 84 files / 837 tests, agentic 203, typecheck/build PASS
+Fifth fresh verifier: PASS for AC1-AC9 with no findings; AC10 PENDING
+```
+
 ## Availability Handoff Repair Guidance
 
 ```text

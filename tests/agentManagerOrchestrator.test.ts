@@ -6,6 +6,7 @@ import {
   orderToolRequestsForSelectionDependencies,
   pendingLeadCaptureDraftMatchesAuthorizationScope,
   productMatchesExactTargetIdentity,
+  productsMatchingToolRequestIntent,
   trustedPendingExhaustedTechnicalHandoffs,
   webResearchResultProvesSourceExhaustion,
   type AgentManagerModel
@@ -2566,6 +2567,81 @@ describe('AgentManagerOrchestrator', () => {
     expect(products.idsSeen).toEqual([exact.id]);
     expect(products.searchCalls).toBe(0);
     expect(payload.productCards.map((card) => card.id)).toEqual([exact.id]);
+  });
+
+  it('keeps only matching products when catalog detail ids contain mixed product classes', async () => {
+    const generator = product('generator-id', 'TSS SGG 5000A generator', 'Generators');
+    const accessory: Product = {
+      ...product('plate-mat-id', 'Коврик для виброплиты', 'Комплектующие для виброплит')
+    };
+    class MismatchedIdProducts extends FakeProducts {
+      async getProductsByIds() {
+        return [generator, accessory];
+      }
+      override async searchProducts(): Promise<Product[]> {
+        throw new Error('text search must not replace exact product ids');
+      }
+    }
+    const intent = structuredGeneratorCatalogIntent();
+    intent.toolRequests = [{
+      id: 'generator-details-by-wrong-id',
+      tool: 'catalog.getProductDetails',
+      args: {
+        productIds: [generator.id, accessory.id],
+        productIntent: 'generator',
+        canonicalProductIntent: 'generator'
+      },
+      rationale: 'rehydrate the requested generator',
+      required: true
+    }];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      selectionGoal: 'browse_catalog',
+      maxCards: 1
+    };
+    const composeAnswer = vi.fn(async (input) => {
+      expect(input.products.map((item: Product) => item.id)).toEqual([generator.id]);
+      expect(input.toolResults).toContainEqual(expect.objectContaining({
+        requestId: 'generator-details-by-wrong-id',
+        status: 'ok',
+        payload: expect.objectContaining({
+          productIds: [generator.id],
+          products: [expect.objectContaining({ id: generator.id })]
+        })
+      }));
+      return {
+        answerText: 'The matching generator remains available.',
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['generator-details-by-wrong-id'],
+        selectedProductIds: [generator.id],
+        selectionRationale: 'The catalog identity matches the requested generator class.',
+        leadAction: 'none' as const,
+        riskFlags: [],
+        selectionReadiness: {
+          productClass: 'generator',
+          status: 'ready_for_preliminary_cards' as const,
+          canShowProductCards: true,
+          missingFacts: [],
+          rationale: 'Only the generator identity matches the typed details request.'
+        }
+      };
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      new MismatchedIdProducts() as never,
+      new FakeLeads() as never,
+      model({ async planTurn() { return intent; }, composeAnswer })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Покажите выбранный генератор.'
+    });
+
+    expect(composeAnswer).toHaveBeenCalledOnce();
+    expect(payload.productCards.map((card) => card.id)).toEqual([generator.id]);
   });
 
   it('keeps current catalog details when a same-id historical visible card is lossy', async () => {
@@ -8388,6 +8464,379 @@ describe('parallel semantic turn contracts', () => {
     expect(decideTurn.mock.calls[1]?.[0].semanticValidationIssues).toContain(
       'required_tool_request_missing:lead.capture'
     );
+  });
+
+  it('accepts a secondary catalog class only after typed current-turn targeting authorizes it', async () => {
+    const conversations = new FakeConversations();
+    const userMessage = 'Покажите виброплиты и скажите насчет коврика для плитки.';
+    conversations.messages = [message(userMessage)];
+    const multiClassIntent = (authorizeAccessory: boolean): AgentIntentContract => {
+      const intent = structuredGeneratorCatalogIntent();
+      intent.userMessageSummary = 'buyer requests plates and a paving mat';
+      intent.dialogueUnderstanding = 'plate is primary and paving mat is a separately requested accessory class';
+      intent.toolRequests = [{
+        id: 'plate-search',
+        tool: 'catalog.search',
+        args: {
+          query: 'виброплиты',
+          semanticQuery: 'виброплиты',
+          productIntent: 'plate',
+          canonicalProductIntent: 'plate',
+          limit: 4
+        },
+        rationale: 'find the requested plates',
+        required: true
+      }, {
+        id: 'mat-search',
+        tool: 'catalog.search',
+        args: {
+          query: 'коврик для плитки',
+          semanticQuery: 'коврик для плитки',
+          productIntent: 'plateAccessory',
+          canonicalProductIntent: 'plateAccessory',
+          limit: 4
+        },
+        rationale: 'find the separately requested paving mat',
+        required: true
+      }];
+      intent.productMentions = authorizeAccessory ? [{
+        name: 'коврик для плитки',
+        evidence: 'коврика для плитки',
+        role: 'target_product',
+        productClass: 'plateAccessory'
+      }] : [];
+      intent.selectionPolicy = {
+        ...intent.selectionPolicy!,
+        targetProductClass: 'plate',
+        canonicalProductClass: 'plate',
+        selectionGoal: 'browse_catalog'
+      };
+      return intent;
+    };
+    const decideTurn = vi.fn(async (
+      _input: import('../src/ai/agentManagerOrchestrator.js').AgentManagerModelInput
+    ): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: { rationale: 'continue the existing plate need', events: [] },
+      intent: multiClassIntent(decideTurn.mock.calls.length > 1) as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn })
+    );
+
+    await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+
+    expect(decideTurn).toHaveBeenCalledTimes(2);
+    expect(decideTurn.mock.calls[1]?.[0].semanticValidationIssues).toContain(
+      'catalog_tool_product_class_mismatch:mat-search:plateAccessory:plate'
+    );
+  });
+
+  it('executes an unfamiliar secondary catalog class without replacing it with the known primary class', async () => {
+    const primaryPlate: Product = {
+      ...product('primary-plate', 'Виброплита TEST 90 кг', 'Виброплиты')
+    };
+    const protectiveFrame: Product = {
+      ...product('protective-frame', 'Защитная рамка TEST', 'Защитные рамки')
+    };
+    class MultiClassProducts extends FakeProducts {
+      override async searchProducts(query?: string): Promise<Product[]> {
+        return query?.includes('рамк') ? [protectiveFrame] : [primaryPlate];
+      }
+    }
+    const intent = structuredGeneratorCatalogIntent();
+    intent.userMessageSummary = 'buyer requests a plate and a protective frame';
+    intent.dialogueUnderstanding = 'plate is primary and protective frame is a separate unfamiliar class';
+    intent.toolRequests = [{
+      id: 'plate-primary-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'виброплита 90 кг',
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate'
+      },
+      rationale: 'find the primary plate',
+      required: true
+    }, {
+      id: 'protective-frame-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'защитная рамка',
+        productIntent: 'защитная рамка'
+      },
+      rationale: 'find the separately requested unfamiliar class',
+      required: true
+    }];
+    intent.productMentions = [{
+      name: 'защитная рамка',
+      evidence: 'защитную рамку',
+      role: 'target_product',
+      productClass: 'защитная рамка'
+    }];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'plate',
+      canonicalProductClass: 'plate',
+      selectionGoal: 'browse_catalog'
+    };
+    const composeAnswer = vi.fn(async (input) => {
+      expect(input.toolResults).toContainEqual(expect.objectContaining({
+        requestId: 'protective-frame-search',
+        status: 'ok',
+        payload: expect.objectContaining({
+          products: [expect.objectContaining({ id: protectiveFrame.id })]
+        })
+      }));
+      return {
+        answerText: 'Виброплита и защитная рамка найдены; основной выбор — виброплита.',
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: ['plate-primary-search', 'protective-frame-search'],
+        selectedProductIds: [primaryPlate.id],
+        selectionRationale: 'The plate is the primary policy class.',
+        leadAction: 'none' as const,
+        riskFlags: [],
+        selectionReadiness: {
+          productClass: 'plate',
+          status: 'ready_for_preliminary_cards' as const,
+          canShowProductCards: true,
+          missingFacts: [],
+          rationale: 'The primary plate has current catalog evidence.'
+        }
+      };
+    });
+    const decideTurn = vi.fn(async (): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: { rationale: 'continue the primary plate need', events: [] },
+      intent: intent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      new MultiClassProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn, composeAnswer })
+    );
+
+    const payload = await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Покажите виброплиту 90 кг и защитную рамку.'
+    });
+
+    expect(decideTurn).toHaveBeenCalledOnce();
+    expect(payload.productCards.map((card) => card.id)).toEqual([primaryPlate.id]);
+  });
+
+  it('still requires a primary-class catalog request when a secondary class is authorized', async () => {
+    const conversations = new FakeConversations();
+    const intent = structuredGeneratorCatalogIntent();
+    intent.toolRequests = [{
+      id: 'mat-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'коврик для плитки',
+        semanticQuery: 'коврик для плитки',
+        productIntent: 'plateAccessory',
+        canonicalProductIntent: 'plateAccessory',
+        limit: 4
+      },
+      rationale: 'find the separately requested paving mat',
+      required: true
+    }];
+    intent.productMentions = [{
+      name: 'коврик для плитки',
+      evidence: 'коврика для плитки',
+      role: 'target_product',
+      productClass: 'plateAccessory'
+    }];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'plate',
+      canonicalProductClass: 'plate'
+    };
+    const decideTurn = vi.fn(async (): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: { rationale: 'invalid secondary-only selection', events: [] },
+      intent: intent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn })
+    );
+
+    await expect(orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Покажите виброплиты и скажите насчет коврика для плитки.'
+    })).rejects.toThrow('required_primary_catalog_tool_missing:plate');
+  });
+
+  it('accepts an unfamiliar typed primary class without coercing it to a known class', async () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.userMessageSummary = 'buyer asks for mini dumpers';
+    intent.dialogueUnderstanding = 'mini dumper is the exact unfamiliar catalog class requested now';
+    intent.toolRequests = [{
+      id: 'mini-dumper-search',
+      tool: 'catalog.search',
+      args: {
+        query: 'мини-думперы',
+        semanticQuery: 'мини-думперы',
+        productIntent: 'мини-думпер',
+        limit: 4
+      },
+      rationale: 'search the requested unfamiliar catalog class without remapping it',
+      required: true
+    }];
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'мини-думпер',
+      canonicalProductClass: null,
+      selectionGoal: 'browse_catalog'
+    };
+    const decideTurn = vi.fn(async (): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: { rationale: 'continue the unfamiliar equipment request', events: [] },
+      intent: intent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Покажите мини-думперы.'
+    });
+
+    expect(decideTurn).toHaveBeenCalledOnce();
+  });
+
+  it('rejects web target names whose typed mention class differs from the web request class', async () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.toolRequests.push({
+      id: 'plate-web-for-mat',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'коврик для виброплиты совместимость',
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate',
+        productNames: ['Коврик для виброплиты'],
+        comparisonAttributes: ['compatibility'],
+        comparisonAttributeBindings: []
+      },
+      rationale: 'invalidly researches an accessory under the plate class',
+      required: true
+    });
+    intent.productMentions = [{
+      name: 'Коврик для виброплиты',
+      evidence: 'коврик для виброплиты',
+      role: 'target_product',
+      productClass: 'plateAccessory'
+    }];
+    intent.grounding = {
+      ...intent.grounding!,
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: ['catalog.search', 'web.researchProductFacts']
+    };
+    const decideTurn = vi.fn(async (): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: { rationale: 'repeat the invalid web class binding', events: [] },
+      intent: intent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn })
+    );
+
+    await expect(orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Проверьте коврик для виброплиты.'
+    })).rejects.toThrow('web_research_target_product_class_mismatch:plate-web-for-mat');
+  });
+
+  it('rejects a product-scoped empty-name web request without a typed product class', async () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.toolRequests.push({
+      id: 'untyped-generator-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'generator noise level',
+        productNames: [],
+        comparisonAttributes: ['noise level'],
+        comparisonAttributeBindings: []
+      },
+      rationale: 'invalid product research without typed class authority',
+      required: true
+    });
+    intent.grounding = {
+      ...intent.grounding!,
+      sourcePolicy: 'web_required',
+      webPurpose: 'technical_specs',
+      webRequirement: 'independent_required',
+      requiredToolKinds: ['catalog.search', 'web.researchProductFacts']
+    };
+    const decideTurn = vi.fn(async (): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => ({
+      ledgerDelta: { rationale: 'repeat the untyped web request', events: [] },
+      intent: intent as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn })
+    );
+
+    await expect(orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Проверьте уровень шума у генераторов.'
+    })).rejects.toThrow('web_research_product_class_missing:untyped-generator-web');
+  });
+
+  it('scopes web research candidates to the web request product class', () => {
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy = {
+      ...intent.selectionPolicy!,
+      targetProductClass: 'plate',
+      canonicalProductClass: 'plate'
+    };
+    const request: ToolRequest = {
+      id: 'plate-web',
+      tool: 'web.researchProductFacts',
+      args: {
+        query: 'виброплита 80 кг',
+        semanticQuery: 'виброплита 80 кг',
+        productIntent: 'plate',
+        canonicalProductIntent: 'plate',
+        productNames: [],
+        comparisonAttributes: ['weight_kg'],
+        comparisonAttributeBindings: []
+      },
+      rationale: 'verify the primary plate facts',
+      required: true
+    };
+    const primaryPlate: Product = {
+      ...product('plate-result', 'Виброплита ТСС 80 кг'),
+      category: 'Виброплиты'
+    };
+    const accessory: Product = {
+      ...product('accessory-result', 'Коврик для виброплиты'),
+      category: 'Комплектующие для виброплит'
+    };
+
+    expect(productsMatchingToolRequestIntent({
+      products: [accessory, primaryPlate],
+      request,
+      intent
+    }).map((item) => item.id)).toEqual([primaryPlate.id]);
   });
 
   it('rejects after two incoherent semantic corrections without a buyer answer', async () => {
