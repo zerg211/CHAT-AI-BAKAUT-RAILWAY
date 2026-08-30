@@ -81,3 +81,16 @@ Writer produced 3 `factsUsed` entries with empty `sourceEventIds`, failing `Answ
 Admin audit found two upstream causes. The first selection used `nominal_power_kw` as a strict numeric product attribute with `value=true`; semantic validation did not reject that malformed shape, and catalog filtering suppressed every candidate. Later selections had a bounded estimate for the pump, boiler, and refrigerator plus lighting with no numeric value. `loadsFromArgs` added both `generator_load_bounded_basis_incomplete` and `generator_load_unbounded_guess`, causing deterministic preliminary-card suppression even though missing lighting power was not a proven conflict. The final three traces stop at `tool_started:catalog.search` and the turns later fail with `agent_manager_generation_aborted_or_timeout`.
 
 Required fix: reject structurally invalid strict requirements before tool execution so the LLM correction loop repairs them, and classify omitted load values as incomplete rather than unbounded. Keep final-fit validation blocked until all required load facts are confirmed.
+
+## Availability Handoff Follow-up Failure
+
+- Date: 2026-08-30
+- Deployed commit: `5e18d505950654c1791c6d8eafd674419b8bb158`
+- Session: `4bf4478c-dd95-467e-8d24-9f281e1912a1`
+- Failed turn: `83e9c047-eabd-47c0-afcd-4a654f4ec712`
+- Buyer message: `Как с доставкой до Азова и наличием, если оформлять вместе генератор и виброплиту? Это можно уточнить?`
+- Buyer/code audit: 1 issue each; buyer goal and lead audit passed.
+
+The turn returned no assistant message. Attempt 1 was schema-invalid because an unauthorized lead carried authorization fields. Attempt 2 failed `product_mention_evidence_not_in_current_message:1`. Attempt 3 failed `opened_need_action_mismatch:continue` and `required_tool_request_missing:lead.capture`, with 120563 ms still remaining. The next buyer turn correctly produced a form offer and the subsequent lead was captured, confirming that the defect is the semantic correction guidance for the pre-contact handoff rather than execution or persistence.
+
+Required fix: tell the LLM correction to remove `lead.capture` from `requiredToolKinds/toolRequests` when contact authorization is absent and preserve an availability/delivery handoff for writer `leadAction="offer_form"`; add exact guidance for reconciling `need.opened` with `needAction`. Do not infer buyer meaning or rewrite the decision in code.

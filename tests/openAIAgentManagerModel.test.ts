@@ -79,7 +79,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         'typed_requirement_coverage_missing:req_load:calc_load',
         'strict_requirement_shape_invalid:req_nominal:invalid_numeric_value',
         'active_requirement_mismatch:pump_rated_power_kw',
-        'product_mention_evidence_not_in_current_message:0'
+        'product_mention_evidence_not_in_current_message:0',
+        'opened_need_action_mismatch:continue',
+        'required_tool_request_missing:lead.capture'
       ],
       semanticValidationIssueHistory: [
         'active_requirement_mismatch:generator_load_scenario'
@@ -112,6 +114,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(systemPrompt).toContain('Факты о мощности потребителя');
     expect(systemPrompt).toContain('productMentions.evidence');
     expect(systemPrompt).toContain('nominal_power_kw=true');
+    expect(systemPrompt).toContain('не создавай need.opened');
+    expect(systemPrompt).toContain('удали lead.capture из requiredToolKinds/toolRequests');
+    expect(systemPrompt).toContain('writer предложит форму через leadAction="offer_form"');
     expect(systemPrompt).toContain('Не возвращай ни одно из этих нарушений');
     expect(systemPrompt).toContain('active_requirement_mismatch:generator_load_scenario');
     expect(request).toMatchObject({ max_output_tokens: 3200 });
@@ -365,6 +370,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('ответил без конфликта');
     expect(plannerPrompt).toContain('явная просьба внешней проверки');
     expect(plannerPrompt).toContain('для availability_or_delivery ставь required только если сначала нужно найти или идентифицировать товар в каталоге');
+    expect(plannerPrompt).toContain('Пока разрешённого контакта нет');
+    expect(plannerPrompt).toContain('leadAction="offer_form"');
     const rankingSchema = plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.properties?.rankingObjectives;
     expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
     expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);

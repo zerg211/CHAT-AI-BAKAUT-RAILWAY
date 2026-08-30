@@ -4679,7 +4679,7 @@ function plannerSystemPromptBlock(
     'Для каждого catalog/calculator/web tool дублируй productIntent и, где применимо, canonicalProductIntent, powerSource, phase. Не подменяй незнакомый класс известным.',
     'policyRuleIds — только коды из SALES POLICY по смыслу хода; обязательные правила применяются всегда.',
     'sourcePolicy="web_required" или requiredToolKinds с web.researchProductFacts → toolRequests обязан содержать web.researchProductFacts (без named model: productNames=[], query/semanticQuery = смысл вопроса, comparisonAttributes = запрошенные факты).',
-    'Наличие/доставка/скидки/сроки — не обещай; при нужном контакте планируй lead.capture/offer form. Сравнение и нехватка важных фактов — web.researchProductFacts.',
+    'Наличие/доставка/скидки/сроки — не обещай. Пока разрешённого контакта нет, leadCaptureAuthorization.authorized=false, не включай lead.capture в requiredToolKinds/toolRequests: ответ должен предложить форму через leadAction="offer_form". Только при authorized=true планируй required lead.capture. Сравнение и нехватка важных фактов — web.researchProductFacts.',
     'catalog.search — только при понятном классе/модели/задаче. Широкий запрос без задачи («что у вас есть», «инструмент») → один главный уточняющий вопрос вместо поиска.',
     'product_selection с технической зависимостью: catalog.search первым, web вторым в том же ходе; productNames пуст, когда кандидаты неизвестны (web исследует найденное каталогом). specialist_required — только когда каталог и web не могут ответить.',
     'Прежние карточки не подходят после сужения — свежий catalog.search в том же классе; ответ отклоняет старые по причине и показывает замену.',
@@ -4752,7 +4752,15 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       hasIssue('required_tool_request_missing:calculator.generatorLoad')
         ? 'Если policy или ledger требуют расчёта нагрузки, добавь required calculator.generatorLoad с корректными loads, runningSource/startingSource, operationMode/coRunningGroup и coversRequirementIds, либо убери hard generator требование и оставь факт как context.'
         : '',
-      repairGuidanceIssues.some((issue) => issue.startsWith('required_tool_request_missing:'))
+      hasIssue('opened_need_action_mismatch')
+        ? 'Согласуй ledgerDelta и selectionPolicy.needAction. Если delta действительно открывает новую потребность, используй needAction="open" или "switch". Если реплика продолжает уже существующую потребность, не создавай need.opened: обнови существующий needId через need.updated и используй "continue" или "resume".'
+        : '',
+      hasIssue('required_tool_request_missing:lead.capture')
+        ? 'Согласуй lead capture без выдуманного разрешения. Если в текущем сообщении нет контакта и нет явного разрешения использовать сохранённый контакт, оставь leadCaptureAuthorization.authorized=false и удали lead.capture из requiredToolKinds/toolRequests; availability/delivery handoff остаётся, а writer предложит форму через leadAction="offer_form". Если контакт действительно авторизован, заполни authorization по evidence и добавь required lead.capture одновременно в requiredToolKinds и toolRequests.'
+        : '',
+      repairGuidanceIssues.some((issue) =>
+        issue.startsWith('required_tool_request_missing:') && issue !== 'required_tool_request_missing:lead.capture'
+      )
         ? 'Каждый tool из grounding.requiredToolKinds должен иметь соответствующий required toolRequest; исправь grounding и requests согласованно, сохраняя смысл rejected decision.'
         : ''
     ].filter(Boolean).join(' ');

@@ -8335,6 +8335,61 @@ describe('parallel semantic turn contracts', () => {
     )).toHaveLength(1);
   });
 
+  it('repairs a missing lead tool requirement without inventing authorization', async () => {
+    const conversations = new FakeConversations();
+    const coherentIntent = noToolIntent('offer a form for the operational check');
+    const decideTurn = vi.fn(async (
+      _input: import('../src/ai/agentManagerOrchestrator.js').AgentManagerModelInput
+    ): Promise<import('../src/ai/agentManagerContracts.js').AgentSemanticDecision> => {
+      if (decideTurn.mock.calls.length === 1) {
+        return {
+          ledgerDelta: { rationale: 'continue the selected products', events: [] },
+          intent: {
+            ...coherentIntent,
+            grounding: {
+              ...coherentIntent.grounding!,
+              taskType: 'availability_or_delivery',
+              responseMode: 'handoff',
+              sourcePolicy: 'specialist_required',
+              requiredToolKinds: ['lead.capture'],
+              buyerQuestion: 'Уточнить наличие и доставку.'
+            }
+          } as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+        };
+      }
+      return {
+        ledgerDelta: { rationale: 'continue without unauthorized lead execution', events: [] },
+        intent: {
+          ...coherentIntent,
+          grounding: {
+            ...coherentIntent.grounding!,
+            taskType: 'availability_or_delivery',
+            responseMode: 'handoff',
+            sourcePolicy: 'specialist_required',
+            buyerQuestion: 'Уточнить наличие и доставку.'
+          }
+        } as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision['intent']
+      };
+    });
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      new FakeProducts() as never,
+      new FakeLeads() as never,
+      model({ decideTurn })
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Как с наличием и доставкой?'
+    });
+
+    expect(decideTurn).toHaveBeenCalledTimes(2);
+    expect(decideTurn.mock.calls[1]?.[0].semanticValidationIssues).toContain(
+      'required_tool_request_missing:lead.capture'
+    );
+  });
+
   it('rejects after two incoherent semantic corrections without a buyer answer', async () => {
     const conversations = new FakeConversations();
     const badIntent = noToolIntent('incoherent semantic decision');

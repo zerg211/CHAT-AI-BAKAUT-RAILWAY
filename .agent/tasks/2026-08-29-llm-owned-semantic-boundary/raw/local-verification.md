@@ -107,6 +107,23 @@ Exact staged snapshot without .env: 84 files / 822 tests, agentic 192, typecheck
 Fresh read-only verifier: PASS for AC1-AC9; AC10 PENDING
 ```
 
+## Availability Handoff Repair Guidance
+
+```text
+npm test -- --run tests/openAIAgentManagerModel.test.ts tests/agentManagerOrchestrator.test.ts: PASS
+Test Files 2 passed (2)
+Tests 116 passed (116)
+npm run typecheck: PASS
+npm run verify: PASS
+Test Files 88 passed (88)
+Tests 895 passed (895)
+Agentic Tests 193 passed (193)
+Typecheck/build/no-regex/dependency audit: PASS
+git diff --check: PASS (line-ending warnings only; no whitespace errors)
+Exact staged snapshot without .env: 84 files / 826 tests, agentic 193, typecheck/build PASS
+Fresh read-only verifier: PASS for AC1-AC9; AC10 PENDING
+```
+
 ## Cumulative Correction History Follow-Up
 
 ```text

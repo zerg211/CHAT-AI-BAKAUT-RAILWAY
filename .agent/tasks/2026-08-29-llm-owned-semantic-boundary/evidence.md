@@ -19,7 +19,7 @@ The implementation and all local checks are complete, but the task is not done u
 | AC6 | PASS | Full card-selection suite confirms unknown mandatory attributes remain preliminary while proven conflicts are excluded. `agentManagerCardSelection.test.ts`: 63/63 PASS. |
 | AC7 | PASS | Deterministic schema, evidence, catalog identity, filtering, ordering, arithmetic, lead authorization, persistence, checkpoints, and tool execution remain active; full release gate passes. |
 | AC8 | PASS | Writer structured output requires `selectionRationale`; pre-send review blocks selected product IDs without a non-empty LLM rationale; product cards receive only that rationale. Always-null `replacementProductEvidence` metadata was removed. |
-| AC9 | PASS | `npm run verify`, standalone no-regex guard, focused integration suites, typecheck, build, and `git diff --check` pass on current files. Full suite: 88 files, 892 tests. Agentic suite: 192 tests. |
+| AC9 | PASS | `npm run verify`, standalone no-regex guard, focused integration suites, typecheck, build, and `git diff --check` pass on current files. Full suite: 88 files, 895 tests. Agentic suite: 193 tests. |
 | AC10 | PENDING | The current repair still needs an exact matching Railway deployment and a fresh post-deploy widget dialogue with buyer/admin audit. |
 
 ## Focused Results
@@ -120,3 +120,11 @@ The second failed production session exposed a structured-schema mismatch and no
 - Six turns returned answers without generator cards; three later catalog turns timed out, so AC10 remains PENDING.
 - Admin metadata showed an invalid numeric strict requirement (`nominal_power_kw=true`) escaped pre-tool validation. Later valid preliminary decisions were blocked because one omitted lighting value incorrectly marked the otherwise bounded calculation as `generator_load_unbounded_guess`.
 - The follow-up rejects invalid strict requirement shapes before tools and keeps omitted load values as incomplete, not unbounded. Final-fit safety remains fail-closed; incomplete preliminary calculations retain explicit caveats. Focused suites: 6 files / 204 tests; full gate: 88 files / 894 tests; agentic 192; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 825 tests, agentic 192, typecheck/build PASS. Fresh read-only verifier: PASS for AC1-AC9.
+
+## Availability Handoff Repair Guidance
+
+- Exact deployed commit `5e18d505950654c1791c6d8eafd674419b8bb158` was exercised through the widget in session `4bf4478c-dd95-467e-8d24-9f281e1912a1`.
+- Generator and plate selections returned cards, and the buyer goal and final lead audit passed. The availability/delivery turn returned no answer after three invalid semantic candidates, so AC10 remains PENDING.
+- Final validator issues were `opened_need_action_mismatch:continue` and `required_tool_request_missing:lead.capture`. The generic correction guidance could incorrectly push the LLM toward adding lead execution even though no contact was authorized.
+- The follow-up gives `lead.capture` a dedicated LLM repair path: without an authorized contact it removes executable lead fields and preserves a form-offer handoff; with authorization it emits a required lead request. It also explains how to reconcile a real new need with `needAction`, or update an existing need without `need.opened`. Deterministic validators and lead authorization are unchanged.
+- Focused suites: 2 files / 116 tests; full gate: 88 files / 895 tests; agentic 193; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 826 tests, agentic 193, typecheck/build PASS. Fresh read-only verifier: PASS for AC1-AC9; AC10 PENDING.
