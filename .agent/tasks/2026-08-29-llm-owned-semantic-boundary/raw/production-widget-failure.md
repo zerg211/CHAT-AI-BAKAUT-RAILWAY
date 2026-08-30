@@ -107,3 +107,14 @@ Required fix: tell the LLM correction to remove `lead.capture` from `requiredToo
 The prior availability/delivery defect is resolved in this session: the corresponding turn returned a correct form offer, and lead capture completed. The plate-plus-accessory turn produced no assistant message. Attempt 1 issues were `conditional_research_plan_missing` and `catalog_tool_product_class_mismatch:mat_search:plateAccessory:plate`; attempts 2 and 3 retained only the class mismatch. The planner consistently represented a primary plate search and a separate accessory search, but deterministic validation assumed all catalog requests had to equal the single primary selection class.
 
 Required fix: preserve one primary selection policy while allowing a secondary catalog class only when the LLM contract supplies a current-message exact-target product mention for that class. Continue rejecting unexplained cross-class requests and validating mention evidence; do not infer accessory meaning from buyer text in code.
+
+## Final Successful Production Audit
+
+- Date: 2026-08-30
+- Deployed commit: `afe7f61bbb03555f4d910a70b14e50771e427abc`
+- Session: `ff38ed11-0d08-44e7-b44c-2c3c6ec3c093`
+- Protocol: `local-live-tests/2026-08-30-production-diverse-buyer-audit-2026-08-30T11-16-32-241Z.production.md`
+- Admin artifact: `local-live-tests/2026-08-30-production-diverse-buyer-audit-2026-08-30T11-16-32-241Z.json`
+- Result: six visible answers; generator and plate cards; mixed plate/accessory planning without class mismatch; availability/delivery handoff; lead persisted with `sent_email`.
+- Audit: buyer issues 0, code/metadata issues 0, buyer-goal issues 0, lead issues 0, pre-send validation 6/6 PASS, recovery fallback 0.
+- Final verifier: PASS for AC1-AC10.

@@ -1,11 +1,11 @@
 # Verification Evidence
 
 Task: `2026-08-29-llm-owned-semantic-boundary`
-Verified at: `2026-08-30T12:54:38.360+03:00`
+Verified at: `2026-08-30T14:32:34.637+03:00`
 Baseline HEAD: `0d12930b1c1850b68ddfad5f61f36c3f624dd63b`
-Current verdict: `PENDING`
+Current verdict: `PASS`
 
-The implementation and all local checks are complete, but the task is not done until AC10 passes on the exact pushed Railway deployment through a fresh widget dialogue at `https://bakautprof.ru/`.
+The implementation, local verification, exact Railway deployment, and fresh widget/admin audit are complete. AC1-AC10 pass.
 
 ## Acceptance Criteria
 
@@ -20,7 +20,7 @@ The implementation and all local checks are complete, but the task is not done u
 | AC7 | PASS | Deterministic schema, evidence, catalog identity, filtering, ordering, arithmetic, lead authorization, persistence, checkpoints, and tool execution remain active; full release gate passes. |
 | AC8 | PASS | Writer structured output requires `selectionRationale`; pre-send review blocks selected product IDs without a non-empty LLM rationale; product cards receive only that rationale. Always-null `replacementProductEvidence` metadata was removed. |
 | AC9 | PASS | `npm run verify`, standalone no-regex guard, focused integration suites, typecheck, build, and `git diff --cached --check` pass on current files. Full suite: 88 files, 906 tests. Agentic suite: 203 tests. |
-| AC10 | PENDING | The current repair still needs an exact matching Railway deployment and a fresh post-deploy widget dialogue with buyer/admin audit. |
+| AC10 | PASS | Railway health reports exact commit `afe7f61bbb03555f4d910a70b14e50771e427abc`. Fresh widget session `ff38ed11-0d08-44e7-b44c-2c3c6ec3c093` completed 6 adaptive turns with 0 buyer, code/metadata, goal, or lead-audit issues; all pre-send validations passed and the form lead reached `sent_email`. |
 
 ## Focused Results
 
@@ -139,3 +139,15 @@ The second failed production session exposed a structured-schema mismatch and no
 - The third fresh verifier returned NOT_PASS because a product-scoped empty-name web request could still omit its typed class and null execution keys matched global catalog state; it also requested stronger mixed execution tests. The follow-up rejects missing web class authority in catalog/product scopes, makes null keys match no prior request or global candidate, tests mixed valid/conflicting detail IDs, and proves an unrelated unfamiliar-class catalog success cannot satisfy the primary web lookup.
 - The fourth fresh verifier returned NOT_PASS because unfamiliar secondary catalog execution still fell back to the known primary class and unfamiliar-primary card scoping could adopt known secondary results. The follow-up keeps exact unfamiliar request classes through execution, applies structured primary policy only to primary-class requests, and restricts unfamiliar-primary cards to primary catalog-tool provenance.
 - Focused suites: 5 files / 263 tests; full gate: 88 files / 906 tests; agentic 203; typecheck/build/no-regex/dependency audit PASS. Exact staged snapshot without `.env`: 84 files / 837 tests, agentic 203, typecheck/build PASS. Fifth fresh read-only verifier: PASS for AC1-AC9 with no findings; AC10 PENDING.
+
+## Final Production Audit
+
+- Exact deployed commit: `afe7f61bbb03555f4d910a70b14e50771e427abc`; runtime marker: `agent_manager`.
+- Widget session: `ff38ed11-0d08-44e7-b44c-2c3c6ec3c093` on `https://bakautprof.ru/`.
+- Six adaptive turns completed with buyer-view issues 0, code/metadata issues 0, buyer-goal issues 0, and lead-audit issues 0. Every turn produced a visible answer, all final semantic decisions were validated within the bounded attempt budget, all pre-send validations passed, and no answer used recovery fallback.
+- Generator selection used typed load arithmetic and showed 3 preliminary generator cards. The need switch showed 1 light plate card; the explicit 80-100 kg request showed 3 clearly disclosed heavier compromises without mixing generator cards.
+- The mixed plate/accessory turn retained `plate` as the primary class and typed the mat as `plateAccessory`. Catalog search succeeded. The accessory web lookup timed out after two attempts; the answer explicitly said compatibility was unconfirmed and made no unsupported compatibility claim.
+- Availability/delivery turns made no stock or delivery promise before verification. Form submission created lead `faccf2df-0aa6-4015-9ab5-2b060fac4b88` with status `sent_email`.
+- Protocol: `local-live-tests/2026-08-30-production-diverse-buyer-audit-2026-08-30T11-16-32-241Z.production.md`.
+- Admin artifact: `local-live-tests/2026-08-30-production-diverse-buyer-audit-2026-08-30T11-16-32-241Z.json`.
+- Final independent verifier: PASS for AC1-AC10 with no findings.
