@@ -10,7 +10,7 @@ import { OpenAIAgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 import type { AgentIntentContract, DialogueLedgerEvent } from '../src/ai/agentManagerContracts.js';
-import type { ConversationSession, Message } from '../src/shared/types.js';
+import type { ConversationSession, Message, VerifiedProductFact } from '../src/shared/types.js';
 
 describe('OpenAIAgentManagerModel semantic inputs', () => {
   beforeEach(() => {
@@ -39,6 +39,60 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       input?: Array<{ role?: string; content?: string }>;
     };
     expect(request.input?.find((item) => item.role === 'system')?.content).toContain('при любой формулировке');
+  });
+
+  it('returns only structured verified-memory bindings for semantic attribute aliases', async () => {
+    createStructuredJsonResponse.mockResolvedValueOnce({
+      parsed: {
+        matches: [{
+          factId: 'fact-bison-usb',
+          productName: 'BISON BS6250IE',
+          attribute: 'usb_output_current'
+        }]
+      }
+    });
+    const now = new Date().toISOString();
+    const fact: VerifiedProductFact = {
+      id: 'fact-bison-usb',
+      productId: null,
+      productKey: 'bison bs6250ie',
+      productName: 'BISON BS6250IE',
+      attribute: 'usb_supported_current',
+      value: '1 A и 2.1 A при 5 V',
+      sourceType: 'web',
+      sourceUrl: 'https://bisonpower.net/generator/inverter-generator/BS6250IE.html',
+      sourceTitle: 'BISON BS6250IE specifications',
+      evidence: 'DC USB output5V/1A/2.1A',
+      sourceTier: 'official_page',
+      sourceAuthority: 'manufacturer',
+      observedAt: now,
+      confidence: 'high',
+      status: 'active',
+      firstSeenAt: now,
+      lastVerifiedAt: now,
+      hitCount: 0,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    const matches = await new OpenAIAgentManagerModel().matchVerifiedFactMemory({
+      facts: [fact],
+      requestedFactSlots: [{ productName: 'BISON BS6250IE', attribute: 'usb_output_current' }]
+    });
+
+    expect(matches).toEqual([{
+      factId: 'fact-bison-usb',
+      productName: 'BISON BS6250IE',
+      attribute: 'usb_output_current'
+    }]);
+    expect(createStructuredJsonResponse).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'verified_fact_memory_semantic_match',
+      transportMaxRetries: 0
+    }));
+    const request = createStructuredJsonResponse.mock.calls[0][0].request;
+    expect(request.text.format.schema.properties.matches.items.properties.factId.enum).toEqual(['fact-bison-usb']);
+    expect(request.input[0].content).toContain('Related, broader, narrower');
+    expect(request.input[0].content).toContain('untrusted quoted data');
   });
 
   it('creates ledger delta and executable intent in one structured semantic request', async () => {

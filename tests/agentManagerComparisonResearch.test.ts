@@ -2746,6 +2746,126 @@ describe('AgentManager comparison research flow', () => {
     expect(fakeProducts.usedVerifiedFactIds).not.toContain('legacy-name-only-button');
   });
 
+  it('semantically binds equivalent canonical attributes before deciding that memory has a gap', async () => {
+    const now = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    class SemanticMemoryProducts extends FakeProducts {
+      constructor() {
+        super();
+        this.verifiedFacts = [{
+          id: 'fact-bison-usb-current',
+          productId: 'bison-bs6250ie',
+          productKey: 'bison bs6250ie',
+          productName: 'BISON BS6250IE',
+          attribute: 'usb_supported_current',
+          value: '1 A и 2.1 A при 5 V',
+          sourceType: 'web',
+          sourceUrl: 'https://bisonpower.net/generator/inverter-generator/BS6250IE.html',
+          sourceTitle: 'BISON BS6250IE specifications',
+          sourceTier: 'official_page',
+          sourceAuthority: 'manufacturer',
+          evidence: 'DC USB output5V/1A/2.1A',
+          confidence: 'high',
+          status: 'active',
+          firstSeenAt: now,
+          lastVerifiedAt: now,
+          observedAt: now,
+          hitCount: 0,
+          createdAt: now,
+          updatedAt: now
+        }];
+      }
+      async searchProducts() {
+        return [product('bison-bs6250ie', 'BISON BS6250IE', {}, 'USB current is absent from catalog data.')];
+      }
+    }
+
+    const semanticModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks for the exact USB output current',
+          dialogueUnderstanding: 'exact model technical fact',
+          nextStepRationale: 'reuse a semantically equivalent verified fact before external research',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:bison-usb',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'BISON BS6250IE USB output current',
+              semanticQuery: 'exact BISON BS6250IE USB output current',
+              productNames: ['BISON BS6250IE'],
+              comparisonAttributes: ['usb_output_current']
+            },
+            rationale: 'the technical fact must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async matchVerifiedFactMemory(input) {
+        expect(input.requestedFactSlots).toEqual([{
+          productName: 'BISON BS6250IE',
+          attribute: 'usb_output_current'
+        }]);
+        expect(input.facts).toContainEqual(expect.objectContaining({
+          id: 'fact-bison-usb-current',
+          attribute: 'usb_supported_current'
+        }));
+        return [{
+          factId: 'fact-bison-usb-current',
+          productName: 'BISON BS6250IE',
+          attribute: 'usb_output_current'
+        }];
+      },
+      async composeAnswer(input) {
+        const result = input.toolResults.find((item) => item.requestId === 'web:bison-usb');
+        expect(result).toEqual(expect.objectContaining({
+          status: 'ok',
+          warnings: expect.arrayContaining(['verified_product_fact_memory_used'])
+        }));
+        expect(result?.payload).toEqual(expect.objectContaining({
+          usedWebSearch: false,
+          searchDisposition: 'memory_hit',
+          facts: expect.arrayContaining([expect.objectContaining({
+            attribute: 'usb_output_current',
+            value: '1 A и 2.1 A при 5 V'
+          })])
+        }));
+        return {
+          answerText: 'USB-выход даёт 1 А или 2,1 А при 5 В.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:bison-usb'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const fakeProducts = new SemanticMemoryProducts();
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Какие токи даёт USB-выход BISON BS6250IE?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      fakeProducts as never,
+      {} as never,
+      withStrictToolFixtures(semanticModel)
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Какие токи даёт USB-выход BISON BS6250IE?'
+    });
+
+    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+    expect(fakeProducts.usedVerifiedFactIds).toEqual(['fact-bison-usb-current']);
+    expect(conversations.traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ eventType: 'verified_fact_memory_semantic_match' }),
+      expect.objectContaining({ eventType: 'verified_fact_memory_used' })
+    ]));
+  });
+
   it('researches only missing canonical attributes and merges them with reusable memory', async () => {
     const now = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     class PartialMemoryProducts extends FakeProducts {
