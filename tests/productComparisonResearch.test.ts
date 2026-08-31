@@ -32,6 +32,7 @@ vi.mock('node:dns/promises', () => ({
 const {
   boundedResearchStageDeadline,
   classifyProductResearchSource,
+  researchWarningsPreventSourceExhaustion,
   researchProductComparisonFacts
 } = await import('../src/ai/productComparisonResearch.js');
 import type { ProductResearchTraceEvent } from '../src/ai/productComparisonResearch.js';
@@ -108,34 +109,80 @@ function sourceSupportedStartKinds(sourceText: unknown) {
 function semanticValidationResponse(call: { request: { input?: Array<{ role?: string; content?: string }> } }) {
   const userInput = call.request.input?.find((item) => item.role === 'user');
   const payload = userInput?.content
-    ? JSON.parse(userInput.content) as { sourceText?: string; claim?: { attribute?: string; value?: string; evidence?: string } }
+    ? JSON.parse(userInput.content) as {
+        sourceText?: string;
+        claim?: { attribute?: string; value?: string; evidence?: string };
+        claims?: Array<{
+          itemIndex: number;
+          sourceText?: string;
+          claim?: { attribute?: string; value?: string; evidence?: string };
+        }>;
+      }
     : {};
-  const claimText = normalized([
-    payload.claim?.attribute,
-    payload.claim?.value,
-    payload.claim?.evidence
-  ].filter(Boolean).join(' '));
-  const claimStartKinds = sourceSupportedStartKinds(claimText)
-    .filter((kind) => kind !== 'button_start' || !includesAny(claimText, [
-      'button control not confirmed',
-      'button start not confirmed',
-      'push button not confirmed'
-    ]));
-  const supportedStartKinds = sourceSupportedStartKinds(payload.sourceText);
-  const claimSupported = claimStartKinds.length
-    ? claimStartKinds.every((kind) => supportedStartKinds.includes(kind))
-    : Boolean(payload.sourceText && claimText && normalized(payload.sourceText).includes(claimText));
-  return {
-    parsed: {
+  const validation = (entry: {
+    sourceText?: string;
+    claim?: { attribute?: string; value?: string; evidence?: string };
+  }) => {
+    const claimText = normalized([
+      entry.claim?.attribute,
+      entry.claim?.value,
+      entry.claim?.evidence
+    ].filter(Boolean).join(' '));
+    const claimStartKinds = sourceSupportedStartKinds(claimText)
+      .filter((kind) => kind !== 'button_start' || !includesAny(claimText, [
+        'button control not confirmed',
+        'button start not confirmed',
+        'push button not confirmed'
+      ]));
+    const supportedStartKinds = sourceSupportedStartKinds(entry.sourceText);
+    const claimSupported = claimStartKinds.length
+      ? claimStartKinds.every((kind) => supportedStartKinds.includes(kind))
+      : Boolean(
+          entry.sourceText &&
+          entry.claim?.value &&
+          entry.claim?.evidence &&
+          normalized(entry.sourceText).includes(normalized(entry.claim.value)) &&
+          normalized(entry.sourceText).includes(normalized(entry.claim.evidence))
+        );
+    const sourceText = String(entry.sourceText ?? '');
+    const claimEvidence = String(entry.claim?.evidence ?? '');
+    const exactEvidence = claimEvidence && normalized(sourceText).includes(normalized(claimEvidence))
+      ? claimEvidence
+      : sourceText.slice(0, 320);
+    return {
       claimSupported,
       claimStartKinds,
       supportedStartKinds,
       publisherAuthority: 'unknown',
       publisherEvidence: '',
-      evidence: 'test semantic source validation',
+      evidence: exactEvidence,
       warnings: []
-    }
+    };
   };
+  if (payload.claims) {
+    return {
+      parsed: {
+        validations: payload.claims.map((entry) => ({
+          itemIndex: entry.itemIndex,
+          ...validation(entry)
+        }))
+      }
+    };
+  }
+  return {
+    parsed: validation(payload)
+  };
+}
+
+function semanticValidationResponseWith(
+  call: { request: { input?: Array<{ role?: string; content?: string }> } },
+  overrides: Record<string, unknown>
+) {
+  const response = semanticValidationResponse(call);
+  const validations = (response.parsed as { validations?: Array<Record<string, unknown>> }).validations;
+  return validations
+    ? { parsed: { validations: validations.map((validation) => ({ ...validation, ...overrides })) } }
+    : { parsed: { ...response.parsed, ...overrides } };
 }
 
 function researchCalls() {
@@ -264,17 +311,12 @@ describe('product comparison research', () => {
     fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote} ${publisherEvidence}</body></html>`));
     createStructuredJsonResponse.mockImplementation(async (call) => {
       if (call.stage === 'source_evidence_semantic_validation') {
-        return {
-          parsed: {
-            claimSupported: true,
-            claimStartKinds: [],
-            supportedStartKinds: [],
-            publisherAuthority: 'manufacturer',
-            publisherEvidence,
-            evidence: 'the exact product claim and publisher identity are present',
-            warnings: []
-          }
-        };
+        return semanticValidationResponseWith(call, {
+          claimSupported: true,
+          publisherAuthority: 'manufacturer',
+          publisherEvidence,
+          evidence: quote
+        });
       }
       const tier = call.stage === 'product_comparison_research_official_page'
         ? 'official_page'
@@ -356,15 +398,10 @@ describe('product comparison research', () => {
     fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote}</body></html>`));
     createStructuredJsonResponse.mockImplementation(async (call) => {
       if (call.stage === 'source_evidence_semantic_validation') {
-        return {
-          parsed: {
-            claimSupported: true,
-            claimStartKinds: [],
-            supportedStartKinds: [],
-            evidence: 'test semantic source validation',
-            warnings: []
-          }
-        };
+        return semanticValidationResponseWith(call, {
+          claimSupported: true,
+          evidence: quote
+        });
       }
       if (call.stage === 'product_comparison_research_official_page') {
         return new Promise((resolve) => {
@@ -464,6 +501,9 @@ describe('product comparison research', () => {
     const traces: ProductResearchTraceEvent[] = [];
     fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote}</body></html>`));
     createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return semanticValidationResponse(call);
+      }
       if (call.stage === 'product_comparison_research_official_page') {
         pageStarted = true;
         return new Promise((_resolve, reject) => {
@@ -795,7 +835,7 @@ describe('product comparison research', () => {
     });
 
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
-      expect.objectContaining({ productName: 'MODEL A', attribute: 'rated power', status: 'not_confirmed' }),
+      expect.objectContaining({ productName: 'MODEL A', attribute: 'rated power', status: 'confirmed' }),
       expect.objectContaining({ productName: 'MODEL B', attribute: 'rated power', status: 'not_confirmed' })
     ]));
     expect(actual.answerGuidance.coverage).not.toContainEqual(expect.objectContaining({
@@ -832,7 +872,6 @@ describe('product comparison research', () => {
         }
       })
     });
-
     const actual = await researchProductComparisonFacts({
       userMessage: 'Как запускается FIRMAN RD3910E?',
       products: [product()],
@@ -1667,6 +1706,112 @@ describe('product comparison research', () => {
     expect(actual.answerGuidance.completeness).toBe('answered');
   });
 
+  it('replaces a catalog gap with accepted non-start web fact coverage', async () => {
+    const exactQuote = 'FIRMAN RD3910E rated power is 5 kW.';
+    const retryQuote = 'FIRMAN RD3910E output voltage is 230 V.';
+    fetchMock.mockResolvedValue(sourceResponse(`${exactQuote} ${retryQuote}`));
+    queueResearchResponse({
+      parsed: compactCatalogResult({
+        missing: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'rated_power',
+          reason: 'Номинальная мощность в карточке не указана.'
+        }, {
+          productName: 'FIRMAN RD3910E',
+          attribute: 'output_voltage',
+          reason: 'Выходное напряжение в карточке не указано.'
+        }],
+        directAnswer: '',
+        completeness: 'not_answered'
+      })
+    });
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'rated_power',
+          value: '5 kW',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: exactQuote,
+          sourceUrl: 'https://manufacturer.example/product/firman-rd3910e',
+          sourceTitle: 'FIRMAN RD3910E specifications'
+        }],
+        answerGuidance: {
+          directAnswer: 'Номинальная мощность составляет 5 кВт.',
+          completeness: 'answered',
+          coverage: [{
+            productName: 'FIRMAN RD3910E',
+            attribute: 'output_voltage',
+            status: 'not_confirmed',
+            value: '',
+            evidence: 'The primary pass did not confirm output voltage.',
+            sourceUrl: null,
+            sourceTitle: null
+          }]
+        }
+      })
+    });
+    queueResearchResponse({
+      parsed: result({
+        usedWebSearch: true,
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'output_voltage',
+          value: '230 V',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: retryQuote,
+          sourceUrl: 'https://manufacturer.example/product/firman-rd3910e',
+          sourceTitle: 'FIRMAN RD3910E specifications'
+        }],
+        answerGuidance: {
+          directAnswer: 'Выходное напряжение составляет 230 В.',
+          completeness: 'answered',
+          coverage: []
+        }
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какие номинальная мощность и выходное напряжение у FIRMAN RD3910E?',
+      products: [product({ specs: {}, description: 'Мощность и напряжение не указаны.' })],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['rated_power', 'output_voltage'],
+      allowCatalogOnlyAnswer: true,
+      deadlineAtMs: Date.now() + 20_000
+    });
+
+    expect(actual.facts).toContainEqual(expect.objectContaining({
+      productName: 'FIRMAN RD3910E',
+      attribute: 'rated_power',
+      value: '5 kW',
+      sourceType: 'web'
+    }));
+    expect(actual.facts).toContainEqual(expect.objectContaining({
+      productName: 'FIRMAN RD3910E',
+      attribute: 'output_voltage',
+      value: '230 V',
+      sourceType: 'web'
+    }));
+    expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({
+      productName: 'FIRMAN RD3910E',
+      attribute: 'rated_power',
+      status: 'confirmed'
+    }));
+    expect(actual.answerGuidance.coverage).not.toContainEqual(expect.objectContaining({
+      productName: 'FIRMAN RD3910E',
+      attribute: 'rated_power',
+      status: 'not_confirmed'
+    }));
+    expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({
+      productName: 'FIRMAN RD3910E',
+      attribute: 'output_voltage',
+      status: 'confirmed'
+    }));
+  });
+
   it('keeps a complete generic comparison backed by validated exact catalog facts for every target', async () => {
     const champion = product({
       id: 'champion-pc5332f',
@@ -1717,9 +1862,15 @@ describe('product comparison research', () => {
     });
 
     expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction_compact']);
-    expect(createStructuredJsonResponse.mock.calls.map((call) => call[0].stage)).toEqual([
-      'catalog_product_fact_extraction_compact'
-    ]);
+    const semanticCalls = createStructuredJsonResponse.mock.calls.filter((call) =>
+      call[0].stage === 'source_evidence_semantic_validation'
+    );
+    expect(semanticCalls).toHaveLength(1);
+    const semanticPayload = JSON.parse(
+      semanticCalls[0][0].request.input.find((item: { role?: string }) => item.role === 'user').content
+    );
+    expect(semanticPayload.claims).toHaveLength(4);
+    expect(semanticCalls[0][0].request.max_output_tokens).toBeGreaterThanOrEqual(1200);
     expect(actual.answerGuidance.completeness).toBe('answered');
     expect(actual.answerGuidance.directAnswer).toContain('17 кг');
     expect(actual.facts).toEqual(expect.arrayContaining([
@@ -2628,6 +2779,286 @@ describe('product comparison research', () => {
     ]));
   });
 
+  it('marks a semantically verified exact-model fact and derives confirmed coverage without literal value matching', async () => {
+    const sourceText = 'BISON BS6250IE specifications. DC USB Output: 5V/1A/2.1A.';
+    fetchMock.mockResolvedValue(sourceResponse(sourceText));
+    const semanticFactResult = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'BISON BS6250IE',
+        attribute: 'usb_current_a',
+        value: '1 А и 2,1 А',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'dc usb output: 5v/1a/2.1a',
+        sourceUrl: 'https://bisonpower.net/generator/inverter-generator/BS6250IE.html',
+        sourceTitle: 'BISON BS6250IE specifications'
+      }],
+      answerGuidance: {
+        directAnswer: 'USB-выход поддерживает ток 1 А или 2,1 А.',
+        completeness: 'answered',
+        coverage: []
+      }
+    });
+    queueResearchResponse({ parsed: semanticFactResult });
+    queueResearchResponse({ parsed: semanticFactResult });
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return {
+          parsed: {
+            claimSupported: true,
+            claimStartKinds: [],
+            supportedStartKinds: [],
+            publisherAuthority: 'manufacturer',
+            publisherEvidence: 'BISON BS6250IE specifications',
+            evidence: 'dc usb output: 5v/1a/2.1a',
+            warnings: []
+          }
+        };
+      }
+      const next = queuedResearchResponses.shift();
+      if (!next) throw new Error(`No queued structured response for stage ${call.stage}`);
+      return {
+        ...next,
+        response: { output: [{ type: 'web_search_call', status: 'completed' }] }
+      };
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какие токи поддерживает USB у BISON BS6250IE?',
+      products: [],
+      targetProductNames: ['BISON BS6250IE'],
+      comparisonAttributes: ['usb_current_a']
+    });
+
+    expect(actual.facts).toContainEqual(expect.objectContaining({
+      productName: 'BISON BS6250IE',
+      attribute: 'usb_current_a',
+      value: '1 А и 2,1 А',
+      evidence: 'DC USB Output: 5V/1A/2.1A',
+      evidenceVerifiedExact: true
+    }));
+    expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({
+      productName: 'BISON BS6250IE',
+      attribute: 'usb_current_a',
+      status: 'confirmed',
+      value: '1 А и 2,1 А'
+    }));
+    expect(actual.warnings).toContain('source_evidence_semantic_claim_verified');
+  });
+
+  it('rejects a semantically supported claim when no exact source excerpt is available', async () => {
+    const sourceText = 'BISON BS6250IE specifications. DC USB output: 5V/1A/2.1A.';
+    fetchMock.mockResolvedValue(sourceResponse(sourceText));
+    const unsupportedExcerptResult = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'BISON BS6250IE',
+        attribute: 'usb_current_a',
+        value: '1 А и 2,1 А',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'The manufacturer confirms both requested USB current modes.',
+        sourceUrl: 'https://bisonpower.net/generator/inverter-generator/BS6250IE.html',
+        sourceTitle: 'BISON BS6250IE specifications'
+      }],
+      answerGuidance: {
+        directAnswer: 'USB-выход поддерживает ток 1 А или 2,1 А.',
+        completeness: 'answered',
+        coverage: []
+      }
+    });
+    queueResearchResponse({ parsed: unsupportedExcerptResult });
+    queueResearchResponse({ parsed: unsupportedExcerptResult });
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return {
+          parsed: {
+            claimSupported: true,
+            claimStartKinds: [],
+            supportedStartKinds: [],
+            publisherAuthority: 'manufacturer',
+            publisherEvidence: 'BISON BS6250IE specifications',
+            evidence: 'Generated summary that is not present in the source.',
+            warnings: ['source_evidence_semantic_claim_verified']
+          }
+        };
+      }
+      const next = queuedResearchResponses.shift();
+      if (!next) throw new Error(`No queued structured response for stage ${call.stage}`);
+      return {
+        ...next,
+        response: { output: [{ type: 'web_search_call', status: 'completed' }] }
+      };
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какие токи поддерживает USB у BISON BS6250IE?',
+      products: [],
+      targetProductNames: ['BISON BS6250IE'],
+      comparisonAttributes: ['usb_current_a']
+    });
+
+    expect(actual.facts).toEqual([]);
+    expect(actual.answerGuidance.coverage).not.toContainEqual(expect.objectContaining({
+      attribute: 'usb_current_a',
+      status: 'confirmed'
+    }));
+    expect(actual.warnings).toContain('source_evidence_exact_excerpt_not_found');
+    expect(actual.warnings).not.toContain('source_evidence_semantic_claim_verified');
+  });
+
+  it('rejects a literal value quote when it supports a different attribute', async () => {
+    const sourceText = 'BISON BS6250IE specifications. Maximum power: 5 kW.';
+    fetchMock.mockResolvedValue(sourceResponse(sourceText));
+    const wrongAttributeResult = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'BISON BS6250IE',
+        attribute: 'rated_power_kw',
+        value: '5 kW',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'BISON BS6250IE specifications. Maximum power: 5 kW.',
+        sourceUrl: 'https://manufacturer.example/product/bison-bs6250ie',
+        sourceTitle: 'BISON BS6250IE specifications'
+      }],
+      answerGuidance: {
+        directAnswer: 'Номинальная мощность составляет 5 кВт.',
+        completeness: 'answered',
+        coverage: []
+      }
+    });
+    queueResearchResponse({ parsed: wrongAttributeResult });
+    queueResearchResponse({ parsed: wrongAttributeResult });
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return {
+          parsed: {
+            claimSupported: false,
+            claimStartKinds: [],
+            supportedStartKinds: [],
+            publisherAuthority: 'manufacturer',
+            publisherEvidence: 'BISON BS6250IE specifications',
+            evidence: 'BISON BS6250IE specifications. Maximum power: 5 kW.',
+            warnings: []
+          }
+        };
+      }
+      const next = queuedResearchResponses.shift();
+      if (!next) throw new Error(`No queued structured response for stage ${call.stage}`);
+      return {
+        ...next,
+        response: { output: [{ type: 'web_search_call', status: 'completed' }] }
+      };
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какая номинальная мощность у BISON BS6250IE?',
+      products: [],
+      targetProductNames: ['BISON BS6250IE'],
+      comparisonAttributes: ['rated_power_kw']
+    });
+
+    expect(actual.facts).toEqual([]);
+    expect(actual.warnings).toContain('source_evidence_exact_quote_verified');
+    expect(actual.warnings).toContain('source_evidence_validation_failed:semantic');
+    expect(actual.warnings).not.toContain('source_evidence_semantic_claim_verified');
+  });
+
+  it('preserves contradicted coverage when accepted facts fill the coverage cap', async () => {
+    const sourceUrl = 'https://manufacturer.example/product/bison-bs6250ie';
+    const facts = Array.from({ length: 12 }, (_, index) => ({
+      productName: 'BISON BS6250IE',
+      attribute: `specification_${index}`,
+      value: `${index + 1} units`,
+      sourceType: 'web' as const,
+      confidence: 'high' as const,
+      evidence: `BISON BS6250IE specification ${index}: ${index + 1} units confirmed by manufacturer.`,
+      sourceUrl,
+      sourceTitle: 'BISON BS6250IE product specifications'
+    }));
+    fetchMock.mockResolvedValue(sourceResponse(facts.map((fact) => fact.evidence).join(' ')));
+    const cappedResult = result({
+      usedWebSearch: true,
+      facts,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'partially_answered',
+        coverage: [{
+          productName: 'BISON BS6250IE',
+          attribute: 'safety_status',
+          status: 'contradicted',
+          value: '',
+          evidence: 'Official sources disagree on the safety status.',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: cappedResult });
+    queueResearchResponse({ parsed: cappedResult });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Проверьте характеристики и спорный статус BISON BS6250IE.',
+      products: [],
+      targetProductNames: ['BISON BS6250IE'],
+      comparisonAttributes: [...facts.map((fact) => fact.attribute), 'safety_status']
+    });
+
+    expect(actual.answerGuidance.coverage).toHaveLength(12);
+    expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({
+      productName: 'BISON BS6250IE',
+      attribute: 'safety_status',
+      status: 'contradicted'
+    }));
+  });
+
+  it('preserves every fail-closed slot when malformed coverage expands across four targets', async () => {
+    const targetProductNames = ['MODEL A1', 'MODEL B2', 'MODEL C3', 'MODEL D4'];
+    const malformedCoverage = Array.from({ length: 12 }, (_, index) => ({
+      productName: 'UNKNOWN MODEL',
+      attribute: `attribute_${index}`,
+      status: 'not_confirmed' as const,
+      value: '',
+      evidence: 'Coverage owner did not match a requested model.',
+      sourceUrl: null,
+      sourceTitle: null
+    }));
+    const malformedResult = result({
+      usedWebSearch: true,
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: malformedCoverage
+      }
+    });
+    queueResearchResponse({ parsed: malformedResult });
+    queueResearchResponse({ parsed: malformedResult });
+    queueResearchResponse({ parsed: malformedResult });
+    queueResearchResponse({ parsed: malformedResult });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Сравните четыре точные модели по двенадцати параметрам.',
+      products: [],
+      targetProductNames,
+      comparisonAttributes: malformedCoverage.map((item) => item.attribute)
+    });
+
+    expect(actual.answerGuidance.coverage).toHaveLength(48);
+    for (const productName of targetProductNames) {
+      for (const attribute of malformedCoverage.map((item) => item.attribute)) {
+        expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({
+          productName,
+          attribute,
+          status: 'not_confirmed'
+        }));
+      }
+    }
+    expect(actual.warnings).toContain('source_coverage_target_mismatch');
+    expect(actual.sourcesExhausted).toBe(false);
+  });
+
   it('parses PDF-magic evidence in isolation even when the endpoint is mislabeled as text', async () => {
     fetchMock.mockImplementation(async () => sourceResponse('%PDF-1.7', 'text/plain'));
     extractPdfTextMock.mockResolvedValue({
@@ -3060,7 +3491,7 @@ describe('product comparison research', () => {
             claimSupported: true,
             claimStartKinds: [],
             supportedStartKinds: [],
-            evidence: 'validated unrelated fuel-type fact',
+            evidence: 'Fuel type: gasoline',
             warnings: []
           }
         };
@@ -3097,8 +3528,8 @@ describe('product comparison research', () => {
           value: 'turn the key to START',
           sourceType: 'web',
           confidence: 'high',
-          evidence: 'source says turn the key to START',
-          sourceUrl: 'https://example.test/firman-rd4910e-manual',
+          evidence: 'Start procedure: turn the key to START. Electric starter and manual starter are available.',
+          sourceUrl: 'https://manufacturer.example/manuals/firman-rd4910e-manual',
           sourceTitle: 'FIRMAN RD4910E manual'
         }],
         answerGuidance: {
@@ -3108,14 +3539,15 @@ describe('product comparison research', () => {
             attribute: 'start_control_mechanism',
             status: 'confirmed',
             value: 'turn the key to START',
-            evidence: 'source says turn the key to START',
-            sourceUrl: 'https://example.test/firman-rd4910e-manual',
+            evidence: 'Start procedure: turn the key to START. Electric starter and manual starter are available.',
+            sourceUrl: 'https://manufacturer.example/manuals/firman-rd4910e-manual',
             sourceTitle: 'FIRMAN RD4910E manual'
           }]
         },
         summaryForAnswer: 'Source-backed key start.'
       })
     });
+    queueResearchResponse(queuedResearchResponses[0]);
 
     const actual = await researchProductComparisonFacts({
       userMessage: 'Does Firman RD4910E start with a key or a button?',
@@ -3124,11 +3556,12 @@ describe('product comparison research', () => {
       comparisonAttributes: ['start_control_mechanism']
     });
 
-    expect(researchCalls()).toHaveLength(1);
+    expect(researchCalls()).toHaveLength(2);
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'start_control_mechanism', status: 'confirmed' })
     ]));
-    expect(actual.answerGuidance.directAnswer).toContain('starts with a key');
+    expect(actual.answerGuidance.directAnswer).toBe('');
+    expect(actual.answerGuidance.completeness).toBe('partially_answered');
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:key_start');
   });
 
@@ -3366,6 +3799,7 @@ describe('product comparison research', () => {
     expect(actual.answerGuidance.coverage.length).toBeLessThanOrEqual(12);
     expect(fetchMock).toHaveBeenCalledTimes(12);
     expect(actual.warnings).toContain('source_evidence_source_cap_reached');
+    expect(researchWarningsPreventSourceExhaustion(actual.warnings)).toBe(true);
   });
 
   it('canonicalizes source cache keys while validating every claim independently', async () => {

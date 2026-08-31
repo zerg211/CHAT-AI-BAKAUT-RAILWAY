@@ -19,11 +19,11 @@
     "typecheck": "PASS",
     "noRegex": "PASS",
     "dependencyAudit": "PASS_0_HIGH_VULNERABILITIES",
-    "focusedTests": "PASS_245",
-    "fullTests": "PASS_856",
+    "focusedTests": "PASS_252",
+    "fullTests": "PASS_863",
     "agenticTests": "PASS_203",
     "build": "PASS",
-    "freshVerifier": "PASS_FRESH_VERIFIER_10"
+    "freshVerifier": "PASS_AC11_REMEDIATION_FRESH_VERIFIER_5"
   },
   "production": {
     "committed": false,

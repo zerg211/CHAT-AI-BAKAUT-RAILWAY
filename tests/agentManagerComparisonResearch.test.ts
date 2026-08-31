@@ -2412,6 +2412,67 @@ describe('AgentManager comparison research flow', () => {
     ]));
   });
 
+  it('persists an exact semantically verified value when the source quote uses different wording', async () => {
+    const fakeProducts = new FakeProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      fakeProducts as never,
+      {} as never,
+      withStrictToolFixtures(model())
+    );
+    const persist = orchestrator as unknown as {
+      persistVerifiedResearchFacts(input: Record<string, unknown>): Promise<number>;
+    };
+
+    const savedCount = await persist.persistVerifiedResearchFacts({
+      sessionId,
+      turnId,
+      targetProductNames: ['BISON BS6250IE'],
+      selectedProducts: [],
+      research: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        sourcesExhausted: false,
+        sourceAttempts: [{ tier: 'official_page', outcome: 'confirmed' }],
+        facts: [{
+          productName: 'BISON BS6250IE',
+          attribute: 'usb_current_a',
+          value: '1 А и 2,1 А',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: 'DC USB output: 5V/1A/2.1A',
+          sourceUrl: 'https://bisonpower.net/generator/inverter-generator/BS6250IE.html',
+          sourceTitle: 'BISON BS6250IE specifications',
+          sourceTier: 'official_page',
+          sourceAuthority: 'manufacturer',
+          evidenceVerifiedExact: true
+        }],
+        conflicts: [],
+        answerGuidance: {
+          directAnswer: 'USB поддерживает 1 А и 2,1 А.',
+          completeness: 'answered',
+          coverage: [{
+            productName: 'BISON BS6250IE',
+            attribute: 'usb_current_a',
+            status: 'confirmed',
+            value: '1 А и 2,1 А',
+            evidence: 'DC USB output: 5V/1A/2.1A'
+          }]
+        },
+        summaryForAnswer: '',
+        warnings: []
+      }
+    });
+
+    expect(savedCount).toBe(1);
+    expect(fakeProducts.savedVerifiedFacts).toContainEqual(expect.objectContaining({
+      productId: null,
+      productName: 'BISON BS6250IE',
+      attribute: 'usb_current_a',
+      value: '1 А и 2,1 А'
+    }));
+  });
+
   it('persists a confirmed product fact while preserving another product unresolved on the same attribute', async () => {
     const fakeProducts = new FakeProducts();
     const orchestrator = new AgentManagerOrchestrator(

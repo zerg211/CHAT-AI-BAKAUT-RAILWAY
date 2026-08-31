@@ -5511,7 +5511,6 @@ export class AgentManagerOrchestrator {
       if (!evidence || !sourceUrl || !sourceTitle || !fact.sourceTier || !fact.sourceAuthority) continue;
       if (fact.evidenceVerifiedExact !== true) continue;
       if (!textMatchesTargetName([sourceUrl, sourceTitle, evidence].join(' '), fact.productName)) continue;
-      if (!compactModelText(evidence).includes(compactModelText(fact.value))) continue;
       const unresolvedConflict = input.research.conflicts.some((conflict) =>
         textMatchesTargetName(conflict.productName, fact.productName) &&
         compactModelText(conflict.attribute) === compactModelText(fact.attribute)

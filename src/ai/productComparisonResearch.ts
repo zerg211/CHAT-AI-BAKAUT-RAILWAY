@@ -364,6 +364,35 @@ function uniqueCoverage(items: ResearchCoverageItem[]) {
   return output;
 }
 
+function confirmedCoverageFromFacts(facts: ProductComparisonResearchFact[]) {
+  return facts
+    .filter((fact) => fact.sourceType !== 'conflict' && ['high', 'medium'].includes(fact.confidence))
+    .map((fact): ResearchCoverageItem => ({
+      productName: fact.productName,
+      attribute: fact.attribute,
+      status: 'confirmed',
+      value: fact.value,
+      evidence: fact.evidence,
+      sourceUrl: fact.sourceUrl,
+      sourceTitle: fact.sourceTitle,
+      sourceTier: fact.sourceTier,
+      sourceAuthority: fact.sourceAuthority
+    }));
+}
+
+function boundedCoveragePreservingUnresolved(items: ResearchCoverageItem[], maxItems: number) {
+  const mergedCoverage = uniqueCoverage(items);
+  const boundedCoverage = mergedCoverage.slice(0, maxItems);
+  for (const unresolved of mergedCoverage.slice(maxItems)) {
+    if (unresolved.status === 'confirmed') continue;
+    let replaceIndex = boundedCoverage.length - 1;
+    while (replaceIndex >= 0 && boundedCoverage[replaceIndex].status !== 'confirmed') replaceIndex -= 1;
+    if (replaceIndex >= 0) boundedCoverage[replaceIndex] = unresolved;
+    else boundedCoverage.push(unresolved);
+  }
+  return boundedCoverage;
+}
+
 function exactTargetAliases(target: string) {
   return [...exactProductIdentity(target).searchAliases];
 }
@@ -686,6 +715,7 @@ export const unreadSourceEvidenceWarnings = new Set([
   'source_evidence_pdf_text_empty',
   'source_evidence_pdf_truncated_to_safe_page_limit',
   'source_evidence_pdf_source_cap_reached',
+  'source_evidence_source_cap_reached',
   'source_evidence_text_truncated_to_safe_limit',
   'source_evidence_semantic_text_truncated_to_safe_limit'
 ]);
@@ -1138,39 +1168,69 @@ function startClaimKindsFromText(value: unknown): SourceBackedStartKind[] {
   return sourceBackedStartKinds.filter((kind) => kinds.includes(kind));
 }
 
+function sourceEvidenceExactExcerpt(
+  evidence: unknown,
+  sourceText: string,
+  minimumEvidenceLength: number
+) {
+  const excerpt = collapseWhitespace(evidence);
+  if (excerpt.length < minimumEvidenceLength) return null;
+  const collapsedSource = collapseWhitespace(sourceText);
+  const exactIndex = collapsedSource.indexOf(excerpt);
+  if (exactIndex >= 0) return collapsedSource.slice(exactIndex, exactIndex + excerpt.length);
+
+  let foldedSource = '';
+  const sourceRanges: Array<{ start: number; end: number }> = [];
+  for (let index = 0; index < collapsedSource.length;) {
+    const codePoint = collapsedSource.codePointAt(index)!;
+    const character = String.fromCodePoint(codePoint);
+    const end = index + character.length;
+    const foldedCharacter = character.toLocaleLowerCase('ru-RU');
+    foldedSource += foldedCharacter;
+    for (let foldedIndex = 0; foldedIndex < foldedCharacter.length; foldedIndex += 1) {
+      sourceRanges.push({ start: index, end });
+    }
+    index = end;
+  }
+  const foldedExcerpt = excerpt.toLocaleLowerCase('ru-RU');
+  const foldedIndex = foldedSource.indexOf(foldedExcerpt);
+  if (foldedIndex < 0 || !foldedExcerpt.length) return null;
+  const firstRange = sourceRanges[foldedIndex];
+  const lastRange = sourceRanges[foldedIndex + foldedExcerpt.length - 1];
+  if (!firstRange || !lastRange) return null;
+  return collapsedSource.slice(firstRange.start, lastRange.end);
+}
+
+function boundedSemanticSourceTextForEvidence(sourceText: string, evidence: unknown) {
+  const collapsedSource = collapseWhitespace(sourceText);
+  const exactEvidence = sourceEvidenceExactExcerpt(evidence, collapsedSource, 4);
+  if (!exactEvidence || collapsedSource.length <= semanticSourceTextLimit) {
+    return boundedSemanticSourceText(collapsedSource);
+  }
+  const evidenceIndex = collapsedSource.indexOf(exactEvidence);
+  if (evidenceIndex < 0) return boundedSemanticSourceText(collapsedSource);
+  const maximumStart = Math.max(0, collapsedSource.length - semanticSourceTextLimit);
+  const start = Math.min(maximumStart, Math.max(0, evidenceIndex - Math.floor(semanticSourceTextLimit / 2)));
+  return {
+    text: collapsedSource.slice(start, start + semanticSourceTextLimit),
+    truncated: true
+  };
+}
+
 function sourceEvidenceExactQuoteValidation(
   item: SourceEvidenceItem,
   sourceText: string,
   minimumEvidenceLength = 24
 ) {
-  const evidence = collapseWhitespace(item.evidence);
+  const evidence = sourceEvidenceExactExcerpt(item.evidence, sourceText, minimumEvidenceLength);
   const value = collapseWhitespace(item.value);
-  if (evidence.length < minimumEvidenceLength || value.length < 1) return null;
+  if (!evidence || value.length < 1) return null;
   const normalizedEvidence = normalizedText(evidence);
-  if (!normalizedText(sourceText).includes(normalizedEvidence)) return null;
   if (!normalizedEvidence.includes(normalizedText(value))) return null;
-
-  const claimKinds = startClaimKindsFromText([
-    item.attribute,
-    item.value,
-    item.evidence
-  ].join(' '));
-  if (!claimKinds.length) {
-    return {
-      valid: true,
-      invalidKinds: [] as SourceBackedStartKind[],
-      warnings: ['source_evidence_exact_quote_verified']
-    };
-  }
-  const supportedKinds = startClaimKindsFromText(sourceText);
-  const invalidKinds = claimKinds.filter((kind) => !supportedKinds.includes(kind));
   return {
-    valid: invalidKinds.length === 0,
-    invalidKinds,
-    warnings: uniqueStrings([
-      'source_evidence_exact_quote_verified',
-      ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
-    ])
+    valid: true,
+    invalidKinds: [] as SourceBackedStartKind[],
+    warnings: ['source_evidence_exact_quote_verified']
   };
 }
 
@@ -1267,9 +1327,15 @@ function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
     publisherEvidence: typeof parsed.publisherEvidence === 'string'
       ? compactEvidence(parsed.publisherEvidence, 320)
       : '',
-    evidence: typeof parsed.evidence === 'string' ? compactEvidence(parsed.evidence, 320) : '',
+    evidence: typeof parsed.evidence === 'string'
+      ? collapseWhitespace(parsed.evidence).slice(0, 320)
+      : '',
     warnings: Array.isArray(parsed.warnings)
-      ? parsed.warnings.filter((item): item is string => typeof item === 'string')
+      ? parsed.warnings.filter((item): item is string =>
+          typeof item === 'string' &&
+          item !== 'source_evidence_exact_quote_verified' &&
+          item !== 'source_evidence_semantic_claim_verified'
+        )
       : []
   };
 }
@@ -1306,6 +1372,7 @@ async function validateSourceEvidenceSemantically(input: {
             'Classify publisherAuthority=manufacturer only when sourceText itself proves that the publisher/operator of this source is the product manufacturer or brand owner.',
             'A brand-like URL, page title, reseller statement, or a mere mention of the manufacturer is not enough.',
             'When manufacturer ownership is proven, publisherEvidence must be an exact sourceText excerpt establishing publisher/operator identity; otherwise return unknown or secondary with an empty publisherEvidence.',
+            'evidence must be a concise exact sourceText excerpt that supports the claim, never a paraphrase or generated summary.',
             'Return JSON only.'
           ].join('\n')
         },
@@ -1349,6 +1416,7 @@ interface SourceEvidenceValidationResult {
   invalidKinds: SourceBackedStartKind[];
   warnings: string[];
   manufacturerAuthorityVerified?: boolean;
+  verifiedEvidence?: string;
 }
 
 async function validateEvidenceItem(input: {
@@ -1357,6 +1425,7 @@ async function validateEvidenceItem(input: {
   targetProductNames: string[];
   cache: SourceTextCache;
   semanticValidation: boolean;
+  semanticValidationResult?: Awaited<ReturnType<typeof validateSourceEvidenceSemantically>>;
   expectedSourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
   signal?: AbortSignal;
   deadlineAtMs?: number;
@@ -1442,14 +1511,7 @@ async function validateEvidenceItem(input: {
   const needsPublisherValidation = (
     input.expectedSourceTier === 'official_page' || input.expectedSourceTier === 'official_manual'
   ) && sourceDescriptor?.authority !== 'manufacturer';
-  if (exactQuoteValidation && !needsPublisherValidation) {
-    return {
-      ...exactQuoteValidation,
-      warnings: uniqueStrings([...warnings, ...exactQuoteValidation.warnings])
-    };
-  }
-
-  const semanticValidation = await validateSourceEvidenceSemantically({
+  const semanticValidation = input.semanticValidationResult ?? await validateSourceEvidenceSemantically({
     item: input.item,
     sourceText: source.text,
     targetProductNames: itemTargetProductNames,
@@ -1461,18 +1523,16 @@ async function validateEvidenceItem(input: {
     semanticValidation.publisherAuthority === 'manufacturer' &&
     normalizedPublisherEvidence.length >= 12 &&
     normalizedText(source.text).includes(normalizedPublisherEvidence);
-  if (exactQuoteValidation) {
-    return {
-      ...exactQuoteValidation,
-      warnings: uniqueStrings([
-        ...warnings,
-        ...exactQuoteValidation.warnings,
-        ...semanticValidation.warnings,
-        manufacturerAuthorityVerified ? 'source_publisher_manufacturer_verified' : ''
-      ]),
-      manufacturerAuthorityVerified
-    };
-  }
+  const minimumEvidenceLength = 4;
+  const semanticEvidence = [semanticValidation.evidence, input.item.evidence]
+    .map((evidence) => sourceEvidenceExactExcerpt(evidence, source.text, minimumEvidenceLength))
+    .find((evidence): evidence is string => Boolean(
+      evidence && exactQuoteIsBoundToTarget({
+        item: { ...input.item, evidence },
+        sourceKind: source.sourceKind,
+        targetProductNames: itemTargetProductNames
+      })
+    ));
   const claimKinds = semanticValidation.claimStartKinds.length
     ? semanticValidation.claimStartKinds
     : startClaimKindsFromText([
@@ -1480,28 +1540,133 @@ async function validateEvidenceItem(input: {
         input.item.value,
         input.item.evidence
       ].join(' '));
-  if (semanticValidation.claimSupported && !claimKinds.length) {
-    return {
-      valid: true,
-      invalidKinds: [] as SourceBackedStartKind[],
-      warnings: uniqueStrings([...warnings, ...semanticValidation.warnings]),
-      manufacturerAuthorityVerified
-    };
-  }
-
   const invalidKinds = claimKinds.filter((kind) => !semanticValidation.supportedStartKinds.includes(kind));
-  const valid = semanticValidation.claimSupported && invalidKinds.length === 0;
+  const valid = semanticValidation.claimSupported && Boolean(semanticEvidence) && invalidKinds.length === 0;
   return {
     valid,
     invalidKinds,
     warnings: uniqueStrings([
       ...warnings,
+      ...(exactQuoteValidation?.warnings ?? []),
       ...semanticValidation.warnings,
+      valid ? 'source_evidence_semantic_claim_verified' : '',
+      manufacturerAuthorityVerified ? 'source_publisher_manufacturer_verified' : '',
+      semanticValidation.claimSupported && !semanticEvidence ? 'source_evidence_exact_excerpt_not_found' : '',
       ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`),
       !valid && !invalidKinds.length ? 'source_evidence_validation_failed:semantic' : ''
     ]),
-    manufacturerAuthorityVerified
+    manufacturerAuthorityVerified,
+    verifiedEvidence: valid ? semanticEvidence : undefined
   };
+}
+
+async function validateSourceEvidenceSemanticallyBatch(input: {
+  items: Array<{
+    item: SourceEvidenceItem;
+    sourceText: string;
+    targetProductNames: string[];
+  }>;
+  signal?: AbortSignal;
+  deadlineAtMs?: number;
+}) {
+  if (!input.items.length) return [];
+  const boundedItems = input.items.map((entry, itemIndex) => {
+    const boundedSource = boundedSemanticSourceTextForEvidence(entry.sourceText, entry.item.evidence);
+    return { ...entry, itemIndex, boundedSource };
+  });
+  const itemSchema = sourceEvidenceValidationJsonFormat().format.schema;
+  const { parsed } = await createStructuredJsonResponse({
+    request: {
+      model: config.OPENAI_FACT_MODEL,
+      reasoning: { effort: productResearchReasoningEffort },
+      input: [
+        {
+          role: 'system',
+          content: [
+            'You are a strict semantic source validator for equipment/product facts.',
+            'Validate every indexed claim independently using only its sourceText. Do not search the web or answer the buyer.',
+            'claimSupported=true requires the same exact product/model, attribute, and value/meaning. A related attribute with the same number is not support.',
+            'Do not require exact wording. Interpret source text semantically across languages, tables, descriptions, manuals, listings, and specs.',
+            'For start/control claims, classify the same canonical claimStartKinds and supportedStartKinds used in each requested validation.',
+            'Classify publisherAuthority=manufacturer only when sourceText proves publisher/operator ownership; publisherEvidence must be an exact excerpt.',
+            'evidence must be a concise exact sourceText excerpt supporting the claim, never a paraphrase.',
+            'Return exactly one validation for every itemIndex and JSON only.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            claims: boundedItems.map(({ item, itemIndex, targetProductNames, boundedSource }) => ({
+              itemIndex,
+              targetProductNames,
+              claim: {
+                productName: item.productName ?? null,
+                attribute: item.attribute,
+                value: item.value,
+                evidence: item.evidence,
+                sourceUrl: item.sourceUrl ?? null,
+                sourceTitle: item.sourceTitle ?? null
+              },
+              sourceText: boundedSource.text
+            }))
+          })
+        }
+      ],
+      max_output_tokens: Math.max(
+        config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
+        Math.min(6000, Math.max(900, input.items.length * 300))
+      ),
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'source_evidence_semantic_validation_batch',
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              validations: {
+                type: 'array',
+                minItems: input.items.length,
+                maxItems: input.items.length,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    itemIndex: { type: 'integer', minimum: 0, maximum: input.items.length - 1 },
+                    ...itemSchema.properties
+                  },
+                  required: ['itemIndex', ...itemSchema.required]
+                }
+              }
+            },
+            required: ['validations']
+          }
+        }
+      }
+    },
+    stage: 'source_evidence_semantic_validation',
+    signal: input.signal,
+    deadlineAtMs: input.deadlineAtMs,
+    minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
+    transportMaxRetries: 0
+  });
+
+  const parsedValidations = Array.isArray(parsed.validations)
+    ? parsed.validations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    : input.items.length === 1 ? [parsed] : [];
+  return boundedItems.map(({ itemIndex, boundedSource }) => {
+    const matching = parsedValidations.find((item) => Number(item.itemIndex) === itemIndex) ??
+      (input.items.length === 1 ? parsedValidations[0] : undefined);
+    const normalized = normalizeSourceEvidenceValidation(matching ?? {});
+    return {
+      ...normalized,
+      warnings: uniqueStrings([
+        ...normalized.warnings,
+        boundedSource.truncated ? 'source_evidence_semantic_text_truncated_to_safe_limit' : '',
+        matching ? '' : 'source_evidence_semantic_batch_item_missing'
+      ])
+    };
+  });
 }
 
 function confirmedStartKinds(result: ProductComparisonResearchResult) {
@@ -1587,17 +1752,69 @@ async function validateSourceBackedResult(input: {
   const semanticValidation = true;
   let invalidatedEvidence = false;
 
+  const semanticCandidateInputs = [
+    ...factsToValidate.map((item, itemIndex) => ({ kind: 'fact' as const, itemIndex, item })),
+    ...coverageToValidate.map((item, itemIndex) => ({ kind: 'coverage' as const, itemIndex, item }))
+  ].filter((candidate) => {
+    if (candidate.kind === 'fact') {
+      return candidate.item.sourceType !== 'conflict' && candidate.item.confidence !== 'low';
+    }
+    return candidate.item.status === 'confirmed';
+  });
+  const semanticCandidates = (await mapWithConcurrency(
+    semanticCandidateInputs,
+    sourceEvidenceValidationConcurrency,
+    async (candidate) => {
+      const itemTargetProductNames = evidenceItemTargetNames(candidate.item, input.targetProductNames);
+      if (input.targetProductNames.length && candidate.item.productName?.trim() && !itemTargetProductNames.length) return null;
+      const source = await evidenceItemSourceText({
+        item: candidate.item,
+        products: input.products,
+        targetProductNames: itemTargetProductNames,
+        cache,
+        signal: input.signal
+      });
+      if (!source.ok) return null;
+      return {
+        ...candidate,
+        sourceText: source.text,
+        targetProductNames: itemTargetProductNames
+      };
+    }
+  )).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const batchedSemanticValidations = await validateSourceEvidenceSemanticallyBatch({
+    items: semanticCandidates.map(({ item, sourceText, targetProductNames }) => ({
+      item,
+      sourceText,
+      targetProductNames
+    })),
+    signal: input.signal,
+    deadlineAtMs: input.deadlineAtMs
+  });
+  const semanticValidationByFactIndex = new Map<number, Awaited<ReturnType<typeof validateSourceEvidenceSemantically>>>();
+  const semanticValidationByCoverageIndex = new Map<number, Awaited<ReturnType<typeof validateSourceEvidenceSemantically>>>();
+  semanticCandidates.forEach((candidate, index) => {
+    const validation = batchedSemanticValidations[index];
+    if (candidate.kind === 'fact') semanticValidationByFactIndex.set(candidate.itemIndex, validation);
+    else semanticValidationByCoverageIndex.set(candidate.itemIndex, validation);
+  });
+  const unavailableSemanticValidation: Awaited<ReturnType<typeof validateSourceEvidenceSemantically>> = {
+    ...normalizeSourceEvidenceValidation({}),
+    warnings: ['source_evidence_semantic_batch_item_missing']
+  };
+
   const factValidations = await mapWithConcurrency(
     factsToValidate,
     sourceEvidenceValidationConcurrency,
-    async (fact) => {
+    async (fact, factIndex) => {
     if (fact.sourceType === 'conflict') {
       return {
         fact,
-        accepted: true,
-        warnings: [] as string[],
+        accepted: false,
+        warnings: ['source_evidence_conflict_fact_rejected'],
         invalidKinds: [] as SourceBackedStartKind[],
-        manufacturerAuthorityVerified: false
+        manufacturerAuthorityVerified: false,
+        verifiedEvidence: undefined as string | undefined
       };
     }
     if (fact.confidence === 'low') {
@@ -1606,7 +1823,8 @@ async function validateSourceBackedResult(input: {
         accepted: false,
         warnings: ['source_evidence_low_confidence_rejected'],
         invalidKinds: [] as SourceBackedStartKind[],
-        manufacturerAuthorityVerified: false
+        manufacturerAuthorityVerified: false,
+        verifiedEvidence: undefined as string | undefined
       };
     }
     const validation = await validateEvidenceItem({
@@ -1615,6 +1833,7 @@ async function validateSourceBackedResult(input: {
       targetProductNames: input.targetProductNames,
       cache,
       semanticValidation,
+      semanticValidationResult: semanticValidationByFactIndex.get(factIndex) ?? unavailableSemanticValidation,
       expectedSourceTier: input.expectedSourceTier,
       signal: input.signal,
       deadlineAtMs: input.deadlineAtMs
@@ -1624,7 +1843,8 @@ async function validateSourceBackedResult(input: {
       accepted: validation.valid,
       warnings: validation.warnings,
       invalidKinds: validation.invalidKinds,
-      manufacturerAuthorityVerified: validation.manufacturerAuthorityVerified === true
+      manufacturerAuthorityVerified: validation.manufacturerAuthorityVerified === true,
+      verifiedEvidence: validation.verifiedEvidence
     };
   });
   for (const validation of factValidations) {
@@ -1653,6 +1873,7 @@ async function validateSourceBackedResult(input: {
         : descriptor?.tier;
       facts.push({
         ...validation.fact,
+        evidence: validation.verifiedEvidence ?? validation.fact.evidence,
         confidence: sourceAuthority === 'secondary' && validation.fact.confidence === 'high'
           ? 'medium'
           : validation.fact.confidence,
@@ -1660,7 +1881,8 @@ async function validateSourceBackedResult(input: {
           sourceTier,
           sourceAuthority
         } : {}),
-        evidenceVerifiedExact: validation.warnings.includes('source_evidence_exact_quote_verified')
+        evidenceVerifiedExact: validation.warnings.includes('source_evidence_exact_quote_verified') ||
+          validation.warnings.includes('source_evidence_semantic_claim_verified')
       });
     } else {
       facts.push(validation.fact);
@@ -1671,20 +1893,22 @@ async function validateSourceBackedResult(input: {
   const coverageValidations = await mapWithConcurrency(
     coverageToValidate,
     sourceEvidenceValidationConcurrency,
-    async (item) => {
-    if (item.status !== 'confirmed') return { item, validation: null };
-    const validation = await validateEvidenceItem({
-      item,
-      products: input.products,
-      targetProductNames: input.targetProductNames,
-      cache,
-      semanticValidation,
-      expectedSourceTier: input.expectedSourceTier,
-      signal: input.signal,
-      deadlineAtMs: input.deadlineAtMs
-    });
-    return { item, validation };
-  });
+    async (item, itemIndex) => {
+      if (item.status !== 'confirmed') return { item, validation: null };
+      const validation = await validateEvidenceItem({
+        item,
+        products: input.products,
+        targetProductNames: input.targetProductNames,
+        cache,
+        semanticValidation,
+        semanticValidationResult: semanticValidationByCoverageIndex.get(itemIndex) ?? unavailableSemanticValidation,
+        expectedSourceTier: input.expectedSourceTier,
+        signal: input.signal,
+        deadlineAtMs: input.deadlineAtMs
+      });
+      return { item, validation };
+    }
+  );
   for (const { item, validation } of coverageValidations) {
     if (!validation) {
       coverage.push(item);
@@ -1722,6 +1946,7 @@ async function validateSourceBackedResult(input: {
       : descriptor?.tier;
     coverage.push({
       ...item,
+      evidence: validation.verifiedEvidence ?? item.evidence,
       ...(sourceTier && sourceAuthority ? {
         sourceTier,
         sourceAuthority
@@ -1729,12 +1954,17 @@ async function validateSourceBackedResult(input: {
     });
   }
 
+  const boundedCoverage = boundedCoveragePreservingUnresolved([
+    ...confirmedCoverageFromFacts(facts),
+    ...coverage
+  ], sourceEvidenceMaxCoverage);
+
   let adjusted: ProductComparisonResearchResult = {
     ...input.result,
     facts: uniqueFacts(facts),
     answerGuidance: {
       ...input.result.answerGuidance,
-      coverage: uniqueCoverage(coverage)
+      coverage: boundedCoverage
     },
     warnings: uniqueStrings(warnings)
   };
@@ -2047,19 +2277,28 @@ function mergeCatalogAndWebResearch(
   const primaryAnswerGuidance = resultHasUsableGuidance(webResult)
     ? webResult.answerGuidance
     : catalogResult.answerGuidance;
+  const facts = uniqueFacts([...catalogResult.facts, ...webResult.facts]);
+  const coverage = boundedCoveragePreservingUnresolved([
+    ...confirmedCoverageFromFacts(facts),
+    ...catalogResult.answerGuidance.coverage,
+    ...webResult.answerGuidance.coverage
+  ], sourceEvidenceMaxCoverage);
+  const hasConfirmedSupport = facts.some((fact) =>
+    fact.sourceType !== 'conflict' && ['high', 'medium'].includes(fact.confidence)
+  ) || coverage.some((item) => item.status === 'confirmed');
   const answerGuidance = {
     ...primaryAnswerGuidance,
-    coverage: uniqueCoverage([
-      ...catalogResult.answerGuidance.coverage,
-      ...primaryAnswerGuidance.coverage
-    ])
+    completeness: primaryAnswerGuidance.directAnswer.trim()
+      ? primaryAnswerGuidance.completeness
+      : hasConfirmedSupport ? 'partially_answered' as const : 'not_answered' as const,
+    coverage
   };
   return {
     usedWebSearch: webResult.usedWebSearch,
     searchDisposition: webResult.searchDisposition,
     sourcesExhausted: webResult.sourcesExhausted,
     sourceAttempts: mergeSourceAttempts(catalogResult.sourceAttempts, webResult.sourceAttempts),
-    facts: uniqueFacts([...catalogResult.facts, ...webResult.facts]),
+    facts,
     conflicts: [...catalogResult.conflicts, ...webResult.conflicts],
     answerGuidance,
     summaryForAnswer: uniqueStrings([
@@ -2080,19 +2319,21 @@ function mergeWebResearchPasses(
   retry: ProductComparisonResearchResult
 ): ProductComparisonResearchResult {
   const preferredGuidance = resultHasUsableGuidance(retry) ? retry.answerGuidance : primary.answerGuidance;
+  const facts = uniqueFacts([...primary.facts, ...retry.facts]);
   return {
     usedWebSearch: primary.usedWebSearch || retry.usedWebSearch,
     searchDisposition: retry.searchDisposition,
     sourcesExhausted: false,
     sourceAttempts: mergeSourceAttempts(primary.sourceAttempts, retry.sourceAttempts),
-    facts: uniqueFacts([...primary.facts, ...retry.facts]),
+    facts,
     conflicts: [...primary.conflicts, ...retry.conflicts],
     answerGuidance: {
       ...preferredGuidance,
-      coverage: uniqueCoverage([
+      coverage: boundedCoveragePreservingUnresolved([
+        ...confirmedCoverageFromFacts(facts),
         ...primary.answerGuidance.coverage,
         ...retry.answerGuidance.coverage
-      ])
+      ], sourceEvidenceMaxCoverage)
     },
     summaryForAnswer: uniqueStrings([primary.summaryForAnswer, retry.summaryForAnswer]).join('\n'),
     warnings: uniqueStrings([...primary.warnings, ...retry.warnings])
@@ -2209,10 +2450,10 @@ function timedOutResearchPartial(input: {
     answerGuidance: {
       directAnswer: input.catalogResult?.answerGuidance.directAnswer ?? '',
       completeness: hasCatalogEvidence ? 'partially_answered' : 'not_answered',
-      coverage: uniqueCoverage([
+      coverage: boundedCoveragePreservingUnresolved([
         ...missingCoverage,
         ...preservedCatalogCoverage
-      ]).slice(0, sourceEvidenceMaxCoverage)
+      ], sourceEvidenceMaxCoverage)
     },
     summaryForAnswer: input.catalogResult?.summaryForAnswer ?? '',
     warnings: uniqueStrings([
@@ -3389,7 +3630,10 @@ export async function researchProductComparisonFacts(input: {
       deadlineAtMs: fallbackDeadlineAtMs
     });
     retryResult.sourceAttempts = mergeSourceAttempts(combinedPrimaryResult.sourceAttempts, retryResult.sourceAttempts);
-    const combinedRetryResult = mergeCatalogAndWebResearch(catalogResultForResearch, retryResult);
+    const combinedRetryResult = mergeWebResearchPasses(
+      combinedPrimaryResult,
+      mergeCatalogAndWebResearch(catalogResultForResearch, retryResult)
+    );
     const electricControlStillUnresolved = electricControlRetryRequired && needsElectricStarterControlSearch({
       result: combinedRetryResult,
       comparisonAttributes
@@ -3403,6 +3647,17 @@ export async function researchProductComparisonFacts(input: {
       hasConfirmedExactTargetFacts(combinedRetryResult, targetProductNames, ['catalog', 'web']) ||
       combinedRetryResult.answerGuidance.completeness === 'answered'
     ) {
+      const completedGuidance = resultHasUsableGuidance(combinedRetryResult)
+        ? combinedRetryResult.answerGuidance
+        : combinedPrimaryResult.answerGuidance;
+      const completedCoverage = boundedCoveragePreservingUnresolved([
+        ...confirmedCoverageFromFacts(combinedRetryResult.facts),
+        ...combinedPrimaryResult.answerGuidance.coverage,
+        ...combinedRetryResult.answerGuidance.coverage
+      ], sourceEvidenceMaxCoverage);
+      const hasCompletedSupport = combinedRetryResult.facts.some((fact) =>
+        fact.sourceType !== 'conflict' && ['high', 'medium'].includes(fact.confidence)
+      ) || completedCoverage.some((item) => item.status === 'confirmed');
       const completedResult: ProductComparisonResearchResult = {
         usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
         searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
@@ -3410,9 +3665,13 @@ export async function researchProductComparisonFacts(input: {
         sourceAttempts: combinedRetryResult.sourceAttempts,
         facts: combinedRetryResult.facts,
         conflicts: combinedRetryResult.conflicts.length ? combinedRetryResult.conflicts : combinedPrimaryResult.conflicts,
-        answerGuidance: resultHasUsableGuidance(combinedRetryResult)
-          ? combinedRetryResult.answerGuidance
-          : combinedPrimaryResult.answerGuidance,
+        answerGuidance: {
+          ...completedGuidance,
+          completeness: completedGuidance.directAnswer.trim()
+            ? completedGuidance.completeness
+            : hasCompletedSupport ? 'partially_answered' : 'not_answered',
+          coverage: completedCoverage
+        },
         summaryForAnswer: combinedRetryResult.summaryForAnswer || combinedPrimaryResult.summaryForAnswer,
         warnings: uniqueStrings([
           ...combinedPrimaryResult.warnings.filter((warning) => warning !== 'exact_target_external_fact_not_found'),
@@ -3428,7 +3687,7 @@ export async function researchProductComparisonFacts(input: {
       return completedResult;
     }
     const exhaustedResult: ProductComparisonResearchResult = {
-      ...combinedPrimaryResult,
+      ...combinedRetryResult,
       usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
       searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
       sourcesExhausted: retryUsedWebSearch &&

@@ -236,3 +236,78 @@
 - Removed the independent runtime V2, lead-delivery/widget, temporary catalog-analysis, stale task-artifact, and scratch-file changes at the user's request.
 - Reduced mixed files (`src/db/repositories.ts`, `src/db/migrate.ts`, and `src/shared/types.ts`) to only the verified-fact provenance, memory lookup, and migration changes required by this task.
 - Current post-cleanup verification: focused 245/245 PASS; full release gate 856/856 unit and 203/203 agentic PASS; typecheck, no-regex, dependency audit, and build PASS. Fresh post-cleanup verifier pending.
+
+## AC11 Production Pass 1
+
+- Verdict: FAIL. Runtime/preflight and widget/admin access passed on deployed commit `ea843b0e3dc4135cfb8cb3373d486cf9028a12db`, but no tested new exact fact reached verified persistence.
+- Decisive reproduction: production widget session `228d9b07-0ed5-4318-a4dd-7f250b4c7040` asked for the USB output currents of exact model `BISON BS6250IE`.
+- Buyer-visible failure: the assistant said the manufacturer page did not confirm USB parameters even though its cited exact page contains `DC USB output 5V/1A/2.1A`.
+- Admin evidence: research correctly classified `bisonpower.net/generator/inverter-generator/BS6250IE.html` as `official_page` + `manufacturer` and extracted high-confidence facts, but marked them `evidenceVerifiedExact=false`; persistence traced `persistableCount=0`, `savedCount=0`.
+- Root cause: semantic source validation could accept an exact claim, but only literal quote/value matching set `evidenceVerifiedExact`; persistence then repeated another literal translated-value substring check. Rejected duplicate guidance also hid accepted facts from confirmed coverage.
+- Boundary decision: exact product identity, source fetch, authority/tier, conflict, unresolved product+attribute coverage, and execution disposition remain deterministic. Semantic claim/value equivalence stays LLM-owned and returns a structured exact-verification marker consumed by persistence.
+- Smallest safe fix: mark semantically accepted exact claims as verified, derive confirmed coverage from accepted facts, and remove the duplicate literal value substring requirement after semantic verification. No product-, USB-, or model-specific production rule was added.
+- Focused remediation result: `tests/productComparisonResearch.test.ts` + `tests/agentManagerComparisonResearch.test.ts` PASS, 84/84; typecheck and `git diff --check` PASS.
+- Full remediation verification: canonical focused suite PASS, 247/247; release gate PASS with 858/858 unit tests, 203/203 agentic tests, typecheck, no-regex guard, dependency audit, and production build. Fresh remediation verifier pending.
+
+## AC11 Remediation Fresh Verifier 1
+
+- Verdict: FAIL (`AC5`, `AC6`, `AC9`, `AC10`); AC11 remains pending deployment and a production rerun. All local commands passed.
+- High: semantic claim support could set `evidenceVerifiedExact` without proving that the persisted evidence string was an exact excerpt from fetched source text.
+- High: prepending derived confirmations before the 12-item coverage cap could evict contradicted or unresolved product coverage before persistence and writer guards consumed it.
+- Medium: the focused proof did not exercise either boundary.
+
+## AC11 Remediation Fresh Verifier 1 Fix
+
+- Semantic validation still owns claim/value meaning, but code now requires a concise exact excerpt to occur in fetched source text, binds it to the exact target, stores that verified excerpt, and strips reserved verification markers from model-supplied warnings.
+- Fact-derived coverage remains bounded, but omitted unresolved, ambiguous, contradicted, or not-found coverage replaces a capped confirmation instead of being discarded. Retry completion also rebuilds coverage from accepted facts so facts and guidance cannot diverge.
+- Added regressions for a semantically supported claim with fabricated evidence, reserved-marker injection, exact BISON excerpt propagation, and 12 accepted facts competing with contradicted coverage.
+- Current verification: corrective focused 86/86 PASS; canonical focused 249/249 PASS; release gate PASS with 860/860 unit tests, 203/203 agentic tests, typecheck, no-regex guard, dependency audit, production build, and `git diff --check`. Fresh corrective verifier pending.
+
+## AC11 Remediation Fresh Verifier 2
+
+- Verdict: FAIL (`AC5`, `AC6`, `AC7`, `AC9`, `AC10`); AC11 remains pending deployment and production proof. All local commands passed.
+- High: literal value inclusion could bypass semantic attribute/claim validation, allowing a maximum-power excerpt to be labeled as rated power.
+- High: catalog/web and exact-retry merges could retain accepted facts while dropping their confirmed coverage or primary-pass facts.
+- High: four targets by twelve attributes can expand malformed coverage to 48 fail-closed slots, but the 12-item internal cap retained only twelve.
+- Medium: normalized case-insensitive excerpt matching returned model casing rather than the actual fetched-source slice.
+- Medium: focused tests omitted these boundaries.
+
+## AC11 Remediation Fresh Verifier 2 Fix
+
+- Every accepted source claim now requires semantic validation of exact product, attribute, and value meaning, even when the value appears literally in the excerpt. Literal matching remains deterministic provenance evidence, not a semantic bypass.
+- Exact excerpt matching returns the actual case-preserving slice from collapsed fetched source text; model-supplied casing is not persisted.
+- Catalog/web merging always combines accepted facts and regenerates confirmed coverage. Exact retry merges primary, catalog, and retry facts before constructing final guidance.
+- The coverage cap remains strict for confirmations but becomes soft for fail-closed unresolved/ambiguous/contradicted/not-found slots; all expanded safety slots survive for persistence and writer guards.
+- Added regressions for wrong-attribute literal evidence, actual-source excerpt casing, non-start catalog-gap resolution, primary+retry fact retention, and 48 expanded fail-closed slots.
+- Current verification: corrective focused 89/89 PASS; canonical focused 252/252 PASS; release gate PASS with 863/863 unit tests, 203/203 agentic tests, typecheck, no-regex guard, dependency audit, production build, and `git diff --check`. New fresh verifier pending.
+
+## AC11 Remediation Fresh Verifier 3
+
+- Verdict: FAIL (`AC3`, `AC5`, `AC9`, `AC10`); AC11 remains pending deployment and production proof. Existing local commands passed.
+- High: facts and confirmed coverage were semantically validated with one provider call per item. A maximum result could spend 24 calls in validation alone and concurrent official tiers could consume the turn provider reserve before fallback and writer execution.
+- High: timeout coverage retained only the first twelve generated slots instead of preserving every fail-closed product+attribute gap.
+- High: the exhausted retry result could spread the primary result instead of the merged primary+retry result, and conflict-typed facts could survive as accepted support.
+- Medium: long-source semantic validation was prefix-bound even when an exact evidence excerpt occurred later, while Unicode case folding did not robustly map a matched folded excerpt back to the actual fetched-source slice.
+
+## AC11 Remediation Fresh Verifier 3 Fix
+
+- Facts and confirmed coverage are fetched under bounded concurrency and semantically validated together in one indexed structured batch per result. The response budget scales with batch size, missing or duplicate validation indices fail closed, and tests prove four claims use one provider call.
+- Coverage validation remains semantic rather than deterministic value matching, so aggregate claims are accepted only when the LLM validates their exact product, attribute, and meaning against fetched source text.
+- Timeout and merge paths preserve all fail-closed slots and merged retry facts. Conflict-typed facts are rejected as support.
+- Exact evidence matching maps Unicode-folded matches back to the fetched-source casing. Long semantic context is centered around an exact evidence excerpt when available.
+- Corrective focused verification: 89/89 PASS; canonical focused verification: 252/252 PASS; release gate: 863/863 unit and 203/203 agentic tests PASS.
+
+## AC11 Remediation Fresh Verifier 4
+
+- Verdict: FAIL (`AC5`, `AC9`, `AC10`). The fresh source-exhaustion audit found that `source_evidence_source_cap_reached` was emitted when the global distinct-source cap prevented a read, but was not classified as unread source evidence.
+- Risk: otherwise complete tier attempts could theoretically authorize source exhaustion while at least one cited source remained unread.
+
+## AC11 Remediation Fresh Verifier 4 Fix
+
+- Added `source_evidence_source_cap_reached` to the deterministic unread-evidence blockers and a direct regression proving it prevents source exhaustion.
+- Fresh verification after the fix: focused 89/89 PASS; canonical focused 252/252 PASS; release gate 863/863 unit and 203/203 agentic tests PASS; typecheck, no-regex guard, dependency audit, build, and `git diff --check` PASS.
+
+## AC11 Remediation Fresh Verifier 5
+
+- Verdict: PASS for `AC1`-`AC10`; `AC11` remains pending commit/push, Railway deployment, and production widget/admin proof.
+- No remaining local findings after rereading the frozen criteria and current source, retry, timeout, evidence, persistence, and exhaustion paths and rerunning all required local gates.

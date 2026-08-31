@@ -1,7 +1,7 @@
 {
   "taskId": "2026-08-30-fast-persistent-product-research",
-  "verifier": "Fresh Post-Cleanup Verifier",
-  "verifiedAt": "2026-08-31T10:57:50.5095896+03:00",
+  "verifier": "AC11 Remediation Fresh Verifier 5",
+  "verifiedAt": "2026-08-31T20:13:33.1873026+03:00",
   "overallVerdictAc1ToAc10": "PASS",
   "overallVerdict": "PENDING_AUTHORIZATION",
   "acceptanceCriteria": {
@@ -26,7 +26,7 @@
     },
     "AC3": {
       "verdict": "PASS",
-      "reason": "Catalog, official, and fallback stages receive bounded absolute deadlines with downstream reserves. Each outer tool attempt creates a new timeout signal and recomputes its research deadline inside the shared turn budget; retry traces include actual attempt duration and disposition.",
+      "reason": "Catalog, official, and fallback stages receive bounded absolute deadlines with downstream reserves. Facts and confirmed coverage use one indexed semantic validation batch per result rather than one provider call per claim. Each outer tool attempt creates a new timeout signal and recomputes its research deadline inside the shared turn budget; retry traces include actual attempt duration and disposition.",
       "references": [
         "src/ai/productComparisonResearch.ts:2229-2252",
         "src/ai/productComparisonResearch.ts:2525-2530",
@@ -49,7 +49,7 @@
     },
     "AC5": {
       "verdict": "PASS",
-      "reason": "Accepted evidence must bind the exact target identity, readable source text, and the claimed value. Manufacturer authority is restricted to approved provenance or exact publisher proof from fetched source text; secondary facts are capped at medium confidence, and missing facts remain unresolved rather than incompatible.",
+      "reason": "Accepted evidence must bind the exact target identity, readable source text, an exact fetched-source excerpt, and semantic support for the claimed attribute and value. Manufacturer authority is restricted to approved provenance or exact publisher proof; secondary facts are capped at medium confidence, and unread, truncated, or source-cap-limited evidence blocks exhaustion.",
       "references": [
         "src/ai/productComparisonResearch.ts:1141-1209",
         "src/ai/productComparisonResearch.ts:1354-1504",
@@ -112,7 +112,7 @@
     },
     "AC10": {
       "verdict": "PASS",
-      "reason": "The focused suite covers the required fast paths, fresh retry deadlines, tier concurrency/cancellation and fallback, exact-model rejection, persistence/idempotency, mixed and partial memory reuse, alias-equivalent product scoping, and customer-language review/repair. The fresh canonical focused command and complete release gate both pass on the current reduced tree.",
+      "reason": "The focused suite covers fast paths, fresh retry deadlines, tier concurrency/cancellation and fallback, batched semantic fact/coverage validation, exact-model rejection, timeout/merge/conflict boundaries, source-cap exhaustion blocking, persistence/idempotency, memory reuse, and customer-language review/repair. The current canonical focused command and complete release gate pass.",
       "references": [
         "tests/productComparisonResearch.test.ts:215-850",
         "tests/productComparisonResearch.test.ts:3264-3319",
@@ -134,12 +134,12 @@
     {
       "command": "npx vitest run tests/productComparisonResearch.test.ts tests/verifiedFactMemory.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerHarnessContracts.test.ts tests/agentManagerOrchestrator.test.ts tests/openAIAgentManagerModel.test.ts tests/catalogRepositoryFreshness.test.ts tests/migrate.test.ts",
       "verdict": "PASS",
-      "result": "8 files and 245 tests passed"
+      "result": "8 files and 252 tests passed"
     },
     {
       "command": "npm run verify",
       "verdict": "PASS",
-      "result": "Node.js runtime PASS; no-regex guard PASS; production dependency audit PASS with 0 high vulnerabilities; TypeScript typecheck PASS; 84 files and 856 tests PASS; 4 agentic files and 203 tests PASS; production build PASS"
+      "result": "Node.js runtime PASS; no-regex guard PASS; production dependency audit PASS with 0 high vulnerabilities; TypeScript typecheck PASS; 84 files and 863 tests PASS; 4 agentic files and 203 tests PASS; production build PASS"
     },
     {
       "command": "git diff --check",
