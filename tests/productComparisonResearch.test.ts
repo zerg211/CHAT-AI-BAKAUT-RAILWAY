@@ -30,9 +30,11 @@ vi.mock('node:dns/promises', () => ({
 }));
 
 const {
+  boundedResearchStageDeadline,
   classifyProductResearchSource,
   researchProductComparisonFacts
 } = await import('../src/ai/productComparisonResearch.js');
+import type { ProductResearchTraceEvent } from '../src/ai/productComparisonResearch.js';
 
 const queuedResearchResponses: Array<{ parsed: Record<string, unknown>; response?: unknown }> = [];
 
@@ -128,6 +130,8 @@ function semanticValidationResponse(call: { request: { input?: Array<{ role?: st
       claimSupported,
       claimStartKinds,
       supportedStartKinds,
+      publisherAuthority: 'unknown',
+      publisherEvidence: '',
       evidence: 'test semantic source validation',
       warnings: []
     }
@@ -156,6 +160,21 @@ function queueResearchResponse(response: { parsed: Record<string, unknown>; resp
 }
 
 describe('product comparison research', () => {
+  it('reserves time for fallback instead of giving the primary stage the whole deadline', () => {
+    expect(boundedResearchStageDeadline({
+      overallDeadlineAtMs: 100_000,
+      maxDurationMs: 24_000,
+      reserveMs: 16_000,
+      nowMs: 1_000
+    })).toBe(25_000);
+    expect(boundedResearchStageDeadline({
+      overallDeadlineAtMs: 30_000,
+      maxDurationMs: 24_000,
+      reserveMs: 16_000,
+      nowMs: 1_000
+    })).toBe(14_000);
+  });
+
   it('derives manufacturer/manual authority from the actual host and document URL', () => {
     expect(classifyProductResearchSource({
       sourceUrl: 'https://www.firman.biz/manuals/RD3910E-manual.pdf',
@@ -183,6 +202,651 @@ describe('product comparison research', () => {
       tier: 'reliable_secondary',
       authority: 'secondary'
     });
+    expect(classifyProductResearchSource({
+      sourceUrl: 'https://sunreka.example/products/G7000iS',
+      sourceTitle: 'SUNREKA G7000iS product page',
+      product: product({ name: 'SUNREKA G7000iS', brand: 'SUNREKA' })
+    })).toMatchObject({
+      tier: 'reliable_secondary',
+      authority: 'secondary'
+    });
+  });
+
+  it('downgrades an uncorroborated secondary-source claim from high to medium confidence', async () => {
+    const quote = 'FIRMAN RD3910E service interval is 100 hours.';
+    fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote}</body></html>`));
+    const secondaryResult = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'FIRMAN RD3910E',
+        attribute: 'service interval',
+        value: '100 hours',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: quote,
+        sourceUrl: 'https://equipment-shop.example/firman-rd3910e-service',
+        sourceTitle: 'FIRMAN RD3910E service listing'
+      }],
+      answerGuidance: {
+        directAnswer: 'Межсервисный интервал 100 моточасов.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'service interval',
+          status: 'confirmed',
+          value: '100 hours',
+          evidence: quote,
+          sourceUrl: 'https://equipment-shop.example/firman-rd3910e-service',
+          sourceTitle: 'FIRMAN RD3910E service listing'
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: secondaryResult });
+    queueResearchResponse({ parsed: secondaryResult });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какой межсервисный интервал у FIRMAN RD3910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['service interval']
+    });
+
+    expect(actual.facts).toContainEqual(expect.objectContaining({
+      confidence: 'medium',
+      sourceTier: 'reliable_secondary',
+      sourceAuthority: 'secondary'
+    }));
+  });
+
+  it('accepts an absent target official page only when source text proves manufacturer ownership', async () => {
+    const quote = 'ACME X1 rated power is 5 kW.';
+    const publisherEvidence = 'ACME Power Systems is the manufacturer and publisher of this website.';
+    const sourceUrl = 'https://acme-power.invalid/products/acme-x1';
+    fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote} ${publisherEvidence}</body></html>`));
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return {
+          parsed: {
+            claimSupported: true,
+            claimStartKinds: [],
+            supportedStartKinds: [],
+            publisherAuthority: 'manufacturer',
+            publisherEvidence,
+            evidence: 'the exact product claim and publisher identity are present',
+            warnings: []
+          }
+        };
+      }
+      const tier = call.stage === 'product_comparison_research_official_page'
+        ? 'official_page'
+        : 'official_manual';
+      const query = `ACME X1 ${tier} rated power`;
+      const hasFact = tier === 'official_page';
+      return {
+        parsed: result({
+          usedWebSearch: true,
+          sourceAttempts: [{ tier, query, outcome: hasFact ? 'confirmed' : 'not_found' }],
+          facts: hasFact ? [{
+            productName: 'ACME X1',
+            attribute: 'rated power',
+            value: '5 kW',
+            sourceType: 'web',
+            confidence: 'high',
+            evidence: quote,
+            sourceUrl,
+            sourceTitle: 'ACME X1 product page'
+          }] : [],
+          answerGuidance: {
+            directAnswer: hasFact ? 'ACME X1 has 5 kW rated power.' : '',
+            completeness: hasFact ? 'answered' : 'not_answered',
+            coverage: hasFact ? [{
+              attribute: 'rated power',
+              status: 'confirmed',
+              value: '5 kW',
+              evidence: quote,
+              sourceUrl,
+              sourceTitle: 'ACME X1 product page'
+            }] : []
+          }
+        }),
+        response: {
+          output: [{
+            type: 'web_search_call',
+            status: 'completed',
+            action: {
+              query,
+              sources: hasFact ? [{ url: sourceUrl, title: 'ACME X1 product page' }] : []
+            }
+          }]
+        }
+      };
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какая мощность у ACME X1?',
+      products: [],
+      targetProductNames: ['ACME X1'],
+      comparisonAttributes: ['rated power'],
+      missingFactSlots: [{ productName: 'ACME X1', attribute: 'rated power' }],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(actual.facts).toContainEqual(expect.objectContaining({
+      productName: 'ACME X1',
+      sourceTier: 'official_page',
+      sourceAuthority: 'manufacturer',
+      confidence: 'high'
+    }));
+    expect(actual.warnings).toContain('source_publisher_manufacturer_verified');
+    expect(actual.sourceAttempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tier: 'official_page', outcome: 'confirmed' })
+    ]));
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'product_comparison_research_official_page',
+      'product_comparison_research_official_manual'
+    ]);
+  });
+
+  it('starts independent official tiers together and cancels manual work after official-page coverage', async () => {
+    const quote = 'FIRMAN RD3910E rated power is 5 kW.';
+    let resolveOfficialPage!: (value: unknown) => void;
+    let manualStarted = false;
+    let manualAborted = false;
+    const traces: ProductResearchTraceEvent[] = [];
+    fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote}</body></html>`));
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return {
+          parsed: {
+            claimSupported: true,
+            claimStartKinds: [],
+            supportedStartKinds: [],
+            evidence: 'test semantic source validation',
+            warnings: []
+          }
+        };
+      }
+      if (call.stage === 'product_comparison_research_official_page') {
+        return new Promise((resolve) => {
+          resolveOfficialPage = resolve;
+        });
+      }
+      if (call.stage === 'product_comparison_research_official_manual') {
+        manualStarted = true;
+        return new Promise((_resolve, reject) => {
+          call.signal?.addEventListener('abort', () => {
+            manualAborted = true;
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      }
+      throw new Error(`Unexpected stage ${call.stage}`);
+    });
+
+    const researchPromise = researchProductComparisonFacts({
+      userMessage: 'Какая мощность у FIRMAN RD3910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['rated power'],
+      missingFactSlots: [{ productName: 'FIRMAN RD3910E', attribute: 'rated power' }],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false,
+      onTrace: (event) => {
+        traces.push(event);
+      }
+    });
+    await vi.waitFor(() => expect(manualStarted).toBe(true));
+    const query = 'FIRMAN RD3910E official rated power';
+    resolveOfficialPage({
+      parsed: result({
+        usedWebSearch: true,
+        sourceAttempts: [{ tier: 'official_page', query, outcome: 'confirmed' }],
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'rated power',
+          value: '5 kW',
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: quote,
+          sourceUrl: 'https://manufacturer.example/products/FIRMAN-RD3910E',
+          sourceTitle: 'FIRMAN RD3910E official product page'
+        }],
+        answerGuidance: {
+          directAnswer: 'Мощность FIRMAN RD3910E составляет 5 кВт.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'rated power',
+            status: 'confirmed',
+            value: '5 kW',
+            evidence: quote,
+            sourceUrl: 'https://manufacturer.example/products/FIRMAN-RD3910E',
+            sourceTitle: 'FIRMAN RD3910E official product page'
+          }]
+        }
+      }),
+      response: {
+        output: [{
+          type: 'web_search_call',
+          status: 'completed',
+          action: {
+            query,
+            sources: [{
+              url: 'https://manufacturer.example/products/FIRMAN-RD3910E',
+              title: 'FIRMAN RD3910E official product page'
+            }]
+          }
+        }]
+      }
+    });
+
+    const actual = await researchPromise;
+    expect(actual.facts).toContainEqual(expect.objectContaining({
+      productName: 'FIRMAN RD3910E',
+      attribute: 'rated power',
+      sourceTier: 'official_page',
+      sourceAuthority: 'manufacturer'
+    }));
+    expect(manualAborted).toBe(true);
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'product_comparison_research_official_page',
+      'product_comparison_research_official_manual'
+    ]);
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tiers: ['official_page'], outcome: 'completed' }),
+      expect.objectContaining({ tiers: ['official_manual'], outcome: 'aborted' })
+    ]));
+  });
+
+  it('cancels slow official-page work when the manual finishes first with complete evidence', async () => {
+    const quote = 'FIRMAN RD3910E rated power is 5 kW.';
+    let pageStarted = false;
+    let pageAborted = false;
+    const traces: ProductResearchTraceEvent[] = [];
+    fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote}</body></html>`));
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'product_comparison_research_official_page') {
+        pageStarted = true;
+        return new Promise((_resolve, reject) => {
+          call.signal?.addEventListener('abort', () => {
+            pageAborted = true;
+            reject(new DOMException('aborted', 'AbortError'));
+          }, { once: true });
+        });
+      }
+      if (call.stage === 'product_comparison_research_official_manual') {
+        const query = 'FIRMAN RD3910E official manual rated power';
+        return {
+          parsed: result({
+            usedWebSearch: true,
+            sourceAttempts: [{ tier: 'official_manual', query, outcome: 'confirmed' }],
+            facts: [{
+              productName: 'FIRMAN RD3910E',
+              attribute: 'rated power',
+              value: '5 kW',
+              sourceType: 'web',
+              confidence: 'high',
+              evidence: quote,
+              sourceUrl: 'https://manufacturer.example/manuals/FIRMAN-RD3910E',
+              sourceTitle: 'FIRMAN RD3910E official manual'
+            }],
+            answerGuidance: {
+              directAnswer: 'Мощность FIRMAN RD3910E составляет 5 кВт.',
+              completeness: 'answered',
+              coverage: [{
+                attribute: 'rated power',
+                status: 'confirmed',
+                value: '5 kW',
+                evidence: quote,
+                sourceUrl: 'https://manufacturer.example/manuals/FIRMAN-RD3910E',
+                sourceTitle: 'FIRMAN RD3910E official manual'
+              }]
+            }
+          }),
+          response: {
+            output: [{
+              type: 'web_search_call',
+              status: 'completed',
+              action: {
+                query,
+                sources: [{
+                  url: 'https://manufacturer.example/manuals/FIRMAN-RD3910E',
+                  title: 'FIRMAN RD3910E official manual'
+                }]
+              }
+            }]
+          }
+        };
+      }
+      throw new Error(`Unexpected stage ${call.stage}`);
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какая мощность у FIRMAN RD3910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['rated power'],
+      missingFactSlots: [{ productName: 'FIRMAN RD3910E', attribute: 'rated power' }],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false,
+      onTrace: (event) => { traces.push(event); }
+    });
+
+    expect(pageStarted).toBe(true);
+    expect(pageAborted).toBe(true);
+    expect(actual.facts).toContainEqual(expect.objectContaining({ sourceTier: 'official_manual' }));
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'product_comparison_research_official_page',
+      'product_comparison_research_official_manual'
+    ]);
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ tiers: ['official_manual'], outcome: 'completed' }),
+      expect.objectContaining({ tiers: ['official_page'], outcome: 'aborted' })
+    ]));
+  });
+
+  it('uses reliable secondary only after both official tiers leave typed slots unresolved', async () => {
+    const stageTiers = new Map([
+      ['product_comparison_research_official_page', 'official_page'],
+      ['product_comparison_research_official_manual', 'official_manual'],
+      ['product_comparison_research_reliable_secondary', 'reliable_secondary']
+    ]);
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      const tier = stageTiers.get(call.stage);
+      if (!tier) throw new Error(`Unexpected stage ${call.stage}`);
+      const query = `ACME X1 ${tier} rated power`;
+      return {
+        parsed: result({
+          usedWebSearch: true,
+          sourceAttempts: [{ tier, query, outcome: 'not_found' }],
+          answerGuidance: {
+            directAnswer: '',
+            completeness: 'not_answered',
+            coverage: [{
+              attribute: 'rated power',
+              status: 'not_found',
+              value: '',
+              evidence: 'not confirmed',
+              sourceUrl: null,
+              sourceTitle: null
+            }]
+          }
+        }),
+        response: {
+          output: [{
+            type: 'web_search_call',
+            status: 'completed',
+            action: { query, sources: [] }
+          }]
+        }
+      };
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какая мощность у ACME X1?',
+      products: [],
+      targetProductNames: ['ACME X1'],
+      comparisonAttributes: ['rated power'],
+      missingFactSlots: [{ productName: 'ACME X1', attribute: 'rated power' }],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'product_comparison_research_official_page',
+      'product_comparison_research_official_manual',
+      'product_comparison_research_reliable_secondary'
+    ]);
+    expect(actual.sourceAttempts?.map((attempt) => attempt.tier)).toEqual([
+      'catalog',
+      'official_page',
+      'official_manual',
+      'reliable_secondary'
+    ]);
+    expect(actual.sourcesExhausted).toBe(true);
+  });
+
+  it('does not let secondary evidence returned by an official-page attempt short-circuit the manual tier', async () => {
+    const secondaryQuote = 'FIRMAN RD3910E rated power is 4 kW.';
+    const manualQuote = 'FIRMAN RD3910E rated power is 5 kW.';
+    fetchMock.mockImplementation(async () => sourceResponse(`${secondaryQuote} ${manualQuote}`));
+    const stagedResponse = (input: {
+      tier: 'official_page' | 'official_manual';
+      query: string;
+      quote: string;
+      value: string;
+      url: string;
+      title: string;
+    }) => ({
+      parsed: result({
+        usedWebSearch: true,
+        sourceAttempts: [{ tier: input.tier, query: input.query, outcome: 'confirmed' }],
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'rated power',
+          value: input.value,
+          sourceType: 'web',
+          confidence: 'high',
+          evidence: input.quote,
+          sourceUrl: input.url,
+          sourceTitle: input.title
+        }],
+        conflicts: input.tier === 'official_page' ? [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'rated power',
+          catalogValue: undefined,
+          webValues: ['4 kW', '6 kW'],
+          resolution: 'unresolved secondary-source conflict'
+        }] : [],
+        answerGuidance: {
+          directAnswer: `Мощность ${input.value}.`,
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'rated power',
+            status: 'confirmed',
+            value: input.value,
+            evidence: input.quote,
+            sourceUrl: input.url,
+            sourceTitle: input.title
+          }]
+        }
+      }),
+      response: {
+        output: [{
+          type: 'web_search_call',
+          status: 'completed',
+          action: { query: input.query, sources: [{ url: input.url, title: input.title }] }
+        }]
+      }
+    });
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        return semanticValidationResponse(call);
+      }
+      if (call.stage === 'product_comparison_research_official_page') {
+        return stagedResponse({
+          tier: 'official_page',
+          query: 'FIRMAN RD3910E official rated power',
+          quote: secondaryQuote,
+          value: '4 kW',
+          url: 'https://equipment-shop.example/firman-rd3910e',
+          title: 'FIRMAN RD3910E reseller listing'
+        });
+      }
+      if (call.stage === 'product_comparison_research_official_manual') {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        return stagedResponse({
+          tier: 'official_manual',
+          query: 'FIRMAN RD3910E official manual rated power',
+          quote: manualQuote,
+          value: '5 kW',
+          url: 'https://manufacturer.example/manuals/FIRMAN-RD3910E',
+          title: 'FIRMAN RD3910E official manual'
+        });
+      }
+      throw new Error(`Unexpected stage ${call.stage}`);
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Какая мощность у FIRMAN RD3910E?',
+      products: [],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['rated power'],
+      missingFactSlots: [{ productName: 'FIRMAN RD3910E', attribute: 'rated power' }],
+      catalogSearchAttempted: true,
+      catalogProductsFound: false
+    });
+
+    expect(actual.facts).toEqual([expect.objectContaining({
+      value: '5 kW',
+      sourceTier: 'official_manual',
+      sourceAuthority: 'manufacturer'
+    })]);
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'product_comparison_research_official_page',
+      'product_comparison_research_official_manual'
+    ]);
+    expect(actual.warnings).toContain('source_tier_conflict_rejected:official_page');
+    expect(actual.conflicts).toEqual([]);
+    expect(actual.sourceAttempts).not.toContainEqual(expect.objectContaining({
+      tier: 'official_page',
+      outcome: 'confirmed'
+    }));
+  });
+
+  it('rejects a fact labeled as one requested model when its source only names another requested model', async () => {
+    const quote = 'TSS SGG 6000 EH rated power is 6 kW.';
+    fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote}</body></html>`));
+    const wrongTarget = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'TSS SGG 5000 EH',
+        attribute: 'rated power',
+        value: '6 kW',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: quote,
+        sourceUrl: 'https://equipment.example/TSS-SGG-6000-EH',
+        sourceTitle: 'TSS SGG 6000 EH specification'
+      }],
+      answerGuidance: {
+        directAnswer: 'У TSS SGG 5000 EH мощность 6 кВт.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'rated power',
+          status: 'confirmed',
+          value: '6 kW',
+          evidence: quote,
+          sourceUrl: 'https://equipment.example/TSS-SGG-6000-EH',
+          sourceTitle: 'TSS SGG 6000 EH specification'
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: wrongTarget });
+    queueResearchResponse({ parsed: wrongTarget });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Сравните мощность двух моделей.',
+      products: [],
+      targetProductNames: ['TSS SGG 5000 EH', 'TSS SGG 6000 EH'],
+      comparisonAttributes: ['rated power']
+    });
+
+    expect(actual.facts).toEqual([]);
+    expect(actual.warnings).toContain('source_evidence_exact_target_not_found');
+  });
+
+  it('turns unknown targeted coverage ownership into conservative exact-target gaps', async () => {
+    const quote = 'MODEL A rated power is 6 kW.';
+    fetchMock.mockResolvedValue(sourceResponse(`<html><body>${quote}</body></html>`));
+    const malformedCoverage = result({
+      usedWebSearch: true,
+      facts: [{
+        productName: 'MODEL A',
+        attribute: 'rated power',
+        value: '6 kW',
+        sourceType: 'web',
+        confidence: 'medium',
+        evidence: quote,
+        sourceUrl: 'https://equipment.example/model-a',
+        sourceTitle: 'MODEL A specification'
+      }],
+      answerGuidance: {
+        directAnswer: 'MODEL A has 6 kW rated power.',
+        completeness: 'partially_answered',
+        coverage: [{
+          productName: 'UNKNOWN MODEL',
+          attribute: 'rated power',
+          status: 'not_confirmed',
+          value: '',
+          evidence: 'ownership is malformed',
+          sourceUrl: null,
+          sourceTitle: null
+        }]
+      }
+    });
+    queueResearchResponse({ parsed: malformedCoverage });
+    queueResearchResponse({ parsed: malformedCoverage });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Compare rated power for MODEL A and MODEL B.',
+      products: [],
+      targetProductNames: ['MODEL A', 'MODEL B'],
+      comparisonAttributes: ['rated power']
+    });
+
+    expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productName: 'MODEL A', attribute: 'rated power', status: 'not_confirmed' }),
+      expect.objectContaining({ productName: 'MODEL B', attribute: 'rated power', status: 'not_confirmed' })
+    ]));
+    expect(actual.answerGuidance.coverage).not.toContainEqual(expect.objectContaining({
+      productName: 'UNKNOWN MODEL'
+    }));
+    expect(actual.warnings).toContain('source_coverage_target_mismatch');
+    expect(actual.sourcesExhausted).toBe(false);
+  });
+
+  it('short-circuits staged web tiers when exact catalog facts cover every typed slot', async () => {
+    queueResearchResponse({
+      parsed: result({
+        facts: [{
+          productName: 'FIRMAN RD3910E',
+          attribute: 'start control',
+          value: 'key start',
+          sourceType: 'catalog',
+          confidence: 'high',
+          evidence: 'catalog.description: FIRMAN RD3910E starts with an ignition key',
+          sourceUrl: product().sourceUrl,
+          sourceTitle: product().name
+        }],
+        answerGuidance: {
+          directAnswer: 'FIRMAN RD3910E запускается ключом.',
+          completeness: 'answered',
+          coverage: [{
+            attribute: 'start control',
+            status: 'confirmed',
+            value: 'key start',
+            evidence: 'catalog.description: FIRMAN RD3910E starts with an ignition key',
+            sourceUrl: product().sourceUrl,
+            sourceTitle: product().name
+          }]
+        }
+      })
+    });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'Как запускается FIRMAN RD3910E?',
+      products: [product()],
+      targetProductNames: ['FIRMAN RD3910E'],
+      comparisonAttributes: ['start control'],
+      missingFactSlots: [{ productName: 'FIRMAN RD3910E', attribute: 'start control' }],
+      catalogSearchAttempted: true,
+      catalogProductsFound: true
+    });
+
+    expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction']);
+    expect(actual.usedWebSearch).toBe(false);
+    expect(actual.searchDisposition).toBe('not_needed');
+    expect(actual.warnings).toContain('web_research_not_needed:catalog_extraction_answered');
   });
 
   beforeEach(() => {
@@ -636,6 +1300,63 @@ describe('product comparison research', () => {
     ]);
   });
 
+  it('downgrades a generic confirmed source attempt when validation rejects every claimed fact', async () => {
+    const query = 'GENERATOR TEST 2000 service interval';
+    const sourceUrl = 'https://equipment.example/generator-test-2000';
+    const unsupported = result({
+      usedWebSearch: true,
+      sourceAttempts: [{ tier: 'reliable_secondary', query, outcome: 'confirmed' }],
+      facts: [{
+        productName: 'GENERATOR TEST 2000',
+        attribute: 'service interval',
+        value: '100 hours',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'GENERATOR TEST 2000 service interval is 100 hours',
+        sourceUrl,
+        sourceTitle: 'GENERATOR TEST 2000 specification'
+      }],
+      answerGuidance: {
+        directAnswer: 'Service interval is 100 hours.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'service interval',
+          status: 'confirmed',
+          value: '100 hours',
+          evidence: 'GENERATOR TEST 2000 service interval is 100 hours',
+          sourceUrl,
+          sourceTitle: 'GENERATOR TEST 2000 specification'
+        }]
+      }
+    });
+    const response = {
+      output: [{
+        type: 'web_search_call',
+        status: 'completed',
+        action: { query, sources: [{ url: sourceUrl, title: 'GENERATOR TEST 2000 specification' }] }
+      }]
+    };
+    fetchMock.mockResolvedValue(sourceResponse('GENERATOR TEST 2000 product page without a service interval.'));
+    queueResearchResponse({ parsed: unsupported, response });
+    queueResearchResponse({ parsed: unsupported, response });
+
+    const actual = await researchProductComparisonFacts({
+      userMessage: 'What is the service interval?',
+      products: [],
+      targetProductNames: [],
+      comparisonAttributes: ['service interval']
+    });
+
+    expect(actual.facts).toEqual([]);
+    expect(actual.sourceAttempts).toContainEqual(expect.objectContaining({
+      tier: 'reliable_secondary',
+      outcome: 'unreadable'
+    }));
+    expect(actual.sourceAttempts).not.toContainEqual(expect.objectContaining({ outcome: 'confirmed' }));
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.warnings).toContain('source_attempt_confirmation_rejected');
+  });
+
   it('does not count failed web search calls or their reported queries toward exhaustion', async () => {
     const sourceAttempts = [{
       tier: 'official_page',
@@ -825,11 +1546,11 @@ describe('product comparison research', () => {
     const catalogCall = researchCalls()[0];
     expect(catalogCall.stage).toBe('catalog_product_fact_extraction');
     expect(catalogCall.request.tools).toBeUndefined();
-    expect(catalogCall.request.reasoning).toEqual({ effort: 'none' });
+    expect(catalogCall.request.reasoning).toEqual({ effort: 'low' });
     expect(catalogCall.request.max_output_tokens).toBeGreaterThanOrEqual(1800);
     const webCall = researchCalls()[1];
     expect(webCall.stage).toBe('product_comparison_research');
-    expect(webCall.request.reasoning).toEqual({ effort: 'none' });
+    expect(webCall.request.reasoning).toEqual({ effort: 'low' });
     expect(webCall.request.max_output_tokens).toBeGreaterThanOrEqual(1800);
     expect(webCall.request.tools).toEqual([{
       type: 'web_search',
@@ -1126,6 +1847,8 @@ describe('product comparison research', () => {
       minRetryRemainingMs: 6_000
     });
     expect(researchCalls()[1].request.max_output_tokens).toBeGreaterThanOrEqual(2_600);
+    expect(researchCalls()[0].request.reasoning).toEqual({ effort: 'low' });
+    expect(researchCalls()[1].request.reasoning).toEqual({ effort: 'low' });
     expect(researchCalls()[1].request.tools).toEqual([{
       type: 'web_search',
       search_context_size: 'low',
@@ -1143,6 +1866,7 @@ describe('product comparison research', () => {
   });
 
   it('returns a typed partial with catalog facts and exact missing coverage when deadline-bound web times out', async () => {
+    const traces: ProductResearchTraceEvent[] = [];
     createStructuredJsonResponse.mockImplementation(async (call) => {
       if (call.stage === 'catalog_product_fact_extraction_compact') {
         return {
@@ -1178,13 +1902,21 @@ describe('product comparison research', () => {
       allowCatalogOnlyAnswer: false,
       catalogSearchAttempted: true,
       catalogProductsFound: true,
-      deadlineAtMs: Date.now() + 45_000
+      deadlineAtMs: Date.now() + 45_000,
+      onTrace: (event) => { traces.push(event); }
     });
 
     expect(researchCalls().map((call) => call.stage)).toEqual([
       'catalog_product_fact_extraction_compact',
-      'product_comparison_research'
+      'product_comparison_research',
+      'product_comparison_research_exact_retry'
     ]);
+    const webCalls = researchCalls().filter((call) => call.stage.includes('product_comparison_research'));
+    expect(webCalls[1].deadlineAtMs).toBeGreaterThan(webCalls[0].deadlineAtMs);
+    expect(traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: 'primary_web', attemptNumber: 1, outcome: 'timed_out' }),
+      expect.objectContaining({ stage: 'tier_fallback', attemptNumber: 2, outcome: 'timed_out' })
+    ]));
     expect(actual).toMatchObject({
       usedWebSearch: false,
       searchDisposition: 'timed_out',
@@ -1281,7 +2013,7 @@ describe('product comparison research', () => {
   });
 
   it('preserves exact target and requested attribute gaps when web times out without catalog evidence', async () => {
-    createStructuredJsonResponse.mockRejectedValueOnce(
+    createStructuredJsonResponse.mockRejectedValue(
       new DOMException('The operation was aborted.', 'AbortError')
     );
 
@@ -1303,13 +2035,20 @@ describe('product comparison research', () => {
     });
     expect(actual.answerGuidance.coverage).toEqual([
       expect.objectContaining({
+        productName: 'EXACT MODEL 9000',
         attribute: 'прижимная сила',
         status: 'not_confirmed',
-        sourceTitle: 'EXACT MODEL 9000 / EXACT MODEL 8000'
+        sourceTitle: 'EXACT MODEL 9000'
+      }),
+      expect.objectContaining({
+        productName: 'EXACT MODEL 8000',
+        attribute: 'прижимная сила',
+        status: 'not_confirmed',
+        sourceTitle: 'EXACT MODEL 8000'
       })
     ]);
     expect(actual.answerGuidance.coverage[0]?.evidence).toContain('EXACT MODEL 9000');
-    expect(actual.answerGuidance.coverage[0]?.evidence).toContain('EXACT MODEL 8000');
+    expect(actual.answerGuidance.coverage[1]?.evidence).toContain('EXACT MODEL 8000');
     expect(actual.sourceAttempts).toEqual([
       expect.objectContaining({ tier: 'catalog', outcome: 'not_found' })
     ]);
@@ -1622,6 +2361,7 @@ describe('product comparison research', () => {
             completeness: 'answered',
             coverage: [
               {
+                productName: 'FIRMAN RD4910E',
                 attribute: 'start_control_mechanism',
                 status: 'confirmed',
                 value: 'electric starter',
@@ -1630,6 +2370,7 @@ describe('product comparison research', () => {
                 sourceTitle: 'FIRMAN RD4910E'
               },
               {
+                productName: 'FIRMAN RD4910E',
                 attribute: 'start_control_mechanism',
                 status: 'not_confirmed',
                 value: '',
@@ -1638,6 +2379,7 @@ describe('product comparison research', () => {
                 sourceTitle: null
               },
               {
+                productName: 'FIRMAN RD4910E',
                 attribute: 'start_control_mechanism',
                 status: 'not_confirmed',
                 value: '',
@@ -2511,6 +3253,11 @@ describe('product comparison research', () => {
     expect(actual.answerGuidance.coverage).toEqual(expect.arrayContaining([
       expect.objectContaining({ attribute: 'start_control_mechanism', status: 'confirmed' })
     ]));
+    expect(actual.answerGuidance.coverage).not.toContainEqual(expect.objectContaining({
+      productName: 'FIRMAN RD4910E',
+      attribute: 'start_control_mechanism',
+      status: 'not_confirmed'
+    }));
     expect(actual.warnings).not.toContain('source_evidence_validation_failed:electric_start');
   });
 
@@ -2541,7 +3288,7 @@ describe('product comparison research', () => {
       parsed: result({
         ...unresolved,
         sourceAttempts: attempts,
-        warnings: ['exact_target_external_fact_not_found', 'tool_not_executed:source_reader']
+        warnings: ['exact_target_external_fact_not_found', 'source_coverage_target_mismatch']
       }),
       response: {
         output: attempts.map((attempt) => ({
@@ -2568,7 +3315,7 @@ describe('product comparison research', () => {
       'reliable_secondary'
     ]);
     expect(actual.sourcesExhausted).toBe(false);
-    expect(actual.warnings).toContain('tool_not_executed:source_reader');
+    expect(actual.warnings).toContain('source_coverage_target_mismatch');
   });
 
   it('enforces schema/runtime fact, coverage, and distinct source URL caps', async () => {

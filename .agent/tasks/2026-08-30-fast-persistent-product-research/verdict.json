@@ -1,0 +1,151 @@
+{
+  "taskId": "2026-08-30-fast-persistent-product-research",
+  "verifier": "Fresh Post-Cleanup Verifier",
+  "verifiedAt": "2026-08-31T10:57:50.5095896+03:00",
+  "overallVerdictAc1ToAc10": "PASS",
+  "overallVerdict": "PENDING_AUTHORIZATION",
+  "acceptanceCriteria": {
+    "AC1": {
+      "verdict": "PASS",
+      "reason": "The current orchestrator extracts exact catalog facts first, reads verified memory only for catalog gaps, and sends only remaining product+attribute slots into concurrent official-page/manual work followed by secondary fallback. Complete catalog, memory, or official evidence short-circuits later tiers.",
+      "references": [
+        "src/ai/agentManagerOrchestrator.ts:7431-7517",
+        "src/ai/productComparisonResearch.ts:2883-2905",
+        "src/ai/productComparisonResearch.ts:3091-3180"
+      ]
+    },
+    "AC2": {
+      "verdict": "PASS",
+      "reason": "Research requests are built from planner-typed exact product names, exact-model aliases, canonical attributes, and explicit missing fact slots. Raw buyer text is supplied to semantic model stages as context and is not classified by new regex or keyword routing.",
+      "references": [
+        "src/ai/productComparisonResearch.ts:122-145",
+        "src/ai/productComparisonResearch.ts:2607-2612",
+        "src/ai/productComparisonResearch.ts:2727-2740",
+        "src/ai/agentManagerOrchestrator.ts:7431-7506"
+      ]
+    },
+    "AC3": {
+      "verdict": "PASS",
+      "reason": "Catalog, official, and fallback stages receive bounded absolute deadlines with downstream reserves. Each outer tool attempt creates a new timeout signal and recomputes its research deadline inside the shared turn budget; retry traces include actual attempt duration and disposition.",
+      "references": [
+        "src/ai/productComparisonResearch.ts:2229-2252",
+        "src/ai/productComparisonResearch.ts:2525-2530",
+        "src/ai/productComparisonResearch.ts:3091-3100",
+        "src/ai/productComparisonResearch.ts:3145-3159",
+        "src/ai/agentManagerOrchestrator.ts:7023-7119",
+        "src/ai/agentManagerOrchestrator.ts:7434-7455",
+        "src/ai/agentManagerOrchestrator.ts:7853-7885",
+        "tests/agentManagerComparisonResearch.test.ts:439-445"
+      ]
+    },
+    "AC4": {
+      "verdict": "PASS",
+      "reason": "Official product-page and manual attempts start independently and race in either completion order. Complete exact evidence cancels the slower branch; otherwise the isolated official results merge before reliable-secondary fallback, without off-tier facts or conflicts contaminating a tier.",
+      "references": [
+        "src/ai/productComparisonResearch.ts:2947-3088",
+        "src/ai/productComparisonResearch.ts:3101-3178",
+        "tests/productComparisonResearch.test.ts:350-714"
+      ]
+    },
+    "AC5": {
+      "verdict": "PASS",
+      "reason": "Accepted evidence must bind the exact target identity, readable source text, and the claimed value. Manufacturer authority is restricted to approved provenance or exact publisher proof from fetched source text; secondary facts are capped at medium confidence, and missing facts remain unresolved rather than incompatible.",
+      "references": [
+        "src/ai/productComparisonResearch.ts:1141-1209",
+        "src/ai/productComparisonResearch.ts:1354-1504",
+        "src/ai/productComparisonResearch.ts:1540-1739",
+        "tests/productComparisonResearch.test.ts:215-348",
+        "tests/productComparisonResearch.test.ts:716-805"
+      ]
+    },
+    "AC6": {
+      "verdict": "PASS",
+      "reason": "Persistence independently requires completed web execution, exact product/value evidence, source title/URL/tier/authority, acceptable confidence, and no same-product unresolved conflict or coverage. Repository writes persist observed provenance, bind catalog products to the current snapshot, and use an active-fact unique key for idempotency; absent targets remain safe name-only records.",
+      "references": [
+        "src/ai/agentManagerOrchestrator.ts:5480-5571",
+        "src/db/repositories.ts:3290-3438",
+        "src/db/migrate.ts:241-288",
+        "src/shared/types.ts:94-135",
+        "sql/028_verified_fact_research_provenance.sql:1-12",
+        "tests/agentManagerComparisonResearch.test.ts:2102-2480",
+        "tests/catalogRepositoryFreshness.test.ts:94-194"
+      ]
+    },
+    "AC7": {
+      "verdict": "PASS",
+      "reason": "Verified memory is read after catalog extraction and before external research. Coverage is tracked by exact product+attribute slots, full coverage skips external research, partial coverage researches only gaps, mixed bound/name-only lookup is filtered safely, and alias-equivalent product names merge without erasing distinct model gaps.",
+      "references": [
+        "src/ai/verifiedFactMemory.ts:95-194",
+        "src/ai/agentManagerOrchestrator.ts:3241-3304",
+        "src/ai/agentManagerOrchestrator.ts:5404-5477",
+        "src/ai/agentManagerOrchestrator.ts:7457-7517",
+        "src/db/repositories.ts:3378-3438",
+        "tests/agentManagerComparisonResearch.test.ts:2482-2984"
+      ]
+    },
+    "AC8": {
+      "verdict": "PASS",
+      "reason": "Current traces record stage/tier, attempt number, elapsed and remaining budget, outcome, source count, and accepted fact count. Outer retries report duration/disposition, unsupported confirmed attempts are downgraded, and persistence traces report persistable and saved counts.",
+      "references": [
+        "src/ai/productComparisonResearch.ts:95-104",
+        "src/ai/productComparisonResearch.ts:712-729",
+        "src/ai/productComparisonResearch.ts:3055-3086",
+        "src/ai/agentManagerOrchestrator.ts:5464-5471",
+        "src/ai/agentManagerOrchestrator.ts:5492-5500",
+        "src/ai/agentManagerOrchestrator.ts:5559-5570",
+        "src/ai/agentManagerOrchestrator.ts:7857-7884",
+        "src/ai/agentManagerOrchestrator.ts:7942-7953"
+      ]
+    },
+    "AC9": {
+      "verdict": "PASS",
+      "reason": "Internal metadata is excluded from the public payload, deterministic vocabulary guarding is supplemented by mandatory semantic process-disclosure review and one reviewed repair, and unavailable review fails closed. Product-scoped unresolved facts reach the writer accurately, while deterministic source-exhaustion checks prevent premature handoff.",
+      "references": [
+        "src/ai/agentManagerOutputGuard.ts:23-108",
+        "src/ai/agentManagerOrchestrator.ts:1855-1903",
+        "src/ai/agentManagerOrchestrator.ts:3376-3453",
+        "src/ai/agentManagerOrchestrator.ts:7542-7575",
+        "src/ai/agentManagerOrchestrator.ts:8256-8305",
+        "src/ai/agentManagerOrchestrator.ts:8502-8539",
+        "tests/agentManagerOrchestrator.test.ts:7315-7603"
+      ]
+    },
+    "AC10": {
+      "verdict": "PASS",
+      "reason": "The focused suite covers the required fast paths, fresh retry deadlines, tier concurrency/cancellation and fallback, exact-model rejection, persistence/idempotency, mixed and partial memory reuse, alias-equivalent product scoping, and customer-language review/repair. The fresh canonical focused command and complete release gate both pass on the current reduced tree.",
+      "references": [
+        "tests/productComparisonResearch.test.ts:215-850",
+        "tests/productComparisonResearch.test.ts:3264-3319",
+        "tests/agentManagerComparisonResearch.test.ts:439-445",
+        "tests/agentManagerComparisonResearch.test.ts:2102-2984",
+        "tests/agentManagerOrchestrator.test.ts:7315-7603"
+      ]
+    },
+    "AC11": {
+      "verdict": "PENDING_AUTHORIZATION",
+      "reason": "No explicit commit/push authorization was provided. No GitHub push, Railway deployment, OpenAI call, or production widget/admin dialogue was performed."
+    }
+  },
+  "cleanupAudit": {
+    "verdict": "PASS",
+    "reason": "The post-cleanup worktree contains only the task's research, persistence, schema, and focused test files plus sql/028_verified_fact_research_provenance.sql. Runtime V2, lead/widget, and temporary files are absent from the reduced diff. Typecheck and the full release gate prove no removed source dependency is required; repositories.ts, migrate.ts, and shared/types.ts retain the required provenance, idempotency, snapshot-binding, and name-only lookup changes."
+  },
+  "commands": [
+    {
+      "command": "npx vitest run tests/productComparisonResearch.test.ts tests/verifiedFactMemory.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerHarnessContracts.test.ts tests/agentManagerOrchestrator.test.ts tests/openAIAgentManagerModel.test.ts tests/catalogRepositoryFreshness.test.ts tests/migrate.test.ts",
+      "verdict": "PASS",
+      "result": "8 files and 245 tests passed"
+    },
+    {
+      "command": "npm run verify",
+      "verdict": "PASS",
+      "result": "Node.js runtime PASS; no-regex guard PASS; production dependency audit PASS with 0 high vulnerabilities; TypeScript typecheck PASS; 84 files and 856 tests PASS; 4 agentic files and 203 tests PASS; production build PASS"
+    },
+    {
+      "command": "git diff --check",
+      "verdict": "PASS",
+      "result": "No whitespace errors"
+    }
+  ],
+  "findings": []
+}

@@ -105,6 +105,9 @@ export interface VerifiedProductFact {
   sourceUrl?: string | null;
   sourceTitle?: string | null;
   evidence?: string | null;
+  sourceTier?: 'official_page' | 'official_manual' | 'reliable_secondary' | null;
+  sourceAuthority?: 'manufacturer' | 'secondary' | null;
+  observedAt?: string | null;
   catalogSourceHash?: string | null;
   sourceFingerprint?: string | null;
   confidence: VerifiedProductFactConfidence;
@@ -126,6 +129,9 @@ export interface VerifiedProductFactInput {
   sourceTitle?: string | null;
   evidence?: string | null;
   sourceFingerprint?: string | null;
+  sourceTier?: 'official_page' | 'official_manual' | 'reliable_secondary' | null;
+  sourceAuthority?: 'manufacturer' | 'secondary' | null;
+  observedAt?: string | null;
   confidence: VerifiedProductFactConfidence;
 }
 

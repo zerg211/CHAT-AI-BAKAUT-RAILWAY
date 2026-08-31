@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS verified_product_facts (
   first_seen_at timestamptz NOT NULL DEFAULT now(),
   last_verified_at timestamptz NOT NULL DEFAULT now(),
   hit_count integer NOT NULL DEFAULT 0,
+  catalog_source_hash text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );

@@ -42,10 +42,13 @@ import {
   StructuredJsonRetrySkippedError
 } from './openaiStructured.js';
 import {
+  extractCatalogProductComparisonFacts,
   researchProductComparisonFacts,
+  researchResultCoversFactSlot,
   researchWarningsPreventSourceExhaustion,
   type ProductComparisonResearchFact,
-  type ProductComparisonResearchResult
+  type ProductComparisonResearchResult,
+  type ProductResearchTraceEvent
 } from './productComparisonResearch.js';
 import { refreshExactCatalogProducts } from '../catalog/sitemapSync.js';
 import {
@@ -139,7 +142,7 @@ import {
 import {
   matchingVerifiedFactsForRequest,
   researchFactConfidenceNumber,
-  reusableVerifiedFact,
+  verifiedFactCoverageForRequest,
   verifiedFactsCoverRequest,
   verifiedFactsResearchResult
 } from './verifiedFactMemory.js';
@@ -174,6 +177,15 @@ export interface AgentManagerModel {
   proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta>;
   planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract>;
   composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract>;
+  reviewCustomerLanguage?(input: {
+    answerText: string;
+    signal?: AbortSignal;
+    deadlineAtMs?: number;
+  }): Promise<{
+    processDisclosure: boolean;
+    evidence: string;
+    rationale: string;
+  }>;
 }
 
 export interface AgentManagerModelInput {
@@ -3212,11 +3224,7 @@ function productForResearchFact(input: {
   targetProductNames: string[];
   products: Product[];
 }) {
-  return input.products.find((product) => textMatchesTargetName(product.name, input.fact.productName))
-    ?? input.products.find((product) =>
-      input.targetProductNames.some((targetName) => productMatchesTargetName(product, targetName))
-    )
-    ?? null;
+  return input.products.find((product) => textMatchesTargetName(product.name, input.fact.productName)) ?? null;
 }
 
 function researchFactProductName(input: {
@@ -3228,6 +3236,72 @@ function researchFactProductName(input: {
   if (factName) return factName;
   const targetName = input.targetProductNames.find((name) => name.trim().length > 0);
   return targetName ?? input.product?.name ?? '';
+}
+
+function exactCoverageProductNamesMatch(left: string | null, right: string | null) {
+  if (!left || !right) return left === right;
+  if (compactModelText(left) === compactModelText(right)) return true;
+  return textMatchesTargetName(left, right) && textMatchesTargetName(right, left);
+}
+
+function mergeVerifiedMemoryWithResearch(
+  memory: ProductComparisonResearchResult,
+  research: ProductComparisonResearchResult
+): ProductComparisonResearchResult {
+  const facts = [...new Map([...memory.facts, ...research.facts].map((fact) => [[
+    fact.productName,
+    fact.attribute,
+    fact.value,
+    fact.sourceUrl ?? ''
+  ].join('|'), fact])).values()];
+  const allCoverage = [
+    ...memory.answerGuidance.coverage,
+    ...research.answerGuidance.coverage
+  ];
+  const coverageProductNames = uniqueStrings(allCoverage
+    .map((item) => item.productName?.trim() ?? '')
+    .filter(Boolean));
+  const canonicalCoverageProductName = (productName: string | null) => {
+    if (!productName) return null;
+    return coverageProductNames
+      .filter((candidate) => exactCoverageProductNamesMatch(candidate, productName))
+      .sort((left, right) => compactModelText(left).length - compactModelText(right).length)[0] ?? productName;
+  };
+  const mergedCoverage = [...new Map(allCoverage.map((item) => {
+    const productName = canonicalCoverageProductName(item.productName);
+    return [[
+    productName ?? '',
+    item.attribute,
+    item.status,
+    item.value,
+    item.sourceUrl ?? ''
+    ].join('|'), { ...item, productName }] as const;
+  })).values()];
+  const confirmedCoverageSlots = new Set(mergedCoverage
+    .filter((item) => item.status === 'confirmed')
+    .map((item) => [compactModelText(item.productName ?? ''), compactModelText(item.attribute)].join('|')));
+  const coverage = mergedCoverage.filter((item) =>
+    !(
+      (item.status === 'not_confirmed' || item.status === 'not_found') &&
+      confirmedCoverageSlots.has([
+        compactModelText(item.productName ?? ''),
+        compactModelText(item.attribute)
+      ].join('|'))
+    )
+  );
+  return {
+    ...research,
+    facts,
+    answerGuidance: {
+      ...research.answerGuidance,
+      completeness: research.answerGuidance.completeness === 'answered'
+        ? 'answered'
+        : facts.length ? 'partially_answered' : 'not_answered',
+      coverage
+    },
+    summaryForAnswer: uniqueStrings([memory.summaryForAnswer, research.summaryForAnswer]).join('\n'),
+    warnings: uniqueStrings([...memory.warnings, ...research.warnings, 'verified_fact_memory_merged_with_gap_research'])
+  };
 }
 
 function generatorLoadRequirementKw(toolResults: ToolResult[]) {
@@ -3306,6 +3380,7 @@ export function requiredResponseClausesForToolResults(
       sourcesExhausted?: boolean;
       unconfirmedFacts?: Array<{
         requirementIds?: string[];
+        productName?: string | null;
         attribute?: string;
         status?: string;
         reason?: string;
@@ -3317,10 +3392,14 @@ export function requiredResponseClausesForToolResults(
       comparisonAttributes?: string[];
       searchDisposition?: 'completed' | 'memory_hit' | 'not_needed' | 'skipped_budget' | 'timed_out' | 'failed' | 'aborted';
     };
+    const plannedRequest = intent?.toolRequests.find((request) => request.id === result.requestId);
+    const requestedProductNames = requestStringArray(plannedRequest?.args.productNames);
+    const requestedAttributes = requestStringArray(plannedRequest?.args.comparisonAttributes);
     const unresolvedFacts = (payload.unconfirmedFacts ?? [])
       .filter((fact) => typeof fact.attribute === 'string' && fact.attribute.trim())
       .map((fact) => ({
         requirementIds: fact.requirementIds ?? [],
+        productName: typeof fact.productName === 'string' ? fact.productName : null,
         attribute: fact.attribute!.trim(),
         status: fact.status ?? 'not_confirmed',
         reason: fact.reason ?? ''
@@ -3345,7 +3424,7 @@ export function requiredResponseClausesForToolResults(
       clauses.push({
         code: 'web_research_incomplete_grounding',
         sourceRequestId: result.requestId,
-        instruction: `The requested web check did not complete (${payload.searchDisposition ?? result.status}). Do not describe sources as exhausted and do not offer specialist handoff solely because of this execution failure. Preserve any useful preliminary conclusion supported by dialogue, ledger, successful catalog results, or other confirmed facts; name the exact fact that is still unconfirmed; say plainly that the external check did not complete in this turn. Do not use this failed tool as factual evidence.`
+        instruction: `The requested facts remain unconfirmed and the available sources are not exhausted. Internal execution diagnostics are admin-only: do not mention tools, web/external search, retries, timeout, failures, pipelines, or whether a check completed. Speak as a live sales manager. Preserve useful conclusions supported by dialogue, ledger, catalog results, or other confirmed facts; name the concrete product or option when known; state the exact customer-facing fact still needed and what product document, article, dimension, or specification would settle it. Do not offer specialist handoff solely because of this incomplete attempt and do not use this failed result as factual evidence. Typed targets: ${JSON.stringify(requestedProductNames)}. Requested facts: ${JSON.stringify(requestedAttributes)}.`
       });
       continue;
     }
@@ -4992,6 +5071,59 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     return AgentIntentContractSchema.parse(parsed);
   }
 
+  async reviewCustomerLanguage(input: {
+    answerText: string;
+    signal?: AbortSignal;
+    deadlineAtMs?: number;
+  }) {
+    const { parsed } = await createStructuredJsonResponse({
+      request: {
+        model: config.OPENAI_ANSWER_MODEL,
+        reasoning: { effort: 'low' },
+        max_output_tokens: 500,
+        input: [{
+          role: 'system',
+          content: [
+            'Ты строгий semantic reviewer финального ответа покупателю.',
+            'Определи, раскрывает ли ответ внутренний процесс получения сведений: поиск в интернете или на сайтах, использование инструментов, попытки и повторы, timeout/сбой, pipeline, либо факт успешного/неуспешного завершения проверки.',
+            'Это запрещено при любой формулировке и на любом языке. Покупателю можно сообщать только конкретные подтвержденные факты и конкретный неподтвержденный параметр.',
+            'Обычное упоминание товара или рабочего инструмента не является раскрытием процесса.',
+            'Если processDisclosure=true, evidence должно быть точной цитатой из answerText. Верни только JSON.'
+          ].join('\n')
+        }, {
+          role: 'user',
+          content: JSON.stringify({ answerText: input.answerText })
+        }],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: 'customer_language_process_review',
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                processDisclosure: { type: 'boolean' },
+                evidence: { type: 'string' },
+                rationale: { type: 'string' }
+              },
+              required: ['processDisclosure', 'evidence', 'rationale']
+            }
+          }
+        }
+      },
+      stage: 'agent_customer_language_review',
+      signal: input.signal,
+      deadlineAtMs: input.deadlineAtMs,
+      minRetryRemainingMs: 5_000,
+      transportMaxRetries: 0
+    });
+    return {
+      processDisclosure: parsed.processDisclosure === true,
+      evidence: typeof parsed.evidence === 'string' ? parsed.evidence.trim() : '',
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale.trim() : ''
+    };
+  }
+
   async composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract> {
     const styleExamples = approvedAnswerStyleExamplesPromptBlock();
     const availableEvidenceSources = answerEvidenceSourceHints(input);
@@ -5027,7 +5159,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Ты AI менеджер-консультант БАКАУТ в чате сайта.',
             untrustedEvidenceBoundary,
             managerPolicy,
-            'Отвечай по-русски как живой менеджер БАКАУТ: просто, легко, без канцелярита и третьего лица, от лица магазина («у нас есть», «можем уточнить»). Простое — кратко; сложное/сравнение — сначала вывод 1-2 предложения, затем 2-4 отличия. Без роботизированных связок: «кнопочный запуск в данных не вижу», «точно не подтверждаю».',
+            'Отвечай по-русски как живой менеджер БАКАУТ: просто, легко, без канцелярита и третьего лица, от лица магазина («у нас есть», «можем уточнить»). Простое — кратко; сложное/сравнение — сначала вывод 1-2 предложения, затем 2-4 отличия. Покупателю сообщай состояние товарного факта, а не процесс работы системы: что уже известно по конкретной модели и какой именно параметр, артикул или совместимость пока не подтверждены. Никогда не упоминай инструменты, web/внешний поиск, попытки, timeout/тайм-аут, сбой, pipeline, внутреннюю проверку или то, завершилась ли проверка. Эти сведения остаются только в admin metadata.',
             'Опирайся только на ledger, catalog/tool results, checked research facts и диалог. Чего нет в фактах (dB, наличие, доставка, скидка, срок) — честно «нужно уточнить», при необходимости предложи форму.',
             'Specs товара из tool result catalog.* — подтверждённые данные каталога: если вопрос покупателя о характеристике и её значение есть в specs, отвечай прямо этим значением (factsUsed с sourceEventIds=requestId инструмента). Не отказывайся отвечать и не требуй дополнительного подтверждения того, что в карточке уже написано.',
             'evidenceConflicts в products — это неразрешённое расхождение значений одной характеристики. Не выбирай значение самостоятельно и не называй его подтвержденным; сохрани полезный вывод по остальным фактам и обозначь эту характеристику как требующую уточнения.',
@@ -5045,7 +5177,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'factsUsed[].sourceEventIds — только точные строки из availableEvidenceSources.allowedSourceIds (tool request id для фактов из инструментов, ledger event id для ledger). toolResultIds — только текущие tool request ids. Чистый handoff без точного статуса — factsUsed пуст.',
             'requiredResponseClauses — обязательная смысловая часть ответа. Клауза о неподтвержденной базе расчета: не выдавай число за подтвержденное/покупочное, но не прячь полезную ориентацию калькулятора. Порог требования покупателя в одном предложении с именами товаров — только через numericClaimBinding (dimension/value, semanticRole=buyer_requirement_threshold, точный sourceId) с дословным verifiedSourceQuote; пороги калькулятора — отдельным предложением до товаров, никогда как цена/характеристика товара.',
             'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». sourcesExhausted≠true или guidance partial/not_confirmed — без handoff/контактов/offer_form: подтвержденная часть + точное имя неподтвержденного атрибута. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
-            'web error/timeout/denied/not_found — не называй данные подтвержденными, НО отказ без пользы запрещен: дай инженерную ориентацию по классу оборудования с явной пометкой «типично для класса, для этой модели не подтверждено» (например: типовой объем масла для двигателя такого объема, типовой IP открытых генераторных рам, типовой интервал ТО), назови какой точный документ это подтвердит (мануал модели, шильдик), и предложи проверить: «оставьте номер в форме — уточню по мануалу и сообщу сообщением или звонком» (leadAction="offer_form").',
+            'web error/timeout/denied/not_found — это внутренний статус, не содержание ответа покупателю и не доказательство исчерпания источников. Не ссылайся на выполнение поиска и не предлагай форму/специалиста только из-за такого статуса. Используй остальные подтвержденные факты; для известных моделей назови каждую конкретно, дай полезный предварительный вывод и точно укажи недостающий покупательский факт (например, совместимый артикул для конкретного размера подошвы) и какой документ или характеристика его подтвердит. Общая ориентация по классу допустима только как явно типовая, не как факт о модели.',
             styleExamples,
             'Верни только JSON AnswerContract.'
           ].join('\n')
@@ -5274,6 +5406,7 @@ export class AgentManagerOrchestrator {
     turnId: string;
     targetProductNames: string[];
     comparisonAttributes: string[];
+    requestedFactSlots?: Array<{ productName: string; attribute: string }>;
     selectedProducts: Product[];
   }) {
     const repo = this.verifiedFactRepository();
@@ -5289,39 +5422,59 @@ export class AgentManagerOrchestrator {
     const facts = await repo.searchVerifiedProductFacts({
       productNames,
       productIds: exactProductIds,
-      sourceTypes: ['web'],
+      includeNameOnlyWithProductIds: true,
+      sourceTypes: ['web', 'manual'],
       limit: 32
     });
-    const exactBoundFacts = exactProductIds.length
-      ? facts.filter((fact) => Boolean(fact.productId && exactProductIds.includes(fact.productId)))
-      : facts;
+    const exactBoundFacts = input.targetProductNames.length
+      ? facts.filter((fact) => input.targetProductNames.some((targetName) => {
+          if (!textMatchesTargetName(fact.productName, targetName)) return false;
+          const targetProductIds = input.selectedProducts
+            .filter((product) => productMatchesTargetName(product, targetName))
+            .map((product) => product.id);
+          return targetProductIds.length
+            ? Boolean(fact.productId && targetProductIds.includes(fact.productId))
+            : fact.productId === null || fact.productId === undefined;
+        }))
+      : exactProductIds.length
+        ? facts.filter((fact) => Boolean(fact.productId && exactProductIds.includes(fact.productId)))
+        : facts;
     const matchingFacts = matchingVerifiedFactsForRequest({
       facts: exactBoundFacts,
       targetProductNames: input.targetProductNames,
       comparisonAttributes: input.comparisonAttributes
     });
-    // Token matching cannot decide whether a fact "answers" the buyer's question
-    // ("стартер" vs "электростартер", "тип запуска" vs "electric start" — both missed).
-    // Attribute coverage is a semantic judgment: hand ALL checked facts for the target
-    // model to the writer with a partial-coverage marker; the writer answers only what
-    // the facts confirm and names the rest as unconfirmed.
-    const reusableTargetFacts = exactBoundFacts.filter((fact) =>
-      reusableVerifiedFact(fact, new Date())
-    );
-    if (!reusableTargetFacts.length) return null;
-    const attributesCovered = input.comparisonAttributes.length > 0 &&
-      verifiedFactsCoverRequest({ facts: matchingFacts, comparisonAttributes: input.comparisonAttributes });
+    if (!matchingFacts.length) return null;
+    const coverage = verifiedFactCoverageForRequest({
+      facts: matchingFacts,
+      targetProductNames: input.targetProductNames,
+      comparisonAttributes: input.comparisonAttributes,
+      requestedFactSlots: input.requestedFactSlots
+    });
+    const attributesCovered = verifiedFactsCoverRequest({
+      facts: matchingFacts,
+      targetProductNames: input.targetProductNames,
+      comparisonAttributes: input.comparisonAttributes,
+      requestedFactSlots: input.requestedFactSlots
+    });
     if (typeof repo.markVerifiedProductFactsUsed === 'function') {
-      await repo.markVerifiedProductFactsUsed(reusableTargetFacts.map((fact) => fact.id))
+      await repo.markVerifiedProductFactsUsed(matchingFacts.map((fact) => fact.id))
         .catch((error) => console.warn('Verified product fact usage write failed', safeError(error)));
     }
     await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_used', {
-      factIds: reusableTargetFacts.map((fact) => fact.id),
-      productNames: uniqueStrings(reusableTargetFacts.map((fact) => fact.productName)),
-      attributes: uniqueStrings(reusableTargetFacts.map((fact) => fact.attribute)),
-      attributesCovered
+      factIds: matchingFacts.map((fact) => fact.id),
+      productNames: uniqueStrings(matchingFacts.map((fact) => fact.productName)),
+      attributes: uniqueStrings(matchingFacts.map((fact) => fact.attribute)),
+      attributesCovered,
+      missingAttributes: coverage.missingAttributes,
+      missingFactSlots: coverage.missingFactSlots
     });
-    return verifiedFactsResearchResult(reusableTargetFacts, { attributesCovered });
+    return {
+      research: verifiedFactsResearchResult(matchingFacts, { attributesCovered }),
+      attributesCovered,
+      missingAttributes: coverage.missingAttributes,
+      missingFactSlots: coverage.missingFactSlots
+    };
   }
 
   private async persistVerifiedResearchFacts(input: {
@@ -5332,11 +5485,22 @@ export class AgentManagerOrchestrator {
     selectedProducts: Product[];
   }) {
     const repo = this.verifiedFactRepository();
-    if (typeof repo.upsertVerifiedProductFact !== 'function') return;
+    if (typeof repo.upsertVerifiedProductFact !== 'function') return 0;
     const targetNames = input.targetProductNames.length
       ? input.targetProductNames
       : input.selectedProducts.map((product) => product.name);
+    if (!input.research.usedWebSearch || input.research.searchDisposition !== 'completed') {
+      await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_persistence', {
+        persistableCount: 0,
+        savedCount: 0,
+        targetProductNames: input.targetProductNames,
+        searchDisposition: input.research.searchDisposition,
+        skippedReason: 'research_execution_not_completed'
+      });
+      return 0;
+    }
     let savedCount = 0;
+    let persistableCount = 0;
     for (const fact of input.research.facts) {
       if (fact.sourceType !== 'web') continue;
       if (fact.confidence !== 'high' && fact.confidence !== 'medium') continue;
@@ -5344,7 +5508,20 @@ export class AgentManagerOrchestrator {
       const sourceUrl = typeof fact.sourceUrl === 'string' && fact.sourceUrl.trim() ? fact.sourceUrl.trim() : null;
       const sourceTitle = typeof fact.sourceTitle === 'string' && fact.sourceTitle.trim() ? fact.sourceTitle.trim() : null;
       const evidence = fact.evidence.trim();
-      if (!evidence || (!sourceUrl && !sourceTitle)) continue;
+      if (!evidence || !sourceUrl || !sourceTitle || !fact.sourceTier || !fact.sourceAuthority) continue;
+      if (fact.evidenceVerifiedExact !== true) continue;
+      if (!textMatchesTargetName([sourceUrl, sourceTitle, evidence].join(' '), fact.productName)) continue;
+      if (!compactModelText(evidence).includes(compactModelText(fact.value))) continue;
+      const unresolvedConflict = input.research.conflicts.some((conflict) =>
+        textMatchesTargetName(conflict.productName, fact.productName) &&
+        compactModelText(conflict.attribute) === compactModelText(fact.attribute)
+      );
+      const unresolvedCoverage = input.research.answerGuidance.coverage.some((coverage) =>
+        compactModelText(coverage.attribute) === compactModelText(fact.attribute) &&
+        (!coverage.productName || textMatchesTargetName(coverage.productName, fact.productName)) &&
+        coverage.status !== 'confirmed'
+      );
+      if (unresolvedConflict || unresolvedCoverage) continue;
       const product = productForResearchFact({
         fact,
         targetProductNames: input.targetProductNames,
@@ -5352,17 +5529,22 @@ export class AgentManagerOrchestrator {
       });
       const productName = researchFactProductName({ fact, targetProductNames: input.targetProductNames, product });
       if (!productName) continue;
-      await repo.upsertVerifiedProductFact({
+      persistableCount += 1;
+      const saved = await repo.upsertVerifiedProductFact({
         productId: product?.id ?? null,
         productName,
         attribute: fact.attribute,
         value: fact.value,
-        sourceType: 'web',
+        sourceType: fact.sourceTier === 'official_manual' ? 'manual' : 'web',
         sourceUrl,
         sourceTitle,
         evidence,
-        confidence: fact.confidence
+        sourceTier: fact.sourceTier,
+        sourceAuthority: fact.sourceAuthority,
+        observedAt: new Date().toISOString(),
+        confidence: fact.sourceAuthority === 'secondary' ? 'medium' : fact.confidence
       });
+      if (!saved) continue;
       savedCount += 1;
       if (product?.id && typeof repo.upsertVerifiedWebFact === 'function') {
         await repo.upsertVerifiedWebFact({
@@ -5380,6 +5562,13 @@ export class AgentManagerOrchestrator {
         targetProductNames: input.targetProductNames
       });
     }
+    await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_persistence', {
+      persistableCount,
+      savedCount,
+      targetProductNames: input.targetProductNames,
+      searchDisposition: input.research.searchDisposition
+    });
+    return savedCount;
   }
 
   private async executeTurn(input: AgentManagerGenerateInput & {
@@ -6837,10 +7026,8 @@ export class AgentManagerOrchestrator {
         configuredTimeoutMs: definition.timeoutMs,
         remainingWallTimeMs: input.budget.remainingWallTimeMs()
       });
-      let timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
-      let toolSignal = input.signal
-        ? AbortSignal.any([input.signal, timeoutSignal])
-        : timeoutSignal;
+      let timeoutSignal: AbortSignal;
+      let toolSignal: AbortSignal;
       let result: ToolResult | undefined;
       let attempt = 0;
       let budgetStopError: AgentManagerTurnBudgetExceededError | undefined;
@@ -6910,6 +7097,16 @@ export class AgentManagerOrchestrator {
       }
       while (!result && attempt < definition.maxAttempts) {
         attempt += 1;
+        const toolAttemptStartedAt = Date.now();
+        effectiveTimeoutMs = Math.min(effectiveTimeoutMs, effectiveAgentToolTimeoutMs({
+          tool: request.tool,
+          configuredTimeoutMs: definition.timeoutMs,
+          remainingWallTimeMs: input.budget.remainingWallTimeMs()
+        }));
+        timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
+        toolSignal = input.signal
+          ? AbortSignal.any([input.signal, timeoutSignal])
+          : timeoutSignal;
         try {
         input.budget.consumeToolCall(definition);
         await this.trace(input.session.id, input.turnId, 'tools', 'tool_started', {
@@ -7231,32 +7428,93 @@ export class AgentManagerOrchestrator {
               )
             : [];
           const selectedProducts = (exactTargetProducts.length ? exactTargetProducts : allSelectedProducts).slice(0, 4);
-          let research = await this.researchFromVerifiedFactMemory({
-            sessionId: input.session.id,
-            turnId: input.turnId,
+          const allRequestedFactSlots = targetProductNames.flatMap((productName) =>
+            comparisonAttributes.map((attribute) => ({ productName, attribute }))
+          );
+          const researchDeadlineAtMs = Math.min(
+            toolAttemptStartedAt + effectiveTimeoutMs,
+            Date.now() + input.budget.remainingWallTimeMs() - WEB_ANSWER_RESERVE_MS
+          );
+          const researchTrace = (event: ProductResearchTraceEvent) => this.trace(
+            input.session.id,
+            input.turnId,
+            'tools',
+            'product_research_stage',
+            { requestId: request.id, ...event }
+          );
+          const catalogResearch = await extractCatalogProductComparisonFacts({
+            userMessage: input.userMessage,
+            products: selectedProducts,
             targetProductNames,
             comparisonAttributes,
-            selectedProducts
+            compact: true,
+            catalogSearchAttempted: priorCatalogLookupCompleted || currentWebCatalogLookupCompleted,
+            catalogProductsFound: selectedProducts.length > 0,
+            signal: toolSignal,
+            deadlineAtMs: researchDeadlineAtMs,
+            onTrace: researchTrace
           });
+          const catalogMissingFactSlots = allRequestedFactSlots.filter((slot) =>
+            !catalogResearch || !researchResultCoversFactSlot({
+              result: catalogResearch,
+              productName: slot.productName,
+              attribute: slot.attribute,
+              sourceTypes: ['catalog']
+            })
+          );
+          const catalogCoversRequest = allRequestedFactSlots.length > 0 && catalogMissingFactSlots.length === 0;
+          const memoryTargetProductNames = catalogMissingFactSlots.length
+            ? uniqueStrings(catalogMissingFactSlots.map((slot) => slot.productName))
+            : targetProductNames;
+          const memoryComparisonAttributes = catalogMissingFactSlots.length
+            ? uniqueStrings(catalogMissingFactSlots.map((slot) => slot.attribute))
+            : comparisonAttributes;
+          const memory = catalogCoversRequest
+            ? null
+            : await this.researchFromVerifiedFactMemory({
+                sessionId: input.session.id,
+                turnId: input.turnId,
+                targetProductNames: memoryTargetProductNames,
+                comparisonAttributes: memoryComparisonAttributes,
+                requestedFactSlots: catalogMissingFactSlots.length ? catalogMissingFactSlots : undefined,
+                selectedProducts
+              });
+          const catalogAndMemory = catalogResearch && memory
+            ? mergeVerifiedMemoryWithResearch(catalogResearch, memory.research)
+            : catalogResearch ?? memory?.research ?? null;
+          let research = catalogCoversRequest || memory?.attributesCovered ? catalogAndMemory : null;
           if (!research) {
-            research = await researchProductComparisonFacts({
+            const missingFactSlots = memory?.missingFactSlots ?? catalogMissingFactSlots;
+            const gapTargetProductNames = missingFactSlots.length
+              ? uniqueStrings(missingFactSlots.map((slot) => slot.productName))
+              : targetProductNames;
+            const gapAttributes = missingFactSlots.length
+              ? uniqueStrings(missingFactSlots.map((slot) => slot.attribute))
+              : memory?.missingAttributes ?? comparisonAttributes;
+            const researchedGaps = await researchProductComparisonFacts({
               userMessage: input.userMessage,
               products: selectedProducts,
-              targetProductNames,
-              comparisonAttributes,
+              targetProductNames: gapTargetProductNames,
+              comparisonAttributes: gapAttributes,
+              missingFactSlots,
+              precomputedCatalogResult: catalogResearch,
               allowCatalogOnlyAnswer: allowCatalogOnlyResearchForWebRequest(input.intent, request),
               catalogSearchAttempted: priorCatalogLookupCompleted || currentWebCatalogLookupCompleted,
               catalogProductsFound: selectedProducts.length > 0,
               signal: toolSignal,
-              deadlineAtMs: startedAt + effectiveTimeoutMs
+              deadlineAtMs: researchDeadlineAtMs,
+              onTrace: researchTrace
             });
             await this.persistVerifiedResearchFacts({
               sessionId: input.session.id,
               turnId: input.turnId,
-              research,
+              research: researchedGaps,
               targetProductNames,
               selectedProducts
             }).catch((error) => console.warn('Verified product fact memory write failed', safeError(error)));
+            research = catalogAndMemory
+              ? mergeVerifiedMemoryWithResearch(catalogAndMemory, researchedGaps)
+              : researchedGaps;
           }
           const catalogPresence = catalogPresenceForTargets(targetProductNames, selectedProducts, {
             absenceVerified: exactCatalogAbsenceVerified
@@ -7290,6 +7548,7 @@ export class AgentManagerOrchestrator {
             .filter((coverage) => coverage.status !== 'confirmed')
             .map((coverage) => ({
               requirementIds: request.coversRequirementIds ?? [],
+              productName: coverage.productName ?? (targetProductNames.length === 1 ? targetProductNames[0] : null),
               attribute: coverage.attribute,
               status: coverage.status,
               reason: coverage.evidence
@@ -7594,7 +7853,17 @@ export class AgentManagerOrchestrator {
           const retryable = attempt < definition.maxAttempts &&
             !timeoutSignal.aborted &&
             !input.signal?.aborted;
-          if (retryable) continue;
+          if (retryable) {
+            await this.trace(input.session.id, input.turnId, 'recovery', 'tool_attempt_retry', {
+              requestId: request.id,
+              tool: request.tool,
+              attempt,
+              attemptDurationMs: Date.now() - toolAttemptStartedAt,
+              disposition: 'failed_retryable',
+              remainingTurnMs: input.budget.remainingWallTimeMs()
+            });
+            continue;
+          }
           const timedOut = timeoutSignal.aborted && !input.signal?.aborted;
           // Web research must exhaust the turn budget before giving up (AGENTS.md):
           // a single timeout is often a network flap. If the remaining wall time
@@ -7605,13 +7874,11 @@ export class AgentManagerOrchestrator {
           const retryBudgetMs = input.budget.remainingWallTimeMs() - WEB_ANSWER_RESERVE_MS - 1_000;
           if (webTimeoutRetryable && retryBudgetMs >= 12_000) {
             effectiveTimeoutMs = Math.min(effectiveTimeoutMs, retryBudgetMs);
-            timeoutSignal = AbortSignal.timeout(Math.max(1, effectiveTimeoutMs));
-            toolSignal = input.signal
-              ? AbortSignal.any([input.signal, timeoutSignal])
-              : timeoutSignal;
             await this.trace(input.session.id, input.turnId, 'recovery', 'web_research_retry_after_timeout', {
               requestId: request.id,
               attempt,
+              attemptDurationMs: Date.now() - toolAttemptStartedAt,
+              disposition: 'timed_out_retryable',
               retryTimeoutMs: effectiveTimeoutMs,
               remainingTurnMs: input.budget.remainingWallTimeMs()
             });
@@ -7991,6 +8258,51 @@ export class AgentManagerOrchestrator {
     budget?: AgentManagerTurnBudget
   ): Promise<PreSendReview> {
     const mechanicalIssues: PreSendReview['issues'] = [];
+    const customerLanguageReview = guardCustomerOutput({
+      answerText: input.answer.answerText,
+      productCards: []
+    });
+    for (const issue of customerLanguageReview.issues) {
+      mechanicalIssues.push({
+        code: issue.code,
+        severity: 'high',
+        message: issue.message,
+        evidence: issue.evidence
+      });
+    }
+    if (typeof this.model.reviewCustomerLanguage === 'function') {
+      try {
+        budget?.consumeModelCall();
+        const semanticLanguageReview = await this.model.reviewCustomerLanguage({
+          answerText: input.answer.answerText,
+          signal: input.signal,
+          deadlineAtMs: budget?.snapshot().usage.deadlineAtMs ?? input.structuredDeadlineAtMs
+        });
+        if (semanticLanguageReview.processDisclosure) {
+          mechanicalIssues.push({
+            code: 'customer_output_research_process_disclosure',
+            severity: 'high',
+            message: 'Customer answer describes the internal research or verification process; state only concrete known facts and the exact unconfirmed customer fact.',
+            evidence: semanticLanguageReview.evidence || semanticLanguageReview.rationale
+          });
+        }
+      } catch (error) {
+        if (input.signal?.aborted) throw error;
+        mechanicalIssues.push({
+          code: 'customer_output_semantic_review_unavailable',
+          severity: 'high',
+          message: 'Semantic customer-language review did not complete, so the answer cannot be sent safely.',
+          evidence: safeError(error).code ?? safeError(error).message ?? 'semantic_language_review_failed'
+        });
+      }
+    } else {
+      mechanicalIssues.push({
+        code: 'customer_output_semantic_review_unavailable',
+        severity: 'high',
+        message: 'Semantic customer-language review is unavailable, so the answer cannot be sent safely.',
+        evidence: 'semantic_language_reviewer_not_configured'
+      });
+    }
     const contactInTurn = extractContact(input.userMessage);
     const strictRequirementGate = gateStrictSelectionRequirements(
       input.intent,

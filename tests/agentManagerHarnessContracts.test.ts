@@ -200,6 +200,34 @@ describe('runtime harness contracts', () => {
     expect(review.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
       'customer_output_internal_vocabulary'
     ]));
+
+    const russianProcessLeak = guardCustomerOutput({
+      answerText: 'Внешняя проверка не завершилась из-за тайм-аута.',
+      productCards: []
+    });
+    expect(russianProcessLeak.ok).toBe(false);
+    expect(russianProcessLeak.issues).toContainEqual(expect.objectContaining({
+      code: 'customer_output_internal_vocabulary'
+    }));
+
+    for (const answerText of [
+      'The web search completed after a retry in the pipeline.',
+      'Поисковый инструмент завершил повторный запрос в пайплайне.',
+      'The search completed successfully.',
+      'Two research attempts were required.',
+      'Исследовательский инструмент подтвердил характеристику.',
+      'I searched online but found nothing.',
+      'I checked the manufacturer website but could not complete the check.',
+      'Я поискал в интернете, но ничего не нашел.',
+      'Проверить это не получилось.'
+    ]) {
+      expect(guardCustomerOutput({ answerText, productCards: [] }).ok).toBe(false);
+    }
+
+    expect(guardCustomerOutput({
+      answerText: 'Для этой работы подойдёт аккумуляторный инструмент.',
+      productCards: []
+    }).ok).toBe(true);
   });
 
   it('does not reuse stale web guidance after the active product-selection target changes', () => {

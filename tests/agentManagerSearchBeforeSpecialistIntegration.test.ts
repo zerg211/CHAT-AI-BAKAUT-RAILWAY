@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 const researchProductComparisonFactsMock = vi.hoisted(() => vi.fn());
+const extractCatalogProductComparisonFactsMock = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock('../src/ai/productComparisonResearch.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/ai/productComparisonResearch.js')>(),
-  researchProductComparisonFacts: researchProductComparisonFactsMock
+  researchProductComparisonFacts: researchProductComparisonFactsMock,
+  extractCatalogProductComparisonFacts: extractCatalogProductComparisonFactsMock
 }));
 
 import {
@@ -405,7 +407,10 @@ function harnessModel(input: {
         intent: input.intent
       } as import('../src/ai/agentManagerContracts.js').AgentSemanticDecision;
     },
-    composeAnswer: input.compose
+    composeAnswer: input.compose,
+    async reviewCustomerLanguage() {
+      return { processDisclosure: false, evidence: '', rationale: 'test answer contains no process disclosure' };
+    }
   };
 }
 

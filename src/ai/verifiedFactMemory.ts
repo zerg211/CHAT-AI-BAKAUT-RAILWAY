@@ -73,7 +73,7 @@ function isHttpSourceUrl(value: string | null | undefined) {
 export function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
   if (fact.status !== 'active') return false;
   if (fact.confidence !== 'high' && fact.confidence !== 'medium') return false;
-  if (fact.sourceType === 'web' && !isHttpSourceUrl(fact.sourceUrl)) return false;
+  if ((fact.sourceType === 'web' || fact.sourceType === 'manual') && !isHttpSourceUrl(fact.sourceUrl)) return false;
   const verifiedAt = Date.parse(fact.lastVerifiedAt);
   if (!Number.isFinite(verifiedAt)) return false;
   const ageMs = now.getTime() - verifiedAt;
@@ -112,26 +112,86 @@ export function matchingVerifiedFactsForRequest(input: {
   );
 }
 
-export function verifiedFactsCoverRequest(input: {
+export function verifiedFactCoverageForRequest(input: {
   facts: VerifiedProductFact[];
+  targetProductNames?: string[];
   comparisonAttributes: string[];
+  requestedFactSlots?: Array<{ productName: string; attribute: string }>;
 }) {
-  if (!input.facts.length) return false;
+  const requestedFactSlots = input.requestedFactSlots ?? (input.targetProductNames ?? []).flatMap((productName) =>
+    input.comparisonAttributes.map((attribute) => ({ productName, attribute }))
+  );
+  if (!input.facts.length) {
+    return {
+      coveredAttributes: [] as string[],
+      missingAttributes: [...input.comparisonAttributes],
+      missingFactSlots: requestedFactSlots
+    };
+  }
   const meaningfulAttributes = input.comparisonAttributes
     .filter((attribute) => verifiedFactAttributeTokens(attribute).length > 0);
-  if (!meaningfulAttributes.length) return false;
-  return meaningfulAttributes.every((attribute) => {
+  if (!meaningfulAttributes.length) {
+    return {
+      coveredAttributes: [] as string[],
+      missingAttributes: [...input.comparisonAttributes],
+      missingFactSlots: requestedFactSlots
+    };
+  }
+  const attributeCovered = (attribute: string) => {
     const matchingFacts = input.facts.filter((fact) => verifiedFactMatchesAttribute(fact, attribute));
     if (!matchingFacts.length) return false;
-    const valuesByProduct = new Map<string, Set<string>>();
-    for (const fact of matchingFacts) {
-      const productKey = fact.productId ?? fact.productKey ?? compactModelText(fact.productName);
-      const values = valuesByProduct.get(productKey) ?? new Set<string>();
-      values.add(compactModelText(fact.value));
-      valuesByProduct.set(productKey, values);
-    }
-    return [...valuesByProduct.values()].every((values) => values.size === 1);
+    const targetNames = input.targetProductNames?.filter(Boolean) ?? [];
+    const factGroups = targetNames.length
+      ? targetNames.map((targetName) => matchingFacts.filter((fact) => textMatchesTargetName(fact.productName, targetName)))
+      : [...matchingFacts.reduce((groups, fact) => {
+          const productKey = fact.productId ?? fact.productKey ?? compactModelText(fact.productName);
+          const group = groups.get(productKey) ?? [];
+          group.push(fact);
+          groups.set(productKey, group);
+          return groups;
+        }, new Map<string, VerifiedProductFact[]>()).values()];
+    return factGroups.length > 0 && factGroups.every((facts) => {
+      if (!facts.length) return false;
+      const values = new Set(facts.map((fact) => compactModelText(fact.value)));
+      return values.size === 1;
+    });
+  };
+  const coveredAttributes = meaningfulAttributes.filter(attributeCovered);
+  const missingFactSlots = requestedFactSlots.flatMap(({ productName, attribute }) => {
+    const facts = input.facts.filter((fact) =>
+      textMatchesTargetName(fact.productName, productName) && verifiedFactMatchesAttribute(fact, attribute)
+    );
+    const values = new Set(facts.map((fact) => compactModelText(fact.value)));
+    return values.size === 1 ? [] : [{ productName, attribute }];
   });
+  const missingSlotKeys = new Set(missingFactSlots.map((slot) =>
+    `${compactModelText(slot.productName)}|${compactModelText(slot.attribute)}`
+  ));
+  const coveredAttributesFromSlots = meaningfulAttributes.filter((attribute) => {
+    const slots = requestedFactSlots.filter((slot) => compactModelText(slot.attribute) === compactModelText(attribute));
+    return slots.length > 0 && slots.every((slot) => !missingSlotKeys.has(
+      `${compactModelText(slot.productName)}|${compactModelText(slot.attribute)}`
+    ));
+  });
+  return {
+    coveredAttributes: requestedFactSlots.length ? coveredAttributesFromSlots : coveredAttributes,
+    missingAttributes: input.comparisonAttributes.filter((attribute) =>
+      !(requestedFactSlots.length ? coveredAttributesFromSlots : coveredAttributes).includes(attribute)
+    ),
+    missingFactSlots
+  };
+}
+
+export function verifiedFactsCoverRequest(input: {
+  facts: VerifiedProductFact[];
+  targetProductNames?: string[];
+  comparisonAttributes: string[];
+  requestedFactSlots?: Array<{ productName: string; attribute: string }>;
+}) {
+  const coverage = verifiedFactCoverageForRequest(input);
+  return input.comparisonAttributes.length > 0 &&
+    coverage.missingAttributes.length === 0 &&
+    coverage.missingFactSlots.length === 0;
 }
 
 export function verifiedFactsResearchResult(
@@ -146,7 +206,9 @@ export function verifiedFactsResearchResult(
     confidence: fact.confidence,
     evidence: fact.evidence ?? [fact.sourceTitle, fact.sourceUrl].filter(Boolean).join(' '),
     sourceUrl: fact.sourceUrl ?? undefined,
-    sourceTitle: fact.sourceTitle ?? undefined
+    sourceTitle: fact.sourceTitle ?? undefined,
+    sourceTier: fact.sourceTier ?? undefined,
+    sourceAuthority: fact.sourceAuthority ?? undefined
   }));
   const attributesCovered = options.attributesCovered !== false;
   return {
@@ -159,12 +221,15 @@ export function verifiedFactsResearchResult(
       directAnswer: '',
       completeness: 'answered',
       coverage: facts.map((fact) => ({
+        productName: fact.productName,
         attribute: fact.attribute,
         status: 'confirmed',
         value: fact.value,
         evidence: fact.evidence ?? [fact.sourceTitle, fact.sourceUrl].filter(Boolean).join(' '),
         sourceUrl: fact.sourceUrl ?? undefined,
-        sourceTitle: fact.sourceTitle ?? undefined
+        sourceTitle: fact.sourceTitle ?? undefined,
+        sourceTier: fact.sourceTier ?? undefined,
+        sourceAuthority: fact.sourceAuthority ?? undefined
       }))
     },
     summaryForAnswer: attributesCovered
@@ -172,7 +237,7 @@ export function verifiedFactsResearchResult(
       : 'Verified local product fact memory has source-backed facts for this model, but they may not cover every requested attribute. Answer only what payload.facts confirm; for any requested attribute absent from the facts, say honestly that it is not confirmed yet instead of guessing.',
     warnings: attributesCovered
       ? ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory']
-      : ['verified_product_fact_memory_used', 'web_search_skipped_verified_fact_memory', 'verified_fact_memory_partial_attribute_coverage']
+      : ['verified_product_fact_memory_used', 'verified_fact_memory_partial_attribute_coverage']
   };
 }
 

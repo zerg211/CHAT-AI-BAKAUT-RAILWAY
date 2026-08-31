@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { VerifiedProductFact } from '../src/shared/types.js';
 import {
   matchingVerifiedFactsForRequest,
+  verifiedFactCoverageForRequest,
   verifiedFactsCoverRequest
 } from '../src/ai/verifiedFactMemory.js';
 
@@ -157,5 +158,30 @@ describe('verified fact memory safety', () => {
       facts: matching,
       comparisonAttributes: ['nominal power']
     })).toBe(true);
+  });
+
+  it('requires every requested exact product to have a conflict-free value before skipping research', () => {
+    const matching = matchingVerifiedFactsForRequest({
+      facts: [fact({ id: 'first-model-only', value: '5.0 kW' })],
+      targetProductNames: ['TSS SGG 5000 EH', 'TSS SGG 6000 EH'],
+      comparisonAttributes: ['nominal power'],
+      now
+    });
+
+    expect(verifiedFactsCoverRequest({
+      facts: matching,
+      targetProductNames: ['TSS SGG 5000 EH', 'TSS SGG 6000 EH'],
+      comparisonAttributes: ['nominal power']
+    })).toBe(false);
+    const coverage = verifiedFactCoverageForRequest({
+      facts: matching,
+      targetProductNames: ['TSS SGG 5000 EH', 'TSS SGG 6000 EH'],
+      comparisonAttributes: ['nominal power']
+    });
+    expect(coverage.missingAttributes).toEqual(['nominal power']);
+    expect(coverage.missingFactSlots).toEqual([{
+      productName: 'TSS SGG 6000 EH',
+      attribute: 'nominal power'
+    }]);
   });
 });

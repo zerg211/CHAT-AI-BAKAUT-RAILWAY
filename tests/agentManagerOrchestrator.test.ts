@@ -900,6 +900,9 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
         riskFlags: []
       };
     },
+    async reviewCustomerLanguage() {
+      return { processDisclosure: false, evidence: '', rationale: 'test answer contains no process disclosure' };
+    },
     ...overrides
   };
   const planTurn = implementation.planTurn;
@@ -1527,7 +1530,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(managerPolicy?.packHash).toHaveLength(64);
     expect([...String(managerPolicy?.packHash ?? '')].every((char) => 'abcdef0123456789'.includes(char))).toBe(true);
     const turnBudget = payload.metadata?.turnBudget as { usage?: { modelCalls?: number } } | undefined;
-    expect(turnBudget?.usage?.modelCalls).toBe(2);
+    expect(turnBudget?.usage?.modelCalls).toBe(3);
     expect(conversations.ledgerEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({ eventType: 'question.answered' }),
       expect.objectContaining({ eventType: 'fact.confirmed' })
@@ -7309,7 +7312,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).not.toContain('firman-diesel');
   });
 
-  it('rehydrates exact prior-card ids and preserves their prices when current detail lookup and web research do not complete', async () => {
+  it('rehydrates prior cards, repairs research-process wording, and fails closed when semantic review is unavailable', async () => {
     const priorProducts: Product[] = [{
       ...generatorProductWithPower('prior-generator-a', 'A-iPower AP6000 5.5 kW generator', 5.5),
       brand: 'A-iPower',
@@ -7462,39 +7465,53 @@ describe('AgentManagerOrchestrator', () => {
 
     const conversations = new PriorReferentConversations();
     const products = new MissingCurrentDetailsProducts();
+    let answerAttempt = 0;
+    const composeAnswer = vi.fn(async (input: Parameters<AgentManagerModel['composeAnswer']>[0]) => {
+      answerAttempt += 1;
+      expect(input.intent.toolRequests.find((request) => request.id === 'prior-card-details')?.args.productIds)
+        .toEqual(priorProducts.map((item) => item.id));
+      expect(input.products.map((item) => ({ id: item.id, price: item.price }))).toEqual([
+        { id: 'prior-generator-a', price: 99_990 },
+        { id: 'prior-generator-b', price: 69_990 }
+      ]);
+      expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain(
+        'revalidated_historical_products_are_current_evidence'
+      );
+      const answerText = answerAttempt === 1
+        ? 'EVOline PB7000 дешевле. Я обращался к доступным источникам, но они не дали результата по типу запуска.'
+        : 'Из этих двух EVOline PB7000 дешевле: 69 990 ₽ против 99 990 ₽ у A-iPower AP6000. Точный тип запуска этих модификаций пока не подтверждён; для окончательного сравнения нужен паспорт каждой модели с описанием органа запуска.';
+      return {
+        answerText,
+        factsUsed: [],
+        questionsAsked: [],
+        toolResultIds: [],
+        selectedProductIds: priorProducts.map((item) => item.id),
+        leadAction: 'none' as const,
+        riskFlags: [],
+        selectionReadiness: {
+          productClass: 'generator',
+          status: 'ready_for_preliminary_cards' as const,
+          canShowProductCards: true,
+          missingFacts: ['тип запуска'],
+          rationale: 'The exact prior cards and prices remain visible evidence while the start-control fact is unconfirmed.'
+        }
+      };
+    });
+    const reviewCustomerLanguage = vi.fn(async ({ answerText }: { answerText: string }) => ({
+      processDisclosure: answerText.includes('обращался к доступным источникам'),
+      evidence: answerText.includes('обращался к доступным источникам')
+        ? 'Я обращался к доступным источникам'
+        : '',
+      rationale: 'The answer must state fact status without describing the research process.'
+    }));
     const orchestrator = new AgentManagerOrchestrator(
       conversations as never,
       products as never,
       new FakeLeads() as never,
       model({
         async planTurn() { return intent; },
-        async composeAnswer(input) {
-          expect(input.intent.toolRequests.find((request) => request.id === 'prior-card-details')?.args.productIds)
-            .toEqual(priorProducts.map((item) => item.id));
-          expect(input.products.map((item) => ({ id: item.id, price: item.price }))).toEqual([
-            { id: 'prior-generator-a', price: 99_990 },
-            { id: 'prior-generator-b', price: 69_990 }
-          ]);
-          expect(input.requiredResponseClauses?.map((clause) => clause.code)).toContain(
-            'revalidated_historical_products_are_current_evidence'
-          );
-          return {
-            answerText: 'Из этих двух EVOline PB7000 дешевле: 69 990 ₽ против 99 990 ₽ у A-iPower AP6000. Тип запуска внешне подтвердить в этом ходе не удалось, но это не отменяет ранее показанные карточки и цены.',
-            factsUsed: [],
-            questionsAsked: [],
-            toolResultIds: [],
-            selectedProductIds: priorProducts.map((item) => item.id),
-            leadAction: 'none',
-            riskFlags: [],
-            selectionReadiness: {
-              productClass: 'generator',
-              status: 'ready_for_preliminary_cards',
-              canShowProductCards: true,
-              missingFacts: ['тип запуска'],
-              rationale: 'The exact prior cards and prices remain visible evidence while the current checks are incomplete.'
-            }
-          };
-        }
+        composeAnswer,
+        reviewCustomerLanguage
       })
     );
 
@@ -7513,6 +7530,76 @@ describe('AgentManagerOrchestrator', () => {
     expect(normalizedAnswer).not.toContain('нет карточ');
     expect(normalizedAnswer).not.toContain('нет цен');
     expect(normalizedAnswer).not.toContain('не удалось надёжно получить нужные данные из каталога');
+    expect(normalizedAnswer).not.toContain('внешняя проверка');
+    expect(normalizedAnswer).not.toContain('тайм-аут');
+    expect(normalizedAnswer).not.toContain('обращался к доступным источникам');
+    expect(normalizedAnswer).toContain('паспорт каждой модели');
+    expect(composeAnswer).toHaveBeenCalledTimes(2);
+    expect(composeAnswer.mock.calls[1]?.[0].reviewIssuesFeedback).toEqual(expect.arrayContaining([
+      expect.stringContaining('customer_output_research_process_disclosure')
+    ]));
+    expect(reviewCustomerLanguage).toHaveBeenCalledTimes(2);
+
+    const unavailableConversations = new PriorReferentConversations();
+    const unavailableReview = vi.fn(async () => {
+      throw new Error('semantic language reviewer unavailable');
+    });
+    const unavailableCompose = vi.fn(async () => ({
+      answerText: 'Из этих двух EVOline PB7000 дешевле: 69 990 ₽ против 99 990 ₽ у A-iPower AP6000. Точный тип запуска пока не подтверждён.',
+      factsUsed: [],
+      questionsAsked: [],
+      toolResultIds: [],
+      selectedProductIds: priorProducts.map((item) => item.id),
+      leadAction: 'none' as const,
+      riskFlags: [],
+      selectionReadiness: {
+        productClass: 'generator',
+        status: 'ready_for_preliminary_cards' as const,
+        canShowProductCards: true,
+        missingFacts: ['тип запуска'],
+        rationale: 'The exact prior cards and prices remain visible evidence while the start-control fact is unconfirmed.'
+      }
+    }));
+    const unavailableOrchestrator = new AgentManagerOrchestrator(
+      unavailableConversations as never,
+      new MissingCurrentDetailsProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        composeAnswer: unavailableCompose,
+        reviewCustomerLanguage: unavailableReview
+      })
+    );
+
+    await expect(unavailableOrchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Сравните эти две модели по цене и запуску.'
+    })).rejects.toThrow('customer_output_semantic_review_unavailable');
+    expect(unavailableCompose).toHaveBeenCalledTimes(2);
+    expect(unavailableReview).toHaveBeenCalledTimes(2);
+    expect(unavailableConversations.assistantSaves).toEqual([]);
+    expect(unavailableConversations.answerContracts).toContainEqual(expect.objectContaining({ status: 'rejected' }));
+
+    const missingReviewerConversations = new PriorReferentConversations();
+    const missingReviewerOrchestrator = new AgentManagerOrchestrator(
+      missingReviewerConversations as never,
+      new MissingCurrentDetailsProducts() as never,
+      new FakeLeads() as never,
+      model({
+        async planTurn() { return intent; },
+        composeAnswer: unavailableCompose,
+        reviewCustomerLanguage: undefined
+      })
+    );
+    await expect(missingReviewerOrchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Сравните эти две модели по цене и запуску.'
+    })).rejects.toThrow('customer_output_semantic_review_unavailable');
+    expect(unavailableCompose).toHaveBeenCalledTimes(4);
+    expect(missingReviewerConversations.assistantSaves).toEqual([]);
+    expect(missingReviewerConversations.answerContracts).toContainEqual(expect.objectContaining({ status: 'rejected' }));
   });
 
   it('keeps an over-budget explicit comparison subject as reference evidence but never as a card', async () => {
@@ -7717,7 +7804,7 @@ describe('AgentManagerOrchestrator', () => {
           expect(input.requiredResponseClauses?.map((clause) => clause.code))
             .toContain('comparison_reference_rejected_by_hard_constraint');
           return {
-            answerText: 'Masalta MS125-4 стоит 109 000 ₽ и превышает новый лимит 90 000 ₽, поэтому как подходящий вариант её не рекомендую. CHAMPION PC1150FT стоит 76 690 ₽ и укладывается в бюджет; из этих двух рекомендую её. Дополнительный web-поиск завершился ошибкой, поэтому сравнение ограничиваю подтверждёнными карточками.',
+            answerText: 'Masalta MS125-4 стоит 109 000 ₽ и превышает новый лимит 90 000 ₽, поэтому как подходящий вариант её не рекомендую. CHAMPION PC1150FT стоит 76 690 ₽ и укладывается в бюджет; из этих двух рекомендую её. По дополнительным характеристикам подтверждённых данных нет, поэтому сравнение ограничиваю данными карточек.',
             factsUsed: [],
             questionsAsked: [],
             toolResultIds: ['comparison-details'],
@@ -8954,7 +9041,7 @@ describe('parallel semantic turn contracts', () => {
       'requires_tools_mismatch'
     ]));
     expect(composeAnswer).toHaveBeenCalledTimes(1);
-    expect(payload.metadata?.turnBudget).toMatchObject({ usage: { modelCalls: 4 } });
+    expect(payload.metadata?.turnBudget).toMatchObject({ usage: { modelCalls: 5 } });
     expect(conversations.assistantSaves).toHaveLength(1);
   });
 

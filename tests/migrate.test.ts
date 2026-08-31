@@ -124,4 +124,15 @@ describe('database schema migrations', () => {
     expect(schema).toContain('lead_capture_drafts_pending_session_idx');
     expect(schema).toContain('lead_capture_drafts_expiry_idx');
   });
+
+  it('keeps verified research facts idempotent and adds source provenance', async () => {
+    const baseSchema = await fs.readFile(path.join(process.cwd(), 'sql', '010_verified_product_facts.sql'), 'utf8');
+    const provenance = await fs.readFile(path.join(process.cwd(), 'sql', '028_verified_fact_research_provenance.sql'), 'utf8');
+
+    expect(baseSchema).toContain('CREATE UNIQUE INDEX IF NOT EXISTS verified_product_facts_unique_active_idx');
+    expect(baseSchema).toContain("coalesce(source_url, ''), status");
+    expect(provenance).toContain('source_tier text');
+    expect(provenance).toContain('source_authority text');
+    expect(provenance).toContain('observed_at timestamptz');
+  });
 });

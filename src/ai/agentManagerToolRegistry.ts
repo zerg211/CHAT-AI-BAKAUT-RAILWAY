@@ -112,6 +112,7 @@ const webResearchResult = z.object({
   }).strict()).optional(),
   unconfirmedFacts: z.array(z.object({
     requirementIds: z.array(z.string()),
+    productName: z.string().nullable().optional(),
     attribute: z.string(),
     status: z.string(),
     reason: z.string()

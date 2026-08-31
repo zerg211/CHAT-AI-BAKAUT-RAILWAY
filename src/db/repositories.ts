@@ -491,6 +491,9 @@ function mapVerifiedProductFact(row: QueryResultRow): VerifiedProductFact {
     sourceUrl: row.source_url ?? null,
     sourceTitle: row.source_title ?? null,
     evidence: row.evidence ?? null,
+    sourceTier: row.source_tier ?? null,
+    sourceAuthority: row.source_authority ?? null,
+    observedAt: row.observed_at ? isoTimestamp(row.observed_at) : null,
     catalogSourceHash: row.catalog_source_hash ?? null,
     sourceFingerprint: row.source_fingerprint ?? null,
     confidence: row.confidence as VerifiedProductFactConfidence,
@@ -3306,12 +3309,13 @@ export class ProductRepository {
        ), supersede_barrier AS (
          SELECT count(*) AS superseded_count FROM superseded
        ), inserted AS (
-         INSERT INTO verified_product_facts(
-           product_id, product_key, product_name, attribute, value, source_type,
-           source_url, source_title, evidence, confidence, catalog_source_hash, source_fingerprint
-         )
-         SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                (SELECT source_content_hash FROM product_snapshot), $11
+          INSERT INTO verified_product_facts(
+            product_id, product_key, product_name, attribute, value, source_type,
+            source_url, source_title, evidence, source_tier, source_authority, observed_at,
+            confidence, catalog_source_hash, source_fingerprint
+          )
+          SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $12, $13, coalesce($14::timestamptz, now()), $10,
+                 (SELECT source_content_hash FROM product_snapshot), $11
          FROM supersede_barrier
          ON CONFLICT DO NOTHING
          RETURNING *
@@ -3320,10 +3324,13 @@ export class ProductRepository {
          UPDATE verified_product_facts
          SET
            product_id = coalesce($1, verified_product_facts.product_id),
-           product_name = $3,
-           source_title = coalesce($8, verified_product_facts.source_title),
-           evidence = coalesce($9, verified_product_facts.evidence),
-           catalog_source_hash = (SELECT source_content_hash FROM product_snapshot),
+            product_name = $3,
+            source_title = coalesce($8, verified_product_facts.source_title),
+            evidence = coalesce($9, verified_product_facts.evidence),
+            source_tier = coalesce($12, verified_product_facts.source_tier),
+            source_authority = coalesce($13, verified_product_facts.source_authority),
+            observed_at = greatest(verified_product_facts.observed_at, coalesce($14::timestamptz, now())),
+            catalog_source_hash = (SELECT source_content_hash FROM product_snapshot),
            source_fingerprint = $11,
            confidence = CASE
              WHEN verified_product_facts.confidence = 'high' THEN verified_product_facts.confidence
@@ -3358,7 +3365,10 @@ export class ProductRepository {
           input.sourceTitle ?? null,
           input.evidence ?? null,
           input.confidence,
-          sourceFingerprint
+          sourceFingerprint,
+          input.sourceTier ?? null,
+          input.sourceAuthority ?? null,
+          input.observedAt ?? null
         ]
       );
       return result.rows[0] ? mapVerifiedProductFact(result.rows[0]) : null;
@@ -3370,6 +3380,7 @@ export class ProductRepository {
     productIds?: string[];
     sourceTypes?: Array<'web' | 'catalog' | 'manual'>;
     limit?: number;
+    includeNameOnlyWithProductIds?: boolean;
   }) {
     const productKeys = [...new Set((input.productNames ?? [])
       .map((name) => normalizeVerifiedProductKey(name))
@@ -3391,8 +3402,8 @@ export class ProductRepository {
              AND fact.catalog_source_hash IS NOT NULL
              AND fact.catalog_source_hash = product.source_content_hash
            )
-           OR (
-             $2::uuid[] = '{}'::uuid[]
+            OR (
+              $2::uuid[] = '{}'::uuid[]
              AND $1::text[] <> '{}'::text[]
              AND fact.product_key = ANY($1::text[])
              AND (
@@ -3401,16 +3412,28 @@ export class ProductRepository {
                  product.is_active IS NOT FALSE
                  AND fact.catalog_source_hash IS NOT NULL
                  AND fact.catalog_source_hash = product.source_content_hash
-               )
-             )
-           )
-         )
+                )
+              )
+            )
+            OR (
+              $5::boolean
+              AND $1::text[] <> '{}'::text[]
+              AND fact.product_id IS NULL
+              AND fact.product_key = ANY($1::text[])
+            )
+          )
        ORDER BY
          CASE fact.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
          fact.last_verified_at DESC,
          fact.updated_at DESC
        LIMIT $4`,
-      [productKeys, productIds, sourceTypes, input.limit ?? 24]
+      [
+        productKeys,
+        productIds,
+        sourceTypes,
+        input.limit ?? 24,
+        input.includeNameOnlyWithProductIds === true
+      ]
     );
     return result.rows.map(mapVerifiedProductFact);
   }

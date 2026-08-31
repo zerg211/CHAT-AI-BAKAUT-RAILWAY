@@ -252,6 +252,9 @@ async function repairVerifiedProductFactsSchema(client: QueryableClient) {
       evidence text,
       catalog_source_hash text,
       source_fingerprint text,
+      source_tier text,
+      source_authority text,
+      observed_at timestamptz NOT NULL DEFAULT now(),
       confidence text NOT NULL CHECK (confidence IN ('high', 'medium', 'low')),
       status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded', 'rejected')),
       first_seen_at timestamptz NOT NULL DEFAULT now(),
@@ -264,7 +267,10 @@ async function repairVerifiedProductFactsSchema(client: QueryableClient) {
   await client.query(`
     ALTER TABLE verified_product_facts
       ADD COLUMN IF NOT EXISTS catalog_source_hash text,
-      ADD COLUMN IF NOT EXISTS source_fingerprint text
+      ADD COLUMN IF NOT EXISTS source_fingerprint text,
+      ADD COLUMN IF NOT EXISTS source_tier text,
+      ADD COLUMN IF NOT EXISTS source_authority text,
+      ADD COLUMN IF NOT EXISTS observed_at timestamptz NOT NULL DEFAULT now()
   `);
   await client.query(`DROP INDEX IF EXISTS verified_product_facts_unique_active_idx`);
   await client.query(`

@@ -23,6 +23,7 @@ export interface ProductComparisonResearchFact {
   sourceTitle?: string;
   sourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
   sourceAuthority?: 'manufacturer' | 'secondary';
+  evidenceVerifiedExact?: boolean;
 }
 
 export interface ProductComparisonResearchConflict {
@@ -37,6 +38,7 @@ export interface ProductComparisonResearchAnswerGuidance {
   directAnswer: string;
   completeness: 'answered' | 'partially_answered' | 'not_answered';
   coverage: Array<{
+    productName: string | null;
     attribute: string;
     status: 'confirmed' | 'not_confirmed' | 'contradicted' | 'ambiguous' | 'not_found';
     value: string;
@@ -88,6 +90,17 @@ export interface ProductComparisonResearchResult {
   answerGuidance: ProductComparisonResearchAnswerGuidance;
   summaryForAnswer: string;
   warnings: string[];
+}
+
+export interface ProductResearchTraceEvent {
+  stage: 'catalog_extraction' | 'primary_web' | 'tier_fallback';
+  tiers: ProductResearchSourceTier[];
+  attemptNumber: number;
+  elapsedMs: number;
+  remainingBudgetMs: number | null;
+  outcome: 'completed' | 'timed_out' | 'failed' | 'skipped_budget' | 'aborted';
+  sourceCount: number;
+  acceptedFactCount: number;
 }
 
 type ResearchCoverageItem = ProductComparisonResearchAnswerGuidance['coverage'][number];
@@ -305,6 +318,7 @@ function factKey(fact: ProductComparisonResearchFact) {
 
 function coverageKey(item: ResearchCoverageItem) {
   return [
+    item.productName ?? '',
     item.attribute,
     item.status,
     item.value,
@@ -326,9 +340,22 @@ function uniqueFacts(facts: ProductComparisonResearchFact[]) {
 }
 
 function uniqueCoverage(items: ResearchCoverageItem[]) {
+  const confirmedItems = items.filter((item) => item.status === 'confirmed');
   const seen = new Set<string>();
   const output: ResearchCoverageItem[] = [];
   for (const item of items) {
+    const normalizedAttribute = normalizedText(item.attribute).trim();
+    if (
+      (item.status === 'not_confirmed' || item.status === 'not_found') &&
+      confirmedItems.some((confirmed) => {
+        if (normalizedText(confirmed.attribute).trim() !== normalizedAttribute) return false;
+        if (!item.productName || !confirmed.productName) {
+          return item.productName === confirmed.productName;
+        }
+        return textMatchesTargetName(item.productName, confirmed.productName) &&
+          textMatchesTargetName(confirmed.productName, item.productName);
+      })
+    ) continue;
     const key = coverageKey(item);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -391,6 +418,9 @@ function normalizeAnswerGuidance(value: unknown): ProductComparisonResearchAnswe
     ? raw.coverage
         .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
         .map((item) => ({
+          productName: typeof item.productName === 'string' && item.productName.trim()
+            ? item.productName.trim()
+            : null,
           attribute: typeof item.attribute === 'string' ? item.attribute : '',
           status: allowedStatuses.has(String(item.status)) ? item.status as ProductComparisonResearchAnswerGuidance['coverage'][number]['status'] : 'not_found',
           value: typeof item.value === 'string' ? item.value : '',
@@ -620,7 +650,13 @@ function mergeSourceAttempts(...groups: Array<ProductResearchSourceAttempt[] | u
       byTier.set(attempt.tier, attempt);
     }
   }
-  return [...byTier.values()];
+  const tierOrder: ProductResearchSourceTier[] = [
+    'catalog',
+    'official_page',
+    'official_manual',
+    'reliable_secondary'
+  ];
+  return [...byTier.values()].sort((left, right) => tierOrder.indexOf(left.tier) - tierOrder.indexOf(right.tier));
 }
 
 function sourceTierAttemptsComplete(attempts: ProductResearchSourceAttempt[] | undefined) {
@@ -667,8 +703,30 @@ export function researchWarningsPreventSourceExhaustion(warnings: string[]) {
     warning === 'tool_execution_error' ||
     warning === 'tool_result_rejected_by_local_bounds' ||
     warning === 'tool_not_implemented' ||
+    warning === 'source_coverage_target_mismatch' ||
+    warning === 'source_attempt_confirmation_rejected' ||
     warning === 'source_tier_attempts_incomplete_after_retry'
   );
+}
+
+function reconcileSourceAttemptsWithAcceptedFacts(result: ProductComparisonResearchResult) {
+  let rejectedConfirmation = false;
+  const sourceAttempts = result.sourceAttempts?.map((attempt) => {
+    if (attempt.tier === 'catalog' || attempt.outcome !== 'confirmed') return attempt;
+    const hasAcceptedFact = result.facts.some((fact) =>
+      fact.sourceType === 'web' && fact.sourceTier === attempt.tier
+    );
+    if (hasAcceptedFact) return attempt;
+    rejectedConfirmation = true;
+    return { ...attempt, outcome: 'unreadable' as const };
+  });
+  if (!rejectedConfirmation) return result;
+  return {
+    ...result,
+    sourcesExhausted: false,
+    sourceAttempts,
+    warnings: uniqueStrings([...result.warnings, 'source_attempt_confirmation_rejected'])
+  };
 }
 
 function normalizeResearchParsed(
@@ -711,6 +769,7 @@ const sourceEvidenceMaxCoverage = 12;
 const sourceEvidenceMaxSources = 12;
 const sourceEvidenceValidationConcurrency = 4;
 const sourceEvidenceFetchTimeoutMs = 4_000;
+const productResearchReasoningEffort = 'low' as const;
 
 type SourceDocument = {
   ok: boolean;
@@ -1026,7 +1085,7 @@ function catalogProductForEvidenceItem(input: {
 }
 
 type SourceEvidenceItem = {
-  productName?: string;
+  productName?: string | null;
   attribute: string;
   value: string;
   evidence: string;
@@ -1045,7 +1104,7 @@ async function evidenceItemSourceText(input: {
   const catalogProduct = catalogProductForEvidenceItem({
     products: input.products,
     targetProductNames: input.targetProductNames,
-    productName: input.item.productName,
+    productName: input.item.productName ?? undefined,
     sourceUrl: input.item.sourceUrl,
     sourceTitle: input.item.sourceTitle
   });
@@ -1119,6 +1178,11 @@ function sourceUrlIsDedicatedToExactTarget(sourceUrl: string | undefined, target
   return Boolean(sourceUrl && textMatchesOnlyTargetNames(sourceUrl, targetProductNames));
 }
 
+function evidenceItemTargetNames(item: SourceEvidenceItem, targetProductNames: string[]) {
+  if (!targetProductNames.length || !item.productName?.trim()) return targetProductNames;
+  return targetProductNames.filter((targetName) => textMatchesTargetName(item.productName!, targetName));
+}
+
 function exactQuoteIsBoundToTarget(input: {
   item: SourceEvidenceItem;
   sourceKind?: 'catalog' | 'web';
@@ -1163,10 +1227,20 @@ function sourceEvidenceValidationJsonFormat() {
             type: 'array',
             items: { type: 'string', enum: [...sourceBackedStartKinds] }
           },
+          publisherAuthority: { type: 'string', enum: ['manufacturer', 'secondary', 'unknown'] },
+          publisherEvidence: { type: 'string' },
           evidence: { type: 'string' },
           warnings: { type: 'array', items: { type: 'string' } }
         },
-        required: ['claimSupported', 'claimStartKinds', 'supportedStartKinds', 'evidence', 'warnings']
+        required: [
+          'claimSupported',
+          'claimStartKinds',
+          'supportedStartKinds',
+          'publisherAuthority',
+          'publisherEvidence',
+          'evidence',
+          'warnings'
+        ]
       }
     }
   } as const;
@@ -1187,6 +1261,12 @@ function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
     claimSupported: parsed.claimSupported === true,
     claimStartKinds: sourceBackedStartKinds.filter((kind) => claimStartKinds.includes(kind)),
     supportedStartKinds: sourceBackedStartKinds.filter((kind) => supportedStartKinds.includes(kind)),
+    publisherAuthority: parsed.publisherAuthority === 'manufacturer' || parsed.publisherAuthority === 'secondary'
+      ? parsed.publisherAuthority
+      : 'unknown' as const,
+    publisherEvidence: typeof parsed.publisherEvidence === 'string'
+      ? compactEvidence(parsed.publisherEvidence, 320)
+      : '',
     evidence: typeof parsed.evidence === 'string' ? compactEvidence(parsed.evidence, 320) : '',
     warnings: Array.isArray(parsed.warnings)
       ? parsed.warnings.filter((item): item is string => typeof item === 'string')
@@ -1205,7 +1285,7 @@ async function validateSourceEvidenceSemantically(input: {
   const { parsed } = await createStructuredJsonResponse({
     request: {
       model: config.OPENAI_FACT_MODEL,
-      reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
+      reasoning: { effort: productResearchReasoningEffort },
       input: [
         {
           role: 'system',
@@ -1223,6 +1303,9 @@ async function validateSourceEvidenceSemantically(input: {
             '- manual_starter: the source confirms manual/recoil/hand starter exists.',
             'Do not count a tool or accessory key, such as a spark-plug wrench or kit wrench, as key_start.',
             'For non-start claims, claimStartKinds and supportedStartKinds should be empty arrays.',
+            'Classify publisherAuthority=manufacturer only when sourceText itself proves that the publisher/operator of this source is the product manufacturer or brand owner.',
+            'A brand-like URL, page title, reseller statement, or a mere mention of the manufacturer is not enough.',
+            'When manufacturer ownership is proven, publisherEvidence must be an exact sourceText excerpt establishing publisher/operator identity; otherwise return unknown or secondary with an empty publisherEvidence.',
             'Return JSON only.'
           ].join('\n')
         },
@@ -1261,15 +1344,35 @@ async function validateSourceEvidenceSemantically(input: {
   };
 }
 
+interface SourceEvidenceValidationResult {
+  valid: boolean;
+  invalidKinds: SourceBackedStartKind[];
+  warnings: string[];
+  manufacturerAuthorityVerified?: boolean;
+}
+
 async function validateEvidenceItem(input: {
   item: SourceEvidenceItem;
   products: Product[];
   targetProductNames: string[];
   cache: SourceTextCache;
   semanticValidation: boolean;
+  expectedSourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
   signal?: AbortSignal;
   deadlineAtMs?: number;
-}) {
+}): Promise<SourceEvidenceValidationResult> {
+  const itemTargetProductNames = evidenceItemTargetNames(input.item, input.targetProductNames);
+  if (input.targetProductNames.length && input.item.productName?.trim() && !itemTargetProductNames.length) {
+    return {
+      valid: false,
+      invalidKinds: startClaimKindsFromText([
+        input.item.attribute,
+        input.item.value,
+        input.item.evidence
+      ].join(' ')),
+      warnings: ['source_evidence_fact_target_mismatch', 'source_evidence_validation_failed:semantic']
+    };
+  }
   const source = await evidenceItemSourceText(input);
   const warnings: string[] = [];
   if (source.warning) warnings.push(source.warning);
@@ -1298,7 +1401,7 @@ async function validateEvidenceItem(input: {
     sourceText: source.text,
     sourceTitle: source.sourceTitle,
     item: input.item,
-    targetProductNames: input.targetProductNames
+    targetProductNames: itemTargetProductNames
   })) {
     const claimKinds = startClaimKindsFromText([
       input.item.attribute,
@@ -1320,7 +1423,7 @@ async function validateEvidenceItem(input: {
   const exactQuoteValidation = exactQuoteIsBoundToTarget({
     item: input.item,
     sourceKind: source.sourceKind,
-    targetProductNames: input.targetProductNames
+    targetProductNames: itemTargetProductNames
   })
     ? sourceEvidenceExactQuoteValidation(
         input.item,
@@ -1328,7 +1431,18 @@ async function validateEvidenceItem(input: {
         source.sourceKind === 'catalog' ? 4 : 24
       )
     : null;
-  if (exactQuoteValidation) {
+  const itemProduct = input.products.find((candidate) =>
+    textMatchesTargetName(input.item.productName ?? '', candidate.name)
+  ) ?? (input.products.length === 1 ? input.products[0] : null);
+  const sourceDescriptor = classifyProductResearchSource({
+    sourceUrl: input.item.sourceUrl,
+    sourceTitle: input.item.sourceTitle,
+    product: itemProduct
+  });
+  const needsPublisherValidation = (
+    input.expectedSourceTier === 'official_page' || input.expectedSourceTier === 'official_manual'
+  ) && sourceDescriptor?.authority !== 'manufacturer';
+  if (exactQuoteValidation && !needsPublisherValidation) {
     return {
       ...exactQuoteValidation,
       warnings: uniqueStrings([...warnings, ...exactQuoteValidation.warnings])
@@ -1338,10 +1452,27 @@ async function validateEvidenceItem(input: {
   const semanticValidation = await validateSourceEvidenceSemantically({
     item: input.item,
     sourceText: source.text,
-    targetProductNames: input.targetProductNames,
+    targetProductNames: itemTargetProductNames,
     signal: input.signal,
     deadlineAtMs: input.deadlineAtMs
   });
+  const normalizedPublisherEvidence = normalizedText(semanticValidation.publisherEvidence);
+  const manufacturerAuthorityVerified = needsPublisherValidation &&
+    semanticValidation.publisherAuthority === 'manufacturer' &&
+    normalizedPublisherEvidence.length >= 12 &&
+    normalizedText(source.text).includes(normalizedPublisherEvidence);
+  if (exactQuoteValidation) {
+    return {
+      ...exactQuoteValidation,
+      warnings: uniqueStrings([
+        ...warnings,
+        ...exactQuoteValidation.warnings,
+        ...semanticValidation.warnings,
+        manufacturerAuthorityVerified ? 'source_publisher_manufacturer_verified' : ''
+      ]),
+      manufacturerAuthorityVerified
+    };
+  }
   const claimKinds = semanticValidation.claimStartKinds.length
     ? semanticValidation.claimStartKinds
     : startClaimKindsFromText([
@@ -1353,7 +1484,8 @@ async function validateEvidenceItem(input: {
     return {
       valid: true,
       invalidKinds: [] as SourceBackedStartKind[],
-      warnings: uniqueStrings([...warnings, ...semanticValidation.warnings])
+      warnings: uniqueStrings([...warnings, ...semanticValidation.warnings]),
+      manufacturerAuthorityVerified
     };
   }
 
@@ -1367,7 +1499,8 @@ async function validateEvidenceItem(input: {
       ...semanticValidation.warnings,
       ...invalidKinds.map((kind) => `source_evidence_validation_failed:${kind}`),
       !valid && !invalidKinds.length ? 'source_evidence_validation_failed:semantic' : ''
-    ])
+    ]),
+    manufacturerAuthorityVerified
   };
 }
 
@@ -1409,6 +1542,7 @@ async function validateSourceBackedResult(input: {
   products: Product[];
   targetProductNames: string[];
   comparisonAttributes: string[];
+  expectedSourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
   cache?: SourceTextCache;
   signal?: AbortSignal;
   deadlineAtMs?: number;
@@ -1416,7 +1550,32 @@ async function validateSourceBackedResult(input: {
   const cache = input.cache ?? createSourceTextCache();
   const warnings = [...input.result.warnings];
   const factsToValidate = input.result.facts.slice(0, sourceEvidenceMaxFacts);
-  const coverageToValidate = input.result.answerGuidance.coverage.slice(0, sourceEvidenceMaxCoverage);
+  const coverageToValidate = input.result.answerGuidance.coverage
+    .slice(0, sourceEvidenceMaxCoverage)
+    .flatMap<ResearchCoverageItem>((item): ResearchCoverageItem[] => {
+      if (!input.targetProductNames.length) return [{ ...item, productName: null }];
+      if (!item.productName && input.targetProductNames.length === 1) {
+        return [{ ...item, productName: input.targetProductNames[0] }];
+      }
+      const matchingTargets = item.productName
+        ? input.targetProductNames.filter((targetName) => textMatchesTargetName(item.productName!, targetName))
+        : [];
+      if (matchingTargets.length === 1) {
+        return [{ ...item, productName: matchingTargets[0] }];
+      }
+      warnings.push('source_coverage_target_mismatch');
+      return input.targetProductNames.map((productName) => ({
+        ...item,
+        productName,
+        status: 'not_confirmed' as const,
+        value: '',
+        evidence: `${productName}: coverage ownership did not match an exact typed target.`,
+        sourceUrl: undefined,
+        sourceTitle: undefined,
+        sourceTier: undefined,
+        sourceAuthority: undefined
+      }));
+    });
   if (
     input.result.facts.length > factsToValidate.length ||
     input.result.answerGuidance.coverage.length > coverageToValidate.length
@@ -1433,14 +1592,21 @@ async function validateSourceBackedResult(input: {
     sourceEvidenceValidationConcurrency,
     async (fact) => {
     if (fact.sourceType === 'conflict') {
-      return { fact, accepted: true, warnings: [] as string[], invalidKinds: [] as SourceBackedStartKind[] };
+      return {
+        fact,
+        accepted: true,
+        warnings: [] as string[],
+        invalidKinds: [] as SourceBackedStartKind[],
+        manufacturerAuthorityVerified: false
+      };
     }
     if (fact.confidence === 'low') {
       return {
         fact,
         accepted: false,
         warnings: ['source_evidence_low_confidence_rejected'],
-        invalidKinds: [] as SourceBackedStartKind[]
+        invalidKinds: [] as SourceBackedStartKind[],
+        manufacturerAuthorityVerified: false
       };
     }
     const validation = await validateEvidenceItem({
@@ -1449,6 +1615,7 @@ async function validateSourceBackedResult(input: {
       targetProductNames: input.targetProductNames,
       cache,
       semanticValidation,
+      expectedSourceTier: input.expectedSourceTier,
       signal: input.signal,
       deadlineAtMs: input.deadlineAtMs
     });
@@ -1456,7 +1623,8 @@ async function validateSourceBackedResult(input: {
       fact,
       accepted: validation.valid,
       warnings: validation.warnings,
-      invalidKinds: validation.invalidKinds
+      invalidKinds: validation.invalidKinds,
+      manufacturerAuthorityVerified: validation.manufacturerAuthorityVerified === true
     };
   });
   for (const validation of factValidations) {
@@ -1475,12 +1643,24 @@ async function validateSourceBackedResult(input: {
         sourceTitle: validation.fact.sourceTitle,
         product
       });
+      const sourceAuthority = validation.manufacturerAuthorityVerified
+        ? 'manufacturer' as const
+        : descriptor?.authority;
+      const sourceTier = validation.manufacturerAuthorityVerified && validation.fact.sourceUrl
+        ? sourceDocumentKind(validation.fact.sourceUrl, validation.fact.sourceTitle) === 'manual_or_specification'
+          ? 'official_manual' as const
+          : 'official_page' as const
+        : descriptor?.tier;
       facts.push({
         ...validation.fact,
-        ...(descriptor ? {
-          sourceTier: descriptor.tier,
-          sourceAuthority: descriptor.authority
-        } : {})
+        confidence: sourceAuthority === 'secondary' && validation.fact.confidence === 'high'
+          ? 'medium'
+          : validation.fact.confidence,
+        ...(sourceTier && sourceAuthority ? {
+          sourceTier,
+          sourceAuthority
+        } : {}),
+        evidenceVerifiedExact: validation.warnings.includes('source_evidence_exact_quote_verified')
       });
     } else {
       facts.push(validation.fact);
@@ -1499,6 +1679,7 @@ async function validateSourceBackedResult(input: {
       targetProductNames: input.targetProductNames,
       cache,
       semanticValidation,
+      expectedSourceTier: input.expectedSourceTier,
       signal: input.signal,
       deadlineAtMs: input.deadlineAtMs
     });
@@ -1531,11 +1712,19 @@ async function validateSourceBackedResult(input: {
       sourceTitle: item.sourceTitle,
       product
     });
+    const sourceAuthority = validation.manufacturerAuthorityVerified
+      ? 'manufacturer' as const
+      : descriptor?.authority;
+    const sourceTier = validation.manufacturerAuthorityVerified && item.sourceUrl
+      ? sourceDocumentKind(item.sourceUrl, item.sourceTitle) === 'manual_or_specification'
+        ? 'official_manual' as const
+        : 'official_page' as const
+      : descriptor?.tier;
     coverage.push({
       ...item,
-      ...(descriptor ? {
-        sourceTier: descriptor.tier,
-        sourceAuthority: descriptor.authority
+      ...(sourceTier && sourceAuthority ? {
+        sourceTier,
+        sourceAuthority
       } : {})
     });
   }
@@ -1615,7 +1804,7 @@ async function validateSourceBackedResult(input: {
     }
   }
 
-  return adjusted;
+  return reconcileSourceAttemptsWithAcceptedFacts(adjusted);
 }
 
 function productComparisonResearchJsonFormat(name: string) {
@@ -1675,6 +1864,7 @@ function productComparisonResearchJsonFormat(name: string) {
                   type: 'object',
                   additionalProperties: false,
                   properties: {
+                    productName: { type: ['string', 'null'] },
                     attribute: { type: 'string' },
                     status: { type: 'string', enum: ['confirmed', 'not_confirmed', 'contradicted', 'ambiguous', 'not_found'] },
                     value: { type: 'string' },
@@ -1682,7 +1872,7 @@ function productComparisonResearchJsonFormat(name: string) {
                     sourceUrl: { type: ['string', 'null'] },
                     sourceTitle: { type: ['string', 'null'] }
                   },
-                  required: ['attribute', 'status', 'value', 'evidence', 'sourceUrl', 'sourceTitle']
+                  required: ['productName', 'attribute', 'status', 'value', 'evidence', 'sourceUrl', 'sourceTitle']
                 }
               }
             },
@@ -1922,6 +2112,7 @@ function webResearchTimedOut(error: unknown, signal?: AbortSignal) {
     value.code === 'ABORT_ERR' ||
     value.code === 'ERR_ABORTED' ||
     value.code === 'timed_out' ||
+    value.code === 'structured_json_deadline_exceeded' ||
     (value.code === 'structured_json_retry_skipped' &&
       (value.retryReason === 'signal_aborted' || value.retryReason === 'insufficient_time_budget'));
 }
@@ -1957,10 +2148,11 @@ function timedOutResearchCoverage(
     : ['requested technical facts'];
   if (!targetProductNames.length) {
     return attributes.map((attribute) => ({
+      productName: null,
       attribute,
       status: 'not_confirmed',
       value: '',
-      evidence: `External verification timed out before ${attribute} was confirmed.`
+      evidence: `No confirmed value is available for ${attribute}.`
     }));
   }
   return attributes.flatMap((attribute) => {
@@ -1968,14 +2160,14 @@ function timedOutResearchCoverage(
       !catalogFactConfirmsRequestedTargetAttribute(catalogResult, targetProductName, attribute)
     );
     if (!unresolvedTargets.length) return [];
-    const exactTargets = unresolvedTargets.join(', ');
-    return [{
+    return unresolvedTargets.map((targetProductName) => ({
+      productName: targetProductName,
       attribute,
       status: 'not_confirmed' as const,
       value: '',
-      evidence: `${exactTargets}: external verification timed out before ${attribute} was confirmed.`,
-      sourceTitle: unresolvedTargets.join(' / ')
-    }];
+      evidence: `${targetProductName}: no confirmed value is available for ${attribute}.`,
+      sourceTitle: targetProductName
+    }));
   });
 }
 
@@ -2037,9 +2229,42 @@ function timedOutResearchPartial(input: {
 const PRODUCT_COMPARISON_MIN_OUTPUT_TOKENS = 1800;
 const COMPACT_CATALOG_EXTRACTION_MAX_OUTPUT_TOKENS = 1500;
 const WEB_RESEARCH_MIN_RETRY_REMAINING_MS = 6_000;
+const CATALOG_EXTRACTION_MAX_MS = 8_000;
+const PRIMARY_WEB_MAX_MS = 24_000;
+const PRIMARY_WEB_FALLBACK_RESERVE_MS = 16_000;
+const TIER_FALLBACK_RESERVE_MS = 1_500;
 
 function webResearchRemainingMs(deadlineAtMs: number | undefined) {
   return deadlineAtMs === undefined ? Number.POSITIVE_INFINITY : Math.max(0, deadlineAtMs - Date.now());
+}
+
+export function boundedResearchStageDeadline(input: {
+  overallDeadlineAtMs?: number;
+  maxDurationMs: number;
+  reserveMs: number;
+  nowMs?: number;
+}) {
+  if (input.overallDeadlineAtMs === undefined) return undefined;
+  const nowMs = input.nowMs ?? Date.now();
+  return Math.min(
+    input.overallDeadlineAtMs,
+    Math.max(nowMs + 1, Math.min(nowMs + input.maxDurationMs, input.overallDeadlineAtMs - input.reserveMs))
+  );
+}
+
+function researchSourceCount(result: ProductComparisonResearchResult) {
+  return new Set([
+    ...(result.sourceAttempts ?? []).flatMap((attempt) => attempt.sources ?? []).map((source) => source.url),
+    ...result.facts.flatMap((fact) => fact.sourceUrl ? [fact.sourceUrl] : [])
+  ]).size;
+}
+
+async function emitResearchTrace(
+  onTrace: ((event: ProductResearchTraceEvent) => void | Promise<void>) | undefined,
+  event: ProductResearchTraceEvent
+) {
+  if (!onTrace) return;
+  await Promise.resolve(onTrace(event)).catch(() => undefined);
 }
 
 function productComparisonMaxOutputTokens(targetProductNames: string[]) {
@@ -2078,6 +2303,7 @@ function compactCatalogExtractionToResearchResult(
     resolution: conflict.resolution
   }));
   const confirmedCoverage = facts.map((fact): ResearchCoverageItem => ({
+    productName: fact.productName,
     attribute: fact.attribute,
     status: 'confirmed',
     value: fact.value,
@@ -2086,6 +2312,7 @@ function compactCatalogExtractionToResearchResult(
     sourceTitle: fact.sourceTitle
   }));
   const conflictCoverage = parsed.conflicts.map((conflict): ResearchCoverageItem => ({
+    productName: conflict.productName,
     attribute: conflict.attribute,
     status: 'ambiguous',
     value: conflict.catalogValue ?? conflict.conflictingValues.join(' / '),
@@ -2093,6 +2320,7 @@ function compactCatalogExtractionToResearchResult(
     sourceTitle: conflict.productName
   }));
   const missingCoverage = parsed.missing.map((missing): ResearchCoverageItem => ({
+    productName: missing.productName,
     attribute: missing.attribute,
     status: 'not_confirmed',
     value: '',
@@ -2129,7 +2357,7 @@ async function extractCompactExactCatalogProductFacts(input: {
 }): Promise<ProductComparisonResearchResult> {
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
-    reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
+    reasoning: { effort: productResearchReasoningEffort },
     input: [
       {
         role: 'system',
@@ -2209,7 +2437,7 @@ async function extractExactCatalogProductFacts(input: {
 
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
-    reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
+    reasoning: { effort: productResearchReasoningEffort },
     input: [
       {
         role: 'system',
@@ -2261,16 +2489,119 @@ async function extractExactCatalogProductFacts(input: {
   });
 }
 
+export function researchResultCoversFactSlot(input: {
+  result: ProductComparisonResearchResult;
+  productName: string;
+  attribute: string;
+  sourceTypes?: Array<ProductComparisonResearchFact['sourceType']>;
+}) {
+  const sourceTypes = input.sourceTypes ?? ['catalog', 'web'];
+  return !input.result.conflicts.some((conflict) =>
+    textMatchesTargetName(conflict.productName, input.productName) &&
+    normalizedText(conflict.attribute).trim() === normalizedText(input.attribute).trim()
+  ) && input.result.facts.some((fact) =>
+    sourceTypes.includes(fact.sourceType) &&
+    (fact.confidence === 'high' || fact.confidence === 'medium') &&
+    normalizedText(fact.attribute).trim() === normalizedText(input.attribute).trim() &&
+    factMatchesTarget(fact, input.productName)
+  );
+}
+
+export async function extractCatalogProductComparisonFacts(input: {
+  userMessage: string;
+  products: Product[];
+  targetProductNames: string[];
+  comparisonAttributes: string[];
+  compact?: boolean;
+  catalogSearchAttempted?: boolean;
+  catalogProductsFound?: boolean;
+  signal?: AbortSignal;
+  deadlineAtMs?: number;
+  onTrace?: (event: ProductResearchTraceEvent) => void | Promise<void>;
+}): Promise<ProductComparisonResearchResult | null> {
+  const exactCatalogProducts = exactCatalogProductsForTargets(input.products, input.targetProductNames);
+  if (!exactCatalogProducts.length) return null;
+  const cache = createSourceTextCache();
+  const startedAt = Date.now();
+  const deadlineAtMs = boundedResearchStageDeadline({
+    overallDeadlineAtMs: input.deadlineAtMs,
+    maxDurationMs: CATALOG_EXTRACTION_MAX_MS,
+    reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS + PRIMARY_WEB_MAX_MS
+  });
+  try {
+    const result = await (input.compact === true
+      ? extractCompactExactCatalogProductFacts({
+          userMessage: input.userMessage,
+          products: exactCatalogProducts,
+          targetProductNames: input.targetProductNames,
+          comparisonAttributes: input.comparisonAttributes,
+          cache,
+          signal: input.signal,
+          deadlineAtMs
+        })
+      : extractExactCatalogProductFacts({
+          userMessage: input.userMessage,
+          products: exactCatalogProducts,
+          targetProductNames: input.targetProductNames,
+          comparisonAttributes: input.comparisonAttributes,
+          cache,
+          signal: input.signal,
+          deadlineAtMs
+        }));
+    await emitResearchTrace(input.onTrace, {
+      stage: 'catalog_extraction',
+      tiers: ['catalog'],
+      attemptNumber: 1,
+      elapsedMs: Date.now() - startedAt,
+      remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'completed',
+      sourceCount: exactCatalogProducts.length,
+      acceptedFactCount: result.facts.length
+    });
+    return result;
+  } catch (error) {
+    if (input.signal?.aborted) throw error;
+    if (!webResearchTimedOut(error, input.signal)) throw error;
+    await emitResearchTrace(input.onTrace, {
+      stage: 'catalog_extraction',
+      tiers: ['catalog'],
+      attemptNumber: 1,
+      elapsedMs: Date.now() - startedAt,
+      remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'timed_out',
+      sourceCount: exactCatalogProducts.length,
+      acceptedFactCount: 0
+    });
+    return {
+      ...timedOutResearchPartial({
+        catalogResult: null,
+        catalogSourceAttempts: input.catalogSearchAttempted === true
+          ? [{
+              tier: 'catalog',
+              outcome: (input.catalogProductsFound ?? input.products.length > 0) ? 'confirmed' : 'not_found'
+            }]
+          : [],
+        targetProductNames: input.targetProductNames,
+        comparisonAttributes: input.comparisonAttributes
+      }),
+      warnings: ['catalog_fact_extraction_timed_out_before_web']
+    };
+  }
+}
+
 export async function researchProductComparisonFacts(input: {
   userMessage: string;
   products: Product[];
   targetProductNames?: string[];
   comparisonAttributes?: string[];
+  missingFactSlots?: Array<{ productName: string; attribute: string }>;
+  precomputedCatalogResult?: ProductComparisonResearchResult | null;
   allowCatalogOnlyAnswer?: boolean;
   catalogSearchAttempted?: boolean;
   catalogProductsFound?: boolean;
   signal?: AbortSignal;
   deadlineAtMs?: number;
+  onTrace?: (event: ProductResearchTraceEvent) => void | Promise<void>;
 }): Promise<ProductComparisonResearchResult> {
   const sourceTextCache = createSourceTextCache();
   const targetProductNames = (input.targetProductNames ?? [])
@@ -2291,27 +2622,21 @@ export async function researchProductComparisonFacts(input: {
   const compactCatalogFirstResearch = exactCatalogProducts.length > 0 && (
     input.allowCatalogOnlyAnswer === true || input.deadlineAtMs !== undefined
   );
-  const catalogResult = exactCatalogProducts.length
-    ? await (compactCatalogFirstResearch
-      ? extractCompactExactCatalogProductFacts({
-          userMessage: input.userMessage,
-          products: exactCatalogProducts,
-          targetProductNames,
-          comparisonAttributes,
-          cache: sourceTextCache,
-          signal: input.signal,
-          deadlineAtMs: input.deadlineAtMs
-        })
-      : extractExactCatalogProductFacts({
+  const catalogResult = input.precomputedCatalogResult !== undefined
+    ? input.precomputedCatalogResult
+    : await extractCatalogProductComparisonFacts({
         userMessage: input.userMessage,
-        products: exactCatalogProducts,
+        products: input.products,
         targetProductNames,
         comparisonAttributes,
-        cache: sourceTextCache,
+        compact: compactCatalogFirstResearch,
+        catalogSearchAttempted: input.catalogSearchAttempted,
+        catalogProductsFound: input.catalogProductsFound,
         signal: input.signal,
-        deadlineAtMs: input.deadlineAtMs
-      }))
-    : null;
+        deadlineAtMs: input.deadlineAtMs,
+        onTrace: input.onTrace
+      });
+  const catalogExtractionTimedOut = catalogResult?.warnings.includes('catalog_fact_extraction_timed_out_before_web') === true;
   const catalogExtractionAnswered = Boolean(
     catalogResult && catalogExtractionAnswersQuestion(catalogResult, targetProductNames)
   );
@@ -2328,6 +2653,12 @@ export async function researchProductComparisonFacts(input: {
         ])
       }
     : catalogResult;
+  if (catalogExtractionTimedOut && catalogResultForResearch) {
+    catalogResultForResearch.warnings = uniqueStrings([
+      ...catalogResultForResearch.warnings,
+      'catalog_fact_extraction_timed_out_before_web'
+    ]);
+  }
 
   if (input.allowCatalogOnlyAnswer === true && catalogResultForResearch && catalogExtractionAnswered) {
     return {
@@ -2343,7 +2674,8 @@ export async function researchProductComparisonFacts(input: {
     };
   }
 
-  const exactTargetResearchInstructions = compactCatalogFirstResearch
+  const compactCatalogEvidenceAvailable = compactCatalogFirstResearch && Boolean(catalogResultForResearch);
+  const exactTargetResearchInstructions = compactCatalogEvidenceAvailable
     ? [
         'catalogExtraction already contains a compact semantic reading of the exact current catalog cards and identifies the unresolved facts.',
         'Use web_search now and search only for missing, ambiguous, or contradicted exact-target facts. Preserve the supported catalog facts.',
@@ -2357,7 +2689,7 @@ export async function researchProductComparisonFacts(input: {
 
   const request: Record<string, unknown> = {
     model: config.OPENAI_FACT_MODEL,
-    reasoning: { effort: config.OPENAI_FACT_REASONING_EFFORT },
+    reasoning: { effort: productResearchReasoningEffort },
     input: [
       {
         role: 'system',
@@ -2375,6 +2707,7 @@ export async function researchProductComparisonFacts(input: {
           'When a conflict is resolved by this corroboration, keep the conflict object for audit and add warning source_conflict_adjudicated.',
           'Do not cite bakautprof.ru or provided product.sourceUrl pages as web facts for an absent exact target unless that page is specifically about the exact target model.',
           'If exact external sources state key start, ignition key, electric starter, push button, manual recoil, battery, power, engine, or other requested attributes for the target, return those facts with high or medium confidence.',
+          'Use source tiers in this order: exact official manufacturer product page, official manual/specification, then reliable exact-model secondary sources. Stop adding weaker tiers when the requested exact-model facts are already fully confirmed.',
           'A non-official listing, cached listing, marketplace page, or forum/classified page can be used as medium-confidence evidence when it names the exact target model and the exact text answers the buyer question. Do not upgrade it to high confidence unless the source is official/manufacturer/manual/distributor.',
           'For binary buyer choices such as key vs push-button, manual vs electric, gasoline vs diesel, continue exact-target web search until each choice is confirmed, contradicted, or explicitly not found in exact-target sources. Do not stop at a broad fact like "electric starter" when the buyer asked about the more specific mechanism.',
           'For key vs push-button generator questions, inspect the practical start-control mechanism. If exact-target sources show an ignition key, ignition switch, engine switch, starter switch, or a switch turned/held in START, return that as the practical control evidence. If only broad electric starter is found, mark key/button control as not_confirmed instead of saying it is not key or not button.',
@@ -2384,6 +2717,7 @@ export async function researchProductComparisonFacts(input: {
           styleExamples,
           'Use nearby catalog products only as catalog alternatives/orientation in summaryForAnswer; never as the technical fact for an absent exact target.',
           'If exact target facts cannot be found externally, return no target fact and add warning exact_target_external_fact_not_found instead of returning nearby-model facts.',
+          'For every coverage item, set productName to the exact corresponding targetProductNames value; use null only when no exact product target exists. Never merge coverage for different products.',
           'For every web fact and confirmed coverage item, fill sourceUrl with a non-null absolute HTTP(S) URL, fill sourceTitle, and put a short verbatim excerpt from that exact source in evidence. Keep value in the source wording and make sure the complete value appears inside evidence. Do not paraphrase evidence or prefix it with report wording. This exact quote is required for the fast local source verifier.',
           'If the exact quote is unavailable, return not_confirmed instead of inventing evidence.',
           'For every actual web search query, add sourceAttempts with tier=official_page, official_manual, or reliable_secondary, the exact query sent to web search, and outcome. Never report a query that was not actually executed.'
@@ -2395,9 +2729,10 @@ export async function researchProductComparisonFacts(input: {
           buyerQuestion: input.userMessage,
           targetProductNames,
           comparisonAttributes,
+          missingFactSlots: input.missingFactSlots ?? [],
           catalogExtraction: catalogResultForResearch,
           exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes),
-          products: compactCatalogFirstResearch
+          products: compactCatalogEvidenceAvailable
             ? []
             : targetProductNames.length
               ? productResearchContext(exactCatalogProducts)
@@ -2470,6 +2805,7 @@ export async function researchProductComparisonFacts(input: {
                     type: 'object',
                     additionalProperties: false,
                     properties: {
+                      productName: { type: ['string', 'null'] },
                       attribute: { type: 'string' },
                       status: { type: 'string', enum: ['confirmed', 'not_confirmed', 'contradicted', 'ambiguous', 'not_found'] },
                       value: { type: 'string' },
@@ -2477,7 +2813,7 @@ export async function researchProductComparisonFacts(input: {
                       sourceUrl: { type: ['string', 'null'] },
                       sourceTitle: { type: ['string', 'null'] }
                     },
-                    required: ['attribute', 'status', 'value', 'evidence', 'sourceUrl', 'sourceTitle']
+                    required: ['productName', 'attribute', 'status', 'value', 'evidence', 'sourceUrl', 'sourceTitle']
                   }
                 }
               },
@@ -2506,49 +2842,423 @@ export async function researchProductComparisonFacts(input: {
     }
   };
 
-  let primaryResponse: Awaited<ReturnType<typeof createStructuredJsonResponse>>;
+  // The orchestrator supplies typed product+attribute slots. That production path
+  // executes source tiers itself instead of trusting one model call to report an
+  // order after the fact. The legacy branch below remains for generic research,
+  // where no exact product identity exists to bind an official source.
+  if (input.missingFactSlots !== undefined && targetProductNames.length > 0) {
+    type StagedWebTier = Exclude<ProductResearchSourceTier, 'catalog'>;
+    const requestedSlots = input.missingFactSlots.length
+      ? input.missingFactSlots
+      : targetProductNames.flatMap((productName) => comparisonAttributes.map((attribute) => ({
+          productName,
+          attribute
+        })));
+    const emptyTierResult = (
+      searchDisposition: ProductResearchSearchDisposition,
+      warnings: string[]
+    ): ProductComparisonResearchResult => ({
+      usedWebSearch: false,
+      searchDisposition,
+      sourcesExhausted: false,
+      sourceAttempts: [],
+      facts: [],
+      conflicts: [],
+      answerGuidance: defaultAnswerGuidance(),
+      summaryForAnswer: '',
+      warnings
+    });
+    const requestedSlotsCovered = (result: ProductComparisonResearchResult) => {
+      if (resultHasUnresolvedCatalogConflict(result)) return false;
+      if (!requestedSlots.length) {
+        return hasConfirmedExactTargetFacts(result, targetProductNames, ['web']);
+      }
+      return requestedSlots.every((slot) => result.facts.some((fact) =>
+        fact.sourceType === 'web' &&
+        (fact.confidence === 'high' || fact.confidence === 'medium') &&
+        normalizedText(fact.attribute).trim() === normalizedText(slot.attribute).trim() &&
+        factMatchesTarget(fact, slot.productName)
+      ));
+    };
+    const requestedSlotsCoveredByCatalog = Boolean(
+      catalogResultForResearch &&
+      !resultHasUnresolvedCatalogConflict(catalogResultForResearch) &&
+      requestedSlots.length > 0 &&
+      requestedSlots.every((slot) => catalogResultForResearch.facts.some((fact) =>
+        fact.sourceType === 'catalog' &&
+        (fact.confidence === 'high' || fact.confidence === 'medium') &&
+        normalizedText(fact.attribute).trim() === normalizedText(slot.attribute).trim() &&
+        factMatchesTarget(fact, slot.productName)
+      ))
+    );
+    if (requestedSlotsCoveredByCatalog && catalogResultForResearch) {
+      return {
+        ...catalogResultForResearch,
+        usedWebSearch: false,
+        searchDisposition: 'not_needed',
+        sourcesExhausted: false,
+        sourceAttempts: mergeSourceAttempts(catalogSourceAttempts, catalogResultForResearch.sourceAttempts),
+        warnings: uniqueStrings([
+          ...catalogResultForResearch.warnings,
+          'web_research_not_needed:catalog_extraction_answered'
+        ])
+      };
+    }
+    const tierInstruction = (tier: StagedWebTier) => {
+      if (tier === 'official_page') {
+        return 'Execute only an exact-model official manufacturer product-page lookup. Ignore manuals and third-party sources in this attempt.';
+      }
+      if (tier === 'official_manual') {
+        return 'Execute only an exact-model official manufacturer manual, specification, datasheet, or technical-passport lookup. Ignore third-party sources in this attempt.';
+      }
+      return 'Execute only a reliable third-party exact-model lookup. Do not represent this source as manufacturer evidence.';
+    };
+    const tierRequest = (tier: StagedWebTier) => {
+      const baseInput = Array.isArray(request.input) ? request.input as Array<Record<string, unknown>> : [];
+      return {
+        ...request,
+        input: baseInput.map((message) => {
+          if (message.role === 'system') {
+            return {
+              ...message,
+              content: `${String(message.content ?? '')}\n${tierInstruction(tier)}\nReturn sourceAttempts only for tier=${tier}.`
+            };
+          }
+          if (message.role !== 'user' || typeof message.content !== 'string') return message;
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = JSON.parse(message.content) as Record<string, unknown>;
+          } catch {
+            payload = {};
+          }
+          return {
+            ...message,
+            content: JSON.stringify({ ...payload, sourceTier: tier, missingFactSlots: requestedSlots })
+          };
+        })
+      };
+    };
+    const linkedController = () => {
+      const controller = new AbortController();
+      if (input.signal?.aborted) controller.abort(input.signal.reason);
+      else input.signal?.addEventListener('abort', () => controller.abort(input.signal?.reason), { once: true });
+      return controller;
+    };
+    const executeTier = async (inputTier: {
+      tier: StagedWebTier;
+      stage: ProductResearchTraceEvent['stage'];
+      attemptNumber: number;
+      deadlineAtMs?: number;
+      signal?: AbortSignal;
+    }) => {
+      const startedAt = Date.now();
+      try {
+        const tierResponse = await createStructuredJsonResponse({
+          request: tierRequest(inputTier.tier),
+          stage: `product_comparison_research_${inputTier.tier}`,
+          signal: inputTier.signal,
+          deadlineAtMs: inputTier.deadlineAtMs,
+          minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
+          transportMaxRetries: 0
+        });
+        const usedWebSearch = responseUsedWebSearch(tierResponse.response);
+        const normalizedResult = normalizeResearchParsed(tierResponse.parsed, {
+          usedWebSearch,
+          searchDisposition: usedWebSearch ? 'completed' : 'failed',
+          sourcesExhausted: false
+        });
+        normalizedResult.sourceAttempts = validatedWebSourceAttempts(
+          tierResponse.parsed,
+          tierResponse.response,
+          exactCatalogProducts
+        ).filter((attempt) => attempt.tier === inputTier.tier);
+        const validatedResult = await validateSourceBackedResult({
+          result: normalizedResult,
+          products: exactCatalogProducts,
+          targetProductNames,
+          comparisonAttributes,
+          expectedSourceTier: inputTier.tier,
+          cache: sourceTextCache,
+          signal: inputTier.signal,
+          deadlineAtMs: inputTier.deadlineAtMs
+        });
+        const tierFacts = validatedResult.facts.filter((fact) =>
+          fact.sourceType === 'web' && fact.sourceTier === inputTier.tier
+        );
+        const tierConflicts = validatedResult.conflicts.flatMap((conflict) => {
+          const conflictFacts = tierFacts.filter((fact) =>
+            textMatchesTargetName(fact.productName, conflict.productName) &&
+            normalizedText(fact.attribute).trim() === normalizedText(conflict.attribute).trim()
+          );
+          const webValues = uniqueStrings(conflict.webValues.filter((value) =>
+            conflictFacts.some((fact) => compactModelText(fact.value) === compactModelText(value))
+          ));
+          const hasCatalogConflict = Boolean(conflict.catalogValue?.trim() && webValues.length);
+          const hasWebConflict = new Set(webValues.map(compactModelText)).size > 1;
+          return hasCatalogConflict || hasWebConflict ? [{ ...conflict, webValues }] : [];
+        });
+        const tierCoverage = validatedResult.answerGuidance.coverage.filter((item) =>
+          item.status === 'confirmed'
+            ? item.sourceTier === inputTier.tier
+            : item.status !== 'contradicted' && item.status !== 'ambiguous' ||
+              tierConflicts.some((conflict) =>
+                normalizedText(conflict.attribute).trim() === normalizedText(item.attribute).trim()
+              )
+        );
+        const droppedConfirmedEvidence = tierFacts.length !== validatedResult.facts.filter((fact) =>
+          fact.sourceType === 'web'
+        ).length;
+        const droppedConflicts = tierConflicts.length !== validatedResult.conflicts.length;
+        const sourceAttempts = (validatedResult.sourceAttempts?.length || !tierFacts.length
+          ? validatedResult.sourceAttempts
+          : [{
+              tier: inputTier.tier,
+              outcome: 'confirmed' as const,
+              query: responseWebSearchQueries(tierResponse.response)[0],
+              sources: tierFacts.flatMap((fact) => {
+                const descriptor = classifyProductResearchSource({
+                  sourceUrl: fact.sourceUrl,
+                  sourceTitle: fact.sourceTitle,
+                  product: null
+                });
+                if (!descriptor || !fact.sourceUrl || !fact.sourceAuthority || !fact.sourceTier) return [];
+                return [{
+                  ...descriptor,
+                  tier: fact.sourceTier,
+                  authority: fact.sourceAuthority
+                }];
+              })
+            }])?.map((attempt) =>
+              attempt.outcome === 'confirmed' && !tierFacts.length && !tierConflicts.length
+                ? { ...attempt, outcome: 'unreadable' as const }
+                : attempt
+            );
+        const validated: ProductComparisonResearchResult = {
+          ...validatedResult,
+          sourceAttempts,
+          facts: tierFacts,
+          conflicts: tierConflicts,
+          answerGuidance: droppedConfirmedEvidence
+            ? {
+                ...validatedResult.answerGuidance,
+                directAnswer: '',
+                completeness: tierFacts.length ? 'partially_answered' : 'not_answered',
+                coverage: tierCoverage
+              }
+            : { ...validatedResult.answerGuidance, coverage: tierCoverage },
+          warnings: uniqueStrings([
+            ...validatedResult.warnings,
+            droppedConfirmedEvidence ? `source_tier_evidence_rejected:${inputTier.tier}` : '',
+            droppedConflicts ? `source_tier_conflict_rejected:${inputTier.tier}` : ''
+          ])
+        };
+        await emitResearchTrace(input.onTrace, {
+          stage: inputTier.stage,
+          tiers: [inputTier.tier],
+          attemptNumber: inputTier.attemptNumber,
+          elapsedMs: Date.now() - startedAt,
+          remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+          outcome: usedWebSearch ? 'completed' : 'failed',
+          sourceCount: researchSourceCount(validated),
+          acceptedFactCount: validated.facts.filter((fact) => fact.sourceType === 'web').length
+        });
+        return validated;
+      } catch (error) {
+        if (input.signal?.aborted) throw error;
+        const cancelled = inputTier.signal?.aborted === true;
+        const timedOut = webResearchTimedOut(error, inputTier.signal);
+        const partial = emptyTierResult(cancelled ? 'aborted' : timedOut ? 'timed_out' : 'failed', [
+          cancelled
+            ? `source_tier_cancelled:${inputTier.tier}`
+            : timedOut
+              ? `source_tier_timed_out:${inputTier.tier}`
+              : `source_tier_failed:${inputTier.tier}`
+        ]);
+        await emitResearchTrace(input.onTrace, {
+          stage: inputTier.stage,
+          tiers: [inputTier.tier],
+          attemptNumber: inputTier.attemptNumber,
+          elapsedMs: Date.now() - startedAt,
+          remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+          outcome: cancelled ? 'aborted' : timedOut ? 'timed_out' : 'failed',
+          sourceCount: 0,
+          acceptedFactCount: 0
+        });
+        return partial;
+      }
+    };
+
+    const officialPageDeadlineAtMs = boundedResearchStageDeadline({
+      overallDeadlineAtMs: input.deadlineAtMs,
+      maxDurationMs: PRIMARY_WEB_MAX_MS,
+      reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS
+    });
+    const officialManualDeadlineAtMs = boundedResearchStageDeadline({
+      overallDeadlineAtMs: input.deadlineAtMs,
+      maxDurationMs: PRIMARY_WEB_MAX_MS,
+      reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS
+    });
+    const officialPageController = linkedController();
+    const manualController = linkedController();
+    const officialPagePromise = executeTier({
+      tier: 'official_page',
+      stage: 'primary_web',
+      attemptNumber: 1,
+      deadlineAtMs: officialPageDeadlineAtMs,
+      signal: officialPageController.signal
+    });
+    const officialManualPromise = executeTier({
+      tier: 'official_manual',
+      stage: 'primary_web',
+      attemptNumber: 2,
+      deadlineAtMs: officialManualDeadlineAtMs,
+      signal: manualController.signal
+    });
+    const firstOfficial = await Promise.race([
+      officialPagePromise.then((result) => ({ tier: 'official_page' as const, result })),
+      officialManualPromise.then((result) => ({ tier: 'official_manual' as const, result }))
+    ]);
+    if (requestedSlotsCovered(firstOfficial.result)) {
+      if (firstOfficial.tier === 'official_page') {
+        manualController.abort('official_page_completed_requested_slots');
+        await officialManualPromise;
+      } else {
+        officialPageController.abort('official_manual_completed_requested_slots');
+        await officialPagePromise;
+      }
+      return mergeCatalogAndWebResearch(catalogResultForResearch, firstOfficial.result);
+    }
+    const secondOfficial = firstOfficial.tier === 'official_page'
+      ? { tier: 'official_manual' as const, result: await officialManualPromise }
+      : { tier: 'official_page' as const, result: await officialPagePromise };
+    const officialPageResult = firstOfficial.tier === 'official_page'
+      ? firstOfficial.result
+      : secondOfficial.result;
+    const officialManualResult = firstOfficial.tier === 'official_manual'
+      ? firstOfficial.result
+      : secondOfficial.result;
+    const officialResults = mergeWebResearchPasses(officialPageResult, officialManualResult);
+    if (requestedSlotsCovered(officialResults)) {
+      return mergeCatalogAndWebResearch(catalogResultForResearch, officialResults);
+    }
+
+    if (webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_RETRY_REMAINING_MS) {
+      return {
+        ...mergeCatalogAndWebResearch(catalogResultForResearch, officialResults),
+        searchDisposition: 'skipped_budget',
+        warnings: uniqueStrings([
+          ...officialResults.warnings,
+          'reliable_secondary_skipped_insufficient_budget'
+        ])
+      };
+    }
+    const secondaryDeadlineAtMs = boundedResearchStageDeadline({
+      overallDeadlineAtMs: input.deadlineAtMs,
+      maxDurationMs: Math.max(WEB_RESEARCH_MIN_RETRY_REMAINING_MS, webResearchRemainingMs(input.deadlineAtMs)),
+      reserveMs: TIER_FALLBACK_RESERVE_MS
+    });
+    const secondaryController = linkedController();
+    const secondaryResult = await executeTier({
+      tier: 'reliable_secondary',
+      stage: 'tier_fallback',
+      attemptNumber: 3,
+      deadlineAtMs: secondaryDeadlineAtMs,
+      signal: secondaryController.signal
+    });
+    const allWebResults = mergeWebResearchPasses(officialResults, secondaryResult);
+    const completeTierAttempts = sourceTierAttemptsComplete(mergeSourceAttempts(
+      catalogSourceAttempts,
+      allWebResults.sourceAttempts
+    ));
+    const combined = mergeCatalogAndWebResearch(catalogResultForResearch, {
+      ...allWebResults,
+      sourcesExhausted: !requestedSlotsCovered(allWebResults) &&
+        completeTierAttempts &&
+        !researchWarningsPreventSourceExhaustion(allWebResults.warnings)
+    });
+    combined.sourceAttempts = mergeSourceAttempts(catalogSourceAttempts, combined.sourceAttempts);
+    return combined;
+  }
+
+  const primaryStartedAt = Date.now();
+  const primaryDeadlineAtMs = boundedResearchStageDeadline({
+    overallDeadlineAtMs: input.deadlineAtMs,
+    maxDurationMs: PRIMARY_WEB_MAX_MS,
+    reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS
+  });
+  let combinedPrimaryResult: ProductComparisonResearchResult;
   try {
-    primaryResponse = await createStructuredJsonResponse({
+    const primaryResponse = await createStructuredJsonResponse({
       request,
       stage: 'product_comparison_research',
       signal: input.signal,
-      deadlineAtMs: input.deadlineAtMs,
+      deadlineAtMs: primaryDeadlineAtMs,
       minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
       transportMaxRetries: 0
     });
+    const { parsed, response } = primaryResponse;
+    const primaryUsedWebSearch = responseUsedWebSearch(response);
+    const normalizedPrimaryResult = normalizeResearchParsed(parsed, {
+      usedWebSearch: primaryUsedWebSearch,
+      searchDisposition: primaryUsedWebSearch ? 'completed' : 'failed',
+      sourcesExhausted: false
+    });
+    normalizedPrimaryResult.sourceAttempts = mergeSourceAttempts(
+      catalogSourceAttempts,
+      validatedWebSourceAttempts(parsed, response, exactCatalogProducts)
+    );
+    const primaryResult = await validateSourceBackedResult({
+      result: normalizedPrimaryResult,
+      products: exactCatalogProducts,
+      targetProductNames,
+      comparisonAttributes,
+      cache: sourceTextCache,
+      signal: input.signal,
+      deadlineAtMs: primaryDeadlineAtMs
+    });
+    combinedPrimaryResult = mergeCatalogAndWebResearch(catalogResultForResearch, primaryResult);
+    if (catalogExtractionTimedOut) {
+      combinedPrimaryResult.warnings = uniqueStrings([
+        ...combinedPrimaryResult.warnings,
+        'catalog_fact_extraction_timed_out_before_web'
+      ]);
+    }
+    await emitResearchTrace(input.onTrace, {
+      stage: 'primary_web',
+      tiers: ['official_page', 'official_manual', 'reliable_secondary'],
+      attemptNumber: 1,
+      elapsedMs: Date.now() - primaryStartedAt,
+      remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'completed',
+      sourceCount: researchSourceCount(combinedPrimaryResult),
+      acceptedFactCount: combinedPrimaryResult.facts.filter((fact) => fact.sourceType === 'web').length
+    });
   } catch (error) {
+    if (input.signal?.aborted) throw error;
     if (!webResearchTimedOut(error, input.signal)) throw error;
-    return timedOutResearchPartial({
+    combinedPrimaryResult = timedOutResearchPartial({
       catalogResult: catalogResultForResearch,
       catalogSourceAttempts,
       targetProductNames,
       comparisonAttributes
     });
-  }
-  const { parsed, response } = primaryResponse;
-  const primaryUsedWebSearch = responseUsedWebSearch(response);
-  const normalizedPrimaryResult = normalizeResearchParsed(parsed, {
-      usedWebSearch: primaryUsedWebSearch,
-      searchDisposition: primaryUsedWebSearch
-        ? 'completed'
-        : 'failed',
-      sourcesExhausted: false
+    if (catalogExtractionTimedOut) {
+      combinedPrimaryResult.warnings = uniqueStrings([
+        ...combinedPrimaryResult.warnings,
+        'catalog_fact_extraction_timed_out_before_web'
+      ]);
+    }
+    await emitResearchTrace(input.onTrace, {
+      stage: 'primary_web',
+      tiers: ['official_page', 'official_manual', 'reliable_secondary'],
+      attemptNumber: 1,
+      elapsedMs: Date.now() - primaryStartedAt,
+      remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'timed_out',
+      sourceCount: researchSourceCount(combinedPrimaryResult),
+      acceptedFactCount: combinedPrimaryResult.facts.filter((fact) => fact.sourceType === 'web').length
     });
-  normalizedPrimaryResult.sourceAttempts = mergeSourceAttempts(
-    catalogSourceAttempts,
-    validatedWebSourceAttempts(parsed, response, exactCatalogProducts)
-  );
-  const primaryResult = await validateSourceBackedResult({
-    result: normalizedPrimaryResult,
-    products: exactCatalogProducts,
-    targetProductNames,
-    comparisonAttributes,
-    cache: sourceTextCache,
-    signal: input.signal,
-    deadlineAtMs: input.deadlineAtMs
-  });
-  const mergedPrimaryResult = mergeCatalogAndWebResearch(catalogResultForResearch, primaryResult);
-  const combinedPrimaryResult = mergedPrimaryResult;
+  }
   const deepMissingFactRetryRequired = needsDeepMissingFactSearch({
     result: combinedPrimaryResult,
     userMessage: input.userMessage,
@@ -2567,7 +3277,7 @@ export async function researchProductComparisonFacts(input: {
     )
   );
   if (exactTargetRetryRequired && webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_RETRY_REMAINING_MS) {
-    return {
+    const skippedResult: ProductComparisonResearchResult = {
       ...combinedPrimaryResult,
       searchDisposition: 'skipped_budget',
       sourcesExhausted: false,
@@ -2576,9 +3286,37 @@ export async function researchProductComparisonFacts(input: {
         'exact_target_external_retry_skipped_insufficient_budget'
       ])
     };
+    await emitResearchTrace(input.onTrace, {
+      stage: 'tier_fallback',
+      tiers: ['official_page', 'official_manual', 'reliable_secondary'],
+      attemptNumber: 2,
+      elapsedMs: 0,
+      remainingBudgetMs: webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'skipped_budget',
+      sourceCount: researchSourceCount(skippedResult),
+      acceptedFactCount: skippedResult.facts.filter((fact) => fact.sourceType === 'web').length
+    });
+    return skippedResult;
   }
 
   if (exactTargetRetryRequired) {
+    const fallbackStartedAt = Date.now();
+    const fallbackDeadlineAtMs = boundedResearchStageDeadline({
+      overallDeadlineAtMs: input.deadlineAtMs,
+      maxDurationMs: Math.max(WEB_RESEARCH_MIN_RETRY_REMAINING_MS, webResearchRemainingMs(input.deadlineAtMs)),
+      reserveMs: TIER_FALLBACK_RESERVE_MS
+    });
+    const traceFallback = (result: ProductComparisonResearchResult, outcome: ProductResearchTraceEvent['outcome']) =>
+      emitResearchTrace(input.onTrace, {
+        stage: 'tier_fallback',
+        tiers: ['official_page', 'official_manual', 'reliable_secondary'],
+        attemptNumber: 2,
+        elapsedMs: Date.now() - fallbackStartedAt,
+        remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+        outcome,
+        sourceCount: researchSourceCount(result),
+        acceptedFactCount: result.facts.filter((fact) => fact.sourceType === 'web').length
+      });
     const retryRequest: Record<string, unknown> = {
       ...request,
       max_output_tokens: productComparisonMaxOutputTokens(targetProductNames),
@@ -2588,6 +3326,7 @@ export async function researchProductComparisonFacts(input: {
           content: [
             'You are a second-pass exact-model web research module for a sales assistant.',
             'The first pass did not fully answer the exact-target question. Treat every missing, not_confirmed, ambiguous, or contradicted coverage item as a semantic missing-fact slot.',
+            'When missingFactSlots are supplied, search only those exact productName+attribute pairs. Do not spend requests rechecking a pair that is absent from missingFactSlots.',
             'For each missing-fact slot, reason about what information would make the buyer answer useful, then search deeper exact-model sources for that information. Do not reduce the task to a fixed phrase list.',
             'Search public HTML pages, official manufacturer pages, distributor pages, official PDF or HTML manuals/specification pages, text-only marketplace listings, cached listings, forums, and classified/product-description pages that mention the exact model/code. Prefer manufacturer/manual evidence; the runtime validates bounded PDF text as well as HTML source text.',
             'Execute three distinct search queries before declaring exhaustion: one aimed at an official manufacturer product page, one aimed at an official manual/specification PDF or HTML document, and one aimed at another reliable exact-model source. Report each actually executed query in sourceAttempts with the matching tier. If any tier was not searched, do not imply exhaustion.',
@@ -2610,6 +3349,7 @@ export async function researchProductComparisonFacts(input: {
             buyerQuestion: input.userMessage,
             targetProductNames,
             comparisonAttributes,
+            missingFactSlots: input.missingFactSlots ?? [],
             catalogExtraction: catalogResultForResearch,
             catalogProducts: productResearchContext(exactCatalogProducts),
             exactTargetSearchQueries: exactTargetSearchQueries(targetProductNames, comparisonAttributes)
@@ -2619,23 +3359,25 @@ export async function researchProductComparisonFacts(input: {
       tools: [{ type: 'web_search', search_context_size: 'medium', return_token_budget: 'default' }],
       tool_choice: { type: 'web_search' }
     };
-    const retry = await createStructuredJsonResponse({
-      request: retryRequest,
-      stage: 'product_comparison_research_exact_retry',
-      signal: input.signal,
-      deadlineAtMs: input.deadlineAtMs,
-      minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
-      transportMaxRetries: 0
-    });
+    try {
+      const retry = await createStructuredJsonResponse({
+        request: retryRequest,
+        stage: 'product_comparison_research_exact_retry',
+        signal: input.signal,
+        deadlineAtMs: fallbackDeadlineAtMs,
+        minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
+        transportMaxRetries: 0
+      });
     const retryUsedWebSearch = responseUsedWebSearch(retry.response);
     const normalizedRetryResult = normalizeResearchParsed(retry.parsed, {
         usedWebSearch: retryUsedWebSearch,
         searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
         sourcesExhausted: false
       });
-    normalizedRetryResult.sourceAttempts = mergeSourceAttempts(
-      combinedPrimaryResult.sourceAttempts,
-      validatedWebSourceAttempts(retry.parsed, retry.response, exactCatalogProducts)
+    normalizedRetryResult.sourceAttempts = validatedWebSourceAttempts(
+      retry.parsed,
+      retry.response,
+      exactCatalogProducts
     );
     const retryResult = await validateSourceBackedResult({
       result: normalizedRetryResult,
@@ -2644,8 +3386,9 @@ export async function researchProductComparisonFacts(input: {
       comparisonAttributes,
       cache: sourceTextCache,
       signal: input.signal,
-      deadlineAtMs: input.deadlineAtMs
+      deadlineAtMs: fallbackDeadlineAtMs
     });
+    retryResult.sourceAttempts = mergeSourceAttempts(combinedPrimaryResult.sourceAttempts, retryResult.sourceAttempts);
     const combinedRetryResult = mergeCatalogAndWebResearch(catalogResultForResearch, retryResult);
     const electricControlStillUnresolved = electricControlRetryRequired && needsElectricStarterControlSearch({
       result: combinedRetryResult,
@@ -2660,7 +3403,7 @@ export async function researchProductComparisonFacts(input: {
       hasConfirmedExactTargetFacts(combinedRetryResult, targetProductNames, ['catalog', 'web']) ||
       combinedRetryResult.answerGuidance.completeness === 'answered'
     ) {
-      return {
+      const completedResult: ProductComparisonResearchResult = {
         usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
         searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
         sourcesExhausted: false,
@@ -2681,8 +3424,10 @@ export async function researchProductComparisonFacts(input: {
           deepMissingFactStillUnresolved ? 'missing_fact_deep_search_still_unresolved' : ''
         ])
       };
+      await traceFallback(completedResult, 'completed');
+      return completedResult;
     }
-    return {
+    const exhaustedResult: ProductComparisonResearchResult = {
       ...combinedPrimaryResult,
       usedWebSearch: combinedPrimaryResult.usedWebSearch || combinedRetryResult.usedWebSearch,
       searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
@@ -2706,6 +3451,23 @@ export async function researchProductComparisonFacts(input: {
           : ''
       ])
     };
+    await traceFallback(exhaustedResult, 'completed');
+    return exhaustedResult;
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      if (!webResearchTimedOut(error, input.signal)) throw error;
+      const timedOutResult: ProductComparisonResearchResult = {
+        ...combinedPrimaryResult,
+        searchDisposition: 'timed_out',
+        sourcesExhausted: false,
+        warnings: uniqueStrings([
+          ...combinedPrimaryResult.warnings,
+          'exact_target_external_retry_timed_out'
+        ])
+      };
+      await traceFallback(timedOutResult, 'timed_out');
+      return timedOutResult;
+    }
   }
 
   const unresolvedAfterCompletedPrimary = needsDeepMissingFactSearch({
@@ -2720,7 +3482,7 @@ export async function researchProductComparisonFacts(input: {
       'official_manual',
       'reliable_secondary'
     ] as ProductResearchSourceTier[]).map((tier) => ({ tier, outcome: 'skipped_budget' }));
-    return {
+    const skippedResult: ProductComparisonResearchResult = {
       ...combinedPrimaryResult,
       searchDisposition: 'skipped_budget',
       sourcesExhausted: false,
@@ -2730,9 +3492,37 @@ export async function researchProductComparisonFacts(input: {
         'generic_source_tier_retry_skipped_insufficient_budget'
       ])
     };
+    await emitResearchTrace(input.onTrace, {
+      stage: 'tier_fallback',
+      tiers: ['official_page', 'official_manual', 'reliable_secondary'],
+      attemptNumber: 2,
+      elapsedMs: 0,
+      remainingBudgetMs: webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'skipped_budget',
+      sourceCount: researchSourceCount(skippedResult),
+      acceptedFactCount: skippedResult.facts.filter((fact) => fact.sourceType === 'web').length
+    });
+    return skippedResult;
   }
 
   if (genericRetryRequired) {
+    const fallbackStartedAt = Date.now();
+    const fallbackDeadlineAtMs = boundedResearchStageDeadline({
+      overallDeadlineAtMs: input.deadlineAtMs,
+      maxDurationMs: Math.max(WEB_RESEARCH_MIN_RETRY_REMAINING_MS, webResearchRemainingMs(input.deadlineAtMs)),
+      reserveMs: TIER_FALLBACK_RESERVE_MS
+    });
+    const traceFallback = (result: ProductComparisonResearchResult, outcome: ProductResearchTraceEvent['outcome']) =>
+      emitResearchTrace(input.onTrace, {
+        stage: 'tier_fallback',
+        tiers: ['official_page', 'official_manual', 'reliable_secondary'],
+        attemptNumber: 2,
+        elapsedMs: Date.now() - fallbackStartedAt,
+        remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+        outcome,
+        sourceCount: researchSourceCount(result),
+        acceptedFactCount: result.facts.filter((fact) => fact.sourceType === 'web').length
+      });
     const genericRetryRequest: Record<string, unknown> = {
       ...request,
       input: [
@@ -2761,23 +3551,25 @@ export async function researchProductComparisonFacts(input: {
       tools: [{ type: 'web_search', search_context_size: 'medium', return_token_budget: 'default' }],
       tool_choice: { type: 'web_search' }
     };
-    const genericRetry = await createStructuredJsonResponse({
-      request: genericRetryRequest,
-      stage: 'product_comparison_research_generic_source_tier_retry',
-      signal: input.signal,
-      deadlineAtMs: input.deadlineAtMs,
-      minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
-      transportMaxRetries: 0
-    });
+    try {
+      const genericRetry = await createStructuredJsonResponse({
+        request: genericRetryRequest,
+        stage: 'product_comparison_research_generic_source_tier_retry',
+        signal: input.signal,
+        deadlineAtMs: fallbackDeadlineAtMs,
+        minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
+        transportMaxRetries: 0
+      });
     const retryUsedWebSearch = responseUsedWebSearch(genericRetry.response);
     const normalizedGenericRetry = normalizeResearchParsed(genericRetry.parsed, {
       usedWebSearch: retryUsedWebSearch,
       searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
       sourcesExhausted: false
     });
-    normalizedGenericRetry.sourceAttempts = mergeSourceAttempts(
-      combinedPrimaryResult.sourceAttempts,
-      validatedWebSourceAttempts(genericRetry.parsed, genericRetry.response, exactCatalogProducts)
+    normalizedGenericRetry.sourceAttempts = validatedWebSourceAttempts(
+      genericRetry.parsed,
+      genericRetry.response,
+      exactCatalogProducts
     );
     const validatedGenericRetry = await validateSourceBackedResult({
       result: normalizedGenericRetry,
@@ -2786,7 +3578,7 @@ export async function researchProductComparisonFacts(input: {
       comparisonAttributes,
       cache: sourceTextCache,
       signal: input.signal,
-      deadlineAtMs: input.deadlineAtMs
+      deadlineAtMs: fallbackDeadlineAtMs
     });
     const combinedGenericResult = mergeWebResearchPasses(combinedPrimaryResult, validatedGenericRetry);
     const unresolvedAfterGenericRetry = needsDeepMissingFactSearch({
@@ -2795,7 +3587,7 @@ export async function researchProductComparisonFacts(input: {
       comparisonAttributes
     });
     const completeTierAttempts = sourceTierAttemptsComplete(combinedGenericResult.sourceAttempts);
-    return {
+    const completedResult: ProductComparisonResearchResult = {
       ...combinedGenericResult,
       searchDisposition: retryUsedWebSearch ? 'completed' : 'failed',
       sourcesExhausted: retryUsedWebSearch &&
@@ -2808,6 +3600,23 @@ export async function researchProductComparisonFacts(input: {
         !completeTierAttempts ? 'source_tier_attempts_incomplete_after_retry' : ''
       ])
     };
+    await traceFallback(completedResult, 'completed');
+    return completedResult;
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      if (!webResearchTimedOut(error, input.signal)) throw error;
+      const timedOutResult: ProductComparisonResearchResult = {
+        ...combinedPrimaryResult,
+        searchDisposition: 'timed_out',
+        sourcesExhausted: false,
+        warnings: uniqueStrings([
+          ...combinedPrimaryResult.warnings,
+          'generic_source_tier_retry_timed_out'
+        ])
+      };
+      await traceFallback(timedOutResult, 'timed_out');
+      return timedOutResult;
+    }
   }
 
   return {

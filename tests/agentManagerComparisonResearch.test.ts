@@ -5,12 +5,14 @@ import type { AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import type { ConversationSession, ConversationTurn, Message, Product, VerifiedProductFact, VerifiedProductFactInput } from '../src/shared/types.js';
 
 const researchProductComparisonFacts = vi.hoisted(() => vi.fn());
+const extractCatalogProductComparisonFacts = vi.hoisted(() => vi.fn());
 
 vi.mock('../src/ai/productComparisonResearch.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/ai/productComparisonResearch.js')>();
   return {
     ...actual,
-    researchProductComparisonFacts
+    researchProductComparisonFacts,
+    extractCatalogProductComparisonFacts
   };
 });
 
@@ -136,6 +138,9 @@ class FakeProducts {
       sourceUrl: input.sourceUrl ?? null,
       sourceTitle: input.sourceTitle ?? null,
       evidence: input.evidence ?? null,
+      sourceTier: input.sourceTier ?? null,
+      sourceAuthority: input.sourceAuthority ?? null,
+      observedAt: input.observedAt ?? now,
       confidence: input.confidence,
       status: 'active',
       firstSeenAt: now,
@@ -215,6 +220,9 @@ function model(): AgentManagerModel {
         leadAction: 'none',
         riskFlags: []
       };
+    },
+    async reviewCustomerLanguage() {
+      return { processDisclosure: false, evidence: '', rationale: 'test answer contains no process disclosure' };
     }
   };
 }
@@ -344,6 +352,8 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
 describe('AgentManager comparison research flow', () => {
   beforeEach(() => {
     researchProductComparisonFacts.mockReset();
+    extractCatalogProductComparisonFacts.mockReset();
+    extractCatalogProductComparisonFacts.mockResolvedValue(null);
   });
 
   it('rejects a premature handoff instead of replacing it when web execution fails', async () => {
@@ -419,11 +429,20 @@ describe('AgentManager comparison research flow', () => {
         sourceRequestId: 'web:thd'
       })
     ]));
-    expect(clausesSeen[0]?.instruction).toContain('did not complete');
-    expect(clausesSeen[0]?.instruction).toContain('Do not describe sources as exhausted');
+    expect(clausesSeen[0]?.instruction).toContain('available sources are not exhausted');
+    expect(clausesSeen[0]?.instruction).toContain('Requested facts: ["THD"]');
+    expect(clausesSeen[0]?.instruction).toContain('do not mention tools, web/external search, retries, timeout');
+    expect(clausesSeen[0]?.instruction).not.toContain('say plainly that the external check did not complete');
     expect(clausesSeen[0]?.instruction).not.toContain('leadAction="offer_form"');
     expect(conversations.assistantSaves).toEqual([]);
     expect(conversations.answerContracts).toContainEqual(expect.objectContaining({ status: 'rejected' }));
+    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(2);
+    const firstAttempt = researchProductComparisonFacts.mock.calls[0]?.[0];
+    const secondAttempt = researchProductComparisonFacts.mock.calls[1]?.[0];
+    expect(firstAttempt?.signal).not.toBe(secondAttempt?.signal);
+    expect(firstAttempt?.deadlineAtMs).toEqual(expect.any(Number));
+    expect(secondAttempt?.deadlineAtMs).toEqual(expect.any(Number));
+    expect(secondAttempt!.deadlineAtMs!).toBeGreaterThanOrEqual(firstAttempt!.deadlineAtMs!);
   });
 
   it('blocks a technical handoff after a successful but still partial web result', async () => {
@@ -2083,6 +2102,13 @@ describe('AgentManager comparison research flow', () => {
   it('saves high-confidence exact web facts into reusable product memory', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      sourceAttempts: [{
+        tier: 'official_page',
+        outcome: 'confirmed',
+        query: 'SUNREKA G7000iS button start recoil start'
+      }],
       facts: [
         {
           productName: 'SUNREKA G7000iS',
@@ -2090,9 +2116,12 @@ describe('AgentManager comparison research flow', () => {
           value: 'has START button start',
           sourceType: 'web',
           confidence: 'high',
-          evidence: 'official source says the model starts by START button',
+          evidence: 'SUNREKA G7000iS has START button start',
           sourceUrl: 'https://sunreka.example/g7000is',
-          sourceTitle: 'SUNREKA G7000iS specification'
+          sourceTitle: 'SUNREKA G7000iS specification',
+          sourceTier: 'official_page',
+          sourceAuthority: 'manufacturer',
+          evidenceVerifiedExact: true
         },
         {
           productName: 'SUNREKA G7000iS',
@@ -2100,9 +2129,12 @@ describe('AgentManager comparison research flow', () => {
           value: 'manual recoil starter is also available',
           sourceType: 'web',
           confidence: 'high',
-          evidence: 'official source lists manual starter',
+          evidence: 'SUNREKA G7000iS manual recoil starter is also available',
           sourceUrl: 'https://sunreka.example/g7000is',
-          sourceTitle: 'SUNREKA G7000iS specification'
+          sourceTitle: 'SUNREKA G7000iS specification',
+          sourceTier: 'official_page',
+          sourceAuthority: 'manufacturer',
+          evidenceVerifiedExact: true
         }
       ],
       conflicts: [],
@@ -2179,7 +2211,7 @@ describe('AgentManager comparison research flow', () => {
         sourceType: 'web',
         sourceUrl: 'https://sunreka.example/g7000is',
         sourceTitle: 'SUNREKA G7000iS specification',
-        evidence: 'official source says the model starts by START button',
+        evidence: 'SUNREKA G7000iS has START button start',
         confidence: 'high'
       }),
       expect.objectContaining({
@@ -2197,6 +2229,322 @@ describe('AgentManager comparison research flow', () => {
         sourceUrl: 'https://sunreka.example/g7000is',
         confidence: 0.9
       })
+    ]));
+  });
+
+  it('does not bind an absent exact-model fact to a neighbouring selected catalog product', async () => {
+    const fakeProducts = new FakeProducts();
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      fakeProducts as never,
+      {} as never,
+      withStrictToolFixtures(model())
+    );
+    const persist = orchestrator as unknown as {
+      persistVerifiedResearchFacts(input: Record<string, unknown>): Promise<number>;
+    };
+
+    const savedCount = await persist.persistVerifiedResearchFacts({
+      sessionId,
+      turnId,
+      targetProductNames: ['SUNREKA G7000iS', 'SUNREKA G7500iS'],
+      selectedProducts: [product('g7000is', 'SUNREKA G7000iS generator 6 kW', {})],
+      research: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        sourcesExhausted: false,
+        sourceAttempts: [],
+        facts: [{
+          productName: 'SUNREKA G7500iS',
+          attribute: 'nominal power',
+          value: '7 kW',
+          sourceType: 'web',
+          confidence: 'medium',
+          evidence: 'SUNREKA G7500iS nominal power 7 kW',
+          sourceUrl: 'https://equipment.example/sunreka-g7500is',
+          sourceTitle: 'SUNREKA G7500iS specification',
+          sourceTier: 'reliable_secondary',
+          sourceAuthority: 'secondary',
+          evidenceVerifiedExact: true
+        }],
+        conflicts: [],
+        answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] },
+        summaryForAnswer: '',
+        warnings: []
+      }
+    });
+
+    expect(savedCount).toBe(1);
+    expect(fakeProducts.savedVerifiedFacts).toContainEqual(expect.objectContaining({
+      productId: null,
+      productName: 'SUNREKA G7500iS'
+    }));
+    expect(fakeProducts.mirroredWebFacts).toEqual([]);
+
+    const timedOutCount = await persist.persistVerifiedResearchFacts({
+      sessionId,
+      turnId,
+      targetProductNames: ['SUNREKA G7500iS'],
+      selectedProducts: [],
+      research: {
+        usedWebSearch: true,
+        searchDisposition: 'timed_out',
+        sourcesExhausted: false,
+        sourceAttempts: [{ tier: 'reliable_secondary', outcome: 'confirmed' }],
+        facts: [{
+          productName: 'SUNREKA G7500iS',
+          attribute: 'nominal power',
+          value: '7 kW',
+          sourceType: 'web',
+          confidence: 'medium',
+          evidence: 'SUNREKA G7500iS nominal power 7 kW',
+          sourceUrl: 'https://equipment.example/sunreka-g7500is',
+          sourceTitle: 'SUNREKA G7500iS specification',
+          sourceTier: 'reliable_secondary',
+          sourceAuthority: 'secondary',
+          evidenceVerifiedExact: true
+        }],
+        conflicts: [],
+        answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] },
+        summaryForAnswer: '',
+        warnings: ['generic_source_tier_retry_timed_out']
+      }
+    });
+    expect(timedOutCount).toBe(0);
+    expect(fakeProducts.savedVerifiedFacts).toHaveLength(1);
+
+    const conflictedCount = await persist.persistVerifiedResearchFacts({
+      sessionId,
+      turnId,
+      targetProductNames: ['SUNREKA G7500iS'],
+      selectedProducts: [],
+      research: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        sourcesExhausted: false,
+        sourceAttempts: [],
+        facts: [{
+          productName: 'SUNREKA G7500iS',
+          attribute: 'nominal power',
+          value: '7 kW',
+          sourceType: 'web',
+          confidence: 'medium',
+          evidence: 'SUNREKA G7500iS nominal power 7 kW',
+          sourceUrl: 'https://equipment.example/sunreka-g7500is',
+          sourceTitle: 'SUNREKA G7500iS specification',
+          sourceTier: 'reliable_secondary',
+          sourceAuthority: 'secondary',
+          evidenceVerifiedExact: true
+        }],
+        conflicts: [{
+          productName: 'SUNREKA G7500iS',
+          attribute: 'nominal power',
+          webValues: ['7 kW', '8 kW'],
+          resolution: 'unresolved'
+        }],
+        answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] },
+        summaryForAnswer: '',
+        warnings: []
+      }
+    });
+    expect(conflictedCount).toBe(0);
+    expect(fakeProducts.savedVerifiedFacts).toHaveLength(1);
+
+    const ambiguousMultiTargetCount = await persist.persistVerifiedResearchFacts({
+      sessionId,
+      turnId,
+      targetProductNames: ['SUNREKA G7000iS', 'SUNREKA G7500iS'],
+      selectedProducts: [],
+      research: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        sourcesExhausted: false,
+        sourceAttempts: [],
+        facts: [{
+          productName: 'SUNREKA G7500iS',
+          attribute: 'nominal power',
+          value: '7 kW',
+          sourceType: 'web',
+          confidence: 'medium',
+          evidence: 'SUNREKA G7500iS nominal power 7 kW',
+          sourceUrl: 'https://equipment.example/sunreka-g7500is',
+          sourceTitle: 'SUNREKA G7500iS specification',
+          sourceTier: 'reliable_secondary',
+          sourceAuthority: 'secondary',
+          evidenceVerifiedExact: true
+        }],
+        conflicts: [],
+        answerGuidance: {
+          directAnswer: '',
+          completeness: 'partially_answered',
+          coverage: [{
+            attribute: 'nominal power',
+            status: 'ambiguous',
+            value: '',
+            evidence: 'two unresolved values'
+          }]
+        },
+        summaryForAnswer: '',
+        warnings: []
+      }
+    });
+    expect(ambiguousMultiTargetCount).toBe(0);
+    expect(fakeProducts.savedVerifiedFacts).toHaveLength(1);
+    expect(conversations.traces).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: 'verified_fact_memory_persistence',
+        payload: expect.objectContaining({ persistableCount: 1, savedCount: 1 })
+      }),
+      expect.objectContaining({
+        eventType: 'verified_fact_memory_persistence',
+        payload: expect.objectContaining({ persistableCount: 0, savedCount: 0 })
+      }),
+      expect.objectContaining({
+        eventType: 'verified_fact_memory_persistence',
+        payload: expect.objectContaining({
+          persistableCount: 0,
+          savedCount: 0,
+          searchDisposition: 'timed_out',
+          skippedReason: 'research_execution_not_completed'
+        })
+      })
+    ]));
+  });
+
+  it('persists a confirmed product fact while preserving another product unresolved on the same attribute', async () => {
+    const fakeProducts = new FakeProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      fakeProducts as never,
+      {} as never,
+      withStrictToolFixtures(model())
+    );
+    const persist = orchestrator as unknown as {
+      persistVerifiedResearchFacts(input: Record<string, unknown>): Promise<number>;
+    };
+    const coverage = [{
+      productName: 'SUNREKA G7000iS',
+      attribute: 'nominal power',
+      status: 'confirmed' as const,
+      value: '6 kW',
+      evidence: 'SUNREKA G7000iS nominal power 6 kW',
+      sourceUrl: 'https://equipment.example/sunreka-g7000is',
+      sourceTitle: 'SUNREKA G7000iS specification'
+    }, {
+      productName: 'SUNREKA G7500iS',
+      attribute: 'nominal power',
+      status: 'not_confirmed' as const,
+      value: '',
+      evidence: 'SUNREKA G7500iS nominal power remains unconfirmed'
+    }];
+
+    const savedCount = await persist.persistVerifiedResearchFacts({
+      sessionId,
+      turnId,
+      targetProductNames: ['SUNREKA G7000iS', 'SUNREKA G7500iS'],
+      selectedProducts: [],
+      research: {
+        usedWebSearch: true,
+        searchDisposition: 'completed',
+        sourcesExhausted: false,
+        sourceAttempts: [{ tier: 'reliable_secondary', outcome: 'confirmed' }],
+        facts: [{
+          productName: 'SUNREKA G7000iS',
+          attribute: 'nominal power',
+          value: '6 kW',
+          sourceType: 'web',
+          confidence: 'medium',
+          evidence: 'SUNREKA G7000iS nominal power 6 kW',
+          sourceUrl: 'https://equipment.example/sunreka-g7000is',
+          sourceTitle: 'SUNREKA G7000iS specification',
+          sourceTier: 'reliable_secondary',
+          sourceAuthority: 'secondary',
+          evidenceVerifiedExact: true
+        }],
+        conflicts: [],
+        answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage },
+        summaryForAnswer: '',
+        warnings: []
+      }
+    });
+
+    expect(savedCount).toBe(1);
+    expect(fakeProducts.savedVerifiedFacts).toEqual([
+      expect.objectContaining({ productName: 'SUNREKA G7000iS', attribute: 'nominal power' })
+    ]);
+    expect(coverage).toContainEqual(expect.objectContaining({
+      productName: 'SUNREKA G7500iS',
+      status: 'not_confirmed'
+    }));
+  });
+
+  it('reuses bound memory for a catalog model and name-only memory for an absent comparison target', async () => {
+    const now = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const fakeProducts = new FakeProducts();
+    fakeProducts.verifiedFacts = [{
+      id: 'bound-g7000',
+      productId: 'g7000is',
+      productKey: 'sunreka g7000is',
+      productName: 'SUNREKA G7000iS',
+      attribute: 'nominal power',
+      value: '6 kW',
+      sourceType: 'web',
+      sourceUrl: 'https://manufacturer.example/g7000is',
+      sourceTitle: 'SUNREKA G7000iS specification',
+      evidence: 'SUNREKA G7000iS nominal power 6 kW',
+      confidence: 'high',
+      status: 'active',
+      firstSeenAt: now,
+      lastVerifiedAt: now,
+      hitCount: 0,
+      createdAt: now,
+      updatedAt: now
+    }, {
+      id: 'name-only-g7500',
+      productId: null,
+      productKey: 'sunreka g7500is',
+      productName: 'SUNREKA G7500iS',
+      attribute: 'nominal power',
+      value: '7 kW',
+      sourceType: 'web',
+      sourceUrl: 'https://manufacturer.example/g7500is',
+      sourceTitle: 'SUNREKA G7500iS specification',
+      evidence: 'SUNREKA G7500iS nominal power 7 kW',
+      confidence: 'high',
+      status: 'active',
+      firstSeenAt: now,
+      lastVerifiedAt: now,
+      hitCount: 0,
+      createdAt: now,
+      updatedAt: now
+    }];
+    const orchestrator = new AgentManagerOrchestrator(
+      new FakeConversations() as never,
+      fakeProducts as never,
+      {} as never,
+      withStrictToolFixtures(model())
+    );
+    const memoryReader = orchestrator as unknown as {
+      researchFromVerifiedFactMemory(input: Record<string, unknown>): Promise<{
+        attributesCovered: boolean;
+        missingFactSlots: unknown[];
+      } | null>;
+    };
+
+    const memory = await memoryReader.researchFromVerifiedFactMemory({
+      sessionId,
+      turnId,
+      targetProductNames: ['SUNREKA G7000iS', 'SUNREKA G7500iS'],
+      comparisonAttributes: ['nominal power'],
+      selectedProducts: [product('g7000is', 'SUNREKA G7000iS generator 6 kW', {})]
+    });
+
+    expect(memory?.attributesCovered).toBe(true);
+    expect(memory?.missingFactSlots).toEqual([]);
+    expect(fakeProducts.usedVerifiedFactIds).toEqual(expect.arrayContaining([
+      'bound-g7000',
+      'name-only-g7500'
     ]));
   });
 
@@ -2337,6 +2685,304 @@ describe('AgentManager comparison research flow', () => {
     expect(fakeProducts.usedVerifiedFactIds).not.toContain('legacy-name-only-button');
   });
 
+  it('researches only missing canonical attributes and merges them with reusable memory', async () => {
+    const now = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    class PartialMemoryProducts extends FakeProducts {
+      constructor() {
+        super();
+        this.verifiedFacts = [{
+          id: 'fact-power',
+          productId: 'g7000is',
+          productKey: 'sunreka g7000is',
+          productName: 'SUNREKA G7000iS',
+          attribute: 'nominal power',
+          value: '6 kW',
+          sourceType: 'web',
+          sourceUrl: 'https://manufacturer.example/g7000is',
+          sourceTitle: 'SUNREKA G7000iS specification',
+          sourceTier: 'official_page',
+          sourceAuthority: 'manufacturer',
+          evidence: 'SUNREKA G7000iS nominal power 6 kW',
+          confidence: 'high',
+          status: 'active',
+          firstSeenAt: now,
+          lastVerifiedAt: now,
+          observedAt: now,
+          hitCount: 0,
+          createdAt: now,
+          updatedAt: now
+        }];
+      }
+      async searchProducts() {
+        return [product('g7000is', 'SUNREKA G7000iS generator 6 kW', { nominalPowerKw: 6 })];
+      }
+    }
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      sourceAttempts: [],
+      facts: [{
+        productName: 'SUNREKA G7000iS',
+        attribute: 'fuel tank capacity',
+        value: '15 l',
+        sourceType: 'web',
+        confidence: 'high',
+        evidence: 'SUNREKA G7000iS fuel tank capacity 15 l',
+        sourceUrl: 'https://manufacturer.example/g7000is-manual.pdf',
+        sourceTitle: 'SUNREKA G7000iS manual',
+        sourceTier: 'official_manual',
+        sourceAuthority: 'manufacturer',
+        evidenceVerifiedExact: true
+      }],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'У SUNREKA G7000iS бак 15 л.',
+        completeness: 'answered',
+        coverage: [{
+          attribute: 'fuel tank capacity',
+          status: 'confirmed',
+          value: '15 l',
+          evidence: 'SUNREKA G7000iS fuel tank capacity 15 l',
+          sourceUrl: 'https://manufacturer.example/g7000is-manual.pdf',
+          sourceTitle: 'SUNREKA G7000iS manual',
+          sourceTier: 'official_manual',
+          sourceAuthority: 'manufacturer'
+        }]
+      },
+      summaryForAnswer: 'Fuel tank capacity is confirmed.',
+      warnings: []
+    });
+
+    const partialProducts = new PartialMemoryProducts();
+    const partialModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer asks for power and tank capacity',
+          dialogueUnderstanding: 'exact model technical facts',
+          nextStepRationale: 'reuse memory and research only the gap',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:g7000is-details',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'SUNREKA G7000iS nominal power fuel tank capacity',
+              semanticQuery: 'SUNREKA G7000iS exact specification',
+              productNames: ['SUNREKA G7000iS'],
+              comparisonAttributes: ['nominal power', 'fuel tank capacity']
+            },
+            rationale: 'exact facts must be grounded',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        const payload = input.toolResults.find((item) => item.requestId === 'web:g7000is-details')?.payload as {
+          facts?: Array<{ attribute?: string }>;
+        };
+        expect(payload.facts?.map((fact) => fact.attribute)).toEqual(expect.arrayContaining([
+          'nominal power',
+          'fuel tank capacity'
+        ]));
+        return {
+          answerText: 'Номинальная мощность 6 кВт, бак 15 л.',
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:g7000is-details'],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Какая мощность и объём бака у SUNREKA G7000iS?')];
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      partialProducts as never,
+      {} as never,
+      withStrictToolFixtures(partialModel)
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Какая мощность и объём бака у SUNREKA G7000iS?'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      targetProductNames: ['SUNREKA G7000iS'],
+      comparisonAttributes: ['fuel tank capacity'],
+      missingFactSlots: [{
+        productName: 'SUNREKA G7000iS',
+        attribute: 'fuel tank capacity'
+      }]
+    }));
+    expect(partialProducts.usedVerifiedFactIds).toContain('fact-power');
+    expect(partialProducts.savedVerifiedFacts).toContainEqual(expect.objectContaining({
+      sourceType: 'manual',
+      sourceTier: 'official_manual',
+      sourceAuthority: 'manufacturer'
+    }));
+  });
+
+  it('preserves per-product coverage through partial-memory research and writer grounding', async () => {
+    const now = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const modelA = product('model-a', 'SUNREKA G7000iS', { nominalPowerKw: 6 });
+    const modelB = product('model-b', 'SUNREKA G7500iS', {});
+    const modelAAlias = 'SUNREKA G7000iS generator 6 kW';
+    class TwoTargetMemoryProducts extends FakeProducts {
+      constructor() {
+        super();
+        this.verifiedFacts = [{
+          id: 'fact-model-a-power',
+          productId: modelA.id,
+          productKey: 'sunreka g7000is',
+          productName: modelAAlias,
+          attribute: 'nominal power',
+          value: '6 kW',
+          sourceType: 'web',
+          sourceUrl: 'https://manufacturer.example/g7000is',
+          sourceTitle: 'SUNREKA G7000iS specification',
+          sourceTier: 'official_page',
+          sourceAuthority: 'manufacturer',
+          evidence: 'SUNREKA G7000iS nominal power 6 kW',
+          confidence: 'high',
+          status: 'active',
+          firstSeenAt: now,
+          lastVerifiedAt: now,
+          observedAt: now,
+          hitCount: 0,
+          createdAt: now,
+          updatedAt: now
+        }];
+      }
+      async searchProducts() {
+        return [modelA, modelB];
+      }
+    }
+    extractCatalogProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
+      sourceAttempts: [{ tier: 'catalog', outcome: 'confirmed' }],
+      facts: [],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [modelA, modelB].map((item) => ({
+          productName: item.name,
+          attribute: 'nominal power',
+          status: 'not_confirmed' as const,
+          value: '',
+          evidence: 'catalog card does not confirm nominal power'
+        }))
+      },
+      summaryForAnswer: '',
+      warnings: ['catalog_fact_missing_needs_web_research']
+    });
+    researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourcesExhausted: false,
+      sourceAttempts: [],
+      facts: [],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: '',
+        completeness: 'not_answered',
+        coverage: [{
+          productName: modelB.name,
+          attribute: 'nominal power',
+          status: 'not_confirmed',
+          value: '',
+          evidence: 'SUNREKA G7500iS nominal power remains unconfirmed'
+        }]
+      },
+      summaryForAnswer: '',
+      warnings: []
+    });
+    const groundedModel: AgentManagerModel = {
+      ...model(),
+      async planTurn() {
+        return {
+          userMessageSummary: 'buyer compares nominal power for two exact models',
+          dialogueUnderstanding: 'reuse exact memory and preserve the unresolved second model',
+          nextStepRationale: 'research only the missing product slot',
+          requiresTools: true,
+          toolRequests: [{
+            id: 'web:two-model-power',
+            tool: 'web.researchProductFacts',
+            args: {
+              query: 'SUNREKA G7000iS SUNREKA G7500iS nominal power',
+              productNames: [modelA.name, modelB.name],
+              comparisonAttributes: ['nominal power']
+            },
+            rationale: 'exact product facts must remain product-scoped',
+            required: true
+          }],
+          mustNotAskQuestionIds: [],
+          riskFlags: []
+        };
+      },
+      async composeAnswer(input) {
+        const result = input.toolResults.find((item) => item.requestId === 'web:two-model-power');
+        const payload = result?.payload as {
+          facts?: Array<{ productName?: string }>;
+          answerGuidance?: { coverage?: Array<{ productName?: string | null; status?: string }> };
+          unconfirmedFacts?: Array<{ productName?: string | null; attribute?: string }>;
+        };
+        expect(payload.facts).toContainEqual(expect.objectContaining({ productName: modelAAlias }));
+        expect(payload.answerGuidance?.coverage).toEqual(expect.arrayContaining([
+          expect.objectContaining({ productName: modelA.name, status: 'confirmed' }),
+          expect.objectContaining({ productName: modelB.name, status: 'not_confirmed' })
+        ]));
+        expect(payload.unconfirmedFacts).toContainEqual(expect.objectContaining({
+          productName: modelB.name,
+          attribute: 'nominal power'
+        }));
+        expect(payload.unconfirmedFacts).not.toContainEqual(expect.objectContaining({
+          productName: modelA.name,
+          attribute: 'nominal power'
+        }));
+        expect(input.requiredResponseClauses?.find((clause) => clause.code === 'web_research_partial_grounding')?.instruction)
+          .toContain(modelB.name);
+        return {
+          answerText: `${modelA.name}: 6 kW. ${modelB.name}: nominal power is not confirmed yet.`,
+          factsUsed: [],
+          questionsAsked: [],
+          toolResultIds: ['web:two-model-power'],
+          selectedProductIds: [],
+          leadAction: 'none',
+          riskFlags: []
+        };
+      }
+    };
+    const conversations = new FakeConversations();
+    conversations.messages = [message('Compare nominal power for SUNREKA G7000iS and SUNREKA G7500iS.')];
+    const products = new TwoTargetMemoryProducts();
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never,
+      products as never,
+      {} as never,
+      withStrictToolFixtures(groundedModel)
+    );
+
+    await orchestrator.generateAnswer({
+      sessionId,
+      turnId,
+      userMessage: 'Compare nominal power for SUNREKA G7000iS and SUNREKA G7500iS.'
+    });
+
+    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+      missingFactSlots: [{ productName: modelB.name, attribute: 'nominal power' }]
+    }));
+    expect(products.usedVerifiedFactIds).toContain('fact-model-a-power');
+  });
+
   it('rejects a stale follow-up plan that requires web research but omitted the tool', async () => {
     researchProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: true,
@@ -2474,7 +3120,7 @@ describe('AgentManager comparison research flow', () => {
     });
     tss.price = 49281;
     bison.price = 61100;
-    researchProductComparisonFacts.mockResolvedValueOnce({
+    extractCatalogProductComparisonFacts.mockResolvedValueOnce({
       usedWebSearch: false,
       searchDisposition: 'not_needed',
       sourcesExhausted: false,
@@ -2679,12 +3325,12 @@ describe('AgentManager comparison research flow', () => {
       userMessage: 'Compare only TSS SGG 5000N and BISON BS6250IE: what do I get for the extra money?'
     });
 
-    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(1);
-    expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
-      allowCatalogOnlyAnswer: true,
+    expect(extractCatalogProductComparisonFacts).toHaveBeenCalledTimes(1);
+    expect(extractCatalogProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
       targetProductNames: ['TSS SGG 5000N', 'BISON BS6250IE'],
       comparisonAttributes: ['nominal power', 'generator type']
     }));
+    expect(researchProductComparisonFacts).not.toHaveBeenCalled();
     expect(payload.usedWebSearch).toBe(false);
     expect(payload.answer).toContain('предварительно выбрал бы TSS');
     expect(payload.productCards.map((card) => card.id)).toEqual([tss.id, bison.id]);

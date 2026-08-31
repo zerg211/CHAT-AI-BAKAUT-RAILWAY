@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CATALOG_MUTATION_LOCK_IDENTITY } from '../src/catalog/catalogFreshness.js';
 import { ProductRepository } from '../src/db/repositories.js';
+import type { VerifiedProductFactInput } from '../src/shared/types.js';
 
 describe('ProductRepository catalog freshness integration', () => {
   it('replaces a same-source product snapshot instead of retaining removed specs and raw fields', async () => {
@@ -106,6 +107,9 @@ describe('ProductRepository catalog freshness integration', () => {
             source_url: 'https://manufacturer.example/current-product',
             source_title: 'Official specification',
             evidence: 'Nominal power 5 kW',
+            source_tier: 'official_page',
+            source_authority: 'manufacturer',
+            observed_at: new Date('2026-08-30T12:00:00.000Z'),
             confidence: 'high',
             status: 'active',
             catalog_source_hash: 'catalog-hash-current',
@@ -125,7 +129,7 @@ describe('ProductRepository catalog freshness integration', () => {
       connect: vi.fn(async () => ({ query, release }))
     } as never);
 
-    const saved = await repository.upsertVerifiedProductFact({
+    const verifiedInput: VerifiedProductFactInput = {
       productId: '11111111-1111-4111-8111-111111111111',
       productName: 'Current product',
       attribute: 'nominal power',
@@ -134,22 +138,40 @@ describe('ProductRepository catalog freshness integration', () => {
       sourceUrl: 'https://manufacturer.example/current-product',
       sourceTitle: 'Official specification',
       evidence: 'Nominal power 5 kW',
+      sourceTier: 'official_page',
+      sourceAuthority: 'manufacturer',
+      observedAt: '2026-08-30T12:00:00.000Z',
       confidence: 'high'
-    });
+    };
+    const saved = await repository.upsertVerifiedProductFact(verifiedInput);
+    const savedAgain = await repository.upsertVerifiedProductFact(verifiedInput);
 
     const writeSql = String(query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO verified_product_facts'))?.[0]);
     expect(query.mock.calls[0]?.[0]).toBe('BEGIN');
     expect(writeSql).toContain('source_content_hash');
     expect(writeSql).toContain('catalog_source_hash');
     expect(writeSql).toContain('source_fingerprint');
+    expect(writeSql).toContain('source_tier');
+    expect(writeSql).toContain('source_authority');
+    expect(writeSql).toContain('observed_at');
+    expect(writeSql).toContain('ON CONFLICT DO NOTHING');
+    expect(writeSql).toContain('WHERE NOT EXISTS (SELECT 1 FROM inserted)');
+    expect(writeSql).toContain('AND product_key = $2');
+    expect(writeSql).toContain('AND attribute = $4');
+    expect(writeSql).toContain('AND value = $5');
     expect(writeSql).toContain("status = 'superseded'");
     expect(writeSql).toContain('coalesce(source_url');
     expect(query.mock.calls.at(-1)?.[0]).toBe('COMMIT');
-    expect(release).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledTimes(2);
     expect(saved).toMatchObject({
       catalogSourceHash: 'catalog-hash-current',
-      sourceFingerprint: 'source-fingerprint-current'
+      sourceFingerprint: 'source-fingerprint-current',
+      sourceTier: 'official_page',
+      sourceAuthority: 'manufacturer',
+      observedAt: '2026-08-30T12:00:00.000Z'
     });
+    expect(savedAgain?.id).toBe(saved?.id);
+    expect(query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO verified_product_facts'))).toHaveLength(2);
   });
 
   it('does not return a product-bound verified fact after its catalog fingerprint changes', async () => {
@@ -170,6 +192,7 @@ describe('ProductRepository catalog freshness integration', () => {
     expect(nameOnlyFactFallback).toBeGreaterThan(emptyExactIdsGuard);
     expect(lookupSql).toContain("$2::uuid[] <> '{}'::uuid[]");
     expect(lookupSql).toContain('fact.product_id = ANY($2::uuid[])');
+    expect(lookupSql).toContain('$5::boolean');
   });
 
   it('excludes inactive products and pages from buyer-facing retrieval', async () => {

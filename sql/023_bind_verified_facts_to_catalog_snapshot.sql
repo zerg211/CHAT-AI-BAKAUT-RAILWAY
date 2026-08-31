@@ -3,6 +3,9 @@
 -- intentionally ignored by searchVerifiedProductFacts until this marker exists.
 -- jsonb text is canonical in PostgreSQL, which makes this marker deterministic
 -- for the stored legacy row; future catalog syncs use the normal source hash.
+ALTER TABLE verified_product_facts
+  ADD COLUMN IF NOT EXISTS catalog_source_hash text;
+
 UPDATE products
 SET source_content_hash = encode(
   digest(

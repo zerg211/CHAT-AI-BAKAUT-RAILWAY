@@ -17,6 +17,30 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     createStructuredJsonResponse.mockReset();
   });
 
+  it('semantically classifies paraphrased internal research-process disclosure', async () => {
+    createStructuredJsonResponse.mockResolvedValueOnce({
+      parsed: {
+        processDisclosure: true,
+        evidence: 'Я обращался к доступным источникам',
+        rationale: 'The answer describes how information was sought.'
+      }
+    });
+
+    const review = await new OpenAIAgentManagerModel().reviewCustomerLanguage({
+      answerText: 'Я обращался к доступным источникам, но они не дали результата.'
+    });
+
+    expect(review.processDisclosure).toBe(true);
+    expect(createStructuredJsonResponse).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'agent_customer_language_review',
+      transportMaxRetries: 0
+    }));
+    const request = createStructuredJsonResponse.mock.calls[0]?.[0]?.request as {
+      input?: Array<{ role?: string; content?: string }>;
+    };
+    expect(request.input?.find((item) => item.role === 'system')?.content).toContain('при любой формулировке');
+  });
+
   it('creates ledger delta and executable intent in one structured semantic request', async () => {
     const now = new Date('2026-08-13T10:00:00.000Z').toISOString();
     const session: ConversationSession = {
@@ -542,6 +566,10 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       expect(prompt).toContain('шовнарезчик');
       expect(prompt).toContain('бензорез');
     }
+    expect(answerPrompt).toContain('Покупателю сообщай состояние товарного факта, а не процесс работы системы');
+    expect(answerPrompt).toContain('Никогда не упоминай инструменты, web/внешний поиск, попытки, timeout/тайм-аут');
+    expect(answerPrompt).toContain('это внутренний статус, не содержание ответа покупателю');
+    expect(answerPrompt).toContain('не предлагай форму/специалиста только из-за такого статуса');
   });
 
 });

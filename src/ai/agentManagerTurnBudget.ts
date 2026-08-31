@@ -29,7 +29,7 @@ export type AgentManagerStopReason =
   | ProviderBudgetEstimationStopReason;
 
 export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
-  maxModelCalls: 4,
+  maxModelCalls: 6,
   maxProviderCalls: 60,
   maxToolCalls: 8,
   maxWebCalls: 2,
@@ -38,8 +38,8 @@ export const DEFAULT_AGENT_MANAGER_TURN_LIMITS: AgentManagerTurnLimits = {
   maxProviderReservedOutputTokens: 80_000,
   maxProviderEstimatedTotalTokens: 1_350_000,
   maxEstimatedCostUsd: 10,
-  // The normal path uses decision + writer. Two bounded decision corrections remain
-  // available for invalid contracts before tools; all stages still share this deadline.
+  // The normal path uses decision + writer + semantic customer-language review.
+  // Bounded correction and answer-repair stages still share this deadline.
   maxWallTimeMs: 150_000
 };
 
