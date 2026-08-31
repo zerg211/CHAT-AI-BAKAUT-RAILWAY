@@ -2,7 +2,7 @@
 
 Task: `2026-08-30-fast-persistent-product-research`
 
-Current local verdict: `PASS_AC1_TO_AC10`; production `AC11` is `PENDING_AUTHORIZATION`.
+Current verdict: `PASS`; all `AC1`-`AC11` are verified.
 
 ## Builder Evidence
 
@@ -12,11 +12,11 @@ Current local verdict: `PASS_AC1_TO_AC10`; production `AC11` is `PENDING_AUTHORI
 - AC4: official page and official manual attempts start independently and race for first completion; complete evidence from either branch cancels the other. Secondary starts only after unresolved official attempts. Off-tier facts, conflicts, and contradicted/ambiguous coverage cannot contaminate the current tier.
 - AC5: source acceptance requires per-fact exact model identity, URL, exact verified quote, and semantic product/attribute/value support. A fact labelled for one requested model cannot borrow another model's evidence. Known manufacturer authority uses approved provenance; unknown domains require semantic publisher identity plus an exact excerpt verified against fetched source text. Secondary confidence is capped at medium, and every unread/truncated/source-cap warning blocks source exhaustion.
 - AC6: every coverage item now carries typed `productName` ownership (`null` only for genuinely unscoped research). Targeted ownership is canonicalized against exact typed targets; null, unknown, or ambiguous multi-target ownership becomes conservative unresolved slots for every typed target and blocks source exhaustion. All catalog/memory/web coverage merges key and resolve by product+attribute. Persistence independently requires a completed web execution, source title, URL, tier/authority, exact evidence binding, claimed value, no product+attribute conflict, and no unresolved coverage for that exact product+attribute.
-- AC7: partial-memory gaps are exact product+attribute slots. Mixed catalog-bound and absent targets retain safe name-only facts for the absent target. Full coverage skips web; partial coverage passes only unresolved slots and merges results. Alias-equivalent catalog, memory, and research product names share one bidirectionally matched exact-model coverage slot, so confirmation removes only the same exact product's stale unresolved item.
+- AC7: partial-memory gaps are exact product+attribute slots. Mixed catalog-bound and absent targets retain safe name-only facts for the absent target. Full coverage skips web; partial coverage passes only unresolved slots and merges results. When deterministic canonical-token matching cannot recognize semantically equivalent attribute names, the LLM returns only structured `factId -> exact product+requested attribute` bindings; code rechecks fact identity, bidirectional exact model identity, freshness, value conflicts, and complete slot coverage before skipping web.
 - AC8: research stage traces include one actual tier per deterministic attempt, attempt number, elapsed/remaining budget, truthful execution outcome, source count, and accepted fact count. A model-reported confirmed source attempt is downgraded when validation accepts no fact from that tier. Persistence traces include disposition, skip reason, persistable count, and saved count.
 - AC9: the production model performs a structured semantic process-disclosure review before send and again after repair; a thrown, timed-out, malformed, or absent reviewer blocks delivery. Product-bound unresolved facts flow into the writer contract only after canonical same-product confirmation precedence removes stale alias-equivalent gaps. A deterministic bilingual fragment guard remains defense in depth and permits ordinary product uses of `инструмент`.
 - AC10: focused tests prove orchestrator-level catalog-first short-circuit, fresh outer retry signals/deadlines, bidirectional official concurrency/cancellation, batched fact/coverage validation, fact/conflict tier isolation, unknown-domain publisher proof, secondary fallback, source authority, cross-model rejection, source-cap exhaustion blocking, unknown-owner fail-safe normalization, alias-equivalent product-bound later-confirmed precedence, cross-product catalog/memory/research merge and writer grounding, persistence isolation, failed/timed-out persistence rejection, repeated-write idempotency, mixed/partial memory reuse, truthful source attempts/traces, semantic paraphrase repair, and thrown/absent-reviewer fail-closed behavior.
-- AC11: the first production pass failed on deployed commit `ea843b0e3dc4135cfb8cb3373d486cf9028a12db`; the local remediation is not deployed. AC11 requires commit/push, Railway deployment from GitHub, and a fresh adaptive widget/admin dialogue.
+- AC11: commits `b19a4fc84d96a5cb4a6020ab5dd8337af971dfca` and `b420c4b5c7609dd7c1015afc403b7cb9ce5949a9` were pushed to GitHub and deployed by Railway. The embedded widget first persisted three exact BISON BS6250IE facts in session `b60c6ea1-d933-4aa6-8d23-3a8a4c18d9b2`. After the canonical-attribute remediation, independent widget session `deb2443e-844d-4918-b3f0-cd98cb28d259` reused fact `19cf3054-cc13-4d9c-8bc6-6fcfe2adf229` as `usb_output_current`, returned `searchDisposition=memory_hit` with `usedWebSearch=false`, and had no external research stage beyond catalog extraction. Buyer/code/goal/lead audit issues were all zero.
 
 ## Semantic Boundary Audit
 
@@ -26,10 +26,12 @@ Current local verdict: `PASS_AC1_TO_AC10`; production `AC11` is `PENDING_AUTHORI
 
 ## Verification
 
-- Focused acceptance set: PASS, 8 files and 252 tests.
+- Focused acceptance set: PASS, 8 files and 254 tests.
 - Typecheck: PASS.
-- Full release gate: PASS, 863/863 unit tests and 203/203 agentic tests; no-regex, dependency audit, typecheck, and build all PASS.
+- Full release gate: PASS, 865/865 unit tests and 203/203 agentic tests; no-regex, dependency audit, typecheck, and build all PASS.
 - `git diff --check`: PASS.
-- AC11 Remediation Fresh Verifier 5: PASS for AC1-AC10 with no remaining findings; AC11 remains pending deployment and production proof.
+- Final fresh verification: PASS for AC1-AC11 with no remaining findings.
+- Production protocol: `local-live-tests/2026-08-31-ac11-fast-persistent-product-research-2026-08-31T17-45-48-270Z.production.md`.
+- Raw production audit: `.agent/tasks/2026-08-30-fast-persistent-product-research/raw/ac11-production-2026-08-31T17-45-48-270Z.json`.
 
 See `raw/commands.md` and `problems.md`.

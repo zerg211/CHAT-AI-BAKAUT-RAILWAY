@@ -1,9 +1,9 @@
 {
   "taskId": "2026-08-30-fast-persistent-product-research",
-  "verifier": "AC11 Remediation Fresh Verifier 5",
-  "verifiedAt": "2026-08-31T20:13:33.1873026+03:00",
+  "verifier": "Final AC1-AC11 Verifier",
+  "verifiedAt": "2026-08-31T17:45:48.270Z",
   "overallVerdictAc1ToAc10": "PASS",
-  "overallVerdict": "PENDING_AUTHORIZATION",
+  "overallVerdict": "PASS",
   "acceptanceCriteria": {
     "AC1": {
       "verdict": "PASS",
@@ -73,14 +73,16 @@
     },
     "AC7": {
       "verdict": "PASS",
-      "reason": "Verified memory is read after catalog extraction and before external research. Coverage is tracked by exact product+attribute slots, full coverage skips external research, partial coverage researches only gaps, mixed bound/name-only lookup is filtered safely, and alias-equivalent product names merge without erasing distinct model gaps.",
+      "reason": "Verified memory is read after catalog extraction and before external research. Coverage is tracked by exact product+attribute slots, full coverage skips external research, and partial coverage researches only gaps. If deterministic canonical-token matching leaves a gap, a bounded LLM matcher may return only structured supplied fact IDs and requested slots; deterministic code rechecks exact fact/product identity, freshness, conflicts, and full coverage. Production proved usb_supported_current safely binding to usb_output_current with no repeated web lookup.",
       "references": [
         "src/ai/verifiedFactMemory.ts:95-194",
         "src/ai/agentManagerOrchestrator.ts:3241-3304",
-        "src/ai/agentManagerOrchestrator.ts:5404-5477",
-        "src/ai/agentManagerOrchestrator.ts:7457-7517",
+        "src/ai/agentManagerOrchestrator.ts:5080-5159",
+        "src/ai/agentManagerOrchestrator.ts:5504-5627",
         "src/db/repositories.ts:3378-3438",
-        "tests/agentManagerComparisonResearch.test.ts:2482-2984"
+        "tests/agentManagerComparisonResearch.test.ts:2749-2873",
+        "tests/openAIAgentManagerModel.test.ts:44-97",
+        ".agent/tasks/2026-08-30-fast-persistent-product-research/raw/ac11-production-2026-08-31T17-45-48-270Z.json"
       ]
     },
     "AC8": {
@@ -112,7 +114,7 @@
     },
     "AC10": {
       "verdict": "PASS",
-      "reason": "The focused suite covers fast paths, fresh retry deadlines, tier concurrency/cancellation and fallback, batched semantic fact/coverage validation, exact-model rejection, timeout/merge/conflict boundaries, source-cap exhaustion blocking, persistence/idempotency, memory reuse, and customer-language review/repair. The current canonical focused command and complete release gate pass.",
+      "reason": "The focused suite covers fast paths, fresh retry deadlines, tier concurrency/cancellation and fallback, batched semantic fact/coverage validation, exact-model rejection, timeout/merge/conflict boundaries, source-cap exhaustion blocking, persistence/idempotency, deterministic and semantic memory reuse, and customer-language review/repair. The current canonical 254-test focused command and complete 865-test release gate pass.",
       "references": [
         "tests/productComparisonResearch.test.ts:215-850",
         "tests/productComparisonResearch.test.ts:3264-3319",
@@ -122,8 +124,12 @@
       ]
     },
     "AC11": {
-      "verdict": "PENDING_AUTHORIZATION",
-      "reason": "No explicit commit/push authorization was provided. No GitHub push, Railway deployment, OpenAI call, or production widget/admin dialogue was performed."
+      "verdict": "PASS",
+      "reason": "GitHub commits were deployed by Railway without a manual deploy. Embedded-widget session b60c6ea1-d933-4aa6-8d23-3a8a4c18d9b2 completed bounded exact-model research and persisted three facts. On runtime b420c4b5c7609dd7c1015afc403b7cb9ce5949a9, independent widget session deb2443e-844d-4918-b3f0-cd98cb28d259 reused the saved BISON BS6250IE USB-current fact with usedWebSearch=false and searchDisposition=memory_hit, no repeated external tier stage, and zero buyer/code/goal/lead issues.",
+      "references": [
+        "local-live-tests/2026-08-31-ac11-fast-persistent-product-research-2026-08-31T17-45-48-270Z.production.md",
+        ".agent/tasks/2026-08-30-fast-persistent-product-research/raw/ac11-production-2026-08-31T17-45-48-270Z.json"
+      ]
     }
   },
   "cleanupAudit": {
@@ -134,17 +140,22 @@
     {
       "command": "npx vitest run tests/productComparisonResearch.test.ts tests/verifiedFactMemory.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerHarnessContracts.test.ts tests/agentManagerOrchestrator.test.ts tests/openAIAgentManagerModel.test.ts tests/catalogRepositoryFreshness.test.ts tests/migrate.test.ts",
       "verdict": "PASS",
-      "result": "8 files and 252 tests passed"
+      "result": "8 files and 254 tests passed"
     },
     {
       "command": "npm run verify",
       "verdict": "PASS",
-      "result": "Node.js runtime PASS; no-regex guard PASS; production dependency audit PASS with 0 high vulnerabilities; TypeScript typecheck PASS; 84 files and 863 tests PASS; 4 agentic files and 203 tests PASS; production build PASS"
+      "result": "Node.js runtime PASS; no-regex guard PASS; production dependency audit PASS with 0 high vulnerabilities; TypeScript typecheck PASS; 84 files and 865 tests PASS; 4 agentic files and 203 tests PASS; production build PASS"
     },
     {
       "command": "git diff --check",
       "verdict": "PASS",
       "result": "No whitespace errors"
+    },
+    {
+      "command": "production embedded-widget and admin audit",
+      "verdict": "PASS",
+      "result": "Railway marker b420c4b5c7609dd7c1015afc403b7cb9ce5949a9; fresh session reused verified memory; usedWebSearch=false; searchDisposition=memory_hit; buyer/code/goal/lead issues 0/0/0/0"
     }
   ],
   "findings": []

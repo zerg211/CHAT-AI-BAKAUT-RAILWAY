@@ -409,3 +409,38 @@ Result: PASS. Focused 89/89, canonical 252/252, full serial 863/863, agentic 203
 ## AC11 Remediation Fresh Verifier 5
 
 Result: PASS for AC1-AC10 after a fresh audit of the current code and current command outputs. AC11 remains pending commit/push and production widget/admin verification.
+
+## Semantic Memory Remediation Focused Gate
+
+Command: `npx vitest run tests/productComparisonResearch.test.ts tests/verifiedFactMemory.test.ts tests/agentManagerComparisonResearch.test.ts tests/agentManagerHarnessContracts.test.ts tests/agentManagerOrchestrator.test.ts tests/openAIAgentManagerModel.test.ts tests/catalogRepositoryFreshness.test.ts tests/migrate.test.ts`
+
+Result: PASS, 8 files and 254 tests.
+
+## Semantic Memory Remediation Release Gate
+
+Command: `npm run verify`
+
+Result: PASS.
+
+- Node.js runtime: PASS (`24.14.1`)
+- No new regex constructs: PASS
+- Production dependency audit, high severity: PASS (`0 vulnerabilities`)
+- Typecheck: PASS
+- Full serial suite: PASS (`84 files`, `865 tests`)
+- Agentic suite: PASS (`4 files`, `203 tests`)
+- Production build: PASS
+- `git diff --check`: PASS
+
+## Corrective Deployment
+
+Commands: `git commit -m "fix(ai): reuse semantic product fact memory"` and `git push origin main`.
+
+Result: PASS. GitHub and Railway marker reached `b420c4b5c7609dd7c1015afc403b7cb9ce5949a9`; no manual Railway deploy was used.
+
+## AC11 Final Production Widget Audit
+
+Command: gated Playwright audit through the embedded widget on `https://bakautprof.ru/`, followed by `/api/admin/conversations/:id` audit, with prior persisted-research session `b60c6ea1-d933-4aa6-8d23-3a8a4c18d9b2` and fresh memory-reuse session `deb2443e-844d-4918-b3f0-cd98cb28d259`.
+
+Result: PASS. Runtime model `gpt-5.6-luna`; `verified_fact_memory_used`; `usedWebSearch=false`; `searchDisposition=memory_hit`; no repeated external research stage; buyer/code/goal/lead issues `0/0/0/0`.
+
+Evidence: `../../../../local-live-tests/2026-08-31-ac11-fast-persistent-product-research-2026-08-31T17-45-48-270Z.production.md` and `ac11-production-2026-08-31T17-45-48-270Z.json`.

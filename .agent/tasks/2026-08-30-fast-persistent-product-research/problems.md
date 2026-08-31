@@ -311,3 +311,24 @@
 
 - Verdict: PASS for `AC1`-`AC10`; `AC11` remains pending commit/push, Railway deployment, and production widget/admin proof.
 - No remaining local findings after rereading the frozen criteria and current source, retry, timeout, evidence, persistence, and exhaustion paths and rerunning all required local gates.
+
+## AC11 Production Memory Reuse Failure
+
+- Deployed commit `b19a4fc84d96a5cb4a6020ab5dd8337af971dfca` successfully researched BISON BS6250IE and persisted three exact facts in session `b60c6ea1-d933-4aa6-8d23-3a8a4c18d9b2`.
+- A first follow-up was invalid as proof because it repeated the factual values in the buyer question. A corrected independent session `0b8ac05e-178e-4f4f-a33e-03fb9d9ddf29` repeated external research instead of using memory.
+- Root cause: the planner requested canonical attribute `usb_output_current`, while the persisted fact used `usb_supported_current`. Deterministic token matching treated `output` as a required extra token and made a semantic decision without dialogue/product-fact understanding.
+- Boundary decision: semantic equivalence of canonical attribute names belongs to the LLM planner/model. Freshness, fact ID, exact product identity, conflicting values, full slot coverage, web skipping, and usage writes remain deterministic code checks.
+
+## AC11 Semantic Memory Remediation
+
+- Added a structured semantic matcher that can return only supplied verified fact IDs, exact requested product names, and requested attributes. Saved fact fields are explicitly untrusted quoted data.
+- The orchestrator rechecks fact ID and bidirectional exact-model identity, preserves deterministic freshness/conflict/coverage checks, and falls back to normal research when the semantic matcher fails or coverage remains incomplete.
+- Added contract and orchestrator regressions for `usb_supported_current` -> `usb_output_current`, memory-hit web skipping, trace emission, bounded output schema, and prompt-injection separation.
+- Verification: canonical focused suite PASS (`254/254`); full release gate PASS (`865/865` unit, `203/203` agentic, typecheck, no-regex, dependency audit, build); `git diff --check` PASS.
+
+## AC11 Final Production Pass
+
+- Verdict: PASS on Railway marker `b420c4b5c7609dd7c1015afc403b7cb9ce5949a9` with runtime model `gpt-5.6-luna`.
+- The second independent widget session `deb2443e-844d-4918-b3f0-cd98cb28d259` used verified fact memory for `BISON BS6250IE` / `usb_output_current`, returned `usedWebSearch=false` and `searchDisposition=memory_hit`, and emitted no external `primary_web` or `tier_fallback` stage.
+- Buyer-visible answer was exact and useful: `У BISON BS6250IE USB-выход 5 В с токами 1 А и 2,1 А.`
+- Buyer/code/goal/lead issues: `0/0/0/0`. No fallback/recovery, contact pressure, or lead capture occurred.
