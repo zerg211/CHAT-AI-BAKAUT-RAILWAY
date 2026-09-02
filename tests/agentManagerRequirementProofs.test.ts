@@ -888,6 +888,56 @@ describe('generic requirement proofs', () => {
     }));
   });
 
+  it('keeps an open-text mismatch unverified instead of proving incompatibility', () => {
+    const product = generator('rato-engine', 'Бензиновый генератор TEST R390', {
+      'Модель двигателя': 'Rato R390'
+    });
+    const requirement: SelectionRequirement = {
+      id: 'engine-model-open-text',
+      kind: 'engine_model',
+      value: 'Honda GX390',
+      unit: null,
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: 'нужен двигатель Honda GX390',
+      verification: {
+        mode: 'typed_tool',
+        toolRequestId: 'catalog-details-open-text',
+        tool: 'catalog.getProductDetails',
+        verifier: 'product_attribute',
+        bindAs: 'engine_model'
+      }
+    };
+    const request: ToolRequest = {
+      id: 'catalog-details-open-text',
+      tool: 'catalog.getProductDetails',
+      args: { productIds: [product.id], productIntent: 'generator' },
+      rationale: 'read the exact catalog engine field',
+      required: true,
+      coversRequirementIds: [requirement.id]
+    };
+    const result = select({
+      products: [product],
+      intent: intentFor({ requirement, request }),
+      toolResults: [{
+        requestId: request.id,
+        tool: request.tool,
+        status: 'ok',
+        payload: { products: [product], productIds: [product.id] },
+        warnings: []
+      }]
+    });
+
+    expect(result.selectedProductIds).toEqual([product.id]);
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      requirementId: requirement.id,
+      productId: product.id,
+      status: 'unverified',
+      eligibilityStatus: 'unknown',
+      normalizedValue: 'rato_r390'
+    }));
+  });
+
   it('binds a Russian catalog paving-mat field to a strict protective-mat requirement', () => {
     const withPavingMat = {
       ...generator('masalta-mat', 'Виброплита бензиновая Masalta MSR90-4 (83 кг)', {

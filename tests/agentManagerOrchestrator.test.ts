@@ -1785,7 +1785,7 @@ describe('AgentManagerOrchestrator', () => {
         expect(input.products.map((item) => item.id), JSON.stringify({
           toolResults: input.toolResults,
           products: input.products
-        })).toEqual(['strong-derived']);
+        })).toEqual(['strong-derived', 'maximum-only-derived', 'apparent-only-derived']);
         const required = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } }).profile?.requiredNominalKw;
         return {
           answerText: `The calculated minimum is ${required} kW. TSS SGG 10000EH generator clears that requirement.`,
@@ -2572,7 +2572,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).toEqual([exact.id]);
   });
 
-  it('keeps only matching products when catalog detail ids contain mixed product classes', async () => {
+  it('lets the writer resolve mixed product classes returned for explicit detail ids', async () => {
     const generator = product('generator-id', 'TSS SGG 5000A generator', 'Generators');
     const accessory: Product = {
       ...product('plate-mat-id', 'Коврик для виброплиты', 'Комплектующие для виброплит')
@@ -2603,13 +2603,16 @@ describe('AgentManagerOrchestrator', () => {
       maxCards: 1
     };
     const composeAnswer = vi.fn(async (input) => {
-      expect(input.products.map((item: Product) => item.id)).toEqual([generator.id]);
+      expect(input.products.map((item: Product) => item.id)).toEqual([generator.id, accessory.id]);
       expect(input.toolResults).toContainEqual(expect.objectContaining({
         requestId: 'generator-details-by-wrong-id',
         status: 'ok',
         payload: expect.objectContaining({
-          productIds: [generator.id],
-          products: [expect.objectContaining({ id: generator.id })]
+          productIds: [generator.id, accessory.id],
+          products: [
+            expect.objectContaining({ id: generator.id }),
+            expect.objectContaining({ id: accessory.id })
+          ]
         })
       }));
       return {
@@ -2982,7 +2985,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards).toEqual([]);
   });
 
-  it('filters cross-class catalog noise out of visible product cards', async () => {
+  it('lets the writer remove cross-class catalog noise from visible product cards', async () => {
     class NoisyProducts extends FakeProducts {
       async searchProducts() {
         return [
@@ -3025,7 +3028,12 @@ describe('AgentManagerOrchestrator', () => {
           riskFlags: []
         };
       },
-      async composeAnswer() {
+      async composeAnswer(input) {
+        expect(input.products.map((item) => item.id)).toEqual([
+          'generator-fit',
+          'plate-noise',
+          'cutter-noise'
+        ]);
         return {
           answerText: 'From the found catalog options, Generator Dinking DK9000iE is the relevant reserve option for the coffee point.',
           factsUsed: [],
@@ -3049,9 +3057,13 @@ describe('AgentManagerOrchestrator', () => {
     expect(payload.productCards.map((card) => card.id)).not.toContain('plate-noise');
     expect(payload.productCards.map((card) => card.id)).not.toContain('cutter-noise');
     const metadata = payload.metadata as { toolResults?: Array<{ payload?: { productIds?: string[] }; warnings?: string[] }>; cardSelection?: { droppedProductIds?: string[] } };
-    expect(metadata.toolResults?.[0]?.payload?.productIds).toEqual(['generator-fit']);
-    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('catalog_products_filtered_by_intent:generator:2');
-    expect(metadata.cardSelection?.droppedProductIds).toEqual([]);
+    expect(metadata.toolResults?.[0]?.payload?.productIds).toEqual([
+      'generator-fit',
+      'plate-noise',
+      'cutter-noise'
+    ]);
+    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('catalog_products_semantic_class_unconfirmed:generator:2');
+    expect(metadata.cardSelection?.droppedProductIds).toEqual(['plate-noise', 'cutter-noise']);
   });
 
   it('scopes embedding retrieval and visible cards to the LLM product intent when the dialogue switches product class', async () => {
@@ -3111,12 +3123,15 @@ describe('AgentManagerOrchestrator', () => {
           riskFlags: []
         };
       },
-      async composeAnswer() {
+      async composeAnswer(input) {
+        expect(input.products.map((item) => item.id)).toEqual(['plate-90', 'generator-stale']);
         return {
           answerText: 'For the small driveway, Vibroplita TSS VP90 90 kg is the matching catalog direction.',
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['catalog-search'],
+          selectedProductIds: ['plate-90'],
+          selectionRationale: 'The current request is for a plate compactor.',
           leadAction: 'none',
           riskFlags: []
         };
@@ -3147,12 +3162,12 @@ describe('AgentManagerOrchestrator', () => {
       toolResults?: Array<{ payload?: { productIds?: string[]; retrieval?: { intent?: string; embeddingQuery?: string } }; warnings?: string[] }>;
       cardSelection?: { intent?: string };
     };
-    expect(metadata.toolResults?.[0]?.payload?.productIds).toEqual(['plate-90']);
+    expect(metadata.toolResults?.[0]?.payload?.productIds).toEqual(['plate-90', 'generator-stale']);
     expect(metadata.toolResults?.[0]?.payload?.retrieval).toMatchObject({
       intent: 'plate',
       embeddingQuery: 'plate compactor small driveway paving slabs sand crushed stone self loading 80-100 kg'
     });
-    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('catalog_products_filtered_by_intent:plate:1');
+    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('catalog_products_semantic_class_unconfirmed:plate:1');
     expect(metadata.cardSelection?.intent).toBe('plate');
   });
 
@@ -5790,7 +5805,7 @@ describe('AgentManagerOrchestrator', () => {
   });
 
 
-  it('filters strict ceramic blade evidence before the answer writer sees catalog products', async () => {
+  it('keeps semantic material candidates for the answer writer to resolve', async () => {
     class BladeProducts extends FakeProducts {
       override async searchProducts() {
         return [{
@@ -5858,7 +5873,7 @@ describe('AgentManagerOrchestrator', () => {
         };
       },
       async composeAnswer(input) {
-        expect(input.products.map((item) => item.id)).toEqual(['ceramic-blade']);
+        expect(input.products.map((item) => item.id)).toEqual(['ceramic-blade', 'concrete-blade']);
         return {
           answerText: 'TSS CERAMIC 350 подходит для керамической плитки.',
           factsUsed: [],
@@ -6558,7 +6573,7 @@ describe('AgentManagerOrchestrator', () => {
       model({
         async planTurn() { return intent; },
         async composeAnswer(input) {
-          expect(input.products.map((product) => product.id)).toEqual(['range-55', 'range-60']);
+          expect(input.products.map((product) => product.id)).toEqual(['range-55', 'range-60', 'plate-noise']);
           return {
             answerText: 'Предварительно есть A-iPower AP6000 5.5 kW generator за 49 990 ₽ и ENERGO ED6500KL 6.0 kW generator за 69 990 ₽.',
             factsUsed: [],
@@ -6597,7 +6612,7 @@ describe('AgentManagerOrchestrator', () => {
     })).toEqual(['range-55', 'range-60']);
     expect(metadata.toolResults?.[0]?.payload?.retrieval?.primaryExpansion).toMatchObject({
       attempted: true,
-      matchedCount: 2
+      matchedCount: 3
     });
   });
 
@@ -8888,7 +8903,7 @@ describe('parallel semantic turn contracts', () => {
     })).rejects.toThrow('web_research_product_class_missing:untyped-generator-web');
   });
 
-  it('scopes web research candidates to the web request product class', () => {
+  it('does not class-filter current tool candidates before provenance scoping', () => {
     const intent = structuredGeneratorCatalogIntent();
     intent.selectionPolicy = {
       ...intent.selectionPolicy!,
@@ -8923,7 +8938,7 @@ describe('parallel semantic turn contracts', () => {
       products: [accessory, primaryPlate],
       request,
       intent
-    }).map((item) => item.id)).toEqual([primaryPlate.id]);
+    }).map((item) => item.id)).toEqual([accessory.id, primaryPlate.id]);
   });
 
   it('rejects after two incoherent semantic corrections without a buyer answer', async () => {

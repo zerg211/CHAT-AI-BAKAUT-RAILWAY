@@ -385,7 +385,7 @@ function plateWithNameAndWeight(id: string, name: string, weightKg: number): Pro
 }
 
 describe('AgentManager visible card readiness', () => {
-  it('keeps visible cards scoped to the primary policy class when a secondary request runs first', () => {
+  it('does not override writer-selected secondary cards with regex product-class filtering', () => {
     const intent = structuredSelectionIntentForClass('plate');
     intent.toolRequests = [{
       id: 'accessory-search',
@@ -426,8 +426,8 @@ describe('AgentManager visible card readiness', () => {
     });
 
     expect(selection.intent).toBe('plate');
-    expect(selection.selectedProductIds).toEqual([plate.id]);
-    expect(selection.droppedProductIds).toContain(plateAccessory.id);
+    expect(selection.selectedProductIds).toEqual([plateAccessory.id, plate.id]);
+    expect(selection.droppedProductIds).not.toContain(plateAccessory.id);
   });
 
   it('uses primary tool-result provenance when the policy class is unfamiliar', () => {
@@ -685,6 +685,20 @@ describe('AgentManager visible card readiness', () => {
     expect(filtered.warnings).not.toContain('catalog_search_no_generator_load_fit');
   });
 
+  it('keeps a generator with unknown nominal active power as a preliminary load candidate', () => {
+    const unknownNominal = {
+      ...generatorWithPower('maximum-only', '8.0'),
+      specs: { 'Maximum power': '8 kW' }
+    };
+    const underpowered = generatorWithPower('underpowered', '4.0');
+
+    const filtered = filterGeneratorProductsByLoadProfile([unknownNominal, underpowered], 6);
+
+    expect(filtered.products.map((product) => product.id)).toEqual([unknownNominal.id]);
+    expect(filtered.droppedProductIds).toEqual([underpowered.id]);
+    expect(filtered.warnings).toContain('catalog_products_preliminary:generator_load_unconfirmed:1');
+  });
+
   it('marks generator catalog search as empty when no product fits the structured load profile', () => {
     const twoKw = generatorWithPower('two-kw', '2.0');
     const threeKw = generatorWithPower('three-kw', '3.4');
@@ -722,6 +736,35 @@ describe('AgentManager visible card readiness', () => {
     expect(selection.selectedProductIds).toEqual(['aps-800']);
     expect(selection.droppedProductIds).toEqual(expect.arrayContaining(['gasoline-1kw', 'diesel-24kw']));
     expect(selection.warnings).toContain('product_cards_filtered_by_power_source:battery:2');
+  });
+
+  it('keeps an unknown power source selected by the writer during final fit', () => {
+    const unknownSource: Product = {
+      id: 'source-unconfirmed',
+      name: 'TEST U1000',
+      brand: 'TEST',
+      category: 'Portable equipment',
+      price: 50000,
+      currency: 'RUB',
+      specs: { 'Nominal power': '1 kW' }
+    };
+    const gasoline = generatorWithPower('gasoline-conflict', '1.0');
+
+    const selection = selectProductsForVisibleCards({
+      products: [unknownSource, gasoline],
+      userMessage: 'Need a battery power station.',
+      history: [],
+      intent: structuredSelectionIntentForClass('generator', {
+        selectionGoal: 'final_fit',
+        powerSource: 'battery'
+      }),
+      answerText: 'TEST U1000 is preliminary because its power source is not confirmed.',
+      selectedProductIds: [unknownSource.id, gasoline.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.selectedProductIds).toEqual([unknownSource.id]);
+    expect(selection.droppedProductIds).toContain(gasoline.id);
   });
 
   it('filters battery station cards below an explicit watt lower bound even when the answer rejects them by name', () => {
@@ -856,7 +899,7 @@ describe('AgentManager visible card readiness', () => {
     expect(canonicalIntent).toBe('generator');
   });
 
-  it('filters concrete-only diamond blade cards when the buyer asks for porcelain or ceramic tile', () => {
+  it('does not override writer-selected material candidates with keyword matching', () => {
     const porcelain = diamondBlade('porcelain', 'Diamond blade 350 porcelain tile ceramic');
     const concrete = diamondBlade('concrete', 'Diamond blade 350 concrete reinforced concrete');
 
@@ -882,9 +925,9 @@ describe('AgentManager visible card readiness', () => {
       needState: needStateWithBudget()
     });
 
-    expect(selection.selectedProductIds).toEqual(['porcelain']);
-    expect(selection.droppedProductIds).toContain('concrete');
-    expect(selection.warnings).toContain('product_cards_filtered_by_diamond_material:1');
+    expect(selection.selectedProductIds).toEqual(['porcelain', 'concrete']);
+    expect(selection.droppedProductIds).not.toContain('concrete');
+    expect(selection.warnings).not.toContain('product_cards_filtered_by_diamond_material:1');
   });
 
   it('suppresses previous 400 kg plate cards when the current task is home paving tile', () => {

@@ -59,9 +59,8 @@ import {
   generatorAutoStartProfile,
   generatorPhaseProfile,
   generatorRemoteStartProfile,
-  isBatteryPowerStation,
-  productPowerSource,
-  productMatchesIntent
+  productMatchesIntent,
+  productPowerSource
 } from './productClassifier.js';
 import { emptyNeedState } from './needState.js';
 import { safeError } from './responseUtils.js';
@@ -87,7 +86,6 @@ import {
   productMeetsSupportedStrictAutoStartRequirement,
   productMeetsSupportedStrictRemoteStartRequirement,
   productMeetsSupportedStrictFuelRequirement,
-  productMeetsSupportedStrictMaterialRequirement,
   productMeetsSupportedStrictPriceVisibilityRequirement,
   productMeetsSupportedStrictVoltageRequirement,
   qualifiedNominalActivePowerKw,
@@ -1611,10 +1609,10 @@ export function productsMatchingToolRequestIntent(input: {
   request: ToolRequest;
   intent: AgentIntentContract;
 }) {
-  const productIntent = resolvedToolProductIntent(input.request, input.intent);
-  return productIntent === 'unknown'
-    ? input.products
-    : input.products.filter((product) => productMatchesIntent(product, productIntent));
+  // Product class is semantic evidence for the writer, not a regex-owned hard
+  // exclusion. The typed tool request already scopes retrieval; preserve every
+  // returned candidate so the LLM can resolve uncertain or unfamiliar classes.
+  return input.products;
 }
 
 function resolvedToolPowerSource(request: ToolRequest, intent: AgentIntentContract) {
@@ -2156,6 +2154,7 @@ function productMeetsStructuredPowerSource(
 ) {
   if (!required || required === 'any') return true;
   const source = productPowerSource(product);
+  if (source === 'unknown') return true;
   if (required === 'battery') return source === 'battery';
   if (required === 'fuel') return source === 'gasoline' || source === 'diesel';
   return false;
@@ -2282,14 +2281,7 @@ export function filterProductsByStructuredSelectionPolicy(input: {
     const presenceRelevant = input.intent.grounding?.taskType === 'availability_or_delivery' ||
       (input.intent.riskFlags ?? []).includes('answer_policy_catalog_presence_relevant');
     if (presenceRelevant) {
-      const exactTargetNames = (input.intent.productMentions ?? [])
-        .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
-        .map((mention) => mention.name);
-      const keptProducts = input.products.filter((product) =>
-        canonicalClass === 'unknown' ||
-        productMatchesIntent(product, canonicalClass) ||
-        exactTargetNames.some((targetName) => productMatchesTargetName(product, targetName))
-      );
+      const keptProducts = input.products;
       return {
         products: keptProducts,
         droppedProductIds: input.products
@@ -2343,9 +2335,6 @@ export function filterProductsByStructuredSelectionPolicy(input: {
     let unconfirmed = false;
     let dropped = false;
     const markUnconfirmed = () => { if (!dropped) unconfirmed = true; };
-    const strictProductClass = policy.alternativePolicy === 'exact_only' ||
-      policy.alternativePolicy === 'same_class_only';
-    if (strictProductClass && canonicalClass !== 'unknown' && !productMatchesIntent(product, canonicalClass)) dropped = true;
     if (
       !dropped &&
       policy.alternativePolicy === 'exact_only' &&
@@ -2435,7 +2424,8 @@ export function filterProductsByStructuredSelectionPolicy(input: {
         intent: input.intent,
         kinds: ['power_source', 'fuel_type'],
         nativeMatch,
-        finalFit
+        finalFit,
+        nativeKnown: source !== 'unknown'
       });
       if (outcome === 'conflict') dropped = true;
       if (outcome === 'unconfirmed') markUnconfirmed();
@@ -2497,16 +2487,14 @@ export function filterProductsByStructuredSelectionPolicy(input: {
       if (fuelOutcome === 'unconfirmed') markUnconfirmed();
     }
     if (!dropped && needsNativeCheck(['material'])) {
-      const materialOutcome = passesNativeConstraintOrResolvedProof({
+      const materialOutcome = resolvedEligibilityStatusForStrictKinds({
         proofs: requirementProofs,
         productId: product.id,
         intent: input.intent,
-        kinds: ['material'],
-        nativeMatch: productMeetsSupportedStrictMaterialRequirement(product, input.intent, canonicalClass),
-        finalFit
+        kinds: ['material']
       });
-      if (materialOutcome === 'conflict') dropped = true;
-      if (materialOutcome === 'unconfirmed') markUnconfirmed();
+      if (materialOutcome === 'violated') dropped = true;
+      if (materialOutcome !== 'satisfied' && materialOutcome !== 'violated') markUnconfirmed();
     }
     if (!dropped && !productMeetsSupportedStrictPriceVisibilityRequirement(product, input.intent)) dropped = true;
     if (!dropped && needsNativeCheck(['voltage_v'])) {
@@ -3007,14 +2995,12 @@ function coerceVisibleCardIntent(value: unknown): ProductSelectionClass {
 
 function previousVisibleCardProducts(input: {
   history: Message[];
-  intent: ProductSelectionClass;
   allowedProductIds?: Set<string>;
 }) {
   const productsById = new Map<string, Product>();
   for (let index = input.history.length - 1; index >= 0; index -= 1) {
     const products = visibleCardProducts(input.history[index]!)
-      .filter((product) => !input.allowedProductIds || input.allowedProductIds.has(product.id))
-      .filter((product) => input.intent === 'unknown' || productMatchesIntent(product, input.intent));
+      .filter((product) => !input.allowedProductIds || input.allowedProductIds.has(product.id));
     for (const product of products) {
       if (!productsById.has(product.id)) productsById.set(product.id, product);
     }
@@ -3036,10 +3022,8 @@ function previousProductReferents(input: {
     )
   ) return [] as Product[];
 
-  const productClass = canonicalProductClassFromIntent(input.intent);
   const visibleProducts = previousVisibleCardProducts({
-    history: input.history,
-    intent: productClass
+    history: input.history
   });
   const maxReferents = Math.max(1, Math.min(8, input.intent.selectionPolicy.maxCards || 8));
   const selectedReferents = visibleProducts.filter((product) => input.selectedProductIds.has(product.id));
@@ -3068,8 +3052,7 @@ function previousExplicitComparisonSubjectProducts(input: {
     .map((mention) => mention.name));
   if (!comparisonNames.length) return [] as Product[];
   const visibleProducts = previousVisibleCardProducts({
-    history: input.history,
-    intent: 'unknown'
+    history: input.history
   });
   return visibleProducts.filter((product) =>
     comparisonNames.some((name) => productNameContainsExactComparisonMention(product.name, name))
@@ -3149,12 +3132,7 @@ function previousSelectionToolResults(input: {
       ) continue;
       if (parsed.data.tool === 'catalog.search' || parsed.data.tool === 'catalog.getProductDetails') {
         const products = (parsed.data.payload as { products?: unknown }).products;
-        if (
-          !Array.isArray(products) ||
-          !products.some((product) =>
-            Boolean(product && typeof product === 'object' && productMatchesIntent(product as Product, currentClass))
-          )
-        ) continue;
+        if (!Array.isArray(products)) continue;
       }
       resultsByKey.set(`${parsed.data.tool}:${parsed.data.requestId}`, parsed.data);
     }
@@ -5271,6 +5249,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'requiredResponseClauses — обязательная смысловая часть ответа. Клауза о неподтвержденной базе расчета: не выдавай число за подтвержденное/покупочное, но не прячь полезную ориентацию калькулятора. Порог требования покупателя в одном предложении с именами товаров — только через numericClaimBinding (dimension/value, semanticRole=buyer_requirement_threshold, точный sourceId) с дословным verifiedSourceQuote; пороги калькулятора — отдельным предложением до товаров, никогда как цена/характеристика товара.',
             'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». sourcesExhausted≠true или guidance partial/not_confirmed — без handoff/контактов/offer_form: подтвержденная часть + точное имя неподтвержденного атрибута. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
             'web error/timeout/denied/not_found — это внутренний статус, не содержание ответа покупателю и не доказательство исчерпания источников. Не ссылайся на выполнение поиска и не предлагай форму/специалиста только из-за такого статуса. Используй остальные подтвержденные факты; для известных моделей назови каждую конкретно, дай полезный предварительный вывод и точно укажи недостающий покупательский факт (например, совместимый артикул для конкретного размера подошвы) и какой документ или характеристика его подтвердит. Общая ориентация по классу допустима только как явно типовая, не как факт о модели.',
+            'Ты — финальный семантический селектор карточек. products могут содержать кандидатов с неоднозначным классом, назначением, материалом или совместимостью: код намеренно не удаляет их по keyword/regex. Сам выбери только подходящие selectedProductIds по смыслу запроса и фактам; доказанный typed numeric/boolean/enum conflict обязателен, а unknown/missing атрибут означает только preliminary-кандидата с точной оговоркой, не несовместимость.',
             styleExamples,
             'Верни только JSON AnswerContract.'
           ].join('\n')
@@ -7427,19 +7406,19 @@ export class AgentManagerOrchestrator {
               request,
               intent: input.intent
             });
-            if (webProductIntent !== 'unknown') return products;
-            if (webProductClassKey === null) {
-              return products.filter((product) => webLookupProductIds.has(product.id));
+            if (webProductClassKey !== null) {
+              const matchingCatalogProductIds = new Set(toolResults
+                .filter((toolResult) =>
+                  (toolResult.tool === 'catalog.search' || toolResult.tool === 'catalog.getProductDetails') &&
+                  requestMatchesWebIntent(toolResult.requestId)
+                )
+                .flatMap((toolResult) => productsFromPersistedToolResult(toolResult).map((product) => product.id)));
+              return products.filter((product) =>
+                matchingCatalogProductIds.has(product.id) || webLookupProductIds.has(product.id)
+              );
             }
-            const matchingCatalogProductIds = new Set(toolResults
-              .filter((toolResult) =>
-                (toolResult.tool === 'catalog.search' || toolResult.tool === 'catalog.getProductDetails') &&
-                requestMatchesWebIntent(toolResult.requestId)
-              )
-              .flatMap((toolResult) => productsFromPersistedToolResult(toolResult).map((product) => product.id)));
-            return products.filter((product) =>
-              matchingCatalogProductIds.has(product.id) || webLookupProductIds.has(product.id)
-            );
+            if (webProductIntent !== 'unknown') return products;
+            return products.filter((product) => webLookupProductIds.has(product.id));
           };
           const catalogCandidatesBeforeWeb = scopedProductsForWeb();
           const precedingCatalogSucceeded = toolResults.some((result) =>
@@ -8224,7 +8203,11 @@ export class AgentManagerOrchestrator {
       );
       if (!hasWithinBudget) {
         try {
-          const broadProducts = await this.products.searchProducts('', 500, { signal: input.signal });
+          const broadProducts = await this.products.searchProducts(
+            structuredCatalogExpansionQuery(productIntent, input.intent?.selectionPolicy?.targetProductClass),
+            500,
+            { signal: input.signal }
+          );
           let added = 0;
           for (const product of broadProducts) {
             if (!productMatchesIntent(product, productIntent)) continue;
@@ -8242,13 +8225,22 @@ export class AgentManagerOrchestrator {
     const mergedProducts = [...byId.values()];
     const matchingProducts = productIntent === 'unknown'
       ? mergedProducts
-      : mergedProducts.filter((product) => productMatchesIntent(product, productIntent));
-    if (productIntent !== 'unknown' && matchingProducts.length !== mergedProducts.length) {
-      warnings.push(`catalog_products_filtered_by_intent:${productIntent}:${mergedProducts.length - matchingProducts.length}`);
+      : [
+          ...mergedProducts.filter((product) => productMatchesIntent(product, productIntent)),
+          ...mergedProducts.filter((product) => !productMatchesIntent(product, productIntent))
+        ];
+    if (productIntent !== 'unknown') {
+      const unresolvedClassCount = matchingProducts.filter((product) => !productMatchesIntent(product, productIntent)).length;
+      if (unresolvedClassCount) {
+        warnings.push(`catalog_products_semantic_class_unconfirmed:${productIntent}:${unresolvedClassCount}`);
+      }
     }
     const batteryPowerRequired = isGeneratorProductClass(productIntent) && input.powerSource === 'battery';
     let sourceFilteredProducts = batteryPowerRequired
-      ? matchingProducts.filter(isBatteryPowerStation)
+      ? matchingProducts.filter((product) => {
+          const source = productPowerSource(product);
+          return source === 'battery' || source === 'unknown';
+        })
       : matchingProducts;
     if (sourceFilteredProducts.length !== matchingProducts.length) {
       warnings.push(`catalog_products_filtered_by_power_source:battery:${matchingProducts.length - sourceFilteredProducts.length}`);
@@ -8261,7 +8253,10 @@ export class AgentManagerOrchestrator {
           );
           sourceFilteredProducts = expandedBatteryProducts
             .filter((product) => productMatchesIntent(product, productIntent))
-            .filter(isBatteryPowerStation);
+            .filter((product) => {
+              const source = productPowerSource(product);
+              return source === 'battery' || source === 'unknown';
+            });
           if (sourceFilteredProducts.length) {
             warnings.push(`catalog_battery_power_station_expansion_pool:${sourceFilteredProducts.length}`);
           } else {

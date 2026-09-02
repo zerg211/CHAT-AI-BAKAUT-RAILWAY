@@ -428,6 +428,7 @@ function numericRelation(requirement: SelectionRequirement) {
 }
 
 function compareRequirement(requirement: SelectionRequirement, actual: NormalizedComparable) {
+  const attribute = canonicalAttribute(requirementBindingAttribute(requirement));
   const expectedNumber = typeof requirement.value === 'number' || firstFiniteNumber(requirement.value) !== undefined && requirement.unit !== null;
   const expected = normalizeComparable({
     value: requirement.value,
@@ -440,7 +441,7 @@ function compareRequirement(requirement: SelectionRequirement, actual: Normalize
 
   let matches: boolean;
   if (
-    canonicalAttribute(requirementBindingAttribute(requirement)) === 'voltage' &&
+    attribute === 'voltage' &&
     typeof expected.value === 'number' &&
     typeof actual.value === 'number' &&
     (
@@ -456,14 +457,26 @@ function compareRequirement(requirement: SelectionRequirement, actual: Normalize
       : relation === 'min'
         ? actual.value >= expected.value
         : Math.abs(actual.value - expected.value) < 1e-9;
-  } else if (canonicalAttribute(requirementBindingAttribute(requirement)) === 'phase') {
+  } else if (attribute === 'phase') {
     matches = actual.value === expected.value ||
       (expected.value === 'single_phase' && actual.value === 220) ||
       (expected.value === 'single_phase' && actual.value === 230) ||
       (expected.value === 'three_phase' && actual.value === 380) ||
       (expected.value === 'three_phase' && actual.value === 400);
   } else if (typeof expected.value === 'string' && typeof actual.value === 'string') {
-    matches = actual.value === expected.value || actual.value.includes(expected.value);
+    // Open text values such as material, purpose and compatibility require
+    // semantic interpretation. String inequality or a missing substring is not
+    // proof of incompatibility and must not remove a candidate before the LLM
+    // writer evaluates the checked facts. Fuel is a closed factual enum and may
+    // still be compared deterministically.
+    const textMatches = actual.value === expected.value || actual.value.includes(expected.value);
+    if (attribute !== 'fuel_type') {
+      if (requirement.relation === 'must_not_have') {
+        return { status: textMatches ? 'violated' as const : 'unverified' as const, expected };
+      }
+      return { status: textMatches ? 'satisfied' as const : 'unverified' as const, expected };
+    }
+    matches = textMatches;
   } else {
     matches = actual.value === expected.value;
   }

@@ -16,9 +16,6 @@ import {
   generatorAutoStartProfile,
   generatorPhaseProfile,
   generatorRemoteStartProfile,
-  isBatteryPowerStation,
-  isCoreEquipment,
-  productMatchesIntent,
   productMentionedInText,
   productPowerSource
 } from './productClassifier.js';
@@ -507,7 +504,6 @@ const supportedStrictNumericRequirementUnits: Record<string, Set<string>> = {
   power_max_kw: new Set(['kw', 'квт'])
 };
 
-const supportedCeramicMaterialValues = new Set(['ceramic', 'porcelain_tile', 'ceramic_tile']);
 const generatorLoadDerivedRequirementKind = 'generator_load_scenario';
 const generatorLoadDerivedMinimumRequirementKinds = new Set(['nominal_power_min_kw', 'power_min_kw']);
 const generatorAutoStartRequirementKinds = new Set(['auto_start_required', 'autostart_required']);
@@ -552,7 +548,6 @@ const deterministicallyVerifiableStrictKinds = new Set([
   priceVisibilityRequirementKind,
   'comparison_scope',
   'quantity',
-  'material',
   ...generatorAutoStartRequirementKinds,
   ...generatorRemoteStartRequirementKinds,
   generatorLoadDerivedRequirementKind
@@ -663,7 +658,13 @@ function typedToolRequirementProof(input: {
     verification.tool === 'catalog.getProductDetails'
   ) {
     const proofs = input.requirementProofs.filter((proof) => proof.requirementId === input.requirement.id);
-    if (proofs.some((proof) => proof.status !== 'unverified')) return {};
+    // The read completed and its evidence is represented in the proof contract.
+    // An unverified semantic value is a preliminary data gap, not a malformed
+    // verifier that should suppress every candidate before the writer sees it.
+    if (
+      proofs.some((proof) => proof.status !== 'unverified') ||
+      proofs.length && !deterministicallyVerifiableStrictKinds.has(input.requirement.kind)
+    ) return {};
   }
 
   return { blocker: blocker('unsupported_typed_tool_verifier') };
@@ -910,16 +911,6 @@ export function assessStrictSelectionRequirements(
           : Number.NaN;
       if (!Number.isSafeInteger(value) || value < 1) {
         addBlocker(requirement, 'invalid_quantity_value');
-      }
-      continue;
-    }
-
-    if (requirement.kind === 'material') {
-      const value = typeof requirement.value === 'string'
-        ? requirement.value.trim().toLocaleLowerCase('en-US')
-        : '';
-      if (productClass !== 'diamondBlade' || !supportedCeramicMaterialValues.has(value)) {
-        addBlocker(requirement, 'material_not_mechanically_verifiable');
       }
       continue;
     }
@@ -1266,30 +1257,6 @@ function structuredPlateWeightRange(intent: AgentIntentContract): { min: number;
   };
 }
 
-function structuredMaterialRequirement(intent: AgentIntentContract) {
-  const requirement = (intent.selectionPolicy?.requirements ?? []).find((item) =>
-    item.kind === 'material' &&
-    item.role === 'hard_constraint' &&
-    item.strictness === 'strict' &&
-    item.verification?.mode !== 'typed_tool'
-  );
-  return typeof requirement?.value === 'string'
-    ? requirement.value.trim().toLocaleLowerCase('ru-RU')
-    : undefined;
-}
-
-export function productMeetsSupportedStrictMaterialRequirement(
-  product: Product,
-  intent: AgentIntentContract,
-  productClass: ProductSelectionClass
-) {
-  const material = structuredMaterialRequirement(intent);
-  if (!material) return true;
-  return productClass === 'diamondBlade' &&
-    supportedCeramicMaterialValues.has(material) &&
-    diamondBladeSupportsCeramic(product);
-}
-
 function productMeetsStructuredPowerSource(
   product: Product,
   powerSource: 'battery' | 'fuel' | 'mains' | 'any' | null | undefined
@@ -1622,42 +1589,10 @@ function productMeetsGeneratorPhaseRequirement(
   return profile === 'single_220';
 }
 
-const ceramicBladeMaterialTerms = [
-  'porcelain',
-  'porcelain tile',
-  'ceramic',
-  'ceramic tile',
-  fromEscaped('\\u043a\\u0435\\u0440\\u0430\\u043c\\u043e\\u0433\\u0440\\u0430\\u043d\\u0438\\u0442'),
-  fromEscaped('\\u043a\\u0435\\u0440\\u0430\\u043c\\u0438\\u043a'),
-  fromEscaped('\\u043f\\u043b\\u0438\\u0442\\u043a')
-];
-
-function productTextForMaterial(product: Product) {
-  return [
-    product.name,
-    product.brand,
-    product.category,
-    product.description,
-    JSON.stringify(product.specs ?? {})
-  ].filter(Boolean).join(' ').toLocaleLowerCase('ru-RU');
-}
-
-function requiresCeramicDiamondBlade(text: string) {
-  return windowContainsAny(text.toLocaleLowerCase('ru-RU'), ceramicBladeMaterialTerms);
-}
-
-function diamondBladeSupportsCeramic(product: Product) {
-  return windowContainsAny(productTextForMaterial(product), ceramicBladeMaterialTerms);
-}
-
-function diamondBladeMaterialKnown(product: Product) {
-  return productTextForMaterial(product).trim().length > 0;
-}
-
 export function generatorMeetsRequiredLoad(product: Product, requiredNominalKw: number) {
   if (!Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) return true;
   const nominalKw = qualifiedNominalActivePowerKw(product);
-  return nominalKw !== undefined && nominalKw >= requiredNominalKw;
+  return nominalKw === undefined ? undefined : nominalKw >= requiredNominalKw;
 }
 
 export function filterGeneratorProductsByLoadProfile(products: Product[], requiredNominalKw?: number) {
@@ -1670,16 +1605,24 @@ export function filterGeneratorProductsByLoadProfile(products: Product[], requir
   }
   const kept: Product[] = [];
   const droppedProductIds: string[] = [];
+  const unconfirmedProductIds: string[] = [];
   for (const product of products) {
-    if (generatorMeetsRequiredLoad(product, requiredNominalKw)) {
+    const fit = generatorMeetsRequiredLoad(product, requiredNominalKw);
+    if (fit !== false) {
       kept.push(product);
+      if (fit === undefined) unconfirmedProductIds.push(product.id);
     } else {
       droppedProductIds.push(product.id);
     }
   }
-  const warnings = droppedProductIds.length
-    ? [`catalog_products_filtered_by_generator_load:${droppedProductIds.length}`]
-    : [];
+  const warnings = [
+    ...(droppedProductIds.length
+      ? [`catalog_products_filtered_by_generator_load:${droppedProductIds.length}`]
+      : []),
+    ...(unconfirmedProductIds.length
+      ? [`catalog_products_preliminary:generator_load_unconfirmed:${unconfirmedProductIds.length}`]
+      : [])
+  ];
   if (!kept.length && droppedProductIds.length) {
     warnings.push('catalog_search_no_generator_load_fit');
   }
@@ -1783,11 +1726,6 @@ export function rankCatalogProductsByStructuredPreferences(input: {
     .map((item) => item.product);
 }
 
-function sameIntentProducts(products: Product[], cardIntent: ProductSelectionClass) {
-  if (cardIntent === 'unknown') return products.filter((product) => isCoreEquipment(product));
-  return products.filter((product) => productMatchesIntent(product, cardIntent));
-}
-
 export function selectProductsForVisibleCards(input: {
   products: Product[];
   userMessage: string;
@@ -1860,8 +1798,11 @@ export function selectProductsForVisibleCards(input: {
     };
   }
 
-  const requestedIds = new Set(input.selectedProductIds ?? []);
-  let selected = unique.filter((product) => requestedIds.has(product.id));
+  const uniqueById = new Map(unique.map((product) => [product.id, product]));
+  let selected = (input.selectedProductIds ?? []).flatMap((productId) => {
+    const product = uniqueById.get(productId);
+    return product ? [product] : [];
+  });
   const unfamiliarPrimaryIds = unfamiliarPrimaryProductIds(input.intent, input.toolResults ?? []);
   if (unfamiliarPrimaryIds !== null) {
     selected = selected.filter((product) => unfamiliarPrimaryIds.has(product.id));
@@ -1876,12 +1817,6 @@ export function selectProductsForVisibleCards(input: {
       );
     }
   }
-  const strictProductClass = input.intent.selectionPolicy?.alternativePolicy === 'exact_only' ||
-    input.intent.selectionPolicy?.alternativePolicy === 'same_class_only';
-  if (strictProductClass && cardIntent !== 'unknown') {
-    selected = selected.filter((product) => productMatchesIntent(product, cardIntent));
-  }
-
   const beforeGenericProofCount = selected.length;
   const genericProofOutcome = productsMeetingGenericRequirementProofs({
     products: selected,
@@ -2129,29 +2064,6 @@ export function selectProductsForVisibleCards(input: {
     }
   }
 
-  let diamondMaterialFilteredCount = 0;
-  let diamondMaterialNoFit = false;
-  const structuredMaterial = structuredMaterialRequirement(input.intent);
-  const requiresCeramic = structuredMaterial === 'ceramic' || structuredMaterial === 'porcelain_tile' || structuredMaterial === 'ceramic_tile';
-  if (cardIntent === 'diamondBlade' && selected.length && requiresCeramic) {
-    const ceramicSelected = selected.filter((product) => productPassesNativeConstraintOrAuthoritativeProof({
-      proofs: requirementProofs,
-      productId: product.id,
-      intent: input.intent,
-      kinds: ['material'],
-      nativeMatch: diamondBladeSupportsCeramic(product),
-      nativeKnown: diamondBladeMaterialKnown(product)
-    }));
-    if (ceramicSelected.length) {
-      diamondMaterialFilteredCount = selected.length - ceramicSelected.length;
-      selected = ceramicSelected;
-    } else {
-      diamondMaterialFilteredCount = selected.length;
-      selected = [];
-      diamondMaterialNoFit = true;
-    }
-  }
-
   const visibleCardLimit = input.intent.selectionPolicy?.maxCards ?? undefined;
   const selectedById = uniqueProducts(selected);
   const selectedProducts = uniqueVisibleProductsByIdentity(selectedById).slice(0, visibleCardLimit ?? 8);
@@ -2215,8 +2127,6 @@ export function selectProductsForVisibleCards(input: {
     ...(generatorRemoteStartUnknownKeptCount > 0 ? [`product_cards_preliminary:generator_remote_start_unconfirmed:${generatorRemoteStartUnknownKeptCount}`] : []),
     ...(numericFitFilteredCount > 0 ? [`product_cards_filtered_by_numeric_fit:${numericFitFilteredCount}`] : []),
     ...(plateTaskFilteredCount > 0 ? [`product_cards_filtered_by_plate_task:${plateTaskFilteredCount}`] : []),
-    ...(diamondMaterialFilteredCount > 0 ? [`product_cards_filtered_by_diamond_material:${diamondMaterialFilteredCount}`] : []),
-    ...(diamondMaterialNoFit ? ['product_cards_suppressed:diamond_material_no_fit'] : []),
     ...plateTaskWarnings
   ];
 
