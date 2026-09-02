@@ -5,9 +5,9 @@ COMMAND: npm run typecheck
 RESULT: PASS
 OUTPUT SUMMARY: tsc --noEmit passed for tsconfig.json and tsconfig.server.json.
 
-COMMAND: npx vitest run tests/agentManagerCardSelection.test.ts tests/agentManagerRequirementProofs.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerConditionalWebShortCircuit.test.ts tests/agentManagerExactProductIdentity.test.ts --reporter=verbose
+COMMAND: npx vitest run tests/agentManagerCardSelection.test.ts tests/agentManagerRequirementProofs.test.ts tests/agentManagerOrchestrator.test.ts tests/agentManagerConditionalWebShortCircuit.test.ts tests/agentManagerExactProductIdentity.test.ts tests/agentManagerSemanticDecision.test.ts tests/agentManagerGeneratorLoad.test.ts
 RESULT: PASS
-OUTPUT SUMMARY: 5 test files passed; 256 tests passed.
+OUTPUT SUMMARY: 7 test files passed; 278 tests passed in the fresh verifier run.
 
 COMMAND: npm run test:eval:agentic
 RESULT: PASS
@@ -15,11 +15,11 @@ OUTPUT SUMMARY: 4 test files passed; 205 tests passed.
 
 COMMAND: npm test
 RESULT: PASS
-OUTPUT SUMMARY: 84 test files passed; 868 tests passed; duration 13.20s.
+OUTPUT SUMMARY: 84 test files passed; 873 tests passed; duration 14.52s in the builder run. Fresh verifier rerun also passed all 873 tests.
 
 COMMAND: npx vitest run tests/leadRoutes.test.ts --reporter=verbose
 RESULT: PASS
-OUTPUT SUMMARY: 1 test file passed; 12 tests passed. The test that timed out under concurrent load completed in 164ms.
+OUTPUT SUMMARY: 1 test file passed; 12 tests passed. The test that timed out under concurrent load completed in 204ms.
 
 COMMAND: npm run lint:no-regex
 RESULT: PASS

@@ -1,7 +1,6 @@
 import type { CustomerNeedState, Message, Product, ProductCard, ProductSelectionClass } from '../shared/types.js';
 import type { AgentIntentContract, AnswerContract, AnswerSelectionReadiness, ToolRequest, ToolResult } from './agentManagerContracts.js';
 import {
-  hasGeneratorLoadBasisThatBlocksPreliminaryFit,
   hasUnconfirmedGeneratorLoadBasisResult,
   isGeneratorProductClass
 } from './agentManagerGeneratorLoad.js';
@@ -637,12 +636,6 @@ function typedToolRequirementProof(input: {
       hasUnconfirmedGeneratorLoadBasisResult([result])
     ) {
       return { blocker: blocker('generator_load_result_not_final_fit_safe') };
-    }
-    if (
-      selectionGoal === 'preliminary_fit' &&
-      hasGeneratorLoadBasisThatBlocksPreliminaryFit([result])
-    ) {
-      return { blocker: blocker('generator_load_result_not_preliminary_fit_safe') };
     }
     const profile = (result.payload as { profile?: { requiredNominalKw?: unknown } }).profile;
     const requiredNominalKw = profile?.requiredNominalKw;
@@ -2170,11 +2163,8 @@ export function assessVisibleCardReadiness(input: {
 }): VisibleCardReadiness {
   const productClass = input.cardSelection.intent;
   const selectionGoal = input.intent?.selectionPolicy?.selectionGoal ?? 'final_fit';
-  const generatorLoadBlocksCards = selectionGoal === 'browse_catalog'
-    ? false
-    : selectionGoal === 'preliminary_fit'
-      ? hasGeneratorLoadBasisThatBlocksPreliminaryFit(input.toolResults ?? [])
-      : hasUnconfirmedGeneratorLoadBasisResult(input.toolResults ?? []);
+  const generatorLoadBlocksCards = selectionGoal === 'final_fit' &&
+    hasUnconfirmedGeneratorLoadBasisResult(input.toolResults ?? []);
   if (isGeneratorProductClass(productClass) && generatorLoadBlocksCards) {
     return {
       status: 'blocked_by_tool_safety',

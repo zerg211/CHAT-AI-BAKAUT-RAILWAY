@@ -17,8 +17,8 @@
     "typecheck": "PASS",
     "focusedTests": {
       "status": "PASS",
-      "tests": 256,
-      "files": 5
+      "tests": 278,
+      "files": 7
     },
     "agenticTests": {
       "status": "PASS",
@@ -27,7 +27,7 @@
     },
     "fullTests": {
       "status": "PASS",
-      "tests": 868,
+      "tests": 873,
       "files": 84
     },
     "noRegex": {

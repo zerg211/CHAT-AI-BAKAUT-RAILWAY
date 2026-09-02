@@ -400,6 +400,19 @@ function activeScopedLedgerFacts(ledgerState: ReducedDialogueLedgerState) {
   return activeFacts.filter((fact) => !fact.needId || fact.needId === currentNeedId);
 }
 
+function semanticRequirementValuesMatch(factKey: string, left: unknown, right: unknown) {
+  if (Object.is(left, right)) return true;
+  if (factKey !== 'voltage_v') return false;
+
+  const leftVoltage = typeof left === 'number' ? left : Number(left);
+  const rightVoltage = typeof right === 'number' ? right : Number(right);
+  if (!Number.isFinite(leftVoltage) || !Number.isFinite(rightVoltage)) return false;
+  return (
+    ([220, 230].includes(leftVoltage) && [220, 230].includes(rightVoltage)) ||
+    ([380, 400].includes(leftVoltage) && [380, 400].includes(rightVoltage))
+  );
+}
+
 function parallelIntentLedgerConflicts(input: {
   intent: AgentIntentContract;
   previousLedgerState: ReducedDialogueLedgerState;
@@ -518,7 +531,9 @@ function parallelIntentLedgerConflicts(input: {
       requirement.role === 'hard_constraint' &&
       requirement.strictness === 'strict'
     );
-    const matchingRequirement = requirements.some((requirement) => Object.is(requirement.value, fact.value));
+    const matchingRequirement = requirements.some((requirement) =>
+      semanticRequirementValuesMatch(fact.factKey, requirement.value, fact.value)
+    );
     const hasStructuredField = fact.factKey === 'phase' || fact.factKey === 'power_source';
     const structuredFieldMatches = fact.factKey === 'phase'
       ? Object.is(policy?.phase, fact.value)
@@ -1150,7 +1165,9 @@ export function validateAgentSemanticDecision(input: {
       requirement.role === 'hard_constraint' &&
       requirement.strictness === 'strict'
     );
-    const matchingRequirement = requirements.some((requirement) => Object.is(requirement.value, fact.value));
+    const matchingRequirement = requirements.some((requirement) =>
+      semanticRequirementValuesMatch(fact.factKey, requirement.value, fact.value)
+    );
     const structuredFieldMatches = fact.factKey === 'phase'
       ? Object.is(policy?.phase, fact.value)
       : fact.factKey === 'power_source'
@@ -5236,7 +5253,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'evidenceConflicts в products — это неразрешённое расхождение значений одной характеристики. Не выбирай значение самостоятельно и не называй его подтвержденным; сохрани полезный вывод по остальным фактам и обозначь эту характеристику как требующую уточнения.',
             'lead.capture ok → подтверди получение и не проси повторно. not_found/error (нет имени/телефона) → НЕ подтверждай и не говори, что передано; leadAction="offer_form" и просьба недостающего контакта в форме.',
             'Без лишних вопросов; вопрос — только если он реально нужен для следующего шага.',
-            'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум, не заменяй более широким классом (выше — только как запас/комфорт). Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind: без fit-заявлений; browse_catalog может показывать товары/цены без compatibility claim, preliminary_fit/final_fit — canShowProductCards=false и минимальный вопрос. bounded_basis_incomplete: без final fit, browse показывает товары, preliminary_fit — только полезные предварительные. bounded_assumption: только предварительные карточки при просьбе приблизительного подбора, допущения в answerText и missingFacts.',
+            'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум, не заменяй более широким классом (выше — только как запас/комфорт). Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind/bounded_basis_incomplete/bounded_assumption: без final fit и без утверждения совместимости; browse_catalog или preliminary_fit могут показывать реальные каталоговые товары как полезные предварительные варианты с canShowProductCards=true, если нет доказанного конфликта, а missingFacts и answerText точно называют непроверенную нагрузку. final_fit — canShowProductCards=false и минимальный вопрос.',
             'Просьба предварительных вариантов + calculator ok + catalog товары → selectionReadiness "ready_for_preliminary_cards", карточки предварительные, недостающий точный факт назван. Если расчет и каталог доказывают load/phase, отсутствие топлива или бюджета не подавляет полезные предварительные карточки: покажи подходящие, назови допущение, максимум один уточняющий вопрос.',
             'selectionReadiness — твоё семантическое решение о честности карточек сейчас: needs_more_info (fit рано, не browse), ready_for_preliminary_cards (browse/preliminary_fit без обещания совместимости), ready_for_exact_cards (факты достаточны для final_fit). canShowProductCards=false → answerText сам объясняет, чего не хватает. generator без карточек → ответ самодостаточен: упомяни подбор и блокирующий факт, не голый вопрос.',
             'selectedProductIds — только ID из products/toolResults, только поддерживающие рекомендацию, с уважением maxCards/alternativePolicy, [] когда карточки не полезны. Просьба вариантов/ассортимента + несколько recommendation_candidate → 2-4: сильнейший первым, затем различные (бренд/тип/цена); одна карточка — только когда кандидат один или просили одну. Кандидаты с неподтвержденным решающим атрибутом — после подтвержденных, как preliminary с оговоркой. Если selectedProductIds не пуст, selectionRationale обязателен: короткая покупательская причина выбора на основе подтвержденных фактов и typed selection policy; иначе selectionRationale=null.',

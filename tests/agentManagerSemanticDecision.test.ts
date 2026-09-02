@@ -402,4 +402,90 @@ describe('combined semantic decision validation', () => {
     expect(result.issues).toContain('active_requirement_mismatch:budget_max_rub');
   });
 
+  it.each([
+    { factVoltage: 220, requirementVoltage: 230 },
+    { factVoltage: 230, requirementVoltage: 220 },
+    { factVoltage: 380, requirementVoltage: 400 },
+    { factVoltage: 400, requirementVoltage: 380 }
+  ])('accepts equivalent $factVoltage V and $requirementVoltage V requirement representations', ({
+    factVoltage,
+    requirementVoltage
+  }) => {
+    const decision = generatorDecision();
+    decision.ledgerDelta.events.push({
+      eventType: 'fact.confirmed',
+      scope: 'need',
+      payload: {
+        factKey: 'voltage_v',
+        value: factVoltage,
+        needId: 'generator-workshop',
+        productClass: 'generator',
+        role: 'hard_requirement',
+        confidence: 1
+      },
+      evidence: `The supply is ${factVoltage} V.`,
+      source: 'llm_state_delta',
+      status: 'active'
+    });
+    decision.intent.selectionPolicy!.requirements.push({
+      id: 'voltage',
+      kind: 'voltage_v',
+      value: requirementVoltage,
+      unit: 'V',
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: `${requirementVoltage} V supply`,
+      verification: { mode: 'product_attribute' }
+    });
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222'
+    });
+
+    expect(result.issues).not.toContain('active_requirement_mismatch:voltage_v');
+  });
+
+  it('keeps incompatible single-phase and three-phase voltage requirements distinct', () => {
+    const decision = generatorDecision();
+    decision.ledgerDelta.events.push({
+      eventType: 'fact.confirmed',
+      scope: 'need',
+      payload: {
+        factKey: 'voltage_v',
+        value: 220,
+        needId: 'generator-workshop',
+        productClass: 'generator',
+        role: 'hard_requirement',
+        confidence: 1
+      },
+      evidence: 'The supply is 220 V.',
+      source: 'llm_state_delta',
+      status: 'active'
+    });
+    decision.intent.selectionPolicy!.requirements.push({
+      id: 'voltage',
+      kind: 'voltage_v',
+      value: 400,
+      unit: 'V',
+      relation: 'must_have',
+      role: 'hard_constraint',
+      strictness: 'strict',
+      evidence: '400 V supply',
+      verification: { mode: 'product_attribute' }
+    });
+
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: reduceDialogueLedger([]),
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      turnId: '22222222-2222-4222-8222-222222222222'
+    });
+
+    expect(result.issues).toContain('active_requirement_mismatch:voltage_v');
+  });
+
 });

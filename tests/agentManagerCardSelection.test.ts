@@ -1682,7 +1682,18 @@ describe('AgentManager visible card readiness', () => {
       answer,
       toolResults: [unsafeLoadResult],
       intent
-    }).status).toBe('blocked_by_tool_safety');
+    }).status).toBe('ready_for_cards');
+
+    const preliminaryGate = generatorLoadDerivedConstraintIntent();
+    preliminaryGate.selectionPolicy!.selectionGoal = 'preliminary_fit';
+    expect(assessStrictSelectionRequirements(
+      preliminaryGate,
+      'generator',
+      [unsafeLoadResult]
+    )).toEqual({
+      blockers: [],
+      generatorNominalPowerMinKw: 5.5
+    });
   });
 
   it('does not use a generator-load proof for a different product class', () => {
