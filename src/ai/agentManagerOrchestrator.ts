@@ -1180,9 +1180,13 @@ export function validateAgentSemanticDecision(input: {
   // Buyer-level commercial constraints survive need switches until the buyer
   // changes or retracts them: a still-active dialogue-wide hard fact without a
   // mirrored strict requirement (or structured policy field) is a silent drop,
-  // not a clean scope reset. Retraction is recognised through the fact status
-  // itself (the reducer flips it on supersede/negate events), so only active
-  // facts are examined here. The check runs only on turns that actually select
+  // not a clean scope reset. Only buyer-level kinds are enforced here on
+  // purpose: auto-persisting task-level kinds would be wrong (dacha kilowatts
+  // do not apply to construction, dacha phase is not the site phase), so those
+  // stay governed by the planner switch-discipline prompt rule above, which is
+  // kind-agnostic. Retraction is recognised through the fact status itself
+  // (the reducer flips it on supersede/negate events), so only active facts
+  // are examined here. The check runs only on turns that actually select
   // products (fresh catalog read or explicitly reused cards); pure
   // clarifications and answers carry no shortlist that could violate it.
   const buyerLevelPersistentKinds = new Set([
@@ -4887,6 +4891,7 @@ function plannerSystemPromptBlock(
     'selectionGoal: browse_catalog — ассортимент/цены без обещания совместимости; preliminary_fit — подбор с оговорками; final_fit — подтверждение пригодности к покупке.',
     'requirements: каждое число/ограничение отдельно — kind, value/unit нормализованно, relation (must_have, must_not_have, preferred, not_required, context), role (hard_constraint, preference, context, mentioned_only), strictness (strict/preferred/informational), evidence — точная опора. Код не угадывает роль числа.',
     'Бюджет покупателя (budget_max_rub/price_max_rub) действует и после смены потребности, пока покупатель его не изменил, не ограничил задачей или не отменил: фиксируй ledger fact + strict requirement в каждый ход подбора; смена задачи бюджет не сбрасывает. Топливо/источник энергии не выдумывай: не задано покупателем — powerSource "any" без strict fuel requirement; показ только из одного типа топлива без заявленного предпочтения запрещён без явной оговорки-допущения в ответе.',
+    'При смене потребности явно реши судьбу каждого активного hard-ограничения: перенеси, обнови или ретрактируй фактом с опорой на реплику покупателя; молча не роняй ни одно — даже техническое. Производные расчёта (generator_load_scenario и его числовые минимумы) не переноси, а пересчитывай заново под новую задачу: киловатты дачи не действуют на стройке.',
     '"Автозапуск не нужен" = relation="not_required" (не исключает автозапуск); только явный запрет "только без автозапуска" = must_not_have/hard_constraint/strict/false.',
     'verification: {mode:"product_attribute"} — товар сам должен нести атрибут; {mode:"typed_tool",toolRequestId,tool,verifier,bindAs} — typed tool даёт constraint. Единственный derived binding: calculator.generatorLoad, verifier="generator_load_profile", bindAs="nominal_power_min_kw" — тогда kind="generator_load_scenario", value=true, unit=null, детали нагрузок в evidence и args. Каждый typed verification ссылается на required tool request, чьи coversRequirementIds содержат id requirement. Каждый toolRequest несёт coversRequirementIds ([] если ничего не верифицирует).',
     'rankingObjectives — только для явных предпочтений, ранжируемых по числу: ссылка requirementId на requirement role="preference"/strictness="preferred"/relation="preferred"/verification product_attribute. Атрибуты: weight_kg, price_rub, nominal_power_kw; direction minimize/maximize (малый вес → weight_kg/minimize, дешевле → price_rub/minimize, мощнее → nominal_power_kw/maximize). Иначе [].',

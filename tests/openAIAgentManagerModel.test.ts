@@ -460,6 +460,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('смена задачи бюджет не сбрасывает');
     expect(plannerPrompt).toContain('Топливо/источник энергии не выдумывай');
     expect(plannerPrompt).toContain('catalog.search limit ставь с запасом');
+    expect(plannerPrompt).toContain('молча не роняй ни одно');
+    expect(plannerPrompt).toContain('пересчитывай заново под новую задачу');
     const rankingSchema = plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.properties?.rankingObjectives;
     expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
     expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);
