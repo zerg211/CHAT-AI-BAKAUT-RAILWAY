@@ -77,6 +77,33 @@ export class ChatHistoryNotFoundError extends Error {
   }
 }
 
+/**
+ * Finds the persisted assistant answer for a user message whose live stream
+ * broke. The stream can die (flaky network, long thinking) while the server
+ * still completes the turn, so the answer already exists in history.
+ * Returns the matching assistant message, or null when there is nothing
+ * safe to show (no match, empty answer, or the turn is still running —
+ * callers can check pendingTurn separately).
+ */
+export function findCompletedAnswerForRetry(
+  messages: RestoredChatMessage[],
+  userText: string
+): RestoredChatMessage | null {
+  const wanted = userText.trim();
+  if (!wanted) return null;
+  let userSeen = false;
+  let candidate: RestoredChatMessage | null = null;
+  for (const message of messages) {
+    if (message.role === 'user' && message.content.trim() === wanted) {
+      userSeen = true;
+      candidate = null;
+    } else if (userSeen && message.role === 'assistant') {
+      if (message.content.trim()) candidate = message;
+    }
+  }
+  return candidate;
+}
+
 function trimTrailingSlashes(value: string) {
   let result = value;
   while (result.endsWith('/')) result = result.slice(0, -1);

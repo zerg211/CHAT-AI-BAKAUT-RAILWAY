@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   abandonSavedChat,
+  findCompletedAnswerForRetry,
   initialChatHydrationState,
   restoreSavedChatSession,
   safeBrowserStorage,
@@ -51,6 +52,55 @@ function restoredMessagesForUi(messages: RestoredChatMessage[]): ChatMessage[] {
     leadRequested: message.leadRequested,
     status: 'done'
   }));
+}
+
+const STREAM_RECOVERY_TIMEOUT_MS = 20_000;
+
+type RecoveredStreamAnswer = {
+  content: string;
+  serverId?: string;
+  cards?: ProductCard[];
+  cardDisplay?: CardDisplayOptions;
+  leadRequested?: boolean;
+};
+
+/**
+ * The live SSE stream can break (flaky network, long thinking) while the
+ * server still completes the turn — the answer then exists in history.
+ * Pulls it once, with a bounded wait, instead of showing a connection error
+ * for an answer that is already ready.
+ */
+async function recoverCompletedAnswerAfterStreamFailure(input: {
+  apiBase: string;
+  sessionId: string | null;
+  visitorId: string | null;
+  userText: string;
+}): Promise<RecoveredStreamAnswer | null> {
+  if (!input.sessionId || !input.visitorId) return null;
+  const { apiBase, sessionId, visitorId, userText } = input;
+  const timeout = new Promise<null>((resolve) => {
+    window.setTimeout(() => resolve(null), STREAM_RECOVERY_TIMEOUT_MS);
+  });
+  const lookup = (async (): Promise<RecoveredStreamAnswer | null> => {
+    const restoration = await restoreSavedChatSession(
+      apiBase,
+      sessionId,
+      visitorId,
+      safeBrowserStorage('sessionStorage')
+    ).catch(() => null);
+    if (!restoration || restoration.kind !== 'restored') return null;
+    if (restoration.pendingTurn && !restoration.pendingTurn.terminal) return null;
+    const completed = findCompletedAnswerForRetry(restoration.messages, userText);
+    if (!completed) return null;
+    return {
+      content: completed.content,
+      serverId: completed.id,
+      cards: completed.products,
+      cardDisplay: completed.cardDisplay,
+      leadRequested: completed.leadRequested
+    };
+  })().catch(() => null);
+  return Promise.race([lookup, timeout]);
 }
 
 type LeadForm = {
@@ -1494,17 +1544,47 @@ function App() {
           message.id === assistantId ? { ...message, content: message.content || 'Ответ остановлен.', status: 'stopped' } : message
         )));
       } else {
+        const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
+        setMessages((current) => current.map((message) => (
+          message.id === assistantId && !message.content
+            ? { ...message, progress: 'Проверяю, готов ли ответ...' }
+            : message
+        )));
+        const recovered = await recoverCompletedAnswerAfterStreamFailure({
+          apiBase,
+          sessionId: attemptedSessionId,
+          visitorId,
+          userText
+        });
+        if (recovered) {
+          if (recovered.leadRequested) setLeadAutoOpenKey((value) => value + 1);
+          setMessages((current) => current.map((message) => (
+            message.id === assistantId
+              ? {
+                  ...message,
+                  content: recovered.content,
+                  serverId: recovered.serverId,
+                  cards: recovered.cards ?? message.cards,
+                  cardDisplay: recovered.cardDisplay ?? message.cardDisplay,
+                  leadRequested: recovered.leadRequested,
+                  progress: undefined,
+                  status: 'done'
+                }
+              : message
+          )));
+          return;
+        }
         const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не смог надежно сформировать ответ|не удалось получить ответ/i.test(submitError.message)
           ? submitError.message
           : 'Сейчас не удалось надежно отправить или завершить вопрос. Проверьте соединение и попробуйте ещё раз.';
-         setMessages((current) => current.map((message) => (
-           message.id === assistantId
-             ? {
-                 ...message,
-                 content: message.content,
-                 progress: undefined,
-                 status: 'error'
-               }
+          setMessages((current) => current.map((message) => (
+          message.id === assistantId
+            ? {
+                ...message,
+                content: message.content,
+                progress: undefined,
+                status: 'error'
+              }
             : message
         )));
       setError(safeMessage);
