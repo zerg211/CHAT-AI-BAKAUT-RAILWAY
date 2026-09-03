@@ -316,7 +316,15 @@ async function adminResponseError(response: Response, fallback: string) {
   }
 }
 
-const apiBase = '';
+function resolveApiBase() {
+  const override = (window as unknown as { BAKAUT_CHAT_API_BASE?: unknown }).BAKAUT_CHAT_API_BASE;
+  if (typeof override !== 'string') return '';
+  let base = override.trim();
+  while (base.endsWith('/')) base = base.slice(0, -1);
+  return base;
+}
+
+const apiBase = resolveApiBase();
 const CHAT_TURN_TIMEOUT_MS = 300_000;
 
 function id() {

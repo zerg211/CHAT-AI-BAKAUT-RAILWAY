@@ -16,6 +16,7 @@ import {
 } from '../db/repositories.js';
 import { limitPublicHistoryResponse, normalizePublicHistoryMessage } from '../shared/publicChatHistory.js';
 import { closeSseReply, openSseReply, startStatusTimer } from './sse.js';
+import { sseCorsHeaders } from '../cors.js';
 
 const createSessionSchema = z.object({
   visitorId: z.string().trim().min(1).max(200).optional(),
@@ -241,7 +242,10 @@ export async function registerChatRoutes(
     const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(turn.deadlineAt));
     timeout.unref?.();
 
-    const send = openSseReply(reply, { 'x-chat-turn-id': turnId });
+    const send = openSseReply(reply, {
+      'x-chat-turn-id': turnId,
+      ...sseCorsHeaders(request.headers.origin)
+    });
 
     let stopStatusTimer: (() => void) | null = null;
     try {
@@ -353,7 +357,10 @@ export async function registerChatRoutes(
     const timeout = setTimeout(() => controller.abort(), remainingTurnDeadlineMs(persistedTurn?.deadlineAt));
     timeout.unref?.();
 
-    const send = openSseReply(reply, { 'x-chat-turn-id': params.turnId });
+    const send = openSseReply(reply, {
+      'x-chat-turn-id': params.turnId,
+      ...sseCorsHeaders(request.headers.origin)
+    });
 
     let stopStatusTimer: (() => void) | null = null;
     let runtimeDecision = getAgentManagerRuntimeDecision();
