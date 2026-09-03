@@ -74,6 +74,21 @@
         "cheapest may appear only as backup/economy option if specs are genuinely good",
         "if cheapest is weak or data is poor, do not show it"
       ]
+    },
+    {
+      "id": "vague_first_fit_request_narrows_before_cards",
+      "buyerUtteranceVariants": [
+        "Подберите генератор для дачи",
+        "Нужен генератор на дачу, посоветуйте",
+        "Какой генератор взять для загородного дома"
+      ],
+      "catalogSetup": "Catalog has many generators across power bands; buyer stated zero requirements.",
+      "expectedBehavior": [
+        "ask exactly one key narrowing question about simultaneous appliances or load before showing cards",
+        "give a short rough class orientation labeled as rough, not a product fact",
+        "show no product cards until the buyer states at least one requirement",
+        "never fill the gap with a brand/type/price showcase"
+      ]
     }
   ],
   "longDialogueScenario": {
