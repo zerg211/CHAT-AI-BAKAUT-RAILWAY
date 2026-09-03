@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findCompletedAnswerForRetry } from '../src/client/chatHistory.js';
+import { findCompletedAnswerForRetry, runningTurnIdForRetry } from '../src/client/chatHistory.js';
 import type { RestoredChatMessage } from '../src/client/chatHistory.js';
 
 function user(content: string): RestoredChatMessage {
@@ -34,5 +34,19 @@ describe('findCompletedAnswerForRetry', () => {
 
   it('returns null for blank questions', () => {
     expect(findCompletedAnswerForRetry([assistant('Ответ.')], '   ')).toBeNull();
+  });
+});
+
+describe('runningTurnIdForRetry', () => {
+  it('returns the turn id while the answer is still being prepared', () => {
+    expect(runningTurnIdForRetry({ turnId: 'turn-1', status: 'answering', stage: null, deadlineAt: null, terminal: false, resultState: 'pending' }))
+      .toBe('turn-1');
+  });
+
+  it('returns null for terminal or missing turns', () => {
+    expect(runningTurnIdForRetry({ turnId: 'turn-1', status: 'completed', stage: null, deadlineAt: null, terminal: true, resultState: 'ready' }))
+      .toBeNull();
+    expect(runningTurnIdForRetry(null)).toBeNull();
+    expect(runningTurnIdForRetry(undefined)).toBeNull();
   });
 });

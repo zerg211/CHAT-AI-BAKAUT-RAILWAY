@@ -5,6 +5,7 @@ import {
   findCompletedAnswerForRetry,
   initialChatHydrationState,
   restoreSavedChatSession,
+  runningTurnIdForRetry,
   safeBrowserStorage,
   safeStorageGet,
   safeStorageRemove,
@@ -70,36 +71,45 @@ type RecoveredStreamAnswer = {
  * Pulls it once, with a bounded wait, instead of showing a connection error
  * for an answer that is already ready.
  */
+type StreamFailureRecovery =
+  | { kind: 'answered'; answer: RecoveredStreamAnswer }
+  | { kind: 'running'; turnId: string }
+  | { kind: 'none' };
+
 async function recoverCompletedAnswerAfterStreamFailure(input: {
   apiBase: string;
   sessionId: string | null;
   visitorId: string | null;
   userText: string;
-}): Promise<RecoveredStreamAnswer | null> {
-  if (!input.sessionId || !input.visitorId) return null;
+}): Promise<StreamFailureRecovery> {
+  if (!input.sessionId || !input.visitorId) return { kind: 'none' };
   const { apiBase, sessionId, visitorId, userText } = input;
-  const timeout = new Promise<null>((resolve) => {
-    window.setTimeout(() => resolve(null), STREAM_RECOVERY_TIMEOUT_MS);
+  const timeout = new Promise<StreamFailureRecovery>((resolve) => {
+    window.setTimeout(() => resolve({ kind: 'none' }), STREAM_RECOVERY_TIMEOUT_MS);
   });
-  const lookup = (async (): Promise<RecoveredStreamAnswer | null> => {
+  const lookup = (async (): Promise<StreamFailureRecovery> => {
     const restoration = await restoreSavedChatSession(
       apiBase,
       sessionId,
       visitorId,
       safeBrowserStorage('sessionStorage')
     ).catch(() => null);
-    if (!restoration || restoration.kind !== 'restored') return null;
-    if (restoration.pendingTurn && !restoration.pendingTurn.terminal) return null;
+    if (!restoration || restoration.kind !== 'restored') return { kind: 'none' };
+    const runningTurnId = runningTurnIdForRetry(restoration.pendingTurn);
+    if (runningTurnId) return { kind: 'running', turnId: runningTurnId };
     const completed = findCompletedAnswerForRetry(restoration.messages, userText);
-    if (!completed) return null;
+    if (!completed) return { kind: 'none' };
     return {
-      content: completed.content,
-      serverId: completed.id,
-      cards: completed.products,
-      cardDisplay: completed.cardDisplay,
-      leadRequested: completed.leadRequested
+      kind: 'answered',
+      answer: {
+        content: completed.content,
+        serverId: completed.id,
+        cards: completed.products,
+        cardDisplay: completed.cardDisplay,
+        leadRequested: completed.leadRequested
+      }
     };
-  })().catch(() => null);
+  })().catch((): StreamFailureRecovery => ({ kind: 'none' }));
   return Promise.race([lookup, timeout]);
 }
 
@@ -1556,23 +1566,82 @@ function App() {
           visitorId,
           userText
         });
-        if (recovered) {
-          if (recovered.leadRequested) setLeadAutoOpenKey((value) => value + 1);
+        if (recovered.kind === 'answered') {
+          const answer = recovered.answer;
+          if (answer.leadRequested) setLeadAutoOpenKey((value) => value + 1);
           setMessages((current) => current.map((message) => (
             message.id === assistantId
               ? {
                   ...message,
-                  content: recovered.content,
-                  serverId: recovered.serverId,
-                  cards: recovered.cards ?? message.cards,
-                  cardDisplay: recovered.cardDisplay ?? message.cardDisplay,
-                  leadRequested: recovered.leadRequested,
+                  content: answer.content,
+                  serverId: answer.serverId,
+                  cards: answer.cards ?? message.cards,
+                  cardDisplay: answer.cardDisplay ?? message.cardDisplay,
+                  leadRequested: answer.leadRequested,
                   progress: undefined,
                   status: 'done'
                 }
               : message
           )));
           return;
+        }
+        if (recovered.kind === 'running' && attemptedSessionId && visitorId) {
+          setMessages((current) => current.map((message) => (
+            message.id === assistantId
+              ? { ...message, progress: 'Ответ готовится, жду...' }
+              : message
+          )));
+          const recoveryController = new AbortController();
+          const releaseRecovery = registerChatAbortController(abortRef, recoveryController);
+          try {
+            let recoveredText = '';
+            const payload = await recoverChatTurn(
+              apiBase,
+              attemptedSessionId,
+              recovered.turnId,
+              visitorId,
+              {
+                onDelta: (delta) => {
+                  recoveredText += delta;
+                  const snapshot = recoveredText;
+                  setMessages((current) => current.map((message) => (
+                    message.id === assistantId
+                      ? { ...message, content: snapshot, progress: undefined }
+                      : message
+                  )));
+                },
+                onStatus: (progress) => {
+                  setMessages((current) => current.map((message) => (
+                    message.id === assistantId && !message.content
+                      ? { ...message, progress }
+                      : message
+                  )));
+                }
+              },
+              recoveryController.signal
+            ).catch(() => null);
+            if (payload && typeof payload.answer === 'string' && payload.answer.trim()) {
+              if (payload.leadRequested) setLeadAutoOpenKey((value) => value + 1);
+              setMessages((current) => current.map((message) => (
+                message.id === assistantId
+                  ? {
+                      ...message,
+                      content: payload.answer,
+                      serverId: payload.assistantMessageId,
+                      cards: payload.productCards?.length ? payload.productCards : message.cards,
+                      cardDisplay: payload.cardDisplay ?? payload.metadata?.cardDisplay ?? message.cardDisplay,
+                      leadRequested: payload.leadRequested,
+                      metadata: payload.metadata ?? message.metadata,
+                      progress: undefined,
+                      status: 'done'
+                    }
+                  : message
+              )));
+              return;
+            }
+          } finally {
+            releaseRecovery();
+          }
         }
         const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не смог надежно сформировать ответ|не удалось получить ответ/i.test(submitError.message)
           ? submitError.message

@@ -104,6 +104,18 @@ export function findCompletedAnswerForRetry(
   return candidate;
 }
 
+/**
+ * Returns the turn id when the retried question is still being answered
+ * server-side, so the client can re-attach to the running turn instead of
+ * showing a connection error for an answer that is still on its way.
+ */
+export function runningTurnIdForRetry(
+  pendingTurn: RestoredPendingTurn | null | undefined
+): string | null {
+  if (!pendingTurn || pendingTurn.terminal) return null;
+  return pendingTurn.turnId;
+}
+
 function trimTrailingSlashes(value: string) {
   let result = value;
   while (result.endsWith('/')) result = result.slice(0, -1);
