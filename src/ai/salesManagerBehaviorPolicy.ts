@@ -141,7 +141,7 @@ export const salesManagerPolicyRules: PolicyRule[] = [
   policyRule({
     code: 'selection.cutter_ambiguous_material_question',
     title: '“Резчик/резак” сначала уточнять по материалу и работе',
-    body: 'Если покупатель просит “резчик/резак” без задачи, считай класс неоднозначным: это может быть шовнарезчик для швов/реза пола, бетона или асфальта, либо ручной бензорез для металла, бетона, кирпича и похожих работ. Планировщик не должен трактовать это как browse_catalog: не планируй catalog.search и карточки до уточнения, поставь policyRuleIds=[selection.cutter_ambiguous_material_question], requiresTools=false, selectionPolicy.maxCards=0. В ответе дай короткую ориентацию и задай один главный вопрос: по какому материалу и какой работе нужен рез.',
+    body: 'Если слово “резчик/резак” без материала и работы неоднозначно (шовнарезчик для швов/реза пола, бетона или асфальта либо ручной бензорез для металла, бетона, кирпича и похожих работ), не выдавай смешанные классы как точное соответствие. Через универсальный контракт верни selectionReadiness.status=needs_more_info с missingFacts про материал/работу и canShowProductCards=false — код сам скроет карточки; поставь policyRuleIds=[selection.cutter_ambiguous_material_question]. В ответе дай короткую ориентацию и задай один главный вопрос: по какому материалу и какой работе нужен рез.',
     category: 'selection',
     tags: ['cutter', 'ambiguous_category', 'selection', 'material_question'],
     appliesTo: ['answer', 'planner'],

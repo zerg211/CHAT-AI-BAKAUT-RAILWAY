@@ -20,6 +20,9 @@ export interface CustomerOutputGuardResult {
   issues: CustomerOutputGuardIssue[];
 }
 
+// Narrow last-mile filter: only process-specific phrases. Generic stems such as
+// internal/service/retry/status collide with product language (e.g. internal
+// diameter, restart retry, order status) and are left to the semantic reviewer.
 const forbiddenCustomerFragments = [
   'agent_manager',
   'turncontract',
@@ -62,18 +65,13 @@ const forbiddenCustomerFragments = [
   'попытка исследования',
   'инструмент поиска',
   'инструмент не сработал',
-  'повторная попытка',
-  'повторный запрос',
   'пайплайн',
   'проверка не заверш',
   'поиск не заверш',
   'поискал в интернете',
   'проверить это не получилось',
   'проверка заверш',
-  'поиск заверш',
-  'служебн',
-  'внутренн',
-  'статус выполнения'
+  'поиск заверш'
 ] as const;
 
 /**

@@ -607,7 +607,10 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     const answerPrompt = (answerCall?.[0]?.request as { input?: Array<{ role?: string; content?: string }> })
       ?.input?.find((item) => item.role === 'system')?.content ?? '';
 
-    expect(plannerPrompt).toContain('не планируй catalog.search');
+    expect(plannerPrompt).not.toContain('не планируй catalog.search');
+    expect(plannerPrompt).toContain('needs_more_info');
+    expect(plannerPrompt).toContain('missingFacts');
+    expect(plannerPrompt).toContain('canShowProductCards');
     expect(answerCall?.[0]).toMatchObject({
       deadlineAtMs: Date.parse(now) + 60_000,
       minRetryRemainingMs: 10_000

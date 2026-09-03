@@ -396,69 +396,9 @@ function answerMentionedProducts(products: Product[], answerText: string) {
   return sortByAnswerMentionOrder(products.filter((product) => productMentionedInText(product, answerText)), answerText);
 }
 
-function parseKw(value: string) {
-  const parsed = Number(value.replace(',', '.'));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function isWhitespaceChar(char: string | undefined) {
-  return char !== undefined && char.trim() === '';
-}
-
-function skipWhitespace(value: string, index: number) {
-  let cursor = index;
-  while (cursor < value.length && isWhitespaceChar(value[cursor])) cursor += 1;
-  return cursor;
-}
-
-function decimalNumberAt(value: string, index: number) {
-  let cursor = index;
-  let raw = '';
-  let hasDigit = false;
-  let hasDecimal = false;
-  while (cursor < value.length) {
-    const char = value[cursor];
-    if (char >= '0' && char <= '9') {
-      raw += char;
-      hasDigit = true;
-      cursor += 1;
-      continue;
-    }
-    if ((char === '.' || char === ',') && !hasDecimal) {
-      raw += '.';
-      hasDecimal = true;
-      cursor += 1;
-      continue;
-    }
-    break;
-  }
-  if (!hasDigit) return null;
-  const parsed = parseKw(raw);
-  return parsed === undefined ? null : { value: parsed, end: cursor };
-}
-
-function rangeSeparatorEnd(value: string, index: number) {
-  const char = value[index];
-  if (char === '-' || char === '–' || char === '—') return index + 1;
-  return value.slice(index, index + 2).toLocaleLowerCase('ru-RU') === 'до'
-    ? index + 2
-    : undefined;
-}
-
-function powerUnitAt(value: string, index: number) {
-  const tail = value.slice(index).toLocaleLowerCase('ru-RU');
-  const units = [
-    { unit: 'kw' as const, scale: 1, terms: [fromEscaped('\\u043a\\u0432\\u0442'), 'kw', 'kva', fromEscaped('\\u043a\\u0432\\u0430')] },
-    { unit: 'w' as const, scale: 0.001, terms: [fromEscaped('\\u0432\\u0430\\u0442\\u0442'), fromEscaped('\\u0432\\u0442'), 'w'] }
-  ];
-  for (const candidate of units) {
-    const term = candidate.terms.find((item) => tail.startsWith(item));
-    if (!term) continue;
-    return { unit: candidate.unit, scale: candidate.scale, end: index + term.length };
-  }
-  return undefined;
-}
-
+// Text-to-kW parsing of the buyer message was removed: numeric requirements
+// arrive only via typed selectionPolicy.requirements owned by the LLM planner.
+// Catalog-side verification below works on those typed requirements.
 function structuredRequirementNumber(intent: AgentIntentContract, kinds: string[]) {
   const accepted = new Set(kinds);
   for (const requirement of intent.selectionPolicy?.requirements ?? []) {
@@ -1369,125 +1309,14 @@ export function productAutoStartNativeKnown(product: Product) {
   return generatorAutoStartProfile(product) !== 'unknown';
 }
 
-function requestedPowerRangeKw(text: string) {
-  for (let index = 0; index < text.length; index += 1) {
-    const left = decimalNumberAt(text, index);
-    if (!left) continue;
-    const leftUnit = powerUnitAt(text, skipWhitespace(text, left.end));
-    const separatorEnd = rangeSeparatorEnd(text, skipWhitespace(text, left.end));
-    if (separatorEnd === undefined) {
-      index = left.end;
-      continue;
-    }
-    const right = decimalNumberAt(text, skipWhitespace(text, separatorEnd));
-    const rightUnit = right ? powerUnitAt(text, skipWhitespace(text, right.end)) : undefined;
-    if (right && rightUnit) {
-      const leftScale = leftUnit?.scale ?? rightUnit.scale;
-      const rightScale = rightUnit.scale;
-      const leftKw = left.value * leftScale;
-      const rightKw = right.value * rightScale;
-      return {
-        min: Math.min(leftKw, rightKw),
-        max: Math.max(leftKw, rightKw)
-      };
-    }
-    index = left.end;
-  }
-
-  for (let index = 0; index < text.length; index += 1) {
-    const exact = decimalNumberAt(text, index);
-    if (!exact) continue;
-    const unit = powerUnitAt(text, skipWhitespace(text, exact.end));
-    if (unit) {
-      const valueKw = exact.value * unit.scale;
-      const tolerance = unit.unit === 'w' ? Math.max(0.03, valueKw * 0.1) : 0.75;
-      return { min: Math.max(0.1, valueKw - tolerance), max: valueKw + tolerance };
-    }
-    index = exact.end;
-  }
-  return undefined;
-}
-
-const powerLowerBoundBeforeTerms = [
-  '>=',
-  'at least',
-  'minimum',
-  'min',
-  'from',
-  fromEscaped('\\u043e\\u0442'),
-  fromEscaped('\\u043d\\u0435 \\u043c\\u0435\\u043d\\u0435\\u0435'),
-  fromEscaped('\\u043d\\u0435 \\u043c\\u0435\\u043d\\u044c\\u0448\\u0435'),
-  fromEscaped('\\u043c\\u0438\\u043d\\u0438\\u043c\\u0443\\u043c')
-];
-
-const powerLowerBoundAfterTerms = [
-  '+',
-  'or more',
-  'or higher',
-  'and above',
-  'and up',
-  fromEscaped('\\u0438\\u043b\\u0438 \\u0431\\u043e\\u043b\\u044c\\u0448\\u0435'),
-  fromEscaped('\\u0438\\u043b\\u0438 \\u0432\\u044b\\u0448\\u0435'),
-  fromEscaped('\\u0438\\u043b\\u0438 \\u0431\\u043e\\u043b\\u0435\\u0435'),
-  fromEscaped('\\u0438 \\u0432\\u044b\\u0448\\u0435'),
-  fromEscaped('\\u0438 \\u0431\\u043e\\u043b\\u0435\\u0435')
-];
-
-function windowContainsAny(text: string, terms: string[]) {
-  return terms.some((term) => text.includes(term));
-}
-
-function requestedPowerLowerBoundKw(text: string) {
-  const normalized = text.toLocaleLowerCase('ru-RU');
-  for (let index = 0; index < normalized.length; index += 1) {
-    const exact = decimalNumberAt(normalized, index);
-    if (!exact) continue;
-    const unit = powerUnitAt(normalized, skipWhitespace(normalized, exact.end));
-    if (!unit) {
-      index = exact.end;
-      continue;
-    }
-    const before = normalized.slice(Math.max(0, index - 36), index);
-    const after = normalized.slice(unit.end, Math.min(normalized.length, unit.end + 44));
-    if (windowContainsAny(before, powerLowerBoundBeforeTerms) || windowContainsAny(after, powerLowerBoundAfterTerms)) {
-      return exact.value * unit.scale;
-    }
-    index = exact.end;
-  }
-  return undefined;
-}
-
+// Buyer-message kW range parsing was removed (dead code): the LLM planner owns
+// numeric interpretation and emits typed nominal_power_min_kw/power_min_kw
+// requirements. Card filtering below consumes only those typed requirements.
 type GeneratorPowerCardRequirement = {
   minKw?: number;
   maxKw?: number;
   requireNominal?: boolean;
 };
-
-function generatorPowerRequirementForCardSelection(text: string): GeneratorPowerCardRequirement | undefined {
-  const lowerBound = requestedPowerLowerBoundKw(text);
-  if (lowerBound !== undefined) return { minKw: lowerBound };
-  const range = requestedPowerRangeKw(text);
-  return range ? { minKw: range.min, maxKw: range.max } : undefined;
-}
-
-function generatorPowerFitScore(product: Product, range: { min: number; max: number }) {
-  const power = extractGeneratorPowerForHardSelection(product);
-  const nominal = power.nominalKw ?? power.maxKw;
-  if (nominal === undefined) return -10_000;
-
-  const target = (range.min + range.max) / 2;
-  const distance = nominal < range.min
-    ? range.min - nominal
-    : nominal > range.max
-      ? nominal - range.max
-      : 0;
-  let score = 100 - Math.abs(nominal - target);
-  if (nominal >= range.min && nominal <= range.max) score += 50;
-  if (power.maxKw !== undefined && nominal < range.min && power.maxKw >= range.min) score += 25;
-  score -= distance * 12;
-  if (nominal > range.max * 3 && nominal > range.max + 20) score -= 10_000;
-  return score;
-}
 
 const nominalActivePowerUnitWords = new Set(
   ['kw', 'квт', 'w', 'вт'].flatMap((unit) => matchingModelTextTokens(unit))
@@ -1523,53 +1352,8 @@ function productMeetsGeneratorPowerCardRequirement(
 
 type GeneratorPhaseRequirement = 'single_220' | 'three_380';
 
-const generatorThreePhaseTerms = [
-  'three phase',
-  'three-phase',
-  '3 phase',
-  '3-phase',
-  fromEscaped('\\u0442\\u0440\\u0435\\u0445 \\u0444\\u0430\\u0437'),
-  fromEscaped('\\u0442\\u0440\\u0451\\u0445 \\u0444\\u0430\\u0437'),
-  fromEscaped('\\u0442\\u0440\\u0435\\u0445\\u0444\\u0430\\u0437'),
-  fromEscaped('\\u0442\\u0440\\u0451\\u0445\\u0444\\u0430\\u0437'),
-  fromEscaped('3 \\u0444\\u0430\\u0437'),
-  fromEscaped('3-\\u0444\\u0430\\u0437')
-];
-
-const generatorSinglePhaseTerms = [
-  'single phase',
-  'single-phase',
-  fromEscaped('\\u043e\\u0434\\u043d\\u043e \\u0444\\u0430\\u0437'),
-  fromEscaped('\\u043e\\u0434\\u043d\\u043e\\u0444\\u0430\\u0437')
-];
-
-function isAsciiDigit(char: string | undefined) {
-  return Boolean(char && char >= '0' && char <= '9');
-}
-
-function containsStandaloneNumberToken(text: string, values: string[]) {
-  for (const value of values) {
-    let index = text.indexOf(value);
-    while (index >= 0) {
-      const before = text[index - 1];
-      const after = text[index + value.length];
-      if (!isAsciiDigit(before) && !isAsciiDigit(after)) return true;
-      index = text.indexOf(value, index + 1);
-    }
-  }
-  return false;
-}
-
-function requestedGeneratorPhaseRequirement(text: string): GeneratorPhaseRequirement | undefined {
-  const normalized = text.toLocaleLowerCase('ru-RU');
-  const has380 = containsStandaloneNumberToken(normalized, ['380', '400']) ||
-    windowContainsAny(normalized, generatorThreePhaseTerms);
-  if (has380) return 'three_380';
-  const has220 = containsStandaloneNumberToken(normalized, ['220', '230']) ||
-    windowContainsAny(normalized, generatorSinglePhaseTerms);
-  return has220 ? 'single_220' : undefined;
-}
-
+// Buyer-message phase parsing was removed (dead code): phase arrives only via
+// typed selectionPolicy.phase owned by the LLM planner.
 function productMeetsGeneratorPhaseRequirement(
   product: Product,
   requirement?: GeneratorPhaseRequirement,
