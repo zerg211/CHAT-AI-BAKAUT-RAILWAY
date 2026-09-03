@@ -34,6 +34,7 @@ import {
   type ReducedDialogueLedgerState
 } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
+import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 import { compactToolResultsForModel } from './agentManagerModelContext.js';
 import { resolveProductsForEvidence, type ResolvedProduct } from './productFactResolution.js';
 import {
@@ -6726,7 +6727,7 @@ export class AgentManagerOrchestrator {
         }
       }
     }
-    const finalText = answer.answerText.trim();
+    const finalText = sanitizeVisibleAnswerNumbers(answer.answerText.trim());
     const finalLeadAction = leadActionAfterValidation({ answer, finalText, review, toolResults });
     if (review.verdict !== 'pass') {
       const reviewIssueCodes = review.issues.map((issue) => issue.code);
