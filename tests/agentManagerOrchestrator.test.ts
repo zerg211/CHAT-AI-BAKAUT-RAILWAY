@@ -8,6 +8,7 @@ import {
   productMatchesExactTargetIdentity,
   productsMatchingToolRequestIntent,
   trustedPendingExhaustedTechnicalHandoffs,
+  validateAgentSemanticDecision,
   webResearchResultProvesSourceExhaustion,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
@@ -23,7 +24,7 @@ import {
   type ToolRequest,
   type ToolResult
 } from '../src/ai/agentManagerContracts.js';
-import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
+import { reduceDialogueLedger, type ReducedDialogueLedgerState } from '../src/ai/dialogueLedgerReducer.js';
 import { assessStrictSelectionRequirements, budgetMaxFromNeedState, gateStrictSelectionRequirements } from '../src/ai/agentManagerCardSelection.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 import type { ConversationSession, ConversationTurn, LeadCaptureDraft, Message, Product, ProductCard } from '../src/shared/types.js';
@@ -9406,4 +9407,235 @@ describe('parallel semantic turn contracts', () => {
     expect(repaired.selectionPolicy!.canonicalProductClass).toBe('unknown');
   });
 
+});
+
+describe('buyer-level constraint persistence across needs', () => {
+  function need(needId: string, productClass: string, status: 'open' | 'paused' | 'selected' | 'closed'): ReducedDialogueLedgerState['needsById'][string] {
+    return {
+      needId,
+      productClass,
+      summary: `${needId} need`,
+      constraints: [],
+      openQuestions: [],
+      selectedProductIds: [],
+      rejectedProductIds: [],
+      status,
+      eventId: `ev-need-${needId}`
+    };
+  }
+
+  function hardFact(input: {
+    key: string;
+    eventId: string;
+    value: unknown;
+    needId?: string;
+    productClass?: string;
+  }): ReducedDialogueLedgerState['factsByKey'][string] {
+    return {
+      factKey: input.key,
+      value: input.value,
+      eventId: input.eventId,
+      eventType: 'fact.confirmed' as const,
+      status: 'active' as const,
+      evidence: `buyer stated ${input.key}`,
+      source: 'llm_state_delta' as const,
+      confidence: 1,
+      role: 'hard_requirement' as const,
+      ...(input.needId ? { needId: input.needId } : {}),
+      ...(input.productClass ? { productClass: input.productClass } : {})
+    };
+  }
+
+  function previousLedger(facts: Record<string, ReturnType<typeof hardFact>>): ReducedDialogueLedgerState {
+    return {
+      eventIds: Object.values(facts).map((fact) => fact.eventId),
+      factsByKey: facts,
+      questionsById: {},
+      needsById: {
+        dacha: need('dacha', 'generator', 'paused'),
+        construction: need('construction', 'generator', 'open')
+      },
+      openQuestions: [],
+      warnings: []
+    };
+  }
+
+  function strictRequirement(id: string, kind: string, value: unknown) {
+    return {
+      id,
+      kind,
+      value,
+      unit: kind === 'budget_max_rub' ? 'rub' : kind === 'nominal_power_min_kw' ? 'kw' : null,
+      role: 'hard_constraint' as const,
+      strictness: 'strict' as const,
+      evidence: `buyer stated ${kind}`
+    };
+  }
+
+  function selectionDecision(requirements: ReturnType<typeof strictRequirement>[], canonical: string | null): AgentSemanticDecision {
+    return {
+      ledgerDelta: { rationale: 'switched need without restating buyer constraints', events: [] },
+      intent: {
+        userMessageSummary: 'buyer switched to construction loads',
+        dialogueUnderstanding: 'new construction need with known loads',
+        nextStepRationale: 'select a generator for the construction need',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog-construction',
+          tool: 'catalog.search',
+          args: { query: 'generator', canonicalProductIntent: 'generator' },
+          rationale: 'search generators for the construction need',
+          required: true,
+          coversRequirementIds: []
+        }],
+        productMentions: [],
+        selectionPolicy: {
+          targetProductClass: 'generator',
+          canonicalProductClass: canonical,
+          selectionGoal: 'preliminary_fit' as const,
+          needAction: 'switch' as const,
+          alternativePolicy: 'same_class_only' as const,
+          reusePreviousCards: false,
+          maxCards: 4,
+          powerSource: 'any' as const,
+          phase: 'single_phase' as const,
+          requirements,
+          rationale: 'construction selection policy'
+        },
+        policyRuleIds: [],
+        grounding: {
+          taskType: 'product_selection',
+          buyerRequestedWeb: false,
+          catalogRequirement: 'none',
+          responseMode: 'recommend',
+          sourcePolicy: 'conversation_only',
+          webPurpose: 'none',
+          requiredToolKinds: [],
+          technicalAttributes: [],
+          rationale: 'selection decision under test'
+        },
+        mustNotAskQuestionIds: [],
+        riskFlags: []
+      }
+    } as AgentSemanticDecision;
+  }
+
+  it('flags a silently dropped cross-need budget requirement', () => {
+    const result = validateAgentSemanticDecision({
+      decision: selectionDecision(
+        [strictRequirement('r-phase', 'phase', 'single_phase')],
+        'generator'
+      ),
+      previousLedgerState: previousLedger({
+        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000, needId: 'dacha' })
+      }),
+      sessionId,
+      turnId,
+      userMessage: 'бетономешалка 800 вт, болгарка 1200'
+    });
+
+    expect(result.issues).toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('accepts a carried cross-need budget requirement', () => {
+    const result = validateAgentSemanticDecision({
+      decision: selectionDecision(
+        [
+          strictRequirement('r-budget', 'budget_max_rub', 40000),
+          strictRequirement('r-phase', 'phase', 'single_phase')
+        ],
+        'generator'
+      ),
+      previousLedgerState: previousLedger({
+        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000, needId: 'dacha' })
+      }),
+      sessionId,
+      turnId,
+      userMessage: 'бетономешалка 800 вт, болгарка 1200'
+    });
+
+    expect(result.issues).not.toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('accepts an explicitly retracted cross-need budget fact', () => {
+    const decision = selectionDecision(
+      [strictRequirement('r-phase', 'phase', 'single_phase')],
+      'generator'
+    );
+    decision.ledgerDelta = {
+      rationale: 'buyer cancelled the previous budget',
+      events: [{
+        eventType: 'fact.negated',
+        scope: 'dialogue',
+        payload: { targetEventIds: ['ev-budget-1'] },
+        evidence: 'бюджет больше не важен',
+        source: 'llm_state_delta',
+        status: 'negated'
+      }]
+    };
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: previousLedger({
+        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000, needId: 'dacha' })
+      }),
+      sessionId,
+      turnId,
+      userMessage: 'бюджет больше не важен'
+    });
+
+    expect(result.issues).not.toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('does not require requirements when the turn has no selection policy', () => {
+    const decision = selectionDecision(
+      [strictRequirement('r-phase', 'phase', 'single_phase')],
+      'generator'
+    );
+    delete (decision.intent as Partial<AgentIntentContract>).selectionPolicy;
+    const result = validateAgentSemanticDecision({
+      decision,
+      previousLedgerState: previousLedger({
+        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000, needId: 'dacha' })
+      }),
+      sessionId,
+      turnId,
+      userMessage: 'спасибо, понятно'
+    });
+
+    expect(result.issues).not.toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('flags a silently dropped fuel preference in the same product class', () => {
+    const result = validateAgentSemanticDecision({
+      decision: selectionDecision(
+        [strictRequirement('r-power', 'nominal_power_min_kw', 1.5)],
+        'generator'
+      ),
+      previousLedgerState: previousLedger({
+        'dacha::fuel_type': hardFact({ key: 'fuel_type', eventId: 'ev-fuel-1', value: 'gasoline', needId: 'dacha', productClass: 'generator' })
+      }),
+      sessionId,
+      turnId,
+      userMessage: 'бетономешалка 800 вт, болгарка 1200'
+    });
+
+    expect(result.issues).toContain('active_requirement_mismatch:fuel_type');
+  });
+
+  it('ignores a fuel fact from an unrelated product class', () => {
+    const result = validateAgentSemanticDecision({
+      decision: selectionDecision(
+        [strictRequirement('r-power', 'nominal_power_min_kw', 1.5)],
+        'generator'
+      ),
+      previousLedgerState: previousLedger({
+        'other::fuel_type': hardFact({ key: 'fuel_type', eventId: 'ev-fuel-9', value: 'gasoline', needId: 'other', productClass: 'plate' })
+      }),
+      sessionId,
+      turnId,
+      userMessage: 'бетономешалка 800 вт, болгарка 1200'
+    });
+
+    expect(result.issues).not.toContain('active_requirement_mismatch:fuel_type');
+  });
 });

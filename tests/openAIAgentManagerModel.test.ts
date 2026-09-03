@@ -457,6 +457,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('Если в одном ходе явно запрошены разные классы товаров');
     expect(plannerPrompt).toContain('не своди аксессуар к классу основного товара');
     expect(plannerPrompt).toContain('web request также несёт свой canonicalProductIntent');
+    expect(plannerPrompt).toContain('смена задачи бюджет не сбрасывает');
+    expect(plannerPrompt).toContain('Топливо/источник энергии не выдумывай');
+    expect(plannerPrompt).toContain('catalog.search limit ставь с запасом');
     const rankingSchema = plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.properties?.rankingObjectives;
     expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
     expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);
@@ -627,6 +630,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(answerPrompt).toContain('Никогда не упоминай инструменты, web/внешний поиск, попытки, timeout/тайм-аут');
     expect(answerPrompt).toContain('это внутренний статус, не содержание ответа покупателю');
     expect(answerPrompt).toContain('не предлагай форму/специалиста только из-за такого статуса');
+    expect(answerPrompt).toContain('не обрезай молча');
+    expect(answerPrompt).not.toContain('recommendation_candidate → 2-4');
   });
 
 });
