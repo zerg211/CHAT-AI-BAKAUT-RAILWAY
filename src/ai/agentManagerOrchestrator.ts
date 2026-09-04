@@ -1051,6 +1051,63 @@ export function selectedCardsContradictReadiness(answer: Pick<AnswerContract, 's
   return null;
 }
 
+/**
+ * Right-size guard (deterministic, no semantics): every selected generator is
+ * more than double the calculated nominal need while the evidence pool holds a
+ * closer fit (a nominal within [need, 2x need]). A bigger margin is a legitimate
+ * alternative, never the whole shortlist when a minimal sufficient unit exists.
+ * Returns the mechanical issue code or null.
+ */
+export function generatorSelectionOversizeIssue(input: {
+  requiredNominalKw?: number;
+  selectedNominals: (number | undefined)[];
+  poolNominals?: (number | undefined)[];
+}): string | null {
+  const required = input.requiredNominalKw;
+  if (typeof required !== 'number' || !Number.isFinite(required) || required <= 0) return null;
+  if (!input.selectedNominals.length) return null;
+  const known = input.selectedNominals.filter((nominal): nominal is number =>
+    typeof nominal === 'number' && Number.isFinite(nominal) && nominal > 0
+  );
+  if (!known.length) return null;
+  if (!known.every((nominal) => nominal > required * 2)) return null;
+  if (input.poolNominals !== undefined) {
+    const closerFitExists = input.poolNominals.some((nominal) =>
+      typeof nominal === 'number' && Number.isFinite(nominal) &&
+      nominal >= required && nominal <= required * 2
+    );
+    if (!closerFitExists) return null;
+  }
+  return 'generator_selection_grossly_oversized';
+}
+
+/**
+ * Buyer refined a ledger load device by naming its model ("насосная станция" →
+ * "Aquario AJC-101"): same kind, new name grounded in the current message.
+ * Returns the renamed actual load or null. Identity stays kind-based so a
+ * grounded rename never reads as a dropped load.
+ */
+export function findGroundedLoadRename(input: {
+  expectedLoad: unknown;
+  actualLoads: unknown[];
+  userMessage: string;
+}): Record<string, unknown> | null {
+  if (!input.expectedLoad || typeof input.expectedLoad !== 'object' || Array.isArray(input.expectedLoad)) return null;
+  const expected = input.expectedLoad as Record<string, unknown>;
+  const expectedKind = typeof expected.kind === 'string' ? expected.kind.trim().toLowerCase() : '';
+  if (!expectedKind) return null;
+  const message = (input.userMessage ?? '').toLowerCase();
+  for (const actual of input.actualLoads ?? []) {
+    if (!actual || typeof actual !== 'object' || Array.isArray(actual)) continue;
+    const candidate = actual as Record<string, unknown>;
+    if (typeof candidate.kind !== 'string' || candidate.kind.trim().toLowerCase() !== expectedKind) continue;
+    if (semanticLoadIdentity(candidate) === semanticLoadIdentity(expected)) continue;
+    const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
+    if (name && message.includes(name.toLowerCase())) return candidate;
+  }
+  return null;
+}
+
 export function validateAgentSemanticDecision(input: {
   decision: AgentSemanticDecision;
   previousLedgerState: ReducedDialogueLedgerState;
@@ -1133,19 +1190,38 @@ export function validateAgentSemanticDecision(input: {
       for (const load of expectedLoads) {
         const identity = semanticLoadIdentity(load);
         const executableIdentity = executableSemanticLoadIdentity(load);
-        if (identity && !actualLoadIds.has(identity)) issues.push(`generator_load_scenario_missing_load:${identity}`);
-        if (
-          identity &&
-          semanticLoadDeclaresPower(load) &&
-          (!executableIdentity || !executableLoadIds.has(executableIdentity))
-        ) {
-          issues.push(`generator_load_scenario_unexecutable_load:${identity}`);
-        }
-        const actualLoad = (calculatorArgs.loads ?? []).find((candidate) =>
+        const directActualLoad = (calculatorArgs.loads ?? []).find((candidate) =>
           semanticLoadIdentity(candidate) === identity
         );
+        let actualLoad = directActualLoad;
+        let renamedActual: Record<string, unknown> | null = null;
+        if (identity && !actualLoadIds.has(identity)) {
+          renamedActual = findGroundedLoadRename({
+            expectedLoad: load,
+            actualLoads: calculatorArgs.loads ?? [],
+            userMessage: input.userMessage ?? ''
+          });
+          if (!renamedActual) {
+            issues.push(`generator_load_scenario_missing_load:${identity}`);
+          } else {
+            actualLoad = renamedActual;
+          }
+        }
+        if (identity && semanticLoadDeclaresPower(load)) {
+          const effectiveExecutableIdentity = renamedActual
+            ? executableSemanticLoadIdentity(renamedActual)
+            : executableIdentity;
+          if (!effectiveExecutableIdentity || !executableLoadIds.has(effectiveExecutableIdentity)) {
+            issues.push(`generator_load_scenario_unexecutable_load:${identity}`);
+          }
+        }
         const expectedFields = semanticLoadExecutionFields(load);
         const actualFields = semanticLoadExecutionFields(actualLoad);
+        if (renamedActual && expectedFields && actualFields) {
+          // Buyer-refined device name is grounded new evidence, not a changed
+          // load: kind and numbers must stay, the name may follow the message.
+          actualFields.name = expectedFields.name;
+        }
         if (identity && JSON.stringify(expectedFields) !== JSON.stringify(actualFields)) {
           const mismatchedFields = expectedFields && actualFields
             ? Object.entries(expectedFields)
@@ -4933,6 +5009,7 @@ function plannerSystemPromptBlock(
     'loads.kind — канонические: pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop, unknown_load; описания — в name/evidence.',
     'Для generator_load_scenario сохрани полный structured value: loads со всеми operationMode/coRunningGroup/provenance полями, simultaneousRunning, simultaneousStarting; каждый load из ledgerDelta присутствует в args.loads.',
     'preliminary_fit: unbounded guess → не заявляй fit, спроси тип/функцию/сценарий. browse_catalog: unbounded расчет не блокирует показ диапазона мощности/моделей/цен без обещания совместимости. Достаточный контекст для bounded оценки → calculator + catalog; слишком vague → уточнение вместо поиска. Пустой fit-запрос — ноль заявленных требований (мощность/нагрузка кВт, приборы, бюджет, топливо, фаза, модель, площадь или объем работ): это needs_more_info, не preliminary_fit — уточнение вместо поиска и калькулятора, даже если класс товара ясен. preliminary_fit требует минимум одного заявленного требования покупателя. Явные browse-просьбы («что есть», «покажи варианты», «что подешевле», «ассортимент») — browse_catalog.',
+    'Генераторы: первая карточка — минимальный номинал из каталога с nominal >= requiredNominalKw. Карточка с nominal > requiredNominalKw×1.5 — только позиции 2+ и только с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование превышения. Тип топлива, бренд и ресурс не меняют requiredNominalKw. Неизвестный пуск мотора — это один главный вопрос (без final fit) либо допущение строго в формате «принят пусковой коэффициент K=[значение] для [устройство]» с пересчётом номинала в тексте; K — только из слов покупателя, шильдика или проверенного факта, K из головы запрещён. Неизвестный пуск — никогда strict требование. Топливо не заявлено (powerSource any) — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». fit = сначала минимальное превышение nominal над required сверху, затем цена/вес по rankingObjectives; надёжность в fit не входит.',
     'productMentions для каждой названной модели/товара с ролью: target_product (хочет купить/проверить), catalog_candidate (рассматриваемая альтернатива), comparison_subject (сравнение), context_load_device (потребитель для расчета), compatibility_context (оборудование-партнер), mentioned_only. evidence копируй как точный непустой фрагмент текущего userMessage; для разрешённой анафоры evidence — точная фраза-ссылка из текущей реплики. context_load_device/compatibility_context не попадают в web args.productNames (котёл Baxi в «генератор для котла Baxi» — не цель). Только target_product/catalog_candidate/comparison_subject движут presence/web/nearby. Если в одном ходе явно запрошены разные классы товаров, selectionPolicy описывает главный класс и required catalog request этого же класса обязателен, а каждый дополнительный искомый класс получает отдельный target_product productMention с точным evidence/productClass и отдельный catalog request; не своди аксессуар к классу основного товара. Каждый web request также несёт свой canonicalProductIntent и исследует только товары этого класса.',
     'Анафора («та первая модель», «тот вариант», «вернемся к той») — разреши через priorVisibleProducts (id, name, price прежних карточек): productMentions role="target_product" с точным именем; квалификатор (первый/дешевле/с X) выбирает между несколькими; при неоднозначности — один короткий вопрос. Для фактов — catalog.getProductDetails с productNames=[имя] (или productIds=[id]).',
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
@@ -4976,7 +5053,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         ? 'Если intent содержит calculator.generatorLoad, ledgerDelta обязан сохранить fact.confirmed generator_load_scenario с тем же needId и полным structured value.'
         : '',
       repairGuidanceIssues.some((issue) => issue.startsWith('generator_load_scenario_missing_load:') || issue.startsWith('generator_load_scenario_load_semantics_mismatch:') || issue.startsWith('generator_load_scenario_unexecutable_load:'))
-        ? 'Сделай value.loads факта generator_load_scenario и calculator.generatorLoad args.loads идентичными поле-в-поле: не меняй kind, name, числа, provenance, operationMode, coRunningGroup, basisKind или basisSignals между ledger и tool request.'
+        ? 'Сделай value.loads факта generator_load_scenario и calculator.generatorLoad args.loads идентичными по kind, count, числам, provenance, operationMode, coRunningGroup, basisKind и basisSignals. Исключение: покупатель уточнил модель уже известного устройства (его новое имя есть в текущей реплике) — тогда kind, count и числа сохрани, а name/evidence обнови под слова покупателя; это уточнение, а не новый потребитель. Не выкидывай такой load из args и не превращай бытовой прибор в исследуемый товар.'
         : '',
       hasIssue('typed_requirement_coverage_missing') || hasIssue('typed_requirement_tool_mismatch')
         ? 'Каждый typed_tool requirement должен ссылаться на существующий required request с тем же id/tool, а request.coversRequirementIds обязан содержать id этого requirement.'
@@ -5330,10 +5407,10 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'evidenceConflicts в products — это неразрешённое расхождение значений одной характеристики. Не выбирай значение самостоятельно и не называй его подтвержденным; сохрани полезный вывод по остальным фактам и обозначь эту характеристику как требующую уточнения.',
             'lead.capture ok → подтверди получение и не проси повторно. not_found/error (нет имени/телефона) → НЕ подтверждай и не говори, что передано; leadAction="offer_form" и просьба недостающего контакта в форме.',
             'Без лишних вопросов; вопрос — только если он реально нужен для следующего шага.',
-            'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум, не заменяй более широким классом (выше — только как запас/комфорт). Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind/bounded_basis_incomplete/bounded_assumption: без final fit и без утверждения совместимости; browse_catalog может показывать ассортимент без обещания совместимости. preliminary_fit может показывать предварительные варианты с canShowProductCards=true только при минимум одном заявленном требовании покупателя и без доказанного конфликта, а missingFacts и answerText точно называют непроверенную нагрузку. Estimate-only с нулем заявленных требований — это needs_more_info: canShowProductCards=false, selectedProductIds=[], короткая ориентация по классу как явно грубая (не факт о товаре) и ровно один главный вопрос, без карточек. final_fit — canShowProductCards=false и минимальный вопрос.',
+            'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум. Первая карточка всегда ближайший сверху к requiredNominalKw номинал из products; превышение >1.5× — только позиции 2+ и только с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование. Тип топлива, бренд и ресурс requiredNominalKw не меняют. Топливо покупателем не заявлено — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind/bounded_basis_incomplete/bounded_assumption: без final fit и без утверждения совместимости; browse_catalog может показывать ассортимент без обещания совместимости. preliminary_fit может показывать предварительные варианты с canShowProductCards=true только при минимум одном заявленном требовании покупателя и без доказанного конфликта, а missingFacts и answerText точно называют непроверенную нагрузку. Estimate-only с нулем заявленных требований — это needs_more_info: canShowProductCards=false, selectedProductIds=[], короткая ориентация по классу как явно грубая (не факт о товаре) и ровно один главный вопрос, без карточек. final_fit — canShowProductCards=false и минимальный вопрос.',
             'Просьба предварительных вариантов + calculator ok + catalog товары + минимум одно заявленное требование покупателя → selectionReadiness "ready_for_preliminary_cards", карточки предварительные, недостающий точный факт назван. Если расчет и каталог доказывают load/phase, отсутствие топлива или бюджета не подавляет полезные предварительные карточки: покажи подходящие, назови допущение, максимум один уточняющий вопрос.',
             'selectionReadiness — твоё семантическое решение о честности карточек сейчас: needs_more_info (fit рано, не browse), ready_for_preliminary_cards (browse/preliminary_fit без обещания совместимости), ready_for_exact_cards (факты достаточны для final_fit). canShowProductCards=false → answerText сам объясняет, чего не хватает. generator без карточек → ответ самодостаточен: упомяни подбор и блокирующий факт, не голый вопрос.',
-            'selectedProductIds — только ID из products/toolResults, только поддерживающие рекомендацию, с уважением maxCards/alternativePolicy, [] когда карточки не полезны. Просьба вариантов/ассортимента: покажи до maxCards, упорядочив по fit к заявленным требованиям покупателя (сильнейший fit первым); разнообразие брендов/типов/цен — только внутри равного fit, никогда как цель; одна карточка — только когда кандидат один или просили одну. Если подходящих больше, чем показано, назови их число и как сузить (один вопрос) — не обрезай молча. Кандидаты с неподтвержденным решающим атрибутом — после подтвержденных, как preliminary с оговоркой. Если selectedProductIds не пуст, selectionRationale обязателен: короткая покупательская причина выбора на основе подтвержденных фактов и typed selection policy; иначе selectionRationale=null.',
+            'selectedProductIds — только ID из products/toolResults, только поддерживающие рекомендацию, с уважением maxCards/alternativePolicy, [] когда карточки не полезны. Просьба вариантов/ассортимента: покажи до maxCards, упорядочив по fit к заявленным требованиям покупателя (сильнейший fit первым); для генераторов fit = сначала минимальное превышение nominal над requiredNominalKw сверху, затем цена/вес; надёжность и бренд в fit не входят; разнообразие брендов/типов/цен — только внутри равного fit, никогда как цель; одна карточка — только когда кандидат один или просили одну. Если подходящих больше, чем показано, назови их число и как сузить (один вопрос) — не обрезай молча. Кандидаты с неподтвержденным решающим атрибутом — после подтвержденных, как preliminary с оговоркой. Если selectedProductIds не пуст, selectionRationale обязателен: короткая покупательская причина выбора на основе подтвержденных фактов и typed selection policy; иначе selectionRationale=null.',
             'Модель отсутствует в каталоге, но есть проверенные внешние факты: ответ из трех частей по порядку — прямой ответ на техвопрос, затем что модели нет в каталоге, затем nearby каталога (payload.nearbyCatalogProducts, непустой список). Не «not found» при catalogPresence="absent" — «модели нет в каталоге». catalogPresence="present" без riskFlags "answer_policy_catalog_presence_relevant" — не хвастайся наличием в чисто техническом ответе. Nearby — тот же бренд+класс сначала, прочие того же класса как ориентир; nearby не доказательство об отсутствующей модели.',
             'Чисто технический вопрос — без наличия/доставки/скидок/звонков, если покупатель не спросил. Исключение (web_research_unavailable_grounding): решающий факт не подтвержден после исчерпания попыток — сохрани полезный предварительный вывод, назови точный пробел, предложи передать специалисту, спроси номер и способ (сообщение/звонок), leadAction="offer_form", без заявления «уже передал».',
             'Не придумывай практические диапазоны, требования или допустимые компромиссы из класса задачи. Используй только typed requirements, alternativePolicy, rankingObjectives, tool facts и подтвержденные карточки; изменение требования может предложить только покупатель.',
@@ -8572,6 +8649,30 @@ export class AgentManagerOrchestrator {
         message: 'Product cards were selected while the selection readiness contract does not allow showing them; narrow down with a question instead of showing cards.',
         evidence: `selectionReadiness:${input.answer.selectionReadiness?.status ?? 'missing'}`
       });
+    }
+    // Right-size guard (deterministic, no semantics): a shortlist where every
+    // generator is more than double the calculated nominal need means the
+    // writer picked margin as the whole answer. Repairable: reselect with the
+    // minimal sufficient nominal first, bigger margin only as a priced alternative.
+    if (
+      answerAttemptsConcreteSelection &&
+      isGeneratorProductClass(canonicalProductClassFromIntent(input.intent))
+    ) {
+      const requiredNominalKw = generatorLoadRequirementKw(input.toolResults);
+      const productsById = new Map(input.products.map((product) => [product.id, product]));
+      const selectedNominals = (input.answer.selectedProductIds ?? []).map((productId) => {
+        const product = productsById.get(productId);
+        return product ? qualifiedNominalActivePowerKw(product) : undefined;
+      });
+      const poolNominals = input.products.map((product) => qualifiedNominalActivePowerKw(product));
+      if (generatorSelectionOversizeIssue({ requiredNominalKw, selectedNominals, poolNominals })) {
+        mechanicalIssues.push({
+          code: 'generator_selection_grossly_oversized',
+          severity: 'high',
+          message: `Every selected generator nominal (${selectedNominals.filter((nominal) => nominal !== undefined).join(', ')} kW) is more than double the calculated need (${requiredNominalKw} kW). Reselect minimal-sufficient-first: the closest nominal at or above the calculated need leads; a much bigger margin is only an alternative with an explicit price/fuel tradeoff, never the whole shortlist.`,
+          evidence: (input.answer.selectedProductIds ?? []).join(',')
+        });
+      }
     }
     // Contact-request appropriateness is a semantic judgment over the typed leadAction
     // contract, not a regex over prose. Deterministic business rule: when the buyer
