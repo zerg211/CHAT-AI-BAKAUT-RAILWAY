@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState } from '../src/ai/needState.js';
-import type { AgentIntentContract, ToolRequest } from '../src/ai/agentManagerContracts.js';
+import { AgentIntentContractSchema, type AgentIntentContract, type ToolRequest, type ToolResult } from '../src/ai/agentManagerContracts.js';
+import { AgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
 import type { AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import type { ConversationSession, ConversationTurn, Message, Product, VerifiedProductFact, VerifiedProductFactInput } from '../src/shared/types.js';
 
@@ -247,7 +248,10 @@ const allowedToolArgKeys: Record<ToolRequest['tool'], Set<string>> = {
   'lead.capture': new Set(['contact', 'reason', 'notes'])
 };
 
-function withStrictToolFixtures(implementation: AgentManagerModel): AgentManagerModel {
+function withStrictToolFixtures(
+  implementation: AgentManagerModel,
+  webRequirement?: NonNullable<AgentIntentContract['grounding']>['webRequirement']
+): AgentManagerModel {
   const planTurn = implementation.planTurn;
   const strictPlanTurn = async (input: Parameters<AgentManagerModel['planTurn']>[0]) => {
     const intent = await planTurn(input);
@@ -316,7 +320,7 @@ function withStrictToolFixtures(implementation: AgentManagerModel): AgentManager
       ...intent,
       productMentions,
       selectionPolicy,
-      grounding,
+      grounding: webRequirement ? { ...grounding, webRequirement } : grounding,
       toolRequests: intent.toolRequests.map((request) => ({
         ...request,
         args: {
@@ -354,6 +358,194 @@ describe('AgentManager comparison research flow', () => {
     researchProductComparisonFacts.mockReset();
     extractCatalogProductComparisonFacts.mockReset();
     extractCatalogProductComparisonFacts.mockResolvedValue(null);
+  });
+
+  it('passes grounded product evidence to semantic review and repairs a scoped factual contradiction', async () => {
+    researchProductComparisonFacts.mockResolvedValue({
+      usedWebSearch: true, searchDisposition: 'completed', sourcesExhausted: false,
+      facts: [{ productName: 'BISON 6 kW', attribute: 'manual starter', value: 'present', sourceType: 'web', confidence: 'high', evidence: 'A recoil starter is fitted.', sourceUrl: 'https://manufacturer.example/bison' }],
+      conflicts: [], warnings: [], summaryForAnswer: 'BISON has a manual starter.',
+      answerGuidance: { directAnswer: 'BISON has a manual starter.', completeness: 'answered', coverage: [] }
+    });
+    const reviewCustomerLanguage = vi.fn<NonNullable<AgentManagerModel['reviewCustomerLanguage']>>()
+      .mockResolvedValueOnce({
+        processDisclosure: false, evidence: '', rationale: 'The answer contradicts the scoped product fact.',
+        factualIssues: [{ claim: 'BISON has no manual starter.', sourceResultId: 'web:test', reason: 'BISON manual starter is confirmed present by the source.' }]
+      })
+      .mockResolvedValue({ processDisclosure: false, evidence: '', rationale: 'The repaired answer matches the evidence.', factualIssues: [] });
+    const composeAnswer = vi.fn<AgentManagerModel['composeAnswer']>()
+      .mockImplementation(async (input) => ({
+        answerText: input.reviewIssuesFeedback?.length ? 'BISON has a manual starter.' : 'BISON has no manual starter.',
+        factsUsed: [], questionsAsked: [], toolResultIds: ['web:test'], leadAction: 'none', riskFlags: []
+      }));
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never,
+      withStrictToolFixtures({ ...model(), composeAnswer, reviewCustomerLanguage }));
+
+    const result = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: conversations.messages[0]!.content });
+
+    expect(result.answer).toBe('BISON has a manual starter.');
+    expect(reviewCustomerLanguage).toHaveBeenCalledTimes(2);
+    expect(reviewCustomerLanguage.mock.calls[0]![0]).toMatchObject({
+      products: expect.arrayContaining([expect.objectContaining({ id: 'bison' })]),
+      toolResults: expect.arrayContaining([expect.objectContaining({ requestId: 'web:test', payload: expect.objectContaining({ facts: expect.arrayContaining([expect.objectContaining({ productName: 'BISON 6 kW', value: 'present' })]) }) })])
+    });
+    expect(composeAnswer.mock.calls[1]![0].reviewIssuesFeedback?.join(' ')).toContain('BISON manual starter is confirmed present');
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+
+  it('rejects semantic factual findings that invent a quote or source identity', async () => {
+    researchProductComparisonFacts.mockResolvedValue({
+      usedWebSearch: true, facts: [], conflicts: [], warnings: [], summaryForAnswer: '',
+      answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] }
+    });
+    const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, new FakeProducts() as never, {} as never,
+      withStrictToolFixtures({
+        ...model(),
+        async reviewCustomerLanguage() {
+          return { processDisclosure: false, evidence: '', rationale: '', factualIssues: [
+            { claim: 'This quote is absent from the answer.', sourceResultId: 'invented-tool', reason: 'Unbound finding.' }
+          ] };
+        }
+      }));
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Compare SUMEC and BISON generators by power and noise.' }))
+      .rejects.toThrow('customer_output_semantic_review_unavailable');
+  });
+
+  describe('required external verification with complete local evidence', () => {
+    const targetName = 'FIRMAN RD3910E';
+    const attribute = 'nominal power';
+    const catalogFact = {
+      productName: targetName,
+      attribute,
+      value: '2.8 kW',
+      sourceType: 'catalog' as const,
+      confidence: 'high' as const,
+      evidence: 'Rated output: 2.8 kW',
+      sourceUrl: 'https://example.test/rd3910e',
+      sourceTitle: targetName
+    };
+    const completeCatalog = {
+      usedWebSearch: false,
+      searchDisposition: 'not_needed',
+      sourcesExhausted: false,
+      sourceAttempts: [{ tier: 'catalog', outcome: 'confirmed' }],
+      facts: [catalogFact],
+      conflicts: [],
+      answerGuidance: {
+        directAnswer: 'Rated output is 2.8 kW.',
+        completeness: 'answered',
+        coverage: [{ ...catalogFact, status: 'confirmed' }]
+      },
+      summaryForAnswer: 'The catalog confirms rated output.',
+      warnings: []
+    };
+    const completedWeb = {
+      ...completeCatalog,
+      usedWebSearch: true,
+      searchDisposition: 'completed',
+      sourceAttempts: [{ tier: 'official_page', outcome: 'confirmed' }],
+      facts: [{ ...catalogFact, sourceType: 'web', sourceUrl: 'https://manufacturer.example/rd3910e' }]
+    };
+
+    async function executeResearch(webRequirement: 'buyer_requested' | 'independent_required' | 'conditional_on_catalog_gap', localSource: 'catalog' | 'memory') {
+      const products = new FakeProducts();
+      vi.spyOn(products, 'searchProducts').mockResolvedValue([product('rd3910e', targetName, { nominalPowerKw: 2.8 })]);
+      if (localSource === 'catalog') extractCatalogProductComparisonFacts.mockResolvedValue(completeCatalog);
+      else {
+        const now = new Date().toISOString();
+        products.verifiedFacts = [{
+          ...catalogFact,
+          id: 'verified-rated-output',
+          productId: 'rd3910e',
+          productKey: 'firman rd3910e',
+          sourceType: 'web',
+          sourceUrl: 'https://manufacturer.example/rd3910e',
+          status: 'active',
+          firstSeenAt: now,
+          lastVerifiedAt: now,
+          hitCount: 0,
+          createdAt: now,
+          updatedAt: now
+        }];
+      }
+      const intent = AgentIntentContractSchema.parse({
+        userMessageSummary: `Verify ${targetName} rated output.`,
+        dialogueUnderstanding: 'Check the named catalog candidate before recommending it.',
+        nextStepRationale: 'Use the declared source policy.',
+        requiresTools: true,
+        toolRequests: [{
+          id: 'catalog:source-policy',
+          tool: 'catalog.search',
+          args: { query: targetName, canonicalProductIntent: 'generator', productIntent: 'generator' },
+          rationale: 'Read the current catalog candidate.',
+          required: true
+        }, {
+          id: 'web:source-policy',
+          tool: 'web.researchProductFacts',
+          args: { productNames: [targetName], comparisonAttributes: [attribute], canonicalProductIntent: 'generator', productIntent: 'generator' },
+          rationale: 'Apply the requested source requirement.',
+          required: true
+        }],
+        productMentions: [{ name: targetName, role: 'target_product', productClass: 'generator', evidence: targetName }],
+        selectionPolicy: {
+          targetProductClass: 'generator', canonicalProductClass: 'generator', selectionGoal: 'preliminary_fit',
+          needAction: 'continue', alternativePolicy: 'exact_only', reusePreviousCards: false,
+          maxCards: 1, powerSource: 'any', phase: 'any', requirements: [], rankingObjectives: [], rationale: 'Named candidate.'
+        },
+        grounding: {
+          taskType: 'product_selection', sourcePolicy: 'web_required', webPurpose: 'technical_specs', webRequirement,
+          requiredToolKinds: ['catalog.search', 'web.researchProductFacts'], technicalAttributes: [attribute],
+          buyerQuestion: `Verify ${targetName} rated output.`, rationale: 'Source policy is explicit.'
+        },
+        mustNotAskQuestionIds: [], riskFlags: []
+      });
+      const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, products as never, {} as never, withStrictToolFixtures(model()));
+      const executor = orchestrator as unknown as {
+        executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[] }>;
+      };
+      const result = await executor.executeTools({
+        session: session(), turnId, executionOwner: 'source-policy-test', userMessage: `Verify ${targetName} rated output.`,
+        history: [], intent, toolRequests: intent.toolRequests, needState: emptyNeedState(),
+        pendingLeadCaptureDraft: null, persistedToolResults: new Map(), budget: new AgentManagerTurnBudget()
+      });
+      return result.toolResults.find((item) => item.requestId === 'web:source-policy');
+    }
+
+    it.each(['buyer_requested', 'independent_required'] as const)('performs %s web verification even when the catalog covers every requested attribute', async (webRequirement) => {
+      researchProductComparisonFacts.mockResolvedValue(completedWeb);
+      const result = await executeResearch(webRequirement, 'catalog');
+      expect(researchProductComparisonFacts).toHaveBeenCalledTimes(1);
+      expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+        allowCatalogOnlyAnswer: false, targetProductNames: [targetName], comparisonAttributes: [attribute]
+      }));
+      expect(result?.payload).toMatchObject({ usedWebSearch: true, searchDisposition: 'completed' });
+    });
+
+    it('performs independent web verification even when verified memory covers every requested attribute', async () => {
+      researchProductComparisonFacts.mockResolvedValue(completedWeb);
+      const result = await executeResearch('independent_required', 'memory');
+      expect(researchProductComparisonFacts).toHaveBeenCalledTimes(1);
+      expect(researchProductComparisonFacts).toHaveBeenCalledWith(expect.objectContaining({
+        allowCatalogOnlyAnswer: false, targetProductNames: [targetName], comparisonAttributes: [attribute]
+      }));
+      expect(result?.payload).toMatchObject({ usedWebSearch: true, searchDisposition: 'completed' });
+    });
+
+    it.each(['catalog', 'memory'] as const)('reuses complete %s evidence for a genuinely conditional preliminary check', async (localSource) => {
+      const result = await executeResearch('conditional_on_catalog_gap', localSource);
+      expect(researchProductComparisonFacts).not.toHaveBeenCalled();
+      expect(result?.status).toBe('ok');
+      expect(result?.payload).toMatchObject({ usedWebSearch: false });
+    });
+
+    it('does not claim successful verification when the required external attempt fails', async () => {
+      researchProductComparisonFacts.mockRejectedValue(new Error('external lookup unavailable'));
+      const result = await executeResearch('buyer_requested', 'catalog');
+      expect(researchProductComparisonFacts).toHaveBeenCalled();
+      expect(result?.status).toBe('error');
+      expect(result?.payload).not.toMatchObject({ usedWebSearch: true, searchDisposition: 'completed' });
+    });
   });
 
   it('rejects a premature handoff instead of replacing it when web execution fails', async () => {
@@ -1636,7 +1828,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD3910E есть? Он с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(overconfidentModel));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures({ ...overconfidentModel, reviewCustomerLanguage: async () => ({ processDisclosure: false, evidence: '', rationale: 'Semantic fact review fixture.', factualIssues: [{ claim: 'RD3910E есть и запускается ключом/замком зажигания, а не кнопкой.', sourceResultId: 'web:rd3910e', reason: 'The exact start control remains unconfirmed; the answer asserts a key mechanism.' }] }) }));
 
     await expect(orchestrator.generateAnswer({
       sessionId,
@@ -1740,7 +1932,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(omittingModel));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures({ ...omittingModel, reviewCustomerLanguage: async () => ({ processDisclosure: false, evidence: '', rationale: 'Semantic fact review fixture.', factualIssues: [{ claim: 'По ключу или кнопке точной строки нет.', sourceResultId: 'web:rd3910e-catalog', reason: 'The source explicitly confirms key control, so claiming there is no data contradicts it.' }] }) }));
 
     await expect(orchestrator.generateAnswer({
       sessionId,
@@ -1859,7 +2051,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD3910E - заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(modelThatDropsCoverageFacts));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures({ ...modelThatDropsCoverageFacts, reviewCustomerLanguage: async () => ({ processDisclosure: false, evidence: '', rationale: 'Semantic fact review fixture.', factualIssues: [{ claim: 'По ключу или кнопке точной строки нет.', sourceResultId: 'web:rd3910e-catalog', reason: 'The source confirms key start; the response falsely reports that the data are absent.' }] }) }));
 
     await expect(orchestrator.generateAnswer({
       sessionId,
@@ -1971,7 +2163,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('Firman RD4910E заводится с ключа или с кнопки?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, withStrictToolFixtures(badModel));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, {} as never, withStrictToolFixtures({ ...badModel, reviewCustomerLanguage: async () => ({ processDisclosure: false, evidence: '', rationale: 'Semantic fact review fixture.', factualIssues: [{ claim: 'RD4910E запускается с ключа.', sourceResultId: 'web:rd4910e', reason: 'The exact starter control is unconfirmed and cannot be stated as key start.' }] }) }));
 
     await expect(orchestrator.generateAnswer({
       sessionId,
@@ -2089,7 +2281,7 @@ describe('AgentManager comparison research flow', () => {
     };
     const conversations = new FakeConversations();
     conversations.messages = [message('SUNREKA G7000iS нужно заводить шнурком или он запускается кнопкой?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures(badModel));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new PresentCatalogProducts() as never, {} as never, withStrictToolFixtures({ ...badModel, reviewCustomerLanguage: async () => ({ processDisclosure: false, evidence: '', rationale: 'Semantic fact review fixture.', factualIssues: [{ claim: 'По карточке вижу только ручной стартер.', sourceResultId: 'web:g7000is', reason: 'Later checked evidence confirms button start; only manual start is incorrect.' }] }) }));
 
     await expect(orchestrator.generateAnswer({
       sessionId,
@@ -2733,7 +2925,7 @@ describe('AgentManager comparison research flow', () => {
 
     const conversations = new FakeConversations();
     conversations.messages = [message('SUNREKA G7000iS starts by cord or button?')];
-    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, withStrictToolFixtures(memoryModel));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, fakeProducts as never, {} as never, withStrictToolFixtures(memoryModel, 'conditional_on_catalog_gap'));
 
     await orchestrator.generateAnswer({
       sessionId,
@@ -2849,7 +3041,7 @@ describe('AgentManager comparison research flow', () => {
       conversations as never,
       fakeProducts as never,
       {} as never,
-      withStrictToolFixtures(semanticModel)
+      withStrictToolFixtures(semanticModel, 'conditional_on_catalog_gap')
     );
 
     await orchestrator.generateAnswer({
@@ -2984,7 +3176,7 @@ describe('AgentManager comparison research flow', () => {
       conversations as never,
       partialProducts as never,
       {} as never,
-      withStrictToolFixtures(partialModel)
+      withStrictToolFixtures(partialModel, 'conditional_on_catalog_gap')
     );
 
     await orchestrator.generateAnswer({
@@ -3149,7 +3341,7 @@ describe('AgentManager comparison research flow', () => {
       conversations as never,
       products as never,
       {} as never,
-      withStrictToolFixtures(groundedModel)
+      withStrictToolFixtures(groundedModel, 'conditional_on_catalog_gap')
     );
 
     await orchestrator.generateAnswer({

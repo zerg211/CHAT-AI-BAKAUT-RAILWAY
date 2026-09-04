@@ -1,7 +1,7 @@
 import type { Product } from '../shared/types.js';
-import type { AgentIntentContract, SelectionRequirement, ToolResult } from './agentManagerContracts.js';
+import { AgentSelectionPolicySchema, type AgentIntentContract, type SelectionRequirement, type ToolResult } from './agentManagerContracts.js';
 import { modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
-import { generatorPhaseProfile, generatorRemoteStartProfile, hasElectricStartSignal } from './productClassifier.js';
+import { generatorPhaseProfile, generatorRemoteStartProfile, hasElectricStartSignal, productMatchesIntent } from './productClassifier.js';
 import { classifyProductResearchSource } from './productComparisonResearch.js';
 
 export type RequirementProofStatus = 'satisfied' | 'violated' | 'conflicted' | 'unverified';
@@ -467,16 +467,16 @@ function compareRequirement(requirement: SelectionRequirement, actual: Normalize
     // Open text values such as material, purpose and compatibility require
     // semantic interpretation. String inequality or a missing substring is not
     // proof of incompatibility and must not remove a candidate before the LLM
-    // writer evaluates the checked facts. Fuel is a closed factual enum and may
-    // still be compared deterministically.
+    // writer evaluates the checked facts. Fuel and canonical product classes
+    // are closed factual enums and may still be compared deterministically.
     const textMatches = actual.value === expected.value || actual.value.includes(expected.value);
-    if (attribute !== 'fuel_type') {
+    if (attribute !== 'fuel_type' && requirement.kind !== 'product_class' && requirement.kind !== 'product_type') {
       if (requirement.relation === 'must_not_have') {
         return { status: textMatches ? 'violated' as const : 'unverified' as const, expected };
       }
       return { status: textMatches ? 'satisfied' as const : 'unverified' as const, expected };
     }
-    matches = textMatches;
+    matches = actual.value === expected.value;
   } else {
     matches = actual.value === expected.value;
   }
@@ -545,10 +545,32 @@ function eligibleResults(input: {
 }) {
   const verification = input.requirement.verification;
   if (verification?.mode === 'typed_tool') {
+    const initialRequest = input.intent.toolRequests.find((request) => request.id === verification.toolRequestId);
+    if (
+      initialRequest?.required !== true ||
+      initialRequest.tool !== verification.tool ||
+      !(initialRequest.coversRequirementIds ?? []).includes(input.requirement.id)
+    ) return [];
+    // Read proofs can accumulate evidence from later required reads without
+    // rewriting the requirement's original binding. Every result must still
+    // belong to a planned tool request that explicitly covers this requirement.
+    // Derived tool outputs retain their exact verifier/request binding.
+    const readProof = requirementUsesGenericReadProof(input.requirement);
+    const coveredRequests = new Map(input.intent.toolRequests.filter((request) =>
+      request.required &&
+      (request.coversRequirementIds ?? []).includes(input.requirement.id) &&
+      (
+        request.id === initialRequest.id ||
+        (readProof && (
+          request.tool === 'catalog.search' ||
+          request.tool === 'catalog.getProductDetails' ||
+          request.tool === 'web.researchProductFacts'
+        ))
+      )
+    ).map((request) => [request.id, request]));
     return input.toolResults.filter((result) =>
       result.status === 'ok' &&
-      result.requestId === verification.toolRequestId &&
-      result.tool === verification.tool
+      coveredRequests.get(result.requestId)?.tool === result.tool
     );
   }
   const coveredRequestIds = new Set(input.intent.toolRequests.flatMap((request) =>
@@ -584,6 +606,14 @@ function catalogCandidates(input: {
     });
     if (canonicalAttribute(attribute) === 'price' && typeof resultProduct.price === 'number') {
       entries.push({ path: 'price', value: resultProduct.price });
+    }
+    if (input.requirement.kind === 'product_class' || input.requirement.kind === 'product_type') {
+      const knownClasses = AgentSelectionPolicySchema.shape.canonicalProductClass.unwrap().options
+        .filter((productClass) => productClass !== 'unknown' && productMatchesIntent(resultProduct, productClass));
+      const expectedClass = knownClasses.find((productClass) => productClass === input.requirement.value);
+      for (const productClass of expectedClass ? [expectedClass] : knownClasses) {
+        entries.push({ path: attribute, value: productClass });
+      }
     }
     if (canonicalAttribute(attribute) === 'phase') {
       const nameOnlyPhase = generatorPhaseProfile({

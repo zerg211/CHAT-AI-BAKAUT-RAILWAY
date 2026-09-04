@@ -18,6 +18,7 @@ import type {
   ToolResult
 } from '../src/ai/agentManagerContracts.js';
 import type { CustomerNeedState, Product } from '../src/shared/types.js';
+import { exactProductIdentity } from '../src/ai/modelTextMatching.js';
 
 function answerContract(selectionReadiness: AnswerContract['selectionReadiness']): AnswerContract {
   return {
@@ -2155,6 +2156,59 @@ describe('AgentManager visible card readiness', () => {
 
     expect(selection.products.map((product) => product.id)).toEqual([priced.id]);
     expect(selection.warnings).toContain('product_cards_filtered_by_price_visibility:1');
+  });
+
+  it.each([
+    ['Wacker Neuson BPS 1550 Aw', 'Виброплита Wacker Neuson BPS 1550 A', false],
+    ['Wacker Neuson BPS 1550 A', 'Виброплита Wacker Neuson BPS 1550 Aw', false],
+    ['BISON BS6250IE', 'Генератор BISON BS6250I', false],
+    ['BISON BS6250IE', 'Генератор BISON BS 6250 IE', true],
+    ['BISON BS 6250 IE', 'Генератор BISON BS6250IE', true]
+  ])('keeps exact visible-card identity aligned with retrieval for %s / %s', (targetName, productName, matches) => {
+    const canonicalProductClass = targetName.includes('BISON') ? 'generator' : 'plate';
+    const candidate: Product = {
+      ...plate,
+      id: 'exact-candidate',
+      name: productName,
+      category: canonicalProductClass === 'generator' ? 'Генераторы' : 'Виброплиты'
+    };
+    const intent = structuredSelectionIntentForClass(canonicalProductClass, { alternativePolicy: 'exact_only' });
+    intent.productMentions = [{ name: targetName, role: 'target_product', productClass: canonicalProductClass, evidence: targetName }];
+
+    const selection = selectProductsForVisibleCards({
+      products: [candidate],
+      userMessage: targetName,
+      history: [],
+      intent,
+      answerText: candidate.name,
+      selectedProductIds: [candidate.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(exactProductIdentity(targetName).matches(candidate.name)).toBe(matches);
+    expect(selection.products.map((product) => product.id)).toEqual(matches ? [candidate.id] : []);
+  });
+
+  it('does not display an accessory containing the exact model name as the requested core product', () => {
+    const targetName = 'Wacker Neuson BPS 1550 Aw';
+    const accessory: Product = {
+      ...plateAccessory,
+      name: `Коврик полиуретановый для виброплиты ${targetName}`
+    };
+    const intent = structuredSelectionIntentForClass('plate', { alternativePolicy: 'exact_only' });
+    intent.productMentions = [{ name: targetName, role: 'target_product', productClass: 'plate', evidence: targetName }];
+
+    const selection = selectProductsForVisibleCards({
+      products: [accessory],
+      userMessage: targetName,
+      history: [],
+      intent,
+      answerText: accessory.name,
+      selectedProductIds: [accessory.id],
+      needState: needStateWithBudget()
+    });
+
+    expect(selection.products).toEqual([]);
   });
 
   it('binds an exact comparison scope to named comparison subjects instead of treating it as an unknown product attribute', () => {

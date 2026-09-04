@@ -27,7 +27,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     });
 
     const review = await new OpenAIAgentManagerModel().reviewCustomerLanguage({
-      answerText: 'Я обращался к доступным источникам, но они не дали результата.'
+      answerText: 'Я обращался к доступным источникам, но они не дали результата.',
+      products: [],
+      toolResults: []
     });
 
     expect(review.processDisclosure).toBe(true);
@@ -39,6 +41,25 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       input?: Array<{ role?: string; content?: string }>;
     };
     expect(request.input?.find((item) => item.role === 'system')?.content).toContain('при любой формулировке');
+  });
+
+  it('reviews grounded factual polarity using source-bound findings in the existing review call', async () => {
+    const finding = { claim: 'The model has a manual starter.', sourceResultId: 'manual-read', reason: 'The exact model source confirms absence.' };
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Fact polarity mismatch.', factualIssues: [finding] } });
+    const review = await new OpenAIAgentManagerModel().reviewCustomerLanguage({
+      answerText: finding.claim,
+      products: [{ id: 'model-1', name: 'Exact model X100', specs: {} }],
+      toolResults: [{
+        requestId: 'manual-read', tool: 'web.researchProductFacts', status: 'ok', warnings: [],
+        payload: { facts: [{ productName: 'Exact model X100', attribute: 'manual starter', value: 'absent', evidence: 'No recoil starter is fitted.' }] }
+      }]
+    });
+    expect(review.factualIssues).toEqual([finding]);
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(1);
+    const request = createStructuredJsonResponse.mock.calls[0]![0].request;
+    const input = JSON.parse(request.input.find((item: { role: string }) => item.role === 'user').content);
+    expect(input.toolResults).toEqual(expect.arrayContaining([expect.objectContaining({ requestId: 'manual-read' })]));
+    expect(request.text.format.schema.properties.factualIssues.items.properties.sourceResultId.enum).toEqual(['manual-read']);
   });
 
   it('returns only structured verified-memory bindings for semantic attribute aliases', async () => {
@@ -349,14 +370,29 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         value: 77,
         confidence: 0.7,
         needId: 'generator',
-        role: 'hard_requirement'
+        productId: 'catalog-generator-a',
+        unit: 'kg',
+        relation: 'context',
+        role: 'context'
       },
       evidence: 'Observed in an unconfirmed web result.',
       source: 'web',
       status: 'active',
       createdAt: now
     };
-    const ledgerState = reduceDialogueLedger([observedFact]);
+    const ledgerState = reduceDialogueLedger([{
+      ...observedFact,
+      eventId: 'open-generator',
+      eventType: 'need.opened',
+      scope: 'need',
+      payload: { needId: 'generator', productClass: 'generator', activate: true }
+    }, observedFact, {
+      ...observedFact,
+      eventId: 'open-secondary',
+      eventType: 'need.opened',
+      scope: 'need',
+      payload: { needId: 'oil', productClass: 'engineOil', activate: false }
+    }]);
 
     await model.proposeLedgerDelta({
       session,
@@ -395,8 +431,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       ) as {
         pendingLeadCaptureDraft?: Record<string, unknown>;
         pendingExhaustedTechnicalHandoffs?: unknown;
-        existingState?: { facts?: Array<Record<string, unknown>> };
-        ledger?: { facts?: Array<Record<string, unknown>> };
+        existingState?: { activeNeedId?: string | null; facts?: Array<Record<string, unknown>> };
+        ledger?: { activeNeedId?: string | null; facts?: Array<Record<string, unknown>> };
       };
       expect(userInput.pendingLeadCaptureDraft).toEqual(pendingLeadCaptureDraft);
       expect(userInput.pendingLeadCaptureDraft).not.toHaveProperty('phone');
@@ -405,11 +441,17 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         expect(userInput.pendingExhaustedTechnicalHandoffs).toEqual(pendingExhaustedTechnicalHandoffs);
       }
       const compactFact = (userInput.existingState ?? userInput.ledger)?.facts?.[0];
+      expect((userInput.existingState ?? userInput.ledger)?.activeNeedId).toBe('generator');
       expect(compactFact).toMatchObject({
         eventType: 'fact.observed',
         source: 'web',
         confidence: 0.7,
-        createdAt: now
+        createdAt: now,
+        scope: 'product',
+        productId: 'catalog-generator-a',
+        unit: 'kg',
+        relation: 'context',
+        role: 'context'
       });
     }
     const plannerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_intent_contract');
@@ -457,11 +499,16 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).toContain('Если в одном ходе явно запрошены разные классы товаров');
     expect(plannerPrompt).toContain('не своди аксессуар к классу основного товара');
     expect(plannerPrompt).toContain('web request также несёт свой canonicalProductIntent');
-    expect(plannerPrompt).toContain('смена задачи бюджет не сбрасывает');
+    expect(plannerPrompt).not.toContain('смена задачи бюджет не сбрасывает');
     expect(plannerPrompt).toContain('Топливо/источник энергии не выдумывай');
     expect(plannerPrompt).toContain('catalog.search limit ставь с запасом');
-    expect(plannerPrompt).toContain('молча не роняй ни одно');
-    expect(plannerPrompt).toContain('пересчитывай заново под новую задачу');
+    expect(plannerPrompt).toContain('текущего activeNeedId и явно общие scope=dialogue без needId');
+    expect(plannerPrompt).toContain('те же kind, значение, единицу и relation, включая старые ходы');
+    expect(plannerPrompt).toContain('локальные факты остаются у paused темы для возврата');
+    expect(plannerPrompt).toContain('Общность не выводи из названия kind');
+    expect(plannerPrompt).toContain('пересчитывай по нагрузкам активной задачи');
+    expect(plannerPrompt).toContain('priorVisibleProducts.occurrences');
+    expect(plannerPrompt).toContain('messageId/createdAt/ordinal');
     const rankingSchema = plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.properties?.rankingObjectives;
     expect(plannerRequest?.text?.format?.schema?.properties?.selectionPolicy?.required).toContain('rankingObjectives');
     expect(rankingSchema?.items?.properties?.attribute?.enum).toEqual(['weight_kg', 'price_rub', 'nominal_power_kw']);
@@ -498,14 +545,20 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(reducerPrompt).toContain('openQuestionsUpdateMode');
     expect(reducerPrompt).toContain('fact.observed');
     expect(reducerPrompt).toContain('confidence');
+    expect(reducerPrompt).toContain('activate=false: она останется paused');
+    expect(reducerPrompt).toContain('scope=product и productId');
+    expect(reducerPrompt).toContain('Характеристика товара не становится hard_requirement покупателя');
     expect(ledgerPayloadSchema?.required).toEqual(expect.arrayContaining([
       'confidence',
+      'relation',
       'constraintsUpdateMode',
       'openQuestionsUpdateMode',
       'rejectedProductIdsUpdateMode'
     ]));
     expect(ledgerPayloadSchema?.properties?.rejectedProductIdsUpdateMode?.enum)
       .toEqual(['merge', 'replace', 'clear', null]);
+    expect(ledgerPayloadSchema?.properties?.relation?.enum)
+      .toEqual(['must_have', 'must_not_have', 'preferred', 'not_required', 'context', null]);
   });
 
   it('routes current buyer wording into dynamic sales policy prompts for planner and answer', async () => {

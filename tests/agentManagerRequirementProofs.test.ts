@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  gateStrictSelectionRequirements,
   productCards,
   selectProductsForVisibleCards
 } from '../src/ai/agentManagerCardSelection.js';
@@ -13,6 +14,8 @@ import type {
 import type { CustomerNeedState, Product } from '../src/shared/types.js';
 import { generatorPhaseProfile } from '../src/ai/productClassifier.js';
 import { buildRequirementProofs } from '../src/ai/requirementProofs.js';
+import { filterProductsByStructuredSelectionPolicy } from '../src/ai/agentManagerOrchestrator.js';
+import { continuationValidationIssues } from '../src/ai/agentManagerContinuation.js';
 
 function emptyNeedState(): CustomerNeedState {
   return {
@@ -236,6 +239,276 @@ function select(input: {
 }
 
 describe('generic requirement proofs', () => {
+  describe('continued read evidence', () => {
+    function fixture() {
+      const product = generator('continued-generator', 'Generator TEST G7000', {});
+      const requirement: SelectionRequirement = {
+        id: 'noise-limit', kind: 'noise_max_db', value: 60, unit: 'dB',
+        role: 'hard_constraint', strictness: 'strict', relation: 'must_have',
+        evidence: 'The selected generator must be no louder than 60 dB.',
+        verification: {
+          mode: 'typed_tool', toolRequestId: 'noise-first', tool: 'web.researchProductFacts',
+          verifier: 'technical_source_review', bindAs: 'noise_level_db'
+        }
+      };
+      const initial: ToolRequest = {
+        id: 'noise-first', tool: 'web.researchProductFacts', required: true,
+        coversRequirementIds: [requirement.id], rationale: 'Check the noise limit.',
+        args: { query: 'initial noise check', productNames: [product.name], comparisonAttributes: ['noise level dB'] }
+      };
+      const next: ToolRequest = {
+        ...initial, id: 'noise-followup',
+        args: { ...initial.args, query: 'manufacturer technical manual noise specification' }
+      };
+      const intent = intentFor({ requirement, request: initial });
+      const firstResult = webResult({ requestId: initial.id, product, attribute: 'Noise level', value: '55 dB' });
+      firstResult.payload = { ...firstResult.payload, facts: [], researchOutcome: 'partial' };
+      const validateAndAppend = () => {
+        expect(continuationValidationIssues({
+          intent, products: [product],
+          decision: {
+            action: 'continue', rationale: 'The first source did not resolve noise.',
+            missingFacts: ['noise level'], candidateProductIds: [product.id], toolRequests: [next]
+          }
+        })).toEqual([]);
+        intent.toolRequests.push(next);
+      };
+      return { product, requirement, initial, next, intent, firstResult, validateAndAppend };
+    }
+
+    it.each([
+      { value: '55 dB', status: 'satisfied', keep: true },
+      { value: '90 dB', status: 'violated', keep: false }
+    ])('binds a validated new continuation source with $value to the unchanged requirement', ({ value, status, keep }) => {
+      const { product, requirement, next, intent, firstResult, validateAndAppend } = fixture();
+      const requirementBefore = structuredClone(requirement);
+      const firstResultBefore = structuredClone(firstResult);
+      validateAndAppend();
+      const toolResults = [
+        catalogResult([product]), firstResult,
+        webResult({ requestId: next.id, product, attribute: 'Noise level', value })
+      ];
+
+      const selection = select({ products: [product], intent, toolResults });
+
+      expect(selection.requirementProofs).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, productId: product.id, status, sourceResultIds: [next.id]
+      }));
+      expect(selection.selectedProductIds).toEqual(keep ? [product.id] : []);
+      expect(gateStrictSelectionRequirements(intent, 'generator', toolResults, [product])).toMatchObject({
+        blockers: [], preliminaryUnverified: []
+      });
+      expect(selection.warnings.some((warning) => warning.startsWith('product_cards_preliminary:'))).toBe(false);
+      expect(requirement).toEqual(requirementBefore);
+      expect(firstResult).toEqual(firstResultBefore);
+    });
+
+    it('finishes a read requirement when the continuation succeeds after an earlier tool failure', () => {
+      const { product, requirement, next, intent, firstResult, validateAndAppend } = fixture();
+      validateAndAppend();
+      firstResult.status = 'error';
+      const toolResults = [firstResult, webResult({ requestId: next.id, product, attribute: 'Noise level', value: '55 dB' })];
+
+      expect(buildRequirementProofs({ products: [product], intent, toolResults })).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, status: 'satisfied', sourceResultIds: [next.id]
+      }));
+      expect(gateStrictSelectionRequirements(intent, 'generator', toolResults, [product])).toMatchObject({
+        blockers: [], preliminaryUnverified: []
+      });
+    });
+
+    it('retains both searches when equally authoritative facts conflict', () => {
+      const { product, requirement, initial, next, intent, validateAndAppend } = fixture();
+      validateAndAppend();
+      const toolResults = [
+        catalogResult([product]),
+        webResult({ requestId: initial.id, product, attribute: 'Noise level', value: '55 dB' }),
+        webResult({ requestId: next.id, product, attribute: 'Noise level', value: '90 dB' })
+      ];
+
+      const selection = select({ products: [product], intent, toolResults });
+
+      expect(selection.requirementProofs).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, status: 'conflicted', eligibilityStatus: 'unknown',
+        sourceResultIds: [initial.id, next.id]
+      }));
+      expect(selection.selectedProductIds).toEqual([product.id]);
+      expect(selection.productCaveatsById[product.id]?.join(' ')).toContain('расходятся');
+      expect(gateStrictSelectionRequirements(intent, 'generator', toolResults, [product]).preliminaryUnverified)
+        .toContainEqual(expect.objectContaining({ id: requirement.id }));
+    });
+
+    it('allows a required catalog continuation to contribute its product attributes', () => {
+      const { product, requirement, next, intent, firstResult, validateAndAppend } = fixture();
+      next.tool = 'catalog.getProductDetails';
+      next.args = { productIds: [product.id] };
+      validateAndAppend();
+      const toolResults: ToolResult[] = [firstResult, {
+        requestId: next.id, tool: next.tool, status: 'ok', warnings: [],
+        payload: { products: [{ ...product, specs: { 'Noise level': '90 dB' } }] }
+      }];
+
+      const selection = select({ products: [product], intent, toolResults });
+
+      expect(selection.requirementProofs).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, status: 'violated', sourceResultIds: [next.id], sourceAuthority: 'catalog'
+      }));
+      expect(selection.selectedProductIds).toEqual([]);
+    });
+
+    it('allows an external continuation to resolve a requirement first bound to the catalog', () => {
+      const { product, requirement, initial, next, intent, validateAndAppend } = fixture();
+      initial.tool = 'catalog.getProductDetails';
+      initial.args = { productIds: [product.id] };
+      if (requirement.verification?.mode === 'typed_tool') requirement.verification.tool = initial.tool;
+      validateAndAppend();
+      const toolResults: ToolResult[] = [{
+        requestId: initial.id, tool: initial.tool, status: 'ok', warnings: [], payload: { products: [product] }
+      }, webResult({ requestId: next.id, product, attribute: 'Noise level', value: '55 dB' })];
+
+      expect(buildRequirementProofs({ products: [product], intent, toolResults })).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, status: 'satisfied', sourceResultIds: [next.id]
+      }));
+    });
+
+    it('does not replace a missing original binding with an arbitrary new source', () => {
+      const { product, requirement, next, intent, firstResult, validateAndAppend } = fixture();
+      validateAndAppend();
+      if (requirement.verification?.mode === 'typed_tool') requirement.verification.toolRequestId = 'unplanned-original';
+      const toolResults = [firstResult, webResult({ requestId: next.id, product, attribute: 'Noise level', value: '55 dB' })];
+
+      const selection = select({ products: [product], intent, toolResults });
+
+      expect(selection.requirementProofs).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, status: 'unverified', sourceResultIds: []
+      }));
+      expect(selection.selectedProductIds).toEqual([]);
+    });
+
+    it('does not let a continuation read satisfy an unsupported derived-tool verifier', () => {
+      const { product, requirement, initial, next, intent, validateAndAppend } = fixture();
+      initial.tool = 'calculator.generatorLoad';
+      if (requirement.verification?.mode === 'typed_tool') requirement.verification.tool = initial.tool;
+      validateAndAppend();
+      const toolResults: ToolResult[] = [{
+        requestId: initial.id, tool: initial.tool, status: 'ok', warnings: [], payload: {}
+      }, webResult({ requestId: next.id, product, attribute: 'Noise level', value: '55 dB' })];
+
+      const gate = gateStrictSelectionRequirements(intent, 'generator', toolResults, [product]);
+
+      expect(gate.blockers).toContainEqual(expect.objectContaining({ reason: 'unsupported_typed_tool_verifier' }));
+      expect(buildRequirementProofs({ products: [product], intent, toolResults })).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, status: 'unverified', sourceResultIds: []
+      }));
+    });
+
+    it.each([
+      'unplanned result', 'optional request', 'uncovered requirement', 'result tool mismatch',
+      'failed result', 'different product fact', 'different attribute fact'
+    ])('does not accept continuation evidence with $0', (invalid) => {
+      const { product, requirement, next, intent, firstResult, validateAndAppend } = fixture();
+      validateAndAppend();
+      const result = webResult({ requestId: next.id, product, attribute: 'Noise level', value: '55 dB' });
+      if (invalid === 'unplanned result') result.requestId = 'unplanned-web-result';
+      if (invalid === 'optional request') next.required = false;
+      if (invalid === 'uncovered requirement') next.coversRequirementIds = [];
+      if (invalid === 'result tool mismatch') next.tool = 'catalog.getProductDetails';
+      if (invalid === 'failed result') result.status = 'error';
+      if (invalid === 'different product fact') {
+        Object.assign(result, webResult({
+          requestId: next.id, product: generator('other-generator', 'Generator TEST G9000', {}),
+          attribute: 'Noise level', value: '55 dB'
+        }));
+      }
+      if (invalid === 'different attribute fact') {
+        Object.assign(result, webResult({ requestId: next.id, product, attribute: 'Weight kg', value: '55 kg' }));
+      }
+
+      const selection = select({ products: [product], intent, toolResults: [catalogResult([product]), firstResult, result] });
+
+      expect(selection.requirementProofs).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, status: 'unverified', sourceResultIds: []
+      }));
+      expect(selection.selectedProductIds).toEqual([product.id]);
+      expect(gateStrictSelectionRequirements(intent, 'generator', [firstResult, result], [product]).preliminaryUnverified)
+        .toContainEqual(expect.objectContaining({ id: requirement.id }));
+    });
+  });
+
+  it.each([
+    { label: 'known fitting facts', weight: '54 кг', price: 43313, keep: true, missing: false },
+    { label: 'unknown weight', weight: null, price: 43313, keep: true, missing: true },
+    { label: 'known weight conflict', weight: '84 кг', price: 43313, keep: false, missing: false },
+    { label: 'known budget conflict', weight: '54 кг', price: 80000, keep: false, missing: false },
+    { label: 'known accessory class', weight: '54 кг', price: 43313, keep: false, missing: false }
+  ])('handles typed catalog reads as source evidence for $label', ({ label, weight, price, keep, missing }) => {
+    const candidate: Product = {
+      id: 'tss-wp50l', name: 'Виброплита ТСС TSS-WP50L', category: 'Виброплиты',
+      price, currency: 'RUB', specs: weight ? { вес: weight } : {}
+    };
+    if (label === 'known accessory class') {
+      candidate.name = 'Коврик для виброплиты ТСС TSS-WP50L';
+      candidate.category = 'Комплектующие для виброплит';
+    }
+    const requirements: SelectionRequirement[] = [
+      { id: 'class', kind: 'product_class', value: 'plate', unit: null },
+      { id: 'weight', kind: 'weight_max_kg', value: 70, unit: 'kg' },
+      { id: 'budget', kind: 'budget_max_rub', value: 70000, unit: 'RUB' }
+    ].map((requirement) => ({
+      ...requirement, role: 'hard_constraint', strictness: 'strict', relation: 'must_have', evidence: 'Виброплита до 70 кг и 70000 рублей.',
+      verification: { mode: 'typed_tool', toolRequestId: 'catalog-search', tool: 'catalog.search', verifier: requirement.id === 'class' ? 'catalog_product_class' : 'catalog_product_attribute', bindAs: requirement.kind }
+    }));
+    const request: ToolRequest = {
+      id: 'catalog-search', tool: 'catalog.search', args: { query: 'виброплита', canonicalProductIntent: 'plate', productIntent: 'plate' },
+      required: true, coversRequirementIds: requirements.map((requirement) => requirement.id), rationale: 'Read catalog facts.'
+    };
+    const intent = intentFor({ requirement: requirements[0]!, request });
+    Object.assign(intent.selectionPolicy!, { targetProductClass: 'plate', canonicalProductClass: 'plate', requirements });
+    const toolResults = [catalogResult([candidate])];
+
+    const gate = gateStrictSelectionRequirements(intent, 'plate', toolResults, [candidate]);
+    expect(gate.blockers).toEqual([]);
+    expect(gate.preliminaryUnverified.some((item) => item.id === 'weight')).toBe(missing);
+    expect(gate.preliminaryUnverified.some((item) => item.id === 'class' || item.id === 'budget')).toBe(false);
+    const selection = select({ products: [candidate], intent, toolResults });
+    expect(selection.products.map((product) => product.id)).toEqual(keep ? [candidate.id] : []);
+  });
+
+  it('keeps catalog candidates available while their required read proof is being collected', () => {
+    const requirement: SelectionRequirement = {
+      id: 'weight', kind: 'weight_max_kg', value: 70, unit: 'kg', role: 'hard_constraint', strictness: 'strict',
+      relation: 'must_have', evidence: 'до 70 кг',
+      verification: { mode: 'typed_tool', toolRequestId: 'catalog-search', tool: 'catalog.search', verifier: 'catalog_product_attribute', bindAs: 'weight_max_kg' }
+    };
+    const request: ToolRequest = {
+      id: 'catalog-search', tool: 'catalog.search', args: { query: 'виброплита', canonicalProductIntent: 'plate' },
+      required: true, coversRequirementIds: [requirement.id], rationale: 'Read candidate weight.'
+    };
+    const intent = intentFor({ requirement, request });
+    Object.assign(intent.selectionPolicy!, { targetProductClass: 'plate', canonicalProductClass: 'plate', selectionGoal: 'final_fit' });
+    const gate = gateStrictSelectionRequirements(intent, 'plate', [], [{ id: 'plate', name: 'Виброплита', specs: { вес: '54 кг' } }]);
+    expect(gate.blockers).toEqual([]);
+    expect(gate.preliminaryUnverified).toContainEqual(expect.objectContaining({ id: 'weight', reason: 'typed_tool_result_missing' }));
+    const pendingProducts = [{ id: 'plate', name: 'Виброплита', specs: { вес: '54 кг' } }];
+    expect(filterProductsByStructuredSelectionPolicy({ products: pendingProducts, intent, toolResults: [] }).products)
+      .toEqual(pendingProducts);
+  });
+
+  it('does not accept an unsupported calculator verifier as a generic catalog read', () => {
+    const requirement: SelectionRequirement = {
+      id: 'weight', kind: 'weight_max_kg', value: 70, unit: 'kg', role: 'hard_constraint', strictness: 'strict',
+      relation: 'must_have', evidence: 'до 70 кг',
+      verification: { mode: 'typed_tool', toolRequestId: 'calculation', tool: 'calculator.generatorLoad', verifier: 'catalog_product_attribute', bindAs: 'weight_max_kg' }
+    };
+    const request: ToolRequest = {
+      id: 'calculation', tool: 'calculator.generatorLoad', args: {}, required: true,
+      coversRequirementIds: [requirement.id], rationale: 'Invalid tool/verification pairing.'
+    };
+    const intent = intentFor({ requirement, request });
+    const gate = gateStrictSelectionRequirements(intent, 'plate', [{ requestId: request.id, tool: request.tool, status: 'ok', payload: {}, warnings: [] }]);
+    expect(gate.blockers).toContainEqual(expect.objectContaining({ reason: 'unsupported_typed_tool_verifier' }));
+  });
+
   it('binds remote-start catalog facts without treating ATS-only products as satisfied', () => {
     const remote = generator('remote', 'BISON BS6250IE', {
       запуск: 'ручной/электро/дистанционный'
@@ -1111,7 +1384,8 @@ describe('generic requirement proofs', () => {
       toolResults: [catalogResult]
     });
 
-    expect(result.selectedProductIds).toEqual([]);
+    expect(result.selectedProductIds).toEqual([product.id]);
+    expect(result.warnings).toContain('product_cards_preliminary:needs_evidence:1');
     expect(result.requirementProofs).toContainEqual(expect.objectContaining({
       requirementId: requirement.id,
       productId: product.id,

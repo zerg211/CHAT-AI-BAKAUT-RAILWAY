@@ -24,6 +24,113 @@ function event(input: Partial<DialogueLedgerEvent> & Pick<DialogueLedgerEvent, '
 }
 
 describe('dialogue ledger reducer', () => {
+  it('keeps nonactivated needs paused and switches or resumes only through explicit activation', () => {
+    const primary = event({ eventId: 'primary', eventType: 'need.opened', scope: 'need', payload: {
+      needId: 'primary', productClass: 'generator', activate: true
+    } });
+    const secondary = event({ eventId: 'secondary', eventType: 'need.opened', scope: 'need', payload: {
+      needId: 'secondary', productClass: 'engineOil', activate: false, status: 'open'
+    } });
+    const initial = reduceDialogueLedger([primary, secondary]);
+    expect(initial.needsById.secondary?.status).toBe('paused');
+    expect(deriveNeedStateSnapshotFromLedger(initial).selectionState.currentProductClass).toBe('generator');
+
+    const updated = reduceDialogueLedger([event({
+      eventId: 'secondary-update', eventType: 'need.updated', scope: 'need',
+      payload: { needId: 'secondary', status: 'open', activate: false, summary: 'Oil for later' }
+    })], initial);
+    expect(updated.needsById.secondary?.status).toBe('paused');
+    const resumed = reduceDialogueLedger([event({
+      eventId: 'resume-secondary', eventType: 'need.updated', scope: 'need',
+      payload: { needId: 'secondary', activate: true }
+    })], parseReducedDialogueLedgerState(JSON.parse(JSON.stringify(updated))));
+    expect(resumed.needsById.primary?.status).toBe('paused');
+    expect(deriveNeedStateSnapshotFromLedger(resumed).selectionState.currentProductClass).toBe('engineOil');
+
+    const returned = reduceDialogueLedger([event({
+      eventId: 'resume-primary', eventType: 'need.updated', scope: 'need',
+      payload: { needId: 'primary', activate: true }
+    })], resumed);
+    expect(deriveNeedStateSnapshotFromLedger(returned).selectionState.currentProductClass).toBe('generator');
+  });
+
+  it('does not reactivate a closed need from its last scoped fact or the previous snapshot', () => {
+    const state = reduceDialogueLedger([
+      event({ eventId: 'primary', eventType: 'need.opened', scope: 'need', payload: {
+        needId: 'primary', productClass: 'generator', activate: true
+      } }),
+      event({ eventId: 'budget', eventType: 'fact.confirmed', scope: 'need', payload: {
+        needId: 'primary', productClass: 'generator', factKey: 'budget_max_rub', value: 100000,
+        role: 'hard_requirement'
+      } })
+    ]);
+    const base = deriveNeedStateSnapshotFromLedger(state);
+    const closed = reduceDialogueLedger([event({
+      eventId: 'close', eventType: 'need.closed', scope: 'need', payload: { needId: 'primary' }
+    })], state);
+    const snapshot = deriveNeedStateSnapshotFromLedger(closed, base);
+    expect(snapshot.selectionState.currentProductClass).toBe('unknown');
+    expect(snapshot.constraints).toEqual([]);
+    expect(snapshot.activeNeeds.every((need) => need.status === 'closed')).toBe(true);
+  });
+
+  it('preserves product identity, scope, unit and relation through long snapshot replay', () => {
+    const events: DialogueLedgerEvent[] = [
+      event({ eventId: 'need', eventType: 'need.opened', scope: 'need', payload: {
+        needId: 'comparison', productClass: 'plate', activate: true
+      } }),
+      ...['a', 'b'].map((productId, index) => event({
+        eventId: `weight-${productId}`, eventType: 'fact.confirmed', scope: 'product',
+        source: 'catalog', payload: {
+          needId: 'comparison', productId, factKey: 'weight_kg', value: 30 + index * 40,
+          unit: 'kg', relation: 'context', role: 'context'
+        }
+      })),
+      event({ eventId: 'global-budget', eventType: 'fact.confirmed', scope: 'dialogue', payload: {
+        factKey: 'budget_max_rub', value: 100000, unit: 'RUB', relation: 'must_have', role: 'hard_requirement'
+      } }),
+      event({ eventId: 'local-budget', eventType: 'fact.confirmed', scope: 'need', payload: {
+        needId: 'comparison', factKey: 'budget_max_rub', value: 80000,
+        unit: 'RUB', relation: 'must_have', role: 'hard_requirement'
+      } }),
+      ...Array.from({ length: 81 }, (_, index) => event({
+        eventId: `context-${index}`, eventType: 'fact.confirmed', scope: 'need',
+        payload: { needId: 'comparison', factKey: 'context', value: index, role: 'context' }
+      })),
+      event({ eventId: 'weight-a-updated', eventType: 'fact.confirmed', scope: 'product', source: 'catalog', payload: {
+        needId: 'comparison', productId: 'a', factKey: 'weight_kg', value: 32,
+        unit: 'kg', relation: 'context', role: 'context', supersedesEventIds: ['weight-a']
+      } })
+    ];
+    const stored = parseReducedDialogueLedgerState(JSON.parse(JSON.stringify(reduceDialogueLedger(events.slice(0, 80)))));
+    const result = reduceDialogueLedger(events.slice(80), stored);
+    expect(result.factsByKey).toEqual(reduceDialogueLedger(events).factsByKey);
+    const facts = Object.values(result.factsByKey);
+    expect(facts.filter((fact) => fact.factKey === 'weight_kg')).toHaveLength(2);
+    expect(facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ productId: 'a', value: 32, scope: 'product', unit: 'kg', relation: 'context' }),
+      expect.objectContaining({ productId: 'b', value: 70, scope: 'product', unit: 'kg', relation: 'context' }),
+      expect.objectContaining({ factKey: 'budget_max_rub', value: 100000, scope: 'dialogue' }),
+      expect.objectContaining({ factKey: 'budget_max_rub', value: 80000, scope: 'need', needId: 'comparison' })
+    ]));
+  });
+
+  it('requests raw-event replay for legacy snapshots that lost scope or contain ambiguous active needs', () => {
+    const state = reduceDialogueLedger([event({
+      eventId: 'fact', eventType: 'fact.confirmed', scope: 'product',
+      payload: { factKey: 'weight_kg', value: 30, productId: 'a' }
+    })]);
+    const legacy = JSON.parse(JSON.stringify(state));
+    for (const fact of Object.values(legacy.factsByKey) as Array<Record<string, unknown>>) delete fact.scope;
+    expect(() => parseReducedDialogueLedgerState(legacy)).toThrowError('invalid_dialogue_ledger_snapshot');
+
+    const needs = reduceDialogueLedger(['a', 'b'].map((needId) => event({
+      eventId: needId, eventType: 'need.opened', scope: 'need', payload: { needId, activate: true }
+    })));
+    needs.needsById.a!.status = 'open';
+    expect(() => parseReducedDialogueLedgerState(needs)).toThrowError('invalid_dialogue_ledger_snapshot');
+  });
+
   it('deduplicates events by eventId', () => {
     const state = reduceDialogueLedger([
       event({ eventId: 'same', eventType: 'fact.confirmed', payload: { factKey: 'need.power_kw', value: 5 } }),

@@ -8,6 +8,30 @@ import type { ToolResult } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { buildRequirementProofs } from '../src/ai/requirementProofs.js';
 
+const memorySessionId = '11111111-1111-4111-8111-111111111111';
+const memoryTurnId = '22222222-2222-4222-8222-222222222222';
+
+function selectionDecision() {
+  const decision = generatorDecision();
+  decision.ledgerDelta.events = decision.ledgerDelta.events.filter((event) => event.payload.factKey !== 'generator_load_scenario');
+  decision.intent.toolRequests = decision.intent.toolRequests.filter((request) => request.tool === 'catalog.search');
+  decision.intent.selectionPolicy!.requirements = decision.intent.selectionPolicy!.requirements.filter((requirement) => requirement.kind !== 'generator_load_scenario');
+  decision.intent.grounding.requiredToolKinds = ['catalog.search'];
+  return decision;
+}
+
+function validateMemoryDecision(decision: AgentSemanticDecision, previousLedgerState = reduceDialogueLedger([])) {
+  return validateAgentSemanticDecision({ decision, previousLedgerState, sessionId: memorySessionId, turnId: memoryTurnId });
+}
+
+function continuingSelection() {
+  const previousLedgerState = validateMemoryDecision(selectionDecision()).ledgerState;
+  const decision = selectionDecision();
+  decision.ledgerDelta.events = [];
+  decision.intent.selectionPolicy!.needAction = 'continue';
+  return { decision, previousLedgerState };
+}
+
 function generatorDecision(): AgentSemanticDecision {
   const loads = [
     { kind: 'compressor', name: 'compressor', runningKw: 2.2 },
@@ -192,6 +216,143 @@ function generatorDecision(): AgentSemanticDecision {
 }
 
 describe('combined semantic decision validation', () => {
+  it.each(['missing', 'wrong_value', 'wrong_unit'] as const)('rejects an old active hard requirement with $0 on a later turn', (change) => {
+    const { decision, previousLedgerState } = continuingSelection();
+    const oldBudget = Object.values(previousLedgerState.factsByKey).find((fact) => fact.factKey === 'budget_max_rub')!;
+    Object.assign(oldBudget, { unit: 'RUB', relation: 'must_have' });
+    const requirement = decision.intent.selectionPolicy!.requirements[0]!;
+    if (change === 'missing') decision.intent.selectionPolicy!.requirements = [];
+    if (change === 'wrong_value') requirement.value = 200000;
+    if (change === 'wrong_unit') requirement.unit = 'USD';
+    expect(validateMemoryDecision(decision, previousLedgerState).issues).toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('keeps all scoped hard kinds on card reuse and does not enforce observations as confirmed requirements', () => {
+    const { decision, previousLedgerState } = continuingSelection();
+    const state = reduceDialogueLedger([{
+      sessionId: memorySessionId, turnId: memoryTurnId, eventId: 'old-weight', eventType: 'fact.confirmed',
+      scope: 'need', payload: { needId: 'generator-workshop', factKey: 'weight_max_kg', value: 60, unit: 'kg', role: 'hard_requirement' },
+      evidence: 'At most 60 kg', source: 'llm_state_delta', status: 'active'
+    }, {
+      sessionId: memorySessionId, turnId: memoryTurnId, eventId: 'observed-noise', eventType: 'fact.observed',
+      scope: 'need', payload: { needId: 'generator-workshop', factKey: 'noise_level_max_db', value: 65, role: 'hard_requirement' },
+      evidence: 'An unconfirmed preference', source: 'llm_state_delta', status: 'active'
+    }], previousLedgerState);
+    decision.intent.selectionPolicy!.reusePreviousCards = true;
+    const issues = validateMemoryDecision(decision, state).issues;
+    expect(issues).toContain('active_requirement_mismatch:weight_max_kg');
+    expect(issues).not.toContain('active_requirement_mismatch:noise_level_max_db');
+  });
+
+  it('does not treat a generic fuel power source as the persisted diesel requirement', () => {
+    const { decision, previousLedgerState } = continuingSelection();
+    const state = reduceDialogueLedger([{
+      sessionId: memorySessionId, turnId: memoryTurnId, eventId: 'diesel', eventType: 'fact.confirmed',
+      scope: 'need', payload: { needId: 'generator-workshop', factKey: 'fuel_type', value: 'diesel', role: 'hard_requirement' },
+      evidence: 'Diesel only', source: 'llm_state_delta', status: 'active'
+    }], previousLedgerState);
+    expect(validateMemoryDecision(decision, state).issues).toContain('active_requirement_mismatch:fuel_type');
+  });
+
+  it.each(['generator', 'plate'] as const)('switches to a separate %s need without leaking local facts and restores them on resume', (productClass) => {
+    const { decision, previousLedgerState } = continuingSelection();
+    decision.ledgerDelta.events = [{
+      eventType: 'need.opened', scope: 'need', payload: { needId: 'other', productClass, activate: true },
+      evidence: 'A separate purchase', source: 'llm_state_delta', status: 'active'
+    }];
+    Object.assign(decision.intent.selectionPolicy!, {
+      targetProductClass: productClass, canonicalProductClass: productClass, needAction: 'switch', requirements: []
+    });
+    Object.assign(decision.intent.toolRequests[0]!.args, { productIntent: productClass, canonicalProductIntent: productClass });
+    const switched = validateMemoryDecision(decision, previousLedgerState);
+    expect(switched.issues).not.toContain('active_requirement_mismatch:budget_max_rub');
+    decision.ledgerDelta.events = [{
+      eventType: 'need.updated', scope: 'need', payload: { needId: 'generator-workshop', activate: true },
+      evidence: 'Back to the workshop', source: 'llm_state_delta', status: 'active'
+    }];
+    Object.assign(decision.intent.selectionPolicy!, { targetProductClass: 'generator', canonicalProductClass: 'generator', needAction: 'resume' });
+    Object.assign(decision.intent.toolRequests[0]!.args, { productIntent: 'generator', canonicalProductIntent: 'generator' });
+    expect(validateMemoryDecision(decision, switched.ledgerState).issues).toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('carries only explicitly dialogue-wide constraints across a need switch with the original value', () => {
+    const { decision, previousLedgerState } = continuingSelection();
+    const state = reduceDialogueLedger([{
+      sessionId: memorySessionId, turnId: memoryTurnId, eventId: 'global-weight', eventType: 'fact.confirmed',
+      scope: 'dialogue', payload: { factKey: 'weight_max_kg', value: 60, unit: 'kg', role: 'hard_requirement' },
+      evidence: 'I lift every purchase myself', source: 'llm_state_delta', status: 'active'
+    }], previousLedgerState);
+    decision.ledgerDelta.events = [{
+      eventType: 'need.opened', scope: 'need', payload: { needId: 'other', productClass: 'generator', activate: true },
+      evidence: 'Another generator', source: 'llm_state_delta', status: 'active'
+    }];
+    decision.intent.selectionPolicy!.needAction = 'switch';
+    decision.intent.selectionPolicy!.requirements = [{
+      id: 'weight', kind: 'weight_max_kg', value: 90, unit: 'kg', relation: 'must_have',
+      role: 'hard_constraint', strictness: 'strict', evidence: 'weight', verification: { mode: 'product_attribute' }
+    }];
+    expect(validateMemoryDecision(decision, state).issues).toContain('active_requirement_mismatch:weight_max_kg');
+    decision.intent.selectionPolicy!.requirements[0]!.value = 60;
+    expect(validateMemoryDecision(decision, state).issues.filter((issue) => issue.startsWith('active_requirement_mismatch'))).toEqual([]);
+  });
+
+  it('accepts an explicit replacement and cancellation without keeping the superseded restriction', () => {
+    const { decision, previousLedgerState } = continuingSelection();
+    const budget = Object.values(previousLedgerState.factsByKey).find((fact) => fact.factKey === 'budget_max_rub')!;
+    decision.ledgerDelta.events = [{
+      eventType: 'fact.confirmed', scope: 'need', payload: {
+        needId: 'generator-workshop', factKey: 'budget_max_rub', value: 200000,
+        role: 'hard_requirement', supersedesEventIds: [budget.eventId]
+      }, evidence: 'New budget 200000', source: 'llm_state_delta', status: 'active'
+    }];
+    decision.intent.selectionPolicy!.requirements[0]!.value = 200000;
+    const replaced = validateMemoryDecision(decision, previousLedgerState);
+    expect(replaced.issues).toEqual([]);
+    const currentBudget = Object.values(replaced.ledgerState.factsByKey).find((fact) => fact.factKey === 'budget_max_rub')!;
+    decision.ledgerDelta.events = [{
+      eventType: 'fact.negated', scope: 'need', payload: { targetEventIds: [currentBudget.eventId] },
+      evidence: 'No fixed budget now', source: 'llm_state_delta', status: 'active'
+    }];
+    decision.intent.selectionPolicy!.requirements = [];
+    decision.intent.toolRequests[0]!.coversRequirementIds = [];
+    expect(validateMemoryDecision(decision, replaced.ledgerState).issues).toEqual([]);
+  });
+
+  it('distinguishes a forbidden feature from a cancelled requirement and excludes product facts', () => {
+    const { decision, previousLedgerState } = continuingSelection();
+    const state = reduceDialogueLedger([{
+      sessionId: memorySessionId, turnId: memoryTurnId, eventId: 'no-auto-start', eventType: 'fact.confirmed',
+      scope: 'need', payload: { needId: 'generator-workshop', factKey: 'auto_start_required', value: true, relation: 'must_not_have', role: 'hard_requirement' },
+      evidence: 'Without automatic start', source: 'llm_state_delta', status: 'active'
+    }, {
+      sessionId: memorySessionId, turnId: memoryTurnId, eventId: 'product-weight', eventType: 'fact.confirmed',
+      scope: 'product', payload: { needId: 'generator-workshop', productId: 'model-a', factKey: 'weight_max_kg', value: 80, role: 'hard_requirement' },
+      evidence: 'The model weighs 80 kg', source: 'catalog', status: 'active'
+    }], previousLedgerState);
+    decision.intent.selectionPolicy!.requirements.push({
+      id: 'auto-start', kind: 'auto_start_required', value: true, unit: null, relation: 'not_required',
+      role: 'hard_constraint', strictness: 'strict', evidence: 'feature', verification: { mode: 'product_attribute' }
+    });
+    expect(validateMemoryDecision(decision, state).issues).toContain('active_requirement_mismatch:auto_start_required');
+    decision.intent.selectionPolicy!.requirements.at(-1)!.relation = 'must_not_have';
+    expect(validateMemoryDecision(decision, state).issues.filter((issue) => issue.startsWith('active_requirement_mismatch'))).toEqual([]);
+    decision.ledgerDelta.events = [{
+      eventType: 'fact.negated', scope: 'need', payload: { targetEventIds: ['no-auto-start'] },
+      evidence: 'Automatic start no longer matters', source: 'llm_state_delta', status: 'active'
+    }];
+    Object.assign(decision.intent.selectionPolicy!.requirements.at(-1)!, { relation: 'not_required', role: 'preference', strictness: 'preferred' });
+    expect(validateMemoryDecision(decision, state).issues).toEqual([]);
+  });
+
+  it('does not require catalog execution for a pure clarification carrying old constraints', () => {
+    const { decision, previousLedgerState } = continuingSelection();
+    decision.intent.toolRequests = [];
+    decision.intent.requiresTools = false;
+    decision.intent.selectionPolicy!.requirements = [];
+    Object.assign(decision.intent.grounding, { taskType: 'technical_answer', responseMode: 'clarify', sourcePolicy: 'conversation_only', catalogRequirement: 'none', requiredToolKinds: [] });
+    expect(validateMemoryDecision(decision, previousLedgerState).issues.filter((issue) => issue.startsWith('active_requirement_mismatch'))).toEqual([]);
+  });
+
   it('rejects invalid numeric strict requirement shapes before tools run', () => {
     const decision = generatorDecision();
     const budget = decision.intent.selectionPolicy?.requirements.find((requirement) => requirement.id === 'budget');

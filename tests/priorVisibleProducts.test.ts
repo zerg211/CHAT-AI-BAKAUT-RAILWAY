@@ -14,6 +14,31 @@ function message(role: Message['role'], content: string, productCards?: Array<Re
 }
 
 describe('priorVisibleProductsFromHistory', () => {
+  it('preserves each visible occurrence and ordinal when the same cards change order', () => {
+    const first = message('assistant', 'First list', [
+      { id: 'a', name: 'Model A' }, { id: 'b', name: 'Model B' }
+    ]);
+    const latest = message('assistant', 'Latest list', [
+      { id: 'b', name: 'Model B' }, { id: 'a', name: 'Model A' }
+    ]);
+    const hidden = message('tool', 'Search candidates', [{ id: 'hidden', name: 'Hidden model' }]);
+    const history = [first, ...Array.from({ length: 45 }, () => message('user', 'Follow-up')), hidden, latest];
+    const products = priorVisibleProductsFromHistory(history);
+    expect(products.find((product) => product.id === 'a')).toMatchObject({
+      occurrences: [
+        { messageId: latest.id, ordinal: 2, createdAt: latest.createdAt },
+        { messageId: first.id, ordinal: 1, createdAt: first.createdAt }
+      ]
+    });
+    expect(products.find((product) => product.id === 'b')).toMatchObject({
+      occurrences: [
+        { messageId: latest.id, ordinal: 1, createdAt: latest.createdAt },
+        { messageId: first.id, ordinal: 2, createdAt: first.createdAt }
+      ]
+    });
+    expect(products.some((product) => product.id === 'hidden')).toBe(false);
+  });
+
   it('collects unique product cards from assistant messages in reverse order', () => {
     const history = [
       message('user', 'нужен генератор'),

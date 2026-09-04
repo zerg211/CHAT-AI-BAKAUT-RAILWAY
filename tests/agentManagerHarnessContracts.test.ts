@@ -43,7 +43,42 @@ function intent(overrides: Record<string, unknown> = {}) {
 }
 
 describe('runtime harness contracts', () => {
-  it('accepts a faithful research paraphrase and rejects an overconfident contradiction', () => {
+  it.each([
+    {
+      attribute: 'manual_starter', value: 'absent', evidence: 'No manual starter is fitted.',
+      directAnswer: 'У SUNREKA G7000iS подтверждён электрический запуск.',
+      answerText: 'У SUNREKA G7000iS нет ручного стартера; есть электрический запуск.'
+    },
+    {
+      attribute: 'document_kind', value: 'owner manual', evidence: 'The owner manual describes electric starting.',
+      directAnswer: 'В руководстве SUNREKA G7000iS описан электрический запуск.',
+      answerText: 'SUNREKA G7000iS запускается электростартером. Само руководство не подтверждает ручной стартер.'
+    },
+    {
+      attribute: 'manual_starter', value: 'present', evidence: 'The model is fitted with a recoil starter.',
+      directAnswer: 'У SUNREKA G7000iS подтверждён ручной стартер.',
+      answerText: 'У SUNREKA G7000iS ручной стартер есть, а у другой модели ручного стартера нет.'
+    }
+  ])('preserves the grounded value and product scope for $attribute=$value', ({ attribute, value, evidence, directAnswer, answerText }) => {
+    const researchIntent = intent({
+      productMentions: [{ name: 'SUNREKA G7000iS', role: 'target_product', evidence: 'SUNREKA G7000iS', productClass: 'generator' }]
+    });
+    const result = ToolResultSchema.parse({
+      requestId: 'web-polarity', tool: 'web.researchProductFacts', status: 'ok', warnings: [],
+      payload: {
+        targetProductNames: ['SUNREKA G7000iS'], researchOutcome: 'answered',
+        answerGuidance: {
+          directAnswer, completeness: 'answered',
+          coverage: [{ productName: 'SUNREKA G7000iS', attribute, status: 'confirmed', value, evidence }]
+        }
+      }
+    });
+
+    expect(expectedResearchGuidanceText({ intent: researchIntent, toolResults: [result] })).toBe(directAnswer);
+    expect(researchGuidanceSemanticallySatisfied({ answerText, intent: researchIntent, toolResults: [result] })).toBe(true);
+  });
+
+  it('accepts a faithful research paraphrase and rejects unverified exact-catalog absence', () => {
     const researchIntent = intent({
       userMessageSummary: 'Проверить способ запуска SUNREKA G7000iS',
       productMentions: [{
@@ -60,7 +95,7 @@ describe('runtime harness contracts', () => {
       payload: {
         targetProductNames: ['SUNREKA G7000iS'],
         researchOutcome: 'answered',
-        catalogPresence: [{ productName: 'SUNREKA G7000iS', status: 'present' }],
+        catalogPresence: [{ productName: 'SUNREKA G7000iS', status: 'unknown' }],
         answerGuidance: {
           directAnswer: 'У SUNREKA G7000iS подтверждены электростартер и ручной стартер; отдельную кнопку источники не подтверждают.',
           completeness: 'partially_answered',
@@ -85,7 +120,7 @@ describe('runtime harness contracts', () => {
       toolResults: [result]
     })).toBe(true);
     expect(researchGuidanceSemanticallySatisfied({
-      answerText: 'SUNREKA G7000iS запускается только отдельной кнопкой.',
+      answerText: 'SUNREKA G7000iS нет в каталоге.',
       intent: researchIntent,
       toolResults: [result]
     })).toBe(false);

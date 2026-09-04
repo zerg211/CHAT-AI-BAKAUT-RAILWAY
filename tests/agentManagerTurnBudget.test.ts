@@ -75,11 +75,11 @@ describe('agent manager turn budget', () => {
       .toThrow(AgentManagerTurnBudgetExceededError);
   });
 
-  it('reserves semantic decision, answer composition, review, and bounded corrections', () => {
+  it('reserves semantic decision, bounded observation rounds, answer, review, and corrections', () => {
     const budget = new AgentManagerTurnBudget(DEFAULT_AGENT_MANAGER_TURN_LIMITS);
-    for (let call = 0; call < 6; call += 1) budget.consumeModelCall();
+    for (let call = 0; call < 8; call += 1) budget.consumeModelCall();
 
-    expect(budget.snapshot().usage.modelCalls).toBe(6);
+    expect(budget.snapshot().usage.modelCalls).toBe(8);
     expect(() => budget.consumeModelCall()).toThrow('model_call_budget_exceeded');
   });
 

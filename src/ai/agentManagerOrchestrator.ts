@@ -28,7 +28,9 @@ import {
   type ToolResult
 } from './agentManagerContracts.js';
 import {
+  activeScopedDialogueLedgerFacts,
   deriveNeedStateSnapshotFromLedger,
+  getActiveDialogueNeed,
   parseReducedDialogueLedgerState,
   reduceDialogueLedger,
   type ReducedDialogueLedgerState
@@ -36,6 +38,13 @@ import {
 import { createEmbedding } from './openaiClient.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
 import { compactToolResultsForModel } from './agentManagerModelContext.js';
+import {
+  CONTINUATION_MAX_ROUNDS,
+  continuationValidationIssues,
+  parseContinuationDecision,
+  type ContinuationDecision,
+  type ContinuationOutcome
+} from './agentManagerContinuation.js';
 import { resolveProductsForEvidence, type ResolvedProduct } from './productFactResolution.js';
 import {
   createStructuredJsonResponse,
@@ -173,6 +182,7 @@ export interface AgentManagerRecoverInput {
 
 export interface AgentManagerModel {
   decideTurn?(input: AgentManagerModelInput): Promise<AgentSemanticDecision>;
+  assessObservations?(input: AgentManagerObservationInput): Promise<ContinuationDecision>;
   proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta>;
   planTurn(input: AgentManagerModelInput & { ledgerState: ReducedDialogueLedgerState }): Promise<AgentIntentContract>;
   composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract>;
@@ -184,12 +194,15 @@ export interface AgentManagerModel {
   }): Promise<Array<{ factId: string; productName: string; attribute: string }>>;
   reviewCustomerLanguage?(input: {
     answerText: string;
+    products: Product[];
+    toolResults: ToolResult[];
     signal?: AbortSignal;
     deadlineAtMs?: number;
   }): Promise<{
     processDisclosure: boolean;
     evidence: string;
     rationale: string;
+    factualIssues?: Array<{ claim: string; sourceResultId: string; reason: string }>;
   }>;
 }
 
@@ -248,6 +261,12 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
   requiredResponseClauses?: RequiredResponseClause[];
   semanticDecisionValidated?: boolean;
   reviewIssuesFeedback?: string[];
+  continuation?: ContinuationOutcome;
+}
+
+export interface AgentManagerObservationInput extends AgentManagerAnswerInput {
+  round: number;
+  remainingBudget: ReturnType<AgentManagerTurnBudget['snapshot']>;
 }
 
 export interface AnswerProductRejectionReason {
@@ -275,31 +294,45 @@ export interface AgentManagerReviewInput extends AgentManagerAnswerInput {
 
 function compactHistory(history: Message[]) {
   return history.slice(-40).map((message) => ({
+    messageId: message.id,
     role: message.role,
     content: message.content,
-    createdAt: message.createdAt
+    createdAt: message.createdAt,
+    ...(message.role === 'assistant' ? { productCards: visibleHistoryCards(message) } : {})
   }));
+}
+
+function visibleHistoryCards(message: Message) {
+  const cards = message.metadata?.productCards;
+  if (message.role !== 'assistant' || !Array.isArray(cards)) return [];
+  return cards.flatMap((card: unknown, index) => {
+    if (!card || typeof card !== 'object') return [];
+    const value = card as Record<string, unknown>;
+    if (typeof value.id !== 'string' || !value.id || typeof value.name !== 'string' || !value.name) return [];
+    return [{
+      ordinal: index + 1,
+      id: value.id,
+      name: value.name,
+      price: typeof value.price === 'number' ? value.price : null,
+      brand: typeof value.brand === 'string' ? value.brand : null
+    }];
+  });
 }
 
 // Prior visible cards give the planner the FACTS needed to resolve buyer anaphora
 // ("та первая модель", "тот вариант") — mapping ids to names is deterministic data,
 // while deciding WHICH prior card the buyer means stays an LLM semantic decision.
 export function priorVisibleProductsFromHistory(history: Message[]) {
-  const byId = new Map<string, { id: string; name: string; price: number | null; brand: string | null }>();
+  const byId = new Map<string, {
+    id: string; name: string; price: number | null; brand: string | null;
+    occurrences: Array<{ messageId: string; createdAt: string; ordinal: number }>;
+  }>();
   for (const message of [...history].reverse()) {
-    if (message.role !== 'assistant') continue;
-    const metadata = message.metadata as { productCards?: unknown } | undefined;
-    if (!Array.isArray(metadata?.productCards)) continue;
-    for (const card of metadata!.productCards as Array<Record<string, unknown>>) {
-      const id = typeof card.id === 'string' ? card.id : '';
-      const name = typeof card.name === 'string' ? card.name : '';
-      if (!id || !name || byId.has(id)) continue;
-      byId.set(id, {
-        id,
-        name,
-        price: typeof card.price === 'number' ? card.price : null,
-        brand: typeof card.brand === 'string' ? card.brand : null
-      });
+    for (const { ordinal, ...card } of visibleHistoryCards(message)) {
+      const occurrence = { messageId: message.id, createdAt: message.createdAt, ordinal };
+      const previous = byId.get(card.id);
+      if (previous) previous.occurrences.push(occurrence);
+      else byId.set(card.id, { ...card, occurrences: [occurrence] });
     }
   }
   return [...byId.values()];
@@ -307,6 +340,7 @@ export function priorVisibleProductsFromHistory(history: Message[]) {
 
 function compactLedger(state: ReducedDialogueLedgerState) {
   return {
+    activeNeedId: getActiveDialogueNeed(state)?.needId ?? null,
     facts: Object.values(state.factsByKey).map((fact) => ({
       key: fact.factKey,
       value: fact.value,
@@ -319,7 +353,11 @@ function compactLedger(state: ReducedDialogueLedgerState) {
       eventId: fact.eventId,
       needId: fact.needId,
       role: fact.role,
-      productClass: fact.productClass
+      productClass: fact.productClass,
+      scope: fact.scope,
+      productId: fact.productId,
+      unit: fact.unit,
+      relation: fact.relation
     })),
     needs: Object.values(state.needsById).map((need) => ({
       needId: need.needId,
@@ -393,20 +431,25 @@ function mapLedgerRows(rows: DialogueLedgerRow[]): DialogueLedgerEvent[] {
 }
 
 function activeScopedLedgerFacts(ledgerState: ReducedDialogueLedgerState) {
-  const activeFacts = Object.values(ledgerState.factsByKey).filter((fact) => fact.status === 'active');
-  const currentNeedId = [...Object.values(ledgerState.needsById)]
-    .reverse()
-    .find((need) => need.status === 'open' || need.status === 'selected')?.needId
-    ?? [...activeFacts].reverse().find((fact) => fact.needId)?.needId;
-  return activeFacts.filter((fact) => !fact.needId || fact.needId === currentNeedId);
+  return activeScopedDialogueLedgerFacts(ledgerState);
 }
 
-function semanticRequirementValuesMatch(factKey: string, left: unknown, right: unknown) {
-  if (Object.is(left, right)) return true;
+function semanticRequirementValuesMatch(
+  factKey: string, left: unknown, right: unknown, leftUnit?: string | null, rightUnit?: string | null
+) {
+  const normalizeScalar = (value: unknown) => typeof value === 'string'
+    ? value.trim() && Number.isFinite(Number(value)) ? Number(value) : value.trim().toLocaleLowerCase('en-US')
+    : value;
+  const leftValue = normalizeScalar(left);
+  const rightValue = normalizeScalar(right);
+  const normalizedLeftUnit = leftUnit?.trim().toLocaleLowerCase('en-US');
+  const normalizedRightUnit = rightUnit?.trim().toLocaleLowerCase('en-US');
+  if (normalizedLeftUnit && normalizedRightUnit && normalizedLeftUnit !== normalizedRightUnit) return false;
+  if (Object.is(leftValue, rightValue)) return true;
   if (factKey !== 'voltage_v') return false;
 
-  const leftVoltage = typeof left === 'number' ? left : Number(left);
-  const rightVoltage = typeof right === 'number' ? right : Number(right);
+  const leftVoltage = typeof leftValue === 'number' ? leftValue : Number(leftValue);
+  const rightVoltage = typeof rightValue === 'number' ? rightValue : Number(rightValue);
   if (!Number.isFinite(leftVoltage) || !Number.isFinite(rightVoltage)) return false;
   return (
     ([220, 230].includes(leftVoltage) && [220, 230].includes(rightVoltage)) ||
@@ -823,6 +866,20 @@ function generatorLoadSemanticFieldIssues(request: ToolRequest) {
   return issues;
 }
 
+/**
+ * Mention evidence must come from the current buyer message, not be
+ * hallucinated — but buyers and the planner differ in casing, so the check is
+ * case-insensitive. A grounded-but-differently-cased quote must never kill a
+ * turn (same class as grounded device renames).
+ */
+export function productMentionEvidenceGrounded(
+  evidence: unknown,
+  userMessage: string
+): boolean {
+  if (typeof evidence !== 'string' || !evidence.trim()) return false;
+  return userMessage.toLowerCase().includes(evidence.trim().toLowerCase());
+}
+
 function semanticAuthorityIssues(input: {
   decision: AgentSemanticDecision;
   events: DialogueLedgerEvent[];
@@ -843,7 +900,7 @@ function semanticAuthorityIssues(input: {
   }
   if (input.userMessage !== undefined) {
     for (const [index, mention] of (intent.productMentions ?? []).entries()) {
-      if (!input.userMessage.includes(mention.evidence)) {
+      if (!productMentionEvidenceGrounded(mention.evidence, input.userMessage)) {
         issues.push(`product_mention_evidence_not_in_current_message:${index}`);
       }
     }
@@ -1131,9 +1188,7 @@ export function validateAgentSemanticDecision(input: {
     historicalToolResults: input.historicalToolResults,
     provenExhaustedHandoffContinuation: input.provenExhaustedHandoffContinuation
   }));
-  const activeNeed = [...Object.values(ledgerState.needsById)]
-    .reverse()
-    .find((need) => need.status === 'open' || need.status === 'selected');
+  const activeNeed = getActiveDialogueNeed(ledgerState);
   const policy = input.decision.intent.selectionPolicy;
   const ledgerClass = coerceVisibleCardIntent(activeNeed?.productClass);
   const intentClass = coerceVisibleCardIntent(policy?.canonicalProductClass ?? policy?.targetProductClass);
@@ -1144,9 +1199,12 @@ export function validateAgentSemanticDecision(input: {
   const turnFactEventIds = new Set(events
     .filter((event) => event.eventType === 'fact.observed' || event.eventType === 'fact.confirmed')
     .map((event) => event.eventId));
-  const activeFacts = activeScopedLedgerFacts(ledgerState).filter((fact) =>
-    !activeNeed || !fact.needId || fact.needId === activeNeed.needId
-  );
+  const activeFacts = [
+    ...activeScopedLedgerFacts(ledgerState),
+    ...Object.values(ledgerState.factsByKey).filter((fact) =>
+      fact.status === 'active' && fact.scope === 'need' && !fact.needId && turnFactEventIds.has(fact.eventId)
+    )
+  ];
   const calculatorRequest = input.decision.intent.toolRequests.find((item) =>
     item.tool === 'calculator.generatorLoad'
   );
@@ -1243,91 +1301,42 @@ export function validateAgentSemanticDecision(input: {
       ) issues.push('generator_load_scenario_simultaneous_starting_mismatch');
     }
   }
-  for (const fact of activeFacts) {
-    if (
-      fact.role !== 'hard_requirement' ||
-      !turnFactEventIds.has(fact.eventId) ||
-      fact.factKey === 'generator_load_scenario'
-    ) continue;
-    const requirements = (policy?.requirements ?? []).filter((requirement) =>
-      requirement.kind === fact.factKey &&
-      requirement.role === 'hard_constraint' &&
-      requirement.strictness === 'strict'
-    );
-    const matchingRequirement = requirements.some((requirement) =>
-      semanticRequirementValuesMatch(fact.factKey, requirement.value, fact.value)
-    );
-    const structuredFieldMatches = fact.factKey === 'phase'
-      ? Object.is(policy?.phase, fact.value)
-      : fact.factKey === 'power_source'
-        ? Object.is(policy?.powerSource, fact.value)
-        : false;
-    if (!matchingRequirement && !structuredFieldMatches) {
-      issues.push(`active_requirement_mismatch:${fact.factKey}`);
-    }
-  }
-  // Buyer-level commercial constraints survive need switches until the buyer
-  // changes or retracts them: a still-active dialogue-wide hard fact without a
-  // mirrored strict requirement (or structured policy field) is a silent drop,
-  // not a clean scope reset. Only buyer-level kinds are enforced here on
-  // purpose: auto-persisting task-level kinds would be wrong (dacha kilowatts
-  // do not apply to construction, dacha phase is not the site phase), so those
-  // stay governed by the planner switch-discipline prompt rule above, which is
-  // kind-agnostic. Retraction is recognised through the fact status itself
-  // (the reducer flips it on supersede/negate events), so only active facts
-  // are examined here. The check runs only on turns that actually select
-  // products (fresh catalog read or explicitly reused cards); pure
-  // clarifications and answers carry no shortlist that could violate it.
-  const buyerLevelPersistentKinds = new Set([
-    'budget_max_rub',
-    'price_max_rub',
-    'price_lower_than_reference',
-    'price_lower_than_reference_rub',
-    'fuel_type',
-    'power_source'
-  ]);
-  const buyerLevelClassAgnosticKinds = new Set([
-    'budget_max_rub',
-    'price_max_rub',
-    'price_lower_than_reference',
-    'price_lower_than_reference_rub'
-  ]);
   const selectsProductsThisTurn = (input.decision.intent.toolRequests ?? []).some((request) =>
     request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
   ) || policy?.reusePreviousCards === true;
-  if (policy && selectsProductsThisTurn) {
-    const strictKinds = new Set((policy.requirements ?? [])
-      .filter((requirement) =>
-        requirement.role === 'hard_constraint' &&
-        requirement.strictness === 'strict'
-      )
-      .map((requirement) => requirement.kind));
-    for (const fact of Object.values(ledgerState.factsByKey)) {
-      if (fact.role !== 'hard_requirement' || fact.status !== 'active') continue;
-      const kind = fact.factKey.replaceAll('.', '_');
-      if (!buyerLevelPersistentKinds.has(kind)) continue;
-      if (strictKinds.has(kind)) continue;
-      if (
-        (kind === 'fuel_type' || kind === 'power_source') &&
-        persistentFuelSourceMatchesPolicy(policy.powerSource, fact.value)
-      ) continue;
-      if (!buyerLevelClassAgnosticKinds.has(kind)) {
-        const factClass = typeof fact.productClass === 'string' ? fact.productClass : '';
-        if (factClass && factClass !== 'unknown' && intentClass !== 'unknown' && factClass !== intentClass) continue;
-      }
+  // Scope comes from the ledger event, never from a whitelist of requirement
+  // names. Reusing cards must preserve the same constraints as a fresh search.
+  for (const fact of activeFacts) {
+    if (
+      (!selectsProductsThisTurn && !turnFactEventIds.has(fact.eventId)) ||
+      fact.role !== 'hard_requirement' ||
+      fact.eventType !== 'fact.confirmed' ||
+      fact.scope === 'product' || fact.productId ||
+      (fact.scope !== 'need' && fact.scope !== 'dialogue') ||
+      fact.factKey === 'generator_load_scenario'
+    ) continue;
+    const kind = fact.factKey.replaceAll('.', '_');
+    const relation = fact.relation ?? 'must_have';
+    const requirements = (policy?.requirements ?? []).filter((requirement) =>
+      requirement.kind === kind &&
+      requirement.role === 'hard_constraint' &&
+      requirement.strictness === 'strict' &&
+      (requirement.relation ?? 'must_have') === relation &&
+      (relation === 'must_have' || relation === 'must_not_have')
+    );
+    const matchingRequirement = requirements.some((requirement) =>
+      semanticRequirementValuesMatch(kind, requirement.value, fact.value, requirement.unit, fact.unit)
+    );
+    const structuredFieldMatches = relation !== 'must_have' ? false : kind === 'phase'
+      ? semanticRequirementValuesMatch(kind, policy?.phase, fact.value)
+      : kind === 'power_source'
+        ? semanticRequirementValuesMatch(kind, policy?.powerSource, fact.value)
+        : false;
+    if (!matchingRequirement && !structuredFieldMatches) {
       issues.push(`active_requirement_mismatch:${kind}`);
     }
   }
   return { issues: uniqueStrings(issues), events, ledgerState };
-}
-
-function persistentFuelSourceMatchesPolicy(required: unknown, actual: unknown) {
-  if (required !== 'battery' && required !== 'fuel' && required !== 'mains') return false;
-  const text = String(actual ?? '').trim().toLocaleLowerCase('ru-RU');
-  if (required === 'battery') return text === 'battery' || text.includes('аккумулятор');
-  if (required === 'mains') return text === 'mains' || text === 'grid' || text.includes('сетев');
-  return text === 'fuel' || text === 'gasoline' || text === 'petrol' || text === 'diesel' ||
-    text.includes('бензин') || text.includes('дизель') || text.includes('топлив');
 }
 
 function leadCaptureHash(parts: string[]) {
@@ -3653,188 +3662,10 @@ export function requiredResponseClausesForToolResults(
   return clauses;
 }
 
-type StartControlCoverageItem = {
-  attribute?: unknown;
-  status?: unknown;
-  value?: unknown;
-  evidence?: unknown;
-};
-
-const startControlUncertaintyStatuses = new Set(['not_confirmed', 'ambiguous', 'not_found']);
-
 function normalizedTextIncludesAny(normalizedText: string, fragments: string[]) {
   return fragments.some((fragment) => {
     const normalizedFragment = normalizeModelText(fragment);
     return normalizedFragment.length > 0 && normalizedText.includes(normalizedFragment);
-  });
-}
-
-function startControlCoverageText(coverageItem: StartControlCoverageItem) {
-  return normalizeModelText([
-    coverageItem.attribute,
-    coverageItem.value,
-    coverageItem.evidence
-  ].filter(Boolean).join(' '));
-}
-
-function startControlCoverageLabels(attribute: unknown, value: unknown) {
-  const text = normalizeModelText([attribute, value].filter(Boolean).join(' '));
-  const labels: string[] = [];
-  if (
-    normalizedTextIncludesAny(text, ['key', 'ignition', 'switch', 'ключ', 'зажиган', 'выключател'])
-  ) {
-    labels.push('Запуск с ключа/через выключатель');
-  }
-  if (
-    normalizedTextIncludesAny(text, ['button', 'pushbutton', 'кноп'])
-  ) {
-    labels.push('Кнопочный запуск');
-  }
-  return labels;
-}
-
-function normalizedAnswerMentionsStartControlLabel(normalizedAnswer: string, label: string) {
-  if (label === 'Кнопочный запуск') {
-    return normalizedTextIncludesAny(normalizedAnswer, ['button', 'pushbutton', 'кноп']);
-  }
-  if (label === 'Запуск с ключа/через выключатель') {
-    return normalizedTextIncludesAny(normalizedAnswer, ['key', 'ignition', 'switch', 'ключ', 'зажиган', 'выключател']);
-  }
-  return normalizedTextIncludesAny(normalizedAnswer, [label]);
-}
-
-function answerAlreadyCoversStartControlUncertainty(answerText: string, label: string) {
-  const normalizedAnswer = normalizeModelText(answerText);
-  if (!normalizedAnswerMentionsStartControlLabel(normalizedAnswer, label)) return false;
-  return normalizedTextIncludesAny(normalizedAnswer, [
-    'не виж',
-    'не видно',
-    'не указан',
-    'не указано',
-    'не найден',
-    'не нашел',
-    'не нашли',
-    'не подтверж',
-    'подтвердить не удалось',
-    'подтверждения найти не удалось',
-    'не могу подтвердить',
-    'нет подтверждения',
-    'точно подтвердить не могу',
-    'not confirmed',
-    'not found',
-    'not specified',
-    'unknown',
-    'unclear'
-  ]);
-}
-
-function answerAlreadyCoversGeneralStartControlUncertainty(answerText: string) {
-  const normalizedAnswer = normalizeModelText(answerText);
-  const mentionsElectricControl = normalizedTextIncludesAny(normalizedAnswer, [
-    'чем включается электростартер',
-    'чем включается электрозапуск',
-    'ключом, кнопкой',
-    'ключом кнопкой',
-    'ключом или переключателем',
-    'key or button',
-    'key, button',
-    'start control'
-  ]);
-  if (!mentionsElectricControl) return false;
-  return normalizedTextIncludesAny(normalizedAnswer, [
-    'не подтверд',
-    'не виж',
-    'нет подтверждения',
-    'not confirmed',
-    'not found',
-    'not specified',
-    'unknown',
-    'unclear'
-  ]);
-}
-
-function coverageItemConfirmsManualStarter(coverageItem: StartControlCoverageItem) {
-  if (coverageItem.status !== 'confirmed') return false;
-  const text = startControlCoverageText(coverageItem);
-  return normalizedTextIncludesAny(text, ['manual', 'recoil', 'ручной стартер', 'ручной запуск', 'ручн']);
-}
-
-function answerMentionsManualStarter(answerText: string) {
-  const text = normalizeModelText(answerText);
-  return normalizedTextIncludesAny(text, ['manual', 'recoil', 'ручной стартер', 'ручной запуск', 'ручн']);
-}
-
-function coverageItemConfirmsElectricStarter(coverageItem: StartControlCoverageItem) {
-  if (coverageItem.status !== 'confirmed') return false;
-  const text = startControlCoverageText(coverageItem);
-  return normalizedTextIncludesAny(text, ['electric starter', 'electric start', 'electrostarter', 'электростартер', 'электро стартер', 'электропуск']);
-}
-
-function startControlConfirmedSupplementLines(coverage: unknown[], answerText: string) {
-  const lines: string[] = [];
-  const coverageItems = coverage
-    .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
-  if (!answerMentionsManualStarter(answerText) && coverageItems.some(coverageItemConfirmsManualStarter)) {
-    lines.push('Ручной стартер тоже есть.');
-  }
-  return lines;
-}
-
-function confirmedStartControlLabels(coverageItems: StartControlCoverageItem[]) {
-  const labels = new Set<string>();
-  for (const coverageItem of coverageItems) {
-    if (coverageItem.status !== 'confirmed') continue;
-    for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
-      labels.add(label);
-    }
-  }
-  return labels;
-}
-
-function startControlUncertaintyStatement(input: {
-  label: string;
-  status: string;
-  hasConfirmedElectricStarter: boolean;
-}) {
-  const suffix = input.status === 'ambiguous' ? 'точно подтвердить не могу' : 'в данных не вижу';
-  if (input.hasConfirmedElectricStarter && input.label === 'Запуск с ключа/через выключатель') {
-    return `Чем именно включается электростартер - ключом или переключателем - ${suffix}`;
-  }
-  return `${input.label} ${suffix}`;
-}
-
-function startControlCoverageUncertaintyLine(coverage: unknown[], answerText = '') {
-  const statements: string[] = [];
-  const seen = new Set<string>();
-  const coverageItems = coverage
-    .filter((item): item is StartControlCoverageItem => Boolean(item) && typeof item === 'object');
-  if (answerAlreadyCoversGeneralStartControlUncertainty(answerText)) return '';
-  const confirmedLabels = confirmedStartControlLabels(coverageItems);
-  const hasConfirmedElectricStarter = coverageItems.some(coverageItemConfirmsElectricStarter);
-  for (const coverageItem of coverageItems) {
-    const status = coverageItem.status;
-    if (typeof status !== 'string' || !startControlUncertaintyStatuses.has(status)) continue;
-    for (const label of startControlCoverageLabels(coverageItem.attribute, coverageItem.value)) {
-      if (confirmedLabels.has(label)) continue;
-      if (seen.has(label)) continue;
-      seen.add(label);
-      if (answerAlreadyCoversStartControlUncertainty(answerText, label)) continue;
-      statements.push(startControlUncertaintyStatement({ label, status, hasConfirmedElectricStarter }));
-    }
-  }
-  return statements.length ? `${statements.join('. ')}.` : '';
-}
-
-function hasConfirmedStartControlCoverage(coverage: unknown[]) {
-  return coverage.some((item) => {
-    if (!item || typeof item !== 'object') return false;
-    const coverageItem = item as StartControlCoverageItem;
-    return coverageItem.status === 'confirmed' &&
-      (
-        startControlCoverageLabels(coverageItem.attribute, coverageItem.value).length > 0 ||
-        coverageItemConfirmsManualStarter(coverageItem) ||
-        coverageItemConfirmsElectricStarter(coverageItem)
-      );
   });
 }
 
@@ -3927,37 +3758,6 @@ export class AgentSemanticDecisionIncoherentError extends Error {
   }
 }
 
-function answerMentionsElectricStarter(answerText: string) {
-  const text = normalizeModelText(answerText);
-  return normalizedTextIncludesAny(text, [
-    'electric starter',
-    'electric start',
-    'electrostarter',
-    'электростартер',
-    'электрическ',
-    'электрический запуск',
-    'электрозапуск'
-  ]);
-}
-
-function answerExpressesUncertainty(answerText: string) {
-  const text = normalizeModelText(answerText);
-  return normalizedTextIncludesAny(text, [
-    'не подтвержд',
-    'подтвердить не удалось',
-    'не указано',
-    'не найден',
-    'не вижу',
-    'нет подтверждения',
-    'точно утверждать нельзя',
-    'not confirmed',
-    'not found',
-    'not specified',
-    'unknown',
-    'unclear'
-  ]);
-}
-
 function answerStatesExactCatalogAbsence(answerText: string, productName: string) {
   if (!textMatchesTargetName(answerText, productName)) return false;
   const text = normalizeModelText(answerText);
@@ -3994,10 +3794,8 @@ export function researchGuidanceSemanticallySatisfied(input: {
   toolResults: ToolResult[];
   intent: AgentIntentContract;
 }) {
-  // Two deterministic fact checks remain; everything else (does the prose honestly
-  // convey uncertainty, does it mention each confirmed label) is a semantic judgment
-  // handled by the typed contract and the review repair round — keyword lists here
-  // blocked correct paraphrases.
+  // Keep the catalog-presence guard here. Product-fact meaning, polarity and
+  // ownership are assessed by the source-bound semantic review and repair path.
   for (const result of input.toolResults) {
     if (result.tool !== 'web.researchProductFacts' || result.status !== 'ok') continue;
     const payload = result.payload as {
@@ -4015,134 +3813,15 @@ export function researchGuidanceSemanticallySatisfied(input: {
       : [];
     if (!webResearchTargetsCurrentIntent(targetNames, input.intent) || targetNames.length !== 1) continue;
 
-    // Fact check 1: never assert exact-catalog absence when research says unknown.
+    // Never assert exact-catalog absence when research says unknown.
     for (const presence of payload.catalogPresence ?? []) {
       if (!presence.productName) continue;
       if (presence.status === 'unknown' && answerStatesExactCatalogAbsence(input.answerText, presence.productName)) {
         return false;
       }
     }
-
-    // Fact check 2: never contradict CONFIRMED start-control coverage. The answer
-    // must not deny a confirmed starter kind; it may stay silent about unconfirmed
-    // ones (silence is honest, denial is a proven factual contradiction).
-    const coverage = Array.isArray(payload.answerGuidance?.coverage)
-      ? payload.answerGuidance.coverage
-      : [];
-    const coverageItems = coverage.filter((item): item is StartControlCoverageItem =>
-      Boolean(item) && typeof item === 'object');
-    const normalizedAnswer = normalizeModelText(input.answerText);
-    if (coverageItems.some(coverageItemConfirmsManualStarter) &&
-        answerDeniesManualStarter(normalizedAnswer)) return false;
-    if (coverageItems.some(coverageItemConfirmsElectricStarter) &&
-        answerDeniesElectricStarter(normalizedAnswer)) return false;
-    if (coverageItems.some(coverageItemConfirmsButtonStart) &&
-        answerDeniesButtonStart(normalizedAnswer)) return false;
-
-    // Fact check 3: an ambiguous/not_confirmed start-control fact must not be
-    // asserted as settled in the answer. The writer may say it is unconfirmed; it
-    // may not state a definite mechanism while research marks it ambiguous.
-    for (const item of coverageItems) {
-      if (item.status !== 'ambiguous' && item.status !== 'not_confirmed' && item.status !== 'not_found') continue;
-      const labels = startControlCoverageLabels(item.attribute, item.value);
-      for (const label of labels) {
-        if (answerAssertsStartControlLabelAsSettled(normalizedAnswer, label)) return false;
-      }
-    }
-
-    // Fact check 4: a confirmed start-control label must not be answered with a
-    // "no data found" claim about that same label — the research already found it.
-    for (const item of coverageItems) {
-      if (item.status !== 'confirmed') continue;
-      for (const label of startControlCoverageLabels(item.attribute, item.value)) {
-        if (answerClaimsNoDataForConfirmedLabel(normalizedAnswer, label)) return false;
-      }
-    }
   }
   return true;
-}
-
-function answerClaimsNoDataForConfirmedLabel(normalizedAnswer: string, label: string) {
-  const sentences = normalizedAnswer.split(/[.!?;\n]/);
-  const labelTokens = ['ключ', 'замк', 'ignition', 'key', 'кноп', 'button', 'стартер', 'starter', 'запуск']
-    .filter((token) => normalizeModelText(label).includes(normalizeModelText(token)))
-    .map((token) => normalizeModelText(token));
-  if (!labelTokens.length) return false;
-  const noDataMarkers = [
-    'нет строки', 'нет данных', 'не найден', 'не нашел', 'не удалось найти',
-    'точной строки нет', 'нет информации', 'нет сведений', 'no data', 'not found'
-  ].map((marker) => normalizeModelText(marker));
-  for (const sentence of sentences) {
-    if (!labelTokens.some((token) => sentence.includes(token))) continue;
-    if (noDataMarkers.some((marker) => sentence.includes(marker))) return true;
-  }
-  return false;
-}
-
-function answerAssertsStartControlLabelAsSettled(normalizedAnswer: string, label: string) {
-  // The label itself appears with an affirmative mechanism verb and no uncertainty
-  // marker in the same sentence → overconfident assertion of an unconfirmed fact.
-  // All tokens go through normalizeModelText (confusables), same as the answer text.
-  const sentences = normalizedAnswer.split(/[.!?;\n]/);
-  const uncertaintyMarkers = [
-    'не подтвержд', 'не удалось', 'не нашел', 'не найден', 'неизвестно',
-    'нет данных', 'уточнить', 'не могу сказать', 'не вижу', 'не указан',
-    'not confirmed', 'unclear', 'unknown', 'unverified'
-  ].map((marker) => normalizeModelText(marker));
-  const normalizedLabel = normalizeModelText(label);
-  const affirmativePatterns: Array<{ label: string[]; assertion: string[] }> = [
-    { label: ['ключ', 'замк', 'ignition', 'key'], assertion: ['запускается', 'заводится', 'запуск осуществляется', 'стартует'] },
-    { label: ['кноп', 'button'], assertion: ['запускается', 'заводится', 'стартует', 'кнопка запуска'] }
-  ];
-  for (const pattern of affirmativePatterns) {
-    const matchesLabel = pattern.label.some((token) => normalizedLabel.includes(normalizeModelText(token)));
-    if (!matchesLabel) continue;
-    const labelTokens = pattern.label.map((token) => normalizeModelText(token));
-    const assertionVerbs = pattern.assertion.map((verb) => normalizeModelText(verb));
-    for (const sentence of sentences) {
-      if (!labelTokens.some((token) => sentence.includes(token))) continue;
-      if (!assertionVerbs.some((verb) => sentence.includes(verb))) continue;
-      const hasUncertainty = uncertaintyMarkers.some((marker) => sentence.includes(marker));
-      if (!hasUncertainty) return true;
-    }
-  }
-  return false;
-}
-
-function answerDeniesManualStarter(normalizedAnswer: string) {
-  // Denial patterns: "ручного стартера нет", "запускается только кнопкой",
-  // "не имеет ручного" etc. Denying a confirmed starter kind is a proven factual
-  // contradiction; staying silent about it is honest and allowed.
-  return normalizedTextIncludesAny(normalizedAnswer, [
-    'ручного стартера нет', 'ручного запуска нет', 'нет ручного стартера',
-    'нет ручного запуска', 'не имеет ручного', 'без ручного стартера',
-    'только кнопкой', 'только кнопка', 'только отдельной кнопкой',
-    'только электростартером', 'только от кнопки',
-    'only electric start', 'no manual start', 'no recoil start'
-  ]);
-}
-
-function answerDeniesElectricStarter(normalizedAnswer: string) {
-  return normalizedTextIncludesAny(normalizedAnswer, [
-    'электростартера нет', 'электростартер отсутствует', 'нет электростартера',
-    'электрического запуска нет', 'не имеет электростартера', 'без электростартера',
-    'только ручной', 'только ручным', 'только шнурком', 'только шнуром',
-    'only manual start', 'no electric start', 'recoil only'
-  ]);
-}
-
-function coverageItemConfirmsButtonStart(coverageItem: StartControlCoverageItem) {
-  if (coverageItem.status !== 'confirmed') return false;
-  const text = startControlCoverageText(coverageItem);
-  return normalizedTextIncludesAny(text, ['button', 'кноп'])
-    && normalizedTextIncludesAny(text, ['есть', 'present', 'confirmed', 'поддерж', 'имеется']);
-}
-
-function answerDeniesButtonStart(normalizedAnswer: string) {
-  return normalizedTextIncludesAny(normalizedAnswer, [
-    'кнопки нет', 'кнопки не', 'без кнопки', 'нет кнопочного', 'только ручной',
-    'только ручным', 'только шнурком', 'только шнуром', 'no button start', 'button start absent'
-  ]);
 }
 
 export function expectedResearchGuidanceText(input: {
@@ -4176,17 +3855,13 @@ export function expectedResearchGuidanceText(input: {
     const coverage = Array.isArray(payload.answerGuidance?.coverage)
       ? payload.answerGuidance.coverage
       : [];
-    const hasUncertainCoverage = coverage.some((item) => {
+    const hasCheckedCoverage = coverage.some((item) => {
       if (!item || typeof item !== 'object') return false;
       const status = (item as { status?: unknown }).status;
-      return status === 'not_confirmed' || status === 'ambiguous' || status === 'not_found';
+      return status === 'confirmed' || status === 'not_confirmed' || status === 'ambiguous' || status === 'not_found';
     });
-    const hasConfirmedStartControl = hasConfirmedStartControlCoverage(coverage);
-    if (!hasUncertainCoverage && !hasConfirmedStartControl) continue;
+    if (!hasCheckedCoverage) continue;
     lines.push(directAnswer);
-    lines.push(...startControlConfirmedSupplementLines(coverage, directAnswer));
-    const uncertaintyLine = startControlCoverageUncertaintyLine(coverage, directAnswer);
-    if (uncertaintyLine) lines.push(uncertaintyLine);
     let hasAbsentTarget = false;
     for (const presence of payload.catalogPresence ?? []) {
       if (!presence.productName) continue;
@@ -4301,6 +3976,7 @@ const ledgerPayloadJsonSchema = {
     value: ledgerValueJsonSchema,
     valueText: nullableStringJsonSchema,
     unit: nullableStringJsonSchema,
+    relation: { type: ['string', 'null'], enum: ['must_have', 'must_not_have', 'preferred', 'not_required', 'context', null] },
     questionId: nullableStringJsonSchema,
     text: nullableStringJsonSchema,
     answer: scalarValueJsonSchema,
@@ -4349,6 +4025,7 @@ const ledgerPayloadJsonSchema = {
     'value',
     'valueText',
     'unit',
+    'relation',
     'questionId',
     'text',
     'answer',
@@ -4585,6 +4262,25 @@ const toolRequestJsonSchema = {
     toolRequestVariantJsonSchema('web.researchProductFacts', webResearchToolArgsJsonSchema),
     toolRequestVariantJsonSchema('lead.capture', leadCaptureToolArgsJsonSchema)
   ]
+} as const;
+
+const observationDecisionFormat = {
+  format: {
+    type: 'json_schema',
+    name: 'agent_observation_decision',
+    strict: true,
+    schema: strictJsonObject({
+      action: { type: 'string', enum: ['answer', 'clarify', 'continue'] },
+      rationale: { type: 'string' },
+      missingFacts: boundedStringArrayJsonSchema(12),
+      candidateProductIds: boundedStringArrayJsonSchema(8),
+      toolRequests: { type: 'array', maxItems: 3, items: { anyOf: [
+        toolRequestVariantJsonSchema('catalog.search', catalogSearchToolArgsJsonSchema),
+        toolRequestVariantJsonSchema('catalog.getProductDetails', productDetailsToolArgsJsonSchema),
+        toolRequestVariantJsonSchema('web.researchProductFacts', webResearchToolArgsJsonSchema)
+      ] } }
+    })
+  }
 } as const;
 
 const productMentionJsonSchema = {
@@ -4938,6 +4634,7 @@ function answerContractFormatForEvidenceSources(allowedSourceIds: string[]) {
 }
 
 export const agentManagerStructuredFormats = {
+  observationDecisionFormat,
   semanticDecisionFormat,
   ledgerDeltaFormat,
   intentContractFormat,
@@ -4952,7 +4649,9 @@ function ledgerReducerPolicyPromptBlock() {
     'В need.opened и need.updated всегда задавай constraintsUpdateMode, openQuestionsUpdateMode и rejectedProductIdsUpdateMode: merge добавляет элементы к сохранённым, replace полностью заменяет список, clear явно очищает его. Обязательный пустой массив без replace/clear не является командой удаления. Отказ покупателя от товара добавляй через rejectedProductIdsUpdateMode=merge; снимай отдельные отказы только полным replace, все отказы — только clear.',
     'В need.opened и need.updated всегда задавай selectionUpdateMode: preserve, если прежний выбор остаётся уместен; replace, если selectedProductIds полностью заменяют прежние; clear, если смена вводных аннулирует весь прежний выбор. В invalidatedProductIds перечисляй известные ID, которые больше не подходят. Не используй пустой selectedProductIds как неявную команду preserve.',
     'Для закрытой потребности создай need.closed с needId. Не смешивай факты разных needId.',
+    'Текущая потребность — existingState.activeNeedId. Новую второстепенную тему сохраняй с activate=false: она останется paused. Обновление paused темы без activate=true не переключает текущую; для возврата явно ставь activate=true. После закрытия темы не возвращайся к ней без такого решения.',
     'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass, confidence от 0 до 1 и role: hard_requirement, preference, context или commercial. fact.observed означает неподтверждённое наблюдение и не получает confidence=1; fact.confirmed используй только для явно подтверждённой покупателем или проверенной источником информации. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
+    'Область каждого факта задавай явно: scope=need и needId для требования этой покупки; scope=dialogue и needId=null только если оно действительно относится ко всем покупкам в диалоге; scope=product и productId для характеристики конкретной модели. Характеристика товара не становится hard_requirement покупателя. Сохраняй unit и relation, согласованные с requirement; неизвестную единицу не выдумывай.',
     'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, electric_start_required, auto_start_required, remote_start_required, material или quantity. electric_start_required означает наличие электростартера; auto_start_required означает именно автоматический запуск/АВР; remote_start_required означает запуск по команде с брелока или пульта и не равен АВР или просто электростартеру. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
     'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
     'Если покупатель изменил вводные, создай новый fact.confirmed и укажи supersedesEventIds для старого факта, если он известен.'
@@ -4979,9 +4678,9 @@ function plannerSystemPromptBlock(
     'selectionPolicy: targetProductClass — свободное название, незнакомое не сводится к unknown; canonicalProductClass — только из онтологии (generator, weldingGenerator, generatorOil, engineOil, generatorAccessory, plateAccessory, plate, rammer, roller, cutter, diamondBlade, diamondCore, trowel), иначе null; plate = виброплита. requirement kind="product_class"/"product_type" — value = canonicalProductClass точно; при null не создавай strict product_class requirement.',
     'selectionGoal: browse_catalog — ассортимент/цены без обещания совместимости; preliminary_fit — подбор с оговорками; final_fit — подтверждение пригодности к покупке.',
     'requirements: каждое число/ограничение отдельно — kind, value/unit нормализованно, relation (must_have, must_not_have, preferred, not_required, context), role (hard_constraint, preference, context, mentioned_only), strictness (strict/preferred/informational), evidence — точная опора. Код не угадывает роль числа.',
-    'Бюджет покупателя (budget_max_rub/price_max_rub) действует и после смены потребности, пока покупатель его не изменил, не ограничил задачей или не отменил: фиксируй ledger fact + strict requirement в каждый ход подбора; смена задачи бюджет не сбрасывает. Топливо/источник энергии не выдумывай: не задано покупателем — powerSource "any" без strict fuel requirement; показ только из одного типа топлива без заявленного предпочтения запрещён без явной оговорки-допущения в ответе.',
-    'При смене потребности явно реши судьбу каждого активного hard-ограничения: перенеси, обнови или ретрактируй фактом с опорой на реплику покупателя; молча не роняй ни одно — даже техническое. Производные расчёта (generator_load_scenario и его числовые минимумы) не переноси, а пересчитывай заново под новую задачу: киловатты дачи не действуют на стройке.',
-    '"Автозапуск не нужен" = relation="not_required" (не исключает автозапуск); только явный запрет "только без автозапуска" = must_not_have/hard_constraint/strict/false.',
+    'Топливо/источник энергии не выдумывай: не задано покупателем — powerSource "any" без strict fuel requirement; показ только из одного типа топлива без заявленного предпочтения запрещён без явной оговорки-допущения в ответе.',
+    'При подборе или повторном показе карточек сохрани в policy все действующие fact.confirmed/hard_requirement текущего activeNeedId и явно общие scope=dialogue без needId: те же kind, значение, единицу и relation, включая старые ходы. При смене задачи локальные факты остаются у paused темы для возврата; переноси их только при подтверждённой смысловой применимости. Общность не выводи из названия kind. Производные расчёта пересчитывай по нагрузкам активной задачи.',
+    'Отмена требования — явно сними прежний hard fact через fact.negated/fact.superseded или замени его фактом role=preference/context. relation="not_required" означает отсутствие требования и допускает товары с функцией и без неё; must_not_have — отдельный явный запрет. Ledger и policy должны хранить одинаковые value и relation.',
     'verification: {mode:"product_attribute"} — товар сам должен нести атрибут; {mode:"typed_tool",toolRequestId,tool,verifier,bindAs} — typed tool даёт constraint. Единственный derived binding: calculator.generatorLoad, verifier="generator_load_profile", bindAs="nominal_power_min_kw" — тогда kind="generator_load_scenario", value=true, unit=null, детали нагрузок в evidence и args. Каждый typed verification ссылается на required tool request, чьи coversRequirementIds содержат id requirement. Каждый toolRequest несёт coversRequirementIds ([] если ничего не верифицирует).',
     'rankingObjectives — только для явных предпочтений, ранжируемых по числу: ссылка requirementId на requirement role="preference"/strictness="preferred"/relation="preferred"/verification product_attribute. Атрибуты: weight_kg, price_rub, nominal_power_kw; direction minimize/maximize (малый вес → weight_kg/minimize, дешевле → price_rub/minimize, мощнее → nominal_power_kw/maximize). Иначе [].',
     'comparisonAttributes — до 12 решающих атрибутов, без синонимов и дубликатов.',
@@ -5011,7 +4710,7 @@ function plannerSystemPromptBlock(
     'preliminary_fit: unbounded guess → не заявляй fit, спроси тип/функцию/сценарий. browse_catalog: unbounded расчет не блокирует показ диапазона мощности/моделей/цен без обещания совместимости. Достаточный контекст для bounded оценки → calculator + catalog; слишком vague → уточнение вместо поиска. Пустой fit-запрос — ноль заявленных требований (мощность/нагрузка кВт, приборы, бюджет, топливо, фаза, модель, площадь или объем работ): это needs_more_info, не preliminary_fit — уточнение вместо поиска и калькулятора, даже если класс товара ясен. preliminary_fit требует минимум одного заявленного требования покупателя. Явные browse-просьбы («что есть», «покажи варианты», «что подешевле», «ассортимент») — browse_catalog.',
     'Генераторы: первая карточка — минимальный номинал из каталога с nominal >= requiredNominalKw. Карточка с nominal > requiredNominalKw×1.5 — только позиции 2+ и только с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование превышения. Тип топлива, бренд и ресурс не меняют requiredNominalKw. Неизвестный пуск мотора — это один главный вопрос (без final fit) либо допущение строго в формате «принят пусковой коэффициент K=[значение] для [устройство]» с пересчётом номинала в тексте; K — только из слов покупателя, шильдика или проверенного факта, K из головы запрещён. Неизвестный пуск — никогда strict требование. Топливо не заявлено (powerSource any) — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». fit = сначала минимальное превышение nominal над required сверху, затем цена/вес по rankingObjectives; надёжность в fit не входит.',
     'productMentions для каждой названной модели/товара с ролью: target_product (хочет купить/проверить), catalog_candidate (рассматриваемая альтернатива), comparison_subject (сравнение), context_load_device (потребитель для расчета), compatibility_context (оборудование-партнер), mentioned_only. evidence копируй как точный непустой фрагмент текущего userMessage; для разрешённой анафоры evidence — точная фраза-ссылка из текущей реплики. context_load_device/compatibility_context не попадают в web args.productNames (котёл Baxi в «генератор для котла Baxi» — не цель). Только target_product/catalog_candidate/comparison_subject движут presence/web/nearby. Если в одном ходе явно запрошены разные классы товаров, selectionPolicy описывает главный класс и required catalog request этого же класса обязателен, а каждый дополнительный искомый класс получает отдельный target_product productMention с точным evidence/productClass и отдельный catalog request; не своди аксессуар к классу основного товара. Каждый web request также несёт свой canonicalProductIntent и исследует только товары этого класса.',
-    'Анафора («та первая модель», «тот вариант», «вернемся к той») — разреши через priorVisibleProducts (id, name, price прежних карточек): productMentions role="target_product" с точным именем; квалификатор (первый/дешевле/с X) выбирает между несколькими; при неоднозначности — один короткий вопрос. Для фактов — catalog.getProductDetails с productNames=[имя] (или productIds=[id]).',
+    'Анафору разрешай по реальным показам: history.productCards сохраняет ordinal внутри messageId, а priorVisibleProducts.occurrences хранит все прежние messageId/createdAt/ordinal, даже повторные показы одной модели. Первая в прежнем и последнем списках может быть разной. Выбери нужный показ и товар по смыслу реплики; неоднозначность уточни одним вопросом. productMentions role="target_product" с точным именем; для фактов catalog.getProductDetails по productIds или productNames.',
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
     'Новая модель в текущем ходе → не переиспользуй факты прежней модели, даже при «same», без evidence scoped к тому же идентификатору.',
     'Мультиходовый подбор генератора: при прежнем расчете нагрузок в истории перезапусти calculator.generatorLoad в текущем ходе перед catalog.search, чтобы результаты несли payload.profile.requiredNominalKw.',
@@ -5065,7 +4764,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         ? 'Исправь форму указанного strict requirement, не меняя смысл покупателя: числовые product_attribute requirements требуют конечное числовое value и подходящую unit. Не дублируй результат calculator.generatorLoad как nominal_power_kw=true; производный минимум задаётся через generator_load_scenario с typed_tool binding.'
         : '',
       hasIssue('active_requirement_mismatch')
-        ? 'Каждый новый ledger hard_requirement должен иметь точное отражение в strict selectionPolicy requirement с тем же factKey/kind и value. Факты о мощности потребителя, типе котла и других входах калькулятора сохраняй как context, если покупатель не делал их ограничением самого выбираемого товара; hard requirement расчёта представляет generator_load_scenario.'
+        ? 'Каждый действующий подтверждённый hard_requirement активной потребности и явно общий scope=dialogue без needId должен иметь точное отражение в strict selectionPolicy requirement с тем же factKey/kind, value, unit и relation. Сохраняй применимые старые требования; изменяй или отменяй их только по смыслу реплики покупателя. Факты о мощности потребителя, типе котла и других входах калькулятора сохраняй как context, если покупатель не делал их ограничением самого выбираемого товара; hard requirement расчёта представляет generator_load_scenario.'
         : '',
       hasIssue('active_requirement_mismatch:generator_load_scenario')
         ? 'Для hard fact generator_load_scenario создай strict hard_constraint requirement kind="generator_load_scenario", value=true, unit=null, verification mode="typed_tool", toolRequestId равен id calculator.generatorLoad, tool="calculator.generatorLoad", verifier="generator_load_profile", bindAs="nominal_power_min_kw"; calculator request required=true и coversRequirementIds содержит id requirement.'
@@ -5109,6 +4808,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           role: 'system',
           content: [
             'Ты единый semantic decision maker AI-менеджера БАКАУТ.',
+            'Веди покупателя к решению его задачи: сначала оцени достаточность вводных для разумного выбора. Если неизвестное условие покупателя существенно меняет класс, размер или пригодность техники, задай один-два необходимых вопроса и объясни направление выбора. Не подменяй пригодность тем, что товар первым найден или относится к нужной категории. Самостоятельная работа, перевозка, материал и масштаб — контекст для профессионального решения, а не выдуманные числовые ограничения.',
+            'Планируй минимальный полезный первый поиск. После его выполнения получишь результаты и сможешь уточнить запрос, запросить детали найденных моделей или проверить решающий пробел в интернете в этом же ходе. Не назначай широкое исследование произвольных характеристик до того, как известны подходящие кандидаты и вопросы, реально влияющие на решение. Уже известные каталоговые цена/вес не требуют web сами по себе. Явную просьбу покупателя о внешней проверке исполняй.',
             untrustedEvidenceBoundary,
             'Сначала пойми текущую реплику в контексте, затем в одном JSON верни durable ledgerDelta и исполнимый intent.',
             'intent считается post-delta plan: он обязан включать каждое активное hard requirement, которое создаёт или изменяет ledgerDelta.',
@@ -5315,6 +5016,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
 
   async reviewCustomerLanguage(input: {
     answerText: string;
+    products: Product[];
+    toolResults: ToolResult[];
     signal?: AbortSignal;
     deadlineAtMs?: number;
   }) {
@@ -5322,7 +5025,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       request: {
         model: config.OPENAI_ANSWER_MODEL,
         reasoning: { effort: 'low' },
-        max_output_tokens: 500,
+        max_output_tokens: 1200,
         input: [{
           role: 'system',
           content: [
@@ -5330,11 +5033,18 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Определи, раскрывает ли ответ внутренний процесс получения сведений: поиск в интернете или на сайтах, использование инструментов, попытки и повторы, timeout/сбой, pipeline, либо факт успешного/неуспешного завершения проверки.',
             'Это запрещено при любой формулировке и на любом языке. Покупателю можно сообщать только конкретные подтвержденные факты и конкретный неподтвержденный параметр.',
             'Обычное упоминание товара или рабочего инструмента не является раскрытием процесса.',
+            untrustedEvidenceBoundary,
+            'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
+            'Оценивай смысл и область утверждения, допускай корректный пересказ и полезный предварительный вывод с оговоркой. Не отклоняй общие знания без противоречия источникам и не требуй дословного копирования directAnswer. Для каждого factualIssues укажи claim — точную цитату ответа, sourceResultId — существующий requestId наблюдения, доказывающего проблему, reason — конкретное противоречие или неподтвержденный факт. Без доказанной проблемы factualIssues=[]. Сам ответ не переписывай.',
             'Если processDisclosure=true, evidence должно быть точной цитатой из answerText. Верни только JSON.'
           ].join('\n')
         }, {
           role: 'user',
-          content: JSON.stringify({ answerText: input.answerText })
+          content: JSON.stringify({
+            answerText: input.answerText,
+            products: input.products.map(answerProductContext),
+            toolResults: compactToolResultsForModel(input.toolResults, input.products)
+          })
         }],
         text: {
           format: {
@@ -5346,9 +5056,23 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
               properties: {
                 processDisclosure: { type: 'boolean' },
                 evidence: { type: 'string' },
-                rationale: { type: 'string' }
+                rationale: { type: 'string' },
+                factualIssues: {
+                  type: 'array',
+                  maxItems: input.toolResults.length ? 5 : 0,
+                  items: {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      claim: { type: 'string' },
+                      sourceResultId: { type: 'string', enum: input.toolResults.length ? input.toolResults.map((result) => result.requestId) : [''] },
+                      reason: { type: 'string' }
+                    },
+                    required: ['claim', 'sourceResultId', 'reason']
+                  }
+                }
               },
-              required: ['processDisclosure', 'evidence', 'rationale']
+              required: ['processDisclosure', 'evidence', 'rationale', 'factualIssues']
             }
           }
         }
@@ -5362,8 +5086,49 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     return {
       processDisclosure: parsed.processDisclosure === true,
       evidence: typeof parsed.evidence === 'string' ? parsed.evidence.trim() : '',
-      rationale: typeof parsed.rationale === 'string' ? parsed.rationale.trim() : ''
+      rationale: typeof parsed.rationale === 'string' ? parsed.rationale.trim() : '',
+      factualIssues: Array.isArray(parsed.factualIssues)
+        ? parsed.factualIssues as Array<{ claim: string; sourceResultId: string; reason: string }>
+        : []
     };
+  }
+
+  async assessObservations(input: AgentManagerObservationInput): Promise<ContinuationDecision> {
+    const { parsed } = await createStructuredJsonResponse({
+      request: {
+        model: config.OPENAI_PLANNER_MODEL,
+        reasoning: { effort: config.OPENAI_PLANNER_REASONING_EFFORT },
+        max_output_tokens: 2400,
+        input: [{ role: 'system', content: [
+          'Ты продолжаешь текущий ход профессионального консультанта БАКАУТ после получения реальных результатов инструментов.',
+          untrustedEvidenceBoundary,
+          'Проверь, позволяют ли наблюдения решить задачу покупателя, а не просто назвать найденные товары. Учитывай весь активный контекст, назначение, доступные покупателю условия работы и сравниваемые модели.',
+          'Верни action=answer, если данных достаточно для полезного обоснованного ответа. Верни clarify только для решающего неизвестного условия самого покупателя; характеристики товара выясняй самостоятельно. Не предлагай неподъемную/неуместную технику новичку, если способ работы и перевозки еще неизвестен: выясни существенное условие без выдумывания лимита.',
+          'Верни continue и 1–3 конкретных read-запроса, если каталог пуст/неуместен, нужна другая формулировка поиска, детали найденной модели или решающий отсутствующий/противоречивый факт. После выполнения увидишь их результаты. Не заканчивай на первом пустом запросе, когда разумный уточненный поиск еще возможен.',
+          'catalog.search ищет по query/semanticQuery в каталоге; catalog.getProductDetails получает известные productIds/productNames; web.researchProductFacts проверяет точные productNames и comparisonAttributes. Сначала используй каталог/проверенные факты, потом сайт/инструкцию производителя, затем надежные профильные источники. Не исследуй повторно покрытые факты, если покупатель не просил перепроверить. Не запрашивай точное наличие/скидку/доставку через технический поиск.',
+          'Сохраняй intent, область потребности и все требования без изменения. Нельзя создавать лиды, менять бюджет/условия, переинтерпретировать реплику или выполнять side effects. productIds/candidateProductIds только из products; productNames копируй из products/явных исходных целей. Не подставляй другую модификацию. coversRequirementIds только существующие id, иначе [].',
+          'Каждый новый запрос имеет уникальный id. Не повторяй выполненный tool+args; после ошибки выбирай другую разумную попытку, не бесконечный retry. Учитывай remainingBudget и оставь время на ответ. Если источники не подтвердили факт, missingFacts точно описывает пробел; timeout/остановка не доказывает отсутствие свойства или исчерпание источников.',
+          'candidateProductIds — только перспективные варианты, а не окончательная выдача карточек. missingFacts и rationale кратко объясняют решение. Для answer/clarify toolRequests=[]; для continue — непустой список.'
+        ].join('\n') }, { role: 'user', content: JSON.stringify({
+          userMessage: input.userMessage,
+          history: compactHistory(input.history),
+          state: compactLedger(input.ledgerState),
+          intent: input.intent,
+          products: input.products.map(answerProductContext),
+          toolResults: compactToolResultsForModel(input.toolResults, input.products),
+          round: input.round,
+          maxReadRounds: CONTINUATION_MAX_ROUNDS,
+          remainingBudget: input.remainingBudget
+        }) }],
+        text: observationDecisionFormat
+      },
+      stage: 'agent_observation_decision',
+      signal: input.signal,
+      deadlineAtMs: input.structuredDeadlineAtMs,
+      minRetryRemainingMs: 8000,
+      transportMaxRetries: 0
+    });
+    return parseContinuationDecision(parsed);
   }
 
   async composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract> {
@@ -5407,6 +5172,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'evidenceConflicts в products — это неразрешённое расхождение значений одной характеристики. Не выбирай значение самостоятельно и не называй его подтвержденным; сохрани полезный вывод по остальным фактам и обозначь эту характеристику как требующую уточнения.',
             'lead.capture ok → подтверди получение и не проси повторно. not_found/error (нет имени/телефона) → НЕ подтверждай и не говори, что передано; leadAction="offer_form" и просьба недостающего контакта в форме.',
             'Без лишних вопросов; вопрос — только если он реально нужен для следующего шага.',
+            'continuation — итог оценки реальных наблюдений в этом ходе. При clarify объясни полезное направление и задай конкретный решающий вопрос из missingFacts, не объявляй первые найденные товары подходящими. При answer используй накопленное evidence. При stopped дай полезную подтвержденную часть и точный пробел; остановка по бюджету или ошибка не означает исчерпание источников. Кандидаты из continuation все равно должны соответствовать productEvidenceRoles и фактам.',
+            'Общие принципы устройства, применения, установки, запуска и обслуживания объясняй как общие технические рекомендации, явно отделяя их от характеристик конкретной модели. Точные режимы, расходники, интервалы, допуски и действия с оборудованием зависят от модели и должны опираться на ее проверенные сведения или инструкцию. Не подменяй полезное объяснение предложением оставить телефон.',
             'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум. Первая карточка всегда ближайший сверху к requiredNominalKw номинал из products; превышение >1.5× — только позиции 2+ и только с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование. Тип топлива, бренд и ресурс requiredNominalKw не меняют. Топливо покупателем не заявлено — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind/bounded_basis_incomplete/bounded_assumption: без final fit и без утверждения совместимости; browse_catalog может показывать ассортимент без обещания совместимости. preliminary_fit может показывать предварительные варианты с canShowProductCards=true только при минимум одном заявленном требовании покупателя и без доказанного конфликта, а missingFacts и answerText точно называют непроверенную нагрузку. Estimate-only с нулем заявленных требований — это needs_more_info: canShowProductCards=false, selectedProductIds=[], короткая ориентация по классу как явно грубая (не факт о товаре) и ровно один главный вопрос, без карточек. final_fit — canShowProductCards=false и минимальный вопрос.',
             'Просьба предварительных вариантов + calculator ok + catalog товары + минимум одно заявленное требование покупателя → selectionReadiness "ready_for_preliminary_cards", карточки предварительные, недостающий точный факт назван. Если расчет и каталог доказывают load/phase, отсутствие топлива или бюджета не подавляет полезные предварительные карточки: покажи подходящие, назови допущение, максимум один уточняющий вопрос.',
             'selectionReadiness — твоё семантическое решение о честности карточек сейчас: needs_more_info (fit рано, не browse), ready_for_preliminary_cards (browse/preliminary_fit без обещания совместимости), ready_for_exact_cards (факты достаточны для final_fit). canShowProductCards=false → answerText сам объясняет, чего не хватает. generator без карточек → ответ самодостаточен: упомяни подбор и блокирующий факт, не голый вопрос.',
@@ -5418,7 +5185,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Каталог-ответ: честно подходящие по всем hard requirements; много — сгруппируй/приоритизируй; не вводи near-match от нехватки точных. Размеры/веса/цены — только из контекста товаров или проверенных фактов. Каждая названная модель — копия products[].name. productEvidenceRoles — граница: recommendation_candidate можно рекомендовать; comparison_reference_only — только в явном сравнении с фактами и четким отклонением по rejectionReasons, никогда как подходящий. products включают релевантные прежние карточки — используй их вместо «нет свежего каталога» или формы ради продолжения подбора. Пустой eligible набор только из-за недостающего техфакта — сначала запланированный web и честная предварительная рекомендация.',
             'factsUsed[].sourceEventIds — только точные строки из availableEvidenceSources.allowedSourceIds (tool request id для фактов из инструментов, ledger event id для ledger). toolResultIds — только текущие tool request ids. Чистый handoff без точного статуса — factsUsed пуст.',
             'requiredResponseClauses — обязательная смысловая часть ответа. Клауза о неподтвержденной базе расчета: не выдавай число за подтвержденное/покупочное, но не прячь полезную ориентацию калькулятора. Порог требования покупателя в одном предложении с именами товаров — только через numericClaimBinding (dimension/value, semanticRole=buyer_requirement_threshold, точный sourceId) с дословным verifiedSourceQuote; пороги калькулятора — отдельным предложением до товаров, никогда как цена/характеристика товара.',
-            'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». sourcesExhausted≠true или guidance partial/not_confirmed — без handoff/контактов/offer_form: подтвержденная часть + точное имя неподтвержденного атрибута. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
+            'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». confirmed подтверждает достоверность конкретного value, включая отсутствие свойства, а не само наличие свойства. Сохраняй отрицание, условность и принадлежность факта указанной модели; слова в названии атрибута, типе документа или evidence не заменяют значение факта. sourcesExhausted≠true или guidance partial/not_confirmed — без handoff/контактов/offer_form: подтвержденная часть + точное имя неподтвержденного атрибута. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
             'web error/timeout/denied/not_found — это внутренний статус, не содержание ответа покупателю и не доказательство исчерпания источников. Не ссылайся на выполнение поиска и не предлагай форму/специалиста только из-за такого статуса. Используй остальные подтвержденные факты; для известных моделей назови каждую конкретно, дай полезный предварительный вывод и точно укажи недостающий покупательский факт (например, совместимый артикул для конкретного размера подошвы) и какой документ или характеристика его подтвердит. Общая ориентация по классу допустима только как явно типовая, не как факт о модели.',
             'Ты — финальный семантический селектор карточек. products могут содержать кандидатов с неоднозначным классом, назначением, материалом или совместимостью: код намеренно не удаляет их по keyword/regex. Сам выбери только подходящие selectedProductIds по смыслу запроса и фактам; доказанный typed numeric/boolean/enum conflict обязателен, а unknown/missing атрибут означает только preliminary-кандидата с точной оговоркой, не несовместимость.',
             styleExamples,
@@ -5434,6 +5201,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             intent: input.intent,
             toolResults: compactToolResultsForModel(input.toolResults, input.products),
             requiredResponseClauses: input.requiredResponseClauses ?? [],
+            continuation: input.continuation ?? null,
             availableEvidenceSources,
             productEvidenceRoles: input.productEvidenceRoles ?? [],
             products: input.products.map(answerProductContext)
@@ -6480,6 +6248,130 @@ export class AgentManagerOrchestrator {
       signal: input.signal
     });
 
+    let continuation: ContinuationOutcome | undefined;
+    if (this.model.assessObservations && intent.grounding?.taskType !== 'lead_handoff' &&
+      (toolResults.length > 0 || intent.selectionPolicy?.reusePreviousCards)) {
+      for (let round = 1; round <= CONTINUATION_MAX_ROUNDS + 1; round += 1) {
+        const checkpoint = `observation_decision_${round}`;
+        const savedObservation = latestCheckpoint(persistedExecution.checkpoints, checkpoint);
+        const stopCheckpoint = `observation_stopped_${round}`;
+        const savedStop = succeededCheckpoint(persistedExecution.checkpoints, stopCheckpoint);
+        if (savedStop.found) {
+          continuation = savedStop.payload as ContinuationOutcome;
+          await this.trace(input.sessionId, input.turnId, 'recovery', 'checkpoint_reused', { checkpoint: stopCheckpoint });
+          break;
+        }
+        const stop = async (reason: string, decision?: ContinuationDecision) => {
+          continuation = {
+            status: 'stopped', rounds: round - 1, stopReason: reason,
+            rationale: decision?.rationale ?? 'The observation cycle stopped before readiness was established.',
+            missingFacts: decision?.missingFacts ?? continuation?.missingFacts ?? [],
+            candidateProductIds: decision?.candidateProductIds ?? continuation?.candidateProductIds ?? []
+          };
+          await this.conversations.upsertTurnCheckpoint({
+            sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
+            checkpoint: stopCheckpoint, status: 'succeeded', payload: continuation
+          });
+          await this.trace(input.sessionId, input.turnId, 'tools', 'observation_cycle_stopped', { ...continuation });
+        };
+        if (savedObservation?.status === 'failed') {
+          await stop(String(savedObservation.errorCode ?? savedObservation.error_code ?? 'observation_failed'));
+          break;
+        }
+        // Replaying a saved answer must replay its observations, never invent a
+        // new investigation after an already committed evidence/answer boundary.
+        if (!savedObservation && succeededCheckpoint(persistedExecution.checkpoints, 'answer_contract_created').found) break;
+        const historicalProducts = intent.selectionPolicy?.reusePreviousCards
+          ? previousProductReferents({ history, intent, selectedProductIds: currentNeedSelectedProductIds(needStateSnapshot) })
+          : [];
+        const observationProducts = [...new Map([...historicalProducts, ...products].map((product) => [product.id, product])).values()];
+        let decision: ContinuationDecision;
+        try {
+          if (!savedObservation && turnBudget.remainingWallTimeMs() < 40_000) {
+            await stop('answer_time_reserve');
+            break;
+          }
+          if (savedObservation?.status === 'succeeded') {
+            decision = parseContinuationDecision(savedObservation.payload);
+          } else {
+            turnBudget.consumeModelCall();
+            decision = parseContinuationDecision(await this.model.assessObservations({
+              session: input.session, history, userMessage,
+              ledgerEvents: effectiveLedgerEvents, ledgerState,
+              intent, products: observationProducts, toolResults,
+              pendingLeadCaptureDraft: pendingLeadDraftContext,
+              round, remainingBudget: turnBudget.snapshot(),
+              structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, 30_000),
+              signal: input.signal
+            }));
+          }
+          const issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+          if (issues.length) {
+            await this.conversations.upsertTurnCheckpoint({
+              sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
+              checkpoint, status: 'failed', payload: { issues, decision }, errorCode: 'invalid_continuation'
+            });
+            await stop('invalid_continuation', decision);
+            break;
+          }
+          if (!savedObservation) {
+            await this.conversations.upsertTurnCheckpoint({
+              sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
+              checkpoint, status: 'succeeded', payload: decision
+            });
+          }
+        } catch (error) {
+          if (input.signal?.aborted) throw error;
+          const reason = error instanceof AgentManagerTurnBudgetExceededError ? error.stopReason : 'observation_failed';
+          await this.conversations.upsertTurnCheckpoint({
+            sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
+            checkpoint, status: 'failed', payload: { error: safeError(error) }, errorCode: reason
+          });
+          await stop(reason);
+          break;
+        }
+        await this.trace(input.sessionId, input.turnId, 'tools', 'observations_assessed', {
+          round, action: decision.action, rationale: decision.rationale,
+          missingFacts: decision.missingFacts, candidateProductIds: decision.candidateProductIds,
+          requestIds: decision.toolRequests.map((request) => request.id),
+          replayed: Boolean(savedObservation), remainingTurnMs: turnBudget.remainingWallTimeMs()
+        });
+        if (decision.action !== 'continue') {
+          continuation = { status: decision.action, rounds: round - 1,
+            rationale: decision.rationale, missingFacts: decision.missingFacts, candidateProductIds: decision.candidateProductIds };
+          break;
+        }
+        const usage = turnBudget.snapshot().usage;
+        // Replayed artifacts still count as completed logical requests. A new
+        // execution attempt must not grant another tool allowance to this turn.
+        const completedToolCalls = Math.max(usage.toolCalls, toolResults.length);
+        const completedWebCalls = Math.max(usage.webCalls, toolResults.filter((result) =>
+          result.tool === 'web.researchProductFacts' && result.payload.searchDisposition !== 'not_needed'
+        ).length);
+        const nextWebCalls = decision.toolRequests.filter((request) => request.tool === 'web.researchProductFacts').length;
+        if (round > CONTINUATION_MAX_ROUNDS ||
+          completedToolCalls + decision.toolRequests.length > turnBudget.limits.maxToolCalls ||
+          completedWebCalls + nextWebCalls > turnBudget.limits.maxWebCalls ||
+          turnBudget.remainingWallTimeMs() < 36_000) {
+          await stop(round > CONTINUATION_MAX_ROUNDS ? 'continuation_round_limit' : 'continuation_budget_reserve', decision);
+          break;
+        }
+        const requests = orderToolRequestsForSelectionDependencies(decision.toolRequests.map(validateToolRequest), intent);
+        intent.toolRequests = [...intent.toolRequests, ...requests];
+        // Keep the original intent checkpoint immutable. Numbered observation
+        // checkpoints reconstruct these appended reads during exact-turn replay.
+        ({ toolResults, products } = await this.executeTools({
+          session: input.session, turnId: input.turnId, executionOwner: input.executionOwner,
+          userMessage, history, intent, needState: needStateSnapshot, pendingLeadCaptureDraft,
+          toolRequests: requests, persistedToolResults: reusablePersistedToolResults,
+          priorProducts: observationProducts, priorToolResults: toolResults,
+          budget: turnBudget, signal: input.signal
+        }));
+        continuation = { status: 'stopped', rounds: round, rationale: decision.rationale,
+          missingFacts: decision.missingFacts, candidateProductIds: decision.candidateProductIds };
+      }
+    }
+
     await this.conversations.upsertTurnCheckpoint({
       sessionId: input.sessionId,
       turnId: input.turnId,
@@ -6625,6 +6517,7 @@ export class AgentManagerOrchestrator {
           products: answerEvidenceProductsForWriter,
           productEvidenceRoles,
           requiredResponseClauses,
+          continuation,
           semanticDecisionValidated,
           structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
           signal: input.signal
@@ -6659,10 +6552,149 @@ export class AgentManagerOrchestrator {
       factsUsed: answer.factsUsed.map((fact) => fact.factKey)
     });
 
-    // The writer (a semantic actor) may ask a clarification the planner did not
-    // pre-open. Recording that asked question in the durable ledger is
-    // bookkeeping, not semantics: register synthetic question.asked events so
-    // memory stays consistent instead of failing the whole buyer turn.
+    const savedReview = legacyIntentUpgraded || !savedAnswer.found
+      ? { found: false as const, payload: undefined }
+      : succeededCheckpoint(persistedExecution.checkpoints, 'review_completed');
+    let review: PreSendReview;
+    if (savedReview.found) {
+      review = PreSendReviewSchema.parse(savedReview.payload);
+    } else {
+      review = await this.review({
+          session: input.session,
+          history,
+          userMessage,
+          ledgerEvents: effectiveLedgerEvents,
+          ledgerState,
+          pendingLeadCaptureDraft: pendingLeadDraftContext,
+          intent: effectiveIntent,
+          toolResults: selectionToolResults,
+          products: answerEvidenceProductsForWriter,
+          productEvidenceRoles,
+          requiredResponseClauses,
+          semanticDecisionValidated,
+          continuation,
+          answer,
+          signal: input.signal
+        }, turnBudget);
+      if (review.verdict !== 'pass') {
+        // LLM repair round: re-run the writer with issue feedback instead of killing
+        // the whole turn. Deterministic gates stay as validators; the fix is semantic.
+        const issueCodes = review.issues.map((issue) => issue.code);
+        const repairable = review.issues.every((issue) => issue.code !== 'requires_adjudication');
+        const canAffordRepair = turnBudget.remainingWallTimeMs() > 8_000;
+        if (repairable && canAffordRepair) {
+          await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_started', {
+            issueCodes,
+            remainingTurnMs: turnBudget.remainingWallTimeMs()
+          });
+          turnBudget.consumeModelCall();
+          const repairedAnswer = normalizeAnswerEvidenceSources({
+            answer: await this.model.composeAnswer({
+              session: input.session,
+              history,
+              userMessage,
+              ledgerEvents: effectiveLedgerEvents,
+              ledgerState,
+              pendingLeadCaptureDraft: pendingLeadDraftContext,
+              intent: effectiveIntent,
+              toolResults: selectionToolResults,
+              products: answerEvidenceProductsForWriter,
+              productEvidenceRoles,
+              requiredResponseClauses,
+              semanticDecisionValidated,
+              reviewIssuesFeedback: review.issues.map((issue) => `${issue.code}: ${issue.message}`),
+              continuation,
+              structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
+              signal: input.signal
+            }),
+            ledgerState,
+            toolResults: selectionToolResults
+          });
+          const repairReview = await this.review({
+            session: input.session,
+            history,
+            userMessage,
+            ledgerEvents: effectiveLedgerEvents,
+            ledgerState,
+            pendingLeadCaptureDraft: pendingLeadDraftContext,
+            intent: effectiveIntent,
+            toolResults: selectionToolResults,
+            products: answerEvidenceProductsForWriter,
+            productEvidenceRoles,
+            requiredResponseClauses,
+            semanticDecisionValidated,
+            continuation,
+            answer: repairedAnswer,
+            signal: input.signal
+          }, turnBudget);
+          await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_completed', {
+            issueCodes,
+            repaired: repairReview.verdict === 'pass',
+            remainingIssues: repairReview.issues.map((issue) => issue.code)
+          });
+          if (repairReview.verdict === 'pass') {
+            answer = repairedAnswer;
+            review = repairReview;
+            await this.conversations.saveAnswerContract({
+              sessionId: input.sessionId,
+              turnId: input.turnId,
+              executionOwner: input.executionOwner,
+              answerText: answer.answerText,
+              contract: answer,
+              review,
+              status: 'reviewed'
+            });
+            await this.conversations.upsertTurnCheckpoint({
+              sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
+              checkpoint: 'answer_contract_created', status: 'succeeded', payload: answer
+            });
+          } else {
+            review = repairReview;
+          }
+        }
+      }
+    }
+    const finalText = sanitizeVisibleAnswerNumbers(answer.answerText.trim());
+    const finalLeadAction = leadActionAfterValidation({ answer, finalText, review, toolResults });
+    if (review.verdict !== 'pass') {
+      const reviewIssueCodes = review.issues.map((issue) => issue.code);
+      const reviewErrorMessage = reviewIssueCodes.join(', ');
+      await this.conversations.upsertTurnCheckpoint({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        executionOwner: input.executionOwner,
+        checkpoint: 'answer_contract_created',
+        status: 'failed',
+        payload: answer,
+        errorCode: 'answer_contract_blocked_by_validation',
+        errorMessage: reviewErrorMessage
+      });
+      await this.conversations.upsertTurnCheckpoint({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        executionOwner: input.executionOwner,
+        checkpoint: 'review_completed',
+        status: 'failed',
+        payload: review,
+        errorCode: 'answer_contract_blocked_by_validation',
+        errorMessage: reviewErrorMessage
+      });
+      await this.conversations.saveAnswerContract({
+        sessionId: input.sessionId,
+        turnId: input.turnId,
+        executionOwner: input.executionOwner,
+        answerText: answer.answerText,
+        contract: answer,
+        review,
+        status: 'rejected'
+      });
+      await this.trace(input.sessionId, input.turnId, 'recovery', 'blocked_answer_checkpoint_invalidated', {
+        issueCodes: reviewIssueCodes
+      });
+      throw new AnswerValidationBlockedError(reviewIssueCodes);
+    }
+    // The writer may introduce a needed clarification. Persist only questions
+    // from the accepted answer, including a repaired answer, after review.
     const unregisteredQuestions = answer.questionsAsked.filter((question) => {
       const existing = ledgerState.questionsById[question.questionId];
       return !existing || existing.status === 'closed';
@@ -6719,141 +6751,6 @@ export class AgentManagerOrchestrator {
       await this.trace(input.sessionId, input.turnId, 'ledger', 'writer_questions_registered', {
         questionIds: syntheticEvents.map((event) => event.payload.questionId)
       });
-    }
-
-    const savedReview = legacyIntentUpgraded || !savedAnswer.found
-      ? { found: false as const, payload: undefined }
-      : succeededCheckpoint(persistedExecution.checkpoints, 'review_completed');
-    let review: PreSendReview;
-    if (savedReview.found) {
-      review = PreSendReviewSchema.parse(savedReview.payload);
-    } else {
-      review = await this.review({
-          session: input.session,
-          history,
-          userMessage,
-          ledgerEvents: effectiveLedgerEvents,
-          ledgerState,
-          pendingLeadCaptureDraft: pendingLeadDraftContext,
-          intent: effectiveIntent,
-          toolResults: selectionToolResults,
-          products: answerEvidenceProductsForWriter,
-          productEvidenceRoles,
-          requiredResponseClauses,
-          semanticDecisionValidated,
-          answer,
-          signal: input.signal
-        }, turnBudget);
-      if (review.verdict !== 'pass') {
-        // LLM repair round: re-run the writer with issue feedback instead of killing
-        // the whole turn. Deterministic gates stay as validators; the fix is semantic.
-        const issueCodes = review.issues.map((issue) => issue.code);
-        const repairable = review.issues.every((issue) => issue.code !== 'requires_adjudication');
-        const canAffordRepair = turnBudget.remainingWallTimeMs() > 8_000;
-        if (repairable && canAffordRepair) {
-          await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_started', {
-            issueCodes,
-            remainingTurnMs: turnBudget.remainingWallTimeMs()
-          });
-          turnBudget.consumeModelCall();
-          const repairedAnswer = normalizeAnswerEvidenceSources({
-            answer: await this.model.composeAnswer({
-              session: input.session,
-              history,
-              userMessage,
-              ledgerEvents: effectiveLedgerEvents,
-              ledgerState,
-              pendingLeadCaptureDraft: pendingLeadDraftContext,
-              intent: effectiveIntent,
-              toolResults: selectionToolResults,
-              products: answerEvidenceProductsForWriter,
-              productEvidenceRoles,
-              requiredResponseClauses,
-              semanticDecisionValidated,
-              reviewIssuesFeedback: review.issues.map((issue) => `${issue.code}: ${issue.message}`),
-              structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
-              signal: input.signal
-            }),
-            ledgerState,
-            toolResults: selectionToolResults
-          });
-          const repairReview = await this.review({
-            session: input.session,
-            history,
-            userMessage,
-            ledgerEvents: effectiveLedgerEvents,
-            ledgerState,
-            pendingLeadCaptureDraft: pendingLeadDraftContext,
-            intent: effectiveIntent,
-            toolResults: selectionToolResults,
-            products: answerEvidenceProductsForWriter,
-            productEvidenceRoles,
-            requiredResponseClauses,
-            semanticDecisionValidated,
-            answer: repairedAnswer,
-            signal: input.signal
-          }, turnBudget);
-          await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_completed', {
-            issueCodes,
-            repaired: repairReview.verdict === 'pass',
-            remainingIssues: repairReview.issues.map((issue) => issue.code)
-          });
-          if (repairReview.verdict === 'pass') {
-            answer = repairedAnswer;
-            review = repairReview;
-            await this.conversations.saveAnswerContract({
-              sessionId: input.sessionId,
-              turnId: input.turnId,
-              executionOwner: input.executionOwner,
-              answerText: answer.answerText,
-              contract: answer,
-              review,
-              status: 'reviewed'
-            });
-          } else {
-            review = repairReview;
-          }
-        }
-      }
-    }
-    const finalText = sanitizeVisibleAnswerNumbers(answer.answerText.trim());
-    const finalLeadAction = leadActionAfterValidation({ answer, finalText, review, toolResults });
-    if (review.verdict !== 'pass') {
-      const reviewIssueCodes = review.issues.map((issue) => issue.code);
-      const reviewErrorMessage = reviewIssueCodes.join(', ');
-      await this.conversations.upsertTurnCheckpoint({
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        executionOwner: input.executionOwner,
-        checkpoint: 'answer_contract_created',
-        status: 'failed',
-        payload: answer,
-        errorCode: 'answer_contract_blocked_by_validation',
-        errorMessage: reviewErrorMessage
-      });
-      await this.conversations.upsertTurnCheckpoint({
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        executionOwner: input.executionOwner,
-        checkpoint: 'review_completed',
-        status: 'failed',
-        payload: review,
-        errorCode: 'answer_contract_blocked_by_validation',
-        errorMessage: reviewErrorMessage
-      });
-      await this.conversations.saveAnswerContract({
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        executionOwner: input.executionOwner,
-        answerText: answer.answerText,
-        contract: answer,
-        review,
-        status: 'rejected'
-      });
-      await this.trace(input.sessionId, input.turnId, 'recovery', 'blocked_answer_checkpoint_invalidated', {
-        issueCodes: reviewIssueCodes
-      });
-      throw new AnswerValidationBlockedError(reviewIssueCodes);
     }
     const finalToolResultIds = answer.toolResultIds;
     const finalFactsUsed = answer.factsUsed;
@@ -7103,6 +7000,7 @@ export class AgentManagerOrchestrator {
         answer: config.OPENAI_ANSWER_MODEL
       },
       turnBudget: turnBudget.snapshot(),
+      continuation,
       answerContract: finalAnswerContract,
       preSendValidation: review,
       toolResults,
@@ -7193,11 +7091,13 @@ export class AgentManagerOrchestrator {
     needState: CustomerNeedState;
     pendingLeadCaptureDraft: LeadCaptureDraft | null;
     persistedToolResults: Map<string, ToolResult>;
+    priorProducts?: Product[];
+    priorToolResults?: ToolResult[];
     budget: AgentManagerTurnBudget;
     signal?: AbortSignal;
   }) {
-    const productsById = new Map<string, Product>();
-    const toolResults: ToolResult[] = [];
+    const productsById = new Map<string, Product>((input.priorProducts ?? []).map((product) => [product.id, product]));
+    const toolResults: ToolResult[] = [...(input.priorToolResults ?? [])];
     const technicalLeadRequiresExhaustionProof = intentRequiresSearchBeforeSpecialist(input.intent) &&
       input.intent.toolRequests.some((request) => request.tool === 'lead.capture');
     const technicalHandoffContinuationProven =
@@ -7782,9 +7682,16 @@ export class AgentManagerOrchestrator {
           const catalogAndMemory = catalogResearch && memory
             ? mergeVerifiedMemoryWithResearch(catalogResearch, memory.research)
             : catalogResearch ?? memory?.research ?? null;
-          let research = catalogCoversRequest || memory?.attributesCovered ? catalogAndMemory : null;
+          const requiresFreshWeb = input.intent.grounding?.webRequirement === 'buyer_requested' ||
+            input.intent.grounding?.webRequirement === 'independent_required';
+          const allowCatalogOnlyAnswer = allowCatalogOnlyResearchForWebRequest(input.intent, request);
+          let research = !requiresFreshWeb && ((catalogCoversRequest && allowCatalogOnlyAnswer) || memory?.attributesCovered)
+            ? catalogAndMemory
+            : null;
           if (!research) {
-            const missingFactSlots = memory?.missingFactSlots ?? catalogMissingFactSlots;
+            const missingFactSlots = requiresFreshWeb
+              ? allRequestedFactSlots
+              : memory?.missingFactSlots ?? catalogMissingFactSlots;
             const gapTargetProductNames = missingFactSlots.length
               ? uniqueStrings(missingFactSlots.map((slot) => slot.productName))
               : targetProductNames;
@@ -7798,7 +7705,7 @@ export class AgentManagerOrchestrator {
               comparisonAttributes: gapAttributes,
               missingFactSlots,
               precomputedCatalogResult: catalogResearch,
-              allowCatalogOnlyAnswer: allowCatalogOnlyResearchForWebRequest(input.intent, request),
+              allowCatalogOnlyAnswer,
               catalogSearchAttempted: priorCatalogLookupCompleted || currentWebCatalogLookupCompleted,
               catalogProductsFound: selectedProducts.length > 0,
               signal: toolSignal,
@@ -7815,6 +7722,9 @@ export class AgentManagerOrchestrator {
             research = catalogAndMemory
               ? mergeVerifiedMemoryWithResearch(catalogAndMemory, researchedGaps)
               : researchedGaps;
+            if (requiresFreshWeb) {
+              research.warnings = research.warnings.filter((warning) => warning !== 'web_search_skipped_verified_fact_memory');
+            }
           }
           const catalogPresence = catalogPresenceForTargets(targetProductNames, selectedProducts, {
             absenceVerified: exactCatalogAbsenceVerified
@@ -8574,6 +8484,16 @@ export class AgentManagerOrchestrator {
     budget?: AgentManagerTurnBudget
   ): Promise<PreSendReview> {
     const mechanicalIssues: PreSendReview['issues'] = [];
+    if (input.continuation?.status === 'clarify' && (
+      input.answer.questionsAsked.length === 0 ||
+      input.answer.selectionReadiness?.status === 'ready_for_exact_cards'
+    )) {
+      mechanicalIssues.push({
+        code: 'observation_clarification_not_respected', severity: 'high',
+        message: 'The observation decision requires a buyer clarification. Ask the missing buyer condition and do not declare final suitability before the answer. Preliminary candidates may accompany the question.',
+        evidence: input.continuation.missingFacts.join(', ') || input.continuation.rationale
+      });
+    }
     const customerLanguageReview = guardCustomerOutput({
       answerText: input.answer.answerText,
       productCards: []
@@ -8591,6 +8511,8 @@ export class AgentManagerOrchestrator {
         budget?.consumeModelCall();
         const semanticLanguageReview = await this.model.reviewCustomerLanguage({
           answerText: input.answer.answerText,
+          products: input.products,
+          toolResults: input.toolResults,
           signal: input.signal,
           deadlineAtMs: budget?.snapshot().usage.deadlineAtMs ?? input.structuredDeadlineAtMs
         });
@@ -8600,6 +8522,20 @@ export class AgentManagerOrchestrator {
             severity: 'high',
             message: 'Customer answer describes the internal research or verification process; state only concrete known facts and the exact unconfirmed customer fact.',
             evidence: semanticLanguageReview.evidence || semanticLanguageReview.rationale
+          });
+        }
+        for (const issue of semanticLanguageReview.factualIssues ?? []) {
+          if (!issue || typeof issue.claim !== 'string' || !issue.claim.trim() ||
+            !input.answer.answerText.includes(issue.claim) ||
+            typeof issue.reason !== 'string' || !issue.reason.trim() ||
+            !input.toolResults.some((result) => result.requestId === issue.sourceResultId)) {
+            throw new Error('semantic_factual_review_unbound_evidence');
+          }
+          mechanicalIssues.push({
+            code: 'research_guidance_uncertainty_mismatch',
+            severity: 'high',
+            message: `Grounded factual review rejected the claim "${issue.claim}" using ${issue.sourceResultId}: ${issue.reason}`,
+            evidence: issue.claim
           });
         }
       } catch (error) {
@@ -8695,15 +8631,6 @@ export class AgentManagerOrchestrator {
     }
     for (const question of input.answer.questionsAsked) {
       const existing = input.ledgerState.questionsById[question.questionId];
-      if (input.semanticDecisionValidated && (!existing || existing.status !== 'open')) {
-        mechanicalIssues.push({
-          code: 'question_not_opened_by_semantic_decision',
-          severity: 'high',
-          message: `Question ${question.questionId} was not opened by the authoritative semantic decision.`,
-          evidence: question.text
-        });
-        continue;
-      }
       if (existing && existing.status !== 'open') {
         mechanicalIssues.push({
           code: 'asks_closed_question',

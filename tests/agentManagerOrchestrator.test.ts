@@ -1177,6 +1177,268 @@ function modernizeLegacySelectionPolicyFixture(intent: AgentIntentContract): Age
   };
 }
 
+describe('observation-driven catalog continuation', () => {
+  const ready = { action: 'answer' as const, rationale: 'The discovered catalog evidence answers the request', missingFacts: [], candidateProductIds: [], toolRequests: [] };
+  const refinedRequest: ToolRequest = {
+    id: 'refined-catalog', tool: 'catalog.search',
+    args: { query: 'refined generator query', productIntent: 'generator', canonicalProductIntent: 'generator', limit: 4 },
+    rationale: 'The first query missed the appropriate model', required: true, coversRequirementIds: []
+  };
+
+  it('uses observations to refine an empty search before composing the buyer answer', async () => {
+    const conversations = new FakeConversations();
+    const discovered = generatorProductWithPower('discovered', 'Generator R7000', 5);
+    const searches: string[] = [];
+    const products = { async searchProducts(query: string) { searches.push(query); return query.includes('refined') ? [discovered] : []; } };
+    const assessObservations = vi.fn(async (input) => input.toolResults.some((result: ToolResult) => result.requestId === 'refined-catalog')
+      ? { ...ready, candidateProductIds: ['discovered'] }
+      : { ...ready, action: 'continue' as const, missingFacts: ['matching product'], toolRequests: [refinedRequest] });
+    const composeAnswer = vi.fn(async (input) => {
+      expect(input.products.map((item: Product) => item.id)).toEqual(['discovered']);
+      expect(input.toolResults.map((item: ToolResult) => item.requestId)).toContain('refined-catalog');
+      return { answerText: 'Под вашу задачу есть Generator R7000.', factsUsed: [], questionsAsked: [], toolResultIds: ['refined-catalog'], leadAction: 'none' as const, riskFlags: [] };
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations, composeAnswer }));
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Подберите генератор.' });
+    expect(assessObservations).toHaveBeenCalledTimes(2);
+    expect(composeAnswer).toHaveBeenCalledTimes(1);
+    expect(searches).toContain('refined generator query');
+    expect(payload.productCards.map((item) => item.id)).toContain('discovered');
+    expect(conversations.checkpoints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ checkpoint: 'observation_decision_1', status: 'succeeded' })
+    ]));
+  });
+
+  it('does not repeat a tool when observed facts are already sufficient', async () => {
+    const conversations = new FakeConversations();
+    const products = new FakeProducts();
+    const search = vi.spyOn(products, 'searchProducts');
+    let searchesAfterInitialEvidence = 0;
+    const assessObservations = vi.fn(async () => { searchesAfterInitialEvidence = search.mock.calls.length; return ready; });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+    await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
+    expect(assessObservations).toHaveBeenCalledTimes(1);
+    expect(search.mock.calls.length).toBe(searchesAfterInitialEvidence);
+    expect(conversations.toolArtifacts).toHaveLength(1);
+  });
+
+  it('records an invalid continuation without executing a lead or pretending research succeeded', async () => {
+    const conversations = new FakeConversations();
+    const leads = new FakeLeads();
+    const assessObservations = vi.fn(async () => ({ ...ready, action: 'continue' as const,
+      toolRequests: [{ id: 'unapproved-lead', tool: 'lead.capture' as const, args: {}, required: true, rationale: 'contact', coversRequirementIds: [] }] }));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, leads as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
+    expect(leads.created).toEqual([]);
+    expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'invalid_continuation' });
+    expect(conversations.toolArtifacts).not.toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'lead.capture' })]));
+  });
+
+  it('asks for model-specific missing evidence after discovering a candidate and uses that evidence in the answer', async () => {
+    const conversations = new FakeConversations();
+    const next: ToolRequest = { id: 'manual-after-catalog', tool: 'web.researchProductFacts',
+      args: { productNames: ['Generator 5 kW'], productIntent: 'generator', canonicalProductIntent: 'generator', comparisonAttributes: ['oil_grade'] },
+      required: true, rationale: 'The discovered model has no maintenance instructions in its catalog specs', coversRequirementIds: [] };
+    const assessObservations = vi.fn(async (input) => input.toolResults.some((item: ToolResult) => item.requestId === next.id)
+      ? ready : { ...ready, action: 'continue' as const, missingFacts: ['oil grade'], toolRequests: [next] });
+    const composeAnswer = vi.fn(async (input) => {
+      const evidence = input.toolResults.find((item: ToolResult) => item.requestId === next.id);
+      expect(evidence?.payload.answerGuidance.directAnswer).toBe('The manual specifies the oil grade.');
+      return { answerText: 'Марка масла указана в инструкции к Generator 5 kW.', factsUsed: [], questionsAsked: [], toolResultIds: [next.id], leadAction: 'none' as const, riskFlags: [] };
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations, composeAnswer }));
+    const executor = orchestrator as unknown as { executeTools: (input: any) => Promise<any> };
+    const original = executor.executeTools.bind(orchestrator);
+    vi.spyOn(executor, 'executeTools').mockImplementation(async (input) => {
+      if (input.toolRequests[0]?.id !== next.id) return original(input);
+      expect(input.priorProducts.map((item: Product) => item.name)).toContain('Generator 5 kW');
+      expect(input.priorToolResults[0].tool).toBe('catalog.search');
+      return { products: input.priorProducts, toolResults: [...input.priorToolResults, {
+        requestId: next.id, tool: next.tool, status: 'ok', warnings: [],
+        payload: { usedWebSearch: true, researchOutcome: 'answered', targetProductNames: ['Generator 5 kW'],
+          answerGuidance: { directAnswer: 'The manual specifies the oil grade.', completeness: 'answered', coverage: [] }, facts: [], conflicts: [] }
+      }] };
+    });
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Как обслуживать генератор?' });
+    expect(assessObservations).toHaveBeenCalledTimes(2);
+    expect(composeAnswer).toHaveBeenCalledTimes(1);
+    expect(payload.metadata?.continuation).toMatchObject({ status: 'answer', rounds: 1 });
+  });
+
+  it('stops an unproductive sequence within the shared read-round limit', async () => {
+    const conversations = new FakeConversations();
+    let rounds = 0;
+    const assessObservations = vi.fn(async () => ({ ...ready, action: 'continue' as const, missingFacts: ['not established'],
+      toolRequests: [{ ...refinedRequest, id: `refinement-${++rounds}`, args: { ...refinedRequest.args, query: `alternative query ${rounds}` } }] }));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Подберите генератор.' });
+    expect(assessObservations).toHaveBeenCalledTimes(3);
+    expect(conversations.toolArtifacts).toHaveLength(3);
+    expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'continuation_round_limit' });
+    expect(payload.metadata?.turnBudget).toMatchObject({ usage: { toolCalls: 3 } });
+  });
+
+  it('replays completed observation reads after a writer failure without running them again', async () => {
+    class SerializedCheckpoints extends FakeConversations {
+      async updateTurn(input: Partial<ConversationTurn>) { return super.updateTurn(structuredClone(input)); }
+      async upsertTurnCheckpoint(input: unknown) { return super.upsertTurnCheckpoint(structuredClone(input)); }
+    }
+    const conversations = new SerializedCheckpoints();
+    const products = new FakeProducts();
+    const search = vi.spyOn(products, 'searchProducts');
+    const assessObservations = vi.fn(async (input) => input.toolResults.some((item: ToolResult) => item.requestId === refinedRequest.id)
+      ? ready : { ...ready, action: 'continue' as const, toolRequests: [refinedRequest] });
+    let attempts = 0;
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations,
+        async composeAnswer() {
+          if (++attempts === 1) throw new Error('writer interrupted after observation reads');
+          return { answerText: 'В каталоге есть Generator 5 kW и Generator 6 kW.', factsUsed: [], questionsAsked: [], toolResultIds: [], leadAction: 'none', riskFlags: [] };
+        } }));
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' })).rejects.toThrow('writer interrupted');
+    const searchesBeforeReplay = search.mock.calls.length;
+    const observationsBeforeReplay = assessObservations.mock.calls.length;
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+    expect(search.mock.calls.length).toBe(searchesBeforeReplay);
+    expect(assessObservations.mock.calls.length).toBe(observationsBeforeReplay);
+    expect(payload.metadata?.continuation).toMatchObject({ status: 'answer', rounds: 1 });
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+
+  it('keeps observation failures distinct from successful or exhausted research', async () => {
+    const conversations = new FakeConversations();
+    const assessObservations = vi.fn(async () => { throw new Error('observation provider timed out'); });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
+    expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'observation_failed' });
+    expect(conversations.toolArtifacts).toHaveLength(1);
+    expect(conversations.checkpoints).toEqual(expect.arrayContaining([
+      expect.objectContaining({ checkpoint: 'observation_decision_1', status: 'failed', errorCode: 'observation_failed' })
+    ]));
+  });
+
+  it('reserves time for the buyer answer instead of starting another read cycle', async () => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const conversations = new FakeConversations();
+      let delayed = false;
+      const products = new FakeProducts();
+      const originalSearch = products.searchProducts.bind(products);
+      vi.spyOn(products, 'searchProducts').mockImplementation(async (...args) => {
+        if (!delayed) { now += 111_000; delayed = true; }
+        return originalSearch(...args);
+      });
+      const assessObservations = vi.fn(async () => ready);
+      const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+        model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations }));
+      const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
+      expect(assessObservations).not.toHaveBeenCalled();
+      expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'answer_time_reserve' });
+    } finally { clock.mockRestore(); }
+  });
+
+  it('repairs a final recommendation that ignores the observed need for a buyer clarification', async () => {
+    const conversations = new FakeConversations();
+    const intent = structuredGeneratorCatalogIntent();
+    intent.selectionPolicy!.selectionGoal = 'final_fit';
+    const composeAnswer = vi.fn(async (input) => input.reviewIssuesFeedback?.length
+      ? { answerText: 'Какие приборы будут работать одновременно?', selectedProductIds: [], factsUsed: [],
+          questionsAsked: [{ questionId: 'q.simultaneous', text: 'Какие приборы будут работать одновременно?', reason: 'Required to establish the buyer load' }],
+          toolResultIds: [], leadAction: 'none' as const, riskFlags: [],
+          selectionReadiness: { productClass: 'generator', status: 'needs_more_info' as const, canShowProductCards: false, missingFacts: ['simultaneous load'], rationale: 'Buyer conditions remain unknown' } }
+      : { answerText: 'Под вашу задачу рекомендую Generator 5 kW.', selectedProductIds: ['p1'], factsUsed: [], questionsAsked: [], toolResultIds: [], leadAction: 'none' as const, riskFlags: [] });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
+      model({ planTurn: async () => intent, composeAnswer,
+        assessObservations: async () => ({ ...ready, action: 'clarify', missingFacts: ['simultaneous load'] }) }));
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Подберите генератор.' });
+    expect(composeAnswer).toHaveBeenCalledTimes(2);
+    expect(payload.productCards).toEqual([]);
+    expect(payload.answer).toContain('Какие приборы будут работать одновременно?');
+    expect(conversations.ledgerEvents).toContainEqual(expect.objectContaining({
+      eventType: 'question.asked', payload: expect.objectContaining({ questionId: 'q.simultaneous' })
+    }));
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+
+  it('only records questions from the accepted answer after semantic repair', async () => {
+    const conversations = new FakeConversations();
+    let reviews = 0;
+    const composeAnswer = vi.fn(async (input) => input.reviewIssuesFeedback?.length
+      ? { answerText: 'Что будете подключать одновременно?', factsUsed: [], questionsAsked: [{ questionId: 'q.accepted', text: 'Что будете подключать одновременно?', reason: 'Needed for selection' }], toolResultIds: [], selectedProductIds: [], leadAction: 'none' as const, riskFlags: [] }
+      : { answerText: 'Я повторил поиск. Какой у вас бюджет?', factsUsed: [], questionsAsked: [{ questionId: 'q.rejected', text: 'Какой у вас бюджет?', reason: 'Rejected draft question' }], toolResultIds: [], selectedProductIds: [], leadAction: 'none' as const, riskFlags: [] });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), composeAnswer,
+        reviewCustomerLanguage: async () => ({ processDisclosure: ++reviews === 1, evidence: 'Я повторил поиск.', rationale: 'Only the first draft discloses process' }) }));
+    await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
+    const asked = (conversations.ledgerEvents as Array<{ eventType: string; payload: { questionId?: string } }>).filter((event) => event.eventType === 'question.asked').map((event) => event.payload.questionId);
+    expect(asked).toEqual(['q.accepted']);
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+
+  it('recovers the accepted clarification after final delivery fails without replaying the rejected draft', async () => {
+    class InterruptedFinalization extends FakeConversations {
+      interrupted = false;
+      async updateTurn(input: Partial<ConversationTurn>) { return super.updateTurn(structuredClone(input)); }
+      async upsertTurnCheckpoint(input: unknown) { return super.upsertTurnCheckpoint(structuredClone(input)); }
+      async addAssistantMessageForTurn(input: Parameters<FakeConversations['addAssistantMessageForTurn']>[0]) {
+        if (!this.interrupted) { this.interrupted = true; throw new Error('final save interrupted'); }
+        return super.addAssistantMessageForTurn(input);
+      }
+    }
+    const conversations = new InterruptedFinalization();
+    const composeAnswer = vi.fn(async (input) => input.reviewIssuesFeedback?.length
+      ? { answerText: 'Что будет работать одновременно?', selectedProductIds: [], factsUsed: [], questionsAsked: [{ questionId: 'q.recovery-load', text: 'Что будет работать одновременно?', reason: 'Buyer condition required' }], toolResultIds: [], leadAction: 'none' as const, riskFlags: [], selectionReadiness: { productClass: 'generator', status: 'needs_more_info' as const, canShowProductCards: false, missingFacts: ['simultaneous load'], rationale: 'Clarification needed' } }
+      : { answerText: 'Выбирайте Generator 5 kW.', selectedProductIds: ['p1'], factsUsed: [], questionsAsked: [], toolResultIds: [], leadAction: 'none' as const, riskFlags: [] });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
+      model({ planTurn: async () => structuredGeneratorCatalogIntent(), composeAnswer,
+        assessObservations: async () => ({ ...ready, action: 'clarify', missingFacts: ['simultaneous load'] }) }));
+    await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Подберите генератор.' })).rejects.toThrow('final save interrupted');
+    const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+    expect(composeAnswer).toHaveBeenCalledTimes(2);
+    expect(payload.answer).toBe('Что будет работать одновременно?');
+    expect(payload.productCards).toEqual([]);
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+
+  it('preserves a terminal continuation budget stop when recovering an interrupted writer', async () => {
+    class SerializedCheckpoints extends FakeConversations {
+      async updateTurn(input: Partial<ConversationTurn>) { return super.updateTurn(structuredClone(input)); }
+      async upsertTurnCheckpoint(input: unknown) { return super.upsertTurnCheckpoint(structuredClone(input)); }
+    }
+    const previousLimit = DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxToolCalls;
+    DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxToolCalls = 1;
+    try {
+      const conversations = new SerializedCheckpoints();
+      const products = new FakeProducts();
+      const search = vi.spyOn(products, 'searchProducts');
+      const assessObservations = vi.fn(async (input) => input.toolResults.some((result: ToolResult) => result.requestId === refinedRequest.id)
+        ? ready : { ...ready, action: 'continue' as const, toolRequests: [refinedRequest] });
+      let attempts = 0;
+      const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+        model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations,
+          composeAnswer: async () => {
+            if (++attempts === 1) throw new Error('writer interrupted after budget stop');
+            return { answerText: 'Есть Generator 5 kW.', factsUsed: [], questionsAsked: [], toolResultIds: [], leadAction: 'none', riskFlags: [] };
+          } }));
+      await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' })).rejects.toThrow('writer interrupted');
+      const searchesBeforeReplay = search.mock.calls.length;
+      const observationsBeforeReplay = assessObservations.mock.calls.length;
+      const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+      expect(search.mock.calls.length).toBe(searchesBeforeReplay);
+      expect(assessObservations.mock.calls.length).toBe(observationsBeforeReplay);
+      expect(payload.metadata?.continuation).toMatchObject({ status: 'stopped', stopReason: 'continuation_budget_reserve' });
+      expect(conversations.assistantSaves).toHaveLength(1);
+    } finally { DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxToolCalls = previousLimit; }
+  });
+});
+
 function currentNoProductSelectionPolicy() {
   return {
     targetProductClass: null,
@@ -9441,6 +9703,7 @@ describe('buyer-level constraint persistence across needs', () => {
       source: 'llm_state_delta' as const,
       confidence: 1,
       role: 'hard_requirement' as const,
+      scope: input.needId ? 'need' : 'dialogue',
       ...(input.needId ? { needId: input.needId } : {}),
       ...(input.productClass ? { productClass: input.productClass } : {})
     };
@@ -9520,14 +9783,14 @@ describe('buyer-level constraint persistence across needs', () => {
     } as AgentSemanticDecision;
   }
 
-  it('flags a silently dropped cross-need budget requirement', () => {
+  it('flags a silently dropped explicitly dialogue-wide budget requirement', () => {
     const result = validateAgentSemanticDecision({
       decision: selectionDecision(
         [strictRequirement('r-phase', 'phase', 'single_phase')],
         'generator'
       ),
       previousLedgerState: previousLedger({
-        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000, needId: 'dacha' })
+        budget_max_rub: hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000 })
       }),
       sessionId,
       turnId,
@@ -9537,7 +9800,7 @@ describe('buyer-level constraint persistence across needs', () => {
     expect(result.issues).toContain('active_requirement_mismatch:budget_max_rub');
   });
 
-  it('accepts a carried cross-need budget requirement', () => {
+  it('accepts a carried explicitly dialogue-wide budget requirement', () => {
     const result = validateAgentSemanticDecision({
       decision: selectionDecision(
         [
@@ -9547,7 +9810,7 @@ describe('buyer-level constraint persistence across needs', () => {
         'generator'
       ),
       previousLedgerState: previousLedger({
-        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000, needId: 'dacha' })
+        budget_max_rub: hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000 })
       }),
       sessionId,
       turnId,
@@ -9557,7 +9820,7 @@ describe('buyer-level constraint persistence across needs', () => {
     expect(result.issues).not.toContain('active_requirement_mismatch:budget_max_rub');
   });
 
-  it('accepts an explicitly retracted cross-need budget fact', () => {
+  it('accepts an explicitly retracted dialogue-wide budget fact', () => {
     const decision = selectionDecision(
       [strictRequirement('r-phase', 'phase', 'single_phase')],
       'generator'
@@ -9576,7 +9839,7 @@ describe('buyer-level constraint persistence across needs', () => {
     const result = validateAgentSemanticDecision({
       decision,
       previousLedgerState: previousLedger({
-        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000, needId: 'dacha' })
+        budget_max_rub: hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-1', value: 40000 })
       }),
       sessionId,
       turnId,
@@ -9605,14 +9868,14 @@ describe('buyer-level constraint persistence across needs', () => {
     expect(result.issues).not.toContain('active_requirement_mismatch:budget_max_rub');
   });
 
-  it('flags a silently dropped fuel preference in the same product class', () => {
+  it('flags a silently dropped explicitly dialogue-wide fuel requirement', () => {
     const result = validateAgentSemanticDecision({
       decision: selectionDecision(
         [strictRequirement('r-power', 'nominal_power_min_kw', 1.5)],
         'generator'
       ),
       previousLedgerState: previousLedger({
-        'dacha::fuel_type': hardFact({ key: 'fuel_type', eventId: 'ev-fuel-1', value: 'gasoline', needId: 'dacha', productClass: 'generator' })
+        fuel_type: hardFact({ key: 'fuel_type', eventId: 'ev-fuel-1', value: 'gasoline', productClass: 'generator' })
       }),
       sessionId,
       turnId,
@@ -9620,6 +9883,20 @@ describe('buyer-level constraint persistence across needs', () => {
     });
 
     expect(result.issues).toContain('active_requirement_mismatch:fuel_type');
+  });
+
+  it('does not make a paused need budget or fuel requirement global even within the same class', () => {
+    const result = validateAgentSemanticDecision({
+      decision: selectionDecision([strictRequirement('r-phase', 'phase', 'single_phase')], 'generator'),
+      previousLedgerState: previousLedger({
+        'dacha::budget_max_rub': hardFact({ key: 'budget_max_rub', eventId: 'ev-budget-local', value: 40000, needId: 'dacha' }),
+        'dacha::fuel_type': hardFact({ key: 'fuel_type', eventId: 'ev-fuel-local', value: 'gasoline', needId: 'dacha', productClass: 'generator' })
+      }),
+      sessionId,
+      turnId,
+      userMessage: 'бетономешалка 800 вт, болгарка 1200'
+    });
+    expect(result.issues.filter((issue) => issue.startsWith('active_requirement_mismatch'))).toEqual([]);
   });
 
   it('ignores a fuel fact from an unrelated product class', () => {

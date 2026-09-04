@@ -1,8 +1,10 @@
 import {
   DialogueLedgerEventSchema,
+  dialogueLedgerScopes,
   normalizeLedgerStateDeltaEvents,
   type DialogueLedgerEvent,
-  type LedgerStateDelta
+  type LedgerStateDelta,
+  type SelectionRequirement
 } from './agentManagerContracts.js';
 import { z } from 'zod';
 import { emptyNeedState, emptyProductSelectionState } from './needState.js';
@@ -29,6 +31,10 @@ export interface ReducedFact {
   needId?: string;
   role: ReducedRequirementRole;
   productClass?: string;
+  scope?: DialogueLedgerEvent['scope'];
+  productId?: string;
+  unit?: string;
+  relation?: SelectionRequirement['relation'];
 }
 
 export interface ReducedQuestion {
@@ -75,7 +81,11 @@ const reducedFactSnapshotSchema = z.object({
   createdAt: z.string().trim().min(1).optional(),
   needId: z.string().trim().min(1).optional(),
   role: z.enum(['hard_requirement', 'preference', 'context', 'commercial', 'unknown']),
-  productClass: z.string().trim().min(1).optional()
+  productClass: z.string().trim().min(1).optional(),
+  scope: z.enum(dialogueLedgerScopes).optional(),
+  productId: z.string().trim().min(1).optional(),
+  unit: z.string().trim().min(1).optional(),
+  relation: z.enum(['must_have', 'must_not_have', 'preferred', 'not_required', 'context']).optional()
 }).passthrough();
 
 const reducedQuestionSnapshotSchema = z.object({
@@ -226,8 +236,27 @@ function productClass(value: unknown, fallback: string = 'unknown') {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
 }
 
-function factMapKey(factKey: string, needId?: string) {
+function factMapKey(factKey: string, needId?: string, productId?: string) {
+  if (productId) return JSON.stringify(['product', needId ?? null, productId, factKey]);
   return needId ? `${needId}::${factKey}` : factKey;
+}
+
+export function getActiveDialogueNeed(state: ReducedDialogueLedgerState) {
+  const activeNeeds = Object.values(state.needsById).filter((need) => need.status === 'open' || need.status === 'selected');
+  return activeNeeds.length === 1 ? activeNeeds[0] : undefined;
+}
+
+export function activeScopedDialogueLedgerFacts(state: ReducedDialogueLedgerState) {
+  const activeFacts = Object.values(state.factsByKey).filter((fact) => fact.status === 'active');
+  // Legacy event streams can contain scoped facts before need.opened. A unique
+  // scope is recoverable; insertion order is never evidence for the current need.
+  const legacyNeedIds = Object.keys(state.needsById).length === 0
+    ? [...new Set(activeFacts.map((fact) => fact.needId).filter((needId): needId is string => Boolean(needId)))]
+    : [];
+  const currentNeedId = getActiveDialogueNeed(state)?.needId ?? (legacyNeedIds.length === 1 ? legacyNeedIds[0] : undefined);
+  return activeFacts.filter((fact) => fact.needId
+    ? fact.needId === currentNeedId
+    : fact.scope === 'dialogue' || fact.scope === 'product');
 }
 
 function cloneInitialState(initial?: ReducedDialogueLedgerState): ReducedDialogueLedgerState {
@@ -261,6 +290,12 @@ export function parseReducedDialogueLedgerState(value: unknown): ReducedDialogue
   const parsed = reducedDialogueLedgerSnapshotSchema.safeParse(value);
   if (!parsed.success) throw new Error('invalid_dialogue_ledger_snapshot');
   const state = parsed.data;
+  // Old snapshots discarded product identity and scope. Full raw-event replay
+  // is the only safe way to recover those fields and any overwritten facts.
+  if (
+    Object.values(state.factsByKey).some((fact) => fact.scope === undefined) ||
+    Object.values(state.needsById).filter((need) => need.status === 'open' || need.status === 'selected').length > 1
+  ) throw new Error('invalid_dialogue_ledger_snapshot');
   return cloneInitialState({
     eventIds: state.eventIds,
     factsByKey: state.factsByKey,
@@ -317,7 +352,12 @@ export function reduceDialogueLedger(
       }
       const previous = needsById[needId];
       const activate = event.payload.activate === true || (event.eventType === 'need.opened' && event.payload.activate !== false);
-      if (activate) {
+      const requestedStatus = needStatus(event.payload.status, activate ? 'open' : previous?.status ?? 'paused');
+      const status = !activate && previous?.status !== 'open' && previous?.status !== 'selected' &&
+        (requestedStatus === 'open' || requestedStatus === 'selected')
+        ? previous?.status ?? 'paused'
+        : requestedStatus;
+      if (activate && (status === 'open' || status === 'selected')) {
         for (const need of Object.values(needsById)) {
           if (need.needId !== needId && (need.status === 'open' || need.status === 'selected')) {
             need.status = 'paused';
@@ -389,7 +429,7 @@ export function reduceDialogueLedger(
         openQuestions: effectiveOpenQuestions,
         selectedProductIds: effectiveSelectedProductIds,
         rejectedProductIds: effectiveRejectedProductIds,
-        status: needStatus(event.payload.status, activate ? 'open' : previous?.status ?? 'open'),
+        status,
         eventId: event.eventId,
         updatedAt: event.createdAt
       };
@@ -418,7 +458,8 @@ export function reduceDialogueLedger(
         continue;
       }
       const needId = stringPayload(event.payload, 'needId');
-      const scopedKey = factMapKey(factKey, needId);
+      const productId = stringPayload(event.payload, 'productId');
+      const scopedKey = factMapKey(factKey, needId, productId);
       const previousEventId = factEventByKey.get(scopedKey);
       const previous = previousEventId ? factsByEventId.get(previousEventId) : undefined;
       const supersedesPrevious = previousEventId
@@ -427,6 +468,8 @@ export function reduceDialogueLedger(
       const observedCannotReplaceConfirmed = event.eventType === 'fact.observed' &&
         previous?.eventType === 'fact.confirmed' &&
         (previous.status === 'active' || supersedesPrevious);
+      const relation = reducedFactSnapshotSchema.shape.relation.safeParse(event.payload.relation ?? undefined);
+      if (!relation.success) warnings.push('fact_relation_invalid');
       const fact: ReducedFact = {
         factKey,
         value: event.payload.value,
@@ -439,7 +482,11 @@ export function reduceDialogueLedger(
         createdAt: event.createdAt,
         needId,
         role: requirementRole(event.payload),
-        productClass: stringPayload(event.payload, 'productClass')
+        productClass: stringPayload(event.payload, 'productClass'),
+        scope: event.scope,
+        productId,
+        unit: stringPayload(event.payload, 'unit'),
+        relation: relation.success ? relation.data : undefined
       };
       factsByEventId.set(event.eventId, fact);
       if (observedCannotReplaceConfirmed) {
@@ -564,7 +611,7 @@ function activeCustomerNeedsFromLedger(
   return needs.map((need) => {
     const facts = activeFacts.filter((fact) => fact.needId === need.needId);
     const factConstraints = facts
-      .filter((fact) => fact.eventType === 'fact.confirmed' && fact.role === 'hard_requirement')
+      .filter((fact) => fact.eventType === 'fact.confirmed' && fact.role === 'hard_requirement' && fact.scope !== 'product' && !fact.productId)
       .map((fact) => `${fact.factKey}: ${factValueText(fact.value)}`);
     const linkedQuestions = ledgerState.openQuestions
       .filter((question) => question.needId === need.needId)
@@ -587,20 +634,13 @@ export function deriveNeedStateSnapshotFromLedger(
   base: CustomerNeedState = emptyNeedState()
 ): CustomerNeedState {
   const now = new Date().toISOString();
-  const activeFacts = Object.values(ledgerState.factsByKey).filter((fact) => fact.status === 'active');
   const ledgerNeeds = activeCustomerNeedsFromLedger(ledgerState, base, now);
-  const currentReducedNeed = [...Object.values(ledgerState.needsById)]
-    .reverse()
-    .find((need) => need.status === 'open' || need.status === 'selected');
-  const latestScopedFactNeedId = [...activeFacts].reverse().find((fact) => fact.needId)?.needId;
-  const fallbackBaseNeed = [...(base.activeNeeds ?? [])]
-    .reverse()
-    .find((need) => need.status === 'open' || need.status === 'selected');
-  const currentNeedId = currentReducedNeed?.needId ?? latestScopedFactNeedId ?? fallbackBaseNeed?.id;
+  const currentReducedNeed = getActiveDialogueNeed(ledgerState);
+  const currentFacts = activeScopedDialogueLedgerFacts(ledgerState);
+  const currentNeedId = currentReducedNeed?.needId ?? (ledgerNeeds.length === 0 ? currentFacts.find((fact) => fact.needId)?.needId : undefined);
   const currentNeed = currentReducedNeed
     ? ledgerNeeds.find((need) => need.id === currentReducedNeed.needId)
     : undefined;
-  const currentFacts = activeFacts.filter((fact) => !fact.needId || fact.needId === currentNeedId);
   const activeFactItems = currentFacts.map((fact) => factNeedItem(fact, now));
   const confirmedFacts = currentFacts
     .filter((fact) => fact.eventType === 'fact.confirmed')
@@ -608,7 +648,7 @@ export function deriveNeedStateSnapshotFromLedger(
   const observedFacts = currentFacts
     .filter((fact) => fact.eventType === 'fact.observed')
     .map((fact) => factNeedItem(fact, now));
-  const fallbackClass = base.selectionState.currentProductClass;
+  const fallbackClass = ledgerNeeds.length ? 'unknown' : base.selectionState.currentProductClass;
   const semanticClass: ProductSelectionClass = currentReducedNeed?.productClass === 'commercial'
     ? fallbackClass
     : supportedProductClass(
@@ -646,7 +686,7 @@ export function deriveNeedStateSnapshotFromLedger(
             productClass: semanticClass,
             summary: summary || 'Ledger-derived dialogue state',
             constraints: currentFacts
-              .filter((fact) => fact.eventType === 'fact.confirmed' && fact.role === 'hard_requirement')
+              .filter((fact) => fact.eventType === 'fact.confirmed' && fact.role === 'hard_requirement' && fact.scope !== 'product' && !fact.productId)
               .map((fact) => `${fact.factKey}: ${factValueText(fact.value)}`)
               .slice(0, 24),
             openQuestions,
@@ -655,11 +695,13 @@ export function deriveNeedStateSnapshotFromLedger(
             updatedAt: now
           }]
         : [],
-    explicitNeeds: confirmedFacts,
+    explicitNeeds: currentFacts
+      .filter((fact) => fact.eventType === 'fact.confirmed' && fact.scope !== 'product' && !fact.productId)
+      .map((fact) => factNeedItem(fact, now)),
     confirmedFacts,
     uncertainInferences: observedFacts,
     constraints: currentFacts
-      .filter((fact) => fact.eventType === 'fact.confirmed' && fact.role === 'hard_requirement')
+      .filter((fact) => fact.eventType === 'fact.confirmed' && fact.role === 'hard_requirement' && fact.scope !== 'product' && !fact.productId)
       .map((fact) => factNeedItem(fact, now)),
     selectionState: {
       ...emptyProductSelectionState(),

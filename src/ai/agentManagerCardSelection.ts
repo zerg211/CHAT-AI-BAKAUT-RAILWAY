@@ -5,6 +5,7 @@ import {
   isGeneratorProductClass
 } from './agentManagerGeneratorLoad.js';
 import {
+  classifyProduct,
   compactModelText,
   displayProductBrand,
   extractConfirmedGeneratorNominalPowerKw,
@@ -19,6 +20,7 @@ import {
   productPowerSource
 } from './productClassifier.js';
 import {
+  exactProductIdentity,
   modelTextTokens as matchingModelTextTokens,
   tokenHasDigit,
   tokenHasLetter
@@ -178,11 +180,7 @@ function typedProductClassKey(canonicalValue: unknown, fallbackValue: unknown) {
 }
 
 function productMatchesExactNamedTarget(product: Product, targetName: string) {
-  const targetTokens = extractModelTokens(targetName).map(compactModelText).filter(Boolean);
-  const productTokens = new Set(extractModelTokens(product.name).map(compactModelText).filter(Boolean));
-  if (targetTokens.length) return targetTokens.every((token) => productTokens.has(token));
-  const normalizedTarget = compactModelText(targetName);
-  return Boolean(normalizedTarget && compactModelText(product.name).includes(normalizedTarget));
+  return exactProductIdentity(targetName).matches(product.name);
 }
 
 export function toolRequestProductIntent(request: ToolRequest): ProductSelectionClass {
@@ -492,7 +490,7 @@ const deterministicallyVerifiableStrictKinds = new Set([
   generatorLoadDerivedRequirementKind
 ]);
 
-const failedOrOpenEndedWebProofBlockerReasons = new Set([
+const failedOrOpenEndedReadProofBlockerReasons = new Set([
   'typed_tool_result_missing',
   'typed_tool_result_not_found',
   'typed_tool_result_denied',
@@ -506,7 +504,6 @@ function typedToolRequirementProof(input: {
   intent: AgentIntentContract;
   productClass: ProductSelectionClass;
   toolResults: ToolResult[];
-  requirementProofs: RequirementProof[];
 }) {
   const verification = input.requirement.verification;
   if (!verification || verification.mode !== 'typed_tool') return undefined;
@@ -590,14 +587,9 @@ function typedToolRequirementProof(input: {
     verification.tool === 'catalog.search' ||
     verification.tool === 'catalog.getProductDetails'
   ) {
-    const proofs = input.requirementProofs.filter((proof) => proof.requirementId === input.requirement.id);
-    // The read completed and its evidence is represented in the proof contract.
-    // An unverified semantic value is a preliminary data gap, not a malformed
-    // verifier that should suppress every candidate before the writer sees it.
-    if (
-      proofs.some((proof) => proof.status !== 'unverified') ||
-      proofs.length && !deterministicallyVerifiableStrictKinds.has(input.requirement.kind)
-    ) return {};
+    // A completed read validates the source binding. Value eligibility belongs
+    // to the per-product proof/native checks; absence of a value is a data gap.
+    return {};
   }
 
   return { blocker: blocker('unsupported_typed_tool_verifier') };
@@ -634,8 +626,7 @@ export function assessStrictSelectionRequirements(
         requirement,
         intent,
         productClass,
-        toolResults,
-        requirementProofs
+        toolResults
       });
       if (proof?.blocker) blockers.push(proof.blocker);
       if (proof?.generatorNominalPowerMinKw !== undefined) {
@@ -643,7 +634,7 @@ export function assessStrictSelectionRequirements(
           ? proof.generatorNominalPowerMinKw
           : Math.max(generatorNominalPowerMinKw, proof.generatorNominalPowerMinKw);
       }
-      continue;
+      if (!requirementUsesGenericReadProof(requirement)) continue;
     }
 
     if (requirement.kind === 'product_type' || requirement.kind === 'product_class') {
@@ -900,41 +891,60 @@ export function gateStrictSelectionRequirements(
       ? request.coversRequirementIds ?? []
       : []
   ));
-  const typedWebRequirementIds = new Set(
+  const typedReadRequirementIds = new Set(
     (intent.selectionPolicy?.requirements ?? []).flatMap((requirement) => {
       const verification = requirement.verification;
-      if (verification?.mode !== 'typed_tool' || verification.tool !== 'web.researchProductFacts') return [];
+      if (verification?.mode !== 'typed_tool' || !requirementUsesGenericReadProof(requirement)) return [];
       const request = intent.toolRequests.find((item) => item.id === verification.toolRequestId);
       if (
         request?.required !== true ||
-        request.tool !== 'web.researchProductFacts' ||
+        request.tool !== verification.tool ||
         !(request.coversRequirementIds ?? []).includes(requirement.id)
       ) return [];
       return [requirement.id];
     })
   );
-  const preliminaryUnverified = assessment.blockers.filter((blocker) =>
+  const requirementProofs = buildRequirementProofs({ intent, products, toolResults });
+  const resolvedReadRequirementIds = new Set((intent.selectionPolicy?.requirements ?? []).flatMap((requirement) => {
+    if (!requirementUsesGenericReadProof(requirement) || !products.length) return [];
+    const resolved = products.every((product) => {
+      const status = resolvedRequirementEligibilityStatus(requirementProofsFor(
+        requirementProofs, product.id, [requirement.id]
+      ));
+      return status === 'satisfied' || status === 'violated';
+    });
+    return resolved ? [requirement.id] : [];
+  }));
+  // A later bound read can resolve an earlier missing/failed read. Keep shape,
+  // request-binding and derived-verifier failures as blockers; only obsolete
+  // read-evidence gaps are cleared by resolved per-product proofs.
+  const unresolvedBlockers = assessment.blockers.filter((blocker) => !(
+    failedOrOpenEndedReadProofBlockerReasons.has(blocker.reason) &&
+    typedReadRequirementIds.has(blocker.id) &&
+    resolvedReadRequirementIds.has(blocker.id)
+  ));
+  const preliminaryUnverified = unresolvedBlockers.filter((blocker) =>
     (
       webVerifiablePreliminaryBlockerReasons.has(blocker.reason) &&
       webCoveredRequirementIds.has(blocker.id)
     ) || (
-      failedOrOpenEndedWebProofBlockerReasons.has(blocker.reason) &&
-      typedWebRequirementIds.has(blocker.id)
+      failedOrOpenEndedReadProofBlockerReasons.has(blocker.reason) &&
+      typedReadRequirementIds.has(blocker.id)
     )
   );
   const representedRequirementIds = new Set(preliminaryUnverified.map((blocker) => blocker.id));
-  const requirementProofs = buildRequirementProofs({ intent, products, toolResults });
   for (const requirement of intent.selectionPolicy?.requirements ?? []) {
     if (
       requirement.role !== 'hard_constraint' ||
       requirement.strictness !== 'strict' ||
-      representedRequirementIds.has(requirement.id)
+      representedRequirementIds.has(requirement.id) ||
+      resolvedReadRequirementIds.has(requirement.id)
     ) continue;
     // Unsupported strict kinds (no deterministic verifier exists) are unconfirmed
     // data gaps, not blockers (AGENTS.md): surface them as needing evidence so the
     // writer marks the caveat instead of suppressing the whole shortlist.
     const hasDeterministicVerifier = deterministicallyVerifiableStrictKinds.has(requirement.kind);
-    const webCovered = webCoveredRequirementIds.has(requirement.id) || typedWebRequirementIds.has(requirement.id);
+    const readCovered = webCoveredRequirementIds.has(requirement.id) || typedReadRequirementIds.has(requirement.id);
     if (!hasDeterministicVerifier) {
       preliminaryUnverified.push({
         id: requirement.id,
@@ -945,7 +955,7 @@ export function gateStrictSelectionRequirements(
       representedRequirementIds.add(requirement.id);
       continue;
     }
-    if (!webCovered) continue;
+    if (!readCovered) continue;
     const candidateNeedsEvidence = products.some((product) =>
       resolvedRequirementEligibilityStatus(requirementProofsFor(
         requirementProofs,
@@ -966,7 +976,7 @@ export function gateStrictSelectionRequirements(
   );
   return {
     ...assessment,
-    blockers: assessment.blockers.filter((blocker) =>
+    blockers: unresolvedBlockers.filter((blocker) =>
       !preliminaryUnverifiedKeys.has(`${blocker.id}:${blocker.reason}`)
     ),
     preliminaryUnverified
@@ -1589,9 +1599,14 @@ export function selectProductsForVisibleCards(input: {
       .filter((mention) => mention.role === 'target_product' || mention.role === 'comparison_subject')
       .map((mention) => mention.name);
     if (exactTargetNames.length) {
-      selected = selected.filter((product) =>
-        exactTargetNames.some((targetName) => productMatchesExactNamedTarget(product, targetName))
-      );
+      const targetsCoreEquipment = !['unknown', 'plateAccessory', 'generatorAccessory', 'engineOil', 'generatorOil'].includes(cardIntent);
+      selected = selected.filter((product) => {
+        if (targetsCoreEquipment) {
+          const classification = classifyProduct(product);
+          if (classification.isPlateAccessory || classification.isGeneratorAccessory || classification.isEngineOil || classification.isGeneratorOil) return false;
+        }
+        return exactTargetNames.some((targetName) => productMatchesExactNamedTarget(product, targetName));
+      });
     }
   }
   const beforeGenericProofCount = selected.length;
