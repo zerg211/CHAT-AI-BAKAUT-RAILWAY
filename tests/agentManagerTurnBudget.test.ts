@@ -43,6 +43,14 @@ describe('agent manager turn budget', () => {
     expect(budget.remainingWallTimeMs()).toBe(88_000);
   });
 
+  it('leaves enough time after web research to compose and commit a complex answer', () => {
+    expect(effectiveAgentToolTimeoutMs({
+      tool: 'web.researchProductFacts',
+      configuredTimeoutMs: 60_000,
+      remainingWallTimeMs: 45_000
+    })).toBe(15_000);
+  });
+
   it('caps catalog work before the answer reserve', () => {
     expect(effectiveAgentToolTimeoutMs({
       tool: 'catalog.search',
