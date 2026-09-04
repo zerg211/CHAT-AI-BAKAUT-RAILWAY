@@ -448,7 +448,7 @@ describe('AgentManager comparison research flow', () => {
       facts: [{ ...catalogFact, sourceType: 'web', sourceUrl: 'https://manufacturer.example/rd3910e' }]
     };
 
-    async function executeResearch(webRequirement: 'buyer_requested' | 'independent_required' | 'conditional_on_catalog_gap', localSource: 'catalog' | 'memory') {
+    async function executeResearch(webRequirement: 'buyer_requested' | 'independent_required' | 'conditional_on_catalog_gap', localSource: 'catalog' | 'memory', verifyWebOnlyReplay = false) {
       const products = new FakeProducts();
       vi.spyOn(products, 'searchProducts').mockResolvedValue([product('rd3910e', targetName, { nominalPowerKw: 2.8 })]);
       if (localSource === 'catalog') extractCatalogProductComparisonFacts.mockResolvedValue(completeCatalog);
@@ -502,15 +502,35 @@ describe('AgentManager comparison research flow', () => {
       });
       const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, products as never, {} as never, withStrictToolFixtures(model()));
       const executor = orchestrator as unknown as {
-        executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[] }>;
+        executeTools(input: Record<string, unknown>): Promise<{ toolResults: ToolResult[]; products: Product[] }>;
       };
+      if (verifyWebOnlyReplay) intent.toolRequests = intent.toolRequests.filter(request => request.tool === 'web.researchProductFacts');
       const result = await executor.executeTools({
         session: session(), turnId, executionOwner: 'source-policy-test', userMessage: `Verify ${targetName} rated output.`,
         history: [], intent, toolRequests: intent.toolRequests, needState: emptyNeedState(),
         pendingLeadCaptureDraft: null, persistedToolResults: new Map(), budget: new AgentManagerTurnBudget()
       });
+      if (verifyWebOnlyReplay) {
+        expect(result.products.map(item => item.id)).toEqual(['rd3910e']);
+        const searches = vi.spyOn(products, 'searchProducts');
+        const searchCount = searches.mock.calls.length;
+        const webCount = researchProductComparisonFacts.mock.calls.length;
+        const replay = await executor.executeTools({
+          session: session(), turnId, executionOwner: 'source-policy-replay', userMessage: `Verify ${targetName} rated output.`,
+          history: [], intent: structuredClone(intent), toolRequests: structuredClone(intent.toolRequests), needState: emptyNeedState(),
+          pendingLeadCaptureDraft: null, persistedToolResults: new Map(structuredClone(result.toolResults).map(item => [item.requestId, item])), budget: new AgentManagerTurnBudget()
+        });
+        expect(replay.products).toEqual(result.products);
+        expect(searches.mock.calls.length).toBe(searchCount);
+        expect(researchProductComparisonFacts.mock.calls.length).toBe(webCount);
+      }
       return result.toolResults.find((item) => item.requestId === 'web:source-policy');
     }
+
+    it('replays product identity and facts discovered inside a web-only turn without another lookup', async () => {
+      researchProductComparisonFacts.mockResolvedValue(completedWeb);
+      await executeResearch('independent_required', 'catalog', true);
+    });
 
     it.each(['buyer_requested', 'independent_required'] as const)('performs %s web verification even when the catalog covers every requested attribute', async (webRequirement) => {
       researchProductComparisonFacts.mockResolvedValue(completedWeb);
@@ -3669,7 +3689,7 @@ describe('AgentManager comparison research flow', () => {
           questionsAsked: [],
           toolResultIds: ['catalog:exact-comparison'],
           selectedProductIds: [tss.id, bison.id],
-          selectionRationale: 'Both exact catalog products are the planner-authorized comparison scope.',
+          selectionRationale: 'Обе модели дают нужные 5 кВт; TSS дешевле, BISON предлагает инверторный тип.',
           leadAction: 'none',
           riskFlags: [],
           selectionReadiness: {

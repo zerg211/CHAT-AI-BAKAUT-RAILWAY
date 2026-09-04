@@ -97,6 +97,15 @@ const researchSource = z.object({
 }).strict();
 
 const webResearchResult = z.object({
+  // Catalog identity resolved inside this read must survive checkpoint replay.
+  products: z.array(productResult).max(4).optional(),
+  sourceDiagnostics: z.array(z.object({
+    url: z.string().max(600),
+    reason: z.enum(['http_status', 'timeout', 'network', 'unsupported_binary', 'unreadable']),
+    elapsedMs: z.number().nonnegative(),
+    status: z.number().int().optional(),
+    code: z.string().max(80).optional()
+  }).strict()).max(32).optional(),
   usedWebSearch: z.boolean().optional(),
   searchDisposition: z.enum(['completed', 'memory_hit', 'not_needed', 'skipped_budget', 'timed_out', 'failed', 'aborted']).optional(),
   researchOutcome: z.enum(['answered', 'partial', 'exhausted']).optional(),

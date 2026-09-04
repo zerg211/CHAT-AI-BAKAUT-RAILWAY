@@ -12,7 +12,7 @@ import {
   webResearchResultProvesSourceExhaustion,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
-import { DEFAULT_AGENT_MANAGER_TURN_LIMITS } from '../src/ai/agentManagerTurnBudget.js';
+import { AgentManagerTurnBudget, DEFAULT_AGENT_MANAGER_TURN_LIMITS } from '../src/ai/agentManagerTurnBudget.js';
 import { inferProductIntent } from '../src/ai/productClassifier.js';
 import {
   AgentIntentContractSchema,
@@ -1310,6 +1310,38 @@ describe('observation-driven catalog continuation', () => {
     expect(conversations.assistantSaves).toHaveLength(1);
   });
 
+  it('replays completed observation reads under the new-read time reserve without losing their evidence', async () => {
+    const remaining = vi.spyOn(AgentManagerTurnBudget.prototype, 'remainingWallTimeMs');
+    try {
+      class SerializedCheckpoints extends FakeConversations {
+        async updateTurn(input: Partial<ConversationTurn>) { return super.updateTurn(structuredClone(input)); }
+        async upsertTurnCheckpoint(input: unknown) { return super.upsertTurnCheckpoint(structuredClone(input)); }
+      }
+      const conversations = new SerializedCheckpoints();
+      const products = new FakeProducts();
+      const search = vi.spyOn(products, 'searchProducts');
+      const assessObservations = vi.fn(async (input) => input.toolResults.some((item: ToolResult) => item.requestId === refinedRequest.id)
+        ? ready : { ...ready, action: 'continue' as const, toolRequests: [refinedRequest] });
+      let writes = 0;
+      const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+        model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations,
+          async composeAnswer(input) {
+            if (++writes === 1) throw new Error('writer interrupted with completed evidence');
+            expect(input.toolResults.map(item => item.requestId)).toContain(refinedRequest.id);
+            return { answerText: 'В каталоге есть Generator 5 kW и Generator 6 kW.', factsUsed: [], questionsAsked: [], toolResultIds: [], leadAction: 'none', riskFlags: [] };
+          } }));
+      await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' })).rejects.toThrow('writer interrupted');
+      remaining.mockReturnValue(25_000);
+      const reads = search.mock.calls.length;
+      const assessments = assessObservations.mock.calls.length;
+      const payload = await orchestrator.recoverTurn({ sessionId, turnId });
+      expect(search.mock.calls.length).toBe(reads);
+      expect(assessObservations.mock.calls.length).toBe(assessments);
+      expect(payload.metadata?.continuation).toMatchObject({ status: 'answer', rounds: 1 });
+      expect(conversations.assistantSaves).toHaveLength(1);
+    } finally { remaining.mockRestore(); }
+  });
+
   it('keeps observation failures distinct from successful or exhausted research', async () => {
     const conversations = new FakeConversations();
     const assessObservations = vi.fn(async () => { throw new Error('observation provider timed out'); });
@@ -1379,6 +1411,28 @@ describe('observation-driven catalog continuation', () => {
     await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
     const asked = (conversations.ledgerEvents as Array<{ eventType: string; payload: { questionId?: string } }>).filter((event) => event.eventType === 'question.asked').map((event) => event.payload.questionId);
     expect(asked).toEqual(['q.accepted']);
+    expect(conversations.assistantSaves).toHaveLength(1);
+  });
+
+  it('reviews and repairs the visible card recommendation reason in the same language check as the answer', async () => {
+    const conversations = new FakeConversations();
+    const internalReason = 'Я обращался к доступным источникам, но они не дали результата.';
+    const validReason = 'Подходит для нагрузки до подтверждённой номинальной мощности.';
+    const reviewCustomerLanguage = vi.fn(async ({ answerText }: { answerText: string }) => ({
+      processDisclosure: answerText.includes(internalReason), evidence: internalReason,
+      rationale: 'Check all generated customer-visible text', factualIssues: []
+    }));
+    const composeAnswer = vi.fn(async (input) => ({
+      answerText: 'Есть Generator 5 kW.', factsUsed: [], questionsAsked: [], toolResultIds: [],
+      selectedProductIds: ['p1'], selectionRationale: input.reviewIssuesFeedback?.length ? validReason : internalReason,
+      leadAction: 'none' as const, riskFlags: []
+    }));
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never,
+      new FakeLeads() as never, model({ planTurn: async () => structuredGeneratorCatalogIntent(), composeAnswer, reviewCustomerLanguage }));
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: 'Покажите генераторы.' });
+    expect(payload.productCards[0]?.reasons).toEqual([validReason]);
+    expect(composeAnswer).toHaveBeenCalledTimes(2);
+    expect(reviewCustomerLanguage.mock.calls[0]![0].answerText).toContain(internalReason);
     expect(conversations.assistantSaves).toHaveLength(1);
   });
 
@@ -1811,6 +1865,71 @@ describe('AgentManagerOrchestrator', () => {
     }));
   });
 
+
+  it.each([false, true])('delivers a product-selection qualification without inventing catalog work or card obligations (repair missing question: %s)', async (repairMissingQuestion) => {
+    const conversations = new FakeConversations();
+    const userMessage = 'Здравствуйте. Хочу сам сделать на даче въезд и дорожку, чтобы песок и щебень потом не просели. С такой техникой раньше не работал. Что мне для этого взять?';
+    conversations.messages = [message(userMessage)];
+    const question = 'Какая площадь работ и как планируете перевозить технику?';
+    const answerText = `Вам нужна техника для уплотнения основания. Подберём её под масштаб работ и удобную для вас перевозку. ${question}`;
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: 'qualify the equipment selection from the buyer working conditions',
+      dialogueUnderstanding: 'the buyer needs equipment but scale and transport are not yet known',
+      nextStepRationale: 'explain the selection direction and ask the decisive buyer questions',
+      requiresTools: false,
+      toolRequests: [],
+      productMentions: [],
+      selectionPolicy: {
+        ...currentNoProductSelectionPolicy(),
+        targetProductClass: 'compaction equipment', canonicalProductClass: null,
+        needAction: 'open', selectionGoal: 'preliminary_fit', maxCards: 0,
+        rationale: 'no model is selected before the buyer conditions are known'
+      },
+      grounding: {
+        taskType: 'product_selection', responseMode: 'clarify', buyerRequestedWeb: false,
+        catalogRequirement: 'none', sourcePolicy: 'conversation_only', webPurpose: 'none', webRequirement: 'none',
+        requiredToolKinds: [], technicalAttributes: [], rationale: 'the next useful step is a buyer clarification'
+      },
+      riskFlags: []
+    });
+    const decideTurn = vi.fn(async (): Promise<AgentSemanticDecision> => ({
+      ledgerDelta: { rationale: 'retain the pending selection', events: [{
+        eventType: 'need.opened', scope: 'need', payload: {
+          needId: 'compaction', productClass: 'unknown', activate: true, openQuestions: [question]
+        }, evidence: userMessage, source: 'llm_state_delta', status: 'active'
+      }] },
+      intent
+    }));
+    const products = new FakeProducts();
+    const search = vi.spyOn(products, 'searchProducts');
+    let writerCalls = 0;
+    const composeAnswer = vi.fn(async () => ({
+      answerText: repairMissingQuestion && ++writerCalls === 1 ? 'Вам нужна техника для уплотнения основания.' : answerText,
+      factsUsed: [], toolResultIds: [], selectedProductIds: [], leadAction: 'none' as const,
+      questionsAsked: repairMissingQuestion && writerCalls === 1 ? [] : [{ questionId: 'work-conditions', text: question, reason: 'These conditions determine a suitable class and size.' }],
+      riskFlags: [],
+      selectionReadiness: {
+        productClass: 'unknown', status: 'needs_more_info' as const, canShowProductCards: false,
+        missingFacts: ['work_area', 'transport_method'], rationale: 'The next step depends on buyer information.'
+      }
+    }));
+    const orchestrator = new AgentManagerOrchestrator(
+      conversations as never, products as never, new FakeLeads() as never, model({ decideTurn, composeAnswer })
+    );
+    const payload = await orchestrator.generateAnswer({ sessionId, turnId, userMessage });
+    expect(payload.answer).toBe(answerText);
+    expect(payload.productCards).toEqual([]);
+    expect(composeAnswer).toHaveBeenCalledTimes(repairMissingQuestion ? 2 : 1);
+    expect(decideTurn).toHaveBeenCalledTimes(1);
+    expect(search).not.toHaveBeenCalled();
+    expect(conversations.assistantSaves).toHaveLength(1);
+    expect(payload.metadata?.policyGate).toMatchObject({ ok: true, blockedReasons: [], requiredActions: [] });
+    expect(payload.metadata?.policyGateEnforcement).toMatchObject({ mode: 'pass', hardBlockReasons: [] });
+    expect(payload.metadata?.turnContract).toMatchObject({
+      taskType: 'product_selection', answerTask: 'technical_explanation', productCardsPolicy: 'none', cardsRole: 'none'
+    });
+    expect(payload.needState.activeNeeds).toContainEqual(expect.objectContaining({ id: 'compaction', status: 'open', openQuestions: [question] }));
+  });
 
   it('preserves a safe clarification when a strict typed requirement is intentionally pending', async () => {
     const conversations = new FakeConversations();

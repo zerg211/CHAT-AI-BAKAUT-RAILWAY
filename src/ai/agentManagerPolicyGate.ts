@@ -35,15 +35,14 @@ function hasWebTool(requests: ToolRequest[]) {
   return requests.some((request) => request.tool === 'web.researchProductFacts');
 }
 
-function catalogRequired(intent: AgentIntentContract) {
+export function agentIntentRequiresCatalogEvidence(intent: AgentIntentContract) {
   const grounding = intent.grounding;
   return grounding?.catalogRequirement === 'required' ||
     grounding?.sourcePolicy === 'catalog_required' ||
     grounding?.requiredToolKinds.some((tool) =>
       tool === 'catalog.search' || tool === 'catalog.getProductDetails'
     ) === true ||
-    grounding?.taskType === 'product_selection' ||
-    grounding?.taskType === 'comparison';
+    (grounding?.taskType === 'product_selection' && grounding.responseMode !== 'clarify');
 }
 
 function webRequired(intent: AgentIntentContract) {
@@ -66,7 +65,7 @@ export function evaluateAgentManagerPolicyGate(
   const requests = input.intent.toolRequests;
   const results = input.toolResults ?? [];
   const grounding = input.intent.grounding;
-  const needsCatalog = catalogRequired(input.intent);
+  const needsCatalog = agentIntentRequiresCatalogEvidence(input.intent);
   const needsWeb = webRequired(input.intent);
   const conditionalWeb = grounding?.webRequirement === 'conditional_on_catalog_gap';
   const catalogRequestIndex = requests.findIndex((request) =>

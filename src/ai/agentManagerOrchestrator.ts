@@ -133,7 +133,7 @@ import {
   DEFAULT_AGENT_MANAGER_TURN_LIMITS,
   runWithAgentManagerTurnBudget
 } from './agentManagerTurnBudget.js';
-import { evaluateAgentManagerPolicyGate } from './agentManagerPolicyGate.js';
+import { agentIntentRequiresCatalogEvidence, evaluateAgentManagerPolicyGate } from './agentManagerPolicyGate.js';
 import { guardCustomerOutput } from './agentManagerOutputGuard.js';
 import {
   compactModelText,
@@ -193,6 +193,7 @@ export interface AgentManagerModel {
     deadlineAtMs?: number;
   }): Promise<Array<{ factId: string; productName: string; attribute: string }>>;
   reviewCustomerLanguage?(input: {
+    userMessage?: string;
     answerText: string;
     products: Product[];
     toolResults: ToolResult[];
@@ -760,19 +761,18 @@ export function orderToolRequestsForSelectionDependencies(
   const hasCatalogSearchToWebDependency =
     requests.some((request) => request.tool === 'catalog.search') &&
     requests.some((request) => request.tool === 'web.researchProductFacts');
-  const hasConditionalDetailsToWebDependency =
-    intent.grounding?.webRequirement === 'conditional_on_catalog_gap' &&
+  const hasDetailsDependency =
     requests.some((request) => request.tool === 'catalog.getProductDetails') &&
-    requests.some((request) => request.tool === 'web.researchProductFacts');
-  if (!proofRequestIds.size && !hasCatalogSearchToWebDependency && !hasConditionalDetailsToWebDependency) {
+    requests.some((request) => request.tool === 'catalog.search' || request.tool === 'web.researchProductFacts');
+  if (!proofRequestIds.size && !hasCatalogSearchToWebDependency && !hasDetailsDependency) {
     return requests;
   }
   const priority = (request: ToolRequest) => {
-    if (proofRequestIds.has(request.id) && request.tool !== 'web.researchProductFacts') return 0;
+    if (proofRequestIds.has(request.id) && !['catalog.search', 'catalog.getProductDetails', 'web.researchProductFacts'].includes(request.tool)) return 0;
     if (request.tool === 'catalog.search') return 1;
-    if (hasConditionalDetailsToWebDependency && request.tool === 'catalog.getProductDetails') return 1;
-    if (request.tool === 'web.researchProductFacts') return 2;
-    return 3;
+    if (request.tool === 'catalog.getProductDetails') return 2;
+    if (request.tool === 'web.researchProductFacts') return 3;
+    return 4;
   };
   return requests
     .map((request, index) => ({ request, index, priority: priority(request) }))
@@ -952,9 +952,7 @@ function semanticAuthorityIssues(input: {
     request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
   );
   const webRequests = requiredRequests.filter((request) => request.tool === 'web.researchProductFacts');
-  const catalogRequired = grounding?.catalogRequirement === 'required' ||
-    grounding?.sourcePolicy === 'catalog_required' ||
-    grounding?.taskType === 'product_selection';
+  const catalogRequired = agentIntentRequiresCatalogEvidence(intent);
   if (catalogRequired && !catalogRequests.length && policy?.reusePreviousCards !== true) {
     issues.push('required_catalog_tool_missing');
   }
@@ -973,15 +971,6 @@ function semanticAuthorityIssues(input: {
     grounding?.webRequirement === 'conditional_on_catalog_gap' ||
     grounding?.webRequirement === 'independent_required';
   if (webRequired && !webRequests.length) issues.push('required_web_tool_missing');
-  if (
-    (grounding?.taskType === 'product_selection' || grounding?.taskType === 'comparison') &&
-    policy?.selectionGoal !== 'browse_catalog' &&
-    (grounding?.technicalAttributes.length ?? 0) > 0 &&
-    catalogRequests.length > 0 &&
-    webRequests.length === 0
-  ) {
-    issues.push('conditional_research_plan_missing');
-  }
   if (
     grounding?.sourcePolicy === 'specialist_required' &&
     (grounding.taskType === 'technical_answer' || grounding.taskType === 'product_selection' || grounding.taskType === 'comparison') &&
@@ -2294,7 +2283,11 @@ function agentManagerTaskTypeFromGrounding(intent: AgentIntentContract): AgentTa
 
 function turnContractMetadataFromIntent(intent: AgentIntentContract): AgentTurnContract {
   const taskType = agentManagerTaskTypeFromGrounding(intent);
-  const answerTask = taskType === 'product_selection'
+  const qualifiesNeed = intent.grounding?.responseMode === 'clarify';
+  const showSelectionCards = taskType === 'product_selection' && !qualifiesNeed;
+  const answerTask = qualifiesNeed
+    ? 'technical_explanation'
+    : taskType === 'product_selection'
     ? 'product_selection'
     : taskType === 'comparison'
       ? 'comparison'
@@ -2310,11 +2303,11 @@ function turnContractMetadataFromIntent(intent: AgentIntentContract): AgentTurnC
     commercialAction: intent.toolRequests.some((request) => request.tool === 'lead.capture')
       ? 'explain_manager_required'
       : 'none',
-    productCardsPolicy: taskType === 'product_selection' ? 'show_matching_products' : 'none',
+    productCardsPolicy: showSelectionCards ? 'show_matching_products' : 'none',
     mustAnswerNow: [intent.userMessageSummary],
     activeNeeds: [],
     currentFocus: intent.grounding?.taskType ?? 'agent_manager_turn',
-    cardsRole: taskType === 'product_selection' ? 'primary' : 'none',
+    cardsRole: showSelectionCards ? 'primary' : 'none',
     leadAllowed: intent.toolRequests.some((request) => request.tool === 'lead.capture'),
     leadAllowedReason: intent.toolRequests.some((request) => request.tool === 'lead.capture')
       ? 'Agent manager intent planned lead capture.'
@@ -4672,7 +4665,8 @@ function plannerSystemPromptBlock(
       ? 'Текущая реплика уже применена reducer-ом к ledger. Планируй по post-delta state, не добавляй её повторно, согласуй selectionPolicy с активными typed hard_requirement facts.'
       : 'Планируй по existing ledger вместе с current userMessage: реплика ещё не применена и может заменить, отменить, уточнить или открыть требования. Новая явная вводная приоритетнее конфликтующей старой; не смешивай их.',
     'LLM решает смысл хода без фиксированного списка сценариев. Код только исполнит typed tools.',
-    'Заполни grounding: taskType, buyerRequestedWeb (только явная просьба внешней проверки), catalogRequirement (required для идентификации, поиска или сверки каталожного товара, product_selection и comparison; conditional — только когда каталог первым и web зависит от решающего пробела; для availability_or_delivery ставь required только если сначала нужно найти или идентифицировать товар в каталоге, а для уже названных/выбранных товаров без новой каталоговой проверки ставь none — живое наличие и доставка требуют операционной проверки, а не catalog.search), responseMode, sourcePolicy, webPurpose, webRequirement, requiredToolKinds, technicalAttributes, buyerQuestion, rationale. buyerQuestion — точная непрерывная цитата бизнес-вопроса покупателя без телефона/email/имени/способа связи; сохраняй её через уточнения; для нетехнических задач null. toolRequests исполняют grounding-политику.',
+    'Заполни grounding: taskType, buyerRequestedWeb (только явная просьба внешней проверки), catalogRequirement (required для фактической идентификации, поиска, сверки или рекомендации каталожного товара в текущем ходе; conditional — только когда каталог первым и web зависит от решающего пробела; для availability_or_delivery ставь required только если сначала нужно найти или идентифицировать товар в каталоге, а для уже названных/выбранных товаров без новой каталоговой проверки ставь none — живое наличие и доставка требуют операционной проверки, а не catalog.search), responseMode, sourcePolicy, webPurpose, webRequirement, requiredToolKinds, technicalAttributes, buyerQuestion, rationale. buyerQuestion — точная непрерывная цитата бизнес-вопроса покупателя без телефона/email/имени/способа связи; сохраняй её через уточнения; для нетехнических задач null. toolRequests исполняют grounding-политику.',
+    'taskType описывает цель обращения, responseMode — текущий шаг. product_selection + responseMode="clarify" — корректная квалификация потребности до подбора: сохрани цель покупки и контекст, объясни направление выбора и задай необходимые вопросы покупателю. Если этот шаг не требует новых внешних фактов, используй catalogRequirement="none", sourcePolicy="conversation_only", webRequirement="none", requiredToolKinds=[], toolRequests=[], requiresTools=false и maxCards=0. Не меняй цель обращения на technical_answer ради обхода проверки и не ищи случайные модели до достаточных вводных. Явно требуемые источники и инструменты должны оставаться согласованы с текущим шагом.',
     'grounding.webRequirement: none — web не нужен; buyer_requested — явная просьба проверки; conditional_on_catalog_gap — только при selectionGoal=preliminary_fit, web нужен если полная карточка не отвечает на решающие характеристики; independent_required — руководство, общий технический вопрос, актуальная линейка.',
     'При conditional_on_catalog_gap для сравнения известных моделей сначала планируй catalog.getProductDetails по ним (web не запускается, если structured extraction ответил без конфликта). Для conditional web: отдельный product_attribute requirement в coversRequirementIds и ровно одна comparisonAttributeBindings={attribute,requirementId} на характеристику, attribute = comparisonAttributes точно, без второстепенных. В остальных web-запросах comparisonAttributeBindings=[]. buyer_requested/independent_required — web обязателен.',
     'selectionPolicy: targetProductClass — свободное название, незнакомое не сводится к unknown; canonicalProductClass — только из онтологии (generator, weldingGenerator, generatorOil, engineOil, generatorAccessory, plateAccessory, plate, rammer, roller, cutter, diamondBlade, diamondCore, trowel), иначе null; plate = виброплита. requirement kind="product_class"/"product_type" — value = canonicalProductClass точно; при null не создавай strict product_class requirement.',
@@ -4700,7 +4694,7 @@ function plannerSystemPromptBlock(
     'sourcePolicy="web_required" или requiredToolKinds с web.researchProductFacts → toolRequests обязан содержать web.researchProductFacts (без named model: productNames=[], query/semanticQuery = смысл вопроса, comparisonAttributes = запрошенные факты).',
     'Наличие/доставка/скидки/сроки — не обещай. Пока разрешённого контакта нет, leadCaptureAuthorization.authorized=false, не включай lead.capture в requiredToolKinds/toolRequests: ответ должен предложить форму через leadAction="offer_form". Только при authorized=true планируй required lead.capture. Сравнение и нехватка важных фактов — web.researchProductFacts.',
     'catalog.search — только при понятном классе/модели/задаче. Широкий запрос без задачи («что у вас есть», «инструмент») → один главный уточняющий вопрос вместо поиска.',
-    'product_selection с технической зависимостью: catalog.search первым, web вторым в том же ходе; productNames пуст, когда кандидаты неизвестны (web исследует найденное каталогом). specialist_required — только когда каталог и web не могут ответить.',
+    'Сначала получай доступные каталожные факты; technicalAttributes сами по себе не доказывают пробел и не требуют заранее добавлять web. После результатов оцени достаточность: решающий пробел или конфликт требует самостоятельной web-проверки в текущем ходе, а достаточные факты позволяют ответить. Для заранее известного пробела планируй conditional_on_catalog_gap; явно обязательная внешняя проверка остаётся обязательной независимо от полноты каталога. specialist_required — только когда каталог и web не могут ответить.',
     'Прежние карточки не подходят после сужения — свежий catalog.search в том же классе; ответ отклоняет старые по причине и показывает замену.',
     'calculator.generatorLoad — для расчета по нагрузкам. Для каждого load семантически определи operationMode: continuous, occasional или separate; coRunningGroup объединяет только те occasional/separate нагрузки, которые реально работают вместе. simultaneousRunning=true только когда все перечисленные нагрузки работают вместе; simultaneousStarting=true только при возможном одновременном старте. Код не выводит режим из evidence.',
     'loads — только при защищенной базе: estimateBasis exact_or_user_provided (явные кВт) / catalog_or_web_fact (проверенные) / bounded_assumption (приблизительный подбор, нагрузка ограничена типом/функцией/сценарием) / unbounded_guess (только широкие названия). runningSource и startingSource указывают происхождение каждого числа отдельно; not_provided означает, что соответствующего числа нет. Не приписывай пусковое значение к runningKw и наоборот.',
@@ -4734,10 +4728,10 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         ? 'productMentions.evidence должен быть точной непрерывной подстрокой текущего userMessage; исправь evidence или убери mention, которого в текущей реплике нет.'
         : '',
       hasIssue('required_catalog_tool_missing') || hasIssue('required_primary_catalog_tool_missing') || hasIssue('required_tool_request_missing:catalog.search')
-        ? 'Если rejected decision действительно выбирает/ищет товар сейчас, добавь required catalog.search с непустым args.query и canonicalProductIntent. Если следующий шаг по смыслу только уточнение до подбора, согласованно исправь taskType/responseMode/catalogRequirement/requiredToolKinds/toolRequests, не оставляя product_selection без каталога.'
+        ? 'Если rejected decision действительно ищет или рекомендует товар сейчас, добавь required catalog.search с непустым args.query и canonicalProductIntent. Если текущий шаг — квалификация перед подбором, сохрани taskType="product_selection", выбери responseMode="clarify" и согласуй catalogRequirement="none", sourcePolicy="conversation_only", webRequirement="none", requiredToolKinds=[], toolRequests=[], requiresTools=false, maxCards=0. Не добавляй каталог только из-за цели обращения; не отменяй независимую проверку фактов, необходимую для ответа сейчас.'
         : '',
       hasIssue('required_web_tool_missing') || hasIssue('required_tool_request_missing:web.researchProductFacts') || hasIssue('conditional_research_plan_missing')
-        ? 'Для product_selection/comparison с решающими technicalAttributes запланируй required web.researchProductFacts после catalog request: webRequirement="conditional_on_catalog_gap", requiredToolKinds и toolRequests должны согласованно содержать web; неизвестные заранее модели означают productNames=[] и непустой query. Если ход по смыслу только уточняет вводные и не делает подбор/сравнение сейчас, согласованно выбери clarify contract без ложной обязанности catalog/web.'
+        ? 'Исполни явно обязательную внешнюю проверку из webRequirement/sourcePolicy/requiredToolKinds через required web.researchProductFacts. Для известного решающего пробела используй conditional_on_catalog_gap; неизвестные заранее модели означают productNames=[] и непустой query. Одни technicalAttributes не доказывают пробел: сначала можно получить каталог и оценить результаты. Если текущий шаг только уточняет условия покупателя, сохрани цель обращения и согласованно выбери responseMode="clarify" без выдуманной обязанности catalog/web.'
         : '',
       hasIssue('catalog_search_query_missing')
         ? 'Каждый catalog.search обязан иметь непустой args.query, описывающий typed потребность без добавления новых ограничений.'
@@ -4777,6 +4771,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         : '',
       hasIssue('opened_need_action_mismatch')
         ? 'Согласуй ledgerDelta и selectionPolicy.needAction. Если delta действительно открывает новую потребность, используй needAction="open" или "switch". Если реплика продолжает уже существующую потребность, не создавай need.opened: обнови существующий needId через need.updated и используй "continue" или "resume".'
+        : '',
+      hasIssue('opened_need_product_class_mismatch') || hasIssue('active_product_class_mismatch')
+        ? 'Согласуй productClass активной потребности с canonicalProductClass policy в одной интерпретации. Если класс из онтологии уже определён, используй его канонический идентификатор в обоих полях. Если класс ещё зависит от ответа покупателя, сохрани неопределённость и уточни условия. Не подставляй конкретный класс ради прохождения проверки.'
         : '',
       hasIssue('required_tool_request_missing:lead.capture')
         ? 'Согласуй lead capture без выдуманного разрешения. Если в текущем сообщении нет контакта и нет явного разрешения использовать сохранённый контакт, оставь leadCaptureAuthorization.authorized=false и удали lead.capture из requiredToolKinds/toolRequests; availability/delivery handoff остаётся, а writer предложит форму через leadAction="offer_form". Если контакт действительно авторизован, заполни authorization по evidence и добавь required lead.capture одновременно в requiredToolKinds и toolRequests.'
@@ -5015,6 +5012,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
   }
 
   async reviewCustomerLanguage(input: {
+    userMessage?: string;
     answerText: string;
     products: Product[];
     toolResults: ToolResult[];
@@ -5030,8 +5028,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           role: 'system',
           content: [
             'Ты строгий semantic reviewer финального ответа покупателю.',
-            'Определи, раскрывает ли ответ внутренний процесс получения сведений: поиск в интернете или на сайтах, использование инструментов, попытки и повторы, timeout/сбой, pipeline, либо факт успешного/неуспешного завершения проверки.',
-            'Это запрещено при любой формулировке и на любом языке. Покупателю можно сообщать только конкретные подтвержденные факты и конкретный неподтвержденный параметр.',
+            'Определи, раскрывает ли ответ внутренний процесс работы системы: использование инструментов, попытки и повторы, timeout/сбой, pipeline или технические стадии обработки запроса. Внутренняя кухня запрещена при любой формулировке и на любом языке.',
+            'Учитывай userMessage. Ссылка на руководство, страницу производителя или иной источник факта, указание его редакции, точный неподтвержденный параметр и честное отсутствие подтверждения допустимы. Когда покупатель просит проверить сведения, краткий итог проверки конкретного факта отвечает на его вопрос; это не internal process disclosure. Не запрещай полезную атрибуцию источника или неопределенность из-за упоминания инструкции, подтверждения или проверки.',
             'Обычное упоминание товара или рабочего инструмента не является раскрытием процесса.',
             untrustedEvidenceBoundary,
             'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
@@ -5041,6 +5039,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         }, {
           role: 'user',
           content: JSON.stringify({
+            userMessage: input.userMessage ?? null,
             answerText: input.answerText,
             products: input.products.map(answerProductContext),
             toolResults: compactToolResultsForModel(input.toolResults, input.products)
@@ -5083,13 +5082,15 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       minRetryRemainingMs: 5_000,
       transportMaxRetries: 0
     });
+    if (typeof parsed.processDisclosure !== 'boolean' || typeof parsed.evidence !== 'string' ||
+      typeof parsed.rationale !== 'string' || !Array.isArray(parsed.factualIssues)) {
+      throw new Error('semantic_language_review_invalid_contract');
+    }
     return {
-      processDisclosure: parsed.processDisclosure === true,
-      evidence: typeof parsed.evidence === 'string' ? parsed.evidence.trim() : '',
-      rationale: typeof parsed.rationale === 'string' ? parsed.rationale.trim() : '',
-      factualIssues: Array.isArray(parsed.factualIssues)
-        ? parsed.factualIssues as Array<{ claim: string; sourceResultId: string; reason: string }>
-        : []
+      processDisclosure: parsed.processDisclosure,
+      evidence: parsed.evidence.trim(),
+      rationale: parsed.rationale.trim(),
+      factualIssues: parsed.factualIssues as Array<{ claim: string; sourceResultId: string; reason: string }>
     };
   }
 
@@ -6307,6 +6308,7 @@ export class AgentManagerOrchestrator {
           }
           const issues = continuationValidationIssues({ decision, intent, products: observationProducts });
           if (issues.length) {
+            await this.trace(input.sessionId, input.turnId, 'tools', 'observation_validation_failed', { round, issues, replayed: Boolean(savedObservation) });
             await this.conversations.upsertTurnCheckpoint({
               sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
               checkpoint, status: 'failed', payload: { issues, decision }, errorCode: 'invalid_continuation'
@@ -6349,10 +6351,14 @@ export class AgentManagerOrchestrator {
           result.tool === 'web.researchProductFacts' && result.payload.searchDisposition !== 'not_needed'
         ).length);
         const nextWebCalls = decision.toolRequests.filter((request) => request.tool === 'web.researchProductFacts').length;
+        const allReadsAlreadyPersisted = Boolean(savedObservation) && decision.toolRequests.every((request) =>
+          reusablePersistedToolResults.get(request.id)?.tool === request.tool
+        );
         if (round > CONTINUATION_MAX_ROUNDS ||
-          completedToolCalls + decision.toolRequests.length > turnBudget.limits.maxToolCalls ||
-          completedWebCalls + nextWebCalls > turnBudget.limits.maxWebCalls ||
-          turnBudget.remainingWallTimeMs() < 36_000) {
+          (!allReadsAlreadyPersisted && (
+            completedToolCalls + decision.toolRequests.length > turnBudget.limits.maxToolCalls ||
+            completedWebCalls + nextWebCalls > turnBudget.limits.maxWebCalls ||
+            turnBudget.remainingWallTimeMs() < 36_000))) {
           await stop(round > CONTINUATION_MAX_ROUNDS ? 'continuation_round_limit' : 'continuation_budget_reserve', decision);
           break;
         }
@@ -7773,6 +7779,7 @@ export class AgentManagerOrchestrator {
               : 'ok',
             payload: {
               ...research,
+              products: selectedProducts,
               answerGuidance,
               researchOutcome,
               searchDisposition: research.searchDisposition,
@@ -8484,18 +8491,21 @@ export class AgentManagerOrchestrator {
     budget?: AgentManagerTurnBudget
   ): Promise<PreSendReview> {
     const mechanicalIssues: PreSendReview['issues'] = [];
-    if (input.continuation?.status === 'clarify' && (
+    if ((input.continuation?.status === 'clarify' || input.intent.grounding?.responseMode === 'clarify') && (
       input.answer.questionsAsked.length === 0 ||
       input.answer.selectionReadiness?.status === 'ready_for_exact_cards'
     )) {
       mechanicalIssues.push({
         code: 'observation_clarification_not_respected', severity: 'high',
-        message: 'The observation decision requires a buyer clarification. Ask the missing buyer condition and do not declare final suitability before the answer. Preliminary candidates may accompany the question.',
-        evidence: input.continuation.missingFacts.join(', ') || input.continuation.rationale
+        message: 'The current decision requires a buyer clarification. Ask the missing buyer condition and do not declare final suitability before the answer. Preliminary candidates may accompany the question.',
+        evidence: input.continuation?.missingFacts.join(', ') || input.continuation?.rationale || input.intent.nextStepRationale
       });
     }
+    const customerVisibleText = [input.answer.answerText,
+      (input.answer.selectedProductIds?.length ?? 0) > 0 ? input.answer.selectionRationale : null
+    ].filter(Boolean).join('\n');
     const customerLanguageReview = guardCustomerOutput({
-      answerText: input.answer.answerText,
+      answerText: customerVisibleText,
       productCards: []
     });
     for (const issue of customerLanguageReview.issues) {
@@ -8510,12 +8520,18 @@ export class AgentManagerOrchestrator {
       try {
         budget?.consumeModelCall();
         const semanticLanguageReview = await this.model.reviewCustomerLanguage({
-          answerText: input.answer.answerText,
+          userMessage: input.userMessage,
+          answerText: customerVisibleText,
           products: input.products,
           toolResults: input.toolResults,
           signal: input.signal,
           deadlineAtMs: budget?.snapshot().usage.deadlineAtMs ?? input.structuredDeadlineAtMs
         });
+        if (!semanticLanguageReview || typeof semanticLanguageReview.processDisclosure !== 'boolean' ||
+          typeof semanticLanguageReview.evidence !== 'string' || typeof semanticLanguageReview.rationale !== 'string' ||
+          (semanticLanguageReview.factualIssues !== undefined && !Array.isArray(semanticLanguageReview.factualIssues))) {
+          throw new Error('semantic_language_review_invalid_contract');
+        }
         if (semanticLanguageReview.processDisclosure) {
           mechanicalIssues.push({
             code: 'customer_output_research_process_disclosure',
@@ -8526,7 +8542,7 @@ export class AgentManagerOrchestrator {
         }
         for (const issue of semanticLanguageReview.factualIssues ?? []) {
           if (!issue || typeof issue.claim !== 'string' || !issue.claim.trim() ||
-            !input.answer.answerText.includes(issue.claim) ||
+            !customerVisibleText.includes(issue.claim) ||
             typeof issue.reason !== 'string' || !issue.reason.trim() ||
             !input.toolResults.some((result) => result.requestId === issue.sourceResultId)) {
             throw new Error('semantic_factual_review_unbound_evidence');

@@ -6,6 +6,15 @@ import {
 } from '../src/ai/agentManagerToolRegistry.js';
 
 describe('agent manager strict tool registry', () => {
+  it('preserves bounded typed source failures in a web observation without accepting arbitrary diagnostic fields', () => {
+    const result = {
+      requestId: 'manual', tool: 'web.researchProductFacts' as const, status: 'ok' as const, warnings: [],
+      payload: { usedWebSearch: true, sourceDiagnostics: [{ url: 'https://manufacturer.example/manual.pdf', reason: 'http_status', elapsedMs: 420, status: 503 }] }
+    };
+    expect(validateToolResultOutput(result).payload.sourceDiagnostics).toEqual(result.payload.sourceDiagnostics);
+    expect(() => validateToolResultOutput({ ...result, payload: { sourceDiagnostics: [{ ...result.payload.sourceDiagnostics[0], rawHeaders: 'not allowed' }] } })).toThrow();
+  });
+
   it('accepts only catalog search arguments for catalog.search', () => {
     expect(validateToolRequest({
       id: 'search-1',

@@ -22,7 +22,8 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       parsed: {
         processDisclosure: true,
         evidence: 'Я обращался к доступным источникам',
-        rationale: 'The answer describes how information was sought.'
+        rationale: 'The answer describes how information was sought.',
+        factualIssues: []
       }
     });
 
@@ -180,6 +181,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         'active_requirement_mismatch:pump_rated_power_kw',
         'product_mention_evidence_not_in_current_message:0',
         'opened_need_action_mismatch:continue',
+        'opened_need_product_class_mismatch:unknown:plate',
         'required_tool_request_missing:lead.capture',
         'catalog_tool_product_class_mismatch:mat_search:plateAccessory:plate',
         'required_primary_catalog_tool_missing:plate'
@@ -222,6 +224,11 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(systemPrompt).toContain('target_product productMention');
     expect(systemPrompt).toContain('Не возвращай ни одно из этих нарушений');
     expect(systemPrompt).toContain('active_requirement_mismatch:generator_load_scenario');
+    expect(systemPrompt).toContain('taskType описывает цель обращения, responseMode — текущий шаг');
+    expect(systemPrompt).toContain('product_selection + responseMode="clarify"');
+    expect(systemPrompt).not.toContain('не оставляя product_selection без каталога');
+    expect(systemPrompt).toContain('technicalAttributes сами по себе не доказывают пробел');
+    expect(systemPrompt).toContain('Не подставляй конкретный класс ради прохождения проверки');
     expect(request).toMatchObject({ max_output_tokens: 3200 });
     expect(createStructuredJsonResponse.mock.calls[0]?.[0]).toMatchObject({ retryOutputTokenCap: 4800 });
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);

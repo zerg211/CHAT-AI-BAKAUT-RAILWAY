@@ -236,25 +236,11 @@ describe('runtime harness contracts', () => {
       'customer_output_internal_vocabulary'
     ]));
 
-    const russianProcessLeak = guardCustomerOutput({
-      answerText: 'Внешняя проверка не завершилась из-за тайм-аута.',
-      productCards: []
-    });
-    expect(russianProcessLeak.ok).toBe(false);
-    expect(russianProcessLeak.issues).toContainEqual(expect.objectContaining({
-      code: 'customer_output_internal_vocabulary'
-    }));
-
     for (const answerText of [
+      'Внешняя проверка не завершилась из-за тайм-аута.',
       'The web search completed after a retry in the pipeline.',
       'Поисковый инструмент завершил повторный запрос в пайплайне.',
-      'The search completed successfully.',
-      'Two research attempts were required.',
-      'Исследовательский инструмент подтвердил характеристику.',
-      'I searched online but found nothing.',
-      'I checked the manufacturer website but could not complete the check.',
-      'Я поискал в интернете, но ничего не нашел.',
-      'Проверить это не получилось.'
+      'Исследовательский инструмент подтвердил характеристику.'
     ]) {
       expect(guardCustomerOutput({ answerText, productCards: [] }).ok).toBe(false);
     }
@@ -263,6 +249,27 @@ describe('runtime harness contracts', () => {
       answerText: 'Для этой работы подойдёт аккумуляторный инструмент.',
       productCards: []
     }).ok).toBe(true);
+  });
+
+  it('leaves source attribution and ambiguous process meaning to the mandatory contextual language reviewer', () => {
+    for (const answerText of [
+      'I checked the manufacturer manual: the oil grade is SAE 10W-40.',
+      'В руководстве производителя указано масло SAE 10W-40, но редакция инструкции для этой модели не подтверждена.',
+      'The search completed successfully.',
+      'Two research attempts were required.',
+      'I searched online but found nothing.',
+      'I checked the manufacturer website but could not complete the check.',
+      'Я поискал в интернете, но ничего не нашел.',
+      'Проверить это не получилось.'
+    ]) {
+      expect(guardCustomerOutput({ answerText, productCards: [] }).ok).toBe(true);
+    }
+  });
+
+  it.each(['reasons', 'caveats'] as const)('blocks runtime telemetry in visible card %s', (field) => {
+    expect(guardCustomerOutput({ answerText: 'Подойдёт эта модель.', productCards: [{
+      id: 'p1', name: 'Model', specs: {}, reasons: [], caveats: [], [field]: ['web tool timeout']
+    }] }).ok).toBe(false);
   });
 
   it('does not reuse stale web guidance after the active product-selection target changes', () => {

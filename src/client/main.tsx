@@ -1715,7 +1715,7 @@ function App() {
       </header>
 
       <section className="messages" aria-live="polite">
-        {messages.map((message) => (
+        {messages.filter((message) => message.content || message.status === 'sending' || message.cards?.length).map((message) => (
           <div className={`message ${message.role}`} key={message.id}>
             <div className="message-meta">
               <span>{message.role === 'user' ? 'Вы' : 'Консультант'}</span>

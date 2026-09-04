@@ -32,6 +32,110 @@ function continuingSelection() {
   return { decision, previousLedgerState };
 }
 
+function qualificationDecision(canonicalProductClass: 'generator' | 'plate' | null): AgentSemanticDecision {
+  const decision = selectionDecision();
+  const productClass = canonicalProductClass ?? 'unknown';
+  decision.ledgerDelta.events = [{
+    eventType: 'need.opened', scope: 'need', payload: {
+      needId: 'qualification', productClass, activate: true,
+      summary: 'Determine the suitable equipment from the working conditions',
+      openQuestions: ['What is the scale of the work and how will the equipment be transported?']
+    }, evidence: 'The buyer needs help choosing equipment.', source: 'llm_state_delta', status: 'active'
+  }];
+  decision.intent.requiresTools = false;
+  decision.intent.toolRequests = [];
+  Object.assign(decision.intent.selectionPolicy!, {
+    targetProductClass: canonicalProductClass ?? 'compaction equipment', canonicalProductClass,
+    selectionGoal: 'preliminary_fit', needAction: 'open', requirements: [], maxCards: 0,
+    powerSource: 'any', phase: 'any', reusePreviousCards: false
+  });
+  Object.assign(decision.intent.grounding, {
+    taskType: 'product_selection', responseMode: 'clarify', catalogRequirement: 'none',
+    sourcePolicy: 'conversation_only', webRequirement: 'none', requiredToolKinds: [], technicalAttributes: []
+  });
+  return decision;
+}
+
+describe('selection qualification semantic contract', () => {
+  it.each(['generator', 'plate', null] as const)('accepts a qualification step within product selection for %s', (productClass) => {
+    const decision = qualificationDecision(productClass);
+    const result = validateAgentSemanticDecision({
+      decision, previousLedgerState: reduceDialogueLedger([]), sessionId: memorySessionId, turnId: memoryTurnId,
+      userMessage: 'Здравствуйте. Хочу сам сделать на даче въезд и дорожку, чтобы песок и щебень потом не просели. С такой техникой раньше не работал. Что мне для этого взять?'
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.ledgerState.needsById.qualification?.openQuestions).toHaveLength(1);
+    expect(decision.intent.toolRequests).toEqual([]);
+    expect(decision.intent.grounding.taskType).toBe('product_selection');
+  });
+
+  it('requires catalog evidence once the current selection step recommends products', () => {
+    const decision = qualificationDecision('plate');
+    decision.intent.grounding.responseMode = 'recommend';
+    expect(validateMemoryDecision(decision).issues).toContain('required_catalog_tool_missing');
+  });
+
+  it('keeps a declared catalog requirement binding during a clarification', () => {
+    const decision = qualificationDecision('plate');
+    decision.intent.grounding.catalogRequirement = 'required';
+    expect(validateMemoryDecision(decision).issues).toContain('required_catalog_tool_missing');
+  });
+
+  it('does not silently drop an explicitly declared tool while qualifying the need', () => {
+    const decision = qualificationDecision('plate');
+    decision.intent.grounding.requiredToolKinds = ['catalog.search'];
+    expect(validateMemoryDecision(decision).issues).toContain('required_tool_request_missing:catalog.search');
+  });
+
+  it('keeps independent external verification binding even during a clarification', () => {
+    const decision = qualificationDecision('generator');
+    decision.intent.grounding.webRequirement = 'independent_required';
+    expect(validateMemoryDecision(decision).issues).toContain('required_web_tool_missing');
+  });
+
+  it('allows catalog observation before the model decides whether technical attributes have a research gap', () => {
+    const decision = selectionDecision();
+    decision.intent.grounding.technicalAttributes = ['nominal_power_kw', 'weight_kg'];
+    decision.intent.grounding.webRequirement = 'none';
+    expect(validateMemoryDecision(decision).issues).toEqual([]);
+    expect(decision.intent.toolRequests.map((request) => request.tool)).toEqual(['catalog.search']);
+  });
+
+  it('still requires an explicitly planned conditional external check', () => {
+    const decision = selectionDecision();
+    decision.intent.grounding.technicalAttributes = ['nominal_power_kw', 'weight_kg'];
+    decision.intent.grounding.webRequirement = 'conditional_on_catalog_gap';
+    expect(validateMemoryDecision(decision).issues).toContain('required_web_tool_missing');
+  });
+
+  it('keeps contradictory known need and policy classes invalid during qualification', () => {
+    const decision = qualificationDecision('plate');
+    decision.ledgerDelta.events[0]!.payload.productClass = 'generator';
+    expect(validateMemoryDecision(decision).issues).toContain('opened_need_product_class_mismatch:generator:plate');
+  });
+
+  it.each(['technical_answer', 'comparison'] as const)('allows a named-model %s to use the web tool identity lookup without a redundant catalog request', (taskType) => {
+    const decision = selectionDecision();
+    decision.ledgerDelta.events = [];
+    decision.intent.selectionPolicy!.needAction = 'none';
+    decision.intent.selectionPolicy!.requirements = [];
+    decision.intent.productMentions = [{ name: 'MODEL X100', role: 'target_product', productClass: 'generator', evidence: 'MODEL X100' }];
+    decision.intent.toolRequests = [{
+      id: 'external-facts', tool: 'web.researchProductFacts', required: true,
+      rationale: 'The web tool binds the exact model and researches its technical facts.', coversRequirementIds: [],
+      args: { productNames: ['MODEL X100'], productIntent: 'generator', canonicalProductIntent: 'generator', comparisonAttributes: ['manual_starter'] }
+    }];
+    Object.assign(decision.intent.grounding, {
+      taskType, responseMode: taskType === 'comparison' ? 'compare' : 'answer',
+      catalogRequirement: 'none', sourcePolicy: 'web_required', webRequirement: 'independent_required',
+      requiredToolKinds: ['web.researchProductFacts'], technicalAttributes: ['manual_starter']
+    });
+    expect(validateMemoryDecision(decision).issues).toEqual([]);
+    decision.intent.grounding.catalogRequirement = 'required';
+    expect(validateMemoryDecision(decision).issues).toContain('required_catalog_tool_missing');
+  });
+});
+
 function generatorDecision(): AgentSemanticDecision {
   const loads = [
     { kind: 'compressor', name: 'compressor', runningKw: 2.2 },

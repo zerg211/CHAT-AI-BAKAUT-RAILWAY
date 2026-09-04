@@ -20,9 +20,10 @@ export interface CustomerOutputGuardResult {
   issues: CustomerOutputGuardIssue[];
 }
 
-// Narrow last-mile filter: only process-specific phrases. Generic stems such as
-// internal/service/retry/status collide with product language (e.g. internal
-// diameter, restart retry, order status) and are left to the semantic reviewer.
+// Runtime identifiers and error telemetry retain a deterministic boundary.
+// Source attribution and search/check completion require buyer context and are
+// owned by the mandatory, fail-closed semantic reviewer. See the independent
+// missing/malformed-review and disclosure regressions before changing this list.
 const forbiddenCustomerFragments = [
   'agent_manager',
   'turncontract',
@@ -30,21 +31,7 @@ const forbiddenCustomerFragments = [
   'planner',
   'tool result',
   'web tool',
-  'web search',
-  'external search',
-  'external check',
-  'check completed',
-  'check failed',
   'search tool',
-  'search completed',
-  'search failed',
-  'search attempt',
-  'searched online',
-  'checked the manufacturer',
-  'complete the check',
-  'research completed',
-  'research failed',
-  'research attempt',
   'research tool',
   'tool call',
   'tool execution',
@@ -56,22 +43,11 @@ const forbiddenCustomerFragments = [
   'retry',
   'pipeline',
   'internal error',
-  'внешняя проверка',
-  'внешний поиск',
   'поисковый инструмент',
   'исследовательский инструмент',
-  'исследование заверш',
-  'исследование не заверш',
-  'попытка исследования',
   'инструмент поиска',
   'инструмент не сработал',
-  'пайплайн',
-  'проверка не заверш',
-  'поиск не заверш',
-  'поискал в интернете',
-  'проверить это не получилось',
-  'проверка заверш',
-  'поиск заверш'
+  'пайплайн'
 ] as const;
 
 /**
@@ -94,7 +70,8 @@ export function guardCustomerOutput(input: {
     return { ok: false, issues };
   }
 
-  const normalized = answerText.toLowerCase();
+  const normalized = [answerText, ...input.productCards.flatMap((card) => [...card.reasons, ...card.caveats])]
+    .join('\n').toLowerCase();
   const leaked = forbiddenCustomerFragments.filter((fragment) => normalized.includes(fragment));
   if (leaked.length) {
     issues.push({

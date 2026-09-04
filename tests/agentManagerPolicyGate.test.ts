@@ -44,6 +44,39 @@ function intent(overrides: Partial<AgentIntentContract> = {}): AgentIntentContra
 }
 
 describe('AgentManager policy gate', () => {
+  it.each(['product_selection', 'comparison'] as const)('allows conversation-only qualification within %s', (taskType) => {
+    const candidate = intent();
+    candidate.grounding = { ...candidate.grounding!, taskType, responseMode: 'clarify' };
+    const result = evaluateAgentManagerPolicyGate({ intent: candidate });
+    expect(result.ok).toBe(true);
+    expect(result.requiredActions).toEqual([]);
+    expect(result.blockedReasons).toEqual([]);
+    expect(result.answerConstraints).toContain('no_unsupported_factual_claims');
+  });
+
+  it('does not erase a declared catalog requirement when the current step clarifies', () => {
+    const candidate = intent();
+    candidate.grounding = { ...candidate.grounding!, taskType: 'product_selection', responseMode: 'clarify', catalogRequirement: 'required' };
+    expect(evaluateAgentManagerPolicyGate({ intent: candidate }).blockedReasons).toContain('required_catalog_tool_missing');
+  });
+
+  it.each(['technical_answer', 'comparison'] as const)('preserves a web-owned named-model lookup for %s when no separate catalog step was declared', (taskType) => {
+    const candidate = intent();
+    candidate.requiresTools = true;
+    candidate.toolRequests = [{
+      id: 'web-facts', tool: 'web.researchProductFacts', required: true,
+      args: { productNames: ['MODEL X100'], canonicalProductIntent: 'plate' },
+      rationale: 'The web tool resolves model identity and external technical facts.', coversRequirementIds: []
+    }];
+    candidate.grounding = {
+      ...candidate.grounding!, taskType, responseMode: taskType === 'comparison' ? 'compare' : 'answer',
+      sourcePolicy: 'web_required', webRequirement: 'independent_required', requiredToolKinds: ['web.researchProductFacts']
+    };
+    const result = evaluateAgentManagerPolicyGate({ intent: candidate });
+    expect(result.ok).toBe(true);
+    expect(result.requiredActions).toEqual(['web.researchProductFacts']);
+  });
+
   it('does not require catalog for a conversation-only technical answer', () => {
     const result = evaluateAgentManagerPolicyGate({ intent: intent() });
 

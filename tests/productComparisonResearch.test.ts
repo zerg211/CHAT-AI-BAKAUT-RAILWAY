@@ -151,6 +151,8 @@ function semanticValidationResponse(call: { request: { input?: Array<{ role?: st
       : sourceText.slice(0, 320);
     return {
       claimSupported,
+      targetApplicability: 'exact_model',
+      scopeQuote: '',
       claimStartKinds,
       supportedStartKinds,
       publisherAuthority: 'unknown',
@@ -845,7 +847,7 @@ describe('product comparison research', () => {
     expect(actual.sourcesExhausted).toBe(false);
   });
 
-  it('short-circuits staged web tiers when exact catalog facts cover every typed slot', async () => {
+  it('does not short-circuit mandatory staged web when exact catalog facts cover every typed slot', async () => {
     queueResearchResponse({
       parsed: result({
         facts: [{
@@ -872,6 +874,9 @@ describe('product comparison research', () => {
         }
       })
     });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      queueResearchResponse({ parsed: result({ usedWebSearch: true }) });
+    }
     const actual = await researchProductComparisonFacts({
       userMessage: 'Как запускается FIRMAN RD3910E?',
       products: [product()],
@@ -882,10 +887,13 @@ describe('product comparison research', () => {
       catalogProductsFound: true
     });
 
-    expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction']);
-    expect(actual.usedWebSearch).toBe(false);
-    expect(actual.searchDisposition).toBe('not_needed');
-    expect(actual.warnings).toContain('web_research_not_needed:catalog_extraction_answered');
+    expect(researchCalls().map((call) => call.stage)).toEqual([
+      'catalog_product_fact_extraction', 'product_comparison_research_official_page',
+      'product_comparison_research_official_manual', 'product_comparison_research_reliable_secondary'
+    ]);
+    expect(actual.usedWebSearch).toBe(true);
+    expect(actual.searchDisposition).toBe('completed');
+    expect(actual.warnings).not.toContain('web_research_not_needed:catalog_extraction_answered');
   });
 
   beforeEach(() => {
@@ -1623,7 +1631,7 @@ describe('product comparison research', () => {
       targetProductNames: ['FIRMAN RD3910E'],
       comparisonAttributes: ['start control'],
       allowCatalogOnlyAnswer: true,
-      deadlineAtMs: Date.now() + 20_000
+      deadlineAtMs: Date.now() + 60_000
     });
 
     expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction_compact']);
@@ -1692,7 +1700,7 @@ describe('product comparison research', () => {
       targetProductNames: ['FIRMAN RD3910E'],
       comparisonAttributes: ['start_control_mechanism'],
       allowCatalogOnlyAnswer: true,
-      deadlineAtMs: Date.now() + 20_000
+      deadlineAtMs: Date.now() + 60_000
     });
 
     expect(researchCalls().map((call) => call.stage)).toEqual([
@@ -1780,7 +1788,7 @@ describe('product comparison research', () => {
       targetProductNames: ['FIRMAN RD3910E'],
       comparisonAttributes: ['rated_power', 'output_voltage'],
       allowCatalogOnlyAnswer: true,
-      deadlineAtMs: Date.now() + 20_000
+      deadlineAtMs: Date.now() + 60_000
     });
 
     expect(actual.facts).toContainEqual(expect.objectContaining({
@@ -1858,7 +1866,7 @@ describe('product comparison research', () => {
       targetProductNames: ['CHAMPION PC5332F', 'REDVERG RD-29140'],
       comparisonAttributes: ['масса'],
       allowCatalogOnlyAnswer: true,
-      deadlineAtMs: Date.now() + 20_000
+      deadlineAtMs: Date.now() + 60_000
     });
 
     expect(researchCalls().map((call) => call.stage)).toEqual(['catalog_product_fact_extraction_compact']);
@@ -1927,11 +1935,9 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 5_000
     });
 
-    expect(researchCalls().map((call) => call.stage)).toEqual([
-      'catalog_product_fact_extraction_compact',
-      'product_comparison_research'
-    ]);
+    expect(researchCalls()).toHaveLength(0);
     expect(actual.searchDisposition).toBe('skipped_budget');
+    expect(actual.sourcesExhausted).toBe(false);
   });
 
   it('retains compact exact-catalog evidence before a deadline-bound web pass', async () => {
@@ -1983,7 +1989,7 @@ describe('product comparison research', () => {
       targetProductNames: ['FIRMAN RD3910E'],
       comparisonAttributes: ['start control'],
       allowCatalogOnlyAnswer: false,
-      deadlineAtMs: Date.now() + 20_000
+      deadlineAtMs: Date.now() + 60_000
     });
 
     expect(researchCalls()).toHaveLength(2);
@@ -2243,11 +2249,9 @@ describe('product comparison research', () => {
       deadlineAtMs: Date.now() + 5_000
     });
 
-    expect(researchCalls().map((call) => call.stage)).toEqual([
-      'catalog_product_fact_extraction_compact',
-      'product_comparison_research'
-    ]);
-    expect(actual.warnings).toContain('exact_target_external_retry_skipped_insufficient_budget');
+    expect(researchCalls()).toHaveLength(0);
+    expect(actual.warnings).toContain('web_research_skipped_insufficient_budget');
+    expect(actual.sourcesExhausted).toBe(false);
   });
 
   it('adjudicates catalog conflicts with corroborated exact-target external sources', async () => {
@@ -2812,6 +2816,8 @@ describe('product comparison research', () => {
             publisherAuthority: 'manufacturer',
             publisherEvidence: 'BISON BS6250IE specifications',
             evidence: 'dc usb output: 5v/1a/2.1a',
+            targetApplicability: 'exact_model',
+            scopeQuote: '',
             warnings: []
           }
         };
@@ -2880,6 +2886,8 @@ describe('product comparison research', () => {
             publisherAuthority: 'manufacturer',
             publisherEvidence: 'BISON BS6250IE specifications',
             evidence: 'Generated summary that is not present in the source.',
+            targetApplicability: 'exact_model',
+            scopeQuote: '',
             warnings: ['source_evidence_semantic_claim_verified']
           }
         };
@@ -2941,6 +2949,8 @@ describe('product comparison research', () => {
             publisherAuthority: 'manufacturer',
             publisherEvidence: 'BISON BS6250IE specifications',
             evidence: 'BISON BS6250IE specifications. Maximum power: 5 kW.',
+            targetApplicability: 'exact_model',
+            scopeQuote: '',
             warnings: []
           }
         };
@@ -3492,6 +3502,8 @@ describe('product comparison research', () => {
             claimStartKinds: [],
             supportedStartKinds: [],
             evidence: 'Fuel type: gasoline',
+            targetApplicability: 'exact_model',
+            scopeQuote: '',
             warnings: []
           }
         };

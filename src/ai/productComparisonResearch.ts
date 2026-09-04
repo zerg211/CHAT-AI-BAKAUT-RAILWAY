@@ -6,6 +6,7 @@ import { approvedAnswerStyleExamplesPromptBlock } from './answerStyleExamples.js
 import {
   compactModelText,
   exactProductIdentity,
+  modelIdentifierTokens,
   textMatchesOnlyTargetNames,
   textMatchesTargetName
 } from './modelTextMatching.js';
@@ -24,6 +25,8 @@ export interface ProductComparisonResearchFact {
   sourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
   sourceAuthority?: 'manufacturer' | 'secondary';
   evidenceVerifiedExact?: boolean;
+  targetApplicability?: 'exact_model' | 'shared_instruction';
+  scopeQuote?: string;
 }
 
 export interface ProductComparisonResearchConflict {
@@ -90,6 +93,15 @@ export interface ProductComparisonResearchResult {
   answerGuidance: ProductComparisonResearchAnswerGuidance;
   summaryForAnswer: string;
   warnings: string[];
+  sourceDiagnostics?: ProductResearchSourceDiagnostic[];
+}
+
+export interface ProductResearchSourceDiagnostic {
+  url: string;
+  reason: 'http_status' | 'timeout' | 'network' | 'unsupported_binary' | 'unreadable';
+  elapsedMs: number;
+  status?: number;
+  code?: string;
 }
 
 export interface ProductResearchTraceEvent {
@@ -400,7 +412,8 @@ function exactTargetAliases(target: string) {
 function factMatchesTarget(fact: ProductComparisonResearchFact, targetName: string) {
   if (fact.sourceType === 'web' && !sourceUrlIsHttp(fact.sourceUrl)) return false;
   const identity = exactProductIdentity(targetName);
-  const provenanceText = [fact.sourceUrl, fact.sourceTitle, fact.evidence].filter(Boolean).join(' ');
+  const provenanceText = [fact.sourceUrl, fact.sourceTitle, fact.evidence,
+    fact.evidenceVerifiedExact === true ? fact.scopeQuote : undefined].filter(Boolean).join(' ');
   return identity.matches(fact.productName) && identity.matches(provenanceText);
 }
 
@@ -807,6 +820,7 @@ type SourceDocument = {
   warning?: string;
   sourceTitle?: string;
   sourceKind?: 'catalog' | 'web';
+  diagnostic?: ProductResearchSourceDiagnostic;
 };
 
 type SourceTextCache = {
@@ -995,7 +1009,21 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
       sourceKind: 'web' as const
     };
   }
-  const promise = (async () => {
+  const startedAt = Date.now();
+  const failure = (
+    reason: ProductResearchSourceDiagnostic['reason'],
+    warning = 'source_evidence_fetch_failed',
+    detail: Pick<ProductResearchSourceDiagnostic, 'status' | 'code'> = {}
+  ): SourceDocument => {
+    let url = '';
+    try {
+      const parsed = new URL(sourceUrl);
+      url = `${parsed.protocol}//${parsed.host}${parsed.pathname}`.slice(0, 600);
+    } catch { /* Invalid URLs carry no raw input into diagnostics. */ }
+    return { ok: false, text: '', warning, sourceKind: 'web',
+      diagnostic: { url, reason, elapsedMs: Math.max(0, Date.now() - startedAt), ...detail } };
+  };
+  const promise = (async (): Promise<SourceDocument> => {
     try {
       const sourceUrlLooksLikePdf = sourceLooksLikePdf(sourceUrl, '');
       if (sourceUrlLooksLikePdf && !cache.pdfSourceUrls.has(cacheKey)) {
@@ -1020,7 +1048,7 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
         }
       });
       if (preview.status < 200 || preview.status >= 300) {
-        return { ok: false, text: '', warning: 'source_evidence_fetch_failed', sourceKind: 'web' as const };
+        return failure('http_status', 'source_evidence_fetch_failed', { status: preview.status });
       }
       const contentType = preview.headers.get('content-type') ?? '';
       if (sourceLooksLikePdf(preview.url, contentType) || sourceBytesLookLikePdf(preview.bytes)) {
@@ -1035,26 +1063,30 @@ async function fetchSourceText(sourceUrl: string, cache: SourceTextCache, signal
           }
           cache.pdfSourceUrls.add(cacheKey);
         }
-        return pdfToSourceDocument(preview.bytes, signal);
+        const source = await pdfToSourceDocument(preview.bytes, signal);
+        return source.ok ? source : { ...source, diagnostic: failure('unreadable', source.warning).diagnostic };
       }
       const contentKind = sourceContentKind(contentType);
       if (contentKind === 'binary') {
-        return {
-          ok: false,
-          text: '',
-          warning: 'source_evidence_unsupported_binary',
-          sourceKind: 'web' as const
-        };
+        return failure('unsupported_binary', 'source_evidence_unsupported_binary');
       }
       const source = contentKind === 'html'
         ? htmlToSourceDocument(outboundText(preview))
         : textToSourceDocument(outboundText(preview));
       return source.text
         ? { ...source, sourceKind: 'web' as const }
-        : { ok: false, text: '', sourceTitle: source.sourceTitle, warning: 'source_evidence_empty', sourceKind: 'web' as const };
+        : { ...failure('unreadable', 'source_evidence_empty'), sourceTitle: source.sourceTitle };
     } catch (error) {
-      if (signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
-      return { ok: false, text: '', warning: 'source_evidence_fetch_failed', sourceKind: 'web' as const };
+      if (signal?.aborted) throw error;
+      const knownCodes = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT',
+        'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+        'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'unsafe_outbound_url', 'outbound_response_too_large']);
+      const record = error && typeof error === 'object' ? error as { name?: unknown; code?: unknown; cause?: { code?: unknown } } : {};
+      const candidateCode = record.code ?? record.cause?.code;
+      const code = typeof candidateCode === 'string' && knownCodes.has(candidateCode) ? candidateCode : undefined;
+      const timedOut = record.name === 'TimeoutError' || record.name === 'AbortError' ||
+        code === 'ETIMEDOUT' || code?.endsWith('_TIMEOUT') === true;
+      return failure(timedOut ? 'timeout' : 'network', 'source_evidence_fetch_failed', code ? { code } : {});
     }
   })();
   cache.documents.set(cacheKey, promise);
@@ -1209,10 +1241,16 @@ function boundedSemanticSourceTextForEvidence(sourceText: string, evidence: unkn
   }
   const evidenceIndex = collapsedSource.indexOf(exactEvidence);
   if (evidenceIndex < 0) return boundedSemanticSourceText(collapsedSource);
-  const maximumStart = Math.max(0, collapsedSource.length - semanticSourceTextLimit);
-  const start = Math.min(maximumStart, Math.max(0, evidenceIndex - Math.floor(semanticSourceTextLimit / 2)));
+  // Shared manuals establish covered models near the front; retain that scope
+  // alongside the fact's local context, within the existing total text cap.
+  const scopeLength = 4_000;
+  const gap = '\n[Non-contiguous source excerpts]\n';
+  const contextLength = semanticSourceTextLimit - scopeLength - gap.length;
+  const maximumStart = Math.max(0, collapsedSource.length - contextLength);
+  const start = Math.min(maximumStart, Math.max(0, evidenceIndex - Math.floor(contextLength / 2)));
+  if (start <= scopeLength) return boundedSemanticSourceText(collapsedSource);
   return {
-    text: collapsedSource.slice(start, start + semanticSourceTextLimit),
+    text: collapsedSource.slice(0, scopeLength) + gap + collapsedSource.slice(start, start + contextLength),
     truncated: true
   };
 }
@@ -1279,6 +1317,8 @@ function sourceEvidenceValidationJsonFormat() {
         additionalProperties: false,
         properties: {
           claimSupported: { type: 'boolean' },
+          targetApplicability: { type: 'string', enum: ['exact_model', 'shared_instruction', 'not_applicable', 'uncertain'] },
+          scopeQuote: { type: 'string' },
           claimStartKinds: {
             type: 'array',
             items: { type: 'string', enum: [...sourceBackedStartKinds] }
@@ -1294,6 +1334,8 @@ function sourceEvidenceValidationJsonFormat() {
         },
         required: [
           'claimSupported',
+          'targetApplicability',
+          'scopeQuote',
           'claimStartKinds',
           'supportedStartKinds',
           'publisherAuthority',
@@ -1305,6 +1347,14 @@ function sourceEvidenceValidationJsonFormat() {
     }
   } as const;
 }
+
+const sourceApplicabilityInstructions = [
+  'Return targetApplicability for this exact claim: exact_model for a model-specific instruction or matching table row/column; shared_instruction only for an instruction explicitly applicable to all covered models including the target; not_applicable for another model, excluded revision, or contradictory scope; uncertain when applicability is unproven.',
+  'For a shared manual, scopeQuote must be a concise exact sourceText excerpt naming the exact target model and establishing the instruction scope. A family name, URL, page title, or mere unrelated mention is not a scope proof.',
+  'Check model-specific table columns, exclusions, variants and revisions. Never transfer another model\'s number to the target merely because both appear on the manual cover.',
+  'For exact_model with a separate scopeQuote, quote the target-specific row/instruction including the fact evidence; for shared_instruction quote the covered-model statement and verify that the fact is a general instruction, not a row for another model.',
+  'Return evidence as the exact fact excerpt and scopeQuote separately. If either necessary excerpt is absent, mark claimSupported=false and applicability uncertain or not_applicable.'
+].join('\n');
 
 function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
   const claimStartKinds = Array.isArray(parsed.claimStartKinds)
@@ -1319,6 +1369,9 @@ function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
     : [];
   return {
     claimSupported: parsed.claimSupported === true,
+    targetApplicability: parsed.targetApplicability === 'exact_model' || parsed.targetApplicability === 'shared_instruction' ||
+      parsed.targetApplicability === 'not_applicable' ? parsed.targetApplicability : 'uncertain' as const,
+    scopeQuote: typeof parsed.scopeQuote === 'string' ? collapseWhitespace(parsed.scopeQuote).slice(0, 640) : '',
     claimStartKinds: sourceBackedStartKinds.filter((kind) => claimStartKinds.includes(kind)),
     supportedStartKinds: sourceBackedStartKinds.filter((kind) => supportedStartKinds.includes(kind)),
     publisherAuthority: parsed.publisherAuthority === 'manufacturer' || parsed.publisherAuthority === 'secondary'
@@ -1359,6 +1412,7 @@ async function validateSourceEvidenceSemantically(input: {
             'You are a strict semantic source validator for equipment/product facts.',
             'Use only the provided sourceText. Do not search the web and do not answer the buyer.',
             'Your first job is to decide whether the sourceText supports the exact claim: same product/model, same attribute, same value/meaning.',
+            sourceApplicabilityInstructions,
             'Do not require exact wording. Interpret source text semantically across languages, tables, descriptions, manuals, listings, and specs.',
             'If the source mentions related but broader information, mark claimSupported=false. Example: electric starter exists does not by itself support key start or push-button start.',
             'If the claim is about a start/control mechanism, also classify canonical start kinds claimed and supported:',
@@ -1414,6 +1468,8 @@ async function validateSourceEvidenceSemantically(input: {
 interface SourceEvidenceValidationResult {
   valid: boolean;
   invalidKinds: SourceBackedStartKind[];
+  targetApplicability?: 'exact_model' | 'shared_instruction';
+  scopeQuote?: string;
   warnings: string[];
   manufacturerAuthorityVerified?: boolean;
   verifiedEvidence?: string;
@@ -1446,19 +1502,10 @@ async function validateEvidenceItem(input: {
   const warnings: string[] = [];
   if (source.warning) warnings.push(source.warning);
   if (!source.ok) {
-    const claimKinds = startClaimKindsFromText([
-      input.item.attribute,
-      input.item.value,
-      input.item.evidence
-    ].join(' '));
     return {
       valid: false,
-      invalidKinds: claimKinds,
-      warnings: uniqueStrings([
-        ...warnings,
-        'source_evidence_validation_failed:semantic',
-        ...claimKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
-      ])
+      invalidKinds: [],
+      warnings: uniqueStrings([...warnings, 'source_evidence_validation_unavailable:source_unreadable'])
     };
   }
 
@@ -1524,14 +1571,29 @@ async function validateEvidenceItem(input: {
     normalizedPublisherEvidence.length >= 12 &&
     normalizedText(source.text).includes(normalizedPublisherEvidence);
   const minimumEvidenceLength = 4;
+  const scopeQuote = sourceEvidenceExactExcerpt(semanticValidation.scopeQuote, source.text, minimumEvidenceLength);
+  const scopeNamesExactTarget = Boolean(scopeQuote && itemTargetProductNames.some((name) =>
+    exactProductIdentity(name).hasExactMention(scopeQuote)
+  ));
+  const scopedApplicability = semanticValidation.targetApplicability === 'exact_model' ||
+    semanticValidation.targetApplicability === 'shared_instruction' ? semanticValidation.targetApplicability : undefined;
+  const otherScopedIdentifiers = scopeQuote ? modelIdentifierTokens(scopeQuote).filter((identifier) =>
+    !itemTargetProductNames.some((name) => exactProductIdentity(identifier).hasExactMention(name))
+  ) : [];
   const semanticEvidence = [semanticValidation.evidence, input.item.evidence]
     .map((evidence) => sourceEvidenceExactExcerpt(evidence, source.text, minimumEvidenceLength))
     .find((evidence): evidence is string => Boolean(
-      evidence && exactQuoteIsBoundToTarget({
+      evidence && (exactQuoteIsBoundToTarget({
         item: { ...input.item, evidence },
         sourceKind: source.sourceKind,
         targetProductNames: itemTargetProductNames
-      })
+      }) || (scopeNamesExactTarget && scopedApplicability && (
+        (scopedApplicability === 'shared_instruction' && !otherScopedIdentifiers.some((identifier) =>
+          exactProductIdentity(identifier).hasExactMention(evidence)
+        )) ||
+        (scopedApplicability === 'exact_model' && Boolean(scopeQuote &&
+          sourceEvidenceExactExcerpt(evidence, scopeQuote, minimumEvidenceLength)))
+      )))
     ));
   const claimKinds = semanticValidation.claimStartKinds.length
     ? semanticValidation.claimStartKinds
@@ -1541,7 +1603,8 @@ async function validateEvidenceItem(input: {
         input.item.evidence
       ].join(' '));
   const invalidKinds = claimKinds.filter((kind) => !semanticValidation.supportedStartKinds.includes(kind));
-  const valid = semanticValidation.claimSupported && Boolean(semanticEvidence) && invalidKinds.length === 0;
+  const valid = semanticValidation.claimSupported && Boolean(scopedApplicability) &&
+    Boolean(semanticEvidence) && invalidKinds.length === 0;
   return {
     valid,
     invalidKinds,
@@ -1556,7 +1619,8 @@ async function validateEvidenceItem(input: {
       !valid && !invalidKinds.length ? 'source_evidence_validation_failed:semantic' : ''
     ]),
     manufacturerAuthorityVerified,
-    verifiedEvidence: valid ? semanticEvidence : undefined
+    verifiedEvidence: valid ? semanticEvidence : undefined,
+    ...(valid && scopeQuote && scopeNamesExactTarget && scopedApplicability ? { targetApplicability: scopedApplicability, scopeQuote } : {})
   };
 }
 
@@ -1586,6 +1650,7 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
             'You are a strict semantic source validator for equipment/product facts.',
             'Validate every indexed claim independently using only its sourceText. Do not search the web or answer the buyer.',
             'claimSupported=true requires the same exact product/model, attribute, and value/meaning. A related attribute with the same number is not support.',
+            sourceApplicabilityInstructions,
             'Do not require exact wording. Interpret source text semantically across languages, tables, descriptions, manuals, listings, and specs.',
             'For start/control claims, classify the same canonical claimStartKinds and supportedStartKinds used in each requested validation.',
             'Classify publisherAuthority=manufacturer only when sourceText proves publisher/operator ownership; publisherEvidence must be an exact excerpt.',
@@ -1844,7 +1909,9 @@ async function validateSourceBackedResult(input: {
       warnings: validation.warnings,
       invalidKinds: validation.invalidKinds,
       manufacturerAuthorityVerified: validation.manufacturerAuthorityVerified === true,
-      verifiedEvidence: validation.verifiedEvidence
+      verifiedEvidence: validation.verifiedEvidence,
+      targetApplicability: validation.targetApplicability,
+      scopeQuote: validation.scopeQuote
     };
   });
   for (const validation of factValidations) {
@@ -1874,6 +1941,10 @@ async function validateSourceBackedResult(input: {
       facts.push({
         ...validation.fact,
         evidence: validation.verifiedEvidence ?? validation.fact.evidence,
+        ...(validation.scopeQuote && validation.targetApplicability ? {
+          targetApplicability: validation.targetApplicability,
+          scopeQuote: validation.scopeQuote
+        } : {}),
         confidence: sourceAuthority === 'secondary' && validation.fact.confidence === 'high'
           ? 'medium'
           : validation.fact.confidence,
@@ -2034,7 +2105,10 @@ async function validateSourceBackedResult(input: {
     }
   }
 
-  return reconcileSourceAttemptsWithAcceptedFacts(adjusted);
+  const sourceDiagnostics = (await Promise.all(cache.documents.values()))
+    .flatMap((document) => document.diagnostic ? [document.diagnostic] : []);
+  return reconcileSourceAttemptsWithAcceptedFacts({ ...adjusted,
+    ...(sourceDiagnostics.length ? { sourceDiagnostics } : {}) });
 }
 
 function productComparisonResearchJsonFormat(name: string) {
@@ -2298,6 +2372,7 @@ function mergeCatalogAndWebResearch(
     searchDisposition: webResult.searchDisposition,
     sourcesExhausted: webResult.sourcesExhausted,
     sourceAttempts: mergeSourceAttempts(catalogResult.sourceAttempts, webResult.sourceAttempts),
+    ...mergeResearchDiagnostics(catalogResult, webResult),
     facts,
     conflicts: [...catalogResult.conflicts, ...webResult.conflicts],
     answerGuidance,
@@ -2314,6 +2389,12 @@ function mergeCatalogAndWebResearch(
   };
 }
 
+function mergeResearchDiagnostics(...results: ProductComparisonResearchResult[]) {
+  const diagnostics = [...new Map(results.flatMap((result) => result.sourceDiagnostics ?? [])
+    .map((diagnostic) => [JSON.stringify(diagnostic), diagnostic])).values()].slice(0, 32);
+  return diagnostics.length ? { sourceDiagnostics: diagnostics } : {};
+}
+
 function mergeWebResearchPasses(
   primary: ProductComparisonResearchResult,
   retry: ProductComparisonResearchResult
@@ -2325,6 +2406,7 @@ function mergeWebResearchPasses(
     searchDisposition: retry.searchDisposition,
     sourcesExhausted: false,
     sourceAttempts: mergeSourceAttempts(primary.sourceAttempts, retry.sourceAttempts),
+    ...mergeResearchDiagnostics(primary, retry),
     facts,
     conflicts: [...primary.conflicts, ...retry.conflicts],
     answerGuidance: {
@@ -2471,9 +2553,12 @@ const PRODUCT_COMPARISON_MIN_OUTPUT_TOKENS = 1800;
 const COMPACT_CATALOG_EXTRACTION_MAX_OUTPUT_TOKENS = 1500;
 const WEB_RESEARCH_MIN_RETRY_REMAINING_MS = 6_000;
 const CATALOG_EXTRACTION_MAX_MS = 8_000;
+const CATALOG_EXTRACTION_MIN_MS = 4_000;
 const PRIMARY_WEB_MAX_MS = 24_000;
 const PRIMARY_WEB_FALLBACK_RESERVE_MS = 16_000;
 const TIER_FALLBACK_RESERVE_MS = 1_500;
+const WEB_RESEARCH_MIN_STAGE_MS = 14_000;
+const SOURCE_VALIDATION_RESERVE_MS = 6_000;
 
 function webResearchRemainingMs(deadlineAtMs: number | undefined) {
   return deadlineAtMs === undefined ? Number.POSITIVE_INFINITY : Math.max(0, deadlineAtMs - Date.now());
@@ -2769,6 +2854,19 @@ export async function extractCatalogProductComparisonFacts(input: {
     maxDurationMs: CATALOG_EXTRACTION_MAX_MS,
     reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS + PRIMARY_WEB_MAX_MS
   });
+  if (webResearchRemainingMs(deadlineAtMs) < CATALOG_EXTRACTION_MIN_MS) {
+    await emitResearchTrace(input.onTrace, {
+      stage: 'catalog_extraction', tiers: ['catalog'], attemptNumber: 1,
+      elapsedMs: Date.now() - startedAt, remainingBudgetMs: webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'skipped_budget', sourceCount: exactCatalogProducts.length, acceptedFactCount: 0
+    });
+    return {
+      usedWebSearch: false, searchDisposition: 'skipped_budget', sourcesExhausted: false,
+      sourceAttempts: [{ tier: 'catalog', outcome: 'skipped_budget' }], facts: [], conflicts: [],
+      answerGuidance: defaultAnswerGuidance(), summaryForAnswer: '',
+      warnings: ['catalog_extraction_skipped_insufficient_budget']
+    };
+  }
   try {
     const result = await (input.compact === true
       ? extractCompactExactCatalogProductFacts({
@@ -3132,7 +3230,7 @@ export async function researchProductComparisonFacts(input: {
         factMatchesTarget(fact, slot.productName)
       ))
     );
-    if (requestedSlotsCoveredByCatalog && catalogResultForResearch) {
+    if (input.allowCatalogOnlyAnswer === true && requestedSlotsCoveredByCatalog && catalogResultForResearch) {
       return {
         ...catalogResultForResearch,
         usedWebSearch: false,
@@ -3193,12 +3291,21 @@ export async function researchProductComparisonFacts(input: {
       signal?: AbortSignal;
     }) => {
       const startedAt = Date.now();
+      if (webResearchRemainingMs(inputTier.deadlineAtMs) < WEB_RESEARCH_MIN_STAGE_MS) {
+        await emitResearchTrace(input.onTrace, {
+          stage: inputTier.stage, tiers: [inputTier.tier], attemptNumber: inputTier.attemptNumber,
+          elapsedMs: 0, remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
+          outcome: 'skipped_budget', sourceCount: 0, acceptedFactCount: 0
+        });
+        return { ...emptyTierResult('skipped_budget', [`${inputTier.tier}_skipped_insufficient_budget`]),
+          sourceAttempts: [{ tier: inputTier.tier, outcome: 'skipped_budget' as const }] };
+      }
       try {
         const tierResponse = await createStructuredJsonResponse({
           request: tierRequest(inputTier.tier),
           stage: `product_comparison_research_${inputTier.tier}`,
           signal: inputTier.signal,
-          deadlineAtMs: inputTier.deadlineAtMs,
+          deadlineAtMs: inputTier.deadlineAtMs === undefined ? undefined : inputTier.deadlineAtMs - SOURCE_VALIDATION_RESERVE_MS,
           minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
           transportMaxRetries: 0
         });
@@ -3329,15 +3436,17 @@ export async function researchProductComparisonFacts(input: {
       }
     };
 
+    const officialReserveMs = webResearchRemainingMs(input.deadlineAtMs) >= PRIMARY_WEB_MAX_MS + PRIMARY_WEB_FALLBACK_RESERVE_MS
+      ? PRIMARY_WEB_FALLBACK_RESERVE_MS : TIER_FALLBACK_RESERVE_MS;
     const officialPageDeadlineAtMs = boundedResearchStageDeadline({
       overallDeadlineAtMs: input.deadlineAtMs,
       maxDurationMs: PRIMARY_WEB_MAX_MS,
-      reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS
+      reserveMs: officialReserveMs
     });
     const officialManualDeadlineAtMs = boundedResearchStageDeadline({
       overallDeadlineAtMs: input.deadlineAtMs,
       maxDurationMs: PRIMARY_WEB_MAX_MS,
-      reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS
+      reserveMs: officialReserveMs
     });
     const officialPageController = linkedController();
     const manualController = linkedController();
@@ -3383,10 +3492,18 @@ export async function researchProductComparisonFacts(input: {
       return mergeCatalogAndWebResearch(catalogResultForResearch, officialResults);
     }
 
-    if (webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_RETRY_REMAINING_MS) {
+    if (webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_STAGE_MS + TIER_FALLBACK_RESERVE_MS) {
+      await emitResearchTrace(input.onTrace, {
+        stage: 'tier_fallback', tiers: ['reliable_secondary'], attemptNumber: 3,
+        elapsedMs: 0, remainingBudgetMs: webResearchRemainingMs(input.deadlineAtMs),
+        outcome: 'skipped_budget', sourceCount: 0, acceptedFactCount: 0
+      });
       return {
         ...mergeCatalogAndWebResearch(catalogResultForResearch, officialResults),
         searchDisposition: 'skipped_budget',
+        sourcesExhausted: false,
+        sourceAttempts: mergeSourceAttempts(catalogSourceAttempts, mergeSourceAttempts(officialResults.sourceAttempts,
+          [{ tier: 'reliable_secondary', outcome: 'skipped_budget' }])),
         warnings: uniqueStrings([
           ...officialResults.warnings,
           'reliable_secondary_skipped_insufficient_budget'
@@ -3422,10 +3539,25 @@ export async function researchProductComparisonFacts(input: {
   }
 
   const primaryStartedAt = Date.now();
+  if (webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_STAGE_MS + TIER_FALLBACK_RESERVE_MS) {
+    await emitResearchTrace(input.onTrace, {
+      stage: 'primary_web', tiers: ['official_page', 'official_manual', 'reliable_secondary'], attemptNumber: 1,
+      elapsedMs: 0, remainingBudgetMs: webResearchRemainingMs(input.deadlineAtMs),
+      outcome: 'skipped_budget', sourceCount: 0, acceptedFactCount: 0
+    });
+    return mergeCatalogAndWebResearch(catalogResultForResearch, {
+      usedWebSearch: false, searchDisposition: 'skipped_budget', sourcesExhausted: false,
+      sourceAttempts: (['official_page', 'official_manual', 'reliable_secondary'] as const)
+        .map((tier) => ({ tier, outcome: 'skipped_budget' })),
+      facts: [], conflicts: [], answerGuidance: defaultAnswerGuidance(), summaryForAnswer: '',
+      warnings: ['web_research_skipped_insufficient_budget']
+    });
+  }
   const primaryDeadlineAtMs = boundedResearchStageDeadline({
     overallDeadlineAtMs: input.deadlineAtMs,
     maxDurationMs: PRIMARY_WEB_MAX_MS,
-    reserveMs: PRIMARY_WEB_FALLBACK_RESERVE_MS
+    reserveMs: webResearchRemainingMs(input.deadlineAtMs) >= PRIMARY_WEB_MAX_MS + PRIMARY_WEB_FALLBACK_RESERVE_MS
+      ? PRIMARY_WEB_FALLBACK_RESERVE_MS : TIER_FALLBACK_RESERVE_MS
   });
   let combinedPrimaryResult: ProductComparisonResearchResult;
   try {
@@ -3433,7 +3565,7 @@ export async function researchProductComparisonFacts(input: {
       request,
       stage: 'product_comparison_research',
       signal: input.signal,
-      deadlineAtMs: primaryDeadlineAtMs,
+      deadlineAtMs: primaryDeadlineAtMs === undefined ? undefined : primaryDeadlineAtMs - SOURCE_VALIDATION_RESERVE_MS,
       minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
       transportMaxRetries: 0
     });
