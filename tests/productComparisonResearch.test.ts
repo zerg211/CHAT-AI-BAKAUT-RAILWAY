@@ -36,6 +36,7 @@ const {
   researchProductComparisonFacts
 } = await import('../src/ai/productComparisonResearch.js');
 import type { ProductResearchTraceEvent } from '../src/ai/productComparisonResearch.js';
+import { validateToolResultOutput } from '../src/ai/agentManagerToolRegistry.js';
 
 const queuedResearchResponses: Array<{ parsed: Record<string, unknown>; response?: unknown }> = [];
 
@@ -937,6 +938,11 @@ describe('product comparison research', () => {
     expect(actual.usedWebSearch).toBe(true);
     expect(actual.sourcesExhausted).toBe(false);
     expect(actual.sourceCandidates).toContainEqual(expect.objectContaining({ url: manualUrl }));
+    // Exercise the real producer/consumer boundary, not just the research leaf.
+    expect(validateToolResultOutput({ requestId: 'manual', tool: 'web.researchProductFacts',
+      status: 'ok', payload: actual as unknown as Record<string, unknown>, warnings: actual.warnings }).payload).toMatchObject({
+      sourceCandidates: expect.arrayContaining([expect.objectContaining({ url: manualUrl })])
+    });
     if (mode === 'reader_timeout') expect(actual.warnings).toContain('document_read_timed_out');
   });
 

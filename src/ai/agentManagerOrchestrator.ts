@@ -6283,6 +6283,7 @@ export class AgentManagerOrchestrator {
       sessionId: input.sessionId,
       turnId: input.turnId,
       userMessage,
+      history,
       historicalToolResults: previousSelectionToolResults({ history, intent: plannedIntent }),
       provenExhaustedHandoffContinuation: hasProvenExhaustedTechnicalHandoffContinuation({
         history,

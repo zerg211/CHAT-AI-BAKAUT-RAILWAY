@@ -8812,6 +8812,42 @@ describe('parallel semantic turn contracts', () => {
     }));
   });
 
+  it.each(['generate', 'checkpoint replay'] as const)(
+    'preserves verified historical product references through %s authority validation', async (path) => {
+      const conversations = new FakeConversations();
+      const userMessage = 'Эти два генератора теперь подходят?';
+      const names = ['CHAMPION GG3300', 'A-iPower LITE AP3100'];
+      const previous = { ...message('Показаны две модели.', 'assistant'), id: 'previous-generator-selection',
+        metadata: { productCards: names.map((name, index) => ({ id: `shown-${index}`, name })),
+          intentContract: { selectionPolicy: { canonicalProductClass: 'generator' } } } };
+      conversations.messages = [previous, message(userMessage)];
+      const intent = noToolIntent('Reassess the two previously shown generators.');
+      intent.productMentions = names.map((name) => ({ name, role: 'target_product', productClass: 'generator',
+        evidence: 'Эти два генератора', sourceMessageId: previous.id }));
+      const decision: AgentSemanticDecision = { ledgerDelta: { rationale: 'Use the verified previous models.', events: [] },
+        intent: intent as AgentSemanticDecision['intent'] };
+      const decideTurn = vi.fn(async () => decision);
+      const composeAnswer = vi.fn(async (_input: Parameters<AgentManagerModel['composeAnswer']>[0]) => ({ answerText: 'Условия изменились; предыдущие варианты сохранены для повторной оценки.',
+        factsUsed: [], questionsAsked: [], toolResultIds: [], leadAction: 'none' as const, riskFlags: [] }));
+      if (path === 'checkpoint replay') {
+        conversations.checkpoints.push({ sessionId, turnId, checkpoint: 'semantic_decision_proposed',
+          status: 'succeeded', payload: structuredClone(decision) });
+      }
+      const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never,
+        new FakeLeads() as never, model({ decideTurn, composeAnswer }));
+
+      const payload = path === 'generate'
+        ? await orchestrator.generateAnswer({ sessionId, turnId, userMessage })
+        : await orchestrator.recoverTurn({ sessionId, turnId });
+
+      expect(payload.answer).toContain('предыдущие варианты сохранены');
+      expect(conversations.assistantSaves).toHaveLength(1);
+      expect(decideTurn).toHaveBeenCalledTimes(path === 'generate' ? 1 : 0);
+      expect(composeAnswer.mock.calls[0]?.[0]?.intent.productMentions).toEqual(intent.productMentions);
+      expect(conversations.traces).not.toContainEqual(expect.objectContaining({ eventType: 'semantic_decision_failed' }));
+    }
+  );
+
   it('passes the rejected decision into a bounded semantic correction before execution', async () => {
     const conversations = new FakeConversations();
     const coherentIntent = noToolIntent('corrected semantic decision');

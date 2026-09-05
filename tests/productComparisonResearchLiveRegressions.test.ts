@@ -76,6 +76,19 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('production web research regressions', () => {
+  it.each(['https://www.firman.biz/download?id=RD3910E-manual',
+    `https://www.firman.biz/${'a'.repeat(650)}/manual.pdf`])('preserves the actual source lead address in both continuation and memory: %s', async (url) => {
+    structured.mockImplementation(async (call) => webResponse(call.stage.slice('product_comparison_research_'.length)));
+    await research({ knownSourceCandidates: [{ url, title: 'Manual' }], previousResearch: [{ requestId: 'prior',
+      status: 'ok', warnings: [], payload: { targetProductNames: [target], sourceCandidates: [{ url, title: 'Manual' }] } }] });
+    const calls = structured.mock.calls.map(([call]) => call).filter((call) => call.stage.startsWith('product_comparison_research_'));
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+      expect(payload.knownSourceCandidates).toEqual([{ url, title: 'Manual' }]);
+      expect(payload.previousResearch[0].sourceCandidates).toEqual([{ url, title: 'Manual' }]);
+    }
+  });
   it.each(['shared source', 'different windows', 'different URLs'] as const)('preserves every fact and coverage claim while sharing only identical source windows: %s', async (mode) => {
     const oilQuote = 'Use engine oil SAE 10W-30.';
     const sourceText = mode === 'different windows'

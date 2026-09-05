@@ -120,6 +120,16 @@ export interface ProductResearchPriorObservation {
   warnings: string[];
 }
 
+function sourceCandidateUrl(value: unknown) {
+  if (typeof value !== 'string') return '';
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';
+    url.hash = '';
+    return url.href.length <= 2_000 ? url.href : '';
+  } catch { return ''; }
+}
+
 // Previous tool observations are search context, never newly verified evidence.
 // Project only the exact-target fields needed to choose a different source/read.
 function continuationResearchContext(input: {
@@ -165,8 +175,8 @@ function continuationResearchContext(input: {
     const coverage = payload.answerGuidance && typeof payload.answerGuidance === 'object'
       ? records((payload.answerGuidance as Record<string, unknown>).coverage) : [];
     const sections: Record<string, unknown[]> = {
-      sourceCandidates: records(payload.sourceCandidates).filter((item) => url(item.url)).slice(0, 6)
-        .map((item) => ({ url: url(item.url), title: text(item.title, 120) })),
+      sourceCandidates: records(payload.sourceCandidates).filter((item) => sourceCandidateUrl(item.url)).slice(0, 6)
+        .map((item) => ({ url: sourceCandidateUrl(item.url), title: text(item.title, 120) })),
       sourceDiagnostics: records(payload.sourceDiagnostics).filter((item) => url(item.url) &&
         ['http_status', 'timeout', 'network', 'unsupported_binary', 'unreadable'].includes(String(item.reason))).slice(-8)
         .map((item) => ({ url: url(item.url), reason: item.reason,
@@ -694,7 +704,9 @@ function responseDiscoveredSourceCandidates(response: unknown) {
       candidates.push({ url: call.action.url });
     }
   }
-  return [...new Map(candidates.map((source) => [source.url, source])).values()].slice(0, 12);
+  return [...new Map(candidates.filter((source) => sourceCandidateUrl(source.url))
+    .map((source) => [sourceCandidateUrl(source.url), { url: sourceCandidateUrl(source.url),
+      ...(source.title ? { title: source.title.slice(0, 300) } : {}) }])).values()].slice(0, 12);
 }
 
 const approvedManufacturerDomainsByBrand = new Map<string, readonly string[]>([
@@ -3232,8 +3244,8 @@ export async function researchProductComparisonFacts(input: {
         content: JSON.stringify({
           buyerQuestion: input.userMessage,
           ...continuationContext,
-          knownSourceCandidates: (input.knownSourceCandidates ?? []).filter((source) => sourceUrlIsHttp(source.url))
-            .slice(0, 6).map((source) => ({ url: source.url.slice(0, 600), title: source.title?.slice(0, 120) })),
+          knownSourceCandidates: (input.knownSourceCandidates ?? []).filter((source) => sourceCandidateUrl(source.url))
+            .slice(0, 6).map((source) => ({ url: sourceCandidateUrl(source.url), title: source.title?.slice(0, 120) })),
           targetProductNames,
           comparisonAttributes,
           missingFactSlots: input.missingFactSlots ?? [],

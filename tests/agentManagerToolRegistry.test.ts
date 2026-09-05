@@ -6,6 +6,20 @@ import {
 } from '../src/ai/agentManagerToolRegistry.js';
 
 describe('agent manager strict tool registry', () => {
+  it('preserves bounded HTTP source candidates as untrusted leads without accepting arbitrary fields', () => {
+    const result = { requestId: 'manual', tool: 'web.researchProductFacts' as const, status: 'ok' as const,
+      warnings: [], payload: { sourceCandidates: [{ url: 'https://manufacturer.example/manual.pdf', title: 'Manual' }] } };
+    expect(validateToolResultOutput(result).payload.sourceCandidates).toEqual(result.payload.sourceCandidates);
+    const invalid = [
+      [{ ...result.payload.sourceCandidates[0], authority: 'manufacturer' }],
+      [{ url: 'file:///private/manual.pdf' }],
+      [{ url: `https://manufacturer.example/${'a'.repeat(2_000)}` }],
+      [{ ...result.payload.sourceCandidates[0], title: 'a'.repeat(301) }],
+      Array.from({ length: 13 }, () => result.payload.sourceCandidates[0])
+    ];
+    for (const sourceCandidates of invalid) expect(() => validateToolResultOutput({ ...result,
+      payload: { sourceCandidates } })).toThrow();
+  });
   it('preserves bounded typed source failures in a web observation without accepting arbitrary diagnostic fields', () => {
     const result = {
       requestId: 'manual', tool: 'web.researchProductFacts' as const, status: 'ok' as const, warnings: [],

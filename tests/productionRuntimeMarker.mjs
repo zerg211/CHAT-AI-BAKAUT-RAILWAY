@@ -4,7 +4,7 @@ export const expectedAiManagerContractVersion =
 
 export const expectedAiManagerRuntimeVersion =
   process.env.EXPECTED_AI_MANAGER_RUNTIME_VERSION ||
-  '2026-09-05.autonomous-consultation-v5';
+  '2026-09-05.autonomous-consultation-v6';
 
 export async function fetchProductionHealth(productionApiBase, timeoutMs = 30_000) {
   const controller = new AbortController();

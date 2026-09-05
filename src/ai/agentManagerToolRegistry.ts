@@ -99,6 +99,13 @@ const researchSource = z.object({
 const webResearchResult = z.object({
   // Catalog identity resolved inside this read must survive checkpoint replay.
   products: z.array(productResult).max(4).optional(),
+  sourceCandidates: z.array(z.object({
+    url: z.string().url().max(2_000).refine((value) => {
+      try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; }
+      catch { return false; }
+    }),
+    title: z.string().max(300).optional()
+  }).strict()).max(12).optional(),
   sourceDiagnostics: z.array(z.object({
     url: z.string().max(600),
     reason: z.enum(['http_status', 'timeout', 'network', 'unsupported_binary', 'unreadable']),
