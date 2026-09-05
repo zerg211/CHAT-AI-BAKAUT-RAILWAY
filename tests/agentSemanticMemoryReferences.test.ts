@@ -102,7 +102,7 @@ function refCorrection(context: any) {
 }
 
 describe('initial semantic producer memory references', () => {
-  beforeEach(() => createStructuredJsonResponse.mockReset());
+  beforeEach(() => { createStructuredJsonResponse.mockReset(); });
 
   it('runs two producer turns and preserves preference identities while correcting load and budget', async () => {
     const state = await seed();
@@ -126,6 +126,63 @@ describe('initial semantic producer memory references', () => {
         evidence: 'Эти два генератора', sourceMessageId: history[0]!.id })) : []);
     expect(JSON.stringify(decision)).not.toContain('memoryActions');
     expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
+  });
+
+  it('repairs a duplicate reference write inside the existing generation loop before applying any delta', async () => {
+    const state = await seed();
+    const checkpoints: unknown[] = [], traces: unknown[] = [], writes: any[] = [];
+    const user = { id: '33333333-3333-4333-8333-333333333333', sessionId, role: 'user' as const,
+      content: correction, metadata: {}, createdAt: now };
+    let currentTurn: any = { id: turnId, sessionId, userMessageId: user.id, assistantMessageId: null, status: 'received',
+      requestHash: 'memory-repair', createdAt: now, updatedAt: now };
+    const messages: Message[] = [...history, user];
+    const conversations = { getSession: async () => session, listMessages: async () => messages, getTurn: async () => currentTurn,
+      updateTurn: async (input: any) => (currentTurn = { ...currentTurn, ...input }),
+      addUserMessageForTurn: async () => user, getFinalAnswerContract: async () => null,
+      listTurnCheckpoints: async () => checkpoints, upsertTurnCheckpoint: async (input: any) => (checkpoints.push(input), input),
+      listDialogueLedgerEvents: async () => state.ledgerEvents.map(event => ({ session_id: event.sessionId, turn_id: event.turnId,
+        event_id: event.eventId, event_type: event.eventType, scope: event.scope, payload: event.payload,
+        source: event.source, evidence: event.evidence, status: event.status })),
+      upsertDialogueLedgerEvent: async (input: any) => (writes.push(input), input),
+      listToolArtifacts: async () => [], saveAnswerContract: async () => null,
+      addAgentTrace: async (input: any) => traces.push(input),
+      addAssistantMessageForTurn: async (input: any) => {
+        const assistant = { id: '44444444-4444-4444-8444-444444444444', sessionId, role: 'assistant' as const,
+          content: input.content, metadata: input.metadata, createdAt: now };
+        messages.push(assistant); currentTurn = { ...currentTurn, status: 'completed', assistantMessageId: assistant.id }; return assistant;
+      } };
+    let attempt = 0;
+    createStructuredJsonResponse.mockImplementation(async ({ request }) => {
+      const context = JSON.parse(request.input.find((x: any) => x.role === 'user').content);
+      const wire = refCorrection(context);
+      if (++attempt === 1) wire.ledgerDelta.events.push({ eventType: 'fact.confirmed', scope: 'need',
+        payload: { factKey: 'budget_max_rub', value: 70000, unit: 'RUB', needId: 'generator', role: 'hard_requirement' },
+        evidence: 'Бюджет 70000', source: 'llm_state_delta', status: 'active' });
+      else {
+        expect(writes).toEqual([]);
+        expect(context.semanticReferenceRepairs).toEqual([expect.objectContaining({
+          factRef: 'generator::budget_max_rub', inlineEventPolicy: 'new_facts_only', memoryActionPolicy: 'one_action_for_existing_fact'
+        })]);
+        expect(request.input.find((x: any) => x.role === 'system').content).toContain('duplicate_memory_fact_write');
+      }
+      wire.intent.requiresTools = false; wire.intent.toolRequests = [];
+      wire.intent.selectionPolicy.maxCards = 0;
+      wire.intent.selectionPolicy.requirements = wire.intent.selectionPolicy.requirements.filter((r: any) => !r.factRef.endsWith('::generator_load_scenario'));
+      Object.assign(wire.intent.grounding, { taskType: 'technical_answer', responseMode: 'answer', sourcePolicy: 'conversation_only',
+        catalogRequirement: 'none', requiredToolKinds: [] });
+      return { parsed: wire };
+    });
+    class RepairModel extends OpenAIAgentManagerModel {
+      override async composeAnswer() { return { answerText: 'Новые условия учёл.', factsUsed: [], questionsAsked: [],
+        selectedProductIds: [], toolResultIds: [], leadAction: 'none' as const, riskFlags: [] }; }
+      override async reviewCustomerLanguage() { return { processDisclosure: false, evidence: '', rationale: 'No disclosure.', factualIssues: [] }; }
+    }
+    const result = await new AgentManagerOrchestrator(conversations as never, {} as never, {} as never, new RepairModel())
+      .generateAnswer({ sessionId, turnId, userMessage: correction });
+    expect(result.answer).toBe('Новые условия учёл.');
+    expect(attempt).toBe(2);
+    expect(writes.filter(write => write.payload.factKey === 'budget_max_rub')).toHaveLength(1);
+    expect(traces).toContainEqual(expect.objectContaining({ eventType: 'semantic_decision_schema_invalid' }));
   });
 
   it.each(['unknown fact', 'duplicate action', 'retain with changed value', 'retain plus inline write', 'update without current evidence',

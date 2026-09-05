@@ -4408,10 +4408,11 @@ const productMentionJsonSchema = {
       ]
     },
     productClass: nullableStringJsonSchema,
+    canonicalProductClass: { type: ['string', 'null'], enum: [...productSelectionClasses, null] },
     evidence: { type: 'string', description: 'An exact quote from the current buyer message, including the reference phrase when the model name comes from history.' },
     sourceMessageId: { type: ['string', 'null'], description: 'For a historical model reference, copy its messageId and exact name from priorProductTargets. Otherwise null. This identifies the source of the model identity, not a replacement for current-message evidence.' }
   },
-  required: ['name', 'role', 'productClass', 'evidence', 'sourceMessageId']
+  required: ['name', 'role', 'productClass', 'canonicalProductClass', 'evidence', 'sourceMessageId']
 } as const;
 
 const groundingJsonSchema = {
@@ -4676,6 +4677,8 @@ function semanticDecisionFormatForMemory(references: ReturnType<typeof semanticM
   const policySchema = selectionPolicyJsonSchema;
   return { ...semanticDecisionFormat, format: { ...semanticDecisionFormat.format, schema: strictJsonObject({
     ledgerDelta: references.facts.length ? strictJsonObject({ ...ledgerSchema.properties,
+      events: { ...ledgerSchema.properties.events,
+        description: 'Inline fact events are only for NEW scoped facts absent from memoryReferences. Existing facts use memoryActions exclusively. Need/question events still belong here. Never duplicate a memoryAction with an inline fact event.' },
       memoryActions: { type: 'array', maxItems: 80, items: { anyOf: [
         strictJsonObject({ factRef, action: { type: 'string', enum: ['retain'] } }),
         strictJsonObject({ factRef, action: { type: 'string', enum: ['update'] }, value: ledgerValueJsonSchema,
@@ -4703,6 +4706,21 @@ function semanticDecisionFormatForMemory(references: ReturnType<typeof semanticM
   }) } };
 }
 
+function normalizeProductMentionClasses(raw: unknown) {
+  const intent = z.object({ productMentions: z.array(z.unknown()).optional() }).passthrough().parse(raw);
+  if (!intent.productMentions) return intent;
+  return { ...intent, productMentions: intent.productMentions.map((mention) => {
+    if (!mention || typeof mention !== 'object' || !('canonicalProductClass' in mention)) return mention;
+    const { canonicalProductClass, ...expanded } = z.object({
+      canonicalProductClass: z.enum(productSelectionClasses).nullable().optional()
+    }).passthrough().parse(mention);
+    // The planner supplies ontology identity explicitly. Labels, legacy runtime
+    // mentions and historical references never require a synonym guess here.
+    return canonicalProductClass && canonicalProductClass !== 'unknown'
+      ? { ...expanded, productClass: canonicalProductClass } : expanded;
+  }) };
+}
+
 function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelInput,
   references: ReturnType<typeof semanticMemoryReferences>): AgentSemanticDecision {
   const wire = z.object({
@@ -4715,7 +4733,7 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
     !wire.intent.selectionPolicy?.requirements.some(value => value && typeof value === 'object' && 'factRef' in value) &&
     !wire.intent.selectionPolicy?.rankingObjectives?.some(value => value && typeof value === 'object' && 'factRef' in value) &&
     !wire.intent.productMentions?.some(value => value && typeof value === 'object' && 'targetRef' in value)) {
-    return AgentSemanticDecisionSchema.parse(raw);
+    return AgentSemanticDecisionSchema.parse({ ...wire, intent: normalizeProductMentionClasses(wire.intent) });
   }
   const fail = (message: string): never => { throw new ZodError([{ code: 'custom', path: ['memoryReferences'], message }]); };
   const factByRef = new Map(references.facts.map(fact => [fact.factRef, fact]));
@@ -4788,9 +4806,9 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
     if (!productMentionEvidenceGrounded(ref.evidence, input.userMessage)) fail(`product_reference_evidence_not_current:${ref.targetRef}`);
     return { name: target.name, productClass: target.productClass, sourceMessageId: target.messageId, role: ref.role, evidence: ref.evidence };
   });
-  return AgentSemanticDecisionSchema.parse({ ledgerDelta, intent: { ...wire.intent,
+  return AgentSemanticDecisionSchema.parse({ ledgerDelta, intent: normalizeProductMentionClasses({ ...wire.intent,
     ...(policy ? { selectionPolicy: { ...policy, requirements, rankingObjectives } } : {}),
-    ...(productMentions ? { productMentions } : {}) } });
+    ...(productMentions ? { productMentions } : {}) }) });
 }
 
 const answerContractFormat = {
@@ -4966,6 +4984,7 @@ function plannerSystemPromptBlock(
     'preliminary_fit: unbounded guess → не заявляй fit, спроси тип/функцию/сценарий. browse_catalog: unbounded расчет не блокирует показ диапазона мощности/моделей/цен без обещания совместимости. Достаточный контекст для bounded оценки → calculator + catalog; слишком vague → уточнение вместо поиска. Пустой fit-запрос — ноль заявленных требований (мощность/нагрузка кВт, приборы, бюджет, топливо, фаза, модель, площадь или объем работ): это needs_more_info, не preliminary_fit — уточнение вместо поиска и калькулятора, даже если класс товара ясен. preliminary_fit требует минимум одного заявленного требования покупателя. Явные browse-просьбы («что есть», «покажи варианты», «что подешевле», «ассортимент») — browse_catalog.',
     'Генераторы: nominal >= requiredNominalKw остаётся обязательным минимумом; среди допустимых кандидатов соблюдай порядок rankingObjectives покупателя. При приоритете минимального номинала или без явного числового приоритета первая карточка имеет минимальное достаточное превышение, а nominal > requiredNominalKw×1.5 допускается только на позициях 2+ с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование превышения. Тип топлива, бренд и ресурс не меняют requiredNominalKw. Неизвестный пуск мотора — это один главный вопрос (без final fit) либо допущение строго в формате «принят пусковой коэффициент K=[значение] для [устройство]» с пересчётом номинала в тексте; K — только из слов покупателя, шильдика или проверенного факта, K из головы запрещён. Неизвестный пуск — никогда strict требование. Топливо не заявлено (powerSource any) — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». При явном приоритете цены или веса не подменяй порядок rankingObjectives минимальным номиналом: объясни подтверждённый выигрыш и избыток мощности. Надёжность не меняет проверку достаточности мощности.',
     'productMentions для каждой названной модели/товара с ролью: target_product (хочет купить/проверить), catalog_candidate (рассматриваемая альтернатива), comparison_subject (сравнение), context_load_device (потребитель для расчета), compatibility_context (оборудование-партнер), mentioned_only. evidence копируй как точный непустой фрагмент текущего userMessage; для разрешённой анафоры evidence — точная фраза-ссылка из текущей реплики. context_load_device/compatibility_context не попадают в web args.productNames (котёл Baxi в «генератор для котла Baxi» — не цель). Только target_product/catalog_candidate/comparison_subject движут presence/web/nearby. Если в одном ходе явно запрошены разные классы товаров, selectionPolicy описывает главный класс и required catalog request этого же класса обязателен, а каждый дополнительный искомый класс получает отдельный target_product productMention с точным evidence/productClass и отдельный catalog request; не своди аксессуар к классу основного товара. Каждый web request также несёт свой canonicalProductIntent и исследует только товары этого класса.',
+    'В полном productMention поле productClass — свободное название класса, canonicalProductClass — его точный идентификатор из enum либо null, если соответствия нет. Класс определяй по смыслу товара; согласуй canonicalProductClass цели с canonicalProductIntent её web-запроса. Не заменяй неизвестный класс ближайшим известным. Для targetRef класс уже сохранён в ссылке.',
     'Анафору разрешай по истории: priorProductTargets сохраняет точные прежние target names и messageId даже после технического ответа без карточек. Для ссылки на прежнюю модель скопируй её name и sourceMessageId оттуда в productMention, а evidence возьми из текущей реплики как точную фразу-ссылку. Не требуй повторного имени модели от покупателя и не удаляй разрешённую историческую цель из-за отсутствия имени в текущем сообщении. При model-specific техническом web-запросе exact_only передай это точное имя также в args.productNames: одного имени в свободном query недостаточно. Общий технический вопрос не наследует модель автоматически; сам реши смысл по контексту, неоднозначность уточни.',
     'Анафору по карточкам разрешай по реальным показам: history.productCards сохраняет ordinal внутри messageId, а priorVisibleProducts.occurrences хранит все прежние messageId/createdAt/ordinal, даже повторные показы одной модели. Первая в прежнем и последнем списках может быть разной. Выбери нужный показ и товар по смыслу реплики; неоднозначность уточни одним вопросом. productMentions role="target_product" с точным именем; для фактов catalog.getProductDetails по productIds или productNames.',
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
@@ -4984,10 +5003,21 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       ...semanticValidationIssueHistory,
       ...semanticValidationIssues
     ]);
+    const duplicateReferencePrefix = 'semantic_contract_schema_invalid:memoryReferences:duplicate_memory_fact_write:';
+    const semanticReferenceRepairs = semanticValidationIssues.flatMap(issue => {
+      if (!issue.startsWith(duplicateReferencePrefix)) return [];
+      const factRef = issue.slice(duplicateReferencePrefix.length);
+      const fact = memoryReferences.facts.find(item => item.factRef === factRef);
+      return fact ? [{ factRef, factKey: fact.factKey, needId: fact.needId ?? null,
+        inlineEventPolicy: 'new_facts_only', memoryActionPolicy: 'one_action_for_existing_fact' }] : [];
+    });
     const hasIssue = (prefix: string) => repairGuidanceIssues.some((issue) =>
       issue === prefix || issue.startsWith(`${prefix}:`)
     );
     const issueGuidance = [
+      semanticReferenceRepairs.length
+        ? 'duplicate_memory_fact_write: одна и та же существующая запись указана в memoryActions и inline events. Оставь ровно одну memoryAction для указанного factRef, а дублирующий fact event удали из events. Это касается и бюджета, и structured нагрузок: существующий generator_load_scenario обновляется только memoryAction update. Сохрани новое значение и смысл текущей реплики; не отменяй факт и не удаляй нужный calculator ради устранения дубликата. semanticReferenceRepairs указывает точную запись.'
+        : '',
       hasIssue('product_mention_evidence_not_in_current_message')
         ? 'productMentions.evidence должен быть точной непрерывной подстрокой текущего userMessage. Для разрешённой анафоры сохрани историческую модель, скопируй её точные name/sourceMessageId из priorProductTargets и исправь только evidence на текущую фразу-ссылку; отсутствие имени модели в текущем сообщении не повод удалять цель. Удаляй mention только если он действительно не относится к смыслу текущего вопроса.'
         : '',
@@ -5010,7 +5040,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         ? 'У каждого generator load обязательны source, runningSource и startingSource. source не null: explicit_user только когда оба числа явно даны; при смешанной или оценочной мощности используй estimated_average. Число отсутствует только вместе с соответствующим *Source="not_provided".'
         : '',
       hasIssue('generator_load_scenario_fact_missing')
-        ? 'Если intent содержит calculator.generatorLoad, ledgerDelta обязан сохранить fact.confirmed generator_load_scenario с тем же needId и полным structured value.'
+        ? 'Если intent содержит calculator.generatorLoad, сохрани полный structured generator_load_scenario: для существующего factRef используй только memoryActions update/retain, для нового scoped факта — inline fact.confirmed с тем же needId. Не создавай обе формы одного факта.'
         : '',
       repairGuidanceIssues.some((issue) => issue.startsWith('generator_load_scenario_missing_load:') || issue.startsWith('generator_load_scenario_load_semantics_mismatch:') || issue.startsWith('generator_load_scenario_unexecutable_load:'))
         ? 'Сделай value.loads факта generator_load_scenario и calculator.generatorLoad args.loads идентичными по kind, count, числам, provenance, operationMode, coRunningGroup, basisKind и basisSignals. Исключение: покупатель уточнил модель уже известного устройства (его новое имя есть в текущей реплике) — тогда kind, count и числа сохрани, а name/evidence обнови под слова покупателя; это уточнение, а не новый потребитель. Не выкидывай такой load из args и не превращай бытовой прибор в исследуемый товар.'
@@ -5062,7 +5092,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             : '',
           issueGuidance,
           semanticValidationIssues.includes('generator_load_scenario_fact_missing')
-            ? 'Если в исправленном intent остаётся calculator.generatorLoad, ledgerDelta обязан содержать fact.confirmed с factKey="generator_load_scenario", role="hard_requirement", confidence=1, тем же needId и value.loads, simultaneousRunning, simultaneousStarting, согласованными с calculator args.loads и флагами. Если текущих данных недостаточно для такой структурированной нагрузки, убери calculator и задай один минимальный вопрос; не оставляй calculator без durable fact.'
+            ? 'Если в исправленном intent остаётся calculator.generatorLoad, сохрани durable generator_load_scenario с полными value.loads, simultaneousRunning, simultaneousStarting, согласованными с calculator args. Существующая запись — только memoryActions update/retain по factRef; новая — только inline fact.confirmed с role="hard_requirement", confidence=1 и нужным needId. Не дублируй запись в двух формах. Если данных недостаточно для такой нагрузки, задай необходимый вопрос; не оставляй calculator без durable fact.'
             : ''
         ].filter(Boolean).join(' ')
       : 'Верни одно авторитетное решение: ledgerDelta и intent должны выражать одну и ту же интерпретацию текущей реплики.';
@@ -5105,6 +5135,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
               trustedPendingExhaustedTechnicalHandoffs(input.history),
             rejectedSemanticDecision: input.rejectedSemanticDecision ?? null,
             semanticValidationIssues,
+            semanticReferenceRepairs,
             semanticValidationIssueHistory
           })
         }
@@ -5197,7 +5228,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       deadlineAtMs: input.structuredDeadlineAtMs,
       minRetryRemainingMs: 25_000
     });
-    return AgentIntentContractSchema.parse(parsed);
+    return AgentIntentContractSchema.parse(normalizeProductMentionClasses(parsed));
   }
 
   async matchVerifiedFactMemory(input: {

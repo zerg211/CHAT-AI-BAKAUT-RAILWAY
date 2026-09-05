@@ -6,7 +6,7 @@ vi.mock('../src/ai/openaiStructured.js', () => ({
   createStructuredJsonResponse
 }));
 
-import { OpenAIAgentManagerModel, type AgentManagerAnswerInput } from '../src/ai/agentManagerOrchestrator.js';
+import { OpenAIAgentManagerModel, validateAgentSemanticDecision, type AgentManagerAnswerInput } from '../src/ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
 import { continuationValidationIssues } from '../src/ai/agentManagerContinuation.js';
 import { getActiveDialogueNeed, reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
@@ -17,6 +17,39 @@ import type { ConversationSession, Message, VerifiedProductFact } from '../src/s
 describe('OpenAIAgentManagerModel semantic inputs', () => {
   beforeEach(() => {
     createStructuredJsonResponse.mockReset();
+  });
+
+  it.each(['generator', 'engineOil'] as const)('normalizes an explicit canonical mention class before strict web-target validation: %s', async (canonicalProductClass) => {
+    const now = new Date('2026-09-05T17:00:00Z').toISOString();
+    const session: ConversationSession = { id: '11111111-1111-4111-8111-111111111111', status: 'active',
+      conversationNumber: 1, title: 'Technical question', needState: emptyNeedState(), createdAt: now, updatedAt: now, lastHeartbeatAt: now };
+    const userMessage = 'Проверьте инструкцию FIRMAN RD3910E.';
+    const intent = AgentIntentContractSchema.parse({ userMessageSummary: userMessage, dialogueUnderstanding: 'Exact-model manual lookup',
+      nextStepRationale: 'Read manufacturer instructions', requiresTools: true, riskFlags: [],
+      toolRequests: [{ id: 'web-facts-1', tool: 'web.researchProductFacts', required: true, coversRequirementIds: [], rationale: 'Read the exact manual',
+        args: { query: 'FIRMAN RD3910E manual', productNames: ['FIRMAN RD3910E'], productIntent: 'генератор', canonicalProductIntent: 'generator' } }],
+      selectionPolicy: { needAction: 'continue', targetProductClass: 'генератор', canonicalProductClass: 'generator', selectionGoal: 'final_fit',
+        powerSource: 'any', phase: 'any',
+        alternativePolicy: 'exact_only', requirements: [], rankingObjectives: [], maxCards: 0, reusePreviousCards: false,
+        rationale: 'Technical question about the named generator' },
+      grounding: { taskType: 'technical_answer', sourcePolicy: 'web_required', webPurpose: 'manual_or_service',
+        webRequirement: 'buyer_requested', requiredToolKinds: ['web.researchProductFacts'], technicalAttributes: ['first_start'],
+        buyerQuestion: userMessage, buyerRequestedWeb: true, catalogRequirement: 'none', responseMode: 'answer', rationale: 'Verify the manual' }
+    });
+    createStructuredJsonResponse.mockResolvedValue({ parsed: { ledgerDelta: { rationale: 'Keep current context', events: [] },
+      intent: { ...intent, productMentions: [{ name: 'FIRMAN RD3910E', role: 'target_product', productClass: 'генератор',
+        canonicalProductClass, evidence: 'FIRMAN RD3910E', sourceMessageId: null }] } } });
+    const ledgerState = reduceDialogueLedger([]);
+    const decision = await new OpenAIAgentManagerModel().decideTurn({ session, userMessage, history: [], ledgerEvents: [], ledgerState });
+    expect(decision.intent.productMentions?.[0]?.productClass).toBe(canonicalProductClass);
+    expect(decision.intent.productMentions?.[0]).not.toHaveProperty('canonicalProductClass');
+    const schema = createStructuredJsonResponse.mock.calls[0]![0].request.text.format.schema.properties.intent.properties.productMentions.items;
+    expect(schema.properties.canonicalProductClass.enum).toEqual(expect.arrayContaining(['generator', 'engineOil', null]));
+    expect(schema.required).toContain('canonicalProductClass');
+    const validation = validateAgentSemanticDecision({ decision, previousLedgerState: ledgerState, sessionId: session.id,
+      turnId: '22222222-2222-4222-8222-222222222222', userMessage });
+    if (canonicalProductClass === 'generator') expect(validation.issues).toEqual([]);
+    else expect(validation.issues).toContain('web_research_target_product_class_mismatch:web-facts-1');
   });
 
   it.each([{ requirementIds: [] as string[] }, { requirementIds: ['req-noise'] }])('binds observation requirement references to the current IDs $requirementIds while allowing technical research', async ({ requirementIds }) => {
