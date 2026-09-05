@@ -212,6 +212,14 @@ describe('agent manager contracts', () => {
       variant.properties.tool.enum.includes(tool)
     ).properties.args.properties;
 
+    expect(toolArgs('catalog.search').query).toMatchObject({ type: 'string', minLength: 1 });
+    expect(toolArgs('catalog.getProductDetails').query.type).toEqual(['string', 'null']);
+    const loadKind = toolArgs('calculator.generatorLoad').loads.items.properties.kind;
+    expect(loadKind.enum).toBeUndefined();
+    expect(loadKind.description).toContain('open semantic identifier');
+    const ledgerLoadKind = formats.ledgerDeltaFormat.format.schema.properties.events.items.properties.payload
+      .properties.value.anyOf[1].properties.loads.items.properties.kind;
+    expect(ledgerLoadKind).toEqual(loadKind);
     expect(toolArgs('catalog.search').comparisonAttributes.maxItems).toBe(12);
     expect(toolArgs('catalog.getProductDetails').productIds.maxItems).toBe(8);
     expect(toolArgs('catalog.getProductDetails').productNames.maxItems).toBe(4);

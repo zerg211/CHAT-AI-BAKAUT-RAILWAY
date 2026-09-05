@@ -1378,6 +1378,54 @@ describe('generic requirement proofs', () => {
     expect(result.warnings.some((warning) => warning.includes('generator_voltage'))).toBe(false);
   });
 
+  it('keeps the actual A-iPower 3100 single-phase cards when equivalent phase fields spell 230В without a space', () => {
+    // Relevant exact fields from production-v4-memory/conversation-after-turn-2.json.
+    const products = [
+      generator('c358eaee-518b-4ac8-9195-e9c680d1dd5a', 'Генератор бензиновый A-iPower A3100 (2,8 кВт) 20102', {
+        phases: '1, 230 В / 50 Гц, ток 12,2 А, cosφ 1', 'число фаз': 'однофазные', 'напряжение, в': '230В'
+      }),
+      generator('84c6e136-73c0-458c-81f0-eaaacf022b34', 'Генератор бензиновый A-iPower LITE AР3100 (2,8 кВт) 20203', {
+        phases: '1, 230 В / 50 Гц, ток 12 А, cosφ 1', 'число фаз': 'однофазные', 'напряжение, в': '230В'
+      })
+    ];
+    const requirement: SelectionRequirement = { id: 'req-phase', kind: 'phase', value: 'single_phase', unit: null,
+      role: 'hard_constraint', strictness: 'strict', relation: 'must_have', evidence: 'обычные бытовые розетки',
+      verification: { mode: 'product_attribute' } };
+    const request: ToolRequest = { id: 'catalog-search', tool: 'catalog.search', args: { query: 'generator' },
+      rationale: 'read exact product details', required: true };
+    const result = select({ products, intent: intentFor({ requirement, request, phase: 'single_phase' }), toolResults: [catalogResult(products)] });
+    expect(result.selectedProductIds).toEqual(products.map((product) => product.id));
+    expect(result.requirementProofs.filter((proof) => proof.requirementId === requirement.id)).toEqual(products.map((product) =>
+      expect.objectContaining({ productId: product.id, status: 'satisfied', normalizedValue: 'single_phase', caveats: [] })));
+  });
+
+  it.each([
+    { specs: { voltage: '230В' }, expected: 'satisfied', value: 'single_phase' },
+    { specs: { voltage: '220 V', phases: 'single_phase' }, expected: 'satisfied', value: 'single_phase' },
+    { specs: { voltage: '230В', phases: 'однофазные' }, expected: 'satisfied', value: 'single_phase' },
+    { specs: { voltage: '400В', phases: 'трёхфазные' }, expected: 'violated', value: 'three_phase' },
+    { specs: { phases: 1 }, expected: 'satisfied', value: 'single_phase' },
+    { specs: { phases: 3 }, expected: 'violated', value: 'three_phase' },
+    { specs: { 'число фаз': '1' }, expected: 'satisfied', value: 'single_phase' },
+    { specs: { 'Количество фаз': '3' }, expected: 'violated', value: 'three_phase' },
+    { specs: { phases: '230 W, 400 rpm' }, expected: 'unverified', value: null },
+    { specs: { voltage: '230 W' }, expected: 'unverified', value: null },
+    { specs: { phases: '230' }, expected: 'unverified', value: null },
+    { specs: { voltage: '230/400В' }, expected: 'unverified', value: null },
+    { specs: { voltage: '220–240 V' }, expected: 'unverified', value: null },
+    { specs: { voltage: '230 V and 400 V' }, expected: 'unverified', value: null },
+    { specs: { voltage: '230В', phases: 'three_phase' }, expected: 'conflicted', value: null },
+    { specs: { voltage: '230В', phases: 'noise 400 dB' }, expected: 'satisfied', value: 'single_phase' }
+  ])('normalizes phase only from an explicit phase or unit-bound voltage: $specs', ({ specs, expected, value }) => {
+    const product = generator('phase-evidence', 'Генератор GENERIC G5000', specs);
+    const requirement: SelectionRequirement = { id: 'phase-proof', kind: 'phase', value: 'single_phase', unit: null,
+      role: 'hard_constraint', strictness: 'strict', evidence: 'single phase', verification: { mode: 'product_attribute' } };
+    const request: ToolRequest = { id: 'catalog-search', tool: 'catalog.search', args: { query: 'generator' },
+      rationale: 'read catalog electrical characteristics', required: true };
+    expect(buildRequirementProofs({ products: [product], intent: intentFor({ requirement, request }), toolResults: [catalogResult([product])] }))
+      .toContainEqual(expect.objectContaining({ productId: product.id, status: expected, normalizedValue: value }));
+  });
+
   it.each([
     { specs: { phases: '1, 230 В / 50 Гц, ток 22 А' }, expected: 'satisfied', value: 230 },
     { specs: { phases: 1 }, expected: 'unverified', value: null },

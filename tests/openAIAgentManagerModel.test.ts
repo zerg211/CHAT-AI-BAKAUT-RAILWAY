@@ -156,8 +156,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     ]);
     for (const [call] of createStructuredJsonResponse.mock.calls) {
       const data = JSON.parse(call.request.input.find((item: { role: string }) => item.role === 'user').content);
-      expect(data.verifiedProductFacts).toEqual(input.verifiedProductFacts);
-      expect(data.conflictingVerifiedProductFacts).toEqual(input.conflictingVerifiedProductFacts);
+      const semanticFacts = (facts: VerifiedProductFact[]) => facts.map(({ hitCount, firstSeenAt, createdAt, updatedAt, catalogSourceHash, sourceFingerprint, ...evidence }) => evidence);
+      expect(data.verifiedProductFacts).toEqual(semanticFacts(input.verifiedProductFacts ?? []));
+      expect(data.conflictingVerifiedProductFacts).toEqual(semanticFacts(input.conflictingVerifiedProductFacts ?? []));
       expect(data.toolResults).toEqual([]);
     }
     const writer = createStructuredJsonResponse.mock.calls[1]![0].request;
@@ -170,6 +171,33 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(reviewer.text.format.schema.properties.factualIssues.maxItems).toBe(5);
     expect(reviewer.text.format.schema.properties.factualIssues.items.properties.sourceResultId.enum)
       .toEqual(kind === 'verified' ? ['verified_fact:saved-force'] : ['verified_fact:saved-force', 'verified_fact:conflicting-force']);
+  });
+
+  it('shares full web product descriptions once across observation, answer and review without truncating source evidence', async () => {
+    const product = { id: 'exact-product', name: 'Exact model', specs: { oil: '10W-30' },
+      description: `${'Source description. '.repeat(100)}CRITICAL_SOURCE_TAIL`, raw: { manualNote: 'Do not fit a battery.' } };
+    const toolResults = ['web-one', 'web-two'].map((requestId) => ({ requestId, tool: 'web.researchProductFacts' as const,
+      status: 'ok' as const, warnings: [], payload: { products: [structuredClone(product)], facts: [] } }));
+    const input = { session: { needState: emptyNeedState() }, history: [], userMessage: 'How to start it?', ledgerEvents: [],
+      ledgerState: reduceDialogueLedger([]), products: [product], toolResults, verifiedProductFacts: [],
+      intent: AgentIntentContractSchema.parse({ userMessageSummary: 'Startup', dialogueUnderstanding: 'Exact model',
+        nextStepRationale: 'Read the source.', requiresTools: false, toolRequests: [], riskFlags: [] }),
+      round: 1, remainingBudget: new AgentManagerTurnBudget().snapshot(), answerText: 'Use the manual starter.' };
+    const original = structuredClone(input);
+    createStructuredJsonResponse.mockRejectedValue(new Error('offline capture'));
+    const model = new OpenAIAgentManagerModel();
+    for (const method of ['assessObservations', 'composeAnswer', 'reviewCustomerLanguage'] as const) {
+      await expect((model[method] as (input: unknown) => Promise<unknown>)(input)).rejects.toThrow('offline capture');
+      const request = createStructuredJsonResponse.mock.calls.at(-1)![0].request;
+      const content = request.input.find((item: { role: string }) => item.role === 'user').content;
+      const data = JSON.parse(content);
+      expect(content.split('CRITICAL_SOURCE_TAIL')).toHaveLength(2);
+      expect(data.products[0]).toMatchObject({ description: product.description, raw: product.raw });
+      expect(data.toolResults.every((result: { payload: Record<string, unknown> }) => !('products' in result.payload))).toBe(true);
+      expect(data.toolResults.map((result: { payload: Record<string, unknown> }) => result.payload.productIds))
+        .toEqual([[product.id], [product.id]]);
+    }
+    expect(input).toEqual(original);
   });
 
   it('creates ledger delta and executable intent in one structured semantic request', async () => {
@@ -192,6 +220,10 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       metadata: {},
       createdAt: now
     }));
+    history[1]!.metadata = { productCards: [], intentContract: { productMentions: [
+      { name: 'ТСС SGG 5000N, артикул 060007', role: 'target_product', productClass: 'generator', evidence: 'ТСС SGG 5000N' },
+      { name: 'Consumer MODEL 100', role: 'context_load_device', productClass: null, evidence: 'Consumer MODEL 100' }
+    ] } };
     createStructuredJsonResponse.mockResolvedValueOnce({
       parsed: {
         ledgerDelta: { rationale: 'preserve the current need', events: [] },
@@ -260,8 +292,12 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       history?: unknown[];
       rejectedSemanticDecision?: unknown;
       semanticValidationIssueHistory?: string[];
+      priorProductTargets?: unknown[];
     };
     expect(input.history).toHaveLength(20);
+    expect(input.priorProductTargets).toEqual([{
+      name: 'ТСС SGG 5000N, артикул 060007', productClass: 'generator', messageId: history[1]!.id
+    }]);
     expect(input.rejectedSemanticDecision).toEqual(rejectedSemanticDecision);
     expect(input.semanticValidationIssueHistory).toEqual([
       'active_requirement_mismatch:generator_load_scenario'
@@ -271,6 +307,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(systemPrompt).toContain('value.loads факта generator_load_scenario');
     expect(systemPrompt).toContain('Факты о мощности потребителя');
     expect(systemPrompt).toContain('productMentions.evidence');
+    expect(systemPrompt).toContain('Для разрешённой анафоры сохрани историческую модель');
+    expect(systemPrompt).toContain('sourceMessageId');
+    expect(systemPrompt).not.toContain('убери mention, которого в текущей реплике нет');
     expect(systemPrompt).toContain('nominal_power_kw=true');
     expect(systemPrompt).toContain('не создавай need.opened');
     expect(systemPrompt).toContain('удали lead.capture из requiredToolKinds/toolRequests');
@@ -634,6 +673,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(plannerPrompt).not.toContain('смена задачи бюджет не сбрасывает');
     expect(plannerPrompt).toContain('Топливо/источник энергии не выдумывай');
     expect(plannerPrompt).toContain('catalog.search limit ставь с запасом');
+    expect(plannerPrompt).toContain('catalog.search всегда имеет непустой args.query');
+    expect(plannerPrompt).toContain('loads.kind — открытый семантический идентификатор');
+    expect(plannerPrompt).not.toContain('loads.kind — канонические:');
     expect(plannerPrompt).toContain('текущего activeNeedId и явно общие scope=dialogue без needId');
     expect(plannerPrompt).toContain('те же kind, значение, единицу и relation, включая старые ходы');
     expect(plannerPrompt).toContain('локальные факты остаются у paused темы для возврата');

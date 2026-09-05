@@ -637,6 +637,18 @@ describe('combined semantic decision validation', () => {
     expect(result.issues).toContain('generator_load_scenario_unexecutable_load:unknown_load:machine');
   });
 
+  it.each(['kettle', 'electric_oven', 'laboratory_heater'])('executes an explicitly powered semantic %s kind without restricting it to a prompt list', (kind) => {
+    const decision = generatorDecision();
+    const request = decision.intent.toolRequests.find((item) => item.tool === 'calculator.generatorLoad')!;
+    const machine = request.args.loads?.find((load: unknown) => (load as { name?: string }).name === 'machine') as Record<string, unknown>;
+    machine.kind = kind;
+    const scenarioEvent = decision.ledgerDelta.events.find((event) => event.payload.factKey === 'generator_load_scenario')!;
+    const scenarioValue = scenarioEvent.payload.value as { loads: Array<Record<string, unknown>> };
+    scenarioValue.loads.find((load) => load.name === 'machine')!.kind = kind;
+
+    expect(validateMemoryDecision(decision).issues).toEqual([]);
+  });
+
   it('rejects calculator execution without a persisted structured load scenario', () => {
     const decision = generatorDecision();
     decision.ledgerDelta.events = decision.ledgerDelta.events.filter((event) =>

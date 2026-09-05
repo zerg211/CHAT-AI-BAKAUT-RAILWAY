@@ -898,6 +898,48 @@ describe('product comparison research', () => {
     expect(actual.warnings).not.toContain('web_research_not_needed:catalog_extraction_answered');
   });
 
+  it.each(['supported', 'unread_source', 'reader_timeout'] as const)('reads a discovered manual with source validation: %s', async (mode) => {
+    const manualUrl = 'https://www.firman.biz/manuals/RD3910E.pdf';
+    const quote = 'FIRMAN RD3910E: first oil change after 20 hours.';
+    fetchMock.mockImplementation(async () => sourceResponse('%PDF-mocked', 'application/pdf'));
+    extractPdfTextMock.mockResolvedValue({ text: quote, totalPages: 1, parsedPages: 1, truncated: false });
+    createStructuredJsonResponse.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') return semanticValidationResponse(call);
+      if (call.stage === 'product_research_document_read') {
+        const payload = JSON.parse(call.request.input.find((item: { role: string }) => item.role === 'user').content);
+        expect(payload.documents).toEqual([expect.objectContaining({ sourceUrl: manualUrl, text: quote })]);
+        expect(call.request.tools).toBeUndefined();
+        if (mode === 'reader_timeout') throw Object.assign(new Error('deadline'), { code: 'structured_json_deadline_exceeded' });
+        return { parsed: result({ facts: [{ productName: 'FIRMAN RD3910E', attribute: 'first_oil_change', value: '20 hours',
+          sourceType: 'web', confidence: 'high', evidence: quote, sourceUrl: mode === 'unread_source' ? 'https://www.firman.biz/unread.pdf' : manualUrl,
+          sourceTitle: 'FIRMAN RD3910E manual' }] }) };
+      }
+      const manual = call.stage === 'product_comparison_research_official_manual';
+      const tier = manual ? 'official_manual' : 'official_page';
+      const query = `FIRMAN RD3910E ${tier}`;
+      return { parsed: result({ sourceAttempts: [{ tier, query, outcome: manual ? 'unreadable' : 'not_found' }] }),
+        response: { output: [{ type: 'web_search_call', status: 'completed', action: {
+          query, sources: manual ? [{ url: manualUrl, title: 'FIRMAN RD3910E manual' }] : []
+        } }] } };
+    });
+    const actual = await researchProductComparisonFacts({ userMessage: 'Когда первая замена масла?', products: [product()],
+      targetProductNames: ['FIRMAN RD3910E'], comparisonAttributes: ['first_oil_change'],
+      missingFactSlots: [{ productName: 'FIRMAN RD3910E', attribute: 'first_oil_change' }],
+      precomputedCatalogResult: null, catalogSearchAttempted: true, catalogProductsFound: true });
+    if (mode === 'supported') {
+      expect(actual.facts).toContainEqual(expect.objectContaining({ attribute: 'first_oil_change', value: '20 hours',
+        sourceTier: 'official_manual', sourceUrl: manualUrl }));
+    } else {
+      expect(actual.facts).toEqual([]);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(createStructuredJsonResponse.mock.calls.some(([call]) => call.stage === 'product_research_document_read')).toBe(true);
+    expect(actual.usedWebSearch).toBe(true);
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(actual.sourceCandidates).toContainEqual(expect.objectContaining({ url: manualUrl }));
+    if (mode === 'reader_timeout') expect(actual.warnings).toContain('document_read_timed_out');
+  });
+
   beforeEach(() => {
     queuedResearchResponses.length = 0;
     createStructuredJsonResponse.mockReset();

@@ -62,6 +62,7 @@ function arrangeManual(sourceText = `${scopeQuote} ${generalQuote}`, validation:
   parsePdf.mockResolvedValue({ text: `${sourceText} ${publisherQuote}`, totalPages: 32, parsedPages: 32, truncated: false });
   structured.mockImplementation(async (call) => {
     if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call, validation);
+    if (call.stage === 'product_research_document_read') return webResponse('official_manual', { evidence: quote });
     return webResponse(call.stage.slice('product_comparison_research_'.length),
       call.stage.endsWith('_official_manual') ? { evidence: quote } : undefined);
   });
@@ -143,6 +144,7 @@ describe('production web research regressions', () => {
           sourceUrl: 'https://www.firman.biz/product/rd3910e', evidenceVerifiedExact: true }],
         answerGuidance: { coverage: [{ productName: target, attribute, status: 'not_confirmed', value: '', evidence: 'Manual could not be read.' }] },
         sourceDiagnostics: [{ url: sharedUrl, reason: 'timeout', elapsedMs: 10001 }],
+        sourceCandidates: [{ url: sharedUrl, title: 'Discovered manual' }],
         sourceAttempts: [{ tier: 'official_manual', outcome: 'unreadable', query: 'FIRMAN RD3910E manual', sources: [{ url: sharedUrl }] }] } }];
     const actual = await research({ researchGoal, previousResearch });
     const calls = structured.mock.calls.map(([call]) => call).filter((call) => call.stage.startsWith('product_comparison_research_'));
@@ -153,6 +155,7 @@ describe('production web research regressions', () => {
       expect(payload.researchGoal).toEqual(researchGoal);
       expect(payload.previousResearch).toEqual([expect.objectContaining({ requestId: 'web-original',
         facts: [expect.objectContaining({ productName: target, value: 'manual recoil' })],
+        sourceCandidates: [{ url: sharedUrl, title: 'Discovered manual' }],
         sourceDiagnostics: [expect.objectContaining({ url: sharedUrl, reason: 'timeout' })],
         sourceAttempts: [expect.objectContaining({ query: 'FIRMAN RD3910E manual', outcome: 'unreadable' })] })]);
       const instructions = call.request.input.find((item: any) => item.role === 'system').content;
@@ -300,7 +303,7 @@ describe('production web research regressions', () => {
     const query = structured.mock.calls.find(([call]) => call.stage.endsWith('_official_manual'))![0];
     const validation = structured.mock.calls.find(([call]) => call.stage === 'source_evidence_semantic_validation')![0];
     expect(validation.deadlineAtMs - query.deadlineAtMs).toBeGreaterThanOrEqual(5_000);
-    expect(validation.deadlineAtMs).toBeLessThanOrEqual(1_024_000);
+    expect(validation.deadlineAtMs).toBeLessThanOrEqual(1_038_000);
     expect(actual.facts).toHaveLength(1);
   });
 

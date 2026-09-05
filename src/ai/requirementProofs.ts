@@ -69,6 +69,7 @@ type ProofCandidate = {
   resultId: string;
   authority: 1 | 2 | 3;
   sourceAuthority: Exclude<RequirementProofSourceAuthority, 'none'>;
+  reportedConflict?: boolean;
 };
 
 type NormalizedComparable = {
@@ -120,7 +121,7 @@ function hasOnlyConceptWords(words: Set<string>, values: string[]) {
 function canonicalAttribute(value: unknown) {
   const words = new Set(normalizedWords(value));
   const has = (...values: string[]) => hasAnyWords(words, values);
-  if (has('phase', 'phases', 'фаза', 'фазность')) return 'phase';
+  if (has('phase', 'phases', 'фаза', 'фазы', 'фаз', 'фазность')) return 'phase';
   if (has('voltage', 'volt', 'напряжение', 'вольтаж')) return 'voltage';
   if (has('fuel', 'топливо')) return 'fuel_type';
   if (textHasAny(value, [
@@ -400,12 +401,20 @@ function normalizeComparable(input: {
   if (attribute === 'voltage') return voltageMeasurement(input.value, input.sourceAttribute ?? input.attribute);
 
   if (attribute === 'phase') {
-    const words = new Set(normalizedWords(rawText));
-    const single = textHasAny(rawText, ['single phase', 'one phase', 'однофазный']) || words.has('220') || words.has('230');
-    const three = textHasAny(rawText, ['three phase', '3 phase', 'трехфазный', 'трёхфазный']) || words.has('380') || words.has('400');
+    const sourceAttribute = input.sourceAttribute ?? input.attribute;
+    const phaseCount = canonicalAttribute(sourceAttribute) === 'phase' ? Number(rawText) : NaN;
+    const voltage = voltageMeasurement(input.value, sourceAttribute).value;
+    const single = phaseCount === 1 || voltage === 220 || voltage === 230 || textHasAny(rawText, [
+      'single phase', 'one phase', '1 phase', '1 фаза', 'однофазный', 'однофазная', 'однофазное', 'однофазные'
+    ]);
+    const three = phaseCount === 3 || voltage === 380 || voltage === 400 || textHasAny(rawText, [
+      'three phase', '3 phase', '3 фазы', 'трехфазный', 'трёхфазный', 'трехфазная', 'трёхфазная',
+      'трехфазное', 'трёхфазное', 'трехфазные', 'трёхфазные'
+    ]);
     if (single && three) return { value: 'mixed_phase', unit: null };
     if (single) return { value: 'single_phase', unit: null };
     if (three) return { value: 'three_phase', unit: null };
+    return { value: null, unit: null };
   }
 
   if (attribute === 'auto_start') {
@@ -775,7 +784,8 @@ function webCandidates(input: {
       rawUnit: conflict.attribute,
       resultId: input.result.requestId,
       authority: 1,
-      sourceAuthority: 'catalog'
+      sourceAuthority: 'catalog',
+      reportedConflict: true
     });
   }
   return candidates;
@@ -813,7 +823,7 @@ function proofForProduct(input: {
       sourceAttribute: candidate.attribute,
       preferNumeric: typeof input.requirement.value === 'number'
     })
-  })).filter((item) => attribute !== 'voltage' || item.comparable.value !== null);
+  })).filter((item) => (attribute !== 'voltage' && attribute !== 'phase') || item.comparable.value !== null);
   if (!normalizedCandidates.length) {
     return {
       requirementId: input.requirement.id,
@@ -855,7 +865,9 @@ function proofForProduct(input: {
   const selectedKey = comparableKey(selected.comparable, attribute);
   const lowerConflict = normalizedCandidates.some((item) =>
     item.candidate.authority < topAuthority && comparableKey(item.comparable, attribute) !== selectedKey
-  );
+  ) || productCandidates.some((candidate) => candidate.reportedConflict && candidate.authority < topAuthority &&
+    normalizeComparable({ value: candidate.rawValue, unit: candidate.rawUnit, attribute,
+      sourceAttribute: candidate.attribute, preferNumeric: typeof input.requirement.value === 'number' }).value === null);
   if (lowerConflict && topAuthority < 3) {
     return {
       requirementId: input.requirement.id,

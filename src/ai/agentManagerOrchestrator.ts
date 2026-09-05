@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { ZodError } from 'zod';
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
@@ -37,7 +38,7 @@ import {
 } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
-import { compactToolResultsForModel } from './agentManagerModelContext.js';
+import { compactToolResultsForModel, compactVerifiedFactsForModel } from './agentManagerModelContext.js';
 import {
   CONTINUATION_MAX_ROUNDS,
   continuationValidationIssues,
@@ -342,6 +343,21 @@ export function priorVisibleProductsFromHistory(history: Message[]) {
     }
   }
   return [...byId.values()];
+}
+
+export function priorProductTargetsFromHistory(history: Message[]) {
+  return history.slice(-40).reverse().flatMap((message) => {
+    if (message.role !== 'assistant') return [];
+    const intent = message.metadata?.intentContract as AgentIntentContract | undefined;
+    const targets = (intent?.productMentions ?? [])
+      .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+      .map((mention) => ({ name: mention.name, productClass: mention.productClass ?? null }));
+    const cards = visibleHistoryCards(message).map((card) => ({
+      name: card.name, productClass: intent?.selectionPolicy?.canonicalProductClass ?? null
+    }));
+    return [...new Map([...targets, ...cards].map((target) => [target.name, target])).values()]
+      .slice(0, 8).map((target) => ({ ...target, messageId: message.id }));
+  }).slice(0, 24);
 }
 
 function compactLedger(state: ReducedDialogueLedgerState) {
@@ -893,12 +909,14 @@ function semanticAuthorityIssues(input: {
   events: DialogueLedgerEvent[];
   userMessage?: string;
   historicalToolResults?: ToolResult[];
+  history?: Message[];
   provenExhaustedHandoffContinuation?: boolean;
 }) {
   const intent = input.decision.intent;
   const policy = intent.selectionPolicy;
   const grounding = intent.grounding;
   const issues: string[] = [];
+  const historicalTargets = priorProductTargetsFromHistory(input.history ?? []);
   if (!policy) issues.push('selection_policy_missing');
   if (!grounding || grounding.rationale === DEFAULT_AGENT_INTENT_GROUNDING_RATIONALE) {
     issues.push('grounding_policy_missing');
@@ -910,6 +928,17 @@ function semanticAuthorityIssues(input: {
     for (const [index, mention] of (intent.productMentions ?? []).entries()) {
       if (!productMentionEvidenceGrounded(mention.evidence, input.userMessage)) {
         issues.push(`product_mention_evidence_not_in_current_message:${index}`);
+      }
+      const historicalReference = Boolean(mention.sourceMessageId) ||
+        mention.sourceMessageId !== undefined && input.history !== undefined && exactTargetProductMentionRoles.has(mention.role) &&
+        modelIdentifierTokens(mention.name).length > 0 && !textMatchesTargetName(input.userMessage, mention.name);
+      if (historicalReference && !historicalTargets.some((target) =>
+        target.messageId === mention.sourceMessageId &&
+        compactModelText(target.name) === compactModelText(mention.name) &&
+        (!target.productClass || typedProductClassKey(target.productClass, target.productClass) ===
+          typedProductClassKey(mention.productClass, mention.productClass))
+      )) {
+        issues.push(`product_mention_history_reference_unverified:${index}`);
       }
     }
   }
@@ -1024,6 +1053,13 @@ function semanticAuthorityIssues(input: {
     issues.push(...generatorLoadSemanticFieldIssues(request));
     if (request.tool === 'web.researchProductFacts') {
       const names = requestStringArray(request.args.productNames);
+      if (policy?.alternativePolicy === 'exact_only' &&
+        (grounding?.taskType === 'technical_answer' || grounding?.taskType === 'comparison') &&
+        (historicalTargets.length > 0 || (intent.productMentions ?? []).some((mention) =>
+          exactTargetProductMentionRoles.has(mention.role))) &&
+        (!names.length || !(intent.productMentions ?? []).some((mention) => exactTargetProductMentionRoles.has(mention.role)))) {
+        issues.push(`exact_product_research_target_missing:${request.id}`);
+      }
       const requestClassKey = typedProductClassKey(
         request.args.canonicalProductIntent,
         request.args.productIntent
@@ -1169,6 +1205,7 @@ export function validateAgentSemanticDecision(input: {
   turnId: string;
   userMessage?: string;
   historicalToolResults?: ToolResult[];
+  history?: Message[];
   provenExhaustedHandoffContinuation?: boolean;
 }) {
   const events = normalizeLedgerStateDeltaEvents({
@@ -1183,6 +1220,7 @@ export function validateAgentSemanticDecision(input: {
     events,
     userMessage: input.userMessage,
     historicalToolResults: input.historicalToolResults,
+    history: input.history,
     provenExhaustedHandoffContinuation: input.provenExhaustedHandoffContinuation
   }));
   const activeNeed = getActiveDialogueNeed(ledgerState);
@@ -1709,7 +1747,12 @@ function compactProductDescription(value: unknown, limit = 1200) {
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 
-function answerProductContext(product: ResolvedProduct) {
+function answerProductContext(product: ResolvedProduct, toolResults: ToolResult[]) {
+  // Web artifacts may contain source text beyond the usual catalog summary.
+  // When their exact product copy is shared, keep that full evidence once here.
+  const hasSharedWebSource = toolResults.some((result) => result.tool === 'web.researchProductFacts' &&
+    Array.isArray(result.payload?.products) && result.payload.products.some((source: unknown) => isDeepStrictEqual(source, product)));
+  if (hasSharedWebSource) return { ...product };
   return {
     id: product.id,
     name: product.name,
@@ -3935,6 +3978,11 @@ const nullableIntegerRangeJsonSchema = (minimum: number, maximum: number) => ({
   maximum
 });
 const scalarValueJsonSchema = { type: ['string', 'number', 'boolean', 'null'] } as const;
+const electricalLoadKindJsonSchema = {
+  type: 'string',
+  minLength: 1,
+  description: 'An open semantic identifier for the actual electrical consumer, inferred by the planner from the stated device or function. Use an existing canonical kind only when it is accurate; the examples are not an exhaustive enum. Keep the same identifier in the ledger and calculator. Do not label a known powered device unknown_load merely because it is absent from examples, or substitute the product being selected.'
+} as const;
 const generatorLoadScenarioLedgerValueJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -3946,7 +3994,7 @@ const generatorLoadScenarioLedgerValueJsonSchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          kind: { type: 'string', minLength: 1 },
+          kind: electricalLoadKindJsonSchema,
           name: nullableStringJsonSchema,
           count: nullableNumberJsonSchema,
           runningKw: nullableNumberJsonSchema,
@@ -4118,7 +4166,7 @@ const loadItemArgsJsonSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    kind: { type: 'string', minLength: 1 },
+    kind: electricalLoadKindJsonSchema,
     name: nullableStringJsonSchema,
     count: nullableNumberJsonSchema,
     runningKw: nullableNumberJsonSchema,
@@ -4194,6 +4242,7 @@ const commonCatalogToolArgsJsonProperties = {
 
 const catalogSearchToolArgsJsonSchema = strictJsonObject({
   ...commonCatalogToolArgsJsonProperties,
+  query: { type: 'string', minLength: 1, description: 'A nonempty catalog search query expressing the selected model, product class or buyer need. Required even when semanticQuery or canonicalProductIntent is present.' },
   limit: nullableIntegerRangeJsonSchema(1, 12),
   comparisonAttributes: boundedStringArrayJsonSchema(12),
   reason: nullableStringJsonSchema,
@@ -4342,9 +4391,10 @@ const productMentionJsonSchema = {
       ]
     },
     productClass: nullableStringJsonSchema,
-    evidence: { type: 'string' }
+    evidence: { type: 'string', description: 'An exact quote from the current buyer message, including the reference phrase when the model name comes from history.' },
+    sourceMessageId: { type: ['string', 'null'], description: 'For a historical model reference, copy its messageId and exact name from priorProductTargets. Otherwise null. This identifies the source of the model identity, not a replacement for current-message evidence.' }
   },
-  required: ['name', 'role', 'productClass', 'evidence']
+  required: ['name', 'role', 'productClass', 'evidence', 'sourceMessageId']
 } as const;
 
 const groundingJsonSchema = {
@@ -4744,18 +4794,19 @@ function plannerSystemPromptBlock(
     'policyRuleIds — только коды из SALES POLICY по смыслу хода; обязательные правила применяются всегда.',
     'sourcePolicy="web_required" или requiredToolKinds с web.researchProductFacts → toolRequests обязан содержать web.researchProductFacts (без named model: productNames=[], query/semanticQuery = смысл вопроса, comparisonAttributes = запрошенные факты).',
     'Наличие/доставка/скидки/сроки — не обещай. Пока разрешённого контакта нет, leadCaptureAuthorization.authorized=false, не включай lead.capture в requiredToolKinds/toolRequests: ответ должен предложить форму через leadAction="offer_form". Только при authorized=true планируй required lead.capture. Сравнение и нехватка важных фактов — web.researchProductFacts.',
-    'catalog.search — только при понятном классе/модели/задаче. Широкий запрос без задачи («что у вас есть», «инструмент») → один главный уточняющий вопрос вместо поиска.',
+    'catalog.search — только при понятном классе/модели/задаче. catalog.search всегда имеет непустой args.query по этой модели, классу или потребности; semanticQuery и canonicalProductIntent его не заменяют. Широкий запрос без задачи («что у вас есть», «инструмент») → один главный уточняющий вопрос вместо поиска.',
     'Сначала получай доступные каталожные факты; technicalAttributes сами по себе не доказывают пробел и не требуют заранее добавлять web. После результатов оцени достаточность: решающий пробел или конфликт требует самостоятельной web-проверки в текущем ходе, а достаточные факты позволяют ответить. Для заранее известного пробела планируй conditional_on_catalog_gap; явно обязательная внешняя проверка остаётся обязательной независимо от полноты каталога. specialist_required — только когда каталог и web не могут ответить.',
     'Прежние карточки не подходят после сужения — свежий catalog.search в том же классе; ответ отклоняет старые по причине и показывает замену.',
     'calculator.generatorLoad — для расчета по нагрузкам. Для каждого load семантически определи operationMode: continuous, occasional или separate; coRunningGroup объединяет только те occasional/separate нагрузки, которые реально работают вместе. simultaneousRunning=true только когда все перечисленные нагрузки работают вместе; simultaneousStarting=true только при возможном одновременном старте. Код не выводит режим из evidence.',
     'loads — только при защищенной базе: estimateBasis exact_or_user_provided (явные кВт) / catalog_or_web_fact (проверенные) / bounded_assumption (приблизительный подбор, нагрузка ограничена типом/функцией/сценарием) / unbounded_guess (только широкие названия). runningSource и startingSource указывают происхождение каждого числа отдельно; not_provided означает, что соответствующего числа нет. Не приписывай пусковое значение к runningKw и наоборот.',
     'Не опускай известного важного потребителя без кВт: включи с null и incomplete basis; при конкретном типе/функции + напряжении/фазе и просьбе предварительных вариантов — сам верни консервативные численные runningKw/startingKw как bounded_assumption. Код не подставит типовую мощность и не умножит пусковой ток. basisKind: exact_power / checked_fact / specific_type_or_function / generic_load_name / unknown. basisSignals — только из диалога/фактов («насос» сам по себе generic; скважинный/дренажный/циркуляционный — specific). bounded_assumption для мотора требует specific_type_or_function + известный тип/функцию + напряжение/фазу, иначе unbounded_guess и один минимальный вопрос. source="explicit_user" только когда оба числа явно даны покупателем; для смешанной provenance используй runningSource/startingSource.',
-    'loads.kind — канонические: pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop, unknown_load; описания — в name/evidence.',
+    'loads.kind — открытый семантический идентификатор реального потребителя, определяемый LLM по названному устройству или функции. Известные канонические kind (pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop) используй только когда они точны; это примеры, не закрытый список. Для другого понятного потребителя выбери точный краткий идентификатор и сохрани его одинаково в ledger и args.loads. Известное устройство с заданной мощностью не превращай в unknown_load из-за отсутствия в примерах и не подменяй другим прибором или выбираемым генератором. name/evidence сохраняют название и источник; неизвестные числа остаются null с not_provided.',
     'Для generator_load_scenario сохрани полный structured value: loads со всеми operationMode/coRunningGroup/provenance полями, simultaneousRunning, simultaneousStarting; каждый load из ledgerDelta присутствует в args.loads.',
     'preliminary_fit: unbounded guess → не заявляй fit, спроси тип/функцию/сценарий. browse_catalog: unbounded расчет не блокирует показ диапазона мощности/моделей/цен без обещания совместимости. Достаточный контекст для bounded оценки → calculator + catalog; слишком vague → уточнение вместо поиска. Пустой fit-запрос — ноль заявленных требований (мощность/нагрузка кВт, приборы, бюджет, топливо, фаза, модель, площадь или объем работ): это needs_more_info, не preliminary_fit — уточнение вместо поиска и калькулятора, даже если класс товара ясен. preliminary_fit требует минимум одного заявленного требования покупателя. Явные browse-просьбы («что есть», «покажи варианты», «что подешевле», «ассортимент») — browse_catalog.',
     'Генераторы: первая карточка — минимальный номинал из каталога с nominal >= requiredNominalKw. Карточка с nominal > requiredNominalKw×1.5 — только позиции 2+ и только с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование превышения. Тип топлива, бренд и ресурс не меняют requiredNominalKw. Неизвестный пуск мотора — это один главный вопрос (без final fit) либо допущение строго в формате «принят пусковой коэффициент K=[значение] для [устройство]» с пересчётом номинала в тексте; K — только из слов покупателя, шильдика или проверенного факта, K из головы запрещён. Неизвестный пуск — никогда strict требование. Топливо не заявлено (powerSource any) — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». fit = сначала минимальное превышение nominal над required сверху, затем цена/вес по rankingObjectives; надёжность в fit не входит.',
     'productMentions для каждой названной модели/товара с ролью: target_product (хочет купить/проверить), catalog_candidate (рассматриваемая альтернатива), comparison_subject (сравнение), context_load_device (потребитель для расчета), compatibility_context (оборудование-партнер), mentioned_only. evidence копируй как точный непустой фрагмент текущего userMessage; для разрешённой анафоры evidence — точная фраза-ссылка из текущей реплики. context_load_device/compatibility_context не попадают в web args.productNames (котёл Baxi в «генератор для котла Baxi» — не цель). Только target_product/catalog_candidate/comparison_subject движут presence/web/nearby. Если в одном ходе явно запрошены разные классы товаров, selectionPolicy описывает главный класс и required catalog request этого же класса обязателен, а каждый дополнительный искомый класс получает отдельный target_product productMention с точным evidence/productClass и отдельный catalog request; не своди аксессуар к классу основного товара. Каждый web request также несёт свой canonicalProductIntent и исследует только товары этого класса.',
-    'Анафору разрешай по реальным показам: history.productCards сохраняет ordinal внутри messageId, а priorVisibleProducts.occurrences хранит все прежние messageId/createdAt/ordinal, даже повторные показы одной модели. Первая в прежнем и последнем списках может быть разной. Выбери нужный показ и товар по смыслу реплики; неоднозначность уточни одним вопросом. productMentions role="target_product" с точным именем; для фактов catalog.getProductDetails по productIds или productNames.',
+    'Анафору разрешай по истории: priorProductTargets сохраняет точные прежние target names и messageId даже после технического ответа без карточек. Для ссылки на прежнюю модель скопируй её name и sourceMessageId оттуда в productMention, а evidence возьми из текущей реплики как точную фразу-ссылку. Не требуй повторного имени модели от покупателя и не удаляй разрешённую историческую цель из-за отсутствия имени в текущем сообщении. При model-specific техническом web-запросе exact_only передай это точное имя также в args.productNames: одного имени в свободном query недостаточно. Общий технический вопрос не наследует модель автоматически; сам реши смысл по контексту, неоднозначность уточни.',
+    'Анафору по карточкам разрешай по реальным показам: history.productCards сохраняет ordinal внутри messageId, а priorVisibleProducts.occurrences хранит все прежние messageId/createdAt/ordinal, даже повторные показы одной модели. Первая в прежнем и последнем списках может быть разной. Выбери нужный показ и товар по смыслу реплики; неоднозначность уточни одним вопросом. productMentions role="target_product" с точным именем; для фактов catalog.getProductDetails по productIds или productNames.',
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
     'Новая модель в текущем ходе → не переиспользуй факты прежней модели, даже при «same», без evidence scoped к тому же идентификатору.',
     'Мультиходовый подбор генератора: при прежнем расчете нагрузок в истории перезапусти calculator.generatorLoad в текущем ходе перед catalog.search, чтобы результаты несли payload.profile.requiredNominalKw.',
@@ -4776,7 +4827,10 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     );
     const issueGuidance = [
       hasIssue('product_mention_evidence_not_in_current_message')
-        ? 'productMentions.evidence должен быть точной непрерывной подстрокой текущего userMessage; исправь evidence или убери mention, которого в текущей реплике нет.'
+        ? 'productMentions.evidence должен быть точной непрерывной подстрокой текущего userMessage. Для разрешённой анафоры сохрани историческую модель, скопируй её точные name/sourceMessageId из priorProductTargets и исправь только evidence на текущую фразу-ссылку; отсутствие имени модели в текущем сообщении не повод удалять цель. Удаляй mention только если он действительно не относится к смыслу текущего вопроса.'
+        : '',
+      hasIssue('product_mention_history_reference_unverified') || hasIssue('exact_product_research_target_missing')
+        ? 'Сохрани точную цель технического продолжения: выбери относящийся к текущему вопросу priorProductTargets элемент, скопируй name/sourceMessageId в productMention с текущей evidence-фразой и name в web args.productNames. Не подменяй модель соседней модификацией и не оставляй её только в query. Если вопрос действительно общий или ссылка неоднозначна, согласуй семантическую политику или уточни; не выбирай историческую модель автоматически.'
         : '',
       hasIssue('required_catalog_tool_missing') || hasIssue('required_primary_catalog_tool_missing') || hasIssue('required_tool_request_missing:catalog.search')
         ? 'Если rejected decision действительно ищет или рекомендует товар сейчас, добавь required catalog.search с непустым args.query и canonicalProductIntent. Если текущий шаг — квалификация перед подбором, сохрани taskType="product_selection", выбери responseMode="clarify" и согласуй catalogRequirement="none", sourcePolicy="conversation_only", webRequirement="none", requiredToolKinds=[], toolRequests=[], requiresTools=false, maxCards=0. Не добавляй каталог только из-за цели обращения; не отменяй независимую проверку фактов, необходимую для ответа сейчас.'
@@ -4877,6 +4931,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             userMessage: input.userMessage,
             history: compactHistory(input.history),
             priorVisibleProducts: priorVisibleProductsFromHistory(input.history),
+            priorProductTargets: priorProductTargetsFromHistory(input.history),
             existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
             existingLedger: input.ledgerEvents.slice(-80),
             pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null,
@@ -4959,6 +5014,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             userMessage: input.userMessage,
             history: compactHistory(input.history),
             ledger: compactLedger(input.ledgerState),
+            priorProductTargets: priorProductTargetsFromHistory(input.history),
             ledgerIncludesCurrentTurnDelta: input.ledgerIncludesCurrentTurnDelta === true,
             pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null,
             pendingExhaustedTechnicalHandoffs: input.pendingExhaustedTechnicalHandoffs ??
@@ -5103,9 +5159,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           content: JSON.stringify({
             userMessage: input.userMessage ?? null,
             answerText: input.answerText,
-            products: input.products.map(answerProductContext),
-            verifiedProductFacts: input.verifiedProductFacts ?? [],
-            conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts ?? [],
+            products: input.products.map((product) => answerProductContext(product, input.toolResults)),
+            verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
+            conflictingVerifiedProductFacts: compactVerifiedFactsForModel(input.conflictingVerifiedProductFacts ?? []),
             toolResults: compactToolResultsForModel(input.toolResults, input.products)
           })
         }],
@@ -5181,9 +5237,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           history: compactHistory(input.history),
           state: compactLedger(input.ledgerState),
           intent: input.intent,
-          products: input.products.map(answerProductContext),
-          verifiedProductFacts: input.verifiedProductFacts ?? [],
-          conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts ?? [],
+          products: input.products.map((product) => answerProductContext(product, input.toolResults)),
+          verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
+          conflictingVerifiedProductFacts: compactVerifiedFactsForModel(input.conflictingVerifiedProductFacts ?? []),
           toolResults: compactToolResultsForModel(input.toolResults, input.products),
           round: input.round,
           maxReadRounds: CONTINUATION_MAX_ROUNDS,
@@ -5274,10 +5330,10 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             requiredResponseClauses: input.requiredResponseClauses ?? [],
             continuation: input.continuation ?? null,
             availableEvidenceSources,
-            verifiedProductFacts: input.verifiedProductFacts ?? [],
-            conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts ?? [],
+            verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
+            conflictingVerifiedProductFacts: compactVerifiedFactsForModel(input.conflictingVerifiedProductFacts ?? []),
             productEvidenceRoles: input.productEvidenceRoles ?? [],
-            products: input.products.map(answerProductContext)
+            products: input.products.map((product) => answerProductContext(product, input.toolResults))
           })
         }
       ],
@@ -6058,6 +6114,7 @@ export class AgentManagerOrchestrator {
             sessionId: input.sessionId,
             turnId: input.turnId,
             userMessage,
+            history,
             historicalToolResults: previousSelectionToolResults({ history, intent: candidate.intent }),
             provenExhaustedHandoffContinuation: hasProvenExhaustedTechnicalHandoffContinuation({
               history,
@@ -7873,6 +7930,9 @@ export class AgentManagerOrchestrator {
                   payload: result.payload,
                   warnings: result.warnings
                 })),
+              knownSourceCandidates: (catalogAndMemory?.facts ?? []).flatMap((fact) =>
+                fact.sourceType === 'web' && fact.sourceUrl
+                  ? [{ url: fact.sourceUrl, title: fact.sourceTitle }] : []),
               products: selectedProducts,
               targetProductNames: gapTargetProductNames,
               comparisonAttributes: gapAttributes,

@@ -287,7 +287,8 @@ export const ProductMentionSchema = z.object({
   name: nonEmptyString,
   role: ProductMentionRoleSchema,
   productClass: z.string().trim().min(1).nullable().optional(),
-  evidence: nonEmptyString
+  evidence: nonEmptyString,
+  sourceMessageId: nonEmptyString.nullable().optional()
 }).strict();
 
 export const SelectionRequirementVerificationSchema = z.discriminatedUnion('mode', [
