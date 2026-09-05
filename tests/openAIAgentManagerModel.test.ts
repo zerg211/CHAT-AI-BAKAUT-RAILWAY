@@ -6,10 +6,11 @@ vi.mock('../src/ai/openaiStructured.js', () => ({
   createStructuredJsonResponse
 }));
 
-import { OpenAIAgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
-import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
+import { OpenAIAgentManagerModel, type AgentManagerAnswerInput } from '../src/ai/agentManagerOrchestrator.js';
+import { AgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
+import { getActiveDialogueNeed, reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { emptyNeedState } from '../src/ai/needState.js';
-import type { AgentIntentContract, DialogueLedgerEvent } from '../src/ai/agentManagerContracts.js';
+import { AgentIntentContractSchema, normalizeLedgerStateDeltaEvents, type AgentIntentContract, type DialogueLedgerEvent, type LedgerStateDelta } from '../src/ai/agentManagerContracts.js';
 import type { ConversationSession, Message, VerifiedProductFact } from '../src/shared/types.js';
 
 describe('OpenAIAgentManagerModel semantic inputs', () => {
@@ -115,6 +116,60 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(request.text.format.schema.properties.matches.items.properties.factId.enum).toEqual(['fact-bison-usb']);
     expect(request.input[0].content).toContain('Related, broader, narrower');
     expect(request.input[0].content).toContain('untrusted quoted data');
+  });
+
+  it.each(['verified', 'conflicting'] as const)('carries %s exact-model saved evidence through observation, writer schema and factual review without a separate matching call', async (kind) => {
+    const now = new Date().toISOString();
+    const fact: VerifiedProductFact = {
+      id: 'saved-force', productId: 'champion-pc5431f', productKey: 'championpc5431f', productName: 'CHAMPION PC5431F',
+      attribute: 'centrifugal_force_kn', value: '8.2 kN', sourceType: 'web', confidence: 'high', status: 'active',
+      sourceUrl: 'https://www.champion-tools.ru/shop/vibroplity/champion-pc5431f/',
+      sourceTitle: 'CHAMPION PC5431F specifications', evidence: 'Centrifugal force 8.2 kN',
+      firstSeenAt: now, lastVerifiedAt: now, createdAt: now, updatedAt: now, hitCount: 0
+    };
+    const userMessage = 'Remind me of its compaction force.';
+    const input: AgentManagerAnswerInput = {
+      session: { id: 'session', status: 'active', conversationNumber: 1, title: 'Plate', needState: emptyNeedState(),
+        createdAt: now, updatedAt: now, lastHeartbeatAt: now },
+      history: [], userMessage, ledgerEvents: [], ledgerState: reduceDialogueLedger([]),
+      intent: AgentIntentContractSchema.parse({ userMessageSummary: userMessage, dialogueUnderstanding: 'Recall the selected model fact.',
+        nextStepRationale: 'Use exact saved evidence.', requiresTools: false, toolRequests: [], riskFlags: [] }),
+      products: [{ id: fact.productId!, name: fact.productName, specs: { weight_kg: 50 } }],
+      toolResults: [], verifiedProductFacts: kind === 'verified' ? [fact] : [],
+      conflictingVerifiedProductFacts: kind === 'conflicting' ? [fact, { ...fact, id: 'conflicting-force', value: '18 kN' }] : []
+    };
+    const answer = { answerText: 'Its compaction force is 8.2 kN.',
+      factsUsed: kind === 'verified' ? [{ factKey: 'compaction_force', value: fact.value, sourceEventIds: ['verified_fact:saved-force'] }] : [],
+      questionsAsked: [], toolResultIds: [], selectedProductIds: [], selectionRationale: 'Technical recap needs no card.', leadAction: 'none', riskFlags: [] };
+    createStructuredJsonResponse
+      .mockResolvedValueOnce({ parsed: { action: 'answer', rationale: 'The saved canonical attribute answers this wording.',
+        missingFacts: [], candidateProductIds: [], toolRequests: [] } })
+      .mockResolvedValueOnce({ parsed: answer })
+      .mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'The exact-model fact supports the answer.', factualIssues: [] } });
+    const model = new OpenAIAgentManagerModel();
+    await model.assessObservations({ ...input, round: 1, remainingBudget: new AgentManagerTurnBudget().snapshot() });
+    expect(await model.composeAnswer(input)).toMatchObject(answer);
+    await model.reviewCustomerLanguage({ ...input, answerText: answer.answerText });
+
+    expect(createStructuredJsonResponse.mock.calls.map(([call]) => call.stage)).toEqual([
+      'agent_observation_decision', 'agent_answer_contract', 'agent_customer_language_review'
+    ]);
+    for (const [call] of createStructuredJsonResponse.mock.calls) {
+      const data = JSON.parse(call.request.input.find((item: { role: string }) => item.role === 'user').content);
+      expect(data.verifiedProductFacts).toEqual(input.verifiedProductFacts);
+      expect(data.conflictingVerifiedProductFacts).toEqual(input.conflictingVerifiedProductFacts);
+      expect(data.toolResults).toEqual([]);
+    }
+    const writer = createStructuredJsonResponse.mock.calls[1]![0].request;
+    expect(writer.text.format.schema.properties.factsUsed.items.properties.sourceEventIds.items.enum)
+      .toEqual(kind === 'verified' ? ['verified_fact:saved-force'] : undefined);
+    if (kind === 'conflicting') {
+      expect(writer.text.format.schema.properties.factsUsed.items.properties.sourceEventIds.maxItems).toBe(0);
+    }
+    const reviewer = createStructuredJsonResponse.mock.calls[2]![0].request;
+    expect(reviewer.text.format.schema.properties.factualIssues.maxItems).toBe(5);
+    expect(reviewer.text.format.schema.properties.factualIssues.items.properties.sourceResultId.enum)
+      .toEqual(kind === 'verified' ? ['verified_fact:saved-force'] : ['verified_fact:saved-force', 'verified_fact:conflicting-force']);
   });
 
   it('creates ledger delta and executable intent in one structured semantic request', async () => {
@@ -232,6 +287,68 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(request).toMatchObject({ max_output_tokens: 3200 });
     expect(createStructuredJsonResponse.mock.calls[0]?.[0]).toMatchObject({ retryOutputTokenCap: 4800 });
     expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);
+  });
+
+  it('retains an inactive need selection while the same buyer turn resumes another need', async () => {
+    const now = new Date().toISOString();
+    const sessionId = '11111111-1111-4111-8111-111111111111';
+    const userMessage = 'По виброплите понял, пока выберу первую. Теперь вернёмся к двум последним генераторам. Первый, инверторный EVOline, мне интереснее: сколько он стоит?';
+    const priorEvents = normalizeLedgerStateDeltaEvents({ sessionId, turnId: '22222222-2222-4222-8222-222222222222', delta: { rationale: 'Two previously discussed needs.', events: [
+      { eventType: 'need.opened', scope: 'need', payload: { needId: 'generator', productClass: 'generator',
+        selectedProductIds: ['generator-1', 'generator-2'], selectionUpdateMode: 'replace', activate: true },
+        source: 'llm_state_delta', evidence: 'Previously shown generators.', status: 'active' },
+      { eventType: 'need.opened', scope: 'need', payload: { needId: 'plate', productClass: 'plate',
+        selectedProductIds: ['plate-1', 'plate-2', 'plate-3'], selectionUpdateMode: 'replace', activate: true },
+        source: 'llm_state_delta', evidence: 'Previously shown plates.', status: 'active' }
+    ] } });
+    const ledgerState = reduceDialogueLedger(priorEvents);
+    const history: Message[] = [{ id: 'generator-cards', sessionId, role: 'assistant', content: 'Два генератора.', createdAt: now,
+      metadata: { productCards: [{ id: 'generator-1', name: 'EVOline BPB 4000' }, { id: 'generator-2', name: 'TSS SGG 4000N' }] } },
+    { id: 'plate-cards', sessionId, role: 'assistant', content: 'Три виброплиты.', createdAt: now,
+      metadata: { productCards: [{ id: 'plate-1', name: 'STEM Techno SPC 101' }, { id: 'plate-2', name: 'CHAMPION PC5431F' }, { id: 'plate-3', name: 'TSS VP50' }] } }];
+    const delta: LedgerStateDelta = { rationale: 'Save the plate choice before responding about the generator.', events: [
+      { eventType: 'need.updated', scope: 'need', payload: { needId: 'plate', productClass: 'plate',
+        selectedProductIds: ['plate-1'], selectionUpdateMode: 'replace', activate: false },
+        source: 'llm_state_delta', evidence: 'По виброплите понял, пока выберу первую.', status: 'active' },
+      { eventType: 'need.updated', scope: 'need', payload: { needId: 'generator', productClass: 'generator',
+        selectedProductIds: ['generator-1'], selectionUpdateMode: 'replace', activate: true },
+        source: 'llm_state_delta', evidence: 'Первый, инверторный EVOline, мне интереснее', status: 'active' }
+    ] };
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { ledgerDelta: delta, intent: {
+      userMessageSummary: userMessage, dialogueUnderstanding: 'Record both choices and answer the generator question.',
+      nextStepRationale: 'Check the selected generator price.', requiresTools: true,
+      toolRequests: [{ id: 'generator-details', tool: 'catalog.getProductDetails', required: true,
+        args: { productIds: ['generator-1'], canonicalProductIntent: 'generator' }, rationale: 'Read current price.' }], riskFlags: []
+    } } });
+    const decision = await new OpenAIAgentManagerModel().decideTurn({
+      session: { id: sessionId, status: 'active', conversationNumber: 1, title: 'Two needs', needState: emptyNeedState(),
+        createdAt: now, updatedAt: now, lastHeartbeatAt: now }, history, userMessage, ledgerEvents: priorEvents, ledgerState
+    });
+    expect(createStructuredJsonResponse).toHaveBeenCalledTimes(1);
+    const request = createStructuredJsonResponse.mock.calls[0]![0].request;
+    const input = JSON.parse(request.input.find((item: { role: string }) => item.role === 'user').content);
+    expect(input.userMessage).toBe(userMessage);
+    expect(input.existingState.needs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ needId: 'generator', selectedProductIds: ['generator-1', 'generator-2'] }),
+      expect.objectContaining({ needId: 'plate', selectedProductIds: ['plate-1', 'plate-2', 'plate-3'] })
+    ]));
+    expect(input.priorVisibleProducts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'plate-1', occurrences: [expect.objectContaining({ messageId: 'plate-cards', ordinal: 1 })] }),
+      expect.objectContaining({ id: 'generator-1', occurrences: [expect.objectContaining({ messageId: 'generator-cards', ordinal: 1 })] })
+    ]));
+    const after = reduceDialogueLedger(normalizeLedgerStateDeltaEvents({ sessionId, turnId: '33333333-3333-4333-8333-333333333333', delta: decision.ledgerDelta }), ledgerState);
+    expect(getActiveDialogueNeed(after)?.needId).toBe('generator');
+    expect(after.needsById.plate).toMatchObject({ selectedProductIds: ['plate-1'], status: 'paused' });
+    expect(after.needsById.generator).toMatchObject({ selectedProductIds: ['generator-1'] });
+    const resumedPlate = reduceDialogueLedger(normalizeLedgerStateDeltaEvents({ sessionId, turnId: '44444444-4444-4444-8444-444444444444', delta: {
+      rationale: 'Return to the previously selected plate.', events: [{ eventType: 'need.updated', scope: 'need',
+        payload: { needId: 'plate', productClass: 'plate', selectedProductIds: [], selectionUpdateMode: 'preserve', activate: true },
+        source: 'llm_state_delta', evidence: 'Вернёмся к выбранной виброплите.', status: 'active' }]
+    } }), after);
+    expect(resumedPlate.needsById.plate.selectedProductIds).toEqual(['plate-1']);
+    const prompt = request.input.find((item: { role: string }) => item.role === 'system').content;
+    expect(prompt).toContain('Сначала сохрани все независимые изменения потребностей');
+    expect(prompt).toContain('Смена фокуса ответа не отменяет выбор');
   });
 
   it('includes guidance for generator_loads and calculator tool mismatches', async () => {

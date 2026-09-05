@@ -360,6 +360,52 @@ describe('AgentManager comparison research flow', () => {
     extractCatalogProductComparisonFacts.mockResolvedValue(null);
   });
 
+  it('passes the revised continuation search goal and prior failed source observations to nested research', async () => {
+    const sourceDiagnostic = { url: 'https://manufacturer.example/manual.pdf', reason: 'timeout', elapsedMs: 10000 };
+    researchProductComparisonFacts.mockResolvedValue({
+      usedWebSearch: true, searchDisposition: 'completed', sourcesExhausted: false, facts: [], conflicts: [],
+      sourceDiagnostics: [sourceDiagnostic], warnings: ['source_evidence_fetch_failed'],
+      summaryForAnswer: 'Exact source is unreadable.',
+      answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] }
+    });
+    const initialGoal = { query: 'SUMEC BISON manufacturer noise specifications', semanticQuery: 'Check the exact noise rating',
+      reason: 'Missing model specification', notes: 'Use a manufacturer source first.' };
+    const revisedGoal = { query: 'SUMEC BISON manual copies noise table', semanticQuery: 'Find a readable copy of the exact manual',
+      reason: 'The first source could not be read', notes: 'Look for another reliable source of the same model specification.' };
+    const implementation = model();
+    let observationCalls = 0;
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never,
+      { async createLead() { return null; } } as never, withStrictToolFixtures({
+        ...implementation,
+        async planTurn(input) {
+          const intent = await implementation.planTurn(input);
+          return { ...intent, toolRequests: intent.toolRequests.map(request => request.tool === 'web.researchProductFacts'
+            ? { ...request, args: { ...request.args, ...initialGoal, comparisonAttributes: ['noise'] } } : request) };
+        },
+        async assessObservations(input) {
+          observationCalls += 1;
+          return { action: observationCalls === 1 ? 'continue' : 'answer', rationale: 'Use actual source outcomes.',
+            missingFacts: ['Verified noise rating'], candidateProductIds: input.products.map(item => item.id),
+            toolRequests: observationCalls === 1 ? [{ id: 'web:refined', tool: 'web.researchProductFacts', required: true,
+              rationale: 'Read another source for the same exact targets', coversRequirementIds: [],
+              args: { ...revisedGoal, productNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'], comparisonAttributes: ['noise'] }
+            }] : [] };
+        },
+        async composeAnswer() {
+          return { answerText: 'Точный уровень шума этих моделей пока не подтверждён.', factsUsed: [], questionsAsked: [],
+            toolResultIds: ['web:test', 'web:refined'], selectedProductIds: [], leadAction: 'none', riskFlags: [] };
+        }
+      }));
+    await orchestrator.generateAnswer({ sessionId, turnId, userMessage: conversations.messages[0]!.content });
+    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(2);
+    expect(researchProductComparisonFacts.mock.calls[0]![0]).toMatchObject({ researchGoal: initialGoal, previousResearch: [] });
+    expect(researchProductComparisonFacts.mock.calls[1]![0]).toMatchObject({ researchGoal: revisedGoal,
+      previousResearch: [{ requestId: 'web:test', status: 'ok', payload: {
+        targetProductNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'], sourceDiagnostics: [sourceDiagnostic]
+      } }] });
+  });
+
   it('passes grounded product evidence to semantic review and repairs a scoped factual contradiction', async () => {
     researchProductComparisonFacts.mockResolvedValue({
       usedWebSearch: true, searchDisposition: 'completed', sourcesExhausted: false,

@@ -75,6 +75,136 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('production web research regressions', () => {
+  it('passes the changed research goal and exact-model prior failures to every source tier without treating them as new facts', async () => {
+    structured.mockImplementation(async (call) => webResponse(call.stage.slice('product_comparison_research_'.length)));
+    const researchGoal = { query: 'FIRMAN RD3910E maintenance HTML manual', semanticQuery: 'find readable first-service instructions',
+      reason: 'The official PDF timed out; use another accessible edition or source.', notes: 'Preserve verified start facts and resolve the first oil-change interval.' };
+    const previousResearch = [{ requestId: 'web-original', status: 'ok', warnings: ['source_evidence_fetch_failed'],
+      payload: { targetProductNames: [target], searchDisposition: 'completed', sourcesExhausted: false,
+        facts: [{ productName: target, attribute: 'start', value: 'manual recoil', evidence: 'Manual recoil starter.', sourceType: 'web',
+          sourceUrl: 'https://www.firman.biz/product/rd3910e', evidenceVerifiedExact: true }],
+        answerGuidance: { coverage: [{ productName: target, attribute, status: 'not_confirmed', value: '', evidence: 'Manual could not be read.' }] },
+        sourceDiagnostics: [{ url: sharedUrl, reason: 'timeout', elapsedMs: 10001 }],
+        sourceAttempts: [{ tier: 'official_manual', outcome: 'unreadable', query: 'FIRMAN RD3910E manual', sources: [{ url: sharedUrl }] }] } }];
+    const actual = await research({ researchGoal, previousResearch });
+    const calls = structured.mock.calls.map(([call]) => call).filter((call) => call.stage.startsWith('product_comparison_research_'));
+    expect(calls.map((call) => call.stage)).toEqual(['product_comparison_research_official_page',
+      'product_comparison_research_official_manual', 'product_comparison_research_reliable_secondary']);
+    for (const call of calls) {
+      const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+      expect(payload.researchGoal).toEqual(researchGoal);
+      expect(payload.previousResearch).toEqual([expect.objectContaining({ requestId: 'web-original',
+        facts: [expect.objectContaining({ productName: target, value: 'manual recoil' })],
+        sourceDiagnostics: [expect.objectContaining({ url: sharedUrl, reason: 'timeout' })],
+        sourceAttempts: [expect.objectContaining({ query: 'FIRMAN RD3910E manual', outcome: 'unreadable' })] })]);
+      const instructions = call.request.input.find((item: any) => item.role === 'system').content;
+      expect(instructions).toContain('researchGoal');
+      expect(instructions).toContain('not fresh independent verification');
+      expect(instructions).toContain('timeout is not evidence');
+    }
+    expect(actual.facts).toEqual([]);
+  });
+
+  it('bounds continuation context and strips unrelated model data, raw logs and credential-bearing URL components', async () => {
+    structured.mockImplementation(async (call) => webResponse(call.stage.slice('product_comparison_research_'.length)));
+    const otherTarget = 'FIRMAN RD4910E';
+    const massive = 'bounded text '.repeat(3000);
+    const relevant = (requestId: string) => ({ requestId, status: 'ok', warnings: ['source_evidence_fetch_failed'], payload: {
+      targetProductNames: [target], rawMessages: 'PRIVATE RAW MESSAGE', rawHeaders: { authorization: 'PRIVATE HEADER' },
+      products: [{ name: target, description: 'PRIVATE PRODUCT DESCRIPTION' }], providerTokenReservation: 999999,
+      facts: Array.from({ length: 20 }, (_, index) => ({ productName: index === 0 ? otherTarget : target,
+        attribute: massive, value: massive, evidence: massive, sourceType: 'web', sourceUrl: sharedUrl, raw: 'PRIVATE FACT LOG' })),
+      sourceDiagnostics: Array.from({ length: 15 }, () => ({
+        url: 'https://private-user:private-pass@www.firman.biz/manuals/rd3910e.pdf?token=PRIVATE_TOKEN#PRIVATE_FRAGMENT',
+        reason: 'timeout', elapsedMs: 10000, rawMessage: 'PRIVATE ERROR', rawHeaders: 'PRIVATE DIAGNOSTIC HEADER'
+      })),
+      sourceAttempts: Array.from({ length: 8 }, () => ({ tier: 'official_manual', outcome: 'unreadable', query: massive,
+        sources: Array.from({ length: 8 }, () => ({ url: sharedUrl, rawBody: 'PRIVATE SOURCE BODY' })) }))
+    } });
+    const previousResearch = [relevant('old-relevant'), relevant('recent-relevant'),
+      { requestId: 'unrelated', status: 'ok', warnings: [], payload: { targetProductNames: [otherTarget], summaryForAnswer: 'UNRELATED SUMMARY' } },
+      relevant('latest-relevant')];
+    await research({ researchGoal: { query: massive, notes: massive }, previousResearch });
+    const payload = JSON.parse(structured.mock.calls[0][0].request.input.find((item: any) => item.role === 'user').content);
+    expect(payload.previousResearch.map((item: any) => item.requestId)).toEqual(['recent-relevant', 'latest-relevant']);
+    expect(JSON.stringify({ researchGoal: payload.researchGoal, previousResearch: payload.previousResearch }).length).toBeLessThanOrEqual(12_000);
+    expect(payload.previousResearch.flatMap((item: any) => item.facts).length).toBeLessThanOrEqual(12);
+    expect(payload.previousResearch.flatMap((item: any) => item.sourceDiagnostics).length).toBeLessThanOrEqual(8);
+    expect(payload.previousResearch.flatMap((item: any) => item.sourceAttempts).length).toBeLessThanOrEqual(3);
+    for (const observation of payload.previousResearch) {
+      expect(observation.facts.length).toBeLessThanOrEqual(12);
+      expect(observation.facts.every((fact: any) => fact.productName === target)).toBe(true);
+      expect(observation.sourceDiagnostics.length).toBeLessThanOrEqual(8);
+      expect(observation.sourceDiagnostics[0].url).toBe('https://www.firman.biz/manuals/rd3910e.pdf');
+      expect(observation.sourceAttempts.length).toBeLessThanOrEqual(3);
+      expect(observation.sourceAttempts.every((attempt: any) => attempt.sources.length <= 3)).toBe(true);
+    }
+    const serialized = JSON.stringify(payload.previousResearch);
+    for (const sensitive of ['PRIVATE', 'private-user', 'private-pass', 'providerTokenReservation', 'rawMessages', 'rawHeaders', 'UNRELATED']) {
+      expect(serialized).not.toContain(sensitive);
+    }
+  });
+
+  it.each(['exact', 'generic'] as const)('preserves the changed goal in the legacy %s retry as well as its first pass', async (kind) => {
+    const researchGoal = { query: 'readable maintenance instructions', reason: 'Use a source that can actually be read.' };
+    structured.mockImplementation(async () => webResponse('official_page'));
+    await research({ researchGoal, missingFactSlots: undefined,
+      ...(kind === 'generic' ? { targetProductNames: [] } : {}) });
+    const calls = structured.mock.calls.map(([call]) => call);
+    expect(calls.map((call) => call.stage)).toEqual(['product_comparison_research',
+      kind === 'exact' ? 'product_comparison_research_exact_retry' : 'product_comparison_research_generic_source_tier_retry']);
+    for (const call of calls) {
+      const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+      expect(payload.researchGoal).toEqual(researchGoal);
+      expect(call.request.input.find((item: any) => item.role === 'system').content).toContain('researchGoal');
+    }
+  });
+
+  it('keeps calls without continuation inputs compatible and excludes unknown or mixed prior target scopes', async () => {
+    structured.mockImplementation(async (call) => webResponse(call.stage.slice('product_comparison_research_'.length)));
+    await research();
+    let payload = JSON.parse(structured.mock.calls[0][0].request.input.find((item: any) => item.role === 'user').content);
+    expect(payload.researchGoal).toBeUndefined();
+    expect(payload.previousResearch).toBeUndefined();
+    structured.mockClear();
+    await research({ previousResearch: [
+      { requestId: 'unknown', status: 'ok', warnings: [], payload: { facts: [{ productName: target }] } },
+      { requestId: 'mixed', status: 'ok', warnings: [], payload: { targetProductNames: [target, 'FIRMAN RD4910E'] } }
+    ] });
+    payload = JSON.parse(structured.mock.calls[0][0].request.input.find((item: any) => item.role === 'user').content);
+    expect(payload.previousResearch).toBeUndefined();
+  });
+
+  it.each(['timeout', 'skipped_budget', 'empty_success'] as const)(
+    'retains exact catalog primary text and known source links when compact extraction is %s', async (outcome) => {
+      const exactProduct = { ...catalogProduct, specs: {
+        src: 'https://www.firman.biz/product/rd3910e',
+        manualUrl: 'https://www.firman.biz/manuals/rd3910e.pdf',
+        start: 'manual'
+      } };
+      structured.mockImplementation(async (call) => {
+        if (call.stage.startsWith('catalog_')) {
+          if (outcome === 'timeout') throw new DOMException('Catalog stage expired', 'TimeoutError');
+          return { parsed: { facts: [], conflicts: [], missing: [], directAnswer: '', completeness: 'not_answered' } };
+        }
+        return webResponse(call.stage.slice('product_comparison_research_'.length));
+      });
+      await research({ products: [exactProduct], deadlineAtMs: Date.now() + (outcome === 'skipped_budget' ? 23_000 : 60_000) });
+      const webCalls = structured.mock.calls.map(([call]) => call).filter((call) => call.stage.startsWith('product_comparison_research_'));
+      expect(webCalls.length).toBeGreaterThan(0);
+      for (const call of webCalls) {
+        const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+        expect(payload.products).toContainEqual(expect.objectContaining({
+          id: exactProduct.id, description: exactProduct.description,
+          sourceUrl: exactProduct.sourceUrl, specs: exactProduct.specs
+        }));
+        const instructions = call.request.input.find((item: any) => item.role === 'system').content;
+        expect(instructions).not.toContain('catalogExtraction already contains a compact semantic reading');
+      }
+      expect(structured.mock.calls.some(([call]) => call.stage.startsWith('catalog_'))).toBe(outcome !== 'skipped_budget');
+    }
+  );
+
   it('gives a 23 second retry useful official time and skips doomed catalog extraction and secondary', async () => {
     let now = 1_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => now);

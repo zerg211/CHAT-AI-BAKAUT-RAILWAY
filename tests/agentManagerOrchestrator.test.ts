@@ -27,7 +27,7 @@ import {
 import { reduceDialogueLedger, type ReducedDialogueLedgerState } from '../src/ai/dialogueLedgerReducer.js';
 import { assessStrictSelectionRequirements, budgetMaxFromNeedState, gateStrictSelectionRequirements } from '../src/ai/agentManagerCardSelection.js';
 import { emptyNeedState } from '../src/ai/needState.js';
-import type { ConversationSession, ConversationTurn, LeadCaptureDraft, Message, Product, ProductCard } from '../src/shared/types.js';
+import type { ConversationSession, ConversationTurn, LeadCaptureDraft, Message, Product, ProductCard, VerifiedProductFact } from '../src/shared/types.js';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const turnId = '22222222-2222-4222-8222-222222222222';
@@ -10033,5 +10033,169 @@ describe('buyer-level constraint persistence across needs', () => {
     });
 
     expect(result.issues).not.toContain('active_requirement_mismatch:fuel_type');
+  });
+});
+
+describe('verified product memory across catalog-only follow-ups', () => {
+  const champion = { ...product('a3f7a2ce-4dd2-473b-925c-46eba6ceaaaa', 'CHAMPION PC5431F', 'Виброплиты'),
+    specs: { weight_kg: 50, base_dimensions: '430x310 mm' } };
+  const stem = { ...product('c4cd3a25-4102-4327-a516-9806fcec173a', 'STEM Techno SPC 192E', 'Виброплиты'),
+    specs: { weight_kg: 78, centrifugal_force_kn: 13.5 } };
+  const userMessage = 'Тогда остановлюсь на CHAMPION. Покажите именно её карточку и напомните отличие от STEM.';
+  function fact(overrides: Partial<VerifiedProductFact> = {}): VerifiedProductFact {
+    const now = new Date().toISOString();
+    return { id: 'memory-force', productId: champion.id, productKey: 'championpc5431f', productName: champion.name,
+      attribute: 'centrifugal_force_kn', value: '8,2 кН', sourceType: 'web', confidence: 'high', status: 'active',
+      sourceUrl: 'https://www.champion-tools.ru/shop/vibroplity/champion-pc5431f/', sourceTitle: 'CHAMPION PC5431F',
+      evidence: 'Центробежная сила, (кН) 8,2', sourceTier: 'official_page', sourceAuthority: 'manufacturer',
+      firstSeenAt: now, lastVerifiedAt: now, createdAt: now, updatedAt: now, hitCount: 0, ...overrides };
+  }
+  async function followUp(options: { attribute?: string; facts?: VerifiedProductFact[]; omitCards?: boolean; bothCards?: boolean;
+    contradictMemory?: boolean; forceMemorySource?: boolean; interruptBeforeSend?: boolean } = {}) {
+    const currentUserMessage = options.bothCards ? 'Покажите CHAMPION и STEM и напомните их отличие.' : userMessage;
+    const conversations = new FakeConversations();
+    const previous = message('CHAMPION: 8,2 кН; STEM: 13,5 кН.', 'assistant');
+    previous.id = 'previous-comparison';
+    previous.metadata = { productCards: [champion, stem], toolResults: [{ requestId: 'previous-web',
+      tool: 'web.researchProductFacts', status: 'ok', warnings: [], payload: { facts: [fact()] } }] };
+    conversations.messages = [previous, message(currentUserMessage)];
+    if (options.interruptBeforeSend) {
+      vi.spyOn(conversations, 'addAssistantMessageForTurn').mockRejectedValueOnce(new Error('interrupted before final send'));
+      vi.spyOn(conversations, 'listDialogueLedgerEvents').mockImplementation(async () =>
+        (conversations.ledgerEvents as DialogueLedgerEvent[]).map((event) => ({
+          session_id: event.sessionId, turn_id: event.turnId, event_id: event.eventId,
+          event_type: event.eventType, scope: event.scope, payload: event.payload,
+          evidence: event.evidence, source: event.source, status: event.status
+        }))
+      );
+    }
+    const storedFacts = options.facts ?? [fact()];
+    const products = { getProductsByIds: vi.fn(async () => [champion, stem]),
+      searchVerifiedProductFacts: vi.fn(async () => storedFacts), markVerifiedProductFactsUsed: vi.fn(async () => 1) };
+    const intent = AgentIntentContractSchema.parse({
+      userMessageSummary: currentUserMessage, dialogueUnderstanding: 'The buyer chooses the lighter model.',
+      nextStepRationale: 'Reuse the confirmed comparison and show the selected card.', requiresTools: true,
+      toolRequests: [{ id: 'details-current', tool: 'catalog.getProductDetails', required: true,
+        args: { productIds: [champion.id, stem.id], canonicalProductIntent: 'plate', productIntent: 'plate', limit: 2 },
+        rationale: 'Get current catalog cards', coversRequirementIds: [] }],
+      productMentions: [{ name: champion.name, role: 'target_product', evidence: 'CHAMPION', productClass: 'plate' },
+        { name: stem.name, role: 'comparison_subject', evidence: 'STEM', productClass: 'plate' }],
+      selectionPolicy: { targetProductClass: 'plate', canonicalProductClass: 'plate', needAction: 'open',
+        alternativePolicy: 'same_class_only', reusePreviousCards: false, maxCards: options.bothCards ? 2 : 1, powerSource: 'any', phase: 'any',
+        requirements: [], selectionGoal: 'browse_catalog', rationale: 'Show the explicitly selected model.' },
+      grounding: { taskType: 'comparison', responseMode: 'compare', sourcePolicy: 'catalog_required',
+        catalogRequirement: 'required', webPurpose: 'none', webRequirement: 'none', buyerRequestedWeb: false,
+        requiredToolKinds: ['catalog.getProductDetails'], technicalAttributes: [options.attribute ?? 'centrifugal_force_kn'],
+        buyerQuestion: currentUserMessage, rationale: 'Previously verified model facts can answer the recap.' }, riskFlags: []
+    });
+    const assessObservations = vi.fn(async () => ({ action: 'answer' as const, rationale: 'The saved force answers the recap.',
+      missingFacts: [], candidateProductIds: [champion.id], toolRequests: [] }));
+    const composeAnswer = vi.fn(async (input) => {
+      const hasMemory = (input.verifiedProductFacts ?? []).some((item: VerifiedProductFact) => item.id === 'memory-force');
+      const answerText = options.contradictMemory ? 'У CHAMPION сила 18 кН.' : hasMemory
+        ? 'У CHAMPION сила 8,2 кН против 13,5 кН у STEM; CHAMPION легче.' : 'CHAMPION легче STEM.';
+      return { answerText, factsUsed: hasMemory || options.forceMemorySource
+        ? [{ factKey: 'centrifugal_force_kn', value: '8,2 кН', sourceEventIds: ['verified_fact:memory-force'] }] : [],
+        questionsAsked: [], toolResultIds: ['details-current'], selectedProductIds: options.omitCards ? [] : options.bothCards ? [champion.id, stem.id] : [champion.id],
+        selectionRationale: 'Selected lighter model.', leadAction: 'none' as const, riskFlags: [] };
+    });
+    const reviewCustomerLanguage = vi.fn(async () => ({ processDisclosure: false, evidence: '', rationale: 'Source check.',
+      factualIssues: options.contradictMemory ? [{ claim: 'У CHAMPION сила 18 кН.',
+        sourceResultId: 'verified_fact:memory-force', reason: 'The exact-model saved source confirms 8,2 кН.' }] : [] }));
+    const matchVerifiedFactMemory = vi.fn(async () => []);
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, products as never, new FakeLeads() as never,
+      model({ decideTurn: async () => ({ intent, ledgerDelta: { rationale: 'Select this need', events: [{
+        eventType: 'need.opened', scope: 'need', payload: { needId: 'plate', productClass: 'plate', activate: true },
+        evidence: currentUserMessage, source: 'llm_state_delta', status: 'active' }] } }),
+        assessObservations, composeAnswer, reviewCustomerLanguage, matchVerifiedFactMemory }));
+    const result = orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentUserMessage });
+    return { result, conversations, products, assessObservations, composeAnswer, reviewCustomerLanguage, matchVerifiedFactMemory, orchestrator };
+  }
+
+  it.each(['centrifugal_force_kn', 'compaction_force'])('grounds the recap from saved facts with current attribute %s and no extra research', async (attribute) => {
+    const run = await followUp({ attribute });
+    const payload = await run.result;
+    expect(payload.answer).toContain('8,2 кН');
+    for (const consumer of [run.assessObservations, run.composeAnswer, run.reviewCustomerLanguage]) {
+      expect(consumer.mock.calls[0]?.[0]).toMatchObject({ verifiedProductFacts: [expect.objectContaining({
+        id: 'memory-force', productId: champion.id, attribute: 'centrifugal_force_kn', value: '8,2 кН'
+      })] });
+    }
+    expect(run.products.searchVerifiedProductFacts).toHaveBeenCalledTimes(1);
+    expect(run.matchVerifiedFactMemory).not.toHaveBeenCalled();
+    expect((payload.metadata?.toolResults as ToolResult[]).map((result) => result.tool)).toEqual(['catalog.getProductDetails']);
+    expect(payload.metadata?.preSendValidation).toMatchObject({ verdict: 'pass', issues: [] });
+    expect(payload.metadata?.answerContract).toMatchObject({ factsUsed: [expect.objectContaining({ sourceEventIds: ['verified_fact:memory-force'] })] });
+    expect(payload.productCards.map((card) => card.id)).toEqual([champion.id]);
+    expect(payload.metadata?.turnContract).toMatchObject({ taskType: 'comparison', cardsRole: 'supporting', productCardsPolicy: 'supporting_only' });
+  });
+
+  it.each(['expired', 'superseded', 'wrong_identity', 'wrong_name', 'unbound', 'untrusted_url'] as const)('does not reuse %s product memory', async (kind) => {
+    const overrides: Partial<VerifiedProductFact> = kind === 'expired' ? { lastVerifiedAt: '2020-01-01T00:00:00Z' }
+      : kind === 'superseded' ? { status: 'superseded' } : kind === 'wrong_identity' ? { productId: 'another-need-product' }
+      : kind === 'wrong_name' ? { productName: 'CHAMPION PC5432F' } : kind === 'unbound' ? { productId: null }
+      : { sourceUrl: 'javascript:untrusted' };
+    const run = await followUp({ facts: [fact(overrides)] });
+    const payload = await run.result;
+    expect(run.composeAnswer.mock.calls[0]?.[0].verifiedProductFacts ?? []).toEqual([]);
+    expect(payload.productCards.map((card) => card.id)).toEqual([champion.id]);
+  });
+
+  it('binds a factual reviewer finding to the saved source instead of discarding it as an unknown tool id', async () => {
+    const run = await followUp({ contradictMemory: true });
+    await expect(run.result).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    expect(run.conversations.assistantSaves).toHaveLength(0);
+  });
+
+  it('does not let conflicting saved values authorize a factual claim', async () => {
+    const run = await followUp({ facts: [fact(), fact({ id: 'conflicting-force', value: '18 кН' })], forceMemorySource: true });
+    await expect(run.result).rejects.toThrow('unsupported_fact_source');
+    expect(run.conversations.assistantSaves).toHaveLength(0);
+  });
+
+  it('keeps conflicting source values separate for observation, answer and factual review', async () => {
+    const conflictingFacts = [fact(), fact({ id: 'conflicting-force', value: '18 кН', evidence: 'Центробежная сила 18 кН',
+      sourceUrl: 'https://manual.example/champion-pc5431f' })];
+    const run = await followUp({ facts: conflictingFacts });
+    const payload = await run.result;
+    for (const consumer of [run.assessObservations, run.composeAnswer, run.reviewCustomerLanguage]) {
+      expect(consumer.mock.calls[0]?.[0]).toMatchObject({ verifiedProductFacts: [], conflictingVerifiedProductFacts: conflictingFacts });
+    }
+    expect(payload.metadata?.conflictingVerifiedProductFacts).toEqual(conflictingFacts);
+    expect(run.matchVerifiedFactMemory).not.toHaveBeenCalled();
+  });
+
+  it('binds factual rejection to a conflicting saved source without accepting it as a positive fact', async () => {
+    const run = await followUp({ facts: [fact(), fact({ id: 'conflicting-force', value: '18 кН' })], contradictMemory: true });
+    await expect(run.result).rejects.toThrow('research_guidance_uncertainty_mismatch');
+    expect(run.conversations.assistantSaves).toHaveLength(0);
+  });
+
+  it('projects no cards when the validated comparison answer contains none', async () => {
+    const run = await followUp({ omitCards: true });
+    const payload = await run.result;
+    expect(payload.productCards).toEqual([]);
+    expect(payload.metadata?.turnContract).toMatchObject({ cardsRole: 'none', productCardsPolicy: 'none' });
+  });
+
+  it('projects both validated comparison cards as supporting evidence', async () => {
+    const run = await followUp({ bothCards: true });
+    const payload = await run.result;
+    expect(payload.productCards.map((card) => card.id)).toEqual([champion.id, stem.id]);
+    expect(payload.metadata?.turnContract).toMatchObject({ taskType: 'comparison', cardsRole: 'supporting', productCardsPolicy: 'supporting_only' });
+  });
+
+  it('rechecks a saved draft when its verified product source is no longer current before recovery sends it', async () => {
+    const run = await followUp({ interruptBeforeSend: true });
+    await expect(run.result).rejects.toThrow('interrupted before final send');
+    expect(run.conversations.checkpoints).toContainEqual(expect.objectContaining({ checkpoint: 'review_completed', status: 'succeeded' }));
+    run.products.searchVerifiedProductFacts.mockResolvedValue([]);
+    run.composeAnswer.mockClear();
+    const payload = await run.orchestrator.recoverTurn({ sessionId, turnId });
+    expect(payload.answer).not.toContain('8,2 кН');
+    expect(run.composeAnswer).toHaveBeenCalledTimes(1);
+    expect(run.composeAnswer.mock.calls[0]?.[0].verifiedProductFacts).toEqual([]);
+    expect(run.products.getProductsByIds).toHaveBeenCalledTimes(1);
+    expect(run.conversations.assistantSaves).toHaveLength(1);
   });
 });

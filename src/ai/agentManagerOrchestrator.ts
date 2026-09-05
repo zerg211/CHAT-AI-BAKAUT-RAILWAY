@@ -149,6 +149,7 @@ import {
 } from './modelTextMatching.js';
 import {
   matchingVerifiedFactsForRequest,
+  reusableVerifiedFact,
   researchFactConfidenceNumber,
   verifiedFactCoverageForRequest,
   verifiedFactsCoverRequest,
@@ -197,6 +198,8 @@ export interface AgentManagerModel {
     answerText: string;
     products: Product[];
     toolResults: ToolResult[];
+    verifiedProductFacts?: VerifiedProductFact[];
+    conflictingVerifiedProductFacts?: VerifiedProductFact[];
     signal?: AbortSignal;
     deadlineAtMs?: number;
   }): Promise<{
@@ -258,6 +261,8 @@ export interface AgentManagerAnswerInput extends AgentManagerModelInput {
   intent: AgentIntentContract;
   toolResults: ToolResult[];
   products: Product[];
+  verifiedProductFacts?: VerifiedProductFact[];
+  conflictingVerifiedProductFacts?: VerifiedProductFact[];
   productEvidenceRoles?: AnswerProductEvidenceRole[];
   requiredResponseClauses?: RequiredResponseClause[];
   semanticDecisionValidated?: boolean;
@@ -674,6 +679,7 @@ function pendingLeadCaptureDraftContext(draft: LeadCaptureDraft | null): Pending
 function answerEvidenceSourceHints(input: {
   ledgerState: ReducedDialogueLedgerState;
   toolResults: ToolResult[];
+  verifiedProductFacts?: VerifiedProductFact[];
 }) {
   const ledgerFacts = activeScopedLedgerFacts(input.ledgerState).map((fact) => ({
     id: fact.eventId,
@@ -694,7 +700,8 @@ function answerEvidenceSourceHints(input: {
   return {
     allowedSourceIds: [
       ...ledgerFacts.map((fact) => fact.id),
-      ...factSourceToolIds
+      ...factSourceToolIds,
+      ...(input.verifiedProductFacts ?? []).map((fact) => `verified_fact:${fact.id}`)
     ],
     ledgerFacts,
     toolResults
@@ -2281,10 +2288,11 @@ function agentManagerTaskTypeFromGrounding(intent: AgentIntentContract): AgentTa
   return undefined;
 }
 
-function turnContractMetadataFromIntent(intent: AgentIntentContract): AgentTurnContract {
+function turnContractMetadataFromIntent(intent: AgentIntentContract, cards: ProductCard[]): AgentTurnContract {
   const taskType = agentManagerTaskTypeFromGrounding(intent);
   const qualifiesNeed = intent.grounding?.responseMode === 'clarify';
-  const showSelectionCards = taskType === 'product_selection' && !qualifiesNeed;
+  const showSelectionCards = cards.length > 0 && taskType === 'product_selection' && !qualifiesNeed;
+  const showSupportingCards = cards.length > 0 && !showSelectionCards;
   const answerTask = qualifiesNeed
     ? 'technical_explanation'
     : taskType === 'product_selection'
@@ -2303,11 +2311,11 @@ function turnContractMetadataFromIntent(intent: AgentIntentContract): AgentTurnC
     commercialAction: intent.toolRequests.some((request) => request.tool === 'lead.capture')
       ? 'explain_manager_required'
       : 'none',
-    productCardsPolicy: showSelectionCards ? 'show_matching_products' : 'none',
+    productCardsPolicy: showSelectionCards ? 'show_matching_products' : showSupportingCards ? 'supporting_only' : 'none',
     mustAnswerNow: [intent.userMessageSummary],
     activeNeeds: [],
     currentFocus: intent.grounding?.taskType ?? 'agent_manager_turn',
-    cardsRole: showSelectionCards ? 'primary' : 'none',
+    cardsRole: showSelectionCards ? 'primary' : showSupportingCards ? 'supporting' : 'none',
     leadAllowed: intent.toolRequests.some((request) => request.tool === 'lead.capture'),
     leadAllowedReason: intent.toolRequests.some((request) => request.tool === 'lead.capture')
       ? 'Agent manager intent planned lead capture.'
@@ -4643,6 +4651,7 @@ function ledgerReducerPolicyPromptBlock() {
     'В need.opened и need.updated всегда задавай selectionUpdateMode: preserve, если прежний выбор остаётся уместен; replace, если selectedProductIds полностью заменяют прежние; clear, если смена вводных аннулирует весь прежний выбор. В invalidatedProductIds перечисляй известные ID, которые больше не подходят. Не используй пустой selectedProductIds как неявную команду preserve.',
     'Для закрытой потребности создай need.closed с needId. Не смешивай факты разных needId.',
     'Текущая потребность — existingState.activeNeedId. Новую второстепенную тему сохраняй с activate=false: она останется paused. Обновление paused темы без activate=true не переключает текущую; для возврата явно ставь activate=true. После закрытия темы не возвращайся к ней без такого решения.',
+    'Одна реплика может одновременно менять несколько прежних потребностей. Сначала сохрани все независимые изменения потребностей отдельными ledgerDelta.events по их needId: выбор/отказ от товара, изменение требований, закрытие или возврат. Смена фокуса ответа не отменяет выбор в другой теме: её обновление сохраняй с activate=false, а activate=true ставь у темы текущего ответа. Для выбора конкретной прежней карточки разреши ссылку через priorVisibleProducts.occurrences и используй selectionUpdateMode=replace с её ID; не оставляй весь прежний список вариантов вместо выбора. Одно лишь сохранение выбора в другой теме не требует нового каталожного поиска по ней; текущие инструменты следуют реально заданным вопросам.',
     'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass, confidence от 0 до 1 и role: hard_requirement, preference, context или commercial. fact.observed означает неподтверждённое наблюдение и не получает confidence=1; fact.confirmed используй только для явно подтверждённой покупателем или проверенной источником информации. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
     'Область каждого факта задавай явно: scope=need и needId для требования этой покупки; scope=dialogue и needId=null только если оно действительно относится ко всем покупкам в диалоге; scope=product и productId для характеристики конкретной модели. Характеристика товара не становится hard_requirement покупателя. Сохраняй unit и relation, согласованные с requirement; неизвестную единицу не выдумывай.',
     'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, electric_start_required, auto_start_required, remote_start_required, material или quantity. electric_start_required означает наличие электростартера; auto_start_required означает именно автоматический запуск/АВР; remote_start_required означает запуск по команде с брелока или пульта и не равен АВР или просто электростартеру. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
@@ -5016,9 +5025,16 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     answerText: string;
     products: Product[];
     toolResults: ToolResult[];
+    verifiedProductFacts?: VerifiedProductFact[];
+    conflictingVerifiedProductFacts?: VerifiedProductFact[];
     signal?: AbortSignal;
     deadlineAtMs?: number;
   }) {
+    const factualSourceIds = [
+      ...input.toolResults.map((result) => result.requestId),
+      ...(input.verifiedProductFacts ?? []).map((fact) => `verified_fact:${fact.id}`),
+      ...(input.conflictingVerifiedProductFacts ?? []).map((fact) => `verified_fact:${fact.id}`)
+    ];
     const { parsed } = await createStructuredJsonResponse({
       request: {
         model: config.OPENAI_ANSWER_MODEL,
@@ -5032,8 +5048,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Учитывай userMessage. Ссылка на руководство, страницу производителя или иной источник факта, указание его редакции, точный неподтвержденный параметр и честное отсутствие подтверждения допустимы. Когда покупатель просит проверить сведения, краткий итог проверки конкретного факта отвечает на его вопрос; это не internal process disclosure. Не запрещай полезную атрибуцию источника или неопределенность из-за упоминания инструкции, подтверждения или проверки.',
             'Обычное упоминание товара или рабочего инструмента не является раскрытием процесса.',
             untrustedEvidenceBoundary,
-            'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
-            'Оценивай смысл и область утверждения, допускай корректный пересказ и полезный предварительный вывод с оговоркой. Не отклоняй общие знания без противоречия источникам и не требуй дословного копирования directAnswer. Для каждого factualIssues укажи claim — точную цитату ответа, sourceResultId — существующий requestId наблюдения, доказывающего проблему, reason — конкретное противоречие или неподтвержденный факт. Без доказанной проблемы factualIssues=[]. Сам ответ не переписывай.',
+            'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults/verifiedProductFacts, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. verifiedProductFacts — актуальные сохраненные факты с источниками для точных моделей: учитывай исходные attribute/value, даже если вопрос использует другой термин. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
+            'conflictingVerifiedProductFacts — актуальные источники точных моделей с разными значениями одного атрибута. Они не подтверждают окончательное значение: проверь, разрешают ли текущие toolResults конфликт; иначе ответ должен сохранить неопределенность. sourceResultId=verified_fact:<id> конфликтующего источника допустим для указания проблемы, но сам конфликт не становится фактом ответа.',
+            'Оценивай смысл и область утверждения, допускай корректный пересказ и полезный предварительный вывод с оговоркой. Не отклоняй общие знания без противоречия источникам и не требуй дословного копирования directAnswer. Для каждого factualIssues укажи claim — точную цитату ответа, sourceResultId — существующий requestId наблюдения или verified_fact:<id> сохраненного факта, доказывающего проблему, reason — конкретное противоречие или неподтвержденный факт. Без доказанной проблемы factualIssues=[]. Сам ответ не переписывай.',
             'Если processDisclosure=true, evidence должно быть точной цитатой из answerText. Верни только JSON.'
           ].join('\n')
         }, {
@@ -5042,6 +5059,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             userMessage: input.userMessage ?? null,
             answerText: input.answerText,
             products: input.products.map(answerProductContext),
+            verifiedProductFacts: input.verifiedProductFacts ?? [],
+            conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts ?? [],
             toolResults: compactToolResultsForModel(input.toolResults, input.products)
           })
         }],
@@ -5058,13 +5077,13 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
                 rationale: { type: 'string' },
                 factualIssues: {
                   type: 'array',
-                  maxItems: input.toolResults.length ? 5 : 0,
+                  maxItems: factualSourceIds.length ? 5 : 0,
                   items: {
                     type: 'object',
                     additionalProperties: false,
                     properties: {
                       claim: { type: 'string' },
-                      sourceResultId: { type: 'string', enum: input.toolResults.length ? input.toolResults.map((result) => result.requestId) : [''] },
+                      sourceResultId: { type: 'string', enum: factualSourceIds.length ? factualSourceIds : [''] },
                       reason: { type: 'string' }
                     },
                     required: ['claim', 'sourceResultId', 'reason']
@@ -5107,6 +5126,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           'Верни action=answer, если данных достаточно для полезного обоснованного ответа. Верни clarify только для решающего неизвестного условия самого покупателя; характеристики товара выясняй самостоятельно. Не предлагай неподъемную/неуместную технику новичку, если способ работы и перевозки еще неизвестен: выясни существенное условие без выдумывания лимита.',
           'Верни continue и 1–3 конкретных read-запроса, если каталог пуст/неуместен, нужна другая формулировка поиска, детали найденной модели или решающий отсутствующий/противоречивый факт. После выполнения увидишь их результаты. Не заканчивай на первом пустом запросе, когда разумный уточненный поиск еще возможен.',
           'catalog.search ищет по query/semanticQuery в каталоге; catalog.getProductDetails получает известные productIds/productNames; web.researchProductFacts проверяет точные productNames и comparisonAttributes. Сначала используй каталог/проверенные факты, потом сайт/инструкцию производителя, затем надежные профильные источники. Не исследуй повторно покрытые факты, если покупатель не просил перепроверить. Не запрашивай точное наличие/скидку/доставку через технический поиск.',
+          'verifiedProductFacts содержит актуальные сохраненные факты точных моделей независимо от текущего web policy. Сам сопоставь смысл исходных attribute/value вопросу покупателя; отсутствие того же имени атрибута в каталоге не отменяет сохраненный факт. Противоречие источников требует проверки, а уже подтвержденное значение без конфликта — использования в ответе.',
+          'conflictingVerifiedProductFacts сохраняет источники, расходящиеся по значению одного атрибута модели. Они не подтверждают ни одно окончательное значение; не считай совпадение одного из них с каталогом разрешением конфликта. Проверь решающий конфликт через доступные источники, если текущие наблюдения его еще не разрешили.',
           'Сохраняй intent, область потребности и все требования без изменения. Нельзя создавать лиды, менять бюджет/условия, переинтерпретировать реплику или выполнять side effects. productIds/candidateProductIds только из products; productNames копируй из products/явных исходных целей. Не подставляй другую модификацию. coversRequirementIds только существующие id, иначе [].',
           'Каждый новый запрос имеет уникальный id. Не повторяй выполненный tool+args; после ошибки выбирай другую разумную попытку, не бесконечный retry. Учитывай remainingBudget и оставь время на ответ. Если источники не подтвердили факт, missingFacts точно описывает пробел; timeout/остановка не доказывает отсутствие свойства или исчерпание источников.',
           'candidateProductIds — только перспективные варианты, а не окончательная выдача карточек. missingFacts и rationale кратко объясняют решение. Для answer/clarify toolRequests=[]; для continue — непустой список.'
@@ -5116,6 +5137,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           state: compactLedger(input.ledgerState),
           intent: input.intent,
           products: input.products.map(answerProductContext),
+          verifiedProductFacts: input.verifiedProductFacts ?? [],
+          conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts ?? [],
           toolResults: compactToolResultsForModel(input.toolResults, input.products),
           round: input.round,
           maxReadRounds: CONTINUATION_MAX_ROUNDS,
@@ -5184,7 +5207,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Не придумывай практические диапазоны, требования или допустимые компромиссы из класса задачи. Используй только typed requirements, alternativePolicy, rankingObjectives, tool facts и подтвержденные карточки; изменение требования может предложить только покупатель.',
             'Цена выше typed budget — подтвержденный конфликт. Неизвестная цена — пробел данных, а не превышение бюджета: сохрани модель как предварительного кандидата и честно обозначь, что цену нужно проверить.',
             'Каталог-ответ: честно подходящие по всем hard requirements; много — сгруппируй/приоритизируй; не вводи near-match от нехватки точных. Размеры/веса/цены — только из контекста товаров или проверенных фактов. Каждая названная модель — копия products[].name. productEvidenceRoles — граница: recommendation_candidate можно рекомендовать; comparison_reference_only — только в явном сравнении с фактами и четким отклонением по rejectionReasons, никогда как подходящий. products включают релевантные прежние карточки — используй их вместо «нет свежего каталога» или формы ради продолжения подбора. Пустой eligible набор только из-за недостающего техфакта — сначала запланированный web и честная предварительная рекомендация.',
-            'factsUsed[].sourceEventIds — только точные строки из availableEvidenceSources.allowedSourceIds (tool request id для фактов из инструментов, ledger event id для ledger). toolResultIds — только текущие tool request ids. Чистый handoff без точного статуса — factsUsed пуст.',
+            'verifiedProductFacts — актуальные сохраненные факты точных моделей из проверенных источников. Используй их вместе с каталогом и наблюдениями, в том числе в catalog-only ходе; сам сопоставляй исходные attribute/value с формулировкой вопроса. Отсутствие значения в каталоге не отменяет сохраненный факт, но конфликт источников нельзя скрывать. Сохраняй модель, единицы, отрицания и условия.',
+            'conflictingVerifiedProductFacts — источники с разными значениями одного атрибута модели, а не подтвержденные факты. Окончательное значение допустимо только если текущие наблюдения разрешили конфликт; иначе честно назови конкретное расхождение и сохрани полезный предварительный вывод. Их source IDs не разрешены в factsUsed.',
+            'factsUsed[].sourceEventIds — только точные строки из availableEvidenceSources.allowedSourceIds (tool request id для фактов из инструментов, ledger event id для ledger, verified_fact:<id> для verifiedProductFacts). toolResultIds — только текущие tool request ids. Чистый handoff без точного статуса — factsUsed пуст.',
             'requiredResponseClauses — обязательная смысловая часть ответа. Клауза о неподтвержденной базе расчета: не выдавай число за подтвержденное/покупочное, но не прячь полезную ориентацию калькулятора. Порог требования покупателя в одном предложении с именами товаров — только через numericClaimBinding (dimension/value, semanticRole=buyer_requirement_threshold, точный sourceId) с дословным verifiedSourceQuote; пороги калькулятора — отдельным предложением до товаров, никогда как цена/характеристика товара.',
             'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». confirmed подтверждает достоверность конкретного value, включая отсутствие свойства, а не само наличие свойства. Сохраняй отрицание, условность и принадлежность факта указанной модели; слова в названии атрибута, типе документа или evidence не заменяют значение факта. sourcesExhausted≠true или guidance partial/not_confirmed — без handoff/контактов/offer_form: подтвержденная часть + точное имя неподтвержденного атрибута. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
             'web error/timeout/denied/not_found — это внутренний статус, не содержание ответа покупателю и не доказательство исчерпания источников. Не ссылайся на выполнение поиска и не предлагай форму/специалиста только из-за такого статуса. Используй остальные подтвержденные факты; для известных моделей назови каждую конкретно, дай полезный предварительный вывод и точно укажи недостающий покупательский факт (например, совместимый артикул для конкретного размера подошвы) и какой документ или характеристика его подтвердит. Общая ориентация по классу допустима только как явно типовая, не как факт о модели.',
@@ -5204,6 +5229,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             requiredResponseClauses: input.requiredResponseClauses ?? [],
             continuation: input.continuation ?? null,
             availableEvidenceSources,
+            verifiedProductFacts: input.verifiedProductFacts ?? [],
+            conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts ?? [],
             productEvidenceRoles: input.productEvidenceRoles ?? [],
             products: input.products.map(answerProductContext)
           })
@@ -5411,6 +5438,43 @@ export class AgentManagerOrchestrator {
     return typeof repository.getPendingLeadCaptureDraft === 'function'
       ? repository.getPendingLeadCaptureDraft.call(this.leads, sessionId)
       : null;
+  }
+
+  private async loadVerifiedProductEvidence(products: Product[]) {
+    const repo = this.verifiedFactRepository();
+    if (!products.length || typeof repo.searchVerifiedProductFacts !== 'function') {
+      return { facts: [] as VerifiedProductFact[], conflicts: [] as VerifiedProductFact[] };
+    }
+    const facts = await repo.searchVerifiedProductFacts({
+      productIds: uniqueStrings(products.map((product) => product.id)),
+      sourceTypes: ['web', 'manual'],
+      limit: 32
+    });
+    const productsById = new Map(products.map((product) => [product.id, product]));
+    const now = new Date();
+    const applicable = facts.slice(0, 32).filter((fact) => {
+      const product = fact.productId ? productsById.get(fact.productId) : undefined;
+      return product && reusableVerifiedFact(fact, now) &&
+        (fact.sourceType === 'web' || fact.sourceType === 'manual') &&
+        fact.attribute.trim() && fact.value.trim() &&
+        textMatchesTargetName(fact.productName, product.name) &&
+        textMatchesTargetName(product.name, fact.productName);
+    });
+    // Disagreement on the same canonical model attribute cannot authorize either
+    // value. Attribute aliases remain visible to the semantic consumers unchanged.
+    const valuesBySlot = new Map<string, Set<string>>();
+    for (const fact of applicable) {
+      const slot = `${fact.productId}|${compactModelText(fact.attribute)}`;
+      const values = valuesBySlot.get(slot) ?? new Set<string>();
+      values.add(fact.value.normalize('NFKC').trim().toLocaleLowerCase('ru-RU'));
+      valuesBySlot.set(slot, values);
+    }
+    return {
+      facts: applicable.filter((fact) =>
+        valuesBySlot.get(`${fact.productId}|${compactModelText(fact.attribute)}`)?.size === 1),
+      conflicts: applicable.filter((fact) =>
+        (valuesBySlot.get(`${fact.productId}|${compactModelText(fact.attribute)}`)?.size ?? 0) > 1)
+    };
   }
 
   private async researchFromVerifiedFactMemory(input: {
@@ -6249,6 +6313,25 @@ export class AgentManagerOrchestrator {
       signal: input.signal
     });
 
+    // Cache per observed product/source set for this execution. A continuation
+    // that discovers a model or saves new web evidence refreshes this read.
+    const verifiedEvidenceReads = new Map<string, ReturnType<AgentManagerOrchestrator['loadVerifiedProductEvidence']>>();
+    const verifiedEvidenceFor = (evidenceProducts: Product[]) => {
+      const key = JSON.stringify([
+        evidenceProducts.map((product) => `${product.id}:${product.name}`).sort(),
+        toolResults.filter((result) => result.tool === 'web.researchProductFacts')
+          .map((result) => result.requestId).sort()
+      ]);
+      let read = verifiedEvidenceReads.get(key);
+      if (!read) {
+        read = this.loadVerifiedProductEvidence(evidenceProducts).catch(async (error) => {
+          await this.trace(input.sessionId, input.turnId, 'tools', 'verified_product_evidence_read_failed', { error: safeError(error) });
+          return { facts: [], conflicts: [] };
+        });
+        verifiedEvidenceReads.set(key, read);
+      }
+      return read;
+    };
     let continuation: ContinuationOutcome | undefined;
     if (this.model.assessObservations && intent.grounding?.taskType !== 'lead_handoff' &&
       (toolResults.length > 0 || intent.selectionPolicy?.reusePreviousCards)) {
@@ -6286,6 +6369,7 @@ export class AgentManagerOrchestrator {
           ? previousProductReferents({ history, intent, selectedProductIds: currentNeedSelectedProductIds(needStateSnapshot) })
           : [];
         const observationProducts = [...new Map([...historicalProducts, ...products].map((product) => [product.id, product])).values()];
+        const { facts: verifiedProductFacts, conflicts: conflictingVerifiedProductFacts } = await verifiedEvidenceFor(observationProducts);
         let decision: ContinuationDecision;
         try {
           if (!savedObservation && turnBudget.remainingWallTimeMs() < 40_000) {
@@ -6299,7 +6383,7 @@ export class AgentManagerOrchestrator {
             decision = parseContinuationDecision(await this.model.assessObservations({
               session: input.session, history, userMessage,
               ledgerEvents: effectiveLedgerEvents, ledgerState,
-              intent, products: observationProducts, toolResults,
+              intent, products: observationProducts, toolResults, verifiedProductFacts, conflictingVerifiedProductFacts,
               pendingLeadCaptureDraft: pendingLeadDraftContext,
               round, remainingBudget: turnBudget.snapshot(),
               structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, 30_000),
@@ -6483,6 +6567,15 @@ export class AgentManagerOrchestrator {
       toolResults: selectionToolResults
     });
     const answerEvidenceProductsForWriter = answerEvidenceResolution.products;
+    const { facts: verifiedProductFacts, conflicts: conflictingVerifiedProductFacts } = await verifiedEvidenceFor(answerEvidenceProducts);
+    if (verifiedProductFacts.length || conflictingVerifiedProductFacts.length) {
+      await this.trace(input.sessionId, input.turnId, 'answer', 'verified_product_evidence_loaded', {
+        factIds: verifiedProductFacts.map((fact) => fact.id),
+        productIds: uniqueStrings(verifiedProductFacts.flatMap((fact) => fact.productId ? [fact.productId] : [])),
+        sourceIds: verifiedProductFacts.map((fact) => `verified_fact:${fact.id}`),
+        conflictingFactIds: conflictingVerifiedProductFacts.map((fact) => fact.id)
+      });
+    }
 
     const historicalProductIds = new Set(historicalProducts.map((product) => product.id));
     const usingHistoricalProducts = answerProducts.some((product) => historicalProductIds.has(product.id));
@@ -6521,6 +6614,8 @@ export class AgentManagerOrchestrator {
           intent: effectiveIntent,
           toolResults: selectionToolResults,
           products: answerEvidenceProductsForWriter,
+          verifiedProductFacts,
+          conflictingVerifiedProductFacts,
           productEvidenceRoles,
           requiredResponseClauses,
           continuation,
@@ -6558,7 +6653,12 @@ export class AgentManagerOrchestrator {
       factsUsed: answer.factsUsed.map((fact) => fact.factKey)
     });
 
-    const savedReview = legacyIntentUpgraded || !savedAnswer.found
+    // Saved product facts are reloaded under current identity/freshness rules.
+    // A previously reviewed draft must be checked against that current evidence
+    // before recovery sends it, including when its former source is now absent.
+    const usesReloadedProductEvidence = verifiedProductFacts.length > 0 || conflictingVerifiedProductFacts.length > 0 ||
+      answer.factsUsed.some((fact) => fact.sourceEventIds.some((sourceId) => sourceId.startsWith('verified_fact:')));
+    const savedReview = legacyIntentUpgraded || !savedAnswer.found || usesReloadedProductEvidence
       ? { found: false as const, payload: undefined }
       : succeededCheckpoint(persistedExecution.checkpoints, 'review_completed');
     let review: PreSendReview;
@@ -6575,6 +6675,8 @@ export class AgentManagerOrchestrator {
           intent: effectiveIntent,
           toolResults: selectionToolResults,
           products: answerEvidenceProductsForWriter,
+          verifiedProductFacts,
+          conflictingVerifiedProductFacts,
           productEvidenceRoles,
           requiredResponseClauses,
           semanticDecisionValidated,
@@ -6605,6 +6707,8 @@ export class AgentManagerOrchestrator {
               intent: effectiveIntent,
               toolResults: selectionToolResults,
               products: answerEvidenceProductsForWriter,
+              verifiedProductFacts,
+              conflictingVerifiedProductFacts,
               productEvidenceRoles,
               requiredResponseClauses,
               semanticDecisionValidated,
@@ -6626,6 +6730,8 @@ export class AgentManagerOrchestrator {
             intent: effectiveIntent,
             toolResults: selectionToolResults,
             products: answerEvidenceProductsForWriter,
+            verifiedProductFacts,
+            conflictingVerifiedProductFacts,
             productEvidenceRoles,
             requiredResponseClauses,
             semanticDecisionValidated,
@@ -6990,7 +7096,7 @@ export class AgentManagerOrchestrator {
       ledgerEventIds: turnLedgerEvents.map((event) => event.eventId),
       intentContract: intent,
       effectiveIntentContract: effectiveIntent === intent ? undefined : effectiveIntent,
-      turnContract: turnContractMetadataFromIntent(intent),
+      turnContract: turnContractMetadataFromIntent(intent, cards),
       policyGate,
       policyGateEnforcement,
       sourcePolicy: sourcePolicyMetadataFromIntent(effectiveIntent, selectionToolResults),
@@ -7007,6 +7113,8 @@ export class AgentManagerOrchestrator {
       },
       turnBudget: turnBudget.snapshot(),
       continuation,
+      verifiedProductFacts,
+      conflictingVerifiedProductFacts,
       answerContract: finalAnswerContract,
       preSendValidation: review,
       toolResults,
@@ -7706,6 +7814,20 @@ export class AgentManagerOrchestrator {
               : memory?.missingAttributes ?? comparisonAttributes;
             const researchedGaps = await researchProductComparisonFacts({
               userMessage: input.userMessage,
+              researchGoal: {
+                query: typeof request.args.query === 'string' ? request.args.query : undefined,
+                semanticQuery: typeof request.args.semanticQuery === 'string' ? request.args.semanticQuery : undefined,
+                reason: typeof request.args.reason === 'string' ? request.args.reason : request.rationale,
+                notes: typeof request.args.notes === 'string' ? request.args.notes : undefined
+              },
+              previousResearch: toolResults
+                .filter((result) => result.tool === 'web.researchProductFacts')
+                .map((result) => ({
+                  requestId: result.requestId,
+                  status: result.status,
+                  payload: result.payload,
+                  warnings: result.warnings
+                })),
               products: selectedProducts,
               targetProductNames: gapTargetProductNames,
               comparisonAttributes: gapAttributes,
@@ -8524,6 +8646,8 @@ export class AgentManagerOrchestrator {
           answerText: customerVisibleText,
           products: input.products,
           toolResults: input.toolResults,
+          verifiedProductFacts: input.verifiedProductFacts,
+          conflictingVerifiedProductFacts: input.conflictingVerifiedProductFacts,
           signal: input.signal,
           deadlineAtMs: budget?.snapshot().usage.deadlineAtMs ?? input.structuredDeadlineAtMs
         });
@@ -8544,7 +8668,9 @@ export class AgentManagerOrchestrator {
           if (!issue || typeof issue.claim !== 'string' || !issue.claim.trim() ||
             !customerVisibleText.includes(issue.claim) ||
             typeof issue.reason !== 'string' || !issue.reason.trim() ||
-            !input.toolResults.some((result) => result.requestId === issue.sourceResultId)) {
+            (!input.toolResults.some((result) => result.requestId === issue.sourceResultId) &&
+              ![...(input.verifiedProductFacts ?? []), ...(input.conflictingVerifiedProductFacts ?? [])]
+                .some((fact) => `verified_fact:${fact.id}` === issue.sourceResultId))) {
             throw new Error('semantic_factual_review_unbound_evidence');
           }
           mechanicalIssues.push({
@@ -8658,7 +8784,8 @@ export class AgentManagerOrchestrator {
     }
     const trustedFactSourceIds = new Set<string>([
       ...activeScopedLedgerFacts(input.ledgerState).map((fact) => fact.eventId),
-      ...input.toolResults.filter(toolResultCanGroundFacts).map((result) => result.requestId)
+      ...input.toolResults.filter(toolResultCanGroundFacts).map((result) => result.requestId),
+      ...(input.verifiedProductFacts ?? []).map((fact) => `verified_fact:${fact.id}`)
     ]);
     const knownToolResultIds = new Set(input.toolResults.map((result) => result.requestId));
     for (const fact of input.answer.factsUsed) {
@@ -8669,7 +8796,7 @@ export class AgentManagerOrchestrator {
         mechanicalIssues.push({
           code: 'unsupported_fact_source',
           severity: 'high',
-          message: `Answer fact ${fact.factKey} references sources that are absent from ledger/tool artifacts.`,
+          message: `Answer fact ${fact.factKey} references sources that are absent from ledger/tool artifacts and verified product evidence.`,
           evidence: unknownSourceIds.join(', ')
         });
       }
