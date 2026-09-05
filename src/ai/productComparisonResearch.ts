@@ -52,6 +52,9 @@ export interface ProductComparisonResearchAnswerGuidance {
     sourceTitle?: string;
     sourceTier?: Exclude<ProductResearchSourceTier, 'catalog'>;
     sourceAuthority?: 'manufacturer' | 'secondary';
+    evidenceVerifiedExact?: boolean;
+    targetApplicability?: 'exact_model' | 'shared_instruction';
+    scopeQuote?: string;
   }>;
 }
 
@@ -87,6 +90,8 @@ export interface ProductResearchSourceDescriptor {
 
 export interface ProductComparisonResearchResult {
   usedWebSearch: boolean;
+  // Runtime provenance only; never accept this field from model JSON.
+  usedDocumentRead?: boolean;
   searchDisposition: ProductResearchSearchDisposition;
   sourcesExhausted: boolean;
   sourceAttempts?: ProductResearchSourceAttempt[];
@@ -539,7 +544,10 @@ function confirmedCoverageFromFacts(facts: ProductComparisonResearchFact[]) {
       sourceUrl: fact.sourceUrl,
       sourceTitle: fact.sourceTitle,
       sourceTier: fact.sourceTier,
-      sourceAuthority: fact.sourceAuthority
+      sourceAuthority: fact.sourceAuthority,
+      evidenceVerifiedExact: fact.evidenceVerifiedExact,
+      targetApplicability: fact.targetApplicability,
+      scopeQuote: fact.scopeQuote
     }));
 }
 
@@ -715,6 +723,16 @@ function responseCompletedWebSearchCalls(response: unknown): CompletedWebSearchC
     calls.push({ queries, sourcesProvided, sources });
   }
   return calls;
+}
+
+function evidenceUsableInTier(
+  evidence: Pick<ProductComparisonResearchFact, 'sourceTier' | 'sourceAuthority' | 'sourceUrl' | 'sourceTitle' | 'evidenceVerifiedExact'>,
+  tier: Exclude<ProductResearchSourceTier, 'catalog'>
+) {
+  return evidence.sourceTier === tier || (tier === 'official_manual' &&
+    evidence.sourceTier === 'reliable_secondary' && evidence.sourceAuthority === 'secondary' &&
+    evidence.evidenceVerifiedExact === true && Boolean(evidence.sourceUrl) &&
+    sourceDocumentKind(evidence.sourceUrl!, evidence.sourceTitle) === 'manual_or_specification');
 }
 
 function responseDiscoveredSourceCandidates(response: unknown) {
@@ -1042,7 +1060,7 @@ async function resumeUnverifiedDocumentRead(input: {
       targetProductNames: input.targetProductNames, comparisonAttributes: input.comparisonAttributes,
       expectedSourceTier: 'official_manual', cache: input.cache, signal: input.signal, deadlineAtMs: input.deadlineAtMs,
       onTrace: input.onTrace, documentPassageKeys: new Set(pending.passageKeys) });
-    const facts = result.facts.filter((fact) => fact.sourceType === 'web' && fact.sourceTier === 'official_manual');
+    const facts = result.facts.filter((fact) => fact.sourceType === 'web' && evidenceUsableInTier(fact, 'official_manual'));
     const conflicts = result.conflicts.filter((conflict) => facts.some((fact) =>
       factMatchesTarget(fact, conflict.productName) && fact.attribute === conflict.attribute));
     const droppedEvidence = facts.length !== result.facts.filter((fact) => fact.sourceType === 'web').length;
@@ -1050,7 +1068,7 @@ async function resumeUnverifiedDocumentRead(input: {
       answerGuidance: { ...result.answerGuidance,
         ...(droppedEvidence ? { directAnswer: '', completeness: facts.length ? 'partially_answered' : 'not_answered' } : {}),
         coverage: result.answerGuidance.coverage.filter((item) =>
-        item.status === 'confirmed' ? item.sourceTier === 'official_manual' :
+        item.status === 'confirmed' ? evidenceUsableInTier(item, 'official_manual') :
           item.status !== 'ambiguous' && item.status !== 'contradicted' || conflicts.some((conflict) => conflict.attribute === item.attribute)) },
       // Discovery belongs to the original work item; no old query is reported
       // as newly executed by this continuation's validation.
@@ -2271,6 +2289,9 @@ async function validateSourceBackedResult(input: {
         ...item,
         status: 'not_confirmed',
         value: '',
+        evidenceVerifiedExact: undefined,
+        targetApplicability: undefined,
+        scopeQuote: undefined,
         evidence: validation.invalidKinds.length
           ? `source validation did not confirm ${validation.invalidKinds.join(', ')}`
           : 'source validation did not confirm this claim'
@@ -2296,6 +2317,9 @@ async function validateSourceBackedResult(input: {
     coverage.push({
       ...item,
       evidence: validation.verifiedEvidence ?? item.evidence,
+      evidenceVerifiedExact: true,
+      targetApplicability: validation.targetApplicability,
+      scopeQuote: validation.scopeQuote,
       ...(sourceTier && sourceAuthority ? {
         sourceTier,
         sourceAuthority
@@ -2670,6 +2694,7 @@ function mergeCatalogAndWebResearch(
   };
   return {
     usedWebSearch: webResult.usedWebSearch,
+    ...(webResult.usedDocumentRead ? { usedDocumentRead: true } : {}),
     searchDisposition: webResult.searchDisposition,
     sourcesExhausted: webResult.sourcesExhausted,
     sourceAttempts: mergeSourceAttempts(catalogResult.sourceAttempts, webResult.sourceAttempts),
@@ -2706,6 +2731,7 @@ function mergeWebResearchPasses(
   const facts = uniqueFacts([...primary.facts, ...retry.facts]);
   return {
     usedWebSearch: primary.usedWebSearch || retry.usedWebSearch,
+    ...(primary.usedDocumentRead || retry.usedDocumentRead ? { usedDocumentRead: true } : {}),
     searchDisposition: retry.searchDisposition,
     sourcesExhausted: false,
     sourceAttempts: mergeSourceAttempts(primary.sourceAttempts, retry.sourceAttempts),
@@ -3541,7 +3567,9 @@ export async function researchProductComparisonFacts(input: {
         (fact.confidence === 'high' || fact.confidence === 'medium') &&
         normalizedText(fact.attribute).trim() === normalizedText(slot.attribute).trim() &&
         factMatchesTarget(fact, slot.productName)
-      ));
+      ) || result.answerGuidance.coverage.some((item) => item.status === 'confirmed' && item.evidenceVerifiedExact === true &&
+        normalizedText(item.attribute).trim() === normalizedText(slot.attribute).trim() &&
+        factMatchesTarget({ ...item, productName: item.productName ?? '', sourceType: 'web', confidence: 'medium' }, slot.productName)));
     };
     const documentScopeKey = productResearchDocumentReadScopeKey({ userMessage: input.userMessage, products: exactCatalogProducts,
       targetProductNames, comparisonAttributes, missingFactSlots: requestedSlots });
@@ -3551,8 +3579,11 @@ export async function researchProductComparisonFacts(input: {
     if (resumedDocumentResult && requestedSlotsCovered(resumedDocumentResult)) {
       return mergeCatalogAndWebResearch(catalogResultForResearch, resumedDocumentResult);
     }
-    const includeResumedEvidence = (result: ProductComparisonResearchResult) => resumedDocumentResult
-      ? mergeWebResearchPasses(resumedDocumentResult, result) : result;
+    let knownDocumentResult: ProductComparisonResearchResult | null = null;
+    const includeResumedEvidence = (result: ProductComparisonResearchResult) => {
+      const withKnownDocument = knownDocumentResult ? mergeWebResearchPasses(knownDocumentResult, result) : result;
+      return resumedDocumentResult ? mergeWebResearchPasses(resumedDocumentResult, withKnownDocument) : withKnownDocument;
+    };
     const requestedSlotsCoveredByCatalog = Boolean(
       catalogResultForResearch &&
       !resultHasUnresolvedCatalogConflict(catalogResultForResearch) &&
@@ -3605,6 +3636,7 @@ export async function researchProductComparisonFacts(input: {
       const untried = candidates.filter((candidate) => !priorFailedDocumentUrls.has(candidate.url));
       return (untried.length ? untried : candidates).slice(0, 2).map((candidate) => candidate.url);
     };
+    let documentReadAttempted = false;
     let finishPageDiscovery!: () => void;
     const pageDiscovery = new Promise<void>((resolve) => { finishPageDiscovery = resolve; });
     const waitForPageDiscovery = async (deadlineAtMs?: number, signal?: AbortSignal) => {
@@ -3665,6 +3697,7 @@ export async function researchProductComparisonFacts(input: {
       attemptNumber: number;
       deadlineAtMs?: number;
       signal?: AbortSignal;
+      readKnownDocumentsOnly?: boolean;
     }) => {
       const startedAt = Date.now();
       let sourceCandidates: ProductComparisonResearchResult['sourceCandidates'] = [];
@@ -3681,7 +3714,7 @@ export async function researchProductComparisonFacts(input: {
           sourceAttempts: [{ tier: inputTier.tier, outcome: 'skipped_budget' as const }] };
       }
       try {
-        const tierResponse = await createStructuredJsonResponse({
+        const tierResponse = inputTier.readKnownDocumentsOnly ? undefined : await createStructuredJsonResponse({
           request: tierRequest(inputTier.tier),
           stage: `product_comparison_research_${inputTier.tier}`,
           signal: inputTier.signal,
@@ -3689,27 +3722,27 @@ export async function researchProductComparisonFacts(input: {
           minRetryRemainingMs: WEB_RESEARCH_MIN_RETRY_REMAINING_MS,
           transportMaxRetries: 0
         });
-        const usedWebSearch = responseUsedWebSearch(tierResponse.response);
-        const discoveredSources = responseDiscoveredSourceCandidates(tierResponse.response);
+        const usedWebSearch = tierResponse ? responseUsedWebSearch(tierResponse.response) : false;
+        const discoveredSources = tierResponse ? responseDiscoveredSourceCandidates(tierResponse.response) : [];
         retainDocumentCandidates(discoveredSources);
         sourceCandidates = boundedSourceCandidates(discoveredSources);
         // Release the other tier before any source fetching/validation here.
         if (inputTier.tier === 'official_page') finishPageDiscovery();
-        const normalizedResult = normalizeResearchParsed(tierResponse.parsed, {
+        const normalizedResult = tierResponse ? normalizeResearchParsed(tierResponse.parsed, {
           usedWebSearch,
           searchDisposition: usedWebSearch ? 'completed' : 'failed',
           sourcesExhausted: false
-        });
-        normalizedResult.sourceAttempts = validatedWebSourceAttempts(
+        }) : emptyTierResult('completed', []);
+        normalizedResult.sourceAttempts = tierResponse ? validatedWebSourceAttempts(
           tierResponse.parsed,
           tierResponse.response,
           exactCatalogProducts
-        ).filter((attempt) => attempt.tier === inputTier.tier);
+        ).filter((attempt) => attempt.tier === inputTier.tier) : [];
         let candidateResult = normalizedResult;
         // Discovery snippets are not document contents. Read actual discovered
         // PDFs when the first pass lacks a requested fact, then use the same
         // exact-quote, model-scope and publisher validation as every other fact.
-        if (inputTier.tier === 'official_manual' && !requestedSlotsCovered(candidateResult)) {
+        if (inputTier.tier === 'official_manual' && !documentReadAttempted && !requestedSlotsCovered(candidateResult)) {
           if (!orderedDocumentCandidates().some((candidate) => !priorFailedDocumentUrls.has(candidate.url))) {
             // Only await the already running discovery, not its fact validation.
             // A known untried PDF can be read immediately with the same reader.
@@ -3721,12 +3754,13 @@ export async function researchProductComparisonFacts(input: {
           ]);
           const readStartedAt = Date.now();
           if (documentUrls.length && webResearchRemainingMs(inputTier.deadlineAtMs) >= WEB_RESEARCH_MIN_STAGE_MS) {
+            documentReadAttempted = true;
             const fetched = await Promise.all(documentUrls.map(async (sourceUrl) => ({
               sourceUrl, source: await fetchSourceText(sourceUrl, sourceTextCache, inputTier.signal)
             })));
             const documents = fetched.filter(({ source }) => source.ok && source.text);
             const evidenceDocuments = createEvidenceDocuments(documents.map(({ sourceUrl, source }) => ({
-              sourceUrl, sourceTitle: source.sourceTitle, text: source.text
+              sourceUrl, sourceTitle: source.sourceTitle ?? discoveredDocuments.get(sourceUrl)?.title ?? sourceUrl, text: source.text
             })));
             let documentEvidence: DocumentEvidenceTrace = {
               documents: evidenceDocuments.map(({ passages: _passages, ...document }) => document), selections: []
@@ -3768,8 +3802,9 @@ export async function researchProductComparisonFacts(input: {
                 for (const key of bound.passageKeys) documentPassageKeys.add(key);
                 documentEvidence = bound.trace;
                 const readResult = normalizeResearchParsed(bound.parsed, {
-                  usedWebSearch, searchDisposition: usedWebSearch ? 'completed' : 'failed', sourcesExhausted: false
+                  usedWebSearch, searchDisposition: 'completed', sourcesExhausted: false
                 });
+                readResult.usedDocumentRead = true;
                 // The reader may cite only documents actually fetched here.
                 const readUrls = new Set(documents.map(({ sourceUrl }) => canonicalSourceUrl(sourceUrl)));
                 readResult.facts = readResult.facts.filter((fact) => fact.sourceUrl && readUrls.has(canonicalSourceUrl(fact.sourceUrl)));
@@ -3815,7 +3850,7 @@ export async function researchProductComparisonFacts(input: {
           throw error;
         }
         const tierFacts = validatedResult.facts.filter((fact) =>
-          fact.sourceType === 'web' && fact.sourceTier === inputTier.tier
+          fact.sourceType === 'web' && evidenceUsableInTier(fact, inputTier.tier)
         );
         const tierConflicts = validatedResult.conflicts.flatMap((conflict) => {
           const conflictFacts = tierFacts.filter((fact) =>
@@ -3831,7 +3866,7 @@ export async function researchProductComparisonFacts(input: {
         });
         const tierCoverage = validatedResult.answerGuidance.coverage.filter((item) =>
           item.status === 'confirmed'
-            ? item.sourceTier === inputTier.tier
+            ? evidenceUsableInTier(item, inputTier.tier)
             : item.status !== 'contradicted' && item.status !== 'ambiguous' ||
               tierConflicts.some((conflict) =>
                 normalizedText(conflict.attribute).trim() === normalizedText(item.attribute).trim()
@@ -3841,12 +3876,12 @@ export async function researchProductComparisonFacts(input: {
           fact.sourceType === 'web'
         ).length;
         const droppedConflicts = tierConflicts.length !== validatedResult.conflicts.length;
-        const sourceAttempts = (validatedResult.sourceAttempts?.length || !tierFacts.length
+        const sourceAttempts = (!tierResponse ? [] : validatedResult.sourceAttempts?.length || !tierFacts.length
           ? validatedResult.sourceAttempts
           : [{
               tier: inputTier.tier,
               outcome: 'confirmed' as const,
-              query: responseWebSearchQueries(tierResponse.response)[0],
+              ...(tierResponse ? { query: responseWebSearchQueries(tierResponse.response)[0] } : {}),
               sources: tierFacts.flatMap((fact) => {
                 const descriptor = classifyProductResearchSource({
                   sourceUrl: fact.sourceUrl,
@@ -3861,7 +3896,8 @@ export async function researchProductComparisonFacts(input: {
                 }];
               })
             }])?.map((attempt) =>
-              attempt.outcome === 'confirmed' && !tierFacts.length && !tierConflicts.length
+              attempt.outcome === 'confirmed' && !tierFacts.some((fact) => fact.sourceTier === attempt.tier) &&
+                !tierCoverage.some((item) => item.status === 'confirmed' && item.sourceTier === attempt.tier) && !tierConflicts.length
                 ? { ...attempt, outcome: 'unreadable' as const }
                 : attempt
             );
@@ -3891,7 +3927,7 @@ export async function researchProductComparisonFacts(input: {
           attemptNumber: inputTier.attemptNumber,
           elapsedMs: Date.now() - startedAt,
           remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
-          outcome: usedWebSearch ? 'completed' : 'failed',
+          outcome: usedWebSearch || validatedResult.warnings.includes('discovered_document_read') ? 'completed' : 'failed',
           sourceCount: researchSourceCount(validated),
           acceptedFactCount: validated.facts.filter((fact) => fact.sourceType === 'web').length
         });
@@ -3926,6 +3962,20 @@ export async function researchProductComparisonFacts(input: {
 
     const officialReserveMs = webResearchRemainingMs(input.deadlineAtMs) >= PRIMARY_WEB_MAX_MS + PRIMARY_WEB_FALLBACK_RESERVE_MS
       ? PRIMARY_WEB_FALLBACK_RESERVE_MS : TIER_FALLBACK_RESERVE_MS;
+    // Known exact-scoped leads already completed discovery. Spend the existing
+    // manual stage on actual reading first; incomplete/failed reads still leave
+    // the normal discovery tiers available, without a second document reader.
+    if (orderedDocumentCandidates().some((candidate) => !priorFailedDocumentUrls.has(candidate.url))) {
+      knownDocumentResult = await executeTier({ tier: 'official_manual', stage: 'primary_web', attemptNumber: 1,
+        readKnownDocumentsOnly: true, signal: input.signal, deadlineAtMs: boundedResearchStageDeadline({
+          overallDeadlineAtMs: input.deadlineAtMs, maxDurationMs: PRIMARY_WEB_MAX_MS + WEB_RESEARCH_MIN_STAGE_MS,
+          reserveMs: officialReserveMs
+        }) });
+      if (requestedSlotsCovered(knownDocumentResult)) {
+        return mergeCatalogAndWebResearch(catalogResultForResearch, resumedDocumentResult
+          ? mergeWebResearchPasses(resumedDocumentResult, knownDocumentResult) : knownDocumentResult);
+      }
+    }
     const officialPageDeadlineAtMs = boundedResearchStageDeadline({
       overallDeadlineAtMs: input.deadlineAtMs,
       maxDurationMs: PRIMARY_WEB_MAX_MS,

@@ -97,6 +97,7 @@ const researchSource = z.object({
 }).strict();
 
 const webResearchResult = z.object({
+  usedDocumentRead: z.boolean().optional(),
   // Catalog identity resolved inside this read must survive checkpoint replay.
   products: z.array(productResult).max(4).optional(),
   sourceCandidates: z.array(z.object({

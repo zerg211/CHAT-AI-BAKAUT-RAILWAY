@@ -19,6 +19,26 @@ const genericAttributeTokens = new Set([
 
 const verifiedFactMemoryTtlMs = 90 * 24 * 60 * 60 * 1_000;
 const futureClockSkewMs = 5 * 60 * 1_000;
+
+// Coverage and facts share the source validator, but are separate model output
+// arrays. Only validator-marked confirmed coverage can enter the usual fact
+// persistence path; that path still applies scope/conflict/authority guards.
+export function researchFactMemoryCandidates(research: ProductComparisonResearchResult): ProductComparisonResearchFact[] {
+  const candidates = [...research.facts];
+  for (const coverage of research.answerGuidance.coverage) {
+    if (coverage.status !== 'confirmed' || coverage.evidenceVerifiedExact !== true ||
+      !coverage.productName?.trim() || !coverage.value.trim()) continue;
+    const duplicate = candidates.some(fact => fact.productName === coverage.productName && fact.attribute === coverage.attribute &&
+      fact.value === coverage.value && fact.sourceUrl === coverage.sourceUrl && fact.sourceType === 'web' &&
+      fact.evidenceVerifiedExact === true && (fact.confidence === 'high' || fact.confidence === 'medium'));
+    if (duplicate) continue;
+    candidates.push({ productName: coverage.productName, attribute: coverage.attribute, value: coverage.value,
+      sourceType: 'web', confidence: 'medium', evidence: coverage.evidence, sourceUrl: coverage.sourceUrl,
+      sourceTitle: coverage.sourceTitle, sourceTier: coverage.sourceTier, sourceAuthority: coverage.sourceAuthority,
+      evidenceVerifiedExact: true, targetApplicability: coverage.targetApplicability, scopeQuote: coverage.scopeQuote });
+  }
+  return candidates;
+}
 const powerQualifierPrefixes = {
   nominal: ['nominal', 'rated', 'continuous', 'номин', 'ном'],
   maximum: ['maximum', 'max', 'peak', 'surge', 'максим', 'пиков'],

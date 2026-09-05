@@ -154,6 +154,7 @@ import {
   matchingVerifiedFactsForRequest,
   reusableVerifiedFact,
   researchFactConfidenceNumber,
+  researchFactMemoryCandidates,
   verifiedFactCoverageForRequest,
   verifiedFactsCoverRequest,
   verifiedFactsResearchResult
@@ -5905,6 +5906,10 @@ export class AgentManagerOrchestrator {
       : exactProductIds.length
         ? facts.filter((fact) => Boolean(fact.productId && exactProductIds.includes(fact.productId)))
         : facts;
+    const knownSourceCandidates = [...new Map(exactBoundFacts.filter(fact => reusableVerifiedFact(fact, new Date()) &&
+      fact.sourceTier && fact.sourceAuthority && fact.sourceUrl).map(fact => [fact.sourceUrl!, {
+        url: fact.sourceUrl!, title: fact.sourceTitle ?? undefined
+      }])).values()].slice(0, 8);
     let matchingFacts = matchingVerifiedFactsForRequest({
       facts: exactBoundFacts,
       targetProductNames: input.targetProductNames,
@@ -5970,7 +5975,10 @@ export class AgentManagerOrchestrator {
         });
       }
     }
-    if (!matchingFacts.length) return null;
+    if (!matchingFacts.length) return knownSourceCandidates.length ? {
+      research: null, knownSourceCandidates, attributesCovered: false,
+      missingAttributes: coverage.missingAttributes, missingFactSlots: coverage.missingFactSlots
+    } : null;
     const attributesCovered = verifiedFactsCoverRequest({
       facts: matchingFacts,
       targetProductNames: input.targetProductNames,
@@ -5991,6 +5999,7 @@ export class AgentManagerOrchestrator {
     });
     return {
       research: verifiedFactsResearchResult(matchingFacts, { attributesCovered }),
+      knownSourceCandidates,
       attributesCovered,
       missingAttributes: coverage.missingAttributes,
       missingFactSlots: coverage.missingFactSlots
@@ -6009,7 +6018,7 @@ export class AgentManagerOrchestrator {
     const targetNames = input.targetProductNames.length
       ? input.targetProductNames
       : input.selectedProducts.map((product) => product.name);
-    if (!input.research.usedWebSearch || input.research.searchDisposition !== 'completed') {
+    if ((input.research.usedWebSearch !== true && input.research.usedDocumentRead !== true) || input.research.searchDisposition !== 'completed') {
       await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_persistence', {
         persistableCount: 0,
         savedCount: 0,
@@ -6021,7 +6030,7 @@ export class AgentManagerOrchestrator {
     }
     let savedCount = 0;
     let persistableCount = 0;
-    for (const fact of input.research.facts) {
+    for (const fact of researchFactMemoryCandidates(input.research)) {
       if (fact.sourceType !== 'web') continue;
       if (fact.confidence !== 'high' && fact.confidence !== 'medium') continue;
       if (targetNames.length && !targetNames.some((targetName) => textMatchesTargetName(fact.productName, targetName))) continue;
@@ -6030,7 +6039,8 @@ export class AgentManagerOrchestrator {
       const evidence = fact.evidence.trim();
       if (!evidence || !sourceUrl || !sourceTitle || !fact.sourceTier || !fact.sourceAuthority) continue;
       if (fact.evidenceVerifiedExact !== true) continue;
-      if (!textMatchesTargetName([sourceUrl, sourceTitle, evidence].join(' '), fact.productName)) continue;
+      const scopeQuote = fact.targetApplicability === 'exact_model' || fact.targetApplicability === 'shared_instruction' ? fact.scopeQuote : undefined;
+      if (!textMatchesTargetName([sourceUrl, sourceTitle, evidence, scopeQuote].filter(Boolean).join(' '), fact.productName)) continue;
       const unresolvedConflict = input.research.conflicts.some((conflict) =>
         textMatchesTargetName(conflict.productName, fact.productName) &&
         compactModelText(conflict.attribute) === compactModelText(fact.attribute)
@@ -8187,7 +8197,7 @@ export class AgentManagerOrchestrator {
                 signal: toolSignal,
                 deadlineAtMs: Math.min(researchDeadlineAtMs, Date.now() + 8_000)
               });
-          const catalogAndMemory = catalogResearch && memory
+          const catalogAndMemory = catalogResearch && memory?.research
             ? mergeVerifiedMemoryWithResearch(catalogResearch, memory.research)
             : catalogResearch ?? memory?.research ?? null;
           const requiresFreshWeb = input.intent.grounding?.webRequirement === 'buyer_requested' ||
@@ -8223,9 +8233,9 @@ export class AgentManagerOrchestrator {
                   payload: result.payload,
                   warnings: result.warnings
                 })),
-              knownSourceCandidates: (catalogAndMemory?.facts ?? []).flatMap((fact) =>
+              knownSourceCandidates: [...(memory?.knownSourceCandidates ?? []), ...(catalogAndMemory?.facts ?? []).flatMap((fact) =>
                 fact.sourceType === 'web' && fact.sourceUrl
-                  ? [{ url: fact.sourceUrl, title: fact.sourceTitle }] : []),
+                  ? [{ url: fact.sourceUrl, title: fact.sourceTitle }] : [])],
               products: selectedProducts,
               targetProductNames: gapTargetProductNames,
               comparisonAttributes: gapAttributes,

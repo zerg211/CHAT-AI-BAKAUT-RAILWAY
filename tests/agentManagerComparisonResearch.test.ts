@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyNeedState } from '../src/ai/needState.js';
 import { AgentIntentContractSchema, type AgentIntentContract, type ToolRequest, type ToolResult } from '../src/ai/agentManagerContracts.js';
 import { AgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
+import { validateToolResultOutput } from '../src/ai/agentManagerToolRegistry.js';
 import type { AgentManagerModel } from '../src/ai/agentManagerOrchestrator.js';
 import type { ConversationSession, ConversationTurn, Message, Product, VerifiedProductFact, VerifiedProductFactInput } from '../src/shared/types.js';
 
@@ -2491,6 +2492,70 @@ describe('AgentManager comparison research flow', () => {
         confidence: 0.9
       })
     ]));
+  });
+
+  it.each(['web_search', 'known_document'] as const)('persists validated coverage through the tool boundary and reuses its exact manual source on the next turn: %s', async (execution) => {
+    const fakeProducts = new FakeProducts();
+    const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, fakeProducts as never, {} as never, withStrictToolFixtures(model()));
+    const memory = orchestrator as any;
+    const coverage = { productName: 'ТСС SGG 5000N', attribute: 'first_oil_change_interval', status: 'confirmed', value: 'После первых 20 часов работы',
+      evidence: 'ПЕРВЫЕ 20 ЧАСОВ РАБОТЫ • Замените моторное масло',
+      sourceUrl: 'https://cdn.vseinstrumenti.ru/instruction/nomenclaturecontent/202308/24193970.pdf/tss-sgg-2000n-059999-3187610.pdf',
+      sourceTitle: 'Руководство по эксплуатации ТСС SGG 5000N', sourceTier: 'reliable_secondary', sourceAuthority: 'secondary',
+      evidenceVerifiedExact: true, targetApplicability: 'shared_instruction', scopeQuote: 'Инструкция применима к ТСС SGG 2000N и ТСС SGG 5000N.' };
+    const validated = validateToolResultOutput({ requestId: 'web1', tool: 'web.researchProductFacts', status: 'ok', warnings: [], payload: {
+      usedWebSearch: execution === 'web_search', usedDocumentRead: execution === 'known_document',
+      searchDisposition: 'completed', sourcesExhausted: false, sourceAttempts: [], facts: [], conflicts: [],
+      answerGuidance: { directAnswer: coverage.value, completeness: 'partially_answered', coverage: [coverage] }, summaryForAnswer: '', warnings: []
+    } });
+    const input = { sessionId, turnId, targetProductNames: ['ТСС SGG 5000N'], comparisonAttributes: ['first_oil_change_interval'], selectedProducts: [] };
+    expect(await memory.persistVerifiedResearchFacts({ ...input, research: validated.payload })).toBe(1);
+    expect(fakeProducts.savedVerifiedFacts[0]).toEqual(expect.objectContaining({ productId: null, productName: coverage.productName,
+      value: coverage.value, sourceUrl: coverage.sourceUrl, sourceAuthority: 'secondary', evidence: coverage.evidence, confidence: 'medium' }));
+    const next = await memory.researchFromVerifiedFactMemory({ ...input, turnId: '44444444-4444-4444-8444-444444444444' });
+    expect(next.attributesCovered).toBe(true);
+    expect(next.research.facts).toContainEqual(expect.objectContaining({ productName: coverage.productName, value: coverage.value, sourceUrl: coverage.sourceUrl }));
+    const otherQuestion = await memory.researchFromVerifiedFactMemory({ ...input, comparisonAttributes: ['dipstick_check_position'] });
+    expect(otherQuestion?.attributesCovered).toBe(false);
+    expect(otherQuestion?.research).toBeNull();
+    expect(otherQuestion?.knownSourceCandidates).toContainEqual({ url: coverage.sourceUrl, title: coverage.sourceTitle });
+    expect(await memory.persistVerifiedResearchFacts({ ...input, research: { ...validated.payload,
+      searchDisposition: 'memory_hit', usedWebSearch: false, usedDocumentRead: true } })).toBe(0);
+    expect(await memory.persistVerifiedResearchFacts({ ...input, research: { ...validated.payload,
+      searchDisposition: 'completed', usedWebSearch: false, usedDocumentRead: false } })).toBe(0);
+    expect(fakeProducts.savedVerifiedFacts).toHaveLength(1);
+    expect(await memory.researchFromVerifiedFactMemory({ ...input, targetProductNames: ['ТСС SGG 2000N'] })).toBeNull();
+    fakeProducts.verifiedFacts[0]!.lastVerifiedAt = '2025-01-01T00:00:00.000Z';
+    expect(await memory.researchFromVerifiedFactMemory(input)).toBeNull();
+  });
+
+  it('does not promote unconfirmed, rejected or foreign-model coverage into fact memory', async () => {
+    const fakeProducts = new FakeProducts();
+    const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, fakeProducts as never, {} as never, withStrictToolFixtures(model()));
+    const coverage = { productName: 'Maker GX400', attribute: 'first_oil_change_interval', status: 'confirmed', value: '20 hours',
+      evidence: 'Maker GX400: change oil after 20 hours', sourceUrl: 'https://manufacturer.example/GX400.pdf', sourceTitle: 'Maker GX400 manual',
+      sourceTier: 'official_manual', sourceAuthority: 'manufacturer', evidenceVerifiedExact: true, targetApplicability: 'exact_model' };
+    for (const changes of [{ status: 'not_confirmed' }, { evidenceVerifiedExact: false }, { evidenceVerifiedExact: undefined },
+      { productName: 'Maker GX500' }, { sourceAuthority: undefined }]) {
+      expect(await (orchestrator as any).persistVerifiedResearchFacts({ sessionId, turnId, targetProductNames: ['Maker GX400'], selectedProducts: [], research: {
+        usedWebSearch: true, searchDisposition: 'completed', sourcesExhausted: false, facts: [], conflicts: [],
+        answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [{ ...coverage, ...changes }] }
+      } })).toBe(0);
+    }
+    expect(fakeProducts.savedVerifiedFacts).toEqual([]);
+  });
+
+  it('does not persist the same checked assertion twice when both facts and coverage contain it', async () => {
+    const fakeProducts = new FakeProducts();
+    const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, fakeProducts as never, {} as never, withStrictToolFixtures(model()));
+    const fact = { productName: 'Maker GX400', attribute: 'oil_capacity_l', value: '0.6', sourceType: 'web', confidence: 'high',
+      evidence: 'Maker GX400 oil capacity 0.6 litres', sourceUrl: 'https://manufacturer.example/GX400.pdf', sourceTitle: 'Maker GX400 manual',
+      sourceTier: 'official_manual', sourceAuthority: 'manufacturer', evidenceVerifiedExact: true };
+    expect(await (orchestrator as any).persistVerifiedResearchFacts({ sessionId, turnId, targetProductNames: ['Maker GX400'], selectedProducts: [], research: {
+      usedWebSearch: true, searchDisposition: 'completed', facts: [fact], conflicts: [],
+      answerGuidance: { directAnswer: '', completeness: 'answered', coverage: [{ ...fact, status: 'confirmed' }] }
+    } })).toBe(1);
+    expect(fakeProducts.savedVerifiedFacts).toHaveLength(1);
   });
 
   it('does not bind an absent exact-model fact to a neighbouring selected catalog product', async () => {

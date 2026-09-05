@@ -88,6 +88,76 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('production web research regressions', () => {
+  it.each(['fact', 'coverage'] as const)('preserves a validated shared manual from a secondary mirror: %s', async (kind) => {
+    const mirror = 'https://docs.example.net/manuals/generator-family.pdf';
+    parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call,
+        { publisherAuthority: 'secondary', publisherEvidence: '' });
+      if (call.stage === 'product_research_document_read') {
+        const response = documentResponse(call, { evidence: generalQuote, sourceUrl: mirror });
+        if (kind === 'coverage') {
+          const { sourceType: _sourceType, confidence: _confidence, ...claim } = response.parsed.facts[0] as any;
+          response.parsed.facts = [];
+          response.parsed.answerGuidance.coverage = [{ ...claim, status: 'confirmed' }];
+        }
+        return response;
+      }
+      return webResponse(call.stage.slice('product_comparison_research_'.length));
+    });
+    const actual = await research({ knownSourceCandidates: [{ url: mirror }] });
+    expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({ status: 'confirmed',
+      sourceUrl: mirror, sourceTier: 'reliable_secondary', sourceAuthority: 'secondary', evidenceVerifiedExact: true,
+      targetApplicability: 'shared_instruction', scopeQuote, value: '20 hours' }));
+    if (kind === 'fact') expect(actual.facts).toContainEqual(expect.objectContaining({ sourceUrl: mirror,
+      sourceTier: 'reliable_secondary', sourceAuthority: 'secondary', evidenceVerifiedExact: true }));
+    else expect(actual.facts).toEqual([]);
+    expect(actual.sourceAttempts?.some((attempt) => attempt.tier === 'official_manual' && attempt.outcome === 'confirmed')).toBe(false);
+  });
+
+  it.each(['confirmed', 'partial', 'wrong scope'] as const)('reads a known scoped PDF before new discovery: %s', async (mode) => {
+    const stages: string[] = [];
+    parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote} ${publisherQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
+    structured.mockImplementation(async (call) => {
+      stages.push(call.stage);
+      if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call, { claimSupported: mode !== 'partial' });
+      if (call.stage === 'product_research_document_read') return documentResponse(call, { evidence: generalQuote });
+      return webResponse(call.stage.slice('product_comparison_research_'.length));
+    });
+    const actual = await research({ previousResearch: [{ requestId: 'prior', status: 'ok', warnings: [], payload: {
+      targetProductNames: [mode === 'wrong scope' ? 'FIRMAN RD4910E' : target], sourceCandidates: [{ url: sharedUrl }]
+    } }] });
+    if (mode === 'wrong scope') {
+      expect(stages).not.toContain('product_research_document_read');
+      expect(fetchSource).not.toHaveBeenCalled();
+    } else {
+      expect(stages[0]).toBe('product_research_document_read');
+      expect(stages.filter((stage) => stage === 'product_research_document_read')).toHaveLength(1);
+      if (mode === 'confirmed') {
+        expect(stages.some((stage) => stage.startsWith('product_comparison_research_'))).toBe(false);
+        expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', sourceTier: 'official_manual', evidenceVerifiedExact: true }));
+        expect(actual.usedWebSearch).toBe(false);
+        expect(actual.usedDocumentRead).toBe(true);
+        expect(actual.sourceAttempts?.some((attempt) => attempt.query)).toBe(false);
+        const validated = validateToolResultOutput({ requestId: 'known-pdf', tool: 'web.researchProductFacts',
+          status: 'ok', payload: actual as unknown as Record<string, unknown>, warnings: actual.warnings });
+        const { AgentManagerOrchestrator } = await import('../src/ai/agentManagerOrchestrator.js');
+        const upsertVerifiedProductFact = vi.fn(async (input) => ({ id: 'saved-document-fact', ...input }));
+        const manager = new AgentManagerOrchestrator({ addAgentTrace: vi.fn(async () => undefined) } as any,
+          { upsertVerifiedProductFact } as any, {} as any, {} as any);
+        const saved = await (manager as any).persistVerifiedResearchFacts({ sessionId: 'session', turnId: 'turn',
+          research: validated.payload, targetProductNames: [target], selectedProducts: [catalogProduct] });
+        expect(saved).toBe(1);
+        expect(upsertVerifiedProductFact).toHaveBeenCalledWith(expect.objectContaining({ sourceUrl: sharedUrl,
+          value: '20 hours', productId: catalogProduct.id }));
+      } else {
+        expect(actual.facts).toEqual([]);
+        expect(stages).toContain('product_comparison_research_official_manual');
+        expect(stages).toContain('product_comparison_research_reliable_secondary');
+      }
+    }
+  });
+
   it.each(['late passage', 'adjacent passages', 'invalid reference', 'unsupported claim', 'wrong model', 'missing reference'] as const)(
     'binds document evidence and reports its validation boundary: %s', async (mode) => {
       const actualQuote = mode === 'wrong model' ? generalQuote.replace('20', '50') : generalQuote;
@@ -201,6 +271,7 @@ describe('production web research regressions', () => {
       expect(second.facts).toContainEqual(expect.objectContaining({ value: '20 hours', evidenceVerifiedExact: true }));
       expect(second.warnings).toContain('unverified_document_validation_resumed');
       expect(second.usedWebSearch).toBe(false);
+      expect(second.usedDocumentRead).toBe(true);
       expect(second.sourceAttempts?.some((attempt) => attempt.tier !== 'catalog')).toBe(false);
     }
     expect(JSON.stringify(first)).not.toContain('documentReadContext');
@@ -293,7 +364,8 @@ describe('production web research regressions', () => {
     expect(actual.facts).toContainEqual(expect.objectContaining({ sourceUrl: originalUrl, value: '20 hours',
       sourceTier: 'official_manual', evidenceVerifiedExact: true, targetApplicability: 'shared_instruction' }));
     expect(structured.mock.calls.filter(([call]) => call.stage === 'product_research_document_read')).toHaveLength(1);
-    expect(structured.mock.calls.filter(([call]) => call.stage.startsWith('product_comparison_research_'))).toHaveLength(2);
+    expect(structured.mock.calls.filter(([call]) => call.stage.startsWith('product_comparison_research_')))
+      .toHaveLength(origin === 'parallel page' ? 2 : 0);
     expect(actual.sourcesExhausted).toBe(false);
   });
 
