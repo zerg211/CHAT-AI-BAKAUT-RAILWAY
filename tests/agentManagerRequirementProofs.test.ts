@@ -1342,6 +1342,105 @@ describe('generic requirement proofs', () => {
     }));
   });
 
+  it('keeps final-fit 220 V cards when catalog phase fields also contain the measured 230 V', () => {
+    // Exact relevant catalog fields from production-v3-memory, turn 2.
+    const products = [
+      ['98bb3537-19e5-4650-91d7-f2f265b4b10e', 'Генератор бензиновый A-iPower LITE AР5500 (5,0 кВт) 20204'],
+      ['84236772-154c-45a9-9402-28e5c94a4969', 'Генератор бензиновый A-iPower LITE AР5500E (5,0 кВт) 20205']
+    ].map(([id, name]) => generator(id!, name!, {
+      phases: '1, 230 В / 50 Гц, ток 22 А, cosφ 1',
+      'число фаз': 'однофазные',
+      'напряжение, в': '230В',
+      'мощность номинальная при 220 в, квт': '5'
+    }));
+    const requirement: SelectionRequirement = {
+      id: 'req-voltage', kind: 'voltage_v', value: 220, unit: 'V',
+      role: 'hard_constraint', strictness: 'strict',
+      evidence: 'обычная сеть 220 В', verification: { mode: 'product_attribute' }
+    };
+    const request: ToolRequest = {
+      id: 'catalog-search', tool: 'catalog.search',
+      args: { query: 'генератор', productIntent: 'generator' },
+      rationale: 'проверить каталог', required: true
+    };
+    const result = select({
+      products, intent: intentFor({ requirement, request, phase: 'single_phase' }),
+      toolResults: [catalogResult(products)]
+    });
+
+    expect(result.selectedProductIds).toEqual(products.map((product) => product.id));
+    for (const product of products) {
+      expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+        requirementId: requirement.id, productId: product.id, status: 'satisfied',
+        normalizedValue: 230, normalizedUnit: 'v', caveats: []
+      }));
+    }
+    expect(result.warnings.some((warning) => warning.includes('generator_voltage'))).toBe(false);
+  });
+
+  it.each([
+    { specs: { phases: '1, 230 В / 50 Гц, ток 22 А' }, expected: 'satisfied', value: 230 },
+    { specs: { phases: 1 }, expected: 'unverified', value: null },
+    { specs: { phases: 'однофазные' }, expected: 'unverified', value: null },
+    { specs: { phases: 'single phase', voltage: '230 V' }, expected: 'satisfied', value: 230 },
+    { specs: { voltage: '230 V', 'напряжение, в': '220В' }, expected: 'satisfied', value: 220 },
+    { specs: { phases: '1, 400 В / 50 Гц', voltage: '230 V' }, expected: 'conflicted', value: null },
+    { specs: { phases: '3, 230/400 В / 50 Гц' }, expected: 'unverified', value: null },
+    { specs: { phases: 'single phase', voltage: '110 V' }, expected: 'violated', value: 110 },
+    { specs: { voltage: '400 V' }, expected: 'violated', value: 400 }
+  ])('compares voltage measurements without substituting phase counts: $specs', ({ specs, expected, value }) => {
+    const product = generator('voltage-evidence', 'Генератор GENERIC G5000', specs);
+    const requirement: SelectionRequirement = {
+      id: 'voltage-proof', kind: 'voltage_v', value: 220, unit: 'V',
+      role: 'hard_constraint', strictness: 'strict',
+      evidence: 'обычная сеть 220 В', verification: { mode: 'product_attribute' }
+    };
+    const request: ToolRequest = {
+      id: 'catalog-search', tool: 'catalog.search', args: { query: 'generator' },
+      rationale: 'read exact catalog facts', required: true
+    };
+    const proofs = buildRequirementProofs({
+      products: [product], intent: intentFor({ requirement, request }),
+      toolResults: [catalogResult([product])]
+    });
+
+    expect(proofs).toContainEqual(expect.objectContaining({
+      productId: product.id, status: expected, normalizedValue: value
+    }));
+  });
+
+  it('applies the same voltage measurement rules to catalog and web phase facts', () => {
+    const product = generator('voltage-web', 'Генератор GENERIC G5000', {
+      voltage: '220 V', phases: 'однофазный'
+    });
+    const requirement: SelectionRequirement = {
+      id: 'voltage-proof', kind: 'voltage_v', value: 220, unit: 'V',
+      role: 'hard_constraint', strictness: 'strict',
+      evidence: 'обычная сеть 220 В', verification: { mode: 'product_attribute' }
+    };
+    const request: ToolRequest = {
+      id: 'web-voltage', tool: 'web.researchProductFacts',
+      args: { query: 'generator voltage', productNames: [product.name] },
+      rationale: 'check generator output voltage', required: true,
+      coversRequirementIds: [requirement.id]
+    };
+    const intent = intentFor({ requirement, request, phase: 'single_phase' });
+    const result = select({
+      products: [product], intent,
+      toolResults: [catalogResult([product]), webResult({
+        requestId: request.id, product, attribute: 'phases',
+        value: '1, 230 V / 50 Hz, 22 A', confidence: 'medium'
+      })]
+    });
+
+    expect(result.selectedProductIds).toEqual([product.id]);
+    expect(result.requirementProofs).toContainEqual(expect.objectContaining({
+      productId: product.id, status: 'satisfied', normalizedValue: 230,
+      normalizedUnit: 'v', sourceAuthority: 'corroborated_web', caveats: [],
+      sourceResultIds: ['catalog-search', request.id]
+    }));
+  });
+
   it('does not treat 220 inside a four-digit model index as proof of single phase', () => {
     const product = generator('tss-2200a', 'Generator TSS SGG 2200A', {});
     expect(generatorPhaseProfile(product)).toBe('unknown');

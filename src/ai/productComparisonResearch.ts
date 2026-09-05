@@ -1750,6 +1750,33 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
     const boundedSource = boundedSemanticSourceTextForEvidence(entry.sourceText, entry.item.evidence);
     return { ...entry, itemIndex, boundedSource };
   });
+  const sources: Array<{ sourceId: string; sourceUrl: string | null; sourceText: string }> = [];
+  const sourceIds = new Map<string, string>();
+  const claims = boundedItems.map(({ item, itemIndex, targetProductNames, boundedSource }) => {
+    const sourceUrl = item.sourceUrl ?? null;
+    // One URL may need different quote windows; one text may have different
+    // publishers. Share only the identical source/window, never either alone.
+    const sourceKey = JSON.stringify([sourceUrl, boundedSource.text]);
+    let sourceId = sourceIds.get(sourceKey);
+    if (!sourceId) {
+      sourceId = `source-${sources.length}`;
+      sourceIds.set(sourceKey, sourceId);
+      sources.push({ sourceId, sourceUrl, sourceText: boundedSource.text });
+    }
+    return {
+      itemIndex,
+      targetProductNames,
+      claim: {
+        productName: item.productName ?? null,
+        attribute: item.attribute,
+        value: item.value,
+        evidence: item.evidence,
+        sourceUrl,
+        sourceTitle: item.sourceTitle ?? null
+      },
+      sourceId
+    };
+  });
   const itemSchema = sourceEvidenceValidationJsonFormat().format.schema;
   const { parsed } = await createStructuredJsonResponse({
     request: {
@@ -1760,7 +1787,7 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
           role: 'system',
           content: [
             'You are a strict semantic source validator for equipment/product facts.',
-            'Validate every indexed claim independently using only its sourceText. Do not search the web or answer the buyer.',
+            'Validate every indexed claim independently using only the sourceText in sources whose sourceId equals that claim\'s sourceId. The sources table shares identical source windows without merging claims. Do not transfer evidence from another sourceId, even if the URL is the same. Do not search the web or answer the buyer.',
             'claimSupported=true requires the same exact product/model, attribute, and value/meaning. A related attribute with the same number is not support.',
             sourceApplicabilityInstructions,
             'Do not require exact wording. Interpret source text semantically across languages, tables, descriptions, manuals, listings, and specs.',
@@ -1772,21 +1799,7 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
         },
         {
           role: 'user',
-          content: JSON.stringify({
-            claims: boundedItems.map(({ item, itemIndex, targetProductNames, boundedSource }) => ({
-              itemIndex,
-              targetProductNames,
-              claim: {
-                productName: item.productName ?? null,
-                attribute: item.attribute,
-                value: item.value,
-                evidence: item.evidence,
-                sourceUrl: item.sourceUrl ?? null,
-                sourceTitle: item.sourceTitle ?? null
-              },
-              sourceText: boundedSource.text
-            }))
-          })
+          content: JSON.stringify({ sources, claims })
         }
       ],
       max_output_tokens: Math.max(

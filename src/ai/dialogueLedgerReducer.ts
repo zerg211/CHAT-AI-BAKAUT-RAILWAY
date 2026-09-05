@@ -1,10 +1,12 @@
 import {
   DialogueLedgerEventSchema,
+  SelectionRankingObjectiveSchema,
   dialogueLedgerScopes,
   normalizeLedgerStateDeltaEvents,
   type DialogueLedgerEvent,
   type LedgerStateDelta,
-  type SelectionRequirement
+  type SelectionRequirement,
+  type SelectionRankingObjective
 } from './agentManagerContracts.js';
 import { z } from 'zod';
 import { emptyNeedState, emptyProductSelectionState } from './needState.js';
@@ -35,6 +37,7 @@ export interface ReducedFact {
   productId?: string;
   unit?: string;
   relation?: SelectionRequirement['relation'];
+  ranking?: Pick<SelectionRankingObjective, 'attribute' | 'direction'> | null;
 }
 
 export interface ReducedQuestion {
@@ -85,7 +88,8 @@ const reducedFactSnapshotSchema = z.object({
   scope: z.enum(dialogueLedgerScopes).optional(),
   productId: z.string().trim().min(1).optional(),
   unit: z.string().trim().min(1).optional(),
-  relation: z.enum(['must_have', 'must_not_have', 'preferred', 'not_required', 'context']).optional()
+  relation: z.enum(['must_have', 'must_not_have', 'preferred', 'not_required', 'context']).optional(),
+  ranking: SelectionRankingObjectiveSchema.omit({ requirementId: true }).nullable().optional()
 }).passthrough();
 
 const reducedQuestionSnapshotSchema = z.object({
@@ -470,6 +474,8 @@ export function reduceDialogueLedger(
         (previous.status === 'active' || supersedesPrevious);
       const relation = reducedFactSnapshotSchema.shape.relation.safeParse(event.payload.relation ?? undefined);
       if (!relation.success) warnings.push('fact_relation_invalid');
+      const ranking = reducedFactSnapshotSchema.shape.ranking.safeParse(event.payload.ranking);
+      if (!ranking.success) warnings.push('fact_ranking_invalid');
       const fact: ReducedFact = {
         factKey,
         value: event.payload.value,
@@ -486,7 +492,8 @@ export function reduceDialogueLedger(
         scope: event.scope,
         productId,
         unit: stringPayload(event.payload, 'unit'),
-        relation: relation.success ? relation.data : undefined
+        relation: relation.success ? relation.data : undefined,
+        ranking: ranking.success ? ranking.data : undefined
       };
       factsByEventId.set(event.eventId, fact);
       if (observedCannotReplaceConfirmed) {

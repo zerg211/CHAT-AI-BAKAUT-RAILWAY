@@ -512,6 +512,11 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       payload: { needId: 'generator', productClass: 'generator', activate: true }
     }, observedFact, {
       ...observedFact,
+      eventId: 'saved-ranking-preference', eventType: 'fact.confirmed', scope: 'need',
+      payload: { factKey: 'buyer_priority', value: 'удобнее для меня', needId: 'generator',
+        role: 'preference', relation: 'preferred', ranking: { attribute: 'weight_kg', direction: 'minimize' } }
+    }, {
+      ...observedFact,
       eventId: 'open-secondary',
       eventType: 'need.opened',
       scope: 'need',
@@ -577,6 +582,9 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
         relation: 'context',
         role: 'context'
       });
+      expect((userInput.existingState ?? userInput.ledger)?.facts?.find((fact) => fact.key === 'buyer_priority')).toMatchObject({
+        value: 'удобнее для меня', ranking: { attribute: 'weight_kg', direction: 'minimize' }
+      });
     }
     const plannerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_intent_contract');
     const plannerRequest = plannerCall?.[0]?.request as {
@@ -639,6 +647,15 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(rankingSchema?.items?.properties?.direction?.enum).toEqual(['minimize', 'maximize']);
 
     const reducerCall = createStructuredJsonResponse.mock.calls.find((call) => call[0]?.stage === 'agent_ledger_delta');
+    const rankingPayloadSchema = (reducerCall?.[0]?.request as { text: { format: { schema: { properties: {
+      events: { items: { properties: { payload: { required: string[]; properties: Record<string, unknown> } } } }
+    } } } } }).text.format.schema.properties.events.items.properties.payload;
+    expect(rankingPayloadSchema.required).toContain('ranking');
+    expect(rankingPayloadSchema.properties.ranking).toMatchObject({
+      anyOf: [{ type: 'object', required: ['attribute', 'direction'], properties: {
+        attribute: { enum: ['weight_kg', 'price_rub', 'nominal_power_kw'] }, direction: { enum: ['minimize', 'maximize'] }
+      } }, { type: 'null' }]
+    });
     const reducerRequest = reducerCall?.[0]?.request as {
       input?: Array<{ role?: string; content?: string }>;
       text?: {

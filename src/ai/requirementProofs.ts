@@ -1,6 +1,6 @@
 import type { Product } from '../shared/types.js';
 import { AgentSelectionPolicySchema, type AgentIntentContract, type SelectionRequirement, type ToolResult } from './agentManagerContracts.js';
-import { modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
+import { isModelTokenChar, modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
 import { generatorPhaseProfile, generatorRemoteStartProfile, hasElectricStartSignal, productMatchesIntent } from './productClassifier.js';
 import { classifyProductResearchSource } from './productComparisonResearch.js';
 
@@ -345,16 +345,59 @@ function textHasAny(value: unknown, alternatives: string[]) {
   return alternatives.some((alternative) => normalizedWords(alternative).every((word) => words.has(word)));
 }
 
+function voltageMeasurement(value: unknown, sourceAttribute: unknown): NormalizedComparable {
+  const raw = String(value ?? '').trim().toLocaleLowerCase('ru-RU');
+  const scalar = raw ? Number(raw.split(',').join('.')) : NaN;
+  if (canonicalAttribute(sourceAttribute) === 'voltage' && Number.isFinite(scalar)) {
+    return { value: scalar, unit: 'v' };
+  }
+
+  // A phase field may also contain a voltage, frequency and current. Only a
+  // number explicitly paired with volts proves voltage; the phase count does not.
+  const measurements = new Set<number>();
+  const units = unitAliases.find((entry) => entry.unit === 'v')!.aliases;
+  const isDigit = (char: string | undefined) => char !== undefined && char >= '0' && char <= '9';
+  for (let start = 0; start < raw.length; start += 1) {
+    if (!isDigit(raw[start]) || start > 0 && isModelTokenChar(raw[start - 1]!)) continue;
+    let end = start;
+    while (isDigit(raw[end])) end += 1;
+    if ((raw[end] === '.' || raw[end] === ',') && isDigit(raw[end + 1])) {
+      end += 1;
+      while (isDigit(raw[end])) end += 1;
+    }
+    let unitStart = end;
+    while (unitStart < raw.length && raw[unitStart]!.trim() === '') unitStart += 1;
+    if (units.some((unit) => raw.startsWith(unit, unitStart) &&
+      (unitStart + unit.length === raw.length || !isModelTokenChar(raw[unitStart + unit.length]!)))) {
+      const preceding = raw.slice(0, start).trimEnd();
+      if (['/', '-', '–'].includes(preceding.at(-1) ?? '') &&
+        isDigit(preceding.slice(0, -1).trimEnd().at(-1))) {
+        // A shared unit in a list/range such as 230/400 V does not prove
+        // that only the last voltage is available.
+        return { value: null, unit: null };
+      }
+      measurements.add(Number(raw.slice(start, end).split(',').join('.')));
+    }
+    start = end - 1;
+  }
+  return measurements.size === 1
+    ? { value: [...measurements][0]!, unit: 'v' }
+    : { value: null, unit: null };
+}
+
 function normalizeComparable(input: {
   value: unknown;
   unit?: unknown;
   attribute: string;
+  sourceAttribute?: string;
   preferNumeric: boolean;
 }): NormalizedComparable {
   if (typeof input.value === 'boolean') return { value: input.value, unit: null };
   const attribute = canonicalAttribute(input.attribute);
   const rawText = String(input.value ?? '').trim();
   const unit = canonicalUnit(input.unit, rawText, input.attribute);
+
+  if (attribute === 'voltage') return voltageMeasurement(input.value, input.sourceAttribute ?? input.attribute);
 
   if (attribute === 'phase') {
     const words = new Set(normalizedWords(rawText));
@@ -738,7 +781,13 @@ function webCandidates(input: {
   return candidates;
 }
 
-function comparableKey(value: NormalizedComparable) {
+function comparableKey(value: NormalizedComparable, attribute: string) {
+  // Source consistency must use the same nominal-voltage equivalence as the
+  // requirement comparison, while keeping the actual measured value in the proof.
+  if (attribute === 'voltage' && typeof value.value === 'number') {
+    if ([220, 230].includes(value.value)) return 'voltage:220/230:v';
+    if ([380, 400].includes(value.value)) return 'voltage:380/400:v';
+  }
   return `${typeof value.value}:${String(value.value)}:${value.unit ?? ''}`;
 }
 
@@ -755,7 +804,17 @@ function proofForProduct(input: {
     preferNumeric: typeof input.requirement.value === 'number'
   });
   const productCandidates = input.candidates.filter((candidate) => candidate.productId === input.product.id);
-  if (!productCandidates.length) {
+  const normalizedCandidates = productCandidates.map((candidate) => ({
+    candidate,
+    comparable: normalizeComparable({
+      value: candidate.rawValue,
+      unit: candidate.rawUnit,
+      attribute,
+      sourceAttribute: candidate.attribute,
+      preferNumeric: typeof input.requirement.value === 'number'
+    })
+  })).filter((item) => attribute !== 'voltage' || item.comparable.value !== null);
+  if (!normalizedCandidates.length) {
     return {
       requirementId: input.requirement.id,
       productId: input.product.id,
@@ -771,18 +830,9 @@ function proofForProduct(input: {
     };
   }
 
-  const normalizedCandidates = productCandidates.map((candidate) => ({
-    candidate,
-    comparable: normalizeComparable({
-      value: candidate.rawValue,
-      unit: candidate.rawUnit,
-      attribute,
-      preferNumeric: typeof input.requirement.value === 'number'
-    })
-  }));
   const topAuthority = Math.max(...normalizedCandidates.map((item) => item.candidate.authority));
   const top = normalizedCandidates.filter((item) => item.candidate.authority === topAuthority);
-  const topValues = new Map(top.map((item) => [comparableKey(item.comparable), item]));
+  const topValues = new Map(top.map((item) => [comparableKey(item.comparable, attribute), item]));
   const sourceResultIds = [...new Set(normalizedCandidates.map((item) => item.candidate.resultId))];
   const topSourceAuthority = top[0]?.candidate.sourceAuthority ?? 'none';
   if (topValues.size !== 1) {
@@ -802,9 +852,9 @@ function proofForProduct(input: {
   }
 
   const selected = [...topValues.values()][0]!;
-  const selectedKey = comparableKey(selected.comparable);
+  const selectedKey = comparableKey(selected.comparable, attribute);
   const lowerConflict = normalizedCandidates.some((item) =>
-    item.candidate.authority < topAuthority && comparableKey(item.comparable) !== selectedKey
+    item.candidate.authority < topAuthority && comparableKey(item.comparable, attribute) !== selectedKey
   );
   if (lowerConflict && topAuthority < 3) {
     return {

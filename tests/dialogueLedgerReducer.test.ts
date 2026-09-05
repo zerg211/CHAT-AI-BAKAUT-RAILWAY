@@ -24,6 +24,25 @@ function event(input: Partial<DialogueLedgerEvent> & Pick<DialogueLedgerEvent, '
 }
 
 describe('dialogue ledger reducer', () => {
+  it('round trips explicit ranking tuples, nonnumeric null and legacy absence without changing values', () => {
+    const events = [
+      event({ eventId: 'need', eventType: 'need.opened', scope: 'need', payload: { needId: 'selection', productClass: 'plate', activate: true } }),
+      ...[{ attribute: 'price_rub', direction: 'minimize' }, null, undefined].map((ranking, index) => event({
+        eventId: `pref-${index}`, eventType: 'fact.confirmed', scope: 'need', payload: {
+          needId: 'selection', factKey: `preference_${index}`, value: 'как мне удобнее', unit: 'choice',
+          role: 'preference', relation: 'preferred', ...(ranking === undefined ? {} : { ranking })
+        }
+      }))
+    ];
+    const initial = reduceDialogueLedger(events);
+    const replayed = reduceDialogueLedger([], parseReducedDialogueLedgerState(JSON.parse(JSON.stringify(initial))));
+    expect(replayed.factsByKey['selection::preference_0']).toMatchObject({
+      ranking: { attribute: 'price_rub', direction: 'minimize' }, value: 'как мне удобнее', unit: 'choice'
+    });
+    expect(replayed.factsByKey['selection::preference_1']?.ranking).toBeNull();
+    expect(replayed.factsByKey['selection::preference_2']?.ranking).toBeUndefined();
+  });
+
   it('keeps nonactivated needs paused and switches or resumes only through explicit activation', () => {
     const primary = event({ eventId: 'primary', eventType: 'need.opened', scope: 'need', payload: {
       needId: 'primary', productClass: 'generator', activate: true

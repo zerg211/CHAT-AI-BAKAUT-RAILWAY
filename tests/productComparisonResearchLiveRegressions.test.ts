@@ -75,6 +75,64 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('production web research regressions', () => {
+  it.each(['shared source', 'different windows', 'different URLs'] as const)('preserves every fact and coverage claim while sharing only identical source windows: %s', async (mode) => {
+    const oilQuote = 'Use engine oil SAE 10W-30.';
+    const sourceText = mode === 'different windows'
+      ? `${scopeQuote} ${publisherQuote} ${generalQuote} ${'Maintenance background. '.repeat(1500)} ${oilQuote}`
+      : `${scopeQuote} ${publisherQuote} ${generalQuote} ${oilQuote} ${'Maintenance background. '.repeat(900)}`;
+    parsePdf.mockResolvedValue({ text: sourceText, totalPages: 32, parsedPages: 32, truncated: false });
+    const facts = [
+      { productName: target, attribute, value: '20 hours', sourceType: 'web', confidence: 'high', evidence: generalQuote,
+        sourceUrl: sharedUrl, sourceTitle: 'FIRMAN family instruction manual' },
+      { productName: target, attribute: 'oil grade', value: 'SAE 10W-30', sourceType: 'web', confidence: 'high', evidence: oilQuote,
+        sourceUrl: mode === 'different URLs' ? 'https://www.firman.biz/manuals/generator-family-copy.pdf' : sharedUrl,
+        sourceTitle: 'FIRMAN family instruction manual' }
+    ];
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+        return { parsed: { validations: payload.claims.map((entry: any) => ({ itemIndex: entry.itemIndex,
+          claimSupported: true, claimStartKinds: [], supportedStartKinds: [], publisherAuthority: 'manufacturer',
+          publisherEvidence: publisherQuote, targetApplicability: 'shared_instruction', scopeQuote,
+          evidence: entry.claim.evidence, warnings: [] })) } };
+      }
+      const response = webResponse(call.stage.slice('product_comparison_research_'.length));
+      return call.stage.endsWith('_official_manual') ? { ...response, parsed: { ...response.parsed, facts,
+        answerGuidance: { directAnswer: `${generalQuote} ${oilQuote}`, completeness: 'answered',
+          coverage: facts.map((fact) => ({ ...fact, status: 'confirmed' })) } } } : response;
+    });
+    const actual = await research({ comparisonAttributes: [attribute, 'oil grade'], missingFactSlots: [] });
+    const calls = structured.mock.calls.filter(([call]) => call.stage === 'source_evidence_semantic_validation');
+    expect(calls).toHaveLength(1);
+    const payload = JSON.parse(calls[0]![0].request.input.find((item: any) => item.role === 'user').content);
+    expect(payload.claims).toHaveLength(4);
+    expect(payload.sources).toHaveLength(mode === 'shared source' ? 1 : 2);
+    const sources = new Map(payload.sources.map((source: any) => [source.sourceId, source]));
+    for (const claim of payload.claims) {
+      expect(claim).not.toHaveProperty('sourceText');
+      const source: any = sources.get(claim.sourceId);
+      expect(source.sourceUrl).toBe(claim.claim.sourceUrl);
+      expect(source.sourceText).toContain(claim.claim.evidence);
+      expect(source.sourceText).toContain(scopeQuote);
+      expect(source.sourceText.length).toBeLessThanOrEqual(18_000);
+      expect(claim.targetProductNames).toEqual([target]);
+    }
+    expect(new Set(payload.claims.map((claim: any) => claim.itemIndex)).size).toBe(4);
+    expect(actual.facts).toHaveLength(2);
+    expect(actual.facts).toEqual(expect.arrayContaining(facts.map((fact) => expect.objectContaining({
+      productName: fact.productName, attribute: fact.attribute, value: fact.value,
+      evidence: fact.evidence, sourceUrl: fact.sourceUrl, evidenceVerifiedExact: true,
+      targetApplicability: 'shared_instruction', scopeQuote
+    }))));
+    expect(actual.answerGuidance.coverage.filter((item) => item.status === 'confirmed')).toHaveLength(2);
+    if (mode === 'shared source') {
+      const repeatedPayload = { claims: payload.claims.map(({ sourceId, ...claim }: any) => ({
+        ...claim, sourceText: (sources.get(sourceId) as any).sourceText
+      })) };
+      expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(Buffer.byteLength(JSON.stringify(repeatedPayload)) / 2);
+    }
+  });
+
   it('passes the changed research goal and exact-model prior failures to every source tier without treating them as new facts', async () => {
     structured.mockImplementation(async (call) => webResponse(call.stage.slice('product_comparison_research_'.length)));
     const researchGoal = { query: 'FIRMAN RD3910E maintenance HTML manual', semanticQuery: 'find readable first-service instructions',
@@ -292,9 +350,10 @@ describe('production web research regressions', () => {
     const actual = await research();
     const call = structured.mock.calls.find(([item]) => item.stage === 'source_evidence_semantic_validation')![0];
     const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
-    expect(payload.claims[0].sourceText).toContain(scopeQuote);
-    expect(payload.claims[0].sourceText).toContain(generalQuote);
-    expect(payload.claims[0].sourceText.length).toBeLessThanOrEqual(18_000);
+    const source = payload.sources.find((item: any) => item.sourceId === payload.claims[0].sourceId);
+    expect(source.sourceText).toContain(scopeQuote);
+    expect(source.sourceText).toContain(generalQuote);
+    expect(source.sourceText.length).toBeLessThanOrEqual(18_000);
     expect(actual.facts).toHaveLength(1);
   });
 

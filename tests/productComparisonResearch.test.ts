@@ -111,10 +111,12 @@ function semanticValidationResponse(call: { request: { input?: Array<{ role?: st
   const payload = userInput?.content
     ? JSON.parse(userInput.content) as {
         sourceText?: string;
+        sources?: Array<{ sourceId: string; sourceText: string }>;
         claim?: { attribute?: string; value?: string; evidence?: string };
         claims?: Array<{
           itemIndex: number;
           sourceText?: string;
+          sourceId?: string;
           claim?: { attribute?: string; value?: string; evidence?: string };
         }>;
       }
@@ -166,7 +168,7 @@ function semanticValidationResponse(call: { request: { input?: Array<{ role?: st
       parsed: {
         validations: payload.claims.map((entry) => ({
           itemIndex: entry.itemIndex,
-          ...validation(entry)
+          ...validation({ ...entry, sourceText: payload.sources?.find((source) => source.sourceId === entry.sourceId)?.sourceText ?? entry.sourceText })
         }))
       }
     };

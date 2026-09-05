@@ -363,7 +363,8 @@ function compactLedger(state: ReducedDialogueLedgerState) {
       scope: fact.scope,
       productId: fact.productId,
       unit: fact.unit,
-      relation: fact.relation
+      relation: fact.relation,
+      ranking: fact.ranking
     })),
     needs: Object.values(state.needsById).map((need) => ({
       needId: need.needId,
@@ -1201,6 +1202,21 @@ export function validateAgentSemanticDecision(input: {
       fact.status === 'active' && fact.scope === 'need' && !fact.needId && turnFactEventIds.has(fact.eventId)
     )
   ];
+  const executableRankingObjectives = new Set(structuredSelectionRankingObjectives(input.decision.intent));
+  for (const objective of policy?.rankingObjectives ?? []) {
+    if (!executableRankingObjectives.has(objective)) {
+      issues.push(`ranking_objective_not_executable:${objective.requirementId}`);
+      continue;
+    }
+    const requirement = policy!.requirements.find((item) => item.id === objective.requirementId)!;
+    if (!activeFacts.some((fact) => fact.role === 'preference' && fact.eventType === 'fact.confirmed' &&
+      fact.scope !== 'product' && !fact.productId &&
+      fact.factKey.replaceAll('.', '_') === requirement.kind && fact.relation === 'preferred' &&
+      fact.ranking?.attribute === objective.attribute && fact.ranking.direction === objective.direction &&
+      semanticRequirementValuesMatch(requirement.kind, requirement.value, fact.value, requirement.unit, fact.unit))) {
+      issues.push(`ranking_preference_memory_missing:${requirement.kind}`);
+    }
+  }
   const calculatorRequest = input.decision.intent.toolRequests.find((item) =>
     item.tool === 'calculator.generatorLoad'
   );
@@ -1297,14 +1313,34 @@ export function validateAgentSemanticDecision(input: {
       ) issues.push('generator_load_scenario_simultaneous_starting_mismatch');
     }
   }
-  const selectsProductsThisTurn = (input.decision.intent.toolRequests ?? []).some((request) =>
+  const selectsProductsThisTurn = input.decision.intent.grounding?.taskType === 'product_selection' ||
+    input.decision.intent.grounding?.responseMode === 'recommend';
+  const usesCatalogEvidenceThisTurn = (input.decision.intent.toolRequests ?? []).some((request) =>
     request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
   ) || policy?.reusePreviousCards === true;
   // Scope comes from the ledger event, never from a whitelist of requirement
   // names. Reusing cards must preserve the same constraints as a fresh search.
   for (const fact of activeFacts) {
+    if (selectsProductsThisTurn && fact.role === 'preference' && fact.eventType === 'fact.confirmed' &&
+      fact.scope !== 'product' && !fact.productId && (fact.scope === 'need' || fact.scope === 'dialogue')) {
+      const kind = fact.factKey.replaceAll('.', '_');
+      const matchingPreferences = (policy?.requirements ?? []).filter((requirement) =>
+        requirement.kind === kind && requirement.role === 'preference' && requirement.strictness === 'preferred' &&
+        (requirement.relation ?? 'preferred') === (fact.relation ?? 'preferred') &&
+        semanticRequirementValuesMatch(kind, requirement.value, fact.value, requirement.unit, fact.unit));
+      if (!matchingPreferences.length) issues.push(`active_preference_mismatch:${kind}`);
+      if (fact.ranking === undefined) {
+        // Old facts did not distinguish numeric ranking from other preferences.
+        // Only a new semantic fact delta may resolve that missing information.
+        issues.push(`active_preference_ranking_unresolved:${kind}`);
+      } else if (fact.ranking && ![...executableRankingObjectives].some((objective) =>
+        matchingPreferences.some((requirement) => requirement.id === objective.requirementId) &&
+        objective.attribute === fact.ranking!.attribute && objective.direction === fact.ranking!.direction)) {
+        issues.push(`active_preference_ranking_mismatch:${kind}`);
+      }
+    }
     if (
-      (!selectsProductsThisTurn && !turnFactEventIds.has(fact.eventId)) ||
+      (!usesCatalogEvidenceThisTurn && !turnFactEventIds.has(fact.eventId)) ||
       fact.role !== 'hard_requirement' ||
       fact.eventType !== 'fact.confirmed' ||
       fact.scope === 'product' || fact.productId ||
@@ -3978,6 +4014,10 @@ const ledgerPayloadJsonSchema = {
     valueText: nullableStringJsonSchema,
     unit: nullableStringJsonSchema,
     relation: { type: ['string', 'null'], enum: ['must_have', 'must_not_have', 'preferred', 'not_required', 'context', null] },
+    ranking: { anyOf: [{ type: 'object', additionalProperties: false, properties: {
+      attribute: { type: 'string', enum: ['weight_kg', 'price_rub', 'nominal_power_kw'] },
+      direction: { type: 'string', enum: ['minimize', 'maximize'] }
+    }, required: ['attribute', 'direction'] }, { type: 'null' }] },
     questionId: nullableStringJsonSchema,
     text: nullableStringJsonSchema,
     answer: scalarValueJsonSchema,
@@ -4027,6 +4067,7 @@ const ledgerPayloadJsonSchema = {
     'valueText',
     'unit',
     'relation',
+    'ranking',
     'questionId',
     'text',
     'answer',
@@ -4653,6 +4694,7 @@ function ledgerReducerPolicyPromptBlock() {
     'Текущая потребность — existingState.activeNeedId. Новую второстепенную тему сохраняй с activate=false: она останется paused. Обновление paused темы без activate=true не переключает текущую; для возврата явно ставь activate=true. После закрытия темы не возвращайся к ней без такого решения.',
     'Одна реплика может одновременно менять несколько прежних потребностей. Сначала сохрани все независимые изменения потребностей отдельными ledgerDelta.events по их needId: выбор/отказ от товара, изменение требований, закрытие или возврат. Смена фокуса ответа не отменяет выбор в другой теме: её обновление сохраняй с activate=false, а activate=true ставь у темы текущего ответа. Для выбора конкретной прежней карточки разреши ссылку через priorVisibleProducts.occurrences и используй selectionUpdateMode=replace с её ID; не оставляй весь прежний список вариантов вместо выбора. Одно лишь сохранение выбора в другой теме не требует нового каталожного поиска по ней; текущие инструменты следуют реально заданным вопросам.',
     'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass, confidence от 0 до 1 и role: hard_requirement, preference, context или commercial. fact.observed означает неподтверждённое наблюдение и не получает confidence=1; fact.confirmed используй только для явно подтверждённой покупателем или проверенной источником информации. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
+    'Явные предпочтения покупателя сохраняй как scoped fact.confirmed с role=preference, relation=preferred и теми же kind/value/unit, что в preference requirement. Числовое предпочтение сохраняй отдельно в payload.ranking={attribute,direction}, точно как в связанном rankingObjectives; value не заменяй этим объектом. Для нечислового предпочтения ranking=null. В следующий подбор этой потребности переноси тот же requirement и сохранённые attribute/direction, пока покупатель не изменит или не отменит предпочтение через ledgerDelta. Если у старого факта ranking отсутствует, восстанови его смысл из evidence/контекста и запиши обновлённый fact.confirmed с ranking или null; не угадывай по одному kind. Лимит нагрузки/бюджета и предпочтение минимального избытка/цены — разные требования; rankingObjectives связывай с отдельным preference requirement, не с hard constraint. При технической консультации по известной модели без нового подбора не нужно повторять предпочтения сортировки в selectionPolicy.',
     'Область каждого факта задавай явно: scope=need и needId для требования этой покупки; scope=dialogue и needId=null только если оно действительно относится ко всем покупкам в диалоге; scope=product и productId для характеристики конкретной модели. Характеристика товара не становится hard_requirement покупателя. Сохраняй unit и relation, согласованные с requirement; неизвестную единицу не выдумывай.',
     'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, electric_start_required, auto_start_required, remote_start_required, material или quantity. electric_start_required означает наличие электростартера; auto_start_required означает именно автоматический запуск/АВР; remote_start_required означает запуск по команде с брелока или пульта и не равен АВР или просто электростартеру. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
     'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
@@ -4765,6 +4807,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         : '',
       hasIssue('strict_requirement_shape_invalid')
         ? 'Исправь форму указанного strict requirement, не меняя смысл покупателя: числовые product_attribute requirements требуют конечное числовое value и подходящую unit. Не дублируй результат calculator.generatorLoad как nominal_power_kw=true; производный минимум задаётся через generator_load_scenario с typed_tool binding.'
+        : '',
+      hasIssue('ranking_objective_not_executable') || hasIssue('ranking_preference_memory_missing') || hasIssue('active_preference_mismatch') || hasIssue('active_preference_ranking_unresolved') || hasIssue('active_preference_ranking_mismatch')
+        ? 'Согласуй предпочтения и память: ranking objective ссылается на отдельный product_attribute requirement с role=preference, strictness=preferred, relation=preferred. Сохрани scoped fact.confirmed с теми же kind/value/unit и payload.ranking={attribute,direction}; при подборе objective обязан точно повторять сохранённую пару. Нечисловое предпочтение имеет ranking=null. Отсутствующий ranking старого факта восстанови по evidence и контексту через новый fact.confirmed; не выводи его из имени kind. Не удаляй и не переворачивай предпочтение ради проверки: изменение или отмена требует основания в словах покупателя. Технический ответ по известной модели не является новым подбором.'
         : '',
       hasIssue('active_requirement_mismatch')
         ? 'Каждый действующий подтверждённый hard_requirement активной потребности и явно общий scope=dialogue без needId должен иметь точное отражение в strict selectionPolicy requirement с тем же factKey/kind, value, unit и relation. Сохраняй применимые старые требования; изменяй или отменяй их только по смыслу реплики покупателя. Факты о мощности потребителя, типе котла и других входах калькулятора сохраняй как context, если покупатель не делал их ограничением самого выбираемого товара; hard requirement расчёта представляет generator_load_scenario.'

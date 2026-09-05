@@ -928,6 +928,21 @@ function model(overrides: Partial<AgentManagerModel> = {}): AgentManagerModel {
       let ledgerDelta = overrides.planTurn && !overrides.proposeLedgerDelta
         ? { rationale: 'test fixture has no state change for this custom intent', events: [] } satisfies LedgerStateDelta
         : await implementation.proposeLedgerDelta(input);
+      // Legacy planTurn fixtures simulate a coherent planner: ranked buyer
+      // preferences now have a durable ledger half as well as an intent half.
+      // Tests of missing/invalid memory pass decideTurn/delta explicitly.
+      if (overrides.planTurn && !overrides.proposeLedgerDelta) {
+        for (const requirement of intent.selectionPolicy?.requirements ?? []) {
+          const objective = intent.selectionPolicy?.rankingObjectives?.find((item) => item.requirementId === requirement.id);
+          if (requirement.role !== 'preference' || requirement.relation !== 'preferred' ||
+            !objective) continue;
+          ledgerDelta.events.push({ eventType: 'fact.confirmed', scope: 'dialogue',
+            payload: { factKey: requirement.kind, value: requirement.value, unit: requirement.unit,
+              role: 'preference', relation: 'preferred', confidence: 1,
+              ranking: { attribute: objective.attribute, direction: objective.direction } },
+            evidence: requirement.evidence, source: 'llm_state_delta', status: 'active' });
+        }
+      }
       if (calculatorRequest && !ledgerDelta.events.some((event) =>
         event.payload.factKey === 'generator_load_scenario'
       )) {
@@ -7249,7 +7264,7 @@ describe('AgentManagerOrchestrator', () => {
     expect(metadata.toolResults?.[0]?.warnings).toContain('catalog_structured_remote_start_preference_expansion');
   });
 
-  it('does not broaden or reorder catalog candidates for an unbound preference objective', async () => {
+  it('rejects an unbound preference objective before executing a catalog order that ignores it', async () => {
     class UnboundPreferenceProducts extends FakeProducts {
       calls = 0;
 
@@ -7322,14 +7337,13 @@ describe('AgentManagerOrchestrator', () => {
       })
     );
 
-    const payload = await orchestrator.generateAnswer({
+    await expect(orchestrator.generateAnswer({
       sessionId,
       turnId,
       userMessage: 'Покажите виброплиты.'
-    });
+    })).rejects.toThrow('ranking_objective_not_executable:missing-preference');
 
-    expect(products.calls).toBe(1);
-    expect(payload.productCards.map((card) => card.id)).toEqual(['plate-95', 'plate-56']);
+    expect(products.calls).toBe(0);
   });
 
   it('keeps strict hard constraints after preference-driven broad recovery', async () => {
@@ -9917,6 +9931,115 @@ describe('buyer-level constraint persistence across needs', () => {
     });
 
     expect(result.issues).toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('rejects a ranking objective that the executor would silently discard', () => {
+    const decision = selectionDecision([strictRequirement('load', 'nominal_power_min_kw', 3.5)], 'generator');
+    decision.intent.selectionPolicy!.rankingObjectives = [{ requirementId: 'load', attribute: 'nominal_power_kw', direction: 'minimize' }];
+    const result = validateAgentSemanticDecision({ decision, previousLedgerState: previousLedger({}), sessionId, turnId });
+    expect(result.issues).toContain('ranking_objective_not_executable:load');
+  });
+
+  it('preserves hard constraints for comparison even when no new ranking is requested', () => {
+    const decision = selectionDecision([], 'generator');
+    decision.intent.grounding!.taskType = 'comparison';
+    decision.intent.grounding!.responseMode = 'compare';
+    decision.intent.toolRequests = [];
+    decision.intent.selectionPolicy!.reusePreviousCards = true;
+    const result = validateAgentSemanticDecision({ decision,
+      previousLedgerState: previousLedger({ budget_max_rub: hardFact({ key: 'budget_max_rub', eventId: 'budget', value: 55000 }) }),
+      sessionId, turnId });
+    expect(result.issues).toContain('active_requirement_mismatch:budget_max_rub');
+  });
+
+  it('requires an executable ranking preference to be preserved in scoped memory', () => {
+    const decision = selectionDecision([], 'generator');
+    decision.intent.selectionPolicy!.requirements = [{ id: 'least-power', kind: 'power_preference', value: 'minimize', unit: null,
+      role: 'preference', strictness: 'preferred', relation: 'preferred', evidence: 'без большого избытка', verification: { mode: 'product_attribute' } }];
+    decision.intent.selectionPolicy!.rankingObjectives = [{ requirementId: 'least-power', attribute: 'nominal_power_kw', direction: 'minimize' }];
+    const check = (ledger: ReducedDialogueLedgerState) => validateAgentSemanticDecision({ decision, previousLedgerState: ledger, sessionId, turnId });
+    expect(check(previousLedger({})).issues).toContain('ranking_preference_memory_missing:power_preference');
+    const preference = { ...hardFact({ key: 'power_preference', eventId: 'pref-1', value: 'minimize', needId: 'construction', productClass: 'generator' }),
+      role: 'preference' as const, relation: 'preferred' as const, ranking: { attribute: 'nominal_power_kw' as const, direction: 'minimize' as const } };
+    expect(check(previousLedger({ power_preference: preference })).issues).not.toContain('ranking_preference_memory_missing:power_preference');
+    const otherNeedPreference = { ...preference, needId: 'dacha' };
+    expect(check(previousLedger({ power_preference: otherNeedPreference })).issues).toContain('ranking_preference_memory_missing:power_preference');
+  });
+
+  it.each(['omitted', 'direction', 'attribute', 'legacy'] as const)('rejects a saved ranking preference with %s drift', (variant) => {
+    const decision = selectionDecision([], 'generator');
+    decision.intent.selectionPolicy!.requirements = [{ id: 'preferred', kind: 'buyer_priority', value: 'удобнее для меня', unit: null,
+      role: 'preference', strictness: 'preferred', relation: 'preferred', evidence: 'из подходящих дешевле', verification: { mode: 'product_attribute' } }];
+    decision.intent.selectionPolicy!.rankingObjectives = variant === 'omitted' ? [] : [{ requirementId: 'preferred',
+      attribute: variant === 'attribute' ? 'weight_kg' : 'price_rub', direction: variant === 'direction' ? 'maximize' : 'minimize' }];
+    const preference = { ...hardFact({ key: 'buyer_priority', eventId: 'pref', value: 'удобнее для меня', needId: 'construction' }),
+      role: 'preference' as const, relation: 'preferred' as const,
+      ...(variant === 'legacy' ? {} : { ranking: { attribute: 'price_rub' as const, direction: 'minimize' as const } }) };
+    const result = validateAgentSemanticDecision({ decision, previousLedgerState: previousLedger({ preference }), sessionId, turnId });
+    expect(result.issues).toContain(variant === 'legacy'
+      ? 'active_preference_ranking_unresolved:buyer_priority' : 'active_preference_ranking_mismatch:buyer_priority');
+  });
+
+  it('allows consultation on selected product details without applying saved selection preferences', () => {
+    const decision = selectionDecision([], 'generator');
+    decision.intent.grounding!.taskType = 'technical_answer';
+    decision.intent.grounding!.responseMode = 'answer';
+    decision.intent.selectionPolicy!.maxCards = 0;
+    delete decision.intent.selectionPolicy!.selectionGoal;
+    decision.intent.toolRequests = [{ id: 'details', tool: 'catalog.getProductDetails', args: {
+      productIds: ['selected'], canonicalProductIntent: 'generator'
+    }, required: true, rationale: 'read maintenance details', coversRequirementIds: [] }];
+    const preference = { ...hardFact({ key: 'buyer_priority', eventId: 'pref', value: 'удобнее для меня', needId: 'construction' }),
+      role: 'preference' as const, relation: 'preferred' as const };
+    expect(validateAgentSemanticDecision({ decision, previousLedgerState: previousLedger({ preference }), sessionId, turnId }).issues).toEqual([]);
+  });
+
+  it('persists an explicit changed ranking without changing its scalar value and permits explicit nonnumeric preferences', () => {
+    const decision = selectionDecision([], 'generator');
+    const requirement = { id: 'preferred', kind: 'buyer_priority', value: 'удобнее для меня', unit: null,
+      role: 'preference' as const, strictness: 'preferred' as const, relation: 'preferred' as const,
+      evidence: 'теперь важнее меньший вес', verification: { mode: 'product_attribute' as const } };
+    decision.intent.selectionPolicy!.requirements = [requirement];
+    decision.intent.selectionPolicy!.rankingObjectives = [{ requirementId: 'preferred', attribute: 'weight_kg', direction: 'minimize' }];
+    decision.ledgerDelta.events = [{ eventType: 'fact.confirmed', scope: 'need', status: 'active',
+      evidence: requirement.evidence, source: 'llm_state_delta', payload: { factKey: requirement.kind, value: requirement.value,
+        unit: null, needId: 'construction', role: 'preference', relation: 'preferred', confidence: 1,
+        ranking: { attribute: 'weight_kg', direction: 'minimize' }, supersedesEventIds: ['pref'] } }];
+    const preference = { ...hardFact({ key: 'buyer_priority', eventId: 'pref', value: requirement.value, needId: 'construction' }),
+      role: 'preference' as const, relation: 'preferred' as const, ranking: { attribute: 'price_rub' as const, direction: 'minimize' as const } };
+    const checked = validateAgentSemanticDecision({ decision, previousLedgerState: previousLedger({ preference }), sessionId, turnId });
+    expect(checked.issues).toEqual([]);
+    expect(checked.ledgerState.factsByKey['construction::buyer_priority']).toMatchObject({
+      value: requirement.value, ranking: { attribute: 'weight_kg', direction: 'minimize' }
+    });
+    decision.intent.selectionPolicy!.rankingObjectives = [];
+    decision.ledgerDelta.events[0]!.payload.ranking = null;
+    expect(validateAgentSemanticDecision({ decision, previousLedgerState: previousLedger({ preference }), sessionId, turnId }).issues).toEqual([]);
+  });
+
+  it('restores only the resumed need ranking and respects its explicit cancellation', () => {
+    const preference = { ...hardFact({ key: 'buyer_priority', eventId: 'pref', value: 'удобнее для меня', needId: 'dacha' }),
+      role: 'preference' as const, relation: 'preferred' as const, ranking: { attribute: 'price_rub' as const, direction: 'minimize' as const } };
+    const initial = previousLedger({ preference });
+    const decision = selectionDecision([], 'generator');
+    expect(validateAgentSemanticDecision({ decision, previousLedgerState: initial, sessionId, turnId }).issues).toEqual([]);
+    decision.ledgerDelta.events = [{ eventType: 'need.updated', scope: 'need', payload: { needId: 'dacha', activate: true },
+      status: 'active', evidence: 'вернёмся к даче', source: 'llm_state_delta' }];
+    expect(validateAgentSemanticDecision({ decision, previousLedgerState: initial, sessionId, turnId }).issues)
+      .toContain('active_preference_ranking_mismatch:buyer_priority');
+    decision.ledgerDelta.events.push({ eventType: 'fact.negated', scope: 'need', payload: { targetEventIds: ['pref'], needId: 'dacha' },
+      status: 'negated', evidence: 'цена больше не важна', source: 'llm_state_delta' });
+    expect(validateAgentSemanticDecision({ decision, previousLedgerState: initial, sessionId, turnId }).issues).toEqual([]);
+  });
+
+  it('flags a lost active preference on the next selection while respecting cancellation', () => {
+    const preference = { ...hardFact({ key: 'power_preference', eventId: 'pref-1', value: 'minimize', needId: 'construction', productClass: 'generator' }),
+      role: 'preference' as const, relation: 'preferred' as const };
+    const decision = selectionDecision([], 'generator');
+    const check = (ledger: ReducedDialogueLedgerState) => validateAgentSemanticDecision({ decision, previousLedgerState: ledger, sessionId, turnId });
+    expect(check(previousLedger({ power_preference: preference })).issues).toContain('active_preference_mismatch:power_preference');
+    expect(check(previousLedger({ power_preference: { ...preference, status: 'superseded' } })).issues).not.toContain('active_preference_mismatch:power_preference');
+    expect(check(previousLedger({ power_preference: { ...preference, needId: 'dacha' } })).issues).not.toContain('active_preference_mismatch:power_preference');
   });
 
   it('accepts a carried explicitly dialogue-wide budget requirement', () => {
