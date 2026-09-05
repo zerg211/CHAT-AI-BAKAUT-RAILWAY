@@ -7,7 +7,7 @@ import { AgentSemanticDecisionSchema, normalizeLedgerStateDeltaEvents } from '..
 import { AgentManagerOrchestrator, OpenAIAgentManagerModel, validateAgentSemanticDecision, type AgentManagerReviewInput } from '../src/ai/agentManagerOrchestrator.js';
 import { rankCatalogProductsByStructuredPreferences } from '../src/ai/agentManagerCardSelection.js';
 import { buildRequirementProofs } from '../src/ai/requirementProofs.js';
-import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
+import { deriveNeedStateSnapshotFromLedger, reduceDialogueLedger, parseReducedDialogueLedgerState } from '../src/ai/dialogueLedgerReducer.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 import type { Message, Product } from '../src/shared/types.js';
 
@@ -103,6 +103,107 @@ function refCorrection(context: any) {
 
 describe('initial semantic producer memory references', () => {
   beforeEach(() => { createStructuredJsonResponse.mockReset(); });
+
+  it('binds a legacy constraint and updates it from the prospective fact in the same turn and recovery', async () => {
+    const initial = initialDecision();
+    initial.ledgerDelta.events[0]!.payload.constraints = ['бюджет до 55000 руб.', 'две розетки 230 В', 'небольшой запас мощности'];
+    initial.ledgerDelta.events.push({ eventType: 'need.opened', scope: 'need', source: 'llm_state_delta', status: 'active', evidence: 'another need',
+      payload: { needId: 'plate', productClass: 'plate', status: 'paused', activate: false, constraints: ['масса до 60 кг'] } });
+    const previousLedgerState = reduceDialogueLedger(normalizeLedgerStateDeltaEvents({ sessionId, turnId, delta: initial.ledgerDelta }));
+    createStructuredJsonResponse.mockImplementationOnce(async ({ request }) => {
+      const context = JSON.parse(request.input.find((x: any) => x.role === 'user').content);
+      const wire = refCorrection(context);
+      const budgetRef = context.memoryReferences.constraints?.find((item: any) => item.text === 'бюджет до 55000 руб.')?.constraintRef ?? 'legacy-budget';
+      wire.ledgerDelta.memoryActions.find((action: any) => action.factRef.endsWith('::budget_max_rub')).constraintRefs = [budgetRef];
+      return { parsed: wire };
+    });
+    const decision = await new OpenAIAgentManagerModel().decideTurn({ session, history, userMessage: correction, ledgerEvents: [], ledgerState: previousLedgerState });
+    const validated = validateAgentSemanticDecision({ decision, previousLedgerState, sessionId, turnId, userMessage: correction, history });
+    expect(validated.issues).toEqual([]);
+    expect(validated.ledgerState.needsById.generator!.constraints).toEqual(['budget_max_rub: 70000 RUB', 'две розетки 230 В', 'небольшой запас мощности']);
+    expect(validated.ledgerState.needsById.plate!.constraints).toEqual(['масса до 60 кг']);
+    expect(deriveNeedStateSnapshotFromLedger(validated.ledgerState).activeNeeds.find(need => need.id === 'generator')!.constraints.join(' ')).not.toContain('55000');
+    const restored = parseReducedDialogueLedgerState(JSON.parse(JSON.stringify(validated.ledgerState)));
+    const next = reduceDialogueLedger(normalizeLedgerStateDeltaEvents({ sessionId, turnId, delta: { rationale: 'Another explicit correction', events: [{
+      eventType: 'fact.confirmed', scope: 'need', source: 'llm_state_delta', status: 'active', evidence: 'Бюджет 65000',
+      payload: { factKey: 'budget_max_rub', value: 65000, unit: 'RUB', needId: 'generator', role: 'hard_requirement' }
+    }] } }), restored);
+    expect(next.needsById.generator!.constraints[0]).toBe('budget_max_rub: 65000 RUB');
+  });
+
+  it('projects new constraints from explicitly selected typed preference facts without retyping their meaning', async () => {
+    const wire: any = initialDecision();
+    wire.ledgerDelta.events[0].payload.constraints = [{ factKey: 'nominal_power_preference' }, { factKey: 'price_preference' }, { context: 'для дачи' }];
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: wire });
+    const decision = await new OpenAIAgentManagerModel().decideTurn({ session, history: [], userMessage: firstMessage, ledgerEvents: [] });
+    const checked = validateAgentSemanticDecision({ decision, previousLedgerState: reduceDialogueLedger([]), sessionId, turnId, userMessage: firstMessage });
+    expect(checked.issues).toEqual([]);
+    expect(checked.ledgerState.needsById.generator!.constraints).toEqual([
+      'nominal_power_preference: небольшой запас', 'price_preference: подешевле при близкой мощности', 'для дачи'
+    ]);
+    expect(checked.ledgerState.factsByKey['generator::nominal_power_preference']!.ranking).toEqual({ attribute: 'nominal_power_kw', direction: 'minimize' });
+  });
+
+  it.each(['unknown', 'foreign', 'repeated'] as const)('rejects %s legacy constraint bindings before applying a delta', async (attack) => {
+    const initial = initialDecision();
+    initial.ledgerDelta.events[0]!.payload.constraints = ['старый бюджет'];
+    initial.ledgerDelta.events.push({ eventType: 'need.opened', scope: 'need', source: 'llm_state_delta', status: 'active', evidence: 'another need',
+      payload: { needId: 'plate', productClass: 'plate', status: 'paused', activate: false, constraints: ['чужой бюджет'] } });
+    const ledgerState = reduceDialogueLedger(normalizeLedgerStateDeltaEvents({ sessionId, turnId, delta: initial.ledgerDelta }));
+    createStructuredJsonResponse.mockImplementationOnce(async ({ request }) => {
+      const context = JSON.parse(request.input.find((x: any) => x.role === 'user').content);
+      const wire = refCorrection(context);
+      const target = context.memoryReferences.constraints.find((item: any) => item.needId === (attack === 'foreign' ? 'plate' : 'generator'));
+      const ref = attack === 'unknown' ? 'missing' : target.constraintRef;
+      wire.ledgerDelta.memoryActions.find((action: any) => action.factRef.endsWith('::budget_max_rub')).constraintRefs = attack === 'repeated' ? [ref, ref] : [ref];
+      return { parsed: wire };
+    });
+    await expect(new OpenAIAgentManagerModel().decideTurn({ session, history, userMessage: correction, ledgerEvents: [], ledgerState })).rejects.toThrow();
+    expect(ledgerState.needsById.generator!.constraints).toEqual(['старый бюджет']);
+  });
+
+  it.each([true, false])('keeps writer and reviewer aligned on useful partial answers, proven exhaustion=%s', async (exhausted) => {
+    const result: any = { requestId: 'research', tool: 'web.researchProductFacts', status: 'ok', warnings: [], payload: {
+      usedWebSearch: true, searchDisposition: exhausted ? 'completed' : 'skipped_budget',
+      sourcesExhausted: exhausted, researchOutcome: exhausted ? 'exhausted' : 'partial',
+      answerGuidance: { status: 'partial', directAnswer: 'Номинал подтверждён, способ запуска пока не подтверждён.' },
+      sourceAttempts: ['catalog', 'official_page', 'official_manual', 'reliable_secondary'].map(tier => ({ tier, query: `exact model ${tier}`, outcome: 'not_found' }))
+    } };
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { answerText: 'Полезный предварительный вывод.', factsUsed: [], questionsAsked: [], selectedProductIds: [],
+      toolResultIds: ['research'], leadAction: exhausted ? 'offer_form' : 'none', riskFlags: [] } });
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Appropriate uncertainty.', factualIssues: [] } });
+    const model = new OpenAIAgentManagerModel();
+    await model.composeAnswer({ session, history: [], userMessage: 'Проверьте способ запуска этой модели.', ledgerEvents: [], ledgerState: reduceDialogueLedger([]),
+      intent: initialDecision().intent, toolResults: [result], products: [] });
+    await model.reviewCustomerLanguage({ userMessage: 'Проверьте способ запуска этой модели.', answerText: 'Полезный предварительный вывод.', toolResults: [result], products: [] });
+    for (const [call] of createStructuredJsonResponse.mock.calls) {
+      const system = call.request.input.find((item: any) => item.role === 'system').content;
+      const context = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+      expect(system).not.toContain('sourcesExhausted≠true или guidance partial/not_confirmed');
+      expect(system).toContain('Не перекладывай поиск характеристик товара на покупателя');
+      expect(context.technicalResearchStatus).toEqual({ sourcesExhausted: exhausted, exhaustedResultIds: exhausted ? ['research'] : [], incompleteResultIds: exhausted ? [] : ['research'] });
+    }
+  });
+
+  it.each([true, false])('supersedes an earlier incomplete attempt only for the same exact research scope: %s', async (sameScope) => {
+    const first: any = { requestId: 'first', tool: 'web.researchProductFacts', status: 'ok', warnings: [], payload: {
+      targetProductNames: ['Maker GX400'], comparisonAttributes: ['start_control_mechanism'], usedWebSearch: true,
+      searchDisposition: 'completed', sourcesExhausted: false, researchOutcome: 'partial'
+    } };
+    const last: any = { ...first, requestId: 'last', payload: { ...first.payload,
+      targetProductNames: [sameScope ? 'Maker GX400' : 'Maker GX500'], sourcesExhausted: true, researchOutcome: 'exhausted',
+      sourceAttempts: ['catalog', 'official_page', 'official_manual', 'reliable_secondary'].map(tier => ({ tier, query: `model ${tier}`, outcome: 'not_found' }))
+    } };
+    const intent: any = initialDecision().intent;
+    intent.toolRequests = [first, last].map(result => ({ id: result.requestId, tool: result.tool, required: true, rationale: 'Check exact model',
+      args: { productNames: result.payload.targetProductNames, comparisonAttributes: result.payload.comparisonAttributes } }));
+    createStructuredJsonResponse.mockResolvedValue({ parsed: { answerText: 'Предварительный вывод.', factsUsed: [], questionsAsked: [], selectedProductIds: [], toolResultIds: [], leadAction: 'none', riskFlags: [] } });
+    await new OpenAIAgentManagerModel().composeAnswer({ session, history: [], userMessage: 'Уточните управление запуском GX400.', ledgerEvents: [],
+      ledgerState: reduceDialogueLedger([]), intent, products: [], toolResults: [first, last] });
+    const context = JSON.parse(createStructuredJsonResponse.mock.calls[0]![0].request.input.find((item: any) => item.role === 'user').content);
+    expect(context.technicalResearchStatus.sourcesExhausted).toBe(sameScope);
+    expect(context.technicalResearchStatus.incompleteResultIds).toEqual(sameScope ? [] : ['first']);
+  });
 
   it('runs two producer turns and preserves preference identities while correcting load and budget', async () => {
     const state = await seed();

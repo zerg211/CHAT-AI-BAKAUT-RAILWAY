@@ -909,12 +909,15 @@ describe('product comparison research', () => {
       if (call.stage === 'source_evidence_semantic_validation') return semanticValidationResponse(call);
       if (call.stage === 'product_research_document_read') {
         const payload = JSON.parse(call.request.input.find((item: { role: string }) => item.role === 'user').content);
-        expect(payload.documents).toEqual([expect.objectContaining({ sourceUrl: manualUrl, text: quote })]);
+        expect(payload.documents).toEqual([expect.objectContaining({ sourceUrl: manualUrl,
+          passages: [expect.objectContaining({ text: quote })] })]);
         expect(call.request.tools).toBeUndefined();
         if (mode === 'reader_timeout') throw Object.assign(new Error('deadline'), { code: 'structured_json_deadline_exceeded' });
-        return { parsed: result({ facts: [{ productName: 'FIRMAN RD3910E', attribute: 'first_oil_change', value: '20 hours',
+        const parsed = result({ facts: [{ productName: 'FIRMAN RD3910E', attribute: 'first_oil_change', value: '20 hours',
           sourceType: 'web', confidence: 'high', evidence: quote, sourceUrl: mode === 'unread_source' ? 'https://www.firman.biz/unread.pdf' : manualUrl,
-          sourceTitle: 'FIRMAN RD3910E manual' }] }) };
+          sourceTitle: 'FIRMAN RD3910E manual' }] });
+        (parsed.facts[0] as any).evidenceRef = { passageIds: [mode === 'unread_source' ? 'unread-document' : payload.documents[0].passages[0].id] };
+        return { parsed };
       }
       const manual = call.stage === 'product_comparison_research_official_manual';
       const tier = manual ? 'official_manual' : 'official_page';

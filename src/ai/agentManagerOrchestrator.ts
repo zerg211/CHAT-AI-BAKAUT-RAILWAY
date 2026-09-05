@@ -31,6 +31,7 @@ import {
 import {
   activeScopedDialogueLedgerFacts,
   deriveNeedStateSnapshotFromLedger,
+  dialogueFactConstraintText,
   getActiveDialogueNeed,
   parseReducedDialogueLedgerState,
   reduceDialogueLedger,
@@ -197,6 +198,7 @@ export interface AgentManagerModel {
   }): Promise<Array<{ factId: string; productName: string; attribute: string }>>;
   reviewCustomerLanguage?(input: {
     userMessage?: string;
+    intent?: AgentIntentContract;
     answerText: string;
     products: Product[];
     toolResults: ToolResult[];
@@ -2158,6 +2160,37 @@ export function webResearchResultProvesSourceExhaustion(result: ToolResult) {
   }
   return new Set(webQueries).size === webQueries.length;
 }
+
+function technicalResearchStatus(toolResults: ToolResult[], intent?: AgentIntentContract) {
+  const planned = new Map((intent?.toolRequests ?? []).filter(request => request.tool === 'web.researchProductFacts').map(request => [request.id, request]));
+  const latestBySlot = new Map<string, ToolResult>();
+  for (const result of toolResults) {
+    if (result.tool !== 'web.researchProductFacts' || (planned.size && !planned.has(result.requestId))) continue;
+    const payload = result.payload as { targetProductNames?: unknown; comparisonAttributes?: unknown };
+    const names = Array.isArray(payload.targetProductNames) ? payload.targetProductNames : planned.get(result.requestId)?.args.productNames;
+    const attributes = Array.isArray(payload.comparisonAttributes) ? payload.comparisonAttributes : planned.get(result.requestId)?.args.comparisonAttributes;
+    const validNames = Array.isArray(names) ? names.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())) : [];
+    const validAttributes = Array.isArray(attributes) ? attributes.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())) : [];
+    // Only an exact model/attribute pair can supersede an earlier observation.
+    // Generic/legacy requests have no safe shared identity and stay independent.
+    const slots = validNames.length && validAttributes.length
+      ? validNames.flatMap(name => validAttributes.map(attribute => JSON.stringify([name.trim().toLowerCase(), attribute.trim().toLowerCase()])))
+      : [`request:${result.requestId}`];
+    for (const slot of slots) latestBySlot.set(slot, result);
+  }
+  const exhaustedResultIds: string[] = [], incompleteResultIds: string[] = [];
+  for (const result of new Set(latestBySlot.values())) {
+    if (webResearchResultProvesSourceExhaustion(result)) { exhaustedResultIds.push(result.requestId); continue; }
+    const payload = result.payload as { researchOutcome?: unknown; searchDisposition?: unknown };
+    if (result.status !== 'ok' || payload.researchOutcome === 'partial' || payload.researchOutcome === 'exhausted' ||
+      ['skipped_budget', 'timed_out', 'failed', 'aborted'].includes(String(payload.searchDisposition))) {
+      incompleteResultIds.push(result.requestId);
+    }
+  }
+  return { sourcesExhausted: exhaustedResultIds.length > 0 && incompleteResultIds.length === 0, exhaustedResultIds, incompleteResultIds };
+}
+
+const technicalGapResponseGuidance = 'Не перекладывай поиск характеристик товара на покупателя: просьба самому найти или перечитать руководство не заменяет консультацию. При неполных данных сохрани полезный предварительный вывод по конкретной модели из подтверждённых фактов, назови точный неподтверждённый параметр и его влияние на окончательный выбор. technicalResearchStatus.sourcesExhausted=true означает проверенное исчерпание доступных источников: даже при partial/not_confirmed предложи уточнить именно этот вопрос у технического специалиста, попроси телефон и способ ответа — написать или позвонить; leadAction=offer_form. Если sourcesExhausted=false (в том числе остановка по бюджету), не изображай поиск исчерпанным и не предлагай технический handoff, контакт или offer_form: сохрани полезный вывод и конкретную неопределённость. Не утверждай, что вопрос уже передан или специалист приступил, до успешного lead.capture. Запрос факта о собственном оборудовании покупателя допустим, если без него нельзя определить потребность; это не поручение искать характеристики продаваемой модели.';
 
 export function trustedPendingExhaustedTechnicalHandoffs(
   history: Message[]
@@ -4666,7 +4699,11 @@ function semanticMemoryReferences(input: AgentManagerModelInput) {
     targetRef: `target:${createHash('sha256').update(JSON.stringify([target.messageId, target.name])).digest('hex').slice(0, 20)}`,
     ...target
   }));
-  return { activeNeedId: activeNeedId ?? null, facts, productTargets };
+  const constraints = Object.values(state.needsById).flatMap(need => need.constraints.map(text => ({
+    constraintRef: `constraint:${createHash('sha256').update(JSON.stringify([need.needId, text])).digest('hex').slice(0, 20)}`,
+    needId: need.needId, text
+  }))).slice(0, 80);
+  return { activeNeedId: activeNeedId ?? null, facts, productTargets, constraints };
 }
 
 function semanticDecisionFormatForMemory(references: ReturnType<typeof semanticMemoryReferences>) {
@@ -4675,19 +4712,28 @@ function semanticDecisionFormatForMemory(references: ReturnType<typeof semanticM
     (fact.role === 'hard_requirement' || fact.role === 'preference')).map(fact => fact.factRef);
   const rankedRefs = references.facts.filter(fact => fact.role === 'preference' && fact.ranking).map(fact => fact.factRef);
   const ledgerSchema = ledgerDeltaFormat.format.schema;
+  const constraintRefs = references.constraints.length
+    ? { type: 'array', maxItems: 24, items: { type: 'string', enum: references.constraints.map(item => item.constraintRef) } }
+    : { type: 'array', maxItems: 0, items: { type: 'string' } };
+  const constraints = { type: 'array', maxItems: 24, items: { anyOf: [
+    strictJsonObject({ factKey: { type: 'string', minLength: 1 } }), strictJsonObject({ context: { type: 'string', minLength: 1 } })
+  ] } };
+  const payload = { ...ledgerPayloadJsonSchema, properties: { ...ledgerPayloadJsonSchema.properties, constraints } };
+  const eventItems = ledgerSchema.properties.events.items;
+  const events = { ...ledgerSchema.properties.events, items: { ...eventItems, properties: { ...eventItems.properties, payload } } };
   const policySchema = selectionPolicyJsonSchema;
   return { ...semanticDecisionFormat, format: { ...semanticDecisionFormat.format, schema: strictJsonObject({
     ledgerDelta: references.facts.length ? strictJsonObject({ ...ledgerSchema.properties,
-      events: { ...ledgerSchema.properties.events,
+      events: { ...events,
         description: 'Inline fact events are only for NEW scoped facts absent from memoryReferences. Existing facts use memoryActions exclusively. Need/question events still belong here. Never duplicate a memoryAction with an inline fact event.' },
       memoryActions: { type: 'array', maxItems: 80, items: { anyOf: [
         strictJsonObject({ factRef, action: { type: 'string', enum: ['retain'] } }),
         strictJsonObject({ factRef, action: { type: 'string', enum: ['update'] }, value: ledgerValueJsonSchema,
           unit: nullableStringJsonSchema, relation: ledgerPayloadJsonSchema.properties.relation,
-          ranking: ledgerPayloadJsonSchema.properties.ranking, evidence: { type: 'string', minLength: 1 } }),
-        strictJsonObject({ factRef, action: { type: 'string', enum: ['retract'] }, evidence: { type: 'string', minLength: 1 } })
+          ranking: ledgerPayloadJsonSchema.properties.ranking, evidence: { type: 'string', minLength: 1 }, constraintRefs }),
+        strictJsonObject({ factRef, action: { type: 'string', enum: ['retract'] }, evidence: { type: 'string', minLength: 1 }, constraintRefs })
       ] } }
-    }) : ledgerSchema,
+    }) : { ...ledgerSchema, properties: { ...ledgerSchema.properties, events } },
     intent: strictJsonObject({ ...intentContractFormat.format.schema.properties,
       selectionPolicy: strictJsonObject({ ...policySchema.properties,
         requirements: requirementRefs.length ? { type: 'array', maxItems: 40, items: { anyOf: [
@@ -4731,6 +4777,10 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
     productMentions: z.array(z.unknown()).optional() }).passthrough()
   }).passthrough().parse(raw);
   if (wire.ledgerDelta.memoryActions === undefined &&
+    !wire.ledgerDelta.events.some(event => {
+      const payload = (event as { payload?: { constraints?: unknown[] } })?.payload;
+      return payload?.constraints?.some(value => value && typeof value === 'object');
+    }) &&
     !wire.intent.selectionPolicy?.requirements.some(value => value && typeof value === 'object' && 'factRef' in value) &&
     !wire.intent.selectionPolicy?.rankingObjectives?.some(value => value && typeof value === 'object' && 'factRef' in value) &&
     !wire.intent.productMentions?.some(value => value && typeof value === 'object' && 'targetRef' in value)) {
@@ -4738,6 +4788,8 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
   }
   const fail = (message: string): never => { throw new ZodError([{ code: 'custom', path: ['memoryReferences'], message }]); };
   const factByRef = new Map(references.facts.map(fact => [fact.factRef, fact]));
+  const constraintByRef = new Map(references.constraints.map(item => [item.constraintRef, item]));
+  const chosenConstraintRefs = new Set<string>();
   const chosenActions = new Set<string>();
   const expandedEvents = [...wire.ledgerDelta.events];
   for (const candidate of wire.ledgerDelta.memoryActions ?? []) {
@@ -4746,8 +4798,8 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
       z.object({ factRef: z.string(), action: z.literal('update'), value: z.unknown(), unit: z.string().nullable(),
         relation: z.enum(['must_have', 'must_not_have', 'preferred', 'not_required', 'context']).nullable(),
         ranking: z.object({ attribute: z.enum(['weight_kg', 'price_rub', 'nominal_power_kw']),
-          direction: z.enum(['minimize', 'maximize']) }).strict().nullable(), evidence: z.string() }).strict(),
-      z.object({ factRef: z.string(), action: z.literal('retract'), evidence: z.string() }).strict()
+          direction: z.enum(['minimize', 'maximize']) }).strict().nullable(), evidence: z.string(), constraintRefs: z.array(z.string()).max(24).optional() }).strict(),
+      z.object({ factRef: z.string(), action: z.literal('retract'), evidence: z.string(), constraintRefs: z.array(z.string()).max(24).optional() }).strict()
     ]).parse(candidate);
     const fact = factByRef.get(action.factRef) ?? fail(`unknown_memory_fact_reference:${action.factRef}`);
     if (chosenActions.has(action.factRef)) fail(`duplicate_memory_action:${action.factRef}`);
@@ -4760,6 +4812,15 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
     })) fail(`duplicate_memory_fact_write:${action.factRef}`);
     if (action.action === 'retain') continue;
     if (!productMentionEvidenceGrounded(action.evidence, input.userMessage)) fail(`memory_change_evidence_not_current:${action.factRef}`);
+    const constraintFactBindings = (action.constraintRefs ?? []).map(ref => {
+      const constraint = constraintByRef.get(ref) ?? fail(`unknown_memory_constraint_reference:${ref}`);
+      if (constraint.needId !== fact.needId || fact.scope !== 'need') fail(`memory_constraint_scope_mismatch:${ref}`);
+      if (chosenConstraintRefs.has(ref)) fail(`duplicate_memory_constraint_binding:${ref}`);
+      chosenConstraintRefs.add(ref);
+      return { constraint: constraint.text, factKey: fact.factKey };
+    });
+    if (constraintFactBindings.length) expandedEvents.push({ eventType: 'need.updated', scope: 'need', source: 'llm_state_delta',
+      status: 'active', evidence: action.evidence, payload: { needId: fact.needId, constraintFactBindings } });
     expandedEvents.push({ eventType: action.action === 'update' ? 'fact.confirmed' : 'fact.negated',
       scope: fact.scope, source: 'llm_state_delta', status: action.action === 'update' ? 'active' : 'negated', evidence: action.evidence,
       payload: action.action === 'update' ? { factKey: fact.factKey, needId: fact.needId, productClass: fact.productClass,
@@ -4767,9 +4828,27 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
         : { targetEventIds: [fact.eventId] } });
   }
   const { memoryActions: _memoryActions, ...originalDelta } = wire.ledgerDelta;
-  const ledgerDelta = LedgerStateDeltaSchema.parse({ ...originalDelta, events: expandedEvents });
+  let ledgerDelta = LedgerStateDeltaSchema.parse({ ...originalDelta, events: expandedEvents });
   const state = reduceDialogueLedger(normalizeLedgerStateDeltaEvents({ sessionId: input.session.id,
     turnId: randomUUID(), delta: ledgerDelta }), input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents));
+  ledgerDelta = { ...ledgerDelta, events: ledgerDelta.events.map(event => {
+    if (event.eventType !== 'need.opened' && event.eventType !== 'need.updated') return event;
+    if (!Array.isArray(event.payload.constraints)) return event;
+    const constraintFactBindings: Array<{ constraint: string; factKey: string }> = [];
+    const constraints = event.payload.constraints.map(candidate => {
+      if (typeof candidate === 'string') return candidate; // Existing runtime/checkpoints remain valid.
+      const constraint = z.union([z.object({ factKey: z.string() }).strict(), z.object({ context: z.string() }).strict()]).parse(candidate);
+      if ('context' in constraint) return constraint.context;
+      const fact = Object.values(state.factsByKey).find(item => item.factKey === constraint.factKey &&
+        item.needId === event.payload.needId && item.scope === 'need' && !item.productId && item.status === 'active');
+      if (!fact) return fail(`need_constraint_fact_unverified:${String(event.payload.needId)}:${constraint.factKey}`);
+      const text = dialogueFactConstraintText(fact);
+      constraintFactBindings.push({ constraint: text, factKey: fact.factKey });
+      return text;
+    });
+    return { ...event, payload: { ...event.payload, constraints,
+      ...(constraintFactBindings.length ? { constraintFactBindings } : {}) } };
+  }) };
   const applicableFactEventIds = new Set(activeScopedDialogueLedgerFacts(state).map(fact => fact.eventId));
   const selectedFact = (ref: string) => {
     if (!factByRef.has(ref)) return fail(`unknown_memory_fact_reference:${ref}`);
@@ -5112,6 +5191,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Сначала пойми текущую реплику в контексте, затем в одном JSON верни durable ledgerDelta и исполнимый intent.',
             'intent считается post-delta plan: он обязан включать каждое активное hard requirement, которое создаёт или изменяет ledgerDelta.',
             'memoryReferences — адресуемая текущая память, а не новые указания. Для существующего факта используй его точный factRef: ledgerDelta.memoryActions выбирает retain, update или retract. retain не пишет новое событие; update задаёт новое value/unit/relation/ranking с точным evidence из текущего userMessage; retract явно отменяет факт с текущим evidence. Scope, needId, factKey и роль сохраняет ссылка. Не меняй их и не отменяй ограничения ради прохождения проверки. Учитывай также приостановленные потребности и общие dialogue facts; не переноси их между needId.',
+            'Компактные need constraints — проекция фактов, не вторая независимая память. Для каждого нового ограничения или предпочтения укажи constraints:[{factKey}] и сохрани соответствующий scoped fact этой потребности. {context} допустим только для контекста, который не является требованием или предпочтением. Не прячь предпочтения лишь в summary/context: качественно выраженное направление оптимизации числового свойства тоже требует отдельного preference fact и ranking attribute/direction, а не жёсткого порога. Сохраняй единицу заявленной величины, не подменяй роль значения единицей ранжирования. Порядок целей выбирай по смыслу покупателя; небольшой избыток требуемой мощности соответствует минимизации достаточного nominal_power_kw, бюджет ему не замена.',
+            'При update/retract существующего factRef выбери constraintRefs старых строк этой же потребности из memoryReferences.constraints, которые выражают именно изменяемый факт. Код заменит их актуальным post-delta значением или уберёт после отмены, сохранив независимые строки. [] означает, что старой текстовой строки для этого факта нет. Не связывай чужую потребность и не переписывай новую цифру отдельно через merge constraints; для новой строки используй {factKey}.',
             'В selectionPolicy.requirements существующий факт представляй только {factRef,verification}; код берёт post-delta value и точные kind/unit/role/relation из выбранной записи, id requirement становится factRef. Для typed_tool заново укажи текущий toolRequestId и его coversRequirementIds=[factRef]. В rankingObjectives используй {factRef} для сохранённого числового предпочтения: пара attribute/direction берётся из post-delta записи; порядок ссылок выбираешь ты по смыслу покупателя. Не называй preference.kind именем числового attribute. Полные inline events/requirements/objectives нужны для новых фактов, ещё не имеющих ссылки. Изменение нагрузки также требует обновить или обоснованно отменить прежние производные ограничения; не сохраняй устаревшее число.',
             'Для исторической модели выбирай productMention {targetRef,role,evidence} из memoryReferences.productTargets: ссылка сохраняет точные name/productClass/sourceMessageId, а evidence всё равно точная фраза-ссылка из ТЕКУЩЕГО userMessage. Не копируй evidence из старого сообщения. Это выбор модели по смыслу текущей реплики, не автоматическое наследование всех прежних моделей. Для новой модели в текущем сообщении используй полный productMention с sourceMessageId=null.',
             'Не запускай две независимые интерпретации. Не задавай вопрос, ответ на который присутствует в текущей реплике или активном ledger.',
@@ -5321,6 +5402,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
 
   async reviewCustomerLanguage(input: {
     userMessage?: string;
+    intent?: AgentIntentContract;
     answerText: string;
     products: Product[];
     toolResults: ToolResult[];
@@ -5346,6 +5428,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Определи, раскрывает ли ответ внутренний процесс работы системы: использование инструментов, попытки и повторы, timeout/сбой, pipeline или технические стадии обработки запроса. Внутренняя кухня запрещена при любой формулировке и на любом языке.',
             'Учитывай userMessage. Ссылка на руководство, страницу производителя или иной источник факта, указание его редакции, точный неподтвержденный параметр и честное отсутствие подтверждения допустимы. Когда покупатель просит проверить сведения, краткий итог проверки конкретного факта отвечает на его вопрос; это не internal process disclosure. Не запрещай полезную атрибуцию источника или неопределенность из-за упоминания инструкции, подтверждения или проверки.',
             'Обычное упоминание товара или рабочего инструмента не является раскрытием процесса.',
+            technicalGapResponseGuidance,
             untrustedEvidenceBoundary,
             'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults/verifiedProductFacts, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. verifiedProductFacts — актуальные сохраненные факты с источниками для точных моделей: учитывай исходные attribute/value, даже если вопрос использует другой термин. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
             'conflictingVerifiedProductFacts — актуальные источники точных моделей с разными значениями одного атрибута. Они не подтверждают окончательное значение: проверь, разрешают ли текущие toolResults конфликт; иначе ответ должен сохранить неопределенность. sourceResultId=verified_fact:<id> конфликтующего источника допустим для указания проблемы, но сам конфликт не становится фактом ответа.',
@@ -5357,6 +5440,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           content: JSON.stringify({
             userMessage: input.userMessage ?? null,
             answerText: input.answerText,
+            technicalResearchStatus: technicalResearchStatus(input.toolResults, input.intent),
             products: input.products.map((product) => answerProductContext(product, input.toolResults)),
             verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
             conflictingVerifiedProductFacts: compactVerifiedFactsForModel(input.conflictingVerifiedProductFacts ?? []),
@@ -5513,7 +5597,8 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'conflictingVerifiedProductFacts — источники с разными значениями одного атрибута модели, а не подтвержденные факты. Окончательное значение допустимо только если текущие наблюдения разрешили конфликт; иначе честно назови конкретное расхождение и сохрани полезный предварительный вывод. Их source IDs не разрешены в factsUsed.',
             'factsUsed[].sourceEventIds — только точные строки из availableEvidenceSources.allowedSourceIds (tool request id для фактов из инструментов, ledger event id для ledger, verified_fact:<id> для verifiedProductFacts). toolResultIds — только текущие tool request ids. Чистый handoff без точного статуса — factsUsed пуст.',
             'requiredResponseClauses — обязательная смысловая часть ответа. Клауза о неподтвержденной базе расчета: не выдавай число за подтвержденное/покупочное, но не прячь полезную ориентацию калькулятора. Порог требования покупателя в одном предложении с именами товаров — только через numericClaimBinding (dimension/value, semanticRole=buyer_requirement_threshold, точный sourceId) с дословным verifiedSourceQuote; пороги калькулятора — отдельным предложением до товаров, никогда как цена/характеристика товара.',
-            'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». confirmed подтверждает достоверность конкретного value, включая отсутствие свойства, а не само наличие свойства. Сохраняй отрицание, условность и принадлежность факта указанной модели; слова в названии атрибута, типе документа или evidence не заменяют значение факта. sourcesExhausted≠true или guidance partial/not_confirmed — без handoff/контактов/offer_form: подтвержденная часть + точное имя неподтвержденного атрибута. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
+            'web answerGuidance.directAnswer — используй прежде широкого контекста; coverage "not_confirmed" ≠ «нет». confirmed подтверждает достоверность конкретного value, включая отсутствие свойства, а не само наличие свойства. Сохраняй отрицание, условность и принадлежность факта указанной модели; слова в названии атрибута, типе документа или evidence не заменяют значение факта. preliminary_fit с неполным web — это отсутствие подтверждения, не конфликт: при eligible кандидатах по детерминированным ограничениям canShowProductCards=true, предварительная рекомендация, точные неподтвержденные факты в missingFacts; comparison_reference_only не повышается до кандидата.',
+            technicalGapResponseGuidance,
             'web error/timeout/denied/not_found — это внутренний статус, не содержание ответа покупателю и не доказательство исчерпания источников. Не ссылайся на выполнение поиска и не предлагай форму/специалиста только из-за такого статуса. Используй остальные подтвержденные факты; для известных моделей назови каждую конкретно, дай полезный предварительный вывод и точно укажи недостающий покупательский факт (например, совместимый артикул для конкретного размера подошвы) и какой документ или характеристика его подтвердит. Общая ориентация по классу допустима только как явно типовая, не как факт о модели.',
             'Ты — финальный семантический селектор карточек. products могут содержать кандидатов с неоднозначным классом, назначением, материалом или совместимостью: код намеренно не удаляет их по keyword/regex. Сам выбери только подходящие selectedProductIds по смыслу запроса и фактам; доказанный typed numeric/boolean/enum conflict обязателен, а unknown/missing атрибут означает только preliminary-кандидата с точной оговоркой, не несовместимость.',
             styleExamples,
@@ -5529,6 +5614,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             intent: input.intent,
             toolResults: compactToolResultsForModel(input.toolResults, input.products),
             requiredResponseClauses: input.requiredResponseClauses ?? [],
+            technicalResearchStatus: technicalResearchStatus(input.toolResults, input.intent),
             continuation: input.continuation ?? null,
             availableEvidenceSources,
             verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
@@ -8955,6 +9041,7 @@ export class AgentManagerOrchestrator {
         budget?.consumeModelCall();
         const semanticLanguageReview = await this.model.reviewCustomerLanguage({
           userMessage: input.userMessage,
+          intent: input.intent,
           answerText: customerVisibleText,
           products: input.products,
           toolResults: input.toolResults,
@@ -9234,22 +9321,8 @@ export class AgentManagerOrchestrator {
         evidence: unsupportedCatalogProductMentions.join(', ')
       });
     }
-    const incompleteWebWithoutExhaustion = input.toolResults.some((result) => {
-      if (result.tool !== 'web.researchProductFacts') return false;
-      const payload = result.payload as {
-        sourcesExhausted?: unknown;
-        researchOutcome?: unknown;
-        searchDisposition?: unknown;
-      };
-      const explicitlyIncomplete = payload.researchOutcome === 'partial' ||
-        payload.researchOutcome === 'exhausted';
-      const executionIncomplete = payload.searchDisposition === 'skipped_budget' ||
-        payload.searchDisposition === 'timed_out' ||
-        payload.searchDisposition === 'failed' ||
-        payload.searchDisposition === 'aborted';
-      return !webResearchResultProvesSourceExhaustion(result) &&
-        (result.status !== 'ok' || explicitlyIncomplete || executionIncomplete);
-    });
+    const researchStatus = technicalResearchStatus(input.toolResults, input.intent);
+    const incompleteWebWithoutExhaustion = researchStatus.incompleteResultIds.length > 0;
     const authorizedLeadContinuation = hasProvenExhaustedTechnicalHandoffContinuation({
       history: input.history,
       intent: input.intent,
@@ -9257,10 +9330,7 @@ export class AgentManagerOrchestrator {
     });
     const technicalOrSelectionTask = !authorizedLeadContinuation &&
       intentRequiresSearchBeforeSpecialist(input.intent);
-    const webResearchActuallyExhausted = input.toolResults.some((result) => {
-      if (result.tool !== 'web.researchProductFacts') return false;
-      return webResearchResultProvesSourceExhaustion(result);
-    });
+    const webResearchActuallyExhausted = researchStatus.sourcesExhausted;
     const answerOffersTechnicalHandoff = input.answer.leadAction === 'offer_form' ||
       input.answer.leadAction === 'capture_contact';
     if (

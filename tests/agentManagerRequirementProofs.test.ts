@@ -135,6 +135,49 @@ function intentFor(input: {
   };
 }
 
+describe('calculator-bound product proofs', () => {
+  const requirement: SelectionRequirement = {
+    id: 'load-fit', kind: 'generator_load_scenario', value: true, unit: null,
+    role: 'hard_constraint', strictness: 'strict', relation: 'must_have', evidence: 'checked simultaneous loads',
+    verification: { mode: 'typed_tool', toolRequestId: 'load', tool: 'calculator.generatorLoad',
+      verifier: 'generator_load_profile', bindAs: 'nominal_power_min_kw' }
+  };
+  const request: ToolRequest = { id: 'load', tool: 'calculator.generatorLoad', args: {},
+    required: true, coversRequirementIds: ['load-fit'], rationale: 'Calculate the required nominal power.' };
+  const result: ToolResult = { requestId: 'load', tool: 'calculator.generatorLoad', status: 'ok',
+    payload: { profile: { requiredNominalKw: 3.5 }, estimateBasis: 'exact_or_user_provided' }, warnings: [] };
+
+  it('reports the same derived minimum used by selection, not an unverified boolean', () => {
+    const products = [generator('enough', 'Generator A', { 'Номинальная мощность, кВт': 4 }),
+      generator('small', 'Generator B', { 'Номинальная мощность, кВт': 3.2 }),
+      generator('peak-only', 'Generator C', { 'Максимальная мощность, кВт': 6 })];
+    const proofs = buildRequirementProofs({ intent: intentFor({ requirement, request }), products, toolResults: [result] });
+    expect(proofs[0]).toMatchObject({ status: 'satisfied', normalizedValue: 4, normalizedRequirementValue: 3.5,
+      normalizedUnit: 'kw', sourceResultIds: ['load'] });
+    expect(proofs[1]).toMatchObject({ status: 'violated', normalizedValue: 3.2, normalizedRequirementValue: 3.5 });
+    expect(proofs[2]).toMatchObject({ status: 'unverified', normalizedValue: null });
+  });
+
+  it.each(['unbound', 'wrong-verifier', 'invalid-profile', 'uncertain-basis'] as const)(
+    'does not certify a calculator proof with %s', (failure) => {
+      const selectedRequirement = structuredClone(requirement);
+      const selectedRequest = structuredClone(request);
+      const selectedResult = structuredClone(result);
+      if (failure === 'unbound') selectedRequest.coversRequirementIds = [];
+      if (failure === 'wrong-verifier' && selectedRequirement.verification?.mode === 'typed_tool') {
+        selectedRequirement.verification.verifier = 'catalog_product_attribute';
+      }
+      if (failure === 'invalid-profile') selectedResult.payload.profile = { requiredNominalKw: -1 };
+      if (failure === 'uncertain-basis') {
+        selectedResult.payload.estimateBasis = 'unbounded_guess';
+        selectedResult.warnings = ['generator_load_unbounded_guess'];
+      }
+      const [proof] = buildRequirementProofs({ intent: intentFor({ requirement: selectedRequirement, request: selectedRequest }),
+        products: [generator('enough', 'Generator A', { 'Номинальная мощность, кВт': 4 })], toolResults: [selectedResult] });
+      expect(proof!.status).toBe('unverified');
+    });
+});
+
 function webResult(input: {
   requestId: string;
   product: Product;

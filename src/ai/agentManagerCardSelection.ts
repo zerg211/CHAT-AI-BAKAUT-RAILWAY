@@ -8,7 +8,6 @@ import {
   classifyProduct,
   compactModelText,
   displayProductBrand,
-  extractConfirmedGeneratorNominalPowerKw,
   extractGeneratorPowerForHardSelection,
   extractModelTokens,
   extractWeightKg,
@@ -27,11 +26,11 @@ import {
 } from './modelTextMatching.js';
 import {
   buildRequirementProofs,
+  qualifiedNominalActivePowerKw,
   productRequirementProofCaveats,
   requirementUsesGenericReadProof,
   requirementProofsFor,
   resolvedRequirementEligibilityStatus,
-  selectionRequirementAttributeMatches,
   type RequirementProof
 } from './requirementProofs.js';
 
@@ -1328,18 +1327,7 @@ type GeneratorPowerCardRequirement = {
   requireNominal?: boolean;
 };
 
-const nominalActivePowerUnitWords = new Set(
-  ['kw', 'квт', 'w', 'вт'].flatMap((unit) => matchingModelTextTokens(unit))
-);
-
-export function qualifiedNominalActivePowerKw(product: Product) {
-  const hasQualifiedField = Object.entries(product.specs ?? {}).some(([key, value]) => {
-    if (!selectionRequirementAttributeMatches(key, 'nominal_power_min_kw')) return false;
-    return matchingModelTextTokens([key, String(value)].join(' '))
-      .some((word) => nominalActivePowerUnitWords.has(word));
-  });
-  return hasQualifiedField ? extractConfirmedGeneratorNominalPowerKw(product) : undefined;
-}
+export { qualifiedNominalActivePowerKw } from './requirementProofs.js';
 
 function productMeetsGeneratorPowerCardRequirement(
   product: Product,

@@ -55,6 +55,7 @@ export interface ReducedNeed {
   productClass: string;
   summary: string;
   constraints: string[];
+  constraintFactBindings?: Array<{ constraint: string; factKey: string }>;
   openQuestions: string[];
   selectedProductIds: string[];
   rejectedProductIds: string[];
@@ -107,6 +108,7 @@ const reducedNeedSnapshotSchema = z.object({
   productClass: z.string().trim().min(1),
   summary: z.string(),
   constraints: z.array(z.string()),
+  constraintFactBindings: z.array(z.object({ constraint: z.string(), factKey: z.string() })).optional(),
   openQuestions: z.array(z.string()),
   selectedProductIds: z.array(z.string()),
   rejectedProductIds: z.array(z.string()),
@@ -245,6 +247,10 @@ function factMapKey(factKey: string, needId?: string, productId?: string) {
   return needId ? `${needId}::${factKey}` : factKey;
 }
 
+export function dialogueFactConstraintText(fact: Pick<ReducedFact, 'factKey' | 'value' | 'unit'>) {
+  return `${fact.factKey}: ${factValueText(fact.value)}${fact.unit ? ` ${fact.unit}` : ''}`;
+}
+
 export function getActiveDialogueNeed(state: ReducedDialogueLedgerState) {
   const activeNeeds = Object.values(state.needsById).filter((need) => need.status === 'open' || need.status === 'selected');
   return activeNeeds.length === 1 ? activeNeeds[0] : undefined;
@@ -281,6 +287,7 @@ function cloneInitialState(initial?: ReducedDialogueLedgerState): ReducedDialogu
     needsById: Object.fromEntries(Object.entries(initial.needsById ?? {}).map(([key, need]) => [key, {
       ...need,
       constraints: [...need.constraints],
+      ...(need.constraintFactBindings ? { constraintFactBindings: need.constraintFactBindings.map(binding => ({ ...binding })) } : {}),
       openQuestions: [...need.openQuestions],
       selectedProductIds: [...need.selectedProductIds],
       rejectedProductIds: [...need.rejectedProductIds]
@@ -430,6 +437,10 @@ export function reduceDialogueLedger(
         productClass: productClass(event.payload.productClass, previous?.productClass),
         summary: stringPayload(event.payload, 'summary') ?? previous?.summary ?? needId,
         constraints: effectiveConstraints,
+        constraintFactBindings: [...(previous?.constraintFactBindings ?? []),
+          ...(z.array(z.object({ constraint: z.string(), factKey: z.string() }).strict())
+            .safeParse(event.payload.constraintFactBindings).data ?? [])]
+          .filter(binding => effectiveConstraints.includes(binding.constraint)),
         openQuestions: effectiveOpenQuestions,
         selectedProductIds: effectiveSelectedProductIds,
         rejectedProductIds: effectiveRejectedProductIds,
@@ -556,6 +567,22 @@ export function reduceDialogueLedger(
 
   const openQuestions = Object.values(questionsById).filter((question) => question.status === 'open');
   for (const need of Object.values(needsById)) {
+    // The planner binds the semantic alias; the reducer only resolves that exact
+    // scoped identity after every fact event in this delta has been applied.
+    const bindings = new Map((need.constraintFactBindings ?? []).map(binding => [binding.constraint, binding.factKey]));
+    const nextBindings: NonNullable<ReducedNeed['constraintFactBindings']> = [];
+    need.constraints = need.constraints.flatMap(constraint => {
+      const factKey = bindings.get(constraint);
+      if (!factKey) return [constraint];
+      const fact = Object.values(factsByKey).find(item => item.needId === need.needId && item.factKey === factKey &&
+        item.scope === 'need' && !item.productId);
+      if (!fact) { warnings.push(`need_constraint_fact_missing:${need.needId}:${factKey}`); return [constraint]; }
+      if (fact.status !== 'active') return [];
+      const current = dialogueFactConstraintText(fact);
+      nextBindings.push({ constraint: current, factKey });
+      return [current];
+    });
+    if (bindings.size) need.constraintFactBindings = nextBindings;
     const resolvedQuestionTexts = new Set(
       Object.values(questionsById)
         .filter((question) =>
@@ -619,7 +646,7 @@ function activeCustomerNeedsFromLedger(
     const facts = activeFacts.filter((fact) => fact.needId === need.needId);
     const factConstraints = facts
       .filter((fact) => fact.eventType === 'fact.confirmed' && fact.role === 'hard_requirement' && fact.scope !== 'product' && !fact.productId)
-      .map((fact) => `${fact.factKey}: ${factValueText(fact.value)}`);
+      .map(dialogueFactConstraintText);
     const linkedQuestions = ledgerState.openQuestions
       .filter((question) => question.needId === need.needId)
       .map((question) => question.text);

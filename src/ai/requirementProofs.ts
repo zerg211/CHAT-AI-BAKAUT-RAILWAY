@@ -1,8 +1,9 @@
 import type { Product } from '../shared/types.js';
 import { AgentSelectionPolicySchema, type AgentIntentContract, type SelectionRequirement, type ToolResult } from './agentManagerContracts.js';
 import { isModelTokenChar, modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
-import { generatorPhaseProfile, generatorRemoteStartProfile, hasElectricStartSignal, productMatchesIntent } from './productClassifier.js';
+import { extractConfirmedGeneratorNominalPowerKw, generatorPhaseProfile, generatorRemoteStartProfile, hasElectricStartSignal, productMatchesIntent } from './productClassifier.js';
 import { classifyProductResearchSource } from './productComparisonResearch.js';
+import { hasUnconfirmedGeneratorLoadBasisResult } from './agentManagerGeneratorLoad.js';
 
 export type RequirementProofStatus = 'satisfied' | 'violated' | 'conflicted' | 'unverified';
 export type RequirementEligibilityStatus = 'satisfied' | 'violated' | 'unknown';
@@ -904,6 +905,37 @@ function proofForProduct(input: {
   };
 }
 
+// Shared by visible-card selection and proof reporting: peak power and kVA
+// cannot stand in for a checked nominal active-power rating.
+const nominalActivePowerUnits = new Set(['kw', 'квт', 'w', 'вт'].flatMap((unit) => modelTextTokens(unit)));
+
+export function qualifiedNominalActivePowerKw(product: Product) {
+  const hasQualifiedField = Object.entries(product.specs ?? {}).some(([key, value]) =>
+    selectionRequirementAttributeMatches(key, 'nominal_power_min_kw') &&
+    modelTextTokens([key, String(value)].join(' ')).some((word) => nominalActivePowerUnits.has(word))
+  );
+  return hasQualifiedField ? extractConfirmedGeneratorNominalPowerKw(product) : undefined;
+}
+
+function calculatorRequirementProof(requirement: SelectionRequirement, product: Product, results: ToolResult[]): RequirementProof {
+  const proof = proofForProduct({ requirement, product, candidates: [] });
+  const verification = requirement.verification;
+  const scenario = requirement.kind === 'generator_load_scenario' && requirement.value === true && requirement.unit === null;
+  const minimum = ['nominal_power_min_kw', 'power_min_kw'].includes(requirement.kind) && requirement.value === null &&
+    ['kw', 'квт'].includes(requirement.unit?.trim().toLocaleLowerCase('ru-RU') ?? '');
+  if (verification?.mode !== 'typed_tool' || verification.verifier !== 'generator_load_profile' ||
+    verification.bindAs !== 'nominal_power_min_kw' || (!scenario && !minimum) || results.length !== 1 ||
+    !productMatchesIntent(product, 'generator') || hasUnconfirmedGeneratorLoadBasisResult(results)) return proof;
+  const result = results[0]!;
+  const required = (result.payload as { profile?: { requiredNominalKw?: unknown } }).profile?.requiredNominalKw;
+  if (typeof required !== 'number' || !Number.isFinite(required) || required <= 0) return proof;
+  const nominal = qualifiedNominalActivePowerKw(product);
+  const status = nominal === undefined ? 'unverified' : nominal >= required ? 'satisfied' : 'violated';
+  return { ...proof, attribute: 'nominal_power', normalizedValue: nominal ?? null, normalizedUnit: 'kw',
+    normalizedRequirementValue: required, status, eligibilityStatus: status === 'unverified' ? 'unknown' : status,
+    sourceResultIds: [result.requestId], sourceAuthority: nominal === undefined ? 'none' : 'catalog' };
+}
+
 export function buildRequirementProofs(input: {
   intent: AgentIntentContract;
   products: Product[];
@@ -914,6 +946,9 @@ export function buildRequirementProofs(input: {
   );
   return requirements.flatMap((requirement) => {
     const results = eligibleResults({ requirement, intent: input.intent, toolResults: input.toolResults });
+    if (requirement.verification?.mode === 'typed_tool' && requirement.verification.tool === 'calculator.generatorLoad') {
+      return input.products.map((product) => calculatorRequirementProof(requirement, product, results));
+    }
     const candidates = results.flatMap((result) =>
       result.tool === 'web.researchProductFacts'
         ? webCandidates({ result, requirement, products: input.products })

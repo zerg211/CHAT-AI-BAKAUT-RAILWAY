@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Product } from '../src/shared/types.js';
 import type { ProductComparisonResearchResult, ProductResearchTraceEvent } from '../src/ai/productComparisonResearch.js';
 import { validateToolResultOutput } from '../src/ai/agentManagerToolRegistry.js';
+import { bindDocumentEvidence, createEvidenceDocuments } from '../src/ai/documentEvidence.js';
 
 const structured = vi.hoisted(() => vi.fn());
 const fetchSource = vi.hoisted(() => vi.fn());
@@ -53,6 +54,16 @@ function semanticResponse(call: any, overrides: Record<string, unknown> = {}) {
     targetApplicability: 'shared_instruction', scopeQuote, evidence: generalQuote, warnings: [], ...overrides
   })) } };
 }
+function documentResponse(call: any, fact: { evidence: string; value?: string; sourceUrl?: string }) {
+  const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+  const document = payload.documents.find((item: any) => item.sourceUrl === (fact.sourceUrl ?? sharedUrl));
+  const start = document?.passages.map((part: any) => part.text).join('').indexOf(fact.evidence) ?? -1;
+  const ids = start < 0 ? [document?.passages[0]?.id ?? 'unknown-document']
+    : document.passages.filter((part: any) => part.end > start && part.start < start + fact.evidence.length).map((part: any) => part.id);
+  const response = webResponse('official_manual', fact);
+  (response.parsed.facts[0] as any).evidenceRef = { passageIds: ids };
+  return response;
+}
 function research(overrides: Partial<Parameters<typeof researchProductComparisonFacts>[0]> = {}) {
   return researchProductComparisonFacts({ userMessage: 'Проверьте по руководству первую замену масла.',
     products: [], targetProductNames: [target], comparisonAttributes: [attribute],
@@ -63,7 +74,7 @@ function arrangeManual(sourceText = `${scopeQuote} ${generalQuote}`, validation:
   parsePdf.mockResolvedValue({ text: `${sourceText} ${publisherQuote}`, totalPages: 32, parsedPages: 32, truncated: false });
   structured.mockImplementation(async (call) => {
     if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call, validation);
-    if (call.stage === 'product_research_document_read') return webResponse('official_manual', { evidence: quote });
+    if (call.stage === 'product_research_document_read') return documentResponse(call, { evidence: quote });
     return webResponse(call.stage.slice('product_comparison_research_'.length),
       call.stage.endsWith('_official_manual') ? { evidence: quote } : undefined);
   });
@@ -77,6 +88,90 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('production web research regressions', () => {
+  it.each(['late passage', 'adjacent passages', 'invalid reference', 'unsupported claim', 'wrong model', 'missing reference'] as const)(
+    'binds document evidence and reports its validation boundary: %s', async (mode) => {
+      const actualQuote = mode === 'wrong model' ? generalQuote.replace('20', '50') : generalQuote;
+      const actualScope = mode === 'wrong model' ? 'This instruction manual applies only to FIRMAN RD4910E.' : scopeQuote;
+      const prefix = `${actualScope} ${publisherQuote} `;
+      const position = mode === 'adjacent passages' ? 25_195 : 25_000;
+      const sourceText = prefix + 'x'.repeat(position - prefix.length) + actualQuote + ' Supporting context.'.repeat(2_000);
+      parsePdf.mockResolvedValue({ text: sourceText, totalPages: 32, parsedPages: 32, truncated: false });
+      const traces: ProductResearchTraceEvent[] = [];
+      let validationCalls = 0;
+      structured.mockImplementation(async (call) => {
+        if (call.stage === 'source_evidence_semantic_validation') {
+          validationCalls += 1;
+          const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+          if (mode === 'late passage' || mode === 'adjacent passages') {
+            expect(payload.sources[0].sourceText).toContain(actualQuote);
+            expect(payload.sources[0].sourceText).toContain(scopeQuote);
+            expect(payload.sources[0].sourceText.length).toBeLessThanOrEqual(18_000);
+          }
+          return semanticResponse(call, { claimSupported: mode !== 'unsupported claim',
+            evidence: actualQuote,
+            scopeQuote: actualScope, targetApplicability: mode === 'wrong model' ? 'other_model' : 'shared_instruction' });
+        }
+        if (call.stage === 'product_research_document_read') {
+          const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+          const document = payload.documents[0];
+          expect(document.text).toBeUndefined();
+          expect(document.passages.map((part: any) => part.text).join('')).toBe(sourceText.slice(0, 64_000));
+          expect(document.passages.reduce((total: number, part: any) => total + part.text.length, 0)).toBeLessThanOrEqual(64_000);
+          const refs = document.passages.filter((part: any) => part.end > position && part.start < position + actualQuote.length)
+            .map((part: any) => part.id);
+          expect(refs).toHaveLength(mode === 'adjacent passages' ? 2 : 1);
+          const schema = call.request.text.format.schema.properties.facts.items.properties.evidenceRef;
+          expect(schema.properties.passageIds.items.enum).toContain(refs[0]);
+          const response = webResponse('official_manual', { evidence: 'The first oil change is required after twenty hours.',
+            sourceUrl: 'https://invented.invalid/manual.pdf', value: '20 hours' });
+          (response.parsed.facts[0] as any).evidenceRef = {
+            passageIds: mode === 'invalid reference' ? ['document-99-passage-0'] : refs
+          };
+          if (mode === 'missing reference') delete (response.parsed.facts[0] as any).evidenceRef;
+          return response;
+        }
+        const tier = call.stage.slice('product_comparison_research_'.length);
+        const response = webResponse(tier);
+        if (tier === 'official_manual') response.response.output[0]!.action.sources = [{ url: sharedUrl, title: 'Shared manual' }];
+        return response;
+      });
+      const actual = await research({ onTrace: (event) => { traces.push(event); } });
+      if (mode === 'late passage' || mode === 'adjacent passages') {
+        expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', sourceUrl: sharedUrl,
+          evidence: actualQuote, evidenceVerifiedExact: true }));
+      } else expect(actual.facts).toEqual([]);
+      const readTrace: any = traces.find((event) => event.stage === 'document_read');
+      expect(readTrace.documentEvidence.documents[0]).toMatchObject({ sourceUrl: sharedUrl,
+        textLength: sourceText.length, suppliedLength: Math.min(sourceText.length, 64_000), textHash: expect.any(String) });
+      const textHash = readTrace.documentEvidence.documents[0].textHash as string;
+      expect(textHash).toHaveLength(64);
+      expect([...textHash].every(character => 'abcdef0123456789'.includes(character))).toBe(true);
+      expect(JSON.stringify(traces)).not.toContain(sourceText);
+      if (mode === 'invalid reference' || mode === 'missing reference') {
+        expect(validationCalls).toBe(0);
+        expect(actual.warnings).toContain('document_evidence_reference_invalid');
+        const documents = createEvidenceDocuments([{ sourceUrl: sharedUrl, text: sourceText },
+          { sourceUrl: `${sharedUrl}?other`, text: sourceText }]);
+        for (const ids of [['document-0-passage-0', 'document-0-passage-2'],
+          ['document-0-passage-0', 'document-1-passage-1'], ['document-0-passage-1', 'document-0-passage-0']]) {
+          const rebound = bindDocumentEvidence({ facts: [{ evidenceRef: { passageIds: ids } }] }, documents);
+          expect(rebound.parsed.facts).toEqual([]);
+          expect(rebound.trace.selections[0]?.status).toBe('invalid');
+        }
+      } else {
+        const check: any = traces.find((event: any) => event.evidenceValidation?.length);
+        expect(check.evidenceValidation[0]).toMatchObject({ sourceUrl: sharedUrl, exactExcerptFound: true,
+          modelScopeMatched: mode !== 'wrong model', claimSupported: mode !== 'unsupported claim',
+          accepted: mode === 'late passage' || mode === 'adjacent passages' });
+        expect(check.evidenceValidation[0].validatorTextLength).toBeLessThanOrEqual(18_000);
+      }
+      if (mode === 'wrong model') {
+        expect(actual.warnings).toContain('source_evidence_model_scope_mismatch');
+        expect(actual.warnings).not.toContain('source_evidence_exact_excerpt_not_found');
+      }
+    }
+  );
+
   it.each(['same input', 'changed question', 'changed target', 'changed attributes'] as const)('retries timed-out validation without rereading an unchanged document: %s', async (mode) => {
     const documentReadContext = {};
     let validationCalls = 0;
@@ -86,7 +181,7 @@ describe('production web research regressions', () => {
         if (++validationCalls === 1) throw Object.assign(new Error('validation deadline'), { code: 'structured_json_deadline_exceeded' });
         return semanticResponse(call);
       }
-      if (call.stage === 'product_research_document_read') return webResponse('official_manual', { evidence: generalQuote });
+      if (call.stage === 'product_research_document_read') return documentResponse(call, { evidence: generalQuote });
       const tier = call.stage.slice('product_comparison_research_'.length);
       const response = webResponse(tier);
       if (tier === 'official_manual') response.response.output[0]!.action.sources = [{ url: sharedUrl, title: 'Shared manual' }];
@@ -166,7 +261,7 @@ describe('production web research regressions', () => {
         const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
         expect(payload.documents).toEqual([expect.objectContaining({ sourceUrl: originalUrl })]);
         expect(call.request.tools).toBeUndefined();
-        return webResponse('official_manual', { evidence: generalQuote, sourceUrl: originalUrl });
+        return documentResponse(call, { evidence: generalQuote, sourceUrl: originalUrl });
       }
       const tier = call.stage.slice('product_comparison_research_'.length);
       const response = webResponse(tier);
@@ -219,7 +314,7 @@ describe('production web research regressions', () => {
     parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote} ${publisherQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
     structured.mockImplementation(async (call) => {
       if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call);
-      if (call.stage === 'product_research_document_read') return webResponse('official_manual', { evidence: generalQuote, sourceUrl: mirrorUrl });
+      if (call.stage === 'product_research_document_read') return documentResponse(call, { evidence: generalQuote, sourceUrl: mirrorUrl });
       const tier = call.stage.slice('product_comparison_research_'.length);
       const response = webResponse(tier);
       if (tier === 'official_manual') response.response.output[0]!.action.sources = [{ url: failedUrl, title: 'Manual' }];
@@ -243,7 +338,7 @@ describe('production web research regressions', () => {
       if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call);
       if (call.stage === 'product_research_document_read') {
         releasePage();
-        return webResponse('official_manual', { evidence: generalQuote });
+        return documentResponse(call, { evidence: generalQuote });
       }
       if (call.stage === 'product_comparison_research_official_page') await pageGate;
       return webResponse(call.stage.slice('product_comparison_research_'.length));
@@ -548,6 +643,10 @@ describe('production web research regressions', () => {
     const actual = await research();
     expect(actual.facts).toEqual([]);
     expect(actual.sourcesExhausted).toBe(false);
+    if (_name === 'fabricated scope') {
+      expect(actual.warnings).toContain('source_evidence_model_scope_mismatch');
+      expect(actual.warnings).not.toContain('source_evidence_exact_excerpt_not_found');
+    }
   });
 
   it('keeps document scope visible when the fact is far from the manual cover without expanding the text cap', async () => {
