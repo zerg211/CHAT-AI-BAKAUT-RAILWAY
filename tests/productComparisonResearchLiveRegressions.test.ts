@@ -77,6 +77,58 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('production web research regressions', () => {
+  it.each(['same input', 'changed question', 'changed target', 'changed attributes'] as const)('retries timed-out validation without rereading an unchanged document: %s', async (mode) => {
+    const documentReadContext = {};
+    let validationCalls = 0;
+    parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote} ${publisherQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        if (++validationCalls === 1) throw Object.assign(new Error('validation deadline'), { code: 'structured_json_deadline_exceeded' });
+        return semanticResponse(call);
+      }
+      if (call.stage === 'product_research_document_read') return webResponse('official_manual', { evidence: generalQuote });
+      const tier = call.stage.slice('product_comparison_research_'.length);
+      const response = webResponse(tier);
+      if (tier === 'official_manual') response.response.output[0]!.action.sources = [{ url: sharedUrl, title: 'Shared manual' }];
+      return response;
+    });
+    const first = await research({ documentReadContext, products: [catalogProduct], precomputedCatalogResult: null });
+    expect(first.facts).toEqual([]);
+    expect(first.warnings).toContain('source_tier_timed_out:official_manual');
+    const second = await research({ documentReadContext, products: [catalogProduct], precomputedCatalogResult: null,
+      ...(mode === 'changed question' ? { userMessage: 'Также проверьте обслуживание после хранения.' } : {}),
+      ...(mode === 'changed attributes' ? { comparisonAttributes: ['oil grade'], missingFactSlots: [{ productName: target, attribute: 'oil grade' }] } : {}),
+      ...(mode === 'changed target' ? { targetProductNames: ['FIRMAN RD4910E'], missingFactSlots: [{ productName: 'FIRMAN RD4910E', attribute }] } : {}) });
+    expect(structured.mock.calls.filter(([call]) => call.stage === 'product_research_document_read'))
+      .toHaveLength(mode === 'same input' ? 1 : 2);
+    if (mode !== 'changed target') expect(validationCalls).toBeGreaterThanOrEqual(2);
+    if (mode === 'same input') {
+      expect(second.facts).toContainEqual(expect.objectContaining({ value: '20 hours', evidenceVerifiedExact: true }));
+      expect(second.warnings).toContain('unverified_document_validation_resumed');
+      expect(second.usedWebSearch).toBe(false);
+      expect(second.sourceAttempts?.some((attempt) => attempt.tier !== 'catalog')).toBe(false);
+    }
+    expect(JSON.stringify(first)).not.toContain('documentReadContext');
+  });
+
+  it('does not retain a completed document read when its enclosing validation is aborted', async () => {
+    const documentReadContext = {};
+    const controller = new AbortController();
+    arrangeManual();
+    const base = structured.getMockImplementation()!;
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') {
+        controller.abort();
+        throw new DOMException('aborted', 'AbortError');
+      }
+      return base(call);
+    });
+    await expect(research({ documentReadContext, products: [catalogProduct], precomputedCatalogResult: null,
+      signal: controller.signal })).rejects.toThrow();
+    expect(documentReadContext).toEqual({});
+    expect(structured.mock.calls.filter(([call]) => call.stage === 'product_research_document_read')).toHaveLength(1);
+  });
+
   it.each(['same page', 'separate manual tier'] as const)('persists a discovered PDF among bounded candidates after a reader timeout: %s', async (origin) => {
     const url = `${sharedUrl}?edition=2026&lang=en`;
     parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote}`, totalPages: 4, parsedPages: 4, truncated: false });

@@ -59,6 +59,7 @@ import {
   researchWarningsPreventSourceExhaustion,
   type ProductComparisonResearchFact,
   type ProductComparisonResearchResult,
+  type ProductResearchDocumentReadContext,
   type ProductResearchTraceEvent
 } from './productComparisonResearch.js';
 import { refreshExactCatalogProducts } from '../catalog/sitemapSync.js';
@@ -6601,6 +6602,7 @@ export class AgentManagerOrchestrator {
         preservedSideEffectRequestIds: [...reusablePersistedToolResults.keys()]
       });
     }
+    const documentReadContext: ProductResearchDocumentReadContext = {};
     let { toolResults, products } = await this.executeTools({
       session: input.session,
       turnId: input.turnId,
@@ -6612,6 +6614,7 @@ export class AgentManagerOrchestrator {
       pendingLeadCaptureDraft,
       toolRequests: intent.toolRequests,
       persistedToolResults: reusablePersistedToolResults,
+      documentReadContext,
       budget: turnBudget,
       signal: input.signal
     });
@@ -6758,6 +6761,7 @@ export class AgentManagerOrchestrator {
           userMessage, history, intent, needState: needStateSnapshot, pendingLeadCaptureDraft,
           toolRequests: requests, persistedToolResults: reusablePersistedToolResults,
           priorProducts: observationProducts, priorToolResults: toolResults,
+          documentReadContext,
           budget: turnBudget, signal: input.signal
         }));
         continuation = { status: 'stopped', rounds: round, rationale: decision.rationale,
@@ -7510,6 +7514,7 @@ export class AgentManagerOrchestrator {
     persistedToolResults: Map<string, ToolResult>;
     priorProducts?: Product[];
     priorToolResults?: ToolResult[];
+    documentReadContext?: ProductResearchDocumentReadContext;
     budget: AgentManagerTurnBudget;
     signal?: AbortSignal;
   }) {
@@ -8116,6 +8121,7 @@ export class AgentManagerOrchestrator {
               ? uniqueStrings(missingFactSlots.map((slot) => slot.attribute))
               : memory?.missingAttributes ?? comparisonAttributes;
             const researchedGaps = await researchProductComparisonFacts({
+              documentReadContext: input.documentReadContext,
               userMessage: input.userMessage,
               researchGoal: {
                 query: typeof request.args.query === 'string' ? request.args.query : undefined,

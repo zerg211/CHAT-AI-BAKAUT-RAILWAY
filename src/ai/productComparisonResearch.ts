@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { createHash } from 'node:crypto';
 import type { Product } from '../shared/types.js';
 import * as cheerio from 'cheerio';
 import { outboundText, safeFetchBytes } from '../security/outboundHttp.js';
@@ -980,6 +981,76 @@ type SourceDocument = {
   sourceKind?: 'catalog' | 'web';
   diagnostic?: ProductResearchSourceDiagnostic;
 };
+
+// Private to one orchestrator turn; never put source text in a tool artifact.
+export interface ProductResearchDocumentReadContext {
+  pending?: {
+    scopeKey: string;
+    result: ProductComparisonResearchResult;
+    documents: Array<{ sourceUrl: string; textHash: string; source: SourceDocument }>;
+  };
+}
+
+export function productResearchDocumentReadScopeKey(input: {
+  userMessage: string; products: Product[]; targetProductNames: string[];
+  comparisonAttributes: string[]; missingFactSlots?: Array<{ productName: string; attribute: string }>;
+}) {
+  const productId = (name: string) => {
+    const matches = exactCatalogProductsForTargets(input.products, [name]);
+    return matches.length === 1 ? matches[0]!.id : null;
+  };
+  const targets = input.targetProductNames.map(productId);
+  if (!targets.length || targets.some((id) => !id)) return null;
+  const slots = (input.missingFactSlots ?? []).map((slot) => [productId(slot.productName), slot.attribute]);
+  if (slots.some(([id]) => !id)) return null;
+  return JSON.stringify({ question: input.userMessage, productIds: uniqueStrings(targets as string[]).sort(),
+    attributes: uniqueStrings(input.comparisonAttributes).sort(), slots: slots.map((slot) => JSON.stringify(slot)).sort() });
+}
+
+async function resumeUnverifiedDocumentRead(input: {
+  context?: ProductResearchDocumentReadContext; scopeKey: string | null; products: Product[];
+  targetProductNames: string[]; comparisonAttributes: string[]; cache: SourceTextCache;
+  signal?: AbortSignal; deadlineAtMs?: number;
+}) {
+  if (input.signal?.aborted) {
+    if (input.context) input.context.pending = undefined;
+    return null;
+  }
+  const pending = input.context?.pending;
+  if (!pending || !input.scopeKey || pending.scopeKey !== input.scopeKey || input.signal?.aborted ||
+    webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_STAGE_MS) return null;
+  input.context!.pending = undefined;
+  if (pending.documents.some((document) => createHash('sha256').update(document.source.text).digest('hex') !== document.textHash)) return null;
+  for (const document of pending.documents) {
+    const url = canonicalSourceUrl(document.sourceUrl);
+    input.cache.documents.set(url, Promise.resolve(document.source));
+    input.cache.pdfSourceUrls.add(url);
+  }
+  try {
+    const result = await validateSourceBackedResult({ result: structuredClone(pending.result), products: input.products,
+      targetProductNames: input.targetProductNames, comparisonAttributes: input.comparisonAttributes,
+      expectedSourceTier: 'official_manual', cache: input.cache, signal: input.signal, deadlineAtMs: input.deadlineAtMs });
+    const facts = result.facts.filter((fact) => fact.sourceType === 'web' && fact.sourceTier === 'official_manual');
+    const conflicts = result.conflicts.filter((conflict) => facts.some((fact) =>
+      factMatchesTarget(fact, conflict.productName) && fact.attribute === conflict.attribute));
+    const droppedEvidence = facts.length !== result.facts.filter((fact) => fact.sourceType === 'web').length;
+    const resumed: ProductComparisonResearchResult = { ...result, facts, conflicts, sourcesExhausted: false,
+      answerGuidance: { ...result.answerGuidance,
+        ...(droppedEvidence ? { directAnswer: '', completeness: facts.length ? 'partially_answered' : 'not_answered' } : {}),
+        coverage: result.answerGuidance.coverage.filter((item) =>
+        item.status === 'confirmed' ? item.sourceTier === 'official_manual' :
+          item.status !== 'ambiguous' && item.status !== 'contradicted' || conflicts.some((conflict) => conflict.attribute === item.attribute)) },
+      // Discovery belongs to the original work item; no old query is reported
+      // as newly executed by this continuation's validation.
+      usedWebSearch: false, sourceAttempts: [], warnings: uniqueStrings([...result.warnings, 'unverified_document_validation_resumed',
+        ...(droppedEvidence ? ['source_tier_evidence_rejected:official_manual'] : [])]) };
+    return resumed;
+  } catch (error) {
+    if (input.signal?.aborted) throw error;
+    if (webResearchTimedOut(error, input.signal)) input.context!.pending = pending;
+    return null;
+  }
+}
 
 type SourceTextCache = {
   documents: Map<string, Promise<SourceDocument>>;
@@ -3109,6 +3180,7 @@ export async function researchProductComparisonFacts(input: {
   researchGoal?: ProductResearchGoal;
   previousResearch?: ProductResearchPriorObservation[];
   knownSourceCandidates?: Array<{ url: string; title?: string }>;
+  documentReadContext?: ProductResearchDocumentReadContext;
   missingFactSlots?: Array<{ productName: string; attribute: string }>;
   precomputedCatalogResult?: ProductComparisonResearchResult | null;
   allowCatalogOnlyAnswer?: boolean;
@@ -3412,6 +3484,16 @@ export async function researchProductComparisonFacts(input: {
         factMatchesTarget(fact, slot.productName)
       ));
     };
+    const documentScopeKey = productResearchDocumentReadScopeKey({ userMessage: input.userMessage, products: exactCatalogProducts,
+      targetProductNames, comparisonAttributes, missingFactSlots: requestedSlots });
+    const resumedDocumentResult = await resumeUnverifiedDocumentRead({ context: input.documentReadContext,
+      scopeKey: documentScopeKey, products: exactCatalogProducts, targetProductNames, comparisonAttributes,
+      cache: sourceTextCache, signal: input.signal, deadlineAtMs: input.deadlineAtMs });
+    if (resumedDocumentResult && requestedSlotsCovered(resumedDocumentResult)) {
+      return mergeCatalogAndWebResearch(catalogResultForResearch, resumedDocumentResult);
+    }
+    const includeResumedEvidence = (result: ProductComparisonResearchResult) => resumedDocumentResult
+      ? mergeWebResearchPasses(resumedDocumentResult, result) : result;
     const requestedSlotsCoveredByCatalog = Boolean(
       catalogResultForResearch &&
       !resultHasUnresolvedCatalogConflict(catalogResultForResearch) &&
@@ -3527,6 +3609,7 @@ export async function researchProductComparisonFacts(input: {
     }) => {
       const startedAt = Date.now();
       let sourceCandidates: ProductComparisonResearchResult['sourceCandidates'] = [];
+      let completedDocumentRead: ProductResearchDocumentReadContext['pending'];
       if (webResearchRemainingMs(inputTier.deadlineAtMs) < WEB_RESEARCH_MIN_STAGE_MS) {
         if (inputTier.tier === 'official_page') finishPageDiscovery();
         await emitResearchTrace(input.onTrace, {
@@ -3624,6 +3707,13 @@ export async function researchProductComparisonFacts(input: {
                 readResult.answerGuidance.coverage = readResult.answerGuidance.coverage.filter((item) =>
                   item.sourceUrl && readUrls.has(canonicalSourceUrl(item.sourceUrl)));
                 readResult.sourceAttempts = normalizedResult.sourceAttempts;
+                if (documentScopeKey && !input.signal?.aborted && !inputTier.signal?.aborted &&
+                  documents.length <= sourcePdfMaxSources && Buffer.byteLength(JSON.stringify(readResult), 'utf8') <= sourcePdfMaxBytes) {
+                  completedDocumentRead = { scopeKey: documentScopeKey,
+                    result: structuredClone({ ...readResult, sourceCandidates }),
+                    documents: documents.map(({ sourceUrl, source }) => ({ sourceUrl, source: { ...source },
+                      textHash: createHash('sha256').update(source.text).digest('hex') })) };
+                }
                 candidateResult = mergeWebResearchPasses(candidateResult, readResult);
                 candidateResult.warnings = uniqueStrings([...candidateResult.warnings, 'discovered_document_read']);
               } catch (error) {
@@ -3643,10 +3733,17 @@ export async function researchProductComparisonFacts(input: {
             candidateResult.warnings.push('document_read_skipped_insufficient_budget');
           }
         }
-        const validatedResult = await validateSourceBackedResult({ result: candidateResult,
-          products: exactCatalogProducts, targetProductNames, comparisonAttributes,
-          expectedSourceTier: inputTier.tier, cache: sourceTextCache,
-          signal: inputTier.signal, deadlineAtMs: inputTier.deadlineAtMs });
+        let validatedResult: ProductComparisonResearchResult;
+        try {
+          validatedResult = await validateSourceBackedResult({ result: candidateResult,
+            products: exactCatalogProducts, targetProductNames, comparisonAttributes,
+            expectedSourceTier: inputTier.tier, cache: sourceTextCache,
+            signal: inputTier.signal, deadlineAtMs: inputTier.deadlineAtMs });
+        } catch (error) {
+          if (input.documentReadContext && completedDocumentRead && !input.signal?.aborted && !inputTier.signal?.aborted &&
+            webResearchTimedOut(error, inputTier.signal)) input.documentReadContext.pending = completedDocumentRead;
+          throw error;
+        }
         const tierFacts = validatedResult.facts.filter((fact) =>
           fact.sourceType === 'web' && fact.sourceTier === inputTier.tier
         );
@@ -3797,7 +3894,7 @@ export async function researchProductComparisonFacts(input: {
         officialPageController.abort('official_manual_completed_requested_slots');
         await officialPagePromise;
       }
-      return mergeCatalogAndWebResearch(catalogResultForResearch, firstOfficial.result);
+      return mergeCatalogAndWebResearch(catalogResultForResearch, includeResumedEvidence(firstOfficial.result));
     }
     const secondOfficial = firstOfficial.tier === 'official_page'
       ? { tier: 'official_manual' as const, result: await officialManualPromise }
@@ -3810,7 +3907,7 @@ export async function researchProductComparisonFacts(input: {
       : secondOfficial.result;
     const officialResults = mergeWebResearchPasses(officialPageResult, officialManualResult);
     if (requestedSlotsCovered(officialResults)) {
-      return mergeCatalogAndWebResearch(catalogResultForResearch, officialResults);
+      return mergeCatalogAndWebResearch(catalogResultForResearch, includeResumedEvidence(officialResults));
     }
 
     if (webResearchRemainingMs(input.deadlineAtMs) < WEB_RESEARCH_MIN_STAGE_MS + TIER_FALLBACK_RESERVE_MS) {
@@ -3820,7 +3917,7 @@ export async function researchProductComparisonFacts(input: {
         outcome: 'skipped_budget', sourceCount: 0, acceptedFactCount: 0
       });
       return {
-        ...mergeCatalogAndWebResearch(catalogResultForResearch, officialResults),
+        ...mergeCatalogAndWebResearch(catalogResultForResearch, includeResumedEvidence(officialResults)),
         searchDisposition: 'skipped_budget',
         sourcesExhausted: false,
         sourceAttempts: mergeSourceAttempts(catalogSourceAttempts, mergeSourceAttempts(officialResults.sourceAttempts,
@@ -3844,7 +3941,7 @@ export async function researchProductComparisonFacts(input: {
       deadlineAtMs: secondaryDeadlineAtMs,
       signal: secondaryController.signal
     });
-    const allWebResults = mergeWebResearchPasses(officialResults, secondaryResult);
+    const allWebResults = includeResumedEvidence(mergeWebResearchPasses(officialResults, secondaryResult));
     const completeTierAttempts = sourceTierAttemptsComplete(mergeSourceAttempts(
       catalogSourceAttempts,
       allWebResults.sourceAttempts

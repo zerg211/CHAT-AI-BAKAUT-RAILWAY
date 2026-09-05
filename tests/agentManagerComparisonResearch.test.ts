@@ -399,6 +399,9 @@ describe('AgentManager comparison research flow', () => {
       }));
     await orchestrator.generateAnswer({ sessionId, turnId, userMessage: conversations.messages[0]!.content });
     expect(researchProductComparisonFacts).toHaveBeenCalledTimes(2);
+    expect(researchProductComparisonFacts.mock.calls[0]![0].documentReadContext).toEqual({});
+    expect(researchProductComparisonFacts.mock.calls[1]![0].documentReadContext)
+      .toBe(researchProductComparisonFacts.mock.calls[0]![0].documentReadContext);
     expect(researchProductComparisonFacts.mock.calls[0]![0]).toMatchObject({ researchGoal: initialGoal, previousResearch: [] });
     expect(researchProductComparisonFacts.mock.calls[1]![0]).toMatchObject({ researchGoal: revisedGoal,
       previousResearch: [{ requestId: 'web:test', status: 'ok', payload: {
