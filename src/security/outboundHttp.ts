@@ -299,7 +299,10 @@ export async function safeFetchBytes(value: string, options: SafeOutboundFetchOp
         bytes
       };
     } finally {
-      await dispatcher.close().catch(() => undefined);
+      // This dispatcher owns only this request. The body has either been read,
+      // cancelled, or failed; there is no shared work to drain. Graceful close
+      // can wait for an aborted connection well beyond the request deadline.
+      await dispatcher.destroy().catch(() => undefined);
     }
   }
   throw new UnsafeOutboundUrlError('Outbound redirect limit exceeded');

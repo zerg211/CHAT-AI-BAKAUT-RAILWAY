@@ -22,6 +22,7 @@ vi.mock('undici', () => ({
   fetch: fetchMock,
   Agent: class {
     async close() {}
+    async destroy() {}
   }
 }));
 

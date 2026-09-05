@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { ZodError } from 'zod';
+import { z, ZodError } from 'zod';
 import { config } from '../config.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
 import type { AgentSourcePolicyV2, AgentTaskType, AgentTurnContract, ChatResponsePayload, ConversationSession, CustomerNeedState, LeadCaptureDraft, LeadPreferredContact, Message, Product, ProductCard, ProductSelectionClass, VerifiedProductFact } from '../shared/types.js';
@@ -4374,6 +4374,23 @@ const observationDecisionFormat = {
   }
 } as const;
 
+function observationDecisionFormatForRequirements(requirementIds: string[]) {
+  const allowedIds = uniqueStrings(requirementIds);
+  const requestSchema = (tool: string, args: Record<string, unknown>) => strictJsonObject({
+    ...toolRequestVariantJsonSchema(tool, args).properties,
+    coversRequirementIds: { type: 'array', maxItems: allowedIds.length ? 40 : 0,
+      items: allowedIds.length ? { type: 'string', enum: allowedIds } : { type: 'string' } }
+  });
+  return { format: { ...observationDecisionFormat.format, schema: strictJsonObject({
+    ...observationDecisionFormat.format.schema.properties,
+    toolRequests: { type: 'array', maxItems: 3, items: { anyOf: [
+      requestSchema('catalog.search', catalogSearchToolArgsJsonSchema),
+      requestSchema('catalog.getProductDetails', productDetailsToolArgsJsonSchema),
+      requestSchema('web.researchProductFacts', webResearchToolArgsJsonSchema)
+    ] } }
+  }) } };
+}
+
 const productMentionJsonSchema = {
   type: 'object',
   additionalProperties: false,
@@ -4632,6 +4649,150 @@ const semanticDecisionFormat = {
   }
 } as const;
 
+// These references exist only on the planner wire. Persisted decisions and
+// recovery checkpoints continue to use the ordinary expanded runtime contract.
+function semanticMemoryReferences(input: AgentManagerModelInput) {
+  const state = input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents);
+  const activeNeedId = getActiveDialogueNeed(state)?.needId;
+  const facts = Object.entries(state.factsByKey)
+    .filter(([, fact]) => fact.status === 'active' && !fact.productId &&
+      (fact.scope === 'need' || fact.scope === 'dialogue') &&
+      ['hard_requirement', 'preference', 'context'].includes(fact.role))
+    .sort(([, left], [, right]) => Number(right.needId === activeNeedId) - Number(left.needId === activeNeedId))
+    .slice(0, 80).map(([factRef, fact]) => ({ factRef, ...fact }));
+  const productTargets = priorProductTargetsFromHistory(input.history).map((target) => ({
+    targetRef: `target:${createHash('sha256').update(JSON.stringify([target.messageId, target.name])).digest('hex').slice(0, 20)}`,
+    ...target
+  }));
+  return { activeNeedId: activeNeedId ?? null, facts, productTargets };
+}
+
+function semanticDecisionFormatForMemory(references: ReturnType<typeof semanticMemoryReferences>) {
+  const factRef = { type: 'string', enum: references.facts.map(fact => fact.factRef) };
+  const requirementRefs = references.facts.filter(fact => fact.eventType === 'fact.confirmed' &&
+    (fact.role === 'hard_requirement' || fact.role === 'preference')).map(fact => fact.factRef);
+  const rankedRefs = references.facts.filter(fact => fact.role === 'preference' && fact.ranking).map(fact => fact.factRef);
+  const ledgerSchema = ledgerDeltaFormat.format.schema;
+  const policySchema = selectionPolicyJsonSchema;
+  return { ...semanticDecisionFormat, format: { ...semanticDecisionFormat.format, schema: strictJsonObject({
+    ledgerDelta: references.facts.length ? strictJsonObject({ ...ledgerSchema.properties,
+      memoryActions: { type: 'array', maxItems: 80, items: { anyOf: [
+        strictJsonObject({ factRef, action: { type: 'string', enum: ['retain'] } }),
+        strictJsonObject({ factRef, action: { type: 'string', enum: ['update'] }, value: ledgerValueJsonSchema,
+          unit: nullableStringJsonSchema, relation: ledgerPayloadJsonSchema.properties.relation,
+          ranking: ledgerPayloadJsonSchema.properties.ranking, evidence: { type: 'string', minLength: 1 } }),
+        strictJsonObject({ factRef, action: { type: 'string', enum: ['retract'] }, evidence: { type: 'string', minLength: 1 } })
+      ] } }
+    }) : ledgerSchema,
+    intent: strictJsonObject({ ...intentContractFormat.format.schema.properties,
+      selectionPolicy: strictJsonObject({ ...policySchema.properties,
+        requirements: requirementRefs.length ? { type: 'array', maxItems: 40, items: { anyOf: [
+          strictJsonObject({ factRef: { type: 'string', enum: requirementRefs }, verification: selectionRequirementJsonSchema.properties.verification }),
+          selectionRequirementJsonSchema
+        ] } } : policySchema.properties.requirements,
+        rankingObjectives: rankedRefs.length ? { type: 'array', maxItems: 3, items: { anyOf: [
+          strictJsonObject({ factRef: { type: 'string', enum: rankedRefs } }), selectionRankingObjectiveJsonSchema
+        ] } } : policySchema.properties.rankingObjectives
+      }),
+      productMentions: references.productTargets.length ? { type: 'array', items: { anyOf: [
+        strictJsonObject({ targetRef: { type: 'string', enum: references.productTargets.map(target => target.targetRef) },
+          role: productMentionJsonSchema.properties.role, evidence: productMentionJsonSchema.properties.evidence }),
+        productMentionJsonSchema
+      ] } } : intentContractFormat.format.schema.properties.productMentions
+    })
+  }) } };
+}
+
+function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelInput,
+  references: ReturnType<typeof semanticMemoryReferences>): AgentSemanticDecision {
+  const wire = z.object({
+    ledgerDelta: z.object({ events: z.array(z.unknown()), memoryActions: z.array(z.unknown()).optional() }).passthrough(),
+    intent: z.object({ selectionPolicy: z.object({ requirements: z.array(z.unknown()),
+      rankingObjectives: z.array(z.unknown()).optional() }).passthrough().optional(),
+    productMentions: z.array(z.unknown()).optional() }).passthrough()
+  }).passthrough().parse(raw);
+  if (wire.ledgerDelta.memoryActions === undefined &&
+    !wire.intent.selectionPolicy?.requirements.some(value => value && typeof value === 'object' && 'factRef' in value) &&
+    !wire.intent.selectionPolicy?.rankingObjectives?.some(value => value && typeof value === 'object' && 'factRef' in value) &&
+    !wire.intent.productMentions?.some(value => value && typeof value === 'object' && 'targetRef' in value)) {
+    return AgentSemanticDecisionSchema.parse(raw);
+  }
+  const fail = (message: string): never => { throw new ZodError([{ code: 'custom', path: ['memoryReferences'], message }]); };
+  const factByRef = new Map(references.facts.map(fact => [fact.factRef, fact]));
+  const chosenActions = new Set<string>();
+  const expandedEvents = [...wire.ledgerDelta.events];
+  for (const candidate of wire.ledgerDelta.memoryActions ?? []) {
+    const action = z.discriminatedUnion('action', [
+      z.object({ factRef: z.string(), action: z.literal('retain') }).strict(),
+      z.object({ factRef: z.string(), action: z.literal('update'), value: z.unknown(), unit: z.string().nullable(),
+        relation: z.enum(['must_have', 'must_not_have', 'preferred', 'not_required', 'context']).nullable(),
+        ranking: z.object({ attribute: z.enum(['weight_kg', 'price_rub', 'nominal_power_kw']),
+          direction: z.enum(['minimize', 'maximize']) }).strict().nullable(), evidence: z.string() }).strict(),
+      z.object({ factRef: z.string(), action: z.literal('retract'), evidence: z.string() }).strict()
+    ]).parse(candidate);
+    const fact = factByRef.get(action.factRef) ?? fail(`unknown_memory_fact_reference:${action.factRef}`);
+    if (chosenActions.has(action.factRef)) fail(`duplicate_memory_action:${action.factRef}`);
+    chosenActions.add(action.factRef);
+    if (expandedEvents.some(event => {
+      const parsed = z.object({ payload: z.object({ factKey: z.unknown().optional(), needId: z.unknown().optional(),
+        targetEventIds: z.array(z.string()).optional() }).passthrough() }).passthrough().safeParse(event);
+      return parsed.success && ((parsed.data.payload.factKey === fact.factKey && (parsed.data.payload.needId ?? undefined) === fact.needId) ||
+        parsed.data.payload.targetEventIds?.includes(fact.eventId));
+    })) fail(`duplicate_memory_fact_write:${action.factRef}`);
+    if (action.action === 'retain') continue;
+    if (!productMentionEvidenceGrounded(action.evidence, input.userMessage)) fail(`memory_change_evidence_not_current:${action.factRef}`);
+    expandedEvents.push({ eventType: action.action === 'update' ? 'fact.confirmed' : 'fact.negated',
+      scope: fact.scope, source: 'llm_state_delta', status: action.action === 'update' ? 'active' : 'negated', evidence: action.evidence,
+      payload: action.action === 'update' ? { factKey: fact.factKey, needId: fact.needId, productClass: fact.productClass,
+        role: fact.role, value: action.value, unit: action.unit, relation: action.relation, ranking: action.ranking, confidence: 1 }
+        : { targetEventIds: [fact.eventId] } });
+  }
+  const { memoryActions: _memoryActions, ...originalDelta } = wire.ledgerDelta;
+  const ledgerDelta = LedgerStateDeltaSchema.parse({ ...originalDelta, events: expandedEvents });
+  const state = reduceDialogueLedger(normalizeLedgerStateDeltaEvents({ sessionId: input.session.id,
+    turnId: randomUUID(), delta: ledgerDelta }), input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents));
+  const applicableFactEventIds = new Set(activeScopedDialogueLedgerFacts(state).map(fact => fact.eventId));
+  const selectedFact = (ref: string) => {
+    if (!factByRef.has(ref)) return fail(`unknown_memory_fact_reference:${ref}`);
+    const fact = state.factsByKey[ref];
+    if (!fact || fact.status !== 'active') return fail(`inactive_memory_fact_reference:${ref}`);
+    if (!applicableFactEventIds.has(fact.eventId)) return fail(`memory_requirement_scope_mismatch:${ref}`);
+    return fact;
+  };
+  const policy = wire.intent.selectionPolicy;
+  const requirements = policy?.requirements.map(candidate => {
+    if (!candidate || typeof candidate !== 'object' || !('factRef' in candidate)) return candidate;
+    const ref = z.object({ factRef: z.string(), verification: z.unknown() }).strict().parse(candidate);
+    const fact = selectedFact(ref.factRef);
+    if (fact.eventType !== 'fact.confirmed' || !['hard_requirement', 'preference'].includes(fact.role)) fail(`memory_fact_not_requirement:${ref.factRef}`);
+    const objectValue = fact.value !== null && typeof fact.value === 'object';
+    if (objectValue && (!ref.verification || typeof ref.verification !== 'object' || !('mode' in ref.verification) || ref.verification.mode !== 'typed_tool')) {
+      fail(`structured_memory_fact_requires_typed_tool:${ref.factRef}`);
+    }
+    return { id: ref.factRef, kind: fact.factKey.replaceAll('.', '_'), value: objectValue ? true : fact.value,
+      unit: fact.unit ?? null, role: fact.role === 'preference' ? 'preference' : 'hard_constraint',
+      relation: fact.relation ?? (fact.role === 'preference' ? 'preferred' : 'must_have'),
+      strictness: fact.role === 'preference' ? 'preferred' : 'strict', evidence: fact.evidence, verification: ref.verification };
+  });
+  const rankingObjectives = policy?.rankingObjectives?.map(candidate => {
+    if (!candidate || typeof candidate !== 'object' || !('factRef' in candidate)) return candidate;
+    const ref = z.object({ factRef: z.string() }).strict().parse(candidate);
+    const fact = selectedFact(ref.factRef);
+    if (fact.role !== 'preference' || !fact.ranking) return fail(`memory_fact_has_no_ranking:${ref.factRef}`);
+    return { requirementId: ref.factRef, ...fact.ranking };
+  });
+  const productMentions = wire.intent.productMentions?.map(candidate => {
+    if (!candidate || typeof candidate !== 'object' || !('targetRef' in candidate)) return candidate;
+    const ref = z.object({ targetRef: z.string(), role: z.string(), evidence: z.string() }).strict().parse(candidate);
+    const target = references.productTargets.find(target => target.targetRef === ref.targetRef) ?? fail(`unknown_product_target_reference:${ref.targetRef}`);
+    if (!productMentionEvidenceGrounded(ref.evidence, input.userMessage)) fail(`product_reference_evidence_not_current:${ref.targetRef}`);
+    return { name: target.name, productClass: target.productClass, sourceMessageId: target.messageId, role: ref.role, evidence: ref.evidence };
+  });
+  return AgentSemanticDecisionSchema.parse({ ledgerDelta, intent: { ...wire.intent,
+    ...(policy ? { selectionPolicy: { ...policy, requirements, rankingObjectives } } : {}),
+    ...(productMentions ? { productMentions } : {}) } });
+}
+
 const answerContractFormat = {
   format: {
     type: 'json_schema',
@@ -4803,7 +4964,7 @@ function plannerSystemPromptBlock(
     'loads.kind — открытый семантический идентификатор реального потребителя, определяемый LLM по названному устройству или функции. Известные канонические kind (pump, refrigerator, lighting, handheld_tool, compressor, pressure_washer, boiler, television, router, laptop) используй только когда они точны; это примеры, не закрытый список. Для другого понятного потребителя выбери точный краткий идентификатор и сохрани его одинаково в ledger и args.loads. Известное устройство с заданной мощностью не превращай в unknown_load из-за отсутствия в примерах и не подменяй другим прибором или выбираемым генератором. name/evidence сохраняют название и источник; неизвестные числа остаются null с not_provided.',
     'Для generator_load_scenario сохрани полный structured value: loads со всеми operationMode/coRunningGroup/provenance полями, simultaneousRunning, simultaneousStarting; каждый load из ledgerDelta присутствует в args.loads.',
     'preliminary_fit: unbounded guess → не заявляй fit, спроси тип/функцию/сценарий. browse_catalog: unbounded расчет не блокирует показ диапазона мощности/моделей/цен без обещания совместимости. Достаточный контекст для bounded оценки → calculator + catalog; слишком vague → уточнение вместо поиска. Пустой fit-запрос — ноль заявленных требований (мощность/нагрузка кВт, приборы, бюджет, топливо, фаза, модель, площадь или объем работ): это needs_more_info, не preliminary_fit — уточнение вместо поиска и калькулятора, даже если класс товара ясен. preliminary_fit требует минимум одного заявленного требования покупателя. Явные browse-просьбы («что есть», «покажи варианты», «что подешевле», «ассортимент») — browse_catalog.',
-    'Генераторы: первая карточка — минимальный номинал из каталога с nominal >= requiredNominalKw. Карточка с nominal > requiredNominalKw×1.5 — только позиции 2+ и только с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование превышения. Тип топлива, бренд и ресурс не меняют requiredNominalKw. Неизвестный пуск мотора — это один главный вопрос (без final fit) либо допущение строго в формате «принят пусковой коэффициент K=[значение] для [устройство]» с пересчётом номинала в тексте; K — только из слов покупателя, шильдика или проверенного факта, K из головы запрещён. Неизвестный пуск — никогда strict требование. Топливо не заявлено (powerSource any) — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». fit = сначала минимальное превышение nominal над required сверху, затем цена/вес по rankingObjectives; надёжность в fit не входит.',
+    'Генераторы: nominal >= requiredNominalKw остаётся обязательным минимумом; среди допустимых кандидатов соблюдай порядок rankingObjectives покупателя. При приоритете минимального номинала или без явного числового приоритета первая карточка имеет минимальное достаточное превышение, а nominal > requiredNominalKw×1.5 допускается только на позициях 2+ с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование превышения. Тип топлива, бренд и ресурс не меняют requiredNominalKw. Неизвестный пуск мотора — это один главный вопрос (без final fit) либо допущение строго в формате «принят пусковой коэффициент K=[значение] для [устройство]» с пересчётом номинала в тексте; K — только из слов покупателя, шильдика или проверенного факта, K из головы запрещён. Неизвестный пуск — никогда strict требование. Топливо не заявлено (powerSource any) — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». При явном приоритете цены или веса не подменяй порядок rankingObjectives минимальным номиналом: объясни подтверждённый выигрыш и избыток мощности. Надёжность не меняет проверку достаточности мощности.',
     'productMentions для каждой названной модели/товара с ролью: target_product (хочет купить/проверить), catalog_candidate (рассматриваемая альтернатива), comparison_subject (сравнение), context_load_device (потребитель для расчета), compatibility_context (оборудование-партнер), mentioned_only. evidence копируй как точный непустой фрагмент текущего userMessage; для разрешённой анафоры evidence — точная фраза-ссылка из текущей реплики. context_load_device/compatibility_context не попадают в web args.productNames (котёл Baxi в «генератор для котла Baxi» — не цель). Только target_product/catalog_candidate/comparison_subject движут presence/web/nearby. Если в одном ходе явно запрошены разные классы товаров, selectionPolicy описывает главный класс и required catalog request этого же класса обязателен, а каждый дополнительный искомый класс получает отдельный target_product productMention с точным evidence/productClass и отдельный catalog request; не своди аксессуар к классу основного товара. Каждый web request также несёт свой canonicalProductIntent и исследует только товары этого класса.',
     'Анафору разрешай по истории: priorProductTargets сохраняет точные прежние target names и messageId даже после технического ответа без карточек. Для ссылки на прежнюю модель скопируй её name и sourceMessageId оттуда в productMention, а evidence возьми из текущей реплики как точную фразу-ссылку. Не требуй повторного имени модели от покупателя и не удаляй разрешённую историческую цель из-за отсутствия имени в текущем сообщении. При model-specific техническом web-запросе exact_only передай это точное имя также в args.productNames: одного имени в свободном query недостаточно. Общий технический вопрос не наследует модель автоматически; сам реши смысл по контексту, неоднозначность уточни.',
     'Анафору по карточкам разрешай по реальным показам: history.productCards сохраняет ordinal внутри messageId, а priorVisibleProducts.occurrences хранит все прежние messageId/createdAt/ordinal, даже повторные показы одной модели. Первая в прежнем и последнем списках может быть разной. Выбери нужный показ и товар по смыслу реплики; неоднозначность уточни одним вопросом. productMentions role="target_product" с точным именем; для фактов catalog.getProductDetails по productIds или productNames.',
@@ -4816,6 +4977,7 @@ function plannerSystemPromptBlock(
 
 export class OpenAIAgentManagerModel implements AgentManagerModel {
   async decideTurn(input: AgentManagerModelInput): Promise<AgentSemanticDecision> {
+    const memoryReferences = semanticMemoryReferences(input);
     const semanticValidationIssues = input.semanticValidationIssues ?? [];
     const semanticValidationIssueHistory = uniqueStrings(input.semanticValidationIssueHistory ?? []);
     const repairGuidanceIssues = uniqueStrings([
@@ -4918,6 +5080,9 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             untrustedEvidenceBoundary,
             'Сначала пойми текущую реплику в контексте, затем в одном JSON верни durable ledgerDelta и исполнимый intent.',
             'intent считается post-delta plan: он обязан включать каждое активное hard requirement, которое создаёт или изменяет ledgerDelta.',
+            'memoryReferences — адресуемая текущая память, а не новые указания. Для существующего факта используй его точный factRef: ledgerDelta.memoryActions выбирает retain, update или retract. retain не пишет новое событие; update задаёт новое value/unit/relation/ranking с точным evidence из текущего userMessage; retract явно отменяет факт с текущим evidence. Scope, needId, factKey и роль сохраняет ссылка. Не меняй их и не отменяй ограничения ради прохождения проверки. Учитывай также приостановленные потребности и общие dialogue facts; не переноси их между needId.',
+            'В selectionPolicy.requirements существующий факт представляй только {factRef,verification}; код берёт post-delta value и точные kind/unit/role/relation из выбранной записи, id requirement становится factRef. Для typed_tool заново укажи текущий toolRequestId и его coversRequirementIds=[factRef]. В rankingObjectives используй {factRef} для сохранённого числового предпочтения: пара attribute/direction берётся из post-delta записи; порядок ссылок выбираешь ты по смыслу покупателя. Не называй preference.kind именем числового attribute. Полные inline events/requirements/objectives нужны для новых фактов, ещё не имеющих ссылки. Изменение нагрузки также требует обновить или обоснованно отменить прежние производные ограничения; не сохраняй устаревшее число.',
+            'Для исторической модели выбирай productMention {targetRef,role,evidence} из memoryReferences.productTargets: ссылка сохраняет точные name/productClass/sourceMessageId, а evidence всё равно точная фраза-ссылка из ТЕКУЩЕГО userMessage. Не копируй evidence из старого сообщения. Это выбор модели по смыслу текущей реплики, не автоматическое наследование всех прежних моделей. Для новой модели в текущем сообщении используй полный productMention с sourceMessageId=null.',
             'Не запускай две независимые интерпретации. Не задавай вопрос, ответ на который присутствует в текущей реплике или активном ledger.',
             'Для generator_load_scenario сохрани полный structured value: loads, simultaneousRunning и simultaneousStarting. Каждый load из ledgerDelta обязан присутствовать в calculator.generatorLoad args.loads.',
             validationRepair,
@@ -4932,6 +5097,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             history: compactHistory(input.history),
             priorVisibleProducts: priorVisibleProductsFromHistory(input.history),
             priorProductTargets: priorProductTargetsFromHistory(input.history),
+            memoryReferences,
             existingState: compactLedger(input.ledgerState ?? reduceDialogueLedger(input.ledgerEvents)),
             existingLedger: input.ledgerEvents.slice(-80),
             pendingLeadCaptureDraft: input.pendingLeadCaptureDraft ?? null,
@@ -4943,7 +5109,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           })
         }
       ],
-      text: semanticDecisionFormat
+      text: semanticDecisionFormatForMemory(memoryReferences)
     };
     const { parsed } = await createStructuredJsonResponse({
       request,
@@ -4953,7 +5119,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       minRetryRemainingMs: 25_000,
       retryOutputTokenCap: Math.ceil(request.max_output_tokens * 1.5)
     });
-    return AgentSemanticDecisionSchema.parse(parsed);
+    return expandSemanticMemoryReferences(parsed, input, memoryReferences);
   }
 
   async proposeLedgerDelta(input: AgentManagerModelInput): Promise<LedgerStateDelta> {
@@ -5215,6 +5381,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
   }
 
   async assessObservations(input: AgentManagerObservationInput): Promise<ContinuationDecision> {
+    const allowedRequirementIds = uniqueStrings(input.intent.selectionPolicy?.requirements.map((requirement) => requirement.id) ?? []);
     const { parsed } = await createStructuredJsonResponse({
       request: {
         model: config.OPENAI_PLANNER_MODEL,
@@ -5230,6 +5397,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           'verifiedProductFacts содержит актуальные сохраненные факты точных моделей независимо от текущего web policy. Сам сопоставь смысл исходных attribute/value вопросу покупателя; отсутствие того же имени атрибута в каталоге не отменяет сохраненный факт. Противоречие источников требует проверки, а уже подтвержденное значение без конфликта — использования в ответе.',
           'conflictingVerifiedProductFacts сохраняет источники, расходящиеся по значению одного атрибута модели. Они не подтверждают ни одно окончательное значение; не считай совпадение одного из них с каталогом разрешением конфликта. Проверь решающий конфликт через доступные источники, если текущие наблюдения его еще не разрешили.',
           'Сохраняй intent, область потребности и все требования без изменения. Нельзя создавать лиды, менять бюджет/условия, переинтерпретировать реплику или выполнять side effects. productIds/candidateProductIds только из products; productNames копируй из products/явных исходных целей. Не подставляй другую модификацию. coversRequirementIds только существующие id, иначе [].',
+          'allowedRequirementIds — полный список допустимых ссылок coversRequirementIds. technicalAttributes и missingFacts описывают вопросы для исследования, а не новые requirement IDs. Если allowedRequirementIds пуст, продолжай необходимый технический поиск с coversRequirementIds=[]; не создавай требования подбора ради проверки инструкции.',
           'Каждый новый запрос имеет уникальный id. Не повторяй выполненный tool+args; после ошибки выбирай другую разумную попытку, не бесконечный retry. Учитывай remainingBudget и оставь время на ответ. Если источники не подтвердили факт, missingFacts точно описывает пробел; timeout/остановка не доказывает отсутствие свойства или исчерпание источников.',
           'candidateProductIds — только перспективные варианты, а не окончательная выдача карточек. missingFacts и rationale кратко объясняют решение. Для answer/clarify toolRequests=[]; для continue — непустой список.'
         ].join('\n') }, { role: 'user', content: JSON.stringify({
@@ -5237,6 +5405,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           history: compactHistory(input.history),
           state: compactLedger(input.ledgerState),
           intent: input.intent,
+          allowedRequirementIds,
           products: input.products.map((product) => answerProductContext(product, input.toolResults)),
           verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
           conflictingVerifiedProductFacts: compactVerifiedFactsForModel(input.conflictingVerifiedProductFacts ?? []),
@@ -5245,7 +5414,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           maxReadRounds: CONTINUATION_MAX_ROUNDS,
           remainingBudget: input.remainingBudget
         }) }],
-        text: observationDecisionFormat
+        text: observationDecisionFormatForRequirements(allowedRequirementIds)
       },
       stage: 'agent_observation_decision',
       signal: input.signal,
@@ -5299,10 +5468,10 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Без лишних вопросов; вопрос — только если он реально нужен для следующего шага.',
             'continuation — итог оценки реальных наблюдений в этом ходе. При clarify объясни полезное направление и задай конкретный решающий вопрос из missingFacts, не объявляй первые найденные товары подходящими. При answer используй накопленное evidence. При stopped дай полезную подтвержденную часть и точный пробел; остановка по бюджету или ошибка не означает исчерпание источников. Кандидаты из continuation все равно должны соответствовать productEvidenceRoles и фактам.',
             'Общие принципы устройства, применения, установки, запуска и обслуживания объясняй как общие технические рекомендации, явно отделяя их от характеристик конкретной модели. Точные режимы, расходники, интервалы, допуски и действия с оборудованием зависят от модели и должны опираться на ее проверенные сведения или инструкцию. Не подменяй полезное объяснение предложением оставить телефон.',
-            'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум. Первая карточка всегда ближайший сверху к requiredNominalKw номинал из products; превышение >1.5× — только позиции 2+ и только с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование. Тип топлива, бренд и ресурс requiredNominalKw не меняют. Топливо покупателем не заявлено — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind/bounded_basis_incomplete/bounded_assumption: без final fit и без утверждения совместимости; browse_catalog может показывать ассортимент без обещания совместимости. preliminary_fit может показывать предварительные варианты с canShowProductCards=true только при минимум одном заявленном требовании покупателя и без доказанного конфликта, а missingFacts и answerText точно называют непроверенную нагрузку. Estimate-only с нулем заявленных требований — это needs_more_info: canShowProductCards=false, selectedProductIds=[], короткая ориентация по классу как явно грубая (не факт о товаре) и ровно один главный вопрос, без карточек. final_fit — canShowProductCards=false и минимальный вопрос.',
+            'calculator.generatorLoad ok: payload.profile.requiredNominalKw/requiredStartingKw — авторитетный минимум. Среди достаточных по мощности вариантов соблюдай порядок rankingObjectives покупателя. Только при приоритете минимального номинала или без явного числового приоритета ближайший достаточный номинал ставь первым, а превышение >1.5× — на позиции 2+ с числами в тексте (+X кВт к расчёту, +Y руб, зачем); слова запас/комфорт/надёжность/ресурс/бренд/дизель без этих чисел — не обоснование. Тип топлива, бренд и ресурс requiredNominalKw не меняют. Топливо покупателем не заявлено — смешанный показ топлив либо явная оговорка «показываю только [топливо], потому что [причина]; нужно другое — скажите». Оценки — «по расчету/допущениям», отдельно назови какой факт (шильдик насоса/инструмента) нужен до финального выбора. not_found — не выдумывай кВт. Warnings estimate_only/unbounded_guess/invalid_load_kind/bounded_basis_incomplete/bounded_assumption: без final fit и без утверждения совместимости; browse_catalog может показывать ассортимент без обещания совместимости. preliminary_fit может показывать предварительные варианты с canShowProductCards=true только при минимум одном заявленном требовании покупателя и без доказанного конфликта, а missingFacts и answerText точно называют непроверенную нагрузку. Estimate-only с нулем заявленных требований — это needs_more_info: canShowProductCards=false, selectedProductIds=[], короткая ориентация по классу как явно грубая (не факт о товаре) и ровно один главный вопрос, без карточек. final_fit — canShowProductCards=false и минимальный вопрос.',
             'Просьба предварительных вариантов + calculator ok + catalog товары + минимум одно заявленное требование покупателя → selectionReadiness "ready_for_preliminary_cards", карточки предварительные, недостающий точный факт назван. Если расчет и каталог доказывают load/phase, отсутствие топлива или бюджета не подавляет полезные предварительные карточки: покажи подходящие, назови допущение, максимум один уточняющий вопрос.',
             'selectionReadiness — твоё семантическое решение о честности карточек сейчас: needs_more_info (fit рано, не browse), ready_for_preliminary_cards (browse/preliminary_fit без обещания совместимости), ready_for_exact_cards (факты достаточны для final_fit). canShowProductCards=false → answerText сам объясняет, чего не хватает. generator без карточек → ответ самодостаточен: упомяни подбор и блокирующий факт, не голый вопрос.',
-            'selectedProductIds — только ID из products/toolResults, только поддерживающие рекомендацию, с уважением maxCards/alternativePolicy, [] когда карточки не полезны. Просьба вариантов/ассортимента: покажи до maxCards, упорядочив по fit к заявленным требованиям покупателя (сильнейший fit первым); для генераторов fit = сначала минимальное превышение nominal над requiredNominalKw сверху, затем цена/вес; надёжность и бренд в fit не входят; разнообразие брендов/типов/цен — только внутри равного fit, никогда как цель; одна карточка — только когда кандидат один или просили одну. Если подходящих больше, чем показано, назови их число и как сузить (один вопрос) — не обрезай молча. Кандидаты с неподтвержденным решающим атрибутом — после подтвержденных, как preliminary с оговоркой. Если selectedProductIds не пуст, selectionRationale обязателен: короткая покупательская причина выбора на основе подтвержденных фактов и typed selection policy; иначе selectionRationale=null.',
+            'selectedProductIds — только ID из products/toolResults, только поддерживающие рекомендацию, с уважением maxCards/alternativePolicy, [] когда карточки не полезны. Просьба вариантов/ассортимента: покажи до maxCards, упорядочив по fit к заявленным требованиям покупателя (сильнейший fit первым); для генераторов сначала проверь достаточность nominal относительно requiredNominalKw, затем соблюдай порядок rankingObjectives; без явного числового приоритета предпочти минимальный достаточный номинал; надёжность и бренд не заменяют эту проверку; разнообразие брендов/типов/цен — только внутри равного fit, никогда как цель; одна карточка — только когда кандидат один или просили одну. Если подходящих больше, чем показано, назови их число и как сузить (один вопрос) — не обрезай молча. Кандидаты с неподтвержденным решающим атрибутом — после подтвержденных, как preliminary с оговоркой. Если selectedProductIds не пуст, selectionRationale обязателен: короткая покупательская причина выбора на основе подтвержденных фактов и typed selection policy; иначе selectionRationale=null.',
             'Модель отсутствует в каталоге, но есть проверенные внешние факты: ответ из трех частей по порядку — прямой ответ на техвопрос, затем что модели нет в каталоге, затем nearby каталога (payload.nearbyCatalogProducts, непустой список). Не «not found» при catalogPresence="absent" — «модели нет в каталоге». catalogPresence="present" без riskFlags "answer_policy_catalog_presence_relevant" — не хвастайся наличием в чисто техническом ответе. Nearby — тот же бренд+класс сначала, прочие того же класса как ориентир; nearby не доказательство об отсутствующей модели.',
             'Чисто технический вопрос — без наличия/доставки/скидок/звонков, если покупатель не спросил. Исключение (web_research_unavailable_grounding): решающий факт не подтвержден после исчерпания попыток — сохрани полезный предварительный вывод, назови точный пробел, предложи передать специалисту, спроси номер и способ (сообщение/звонок), leadAction="offer_form", без заявления «уже передал».',
             'Не придумывай практические диапазоны, требования или допустимые компромиссы из класса задачи. Используй только typed requirements, alternativePolicy, rankingObjectives, tool facts и подтвержденные карточки; изменение требования может предложить только покупатель.',
@@ -8834,13 +9003,15 @@ export class AgentManagerOrchestrator {
         evidence: `selectionReadiness:${input.answer.selectionReadiness?.status ?? 'missing'}`
       });
     }
-    // Right-size guard (deterministic, no semantics): a shortlist where every
-    // generator is more than double the calculated nominal need means the
-    // writer picked margin as the whole answer. Repairable: reselect with the
-    // minimal sufficient nominal first, bigger margin only as a priced alternative.
+    // This checks the planner's ranking policy, not electrical compatibility.
+    // Explicit price/weight priorities must not be overwritten by a size default.
+    const primaryRanking = structuredSelectionRankingObjectives(input.intent)[0];
+    const prioritizesMinimalNominal = !primaryRanking ||
+      (primaryRanking.attribute === 'nominal_power_kw' && primaryRanking.direction === 'minimize');
     if (
       answerAttemptsConcreteSelection &&
-      isGeneratorProductClass(canonicalProductClassFromIntent(input.intent))
+      isGeneratorProductClass(canonicalProductClassFromIntent(input.intent)) &&
+      prioritizesMinimalNominal
     ) {
       const requiredNominalKw = generatorLoadRequirementKw(input.toolResults);
       const productsById = new Map(input.products.map((product) => [product.id, product]));

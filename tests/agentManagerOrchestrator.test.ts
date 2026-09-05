@@ -1252,26 +1252,34 @@ describe('observation-driven catalog continuation', () => {
     expect(conversations.toolArtifacts).not.toEqual(expect.arrayContaining([expect.objectContaining({ toolName: 'lead.capture' })]));
   });
 
-  it('asks for model-specific missing evidence after discovering a candidate and uses that evidence in the answer', async () => {
+  it.each(['product_selection', 'technical_answer'] as const)('continues %s for model-specific missing evidence without inventing selection requirements', async (taskType) => {
     const conversations = new FakeConversations();
     const next: ToolRequest = { id: 'manual-after-catalog', tool: 'web.researchProductFacts',
       args: { productNames: ['Generator 5 kW'], productIntent: 'generator', canonicalProductIntent: 'generator', comparisonAttributes: ['oil_grade'] },
       required: true, rationale: 'The discovered model has no maintenance instructions in its catalog specs', coversRequirementIds: [] };
-    const assessObservations = vi.fn(async (input) => input.toolResults.some((item: ToolResult) => item.requestId === next.id)
-      ? ready : { ...ready, action: 'continue' as const, missingFacts: ['oil grade'], toolRequests: [next] });
+    const assessObservations = vi.fn(async (input) => {
+      expect(input.intent.selectionPolicy.requirements).toEqual([]);
+      expect(input.intent.grounding.taskType).toBe(taskType);
+      return input.toolResults.some((item: ToolResult) => item.requestId === next.id)
+        ? ready : { ...ready, action: 'continue' as const, missingFacts: ['oil grade'], toolRequests: [next] };
+    });
     const composeAnswer = vi.fn(async (input) => {
       const evidence = input.toolResults.find((item: ToolResult) => item.requestId === next.id);
       expect(evidence?.payload.answerGuidance.directAnswer).toBe('The manual specifies the oil grade.');
       return { answerText: 'Марка масла указана в инструкции к Generator 5 kW.', factsUsed: [], questionsAsked: [], toolResultIds: [next.id], leadAction: 'none' as const, riskFlags: [] };
     });
+    const intent = structuredGeneratorCatalogIntent();
+    intent.grounding = { ...intent.grounding!, taskType, responseMode: taskType === 'technical_answer' ? 'answer' : 'recommend', technicalAttributes: ['oil_grade'] };
+    if (taskType === 'technical_answer') intent.selectionPolicy!.maxCards = 0;
     const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never, new FakeLeads() as never,
-      model({ planTurn: async () => structuredGeneratorCatalogIntent(), assessObservations, composeAnswer }));
+      model({ planTurn: async () => intent, assessObservations, composeAnswer }));
     const executor = orchestrator as unknown as { executeTools: (input: any) => Promise<any> };
     const original = executor.executeTools.bind(orchestrator);
     vi.spyOn(executor, 'executeTools').mockImplementation(async (input) => {
       if (input.toolRequests[0]?.id !== next.id) return original(input);
       expect(input.priorProducts.map((item: Product) => item.name)).toContain('Generator 5 kW');
       expect(input.priorToolResults[0].tool).toBe('catalog.search');
+      expect(input.toolRequests[0].coversRequirementIds).toEqual([]);
       return { products: input.priorProducts, toolResults: [...input.priorToolResults, {
         requestId: next.id, tool: next.tool, status: 'ok', warnings: [],
         payload: { usedWebSearch: true, researchOutcome: 'answered', targetProductNames: ['Generator 5 kW'],

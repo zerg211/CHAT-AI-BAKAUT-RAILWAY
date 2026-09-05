@@ -130,6 +130,24 @@ function sourceCandidateUrl(value: unknown) {
   } catch { return ''; }
 }
 
+function boundedSourceCandidates(candidates: Array<{ url: string; title?: string }>) {
+  return [...new Map(candidates.map((candidate) => [candidate.url, candidate])).values()]
+    // Document leads must survive a failed read and subsequent tier merges.
+    // This is retention priority only, never publisher or factual authority.
+    .sort((left, right) => Number(sourceLooksLikePdf(right.url, '')) - Number(sourceLooksLikePdf(left.url, '')))
+    .slice(0, 12);
+}
+
+function exactScopedPriorResearch(input: { previousResearch?: ProductResearchPriorObservation[]; targetProductNames: string[] }) {
+  return (input.previousResearch ?? []).filter((observation) => {
+    const names = observation.payload.targetProductNames;
+    // A lead from an unknown or mixed model scope cannot be attributed here.
+    return Array.isArray(names) && names.length > 0 && names.every((name) =>
+      typeof name === 'string' && input.targetProductNames.some((target) =>
+        textMatchesTargetName(name, target) && textMatchesTargetName(target, name)));
+  }).slice(-2);
+}
+
 // Previous tool observations are search context, never newly verified evidence.
 // Project only the exact-target fields needed to choose a different source/read.
 function continuationResearchContext(input: {
@@ -157,11 +175,7 @@ function continuationResearchContext(input: {
       .map((key) => [key, text(input.researchGoal?.[key], 400)])
       .filter(([, value]) => Boolean(value))
   ) : undefined;
-  const relevant = (input.previousResearch ?? []).filter((observation) => {
-    const names = observation.payload.targetProductNames;
-    // Mixed/unknown target scopes cannot attribute a failed URL to this target.
-    return Array.isArray(names) && names.length > 0 && names.every(exactTarget);
-  }).slice(-2);
+  const relevant = exactScopedPriorResearch(input);
   const maxObservationChars = Math.floor((11_900 - JSON.stringify(researchGoal ?? {}).length) / Math.max(1, relevant.length));
   const remainingItems: Record<string, number> = { sourceCandidates: 6, sourceDiagnostics: 8, sourceAttempts: 3, facts: 12, coverage: 12, warnings: 6 };
   const previousResearch = relevant.map((observation, observationIndex) => {
@@ -706,7 +720,7 @@ function responseDiscoveredSourceCandidates(response: unknown) {
   }
   return [...new Map(candidates.filter((source) => sourceCandidateUrl(source.url))
     .map((source) => [sourceCandidateUrl(source.url), { url: sourceCandidateUrl(source.url),
-      ...(source.title ? { title: source.title.slice(0, 300) } : {}) }])).values()].slice(0, 12);
+      ...(source.title ? { title: source.title.slice(0, 300) } : {}) }])).values()];
 }
 
 const approvedManufacturerDomainsByBrand = new Map<string, readonly string[]>([
@@ -2549,8 +2563,7 @@ function mergeCatalogAndWebResearch(
 function mergeResearchDiagnostics(...results: ProductComparisonResearchResult[]) {
   const diagnostics = [...new Map(results.flatMap((result) => result.sourceDiagnostics ?? [])
     .map((diagnostic) => [JSON.stringify(diagnostic), diagnostic])).values()].slice(0, 32);
-  const candidates = [...new Map(results.flatMap((result) => result.sourceCandidates ?? [])
-    .map((candidate) => [candidate.url, candidate])).values()].slice(0, 12);
+  const candidates = boundedSourceCandidates(results.flatMap((result) => result.sourceCandidates ?? []));
   return { ...(diagnostics.length ? { sourceDiagnostics: diagnostics } : {}),
     ...(candidates.length ? { sourceCandidates: candidates } : {}) };
 }
@@ -3423,6 +3436,48 @@ export async function researchProductComparisonFacts(input: {
         ])
       };
     }
+    const scopedPriorResearch = exactScopedPriorResearch({ previousResearch: input.previousResearch,
+      targetProductNames: targetProductNames.length ? targetProductNames : exactCatalogProducts.map((product) => product.name) });
+    const priorFailedDocumentUrls = new Set(scopedPriorResearch.flatMap((observation) =>
+      Array.isArray(observation.payload.sourceDiagnostics) ? observation.payload.sourceDiagnostics.flatMap((item) =>
+        item && typeof item === 'object' && ['http_status', 'timeout', 'network', 'unsupported_binary', 'unreadable'].includes(String(item.reason))
+          && sourceCandidateUrl(item.url) ? [sourceCandidateUrl(item.url)] : []) : []));
+    const discoveredDocuments = new Map<string, { url: string; title?: string }>();
+    const orderedDocumentCandidates = () => [...discoveredDocuments.values()].sort((left, right) =>
+      Number(priorFailedDocumentUrls.has(left.url)) - Number(priorFailedDocumentUrls.has(right.url)));
+    const retainDocumentCandidates = (candidates: unknown) => {
+      if (!Array.isArray(candidates)) return;
+      for (const candidate of candidates) {
+        const url = sourceCandidateUrl(candidate?.url);
+        if (!url || !sourceLooksLikePdf(url, '')) continue;
+        discoveredDocuments.set(url, { url, ...(typeof candidate.title === 'string' ? { title: candidate.title.slice(0, 300) } : {}) });
+        // Filter documents before the cap: long product-page result lists must
+        // not displace an actually discovered PDF. Leads still are not facts.
+        const overflow = orderedDocumentCandidates().slice(sourceEvidenceMaxSources);
+        for (const item of overflow) discoveredDocuments.delete(item.url);
+      }
+    };
+    retainDocumentCandidates(input.knownSourceCandidates);
+    for (const observation of scopedPriorResearch) retainDocumentCandidates(observation.payload.sourceCandidates);
+    const documentReadUrls = () => {
+      const candidates = orderedDocumentCandidates();
+      const untried = candidates.filter((candidate) => !priorFailedDocumentUrls.has(candidate.url));
+      return (untried.length ? untried : candidates).slice(0, 2).map((candidate) => candidate.url);
+    };
+    let finishPageDiscovery!: () => void;
+    const pageDiscovery = new Promise<void>((resolve) => { finishPageDiscovery = resolve; });
+    const waitForPageDiscovery = async (deadlineAtMs?: number, signal?: AbortSignal) => {
+      if (signal?.aborted) return;
+      const remainingMs = webResearchRemainingMs(deadlineAtMs) - WEB_RESEARCH_MIN_STAGE_MS;
+      if (remainingMs <= 0) return;
+      await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = () => { if (timer) clearTimeout(timer); signal?.removeEventListener('abort', finish); resolve(); };
+        signal?.addEventListener('abort', finish, { once: true });
+        if (Number.isFinite(remainingMs)) timer = setTimeout(finish, remainingMs);
+        void pageDiscovery.then(finish);
+      });
+    };
     const tierInstruction = (tier: StagedWebTier) => {
       if (tier === 'official_page') {
         return 'Execute only an exact-model official manufacturer product-page lookup. Ignore manuals and third-party sources in this attempt.';
@@ -3473,6 +3528,7 @@ export async function researchProductComparisonFacts(input: {
       const startedAt = Date.now();
       let sourceCandidates: ProductComparisonResearchResult['sourceCandidates'] = [];
       if (webResearchRemainingMs(inputTier.deadlineAtMs) < WEB_RESEARCH_MIN_STAGE_MS) {
+        if (inputTier.tier === 'official_page') finishPageDiscovery();
         await emitResearchTrace(input.onTrace, {
           stage: inputTier.stage, tiers: [inputTier.tier], attemptNumber: inputTier.attemptNumber,
           elapsedMs: 0, remainingBudgetMs: input.deadlineAtMs === undefined ? null : webResearchRemainingMs(input.deadlineAtMs),
@@ -3491,7 +3547,11 @@ export async function researchProductComparisonFacts(input: {
           transportMaxRetries: 0
         });
         const usedWebSearch = responseUsedWebSearch(tierResponse.response);
-        sourceCandidates = responseDiscoveredSourceCandidates(tierResponse.response);
+        const discoveredSources = responseDiscoveredSourceCandidates(tierResponse.response);
+        retainDocumentCandidates(discoveredSources);
+        sourceCandidates = boundedSourceCandidates(discoveredSources);
+        // Release the other tier before any source fetching/validation here.
+        if (inputTier.tier === 'official_page') finishPageDiscovery();
         const normalizedResult = normalizeResearchParsed(tierResponse.parsed, {
           usedWebSearch,
           searchDisposition: usedWebSearch ? 'completed' : 'failed',
@@ -3502,15 +3562,20 @@ export async function researchProductComparisonFacts(input: {
           tierResponse.response,
           exactCatalogProducts
         ).filter((attempt) => attempt.tier === inputTier.tier);
-        const documentUrls = inputTier.tier === 'official_manual'
-          ? uniqueStrings(sourceCandidates.map((source) => source.url)
-            .filter((url) => sourceLooksLikePdf(url, ''))).slice(0, 2)
-          : [];
         let candidateResult = normalizedResult;
         // Discovery snippets are not document contents. Read actual discovered
         // PDFs when the first pass lacks a requested fact, then use the same
         // exact-quote, model-scope and publisher validation as every other fact.
         if (inputTier.tier === 'official_manual' && !requestedSlotsCovered(candidateResult)) {
+          if (!orderedDocumentCandidates().some((candidate) => !priorFailedDocumentUrls.has(candidate.url))) {
+            // Only await the already running discovery, not its fact validation.
+            // A known untried PDF can be read immediately with the same reader.
+            await waitForPageDiscovery(inputTier.deadlineAtMs, inputTier.signal);
+          }
+          const documentUrls = documentReadUrls();
+          sourceCandidates = boundedSourceCandidates([
+            ...documentUrls.map((url) => discoveredDocuments.get(url)!), ...sourceCandidates
+          ]);
           const readStartedAt = Date.now();
           if (documentUrls.length && webResearchRemainingMs(inputTier.deadlineAtMs) >= WEB_RESEARCH_MIN_STAGE_MS) {
             const fetched = await Promise.all(documentUrls.map(async (sourceUrl) => ({
@@ -3687,6 +3752,8 @@ export async function researchProductComparisonFacts(input: {
           acceptedFactCount: 0
         });
         return partial;
+      } finally {
+        if (inputTier.tier === 'official_page') finishPageDiscovery();
       }
     };
 

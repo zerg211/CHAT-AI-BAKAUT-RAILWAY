@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
-import { fetch as undiciFetch } from 'undici';
+import { Agent, fetch as undiciFetch } from 'undici';
 import {
   createPinnedOutboundAgent,
   OutboundResponseTooLargeError,
@@ -163,5 +163,39 @@ describe('safe outbound HTTP', () => {
     resolveDns([{ address: '93.184.216.34', family: 4 }]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each(['timeout', 'network failure'] as const)('returns a %s without waiting for a pending connection to drain', async (failure) => {
+    let releaseDrain!: () => void;
+    const pendingDrain = new Promise<void>((resolve) => { releaseDrain = resolve; });
+    // An aborted connect can still be queued inside Undici. Graceful close waits
+    // for that queue even though fetch has already rejected.
+    const close = vi.spyOn(Agent.prototype, 'close').mockImplementation(() => pendingDrain);
+    const networkError = new Error('connection failed');
+    const fetcher = vi.fn(async (_url, options) => {
+      if (failure === 'network failure') throw networkError;
+      return new Promise<never>((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      });
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const request = safeFetchBytes('https://slow-connect.example/file', {
+      maxBytes: 1024,
+      timeoutMs: 20,
+      resolver: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]) as never,
+      fetcher: fetcher as never
+    }).then(() => 'unexpected success', (error: unknown) => error);
+    try {
+      const result = await Promise.race([request, new Promise<string>((resolve) => {
+        timer = setTimeout(() => resolve('still waiting for graceful drain'), 400);
+      })]);
+      if (failure === 'timeout') expect(result).toMatchObject({ name: 'TimeoutError' });
+      else expect(result).toBe(networkError);
+    } finally {
+      if (timer) clearTimeout(timer);
+      releaseDrain();
+      await request;
+      close.mockRestore();
+    }
   });
 });

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Product } from '../src/shared/types.js';
 import type { ProductComparisonResearchResult, ProductResearchTraceEvent } from '../src/ai/productComparisonResearch.js';
+import { validateToolResultOutput } from '../src/ai/agentManagerToolRegistry.js';
 
 const structured = vi.hoisted(() => vi.fn());
 const fetchSource = vi.hoisted(() => vi.fn());
@@ -76,6 +77,142 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('production web research regressions', () => {
+  it.each(['same page', 'separate manual tier'] as const)('persists a discovered PDF among bounded candidates after a reader timeout: %s', async (origin) => {
+    const url = `${sharedUrl}?edition=2026&lang=en`;
+    parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'product_research_document_read') throw Object.assign(new Error('deadline'), { code: 'structured_json_deadline_exceeded' });
+      const tier = call.stage.slice('product_comparison_research_'.length);
+      const response = webResponse(tier);
+      if (tier === 'official_page') response.response.output[0]!.action.sources = [
+        ...Array.from({ length: 13 }, (_, index) => ({ url: `https://www.firman.biz/catalog/${index}`, title: 'Product page' })),
+        ...(origin === 'same page' ? [{ url, title: 'Shared manual' }] : [])
+      ];
+      if (tier === 'official_manual' && origin === 'separate manual tier') response.response.output[0]!.action.sources = [{ url, title: 'Shared manual' }];
+      return response;
+    });
+    const actual = await research();
+    expect(fetchSource.mock.calls.map(([value]) => value)).toContain(url);
+    expect(actual.sourceCandidates).toHaveLength(12);
+    expect(actual.sourceCandidates).toContainEqual(expect.objectContaining({ url }));
+    expect(actual.sourceCandidates?.some((candidate) => candidate.url.includes('/catalog/'))).toBe(true);
+    expect(actual.facts).toEqual([]);
+    expect(actual.warnings).toContain('document_read_timed_out');
+    expect(actual.sourcesExhausted).toBe(false);
+    expect(validateToolResultOutput({ requestId: 'web', tool: 'web.researchProductFacts', status: 'ok',
+      payload: actual as unknown as Record<string, unknown>, warnings: actual.warnings }).payload.sourceCandidates)
+      .toContainEqual(expect.objectContaining({ url }));
+  });
+
+  it.each(['scoped prior', 'known source', 'parallel page'] as const)('reads the actual PDF lead from %s when the manual response has no document', async (origin) => {
+    const originalUrl = 'https://www.firman.biz/manuals/93ae398.pdf?edition=2026&lang=en';
+    const mistypedUrl = 'https://www.firman.biz/manuals/93a398.pdf?edition=2026&lang=en';
+    parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote} ${publisherQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call);
+      if (call.stage === 'product_research_document_read') {
+        const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+        expect(payload.documents).toEqual([expect.objectContaining({ sourceUrl: originalUrl })]);
+        expect(call.request.tools).toBeUndefined();
+        return webResponse('official_manual', { evidence: generalQuote, sourceUrl: originalUrl });
+      }
+      const tier = call.stage.slice('product_comparison_research_'.length);
+      const response = webResponse(tier);
+      if (tier === 'official_page' && origin === 'parallel page') {
+        // Finish manual discovery first: sharing only a currently filled array
+        // would still miss the page's actual document lead.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        response.response.output[0]!.action.sources = [
+          ...Array.from({ length: 13 }, (_, index) => ({ url: `https://www.firman.biz/catalog/${index}`, title: 'Product page' })),
+          { url: originalUrl, title: 'Shared manual' }
+        ];
+      }
+      if (tier === 'official_manual') {
+        response.parsed.sourceAttempts = [{ tier, outcome: 'unreadable', query: `${target} ${tier} ${attribute}`,
+          sources: [{ url: mistypedUrl }] }] as any;
+      }
+      return response;
+    });
+    const actual = await research({
+      ...(origin === 'known source' ? { knownSourceCandidates: [{ url: originalUrl }] } : {}),
+      ...(origin === 'scoped prior' ? { previousResearch: [{ requestId: 'prior', status: 'ok', warnings: [],
+        payload: { targetProductNames: [target], sourceCandidates: [
+          ...Array.from({ length: 13 }, (_, index) => ({ url: `https://www.firman.biz/catalog/${index}` })),
+          { url: originalUrl }
+        ] } }] } : {})
+    });
+    expect(fetchSource.mock.calls.map(([url]) => url)).toContain(originalUrl);
+    expect(fetchSource.mock.calls.map(([url]) => url)).not.toContain(mistypedUrl);
+    expect(actual.facts).toContainEqual(expect.objectContaining({ sourceUrl: originalUrl, value: '20 hours',
+      sourceTier: 'official_manual', evidenceVerifiedExact: true, targetApplicability: 'shared_instruction' }));
+    expect(structured.mock.calls.filter(([call]) => call.stage === 'product_research_document_read')).toHaveLength(1);
+    expect(structured.mock.calls.filter(([call]) => call.stage.startsWith('product_comparison_research_'))).toHaveLength(2);
+    expect(actual.sourcesExhausted).toBe(false);
+  });
+
+  it.each(['other target', 'mixed targets', 'unknown scope'] as const)('does not read saved document leads from %s', async (scope) => {
+    structured.mockImplementation(async (call) => webResponse(call.stage.slice('product_comparison_research_'.length)));
+    const actual = await research({ previousResearch: [{ requestId: 'unrelated', status: 'ok', warnings: [], payload: {
+      ...(scope === 'unknown scope' ? {} : { targetProductNames: scope === 'mixed targets' ? [target, 'FIRMAN RD4910E'] : ['FIRMAN RD4910E'] }),
+      sourceCandidates: [{ url: sharedUrl }], facts: [{ productName: target, attribute, value: '20 hours' }]
+    } }] });
+    expect(fetchSource).not.toHaveBeenCalled();
+    expect(actual.facts).toEqual([]);
+    expect(structured.mock.calls.some(([call]) => call.stage === 'product_research_document_read')).toBe(false);
+  });
+
+  it('prefers an accessible saved PDF over a rediscovered prior timeout without copying the old fact', async () => {
+    const failedUrl = 'https://www.firman.biz/manuals/old.pdf';
+    const mirrorUrl = 'https://www.firman.biz/manuals/accessible.pdf?edition=2026';
+    parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote} ${publisherQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call);
+      if (call.stage === 'product_research_document_read') return webResponse('official_manual', { evidence: generalQuote, sourceUrl: mirrorUrl });
+      const tier = call.stage.slice('product_comparison_research_'.length);
+      const response = webResponse(tier);
+      if (tier === 'official_manual') response.response.output[0]!.action.sources = [{ url: failedUrl, title: 'Manual' }];
+      return response;
+    });
+    const actual = await research({ previousResearch: [{ requestId: 'prior', status: 'ok', warnings: [], payload: {
+      targetProductNames: [target], sourceCandidates: [{ url: failedUrl }, { url: mirrorUrl }],
+      sourceDiagnostics: [{ url: failedUrl, reason: 'timeout', elapsedMs: 4000 }],
+      facts: [{ productName: target, attribute, value: '999 hours', sourceUrl: mirrorUrl }]
+    } }] });
+    expect(fetchSource.mock.calls.map(([url]) => url)).toEqual([mirrorUrl]);
+    expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', sourceUrl: mirrorUrl, evidenceVerifiedExact: true }));
+    expect(actual.facts.some((fact) => fact.value === '999 hours')).toBe(false);
+  });
+
+  it('reads a known document without waiting for the parallel page discovery', async () => {
+    let releasePage!: () => void;
+    const pageGate = new Promise<void>((resolve) => { releasePage = resolve; });
+    parsePdf.mockResolvedValue({ text: `${scopeQuote} ${generalQuote} ${publisherQuote}`, totalPages: 4, parsedPages: 4, truncated: false });
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'source_evidence_semantic_validation') return semanticResponse(call);
+      if (call.stage === 'product_research_document_read') {
+        releasePage();
+        return webResponse('official_manual', { evidence: generalQuote });
+      }
+      if (call.stage === 'product_comparison_research_official_page') await pageGate;
+      return webResponse(call.stage.slice('product_comparison_research_'.length));
+    });
+    const actual = await research({ knownSourceCandidates: [{ url: sharedUrl }] });
+    expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', evidenceVerifiedExact: true }));
+    expect(structured.mock.calls.filter(([call]) => call.stage === 'product_research_document_read')).toHaveLength(1);
+  });
+
+  it('finishes the manual wait when the parallel page discovery fails', async () => {
+    structured.mockImplementation(async (call) => {
+      if (call.stage === 'product_comparison_research_official_page') throw new Error('discovery unavailable');
+      return webResponse(call.stage.slice('product_comparison_research_'.length));
+    });
+    const actual = await research();
+    expect(actual.facts).toEqual([]);
+    expect(actual.warnings).toContain('source_tier_failed:official_page');
+    expect(structured.mock.calls.filter(([call]) => call.stage.startsWith('product_comparison_research_'))).toHaveLength(3);
+    expect(fetchSource).not.toHaveBeenCalled();
+  });
+
   it.each(['https://www.firman.biz/download?id=RD3910E-manual',
     `https://www.firman.biz/${'a'.repeat(650)}/manual.pdf`])('preserves the actual source lead address in both continuation and memory: %s', async (url) => {
     structured.mockImplementation(async (call) => webResponse(call.stage.slice('product_comparison_research_'.length)));

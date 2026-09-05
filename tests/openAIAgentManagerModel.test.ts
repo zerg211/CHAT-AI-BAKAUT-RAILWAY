@@ -8,6 +8,7 @@ vi.mock('../src/ai/openaiStructured.js', () => ({
 
 import { OpenAIAgentManagerModel, type AgentManagerAnswerInput } from '../src/ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudget } from '../src/ai/agentManagerTurnBudget.js';
+import { continuationValidationIssues } from '../src/ai/agentManagerContinuation.js';
 import { getActiveDialogueNeed, reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { emptyNeedState } from '../src/ai/needState.js';
 import { AgentIntentContractSchema, normalizeLedgerStateDeltaEvents, type AgentIntentContract, type DialogueLedgerEvent, type LedgerStateDelta } from '../src/ai/agentManagerContracts.js';
@@ -16,6 +17,42 @@ import type { ConversationSession, Message, VerifiedProductFact } from '../src/s
 describe('OpenAIAgentManagerModel semantic inputs', () => {
   beforeEach(() => {
     createStructuredJsonResponse.mockReset();
+  });
+
+  it.each([{ requirementIds: [] as string[] }, { requirementIds: ['req-noise'] }])('binds observation requirement references to the current IDs $requirementIds while allowing technical research', async ({ requirementIds }) => {
+    const product = { id: 'exact-tss', name: 'ТСС SGG 5000N', specs: {} };
+    const intent = AgentIntentContractSchema.parse({ userMessageSummary: 'First startup questions',
+      dialogueUnderstanding: 'Read the exact model instructions', nextStepRationale: 'Resolve missing facts',
+      requiresTools: true, toolRequests: [{ id: 'initial-details', tool: 'catalog.getProductDetails',
+        args: { productIds: [product.id], canonicalProductIntent: 'generator' }, required: true, rationale: 'Get catalog facts', coversRequirementIds: [] }],
+      selectionPolicy: { targetProductClass: 'generator', canonicalProductClass: 'generator', needAction: 'continue', alternativePolicy: 'same_class_only',
+        reusePreviousCards: false, maxCards: 0, powerSource: 'any', phase: null, rationale: 'Technical consultation',
+        requirements: requirementIds.map((id) => ({ id, kind: 'noise_db_max', value: 70, unit: 'dB', role: 'hard_constraint',
+          strictness: 'strict', relation: 'must_have', evidence: 'up to 70 dB', verification: { mode: 'product_attribute' } })) },
+      grounding: { taskType: 'technical_answer', responseMode: 'answer', sourcePolicy: 'conversation_only', webPurpose: 'none',
+        requiredToolKinds: [], technicalAttributes: ['battery_required', 'engine_oil_type', 'first_start_procedure'], rationale: 'Exact model guidance' }
+    });
+    const decision = { action: 'continue', rationale: 'The instruction still has unresolved startup facts.',
+      missingFacts: ['battery_required', 'first_start_procedure'], candidateProductIds: [product.id],
+      toolRequests: [{ id: 'manual-next', tool: 'web.researchProductFacts', required: true, rationale: 'Read the exact manual',
+        coversRequirementIds: requirementIds, args: { query: 'Exact model first startup', productNames: [product.name],
+          canonicalProductIntent: 'generator', comparisonAttributes: ['battery_required', 'first_start_procedure'] } }] };
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: decision });
+    const input = { session: { needState: emptyNeedState() }, userMessage: 'How to start it safely?', history: [],
+      ledgerEvents: [], ledgerState: reduceDialogueLedger([]), intent, products: [product], toolResults: [],
+      round: 1, remainingBudget: new AgentManagerTurnBudget().snapshot() };
+    const result = await new OpenAIAgentManagerModel().assessObservations(input as never);
+    const request = createStructuredJsonResponse.mock.calls[0]![0].request;
+    for (const variant of request.text.format.schema.properties.toolRequests.items.anyOf) {
+      const coverage = variant.properties.coversRequirementIds;
+      if (requirementIds.length) expect(coverage.items.enum).toEqual(requirementIds);
+      else expect(coverage.maxItems).toBe(0);
+    }
+    const data = JSON.parse(request.input.find((item: { role: string }) => item.role === 'user').content);
+    expect(data.allowedRequirementIds).toEqual(requirementIds);
+    expect(data.intent.grounding.technicalAttributes).toEqual(intent.grounding!.technicalAttributes);
+    expect(continuationValidationIssues({ decision: result, intent, products: [product] })).toEqual([]);
+    expect(result).toMatchObject({ action: 'continue', toolRequests: [{ tool: 'web.researchProductFacts', coversRequirementIds: requirementIds }] });
   });
 
   it('semantically classifies paraphrased internal research-process disclosure', async () => {
