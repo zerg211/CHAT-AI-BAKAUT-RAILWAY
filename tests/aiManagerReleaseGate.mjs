@@ -115,6 +115,18 @@ try {
 
 const gates = [
   {
+    label: 'offline acceptance-oracle and transport regression checks (not real-agent evals)',
+    command: process.execPath,
+    args: ['evals/acceptance/offline.cjs'],
+    timeout: 3 * 60_000
+  },
+  {
+    label: 'acceptance-oracle seeded mutation checks',
+    command: process.execPath,
+    args: ['evals/acceptance/mutations.cjs'],
+    timeout: 3 * 60_000
+  },
+  {
     label: `no new regex constructs relative to ${baselineRef}`,
     command: process.execPath,
     args: ['scripts/no-regex-guard.mjs'],
@@ -138,12 +150,6 @@ const gates = [
     command: npmCommand,
     args: ['test', '--', '--fileParallelism=false'],
     timeout: 20 * 60_000
-  },
-  {
-    label: 'agentic eval suite',
-    command: npmCommand,
-    args: ['run', 'test:eval:agentic'],
-    timeout: 8 * 60_000
   },
   {
     label: 'production build',
@@ -179,4 +185,4 @@ if (failed.length) {
   console.error(`[release-gate] BLOCKED: ${failed.length} gate(s) failed.`);
   process.exit(1);
 }
-console.log('[release-gate] PASS: all local release checks succeeded.');
+console.log('[code-and-oracle-gate] PASS: local code/oracle checks only. REAL_AGENT_ACCEPTANCE=NOT_RUN. This is NOT permission to deploy.');

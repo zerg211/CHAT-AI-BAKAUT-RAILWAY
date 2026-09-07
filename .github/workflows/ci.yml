@@ -1,4 +1,4 @@
-name: AI Manager Release Gate
+name: Code and Oracle Checks
 
 on:
   pull_request:
@@ -16,9 +16,21 @@ concurrency:
 
 jobs:
   release-gate:
-    name: Typecheck, tests, build, regex and audit
+    name: Offline code and oracle checks - not agent acceptance
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: acceptance
+          POSTGRES_PASSWORD: acceptance-local-only
+          POSTGRES_DB: bakaut_acceptance_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U acceptance -d bakaut_acceptance_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       AI_MANAGER_REGEX_BASELINE_REF: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
     steps:
@@ -41,3 +53,28 @@ jobs:
 
       - name: Run AI manager release gate
         run: node tests/aiManagerReleaseGate.mjs
+
+      - name: Verify migrations and durable knowledge on real isolated PostgreSQL
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://acceptance:acceptance-local-only@127.0.0.1:5432/bakaut_acceptance_ci
+          NODE_OPTIONS: --require ./evals/acceptance/network-guard.cjs
+        run: |
+          npm run migrate
+          node --import tsx tests/knowledgeDatabase.integration.mjs
+
+      - name: Verify real backend contracts without model calls
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://acceptance:acceptance-local-only@127.0.0.1:5432/bakaut_acceptance_ci
+          BAKAUT_EVAL_ISOLATED_DB: YES
+          OPENAI_API_KEY: offline-no-provider-access
+          BAKAUT_EVAL_AGENT_MODEL: gpt-5.6-luna
+          NODE_OPTIONS: --require ./evals/acceptance/network-guard.cjs
+        run: |
+          mkdir -p .private
+          npm run test:acceptance:host > .private/acceptance-host.log 2>&1 &
+          HOST_PID=$!
+          trap 'kill "$HOST_PID" 2>/dev/null || true' EXIT
+          node --input-type=module -e 'import fs from "node:fs"; for(let i=0;i<30&&!fs.existsSync(".private/acceptance-target.json");i++)await new Promise(r=>setTimeout(r,1000)); if(!fs.existsSync(".private/acceptance-target.json"))process.exit(1);'
+          npm run test:acceptance:backend

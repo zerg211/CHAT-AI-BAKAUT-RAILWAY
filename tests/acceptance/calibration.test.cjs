@@ -1,0 +1,15 @@
+'use strict';
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const {examples,assess}=require('../../evals/acceptance/calibration.cjs');
+const {hash}=require('../../evals/acceptance/engine.cjs');const {Judge}=require('../../evals/acceptance/judge.cjs');
+const examplesData=examples();
+function verdicts(fn){return examplesData.map(c=>({inputHash:hash({scenario:c.scenario,world:c.world,turns:c.run.turns}),checks:c.scenario.steps[0].criteria.map(x=>({id:x.id,verdict:fn(c),reason:'Synthetic calibration result.',quotes:[],sourceIds:[]}))}));}
+test('calibration accepts both correct positives and negatives',()=>assert.equal(assess(examplesData,verdicts(c=>c.expected?'pass':'fail')).pass,true));
+test('always-reject evaluator is detected, not rewarded',()=>{const r=assess(examplesData,verdicts(()=> 'fail'));assert.equal(r.pass,false);assert.equal(r.checks.filter(c=>!c.ok).length,8);});
+test('always-accept evaluator is detected',()=>{const r=assess(examplesData,verdicts(()=> 'pass'));assert.equal(r.pass,false);assert.equal(r.checks.filter(c=>!c.ok).length,8);});
+test('all-unknown is not valid rejection',()=>assert.equal(assess(examplesData,verdicts(()=> 'unknown')).pass,false));
+test('missing judge result is not a correct rejection',()=>assert.equal(assess(examplesData,[]).pass,false));
+for(const [i,c]of examplesData.entries())test(`sensitivity: flipping known label ${c.scenario.id} is detected`,()=>{const v=verdicts(c=>c.expected?'pass':'fail');v[i].checks[0].verdict=c.expected?'fail':'pass';assert.equal(assess(examplesData,v).pass,false);});
+test('judge input is structured and response scope is validated',async()=>{let calls=0;const j=new Judge({apiKey:'fake',model:'fixture-model',maxCalls:1,fetchImpl:async(url,opts)=>{calls++;assert.equal(url,'https://api.openai.com/v1/responses');const body=JSON.parse(opts.body);assert.equal(body.store,false);assert.equal(body.text.format.strict,true);return {ok:true,json:async()=>({status:'completed',id:'mock',model:'fixture-model',usage:{input_tokens:1,output_tokens:1},output_text:JSON.stringify({items:examplesData.map(c=>({caseId:c.scenario.id,checks:[{id:c.scenario.steps[0].criteria[0].id,verdict:c.expected?'pass':'fail',reason:'Fixture judgement',quotes:[],sourceIds:[]}]}))})})};}});const v=await j.gradeMany(examplesData);assert.equal(assess(examplesData,v).pass,true);assert.equal(calls,1);await assert.rejects(()=>j.gradeMany(examplesData),{code:'JUDGE_CALL_BUDGET'});assert.equal(calls,1);});
+for(const status of ['incomplete','failed','cancelled'])test(`judge ${status} not green`,async()=>{const j=new Judge({apiKey:'fake',model:'fixture-model',maxCalls:1,fetchImpl:async()=>({ok:true,json:async()=>({status})})});await assert.rejects(()=>j.gradeMany(examplesData),{code:'JUDGE_NOT_COMPLETED'});});
+test('oversized judge evidence is not silently truncated',async()=>{const j=new Judge({apiKey:'fake',model:'fixture-model',maxCalls:1,maxInputChars:1,fetchImpl:async()=>{throw new Error('must not call');}});await assert.rejects(()=>j.gradeMany(examplesData),{code:'JUDGE_INPUT_TOO_LARGE'});assert.equal(j.calls,0);});
