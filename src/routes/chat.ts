@@ -389,8 +389,6 @@ export async function registerChatRoutes(
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
-      const budgetStopped = error instanceof AgentManagerTurnBudgetExceededError;
-      const recoveryUnavailable = error instanceof RecoveryAttemptUnavailableError;
       if (!executionInProgress) {
         await conversations.updateTurn({
           sessionId: params.id,
@@ -416,11 +414,7 @@ export async function registerChatRoutes(
         recoverable: false,
         error: executionInProgress
           ? 'Этот ответ уже формируется в другом запросе. Дождитесь завершения — повторно выполнять ход не нужно.'
-          : budgetStopped
-            ? 'Не удалось завершить ответ в безопасных лимитах этого хода. Запрос сохранён; попробуйте уточнить его короче.'
-            : recoveryUnavailable
-              ? 'Для этого хода уже использована единственная попытка восстановления. Новый запуск этого же хода не выполняется.'
-              : 'Не удалось завершить восстановление этого хода. Запрос сохранён, но повторный запуск этого же хода не выполняется.'
+          : 'Не удалось завершить ответ. Ваш вопрос сохранён в истории чата.'
       });
     } finally {
       stopStatusTimer?.();

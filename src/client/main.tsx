@@ -1289,7 +1289,7 @@ function App() {
             {
               id: id(),
               role: 'assistant',
-              content: 'Не удалось завершить ответ на сохранённый вопрос. Можно отправить его ещё раз.',
+              content: 'Не удалось завершить ответ. Ваш вопрос сохранён в истории чата.',
               createdAt: nowIso(),
               status: 'error'
             }
@@ -1643,9 +1643,7 @@ function App() {
             releaseRecovery();
           }
         }
-        const safeMessage = submitError instanceof Error && /Не смог надежно завершить ответ|не смог надежно сформировать ответ|не удалось получить ответ/i.test(submitError.message)
-          ? submitError.message
-          : 'Сейчас не удалось надежно отправить или завершить вопрос. Проверьте соединение и попробуйте ещё раз.';
+        const safeMessage = 'Не удалось завершить ответ. Текст вашего вопроса остался в чате.';
           setMessages((current) => current.map((message) => (
           message.id === assistantId
             ? {

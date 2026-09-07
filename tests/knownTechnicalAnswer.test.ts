@@ -12,8 +12,8 @@ function fixture() {
   };
 }
 describe('known technical evidence path', () => {
-  it('accepts actual planner field IDs while keeping transport mass separate',()=>{
-    const f=fixture();f.intent.grounding!.technicalAttributes=['weight_kg'];
+  it.each(['weight_kg','working_weight_kg','working_mass_kg'])('accepts planner field %s while keeping transport mass separate',(attribute)=>{
+    const f=fixture();f.intent.grounding!.technicalAttributes=[attribute];
     f.products[0].specs={'рабочая масса, кг':'91'};
     expect(knownTechnicalAnswerReady(f)).toBe(true);
     f.intent.grounding!.technicalAttributes=['transport_weight_kg'];

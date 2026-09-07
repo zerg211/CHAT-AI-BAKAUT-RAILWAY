@@ -165,6 +165,7 @@ import { compactSemanticDecisionFormat, expandCompactSemanticDecision } from './
 import { reviewClaimReferences, expandReviewFindings } from './reviewClaimReferences.js';
 import { AI_MANAGER_RUNTIME_VERSION } from './aiManagerRuntimeManifest.js';
 import { readCurrentSitePrice, sitePriceErrorCode } from '../catalog/currentSitePrice.js';
+import { verifyBudgetPrices } from '../catalog/verifyBudgetPrices.js';
 import {
   authoritativeRequirementProofStatus,
   buildRequirementProofs,
@@ -1098,7 +1099,10 @@ function semanticAuthorityIssues(input: {
       ) {
         issues.push(`web_research_product_class_not_authorized:${request.id}:${requestClassKey}`);
       }
-      if (names.length && !webResearchTargetsCurrentIntent(names, intent)) {
+      // Match execution's typed-role suppression before checking every actual target.
+      // Context devices are not research targets even if accidentally listed in args.
+      const executableTargetNames = names.filter(name => productNameAllowedAsExactTarget({ intent, productName: name }));
+      if (executableTargetNames.length && !webResearchTargetsCurrentIntent(executableTargetNames, intent)) {
         issues.push(`web_research_target_not_authorized_by_product_mentions:${request.id}`);
       }
       if (
@@ -3923,17 +3927,14 @@ function factSourceIdsFromNonFactBearingTools(input: {
   ));
 }
 
-function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentIntentContract) {
+export function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentIntentContract) {
   if (!targetNames.length) return true;
   const taskType = intent.grounding?.taskType;
   const currentTargetNames = uniqueStrings((intent.productMentions ?? [])
-    .filter((mention) =>
-      mention.role === 'target_product' ||
-      mention.role === 'catalog_candidate' ||
-      (taskType === 'comparison' && mention.role === 'comparison_subject')
-    )
+    .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
     .map((mention) => mention.name));
   if (!currentTargetNames.length) {
+    if (intent.productMentions?.length) return false;
     const hasExplicitCatalogPlan = intent.toolRequests.some((request) =>
       request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails'
     );
@@ -3944,7 +3945,7 @@ function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentInt
         .filter((request) => request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails')
         .map((request) => toolRequestEvidenceText(request))
     ].filter(Boolean);
-    return targetNames.some((targetName) => currentIntentEvidence.some((evidence) => {
+    return targetNames.every((targetName) => currentIntentEvidence.some((evidence) => {
       if (productMentionMatchesName(evidence, targetName)) return true;
       const evidenceTokens = new Set(modelTextTokens(evidence));
       return modelTextTokens(targetName).some((token) =>
@@ -3952,7 +3953,7 @@ function webResearchTargetsCurrentIntent(targetNames: string[], intent: AgentInt
       );
     }));
   }
-  return targetNames.some((targetName) => currentTargetNames.some((currentTargetName) =>
+  return targetNames.every((targetName) => currentTargetNames.some((currentTargetName) =>
     productNameContainsExactComparisonMention(targetName, currentTargetName) ||
     productNameContainsExactComparisonMention(currentTargetName, targetName)
   ));
@@ -5128,6 +5129,7 @@ function ledgerReducerPolicyPromptBlock(memoryReferencesAvailable = false) {
     'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass, confidence от 0 до 1 и role: hard_requirement, preference, context или commercial. fact.observed означает неподтверждённое наблюдение и не получает confidence=1; fact.confirmed используй только для явно подтверждённой покупателем или проверенной источником информации. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
     'Явные предпочтения покупателя сохраняй как scoped fact.confirmed с role=preference, relation=preferred и теми же kind/value/unit, что в preference requirement. Числовое предпочтение сохраняй отдельно в payload.ranking={attribute,direction}, точно как в связанном rankingObjectives; value не заменяй этим объектом. Для нечислового предпочтения ranking=null. В следующий подбор этой потребности переноси тот же requirement и сохранённые attribute/direction, пока покупатель не изменит или не отменит предпочтение через ledgerDelta. Если у старого факта ranking отсутствует, восстанови его смысл из evidence/контекста и сохрани ranking или null: при наличии factRef используй memoryActions update, иначе новый fact.confirmed; не угадывай по одному kind. Лимит нагрузки/бюджета и предпочтение минимального избытка/цены — разные требования; rankingObjectives связывай с отдельным preference requirement, не с hard constraint. При технической консультации по известной модели без нового подбора не нужно повторять предпочтения сортировки в selectionPolicy.',
     'Область каждого факта задавай явно: scope=need и needId для требования этой покупки; scope=dialogue и needId=null только если оно действительно относится ко всем покупкам в диалоге; scope=product и productId для характеристики конкретной модели. Характеристика товара не становится hard_requirement покупателя. Сохраняй unit и relation, согласованные с requirement; неизвестную единицу не выдумывай.',
+    'Различай отсутствие обязательности и обязательное отсутствие свойства. Когда покупатель разрешает варианты как со свойством, так и без него, это снятие ограничения, а не must_not_have и не hard_requirement со значением false. Отмени прежнее обязательное требование через memoryActions retract, если оно существовало; нейтральное разрешение сохрани как context. Не создавай для него selectionPolicy.requirement. Только явный запрет свойства является must_not_have; предпочтение без запрета является preference. Применяй это смысловое различие к любому свойству, а не к отдельным словам.',
     'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, electric_start_required, auto_start_required, remote_start_required, material или quantity. electric_start_required означает наличие электростартера; auto_start_required означает именно автоматический запуск/АВР; remote_start_required означает запуск по команде с брелока или пульта и не равен АВР или просто электростартеру. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
     'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
     memoryReferencesAvailable
@@ -7876,7 +7878,10 @@ export class AgentManagerOrchestrator {
 
     for (const [requestIndex, request] of input.toolRequests.entries()) {
       const baseDefinition = agentManagerToolRegistry[request.tool];
-      const definition = request.tool === 'catalog.getProductDetails' && request.args.verifyCurrentPrice === true
+      const verifyBudget = budgetMax !== undefined && (request.tool === 'catalog.search' || request.tool === 'catalog.getProductDetails') &&
+        typeof this.products.updateVerifiedSitePrice === 'function';
+      const definition = verifyBudget ? { ...baseDefinition, timeoutMs: 30_000 }
+        : request.tool === 'catalog.getProductDetails' && request.args.verifyCurrentPrice === true
         ? { ...baseDefinition, timeoutMs: 20_000 } : baseDefinition;
       const productIdsBeforeRequest = new Set(productsById.keys());
       const rollbackProductsAddedForRequest = () => {
@@ -8071,10 +8076,13 @@ export class AgentManagerOrchestrator {
             const loadRequirementKw = isGeneratorProductClass(productIntent)
               ? generatorLoadRequirementKw(toolResults)
               : undefined;
-            const loadFit = filterGeneratorProductsByLoadProfile(search.products, loadRequirementKw);
+            const budgetPrices = verifyBudget ? await verifyBudgetPrices({products:search.products,
+              read:this.readSitePrice, persist:price=>this.products.updateVerifiedSitePrice(price), signal:toolSignal}) : undefined;
+            const loadFit = filterGeneratorProductsByLoadProfile(budgetPrices?.products ?? search.products, loadRequirementKw);
             const loadAwareRetry = false;
             const products = loadFit.products;
-            const warnings = [...search.warnings, ...loadFit.warnings];
+            const warnings = [...search.warnings, ...loadFit.warnings,
+              ...(budgetPrices?.proofs.filter(proof=>proof.status==='unavailable').map(proof=>`site_price_not_verified:${proof.productId}`) ?? [])];
             const catalogSearchGrounded = products.length > 0 || search.candidateTiers.length > 0;
             products.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
@@ -8085,6 +8093,7 @@ export class AgentManagerOrchestrator {
                 query,
                 productIds: products.map((product) => product.id),
                 products,
+                ...(budgetPrices ? { priceVerifications: budgetPrices.proofs } : {}),
                 ...(loadRequirementKw === undefined ? {} : {
                   generatorLoadFit: {
                     requiredNominalKw: loadRequirementKw,
@@ -8168,7 +8177,7 @@ export class AgentManagerOrchestrator {
             });
             requestProductsById.clear();
             scopedProducts.forEach((product) => requestProductsById.set(product.id, product));
-            const priceVerifications = request.args.verifyCurrentPrice === true
+            const priceVerifications = request.args.verifyCurrentPrice === true || verifyBudget
               ? await Promise.all(scopedProducts.map(async product => {
                 let priceStage = 'read_page';
                 try {
@@ -8182,6 +8191,7 @@ export class AgentManagerOrchestrator {
                     observedAt: checked.observedAt, evidence: checked.evidence };
                 } catch (error) {
                   const errorCode = sitePriceErrorCode(error);
+                  if (verifyBudget) requestProductsById.set(product.id,{...product,price:null});
                   await this.trace(input.session.id,input.turnId,'tools','site_price_verification_failed',{
                     productId:product.id,errorCode,stage:priceStage,remainingTurnMs:input.budget.remainingWallTimeMs()
                   });

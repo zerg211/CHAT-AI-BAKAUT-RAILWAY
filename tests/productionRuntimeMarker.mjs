@@ -4,7 +4,7 @@ export const expectedAiManagerContractVersion =
 
 export const expectedAiManagerRuntimeVersion =
   process.env.EXPECTED_AI_MANAGER_RUNTIME_VERSION ||
-  '2026-09-07.bound-review-claims-v21';
+  '2026-09-07.research-role-and-known-facts-v22';
 
 export async function fetchProductionHealth(productionApiBase, timeoutMs = 30_000) {
   const controller = new AbortController();
