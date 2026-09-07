@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { recordCurrentAgentPromptShape } from './agentManagerTurnBudget.js';
 import { createOpenAIClient, withRetry } from './openaiClient.js';
 import { recordOpenAIUsageOnce } from './openaiUsageGuard.js';
 import { extractResponseText, safeError } from './responseUtils.js';
@@ -173,6 +174,7 @@ export async function createStructuredJsonResponse(input: {
       requestSignal
     );
   const sendWithinDeadline = async (body: Record<string, unknown>) => {
+    recordCurrentAgentPromptShape(input.stage, body);
     try {
       return await send(body);
     } catch (error) {

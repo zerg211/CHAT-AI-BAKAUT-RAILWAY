@@ -2,6 +2,8 @@
 .env.*
 !.env.example
 .agent
+.private
+evals
 .codex-logs
 .hermes
 .hermes-admin-api-key

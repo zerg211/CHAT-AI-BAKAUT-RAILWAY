@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 
 describe('production model configuration', () => {
-  it('locks every manager role to GPT-5.6 Luna with bounded production planner effort despite legacy overrides', () => {
+  it('honors explicit model roles in production while retaining bounded production effort defaults', () => {
     const outputMarker = '__PRODUCTION_MODEL_CONFIG__';
     const script = [
       "import { config } from './src/config.ts';",
@@ -44,15 +44,15 @@ describe('production model configuration', () => {
     const markerIndex = stdout.lastIndexOf(outputMarker);
     expect(markerIndex).toBeGreaterThanOrEqual(0);
     expect(JSON.parse(stdout.slice(markerIndex + outputMarker.length))).toEqual({
-      model: 'gpt-5.6-luna',
-      answer: 'gpt-5.6-luna',
+      model: 'gpt-5.4-mini',
+      answer: 'gpt-5.4',
       answerReasoning: 'medium',
-      planner: 'gpt-5.6-luna',
+      planner: 'gpt-5.5',
       plannerReasoning: 'low',
       plannerMaxOutputTokens: 9000,
       fact: 'gpt-5.6-luna',
       factReasoning: 'xhigh',
-      deepReasoning: 'gpt-5.6-luna'
+      deepReasoning: 'gpt-5.6-sol'
     });
   });
 });

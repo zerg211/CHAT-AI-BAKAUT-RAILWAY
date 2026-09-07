@@ -27,6 +27,7 @@ import type {
   VerifiedProductFactInput
 } from '../shared/types.js';
 import { emptyNeedState } from '../ai/needState.js';
+import { canonicalFactAttribute, factAttributeAliases, normalizedFactValue } from '../ai/verifiedFactNormalization.js';
 import {
   catalogSourceContentHash,
   catalogSyncLockIdentity,
@@ -349,6 +350,7 @@ function mapProduct(row: QueryResultRow): Product {
     lastSyncedAt: row.last_synced_at ? row.last_synced_at.toISOString() : null,
     isActive: row.is_active === undefined ? true : Boolean(row.is_active),
     sourceContentHash: row.source_content_hash ?? null,
+    technicalVersion: row.technical_version ?? null,
     retrievalScore,
     retrievalSource
   };
@@ -370,7 +372,8 @@ const PRODUCT_RESPONSE_COLUMNS = [
   'last_seen_at',
   'last_synced_at',
   'is_active',
-  'source_content_hash'
+  'source_content_hash',
+  'technical_version'
 ].join(', ');
 
 const PRODUCT_FILTER = `is_active IS NOT FALSE AND (raw->>'pageType' = 'product' OR raw->>'sourceType' = 'csv')`;
@@ -2981,22 +2984,22 @@ export class ProductRepository {
            source_priority = LEAST(products.source_priority, EXCLUDED.source_priority),
            embedding = CASE
              WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding
-             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             WHEN products.technical_version IS DISTINCT FROM EXCLUDED.technical_version THEN NULL
              ELSE products.embedding
            END,
            embedding_model = CASE
              WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_model
-             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             WHEN products.technical_version IS DISTINCT FROM EXCLUDED.technical_version THEN NULL
              ELSE products.embedding_model
            END,
            embedding_source_hash = CASE
              WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_source_hash
-             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             WHEN products.technical_version IS DISTINCT FROM EXCLUDED.technical_version THEN NULL
              ELSE products.embedding_source_hash
            END,
            embedding_updated_at = CASE
              WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_updated_at
-             WHEN products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash THEN NULL
+             WHEN products.technical_version IS DISTINCT FROM EXCLUDED.technical_version THEN NULL
              ELSE products.embedding_updated_at
            END,
            last_seen_at = now(),
@@ -3276,6 +3279,65 @@ export class ProductRepository {
     return result.rows.map(mapCatalogPage);
   }
 
+  async enqueueVerifiedProductFacts(dedupeKey: string, facts: VerifiedProductFactInput[]) {
+    if (!facts.length) return 0;
+    const result = await this.db.query(
+      `INSERT INTO verified_fact_enrichment_jobs(dedupe_key, facts)
+       SELECT $1, jsonb_agg(item || jsonb_build_object('expectedTechnicalVersion', p.technical_version))
+       FROM jsonb_array_elements($2::jsonb) item
+       LEFT JOIN products p ON p.id = (item->>'productId')::uuid
+       WHERE item->>'productId' IS NULL OR (
+         p.name = item->>'productName' AND p.is_active IS NOT FALSE
+         AND (item->>'expectedTechnicalVersion' IS NULL OR p.technical_version = item->>'expectedTechnicalVersion')
+       )
+       HAVING count(*) > 0
+       ON CONFLICT (dedupe_key) DO NOTHING RETURNING jsonb_array_length(facts) AS count`,
+      [dedupeKey, JSON.stringify(facts)]
+    );
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async getVerifiedFactEnrichmentHealth() {
+    const result = await this.db.query(`SELECT
+      count(*) FILTER (WHERE status = 'pending')::int AS pending,
+      count(*) FILTER (WHERE status = 'processing')::int AS processing,
+      count(*) FILTER (WHERE status = 'failed')::int AS failed,
+      count(*) FILTER (WHERE status = 'completed')::int AS completed,
+      min(created_at) FILTER (WHERE status IN ('pending','processing')) AS oldest_pending_at
+      FROM verified_fact_enrichment_jobs`);
+    return result.rows[0];
+  }
+
+  async claimVerifiedFactEnrichmentJob() {
+    const result = await this.db.query(
+      `WITH exhausted AS (
+         UPDATE verified_fact_enrichment_jobs SET status = 'failed', last_error = 'lease_retry_limit'
+         WHERE status IN ('pending','processing') AND available_at <= now() AND attempts >= 6
+       ), due AS (
+         SELECT id FROM verified_fact_enrichment_jobs
+         WHERE status IN ('pending','processing') AND available_at <= now() AND attempts < 6
+         ORDER BY available_at, id FOR UPDATE SKIP LOCKED LIMIT 1
+       ) UPDATE verified_fact_enrichment_jobs job
+       SET status = 'processing', attempts = attempts + 1, lease_token = gen_random_uuid(),
+           available_at = now() + interval '2 minutes'
+       FROM due WHERE job.id = due.id RETURNING job.*`
+    );
+    const row = result.rows[0];
+    return row ? { id: String(row.id), leaseToken: String(row.lease_token), attempts: Number(row.attempts),
+      facts: row.facts as VerifiedProductFactInput[] } : null;
+  }
+
+  async finishVerifiedFactEnrichmentJob(job: { id: string; leaseToken: string; attempts: number }, errorCode?: string) {
+    await this.db.query(
+      `UPDATE verified_fact_enrichment_jobs
+       SET status = $3, last_error = $4,
+           available_at = now() + interval '1 minute' * least(60, power(2, attempts)),
+           completed_at = CASE WHEN $3 = 'completed' THEN now() ELSE NULL END
+       WHERE id = $1 AND lease_token = $2 AND status = 'processing'`,
+      [job.id, job.leaseToken, errorCode ? (job.attempts >= 6 ? 'failed' : 'pending') : 'completed', errorCode ?? null]
+    );
+  }
+
   async upsertVerifiedProductFact(input: VerifiedProductFactInput) {
     const productName = input.productName.trim();
     const productKey = normalizeVerifiedProductKey(productName);
@@ -3294,7 +3356,15 @@ export class ProductRepository {
         `WITH product_snapshot AS MATERIALIZED (
          SELECT source_content_hash
          FROM products
-         WHERE id = $1
+         WHERE id = $1 AND ($15::text IS NULL OR technical_version = $15)
+         FOR SHARE
+       ), evidence_order AS MATERIALIZED (
+         SELECT NOT EXISTS (
+           SELECT 1 FROM verified_product_facts
+           WHERE product_key = $2 AND attribute = $4 AND source_type = $6
+             AND coalesce(source_url, '') = coalesce($7, '') AND status = 'active'
+             AND last_verified_at > coalesce($14::timestamptz, now())
+         ) AS current
        ), superseded AS (
          UPDATE verified_product_facts
          SET status = 'superseded',
@@ -3305,18 +3375,22 @@ export class ProductRepository {
            AND source_type = $6
            AND coalesce(source_url, '') = coalesce($7, '')
            AND status = 'active'
+           AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM product_snapshot))
+           AND (SELECT current FROM evidence_order)
          RETURNING id
        ), supersede_barrier AS (
          SELECT count(*) AS superseded_count FROM superseded
        ), inserted AS (
           INSERT INTO verified_product_facts(
             product_id, product_key, product_name, attribute, value, source_type,
-            source_url, source_title, evidence, source_tier, source_authority, observed_at,
-            confidence, catalog_source_hash, source_fingerprint
+            source_url, source_title, evidence, source_tier, source_authority, observed_at, last_verified_at,
+            confidence, catalog_source_hash, source_fingerprint, normalized_attribute, normalized_value
           )
-          SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $12, $13, coalesce($14::timestamptz, now()), $10,
-                 (SELECT source_content_hash FROM product_snapshot), $11
+          SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $12, $13, coalesce($14::timestamptz, now()), coalesce($14::timestamptz, now()), $10,
+                 (SELECT source_content_hash FROM product_snapshot), $11, $16, $17::jsonb
          FROM supersede_barrier
+         WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM product_snapshot))
+           AND (SELECT current FROM evidence_order)
          ON CONFLICT DO NOTHING
          RETURNING *
        ),
@@ -3339,9 +3413,13 @@ export class ProductRepository {
              WHEN $10 = 'medium' THEN 'medium'
              ELSE verified_product_facts.confidence
            END,
-           last_verified_at = now(),
+           last_verified_at = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now())),
+           normalized_attribute = $16,
+           normalized_value = $17::jsonb,
            updated_at = now()
          WHERE NOT EXISTS (SELECT 1 FROM inserted)
+           AND (SELECT current FROM evidence_order)
+           AND ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM product_snapshot))
            AND product_key = $2
            AND attribute = $4
            AND value = $5
@@ -3368,7 +3446,10 @@ export class ProductRepository {
           sourceFingerprint,
           input.sourceTier ?? null,
           input.sourceAuthority ?? null,
-          input.observedAt ?? null
+          input.observedAt ?? null,
+          input.expectedTechnicalVersion ?? null,
+          canonicalFactAttribute(attribute),
+          JSON.stringify(normalizedFactValue(value))
         ]
       );
       return result.rows[0] ? mapVerifiedProductFact(result.rows[0]) : null;
@@ -3381,6 +3462,7 @@ export class ProductRepository {
     sourceTypes?: Array<'web' | 'catalog' | 'manual'>;
     limit?: number;
     includeNameOnlyWithProductIds?: boolean;
+    attributes?: string[];
   }) {
     const productKeys = [...new Set((input.productNames ?? [])
       .map((name) => normalizeVerifiedProductKey(name))
@@ -3389,7 +3471,12 @@ export class ProductRepository {
     if (!productKeys.length && !productIds.length) return [];
     const sourceTypes = input.sourceTypes?.length ? input.sourceTypes : ['web'];
     const result = await this.db.query(
-      `SELECT fact.*
+      `WITH candidates AS (
+       SELECT fact.*, row_number() OVER (
+         PARTITION BY coalesce(fact.product_id::text, fact.product_key)
+         ORDER BY CASE fact.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
+                  fact.last_verified_at DESC, fact.id
+       ) AS product_rank
        FROM verified_product_facts AS fact
        LEFT JOIN products AS product ON product.id = fact.product_id
        WHERE fact.status = 'active'
@@ -3400,7 +3487,7 @@ export class ProductRepository {
              AND fact.product_id = ANY($2::uuid[])
              AND product.is_active IS NOT FALSE
              AND fact.catalog_source_hash IS NOT NULL
-             AND fact.catalog_source_hash = product.source_content_hash
+             AND coalesce(fact.catalog_technical_version, fact.catalog_source_hash) = coalesce(product.technical_version, product.source_content_hash)
            )
             OR (
               $2::uuid[] = '{}'::uuid[]
@@ -3411,7 +3498,7 @@ export class ProductRepository {
                OR (
                  product.is_active IS NOT FALSE
                  AND fact.catalog_source_hash IS NOT NULL
-                 AND fact.catalog_source_hash = product.source_content_hash
+                 AND coalesce(fact.catalog_technical_version, fact.catalog_source_hash) = coalesce(product.technical_version, product.source_content_hash)
                 )
               )
             )
@@ -3422,17 +3509,17 @@ export class ProductRepository {
               AND fact.product_key = ANY($1::text[])
             )
           )
-       ORDER BY
-         CASE fact.confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END DESC,
-         fact.last_verified_at DESC,
-         fact.updated_at DESC
-       LIMIT $4`,
+       ) SELECT * FROM candidates
+       WHERE product_rank <= $4 OR lower(trim(attribute)) = ANY($6::text[])
+       ORDER BY (lower(trim(attribute)) = ANY($6::text[])) DESC,
+         product_rank, id`,
       [
         productKeys,
         productIds,
         sourceTypes,
         input.limit ?? 24,
-        input.includeNameOnlyWithProductIds === true
+        input.includeNameOnlyWithProductIds === true,
+        factAttributeAliases(input.attributes ?? [])
       ]
     );
     return result.rows.map(mapVerifiedProductFact);

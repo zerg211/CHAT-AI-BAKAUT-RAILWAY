@@ -3,7 +3,7 @@ import {
   SALES_MANAGER_POLICY_PACK_VERSION
 } from './salesManagerBehaviorPolicy.js';
 
-export const AI_MANAGER_RUNTIME_VERSION = '2026-09-07.autonomous-consultation-v17';
+export const AI_MANAGER_RUNTIME_VERSION = '2026-09-07.knowledge-and-acceptance-v18';
 export const AI_MANAGER_CONTRACT_VERSION = '2026-08-11.manager-contract-v2';
 
 export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({
@@ -16,7 +16,7 @@ export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({
   policyPackHash: SALES_MANAGER_POLICY_PACK_HASH,
   stateModel: 'dialogue_ledger_snapshot_plus_tail',
   recoveryModel: 'leased_checkpoint_and_tool_artifact_replay',
-  reviewPolicy: 'always; grounded factual and customer-language review plus deterministic contracts',
+  reviewPolicy: 'grounded factual and action gates required; editorial-only issues nonblocking after bounded repair',
   runtimeArtifacts: [
     'conversation_turns.client_message_id',
     'conversation_turns.execution_lease',

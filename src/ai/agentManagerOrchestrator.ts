@@ -159,6 +159,8 @@ import {
   verifiedFactsCoverRequest,
   verifiedFactsResearchResult
 } from './verifiedFactMemory.js';
+import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
+import { knownTechnicalAnswerReady } from './knownTechnicalAnswer.js';
 import {
   authoritativeRequirementProofStatus,
   buildRequirementProofs,
@@ -5696,10 +5698,6 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Ты AI менеджер-консультант БАКАУТ в чате сайта.',
             untrustedEvidenceBoundary,
             managerPolicy,
-            ...(reviewRepair ? [reviewRepair] : []),
-            'Ты AI менеджер-консультант БАКАУТ в чате сайта.',
-            untrustedEvidenceBoundary,
-            managerPolicy,
             'Отвечай по-русски как живой менеджер БАКАУТ: просто, легко, без канцелярита и третьего лица, от лица магазина («у нас есть», «можем уточнить»). Простое — кратко; сложное/сравнение — сначала вывод 1-2 предложения, затем 2-4 отличия. Покупателю сообщай состояние товарного факта, а не процесс работы системы: что уже известно по конкретной модели и какой именно параметр, артикул или совместимость пока не подтверждены. Никогда не упоминай инструменты, web/внешний поиск, попытки, timeout/тайм-аут, сбой, pipeline, внутреннюю проверку или то, завершилась ли проверка. Эти сведения остаются только в admin metadata.',
             'Опирайся только на ledger, catalog/tool results, checked research facts и диалог. Чего нет в фактах (dB, наличие, доставка, скидка, срок) — честно «нужно уточнить», при необходимости предложи форму.',
             'Specs товара из tool result catalog.* — подтверждённые данные каталога: если вопрос покупателя о характеристике и её значение есть в specs, отвечай прямо этим значением (factsUsed с sourceEventIds=requestId инструмента). Не отказывайся отвечать и не требуй дополнительного подтверждения того, что в карточке уже написано.',
@@ -5953,7 +5951,7 @@ export class AgentManagerOrchestrator {
       : null;
   }
 
-  private async loadVerifiedProductEvidence(products: Product[]) {
+  private async loadVerifiedProductEvidence(products: Product[], attributes: string[] = []) {
     const repo = this.verifiedFactRepository();
     if (!products.length || typeof repo.searchVerifiedProductFacts !== 'function') {
       return { facts: [] as VerifiedProductFact[], conflicts: [] as VerifiedProductFact[] };
@@ -5961,11 +5959,12 @@ export class AgentManagerOrchestrator {
     const facts = await repo.searchVerifiedProductFacts({
       productIds: uniqueStrings(products.map((product) => product.id)),
       sourceTypes: ['web', 'manual'],
+      attributes,
       limit: 32
     });
     const productsById = new Map(products.map((product) => [product.id, product]));
     const now = new Date();
-    const applicable = facts.slice(0, 32).filter((fact) => {
+    const applicable = facts.filter((fact) => {
       const product = fact.productId ? productsById.get(fact.productId) : undefined;
       return product && reusableVerifiedFact(fact, now) &&
         (fact.sourceType === 'web' || fact.sourceType === 'manual') &&
@@ -5977,16 +5976,16 @@ export class AgentManagerOrchestrator {
     // value. Attribute aliases remain visible to the semantic consumers unchanged.
     const valuesBySlot = new Map<string, Set<string>>();
     for (const fact of applicable) {
-      const slot = `${fact.productId}|${compactModelText(fact.attribute)}`;
+      const slot = `${fact.productId}|${canonicalFactAttribute(fact.attribute)}`;
       const values = valuesBySlot.get(slot) ?? new Set<string>();
-      values.add(fact.value.normalize('NFKC').trim().toLocaleLowerCase('ru-RU'));
+      values.add(verifiedFactValueKey(fact));
       valuesBySlot.set(slot, values);
     }
     return {
       facts: applicable.filter((fact) =>
-        valuesBySlot.get(`${fact.productId}|${compactModelText(fact.attribute)}`)?.size === 1),
+        valuesBySlot.get(`${fact.productId}|${canonicalFactAttribute(fact.attribute)}`)?.size === 1),
       conflicts: applicable.filter((fact) =>
-        (valuesBySlot.get(`${fact.productId}|${compactModelText(fact.attribute)}`)?.size ?? 0) > 1)
+        (valuesBySlot.get(`${fact.productId}|${canonicalFactAttribute(fact.attribute)}`)?.size ?? 0) > 1)
     };
   }
 
@@ -6015,6 +6014,7 @@ export class AgentManagerOrchestrator {
       productIds: exactProductIds,
       includeNameOnlyWithProductIds: true,
       sourceTypes: ['web', 'manual'],
+      attributes: input.comparisonAttributes,
       limit: 32
     });
     const exactBoundFacts = input.targetProductNames.length
@@ -6133,6 +6133,7 @@ export class AgentManagerOrchestrator {
   private async persistVerifiedResearchFacts(input: {
     sessionId: string;
     turnId: string;
+    requestId?: string;
     research: ProductComparisonResearchResult;
     targetProductNames: string[];
     selectedProducts: Product[];
@@ -6160,6 +6161,7 @@ export class AgentManagerOrchestrator {
     }
     let savedCount = 0;
     let persistableCount = 0;
+    const queuedFacts: Parameters<ProductRepository['upsertVerifiedProductFact']>[0][] = [];
     for (const fact of researchFactMemoryCandidates(input.research)) {
       if (fact.sourceType !== 'web') continue;
       if (fact.confidence !== 'high' && fact.confidence !== 'medium') continue;
@@ -6189,8 +6191,9 @@ export class AgentManagerOrchestrator {
       const productName = researchFactProductName({ fact, targetProductNames: input.targetProductNames, product });
       if (!productName) continue;
       persistableCount += 1;
-      const saved = await repo.upsertVerifiedProductFact({
+      const factInput: Parameters<ProductRepository['upsertVerifiedProductFact']>[0] = {
         productId: product?.id ?? null,
+        expectedTechnicalVersion: product?.technicalVersion ?? null,
         productName,
         attribute: fact.attribute,
         value: fact.value,
@@ -6202,7 +6205,12 @@ export class AgentManagerOrchestrator {
         sourceAuthority: fact.sourceAuthority,
         observedAt: new Date().toISOString(),
         confidence: fact.sourceAuthority === 'secondary' ? 'medium' : fact.confidence
-      });
+      };
+      if (typeof repo.enqueueVerifiedProductFacts === 'function') {
+        queuedFacts.push(factInput);
+        continue;
+      }
+      const saved = await repo.upsertVerifiedProductFact(factInput);
       if (!saved) continue;
       savedCount += 1;
       if (product?.id && typeof repo.upsertVerifiedWebFact === 'function') {
@@ -6215,6 +6223,9 @@ export class AgentManagerOrchestrator {
         }).catch((error) => console.warn('Product web fact mirror write failed', safeError(error)));
       }
     }
+    const queuedCount = queuedFacts.length
+      ? await repo.enqueueVerifiedProductFacts(`${input.turnId}:${input.requestId ?? 'research'}`, queuedFacts)
+      : 0;
     if (savedCount > 0) {
       await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_saved', {
         savedCount,
@@ -6224,6 +6235,7 @@ export class AgentManagerOrchestrator {
     await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_persistence', {
       persistableCount,
       savedCount,
+      queuedCount,
       targetProductNames: input.targetProductNames,
       searchDisposition: input.research.searchDisposition
     });
@@ -6862,7 +6874,9 @@ export class AgentManagerOrchestrator {
       ]);
       let read = verifiedEvidenceReads.get(key);
       if (!read) {
-        read = this.loadVerifiedProductEvidence(evidenceProducts).catch(async (error) => {
+        read = this.loadVerifiedProductEvidence(evidenceProducts,
+          [...(intent.grounding?.technicalAttributes ?? []), ...intent.toolRequests.flatMap(request => comparisonAttributesForRequest(request))]
+        ).catch(async (error) => {
           await this.trace(input.sessionId, input.turnId, 'tools', 'verified_product_evidence_read_failed', { error: safeError(error) });
           return { facts: [], conflicts: [] };
         });
@@ -6871,7 +6885,17 @@ export class AgentManagerOrchestrator {
       return read;
     };
     let continuation: ContinuationOutcome | undefined;
-    if (this.model.assessObservations && intent.grounding?.taskType !== 'lead_handoff' &&
+    const knownEvidence = await verifiedEvidenceFor(products);
+    const knownFactShortPath = toolResults.length > 0 && toolResults.every(result => result.status === 'ok') &&
+      knownTechnicalAnswerReady({ intent, products, facts: knownEvidence.facts, conflicts: knownEvidence.conflicts });
+    if (knownFactShortPath) {
+      continuation = { status: 'answer', rounds: 0, missingFacts: [], candidateProductIds: products.map(product => product.id),
+        rationale: 'Every planner-requested technical slot is present in current evidence; proceed to writer and factual review.' };
+      await this.trace(input.sessionId, input.turnId, 'tools', 'known_fact_short_path', {
+        productIds: products.map(product => product.id), attributes: intent.grounding?.technicalAttributes
+      });
+    }
+    if (!knownFactShortPath && this.model.assessObservations && intent.grounding?.taskType !== 'lead_handoff' &&
       (toolResults.length > 0 || intent.selectionPolicy?.reusePreviousCards)) {
       for (let round = 1; round <= CONTINUATION_MAX_ROUNDS + 1; round += 1) {
         const checkpoint = `observation_decision_${round}`;
@@ -7161,7 +7185,7 @@ export class AgentManagerOrchestrator {
           requiredResponseClauses,
           continuation,
           semanticDecisionValidated,
-          structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
+          structuredDeadlineAtMs: turnBudget.deadlineForStage(45_000, 15_000),
           signal: input.signal
         }),
         ledgerState,
@@ -7241,8 +7265,9 @@ export class AgentManagerOrchestrator {
         // the whole turn. Deterministic gates stay as validators; the fix is semantic.
         const issueCodes = review.issues.map((issue) => issue.code);
         const repairable = review.issues.every((issue) => issue.code !== 'requires_adjudication');
-        const canAffordRepair = turnBudget.remainingWallTimeMs() > 8_000;
+        const canAffordRepair = turnBudget.remainingWallTimeMs() > 30_000;
         if (repairable && canAffordRepair) {
+          try {
           await this.trace(input.sessionId, input.turnId, 'recovery', 'answer_review_repair_started', {
             issueCodes,
             remainingTurnMs: turnBudget.remainingWallTimeMs()
@@ -7266,7 +7291,7 @@ export class AgentManagerOrchestrator {
               semanticDecisionValidated,
               reviewIssuesFeedback: review.issues.map((issue) => `${issue.code}: ${issue.message}`),
               continuation,
-              structuredDeadlineAtMs: turnBudget.snapshot().usage.deadlineAtMs,
+              structuredDeadlineAtMs: turnBudget.deadlineForStage(30_000, 12_000),
               signal: input.signal
             }),
             ledgerState,
@@ -7313,10 +7338,28 @@ export class AgentManagerOrchestrator {
               checkpoint: 'answer_contract_created', status: 'succeeded', payload: answer
             });
           } else {
-            review = repairReview;
+            // A review must remain bound to the exact draft it judged.
+            // Preserve the original if only its wording needs improvement.
+            if (!review.issues.every(issue => issue.code === 'customer_output_research_process_disclosure')) {
+              answer = repairedAnswer;
+              review = repairReview;
+            }
+          }
+          } catch (error) {
+            if (input.signal?.aborted || !review.issues.every(issue => issue.code === 'customer_output_research_process_disclosure')) throw error;
+            await this.trace(input.sessionId, input.turnId, 'recovery', 'editorial_repair_failed_keep_verified_original', {
+              issueCodes: review.issues.map(issue => issue.code)
+            });
           }
         }
       }
+    }
+    if (review.verdict === 'block' && review.issues.length &&
+      review.issues.every(issue => issue.code === 'customer_output_research_process_disclosure')) {
+      await this.trace(input.sessionId, input.turnId, 'recovery', 'editorial_issue_nonblocking', {
+        issueCodes: review.issues.map(issue => issue.code)
+      });
+      review = { verdict: 'pass', issues: review.issues.map(issue => ({ ...issue, severity: 'low' as const })) };
     }
     const finalText = sanitizeVisibleAnswerNumbers(answer.answerText.trim());
     const finalLeadAction = leadActionAfterValidation({ answer, finalText, review, toolResults });
@@ -7661,7 +7704,9 @@ export class AgentManagerOrchestrator {
       },
       models: {
         planner: config.OPENAI_PLANNER_MODEL,
-        answer: config.OPENAI_ANSWER_MODEL
+        answer: config.OPENAI_ANSWER_MODEL,
+        fact: config.OPENAI_FACT_MODEL,
+        deepReasoning: config.OPENAI_DEEP_REASONING_MODEL
       },
       turnBudget: turnBudget.snapshot(),
       continuation,
@@ -7735,6 +7780,11 @@ export class AgentManagerOrchestrator {
       throw new TurnExecutionInProgressError();
     }
     await input.onDelta?.(finalText);
+    await this.trace(input.sessionId, input.turnId, 'turn', 'first_useful_content_emitted', {
+      elapsedMs: turnBudget.snapshot().usage.wallTimeMs,
+      definition: 'server emitted accepted persisted answer; excludes status events and client rendering latency',
+      knownFactShortPath
+    });
     await this.trace(input.sessionId, input.turnId, 'turn', 'assistant_message_saved', {
       assistantMessageId: assistantMessage.id,
       recovered: input.recovered
@@ -8079,7 +8129,9 @@ export class AgentManagerOrchestrator {
               }
             }
             const shouldSearchByText = requestedProductIds.length === 0;
-            for (const query of shouldSearchByText ? queries.slice(0, 4) : []) {
+            for (const query of shouldSearchByText ? queries.slice(0, 4).filter(name =>
+              ![...requestProductsById.values()].some(product => productMatchesExactTargetIdentity(product, name))
+            ) : []) {
               const found = await this.searchCatalogProducts({
                 query,
                 limit: 4,
@@ -8444,6 +8496,7 @@ export class AgentManagerOrchestrator {
             await this.persistVerifiedResearchFacts({
               sessionId: input.session.id,
               turnId: input.turnId,
+              requestId: request.id,
               research: researchedGaps,
               targetProductNames,
               selectedProducts

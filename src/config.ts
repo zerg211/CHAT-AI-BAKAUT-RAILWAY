@@ -119,18 +119,10 @@ const configuredPrimaryModel = parsedConfig.OPENAI_ANSWER_MODEL
   || parsedConfig.OPENAI_MODEL
   || parsedConfig.MODEL
   || requiredProductionManagerModel;
-const primaryModel = parsedConfig.NODE_ENV === 'production'
-  ? requiredProductionManagerModel
-  : configuredPrimaryModel;
-const deepReasoningModel = parsedConfig.NODE_ENV === 'production'
-  ? requiredProductionManagerModel
-  : parsedConfig.OPENAI_DEEP_REASONING_MODEL || requiredProductionManagerModel;
-const plannerModel = parsedConfig.NODE_ENV === 'production'
-  ? requiredProductionManagerModel
-  : parsedConfig.OPENAI_PLANNER_MODEL || primaryModel;
-const factModel = parsedConfig.NODE_ENV === 'production'
-  ? requiredProductionManagerModel
-  : parsedConfig.OPENAI_FACT_MODEL || plannerModel;
+const primaryModel = configuredPrimaryModel;
+const deepReasoningModel = parsedConfig.OPENAI_DEEP_REASONING_MODEL || requiredProductionManagerModel;
+const plannerModel = parsedConfig.OPENAI_PLANNER_MODEL || primaryModel;
+const factModel = parsedConfig.OPENAI_FACT_MODEL || plannerModel;
 const normalizeReasoningEffort = (value: z.infer<typeof reasoningEffort>) =>
   value === 'minimal' ? 'none' : value;
 
@@ -141,9 +133,7 @@ export const config = {
   EMAIL_HTTP_TIMEOUT_MS: parsedConfig.RESEND_TIMEOUT_MS || parsedConfig.EMAIL_HTTP_TIMEOUT_MS,
   EMAIL_FROM: parsedConfig.EMAIL_FROM || parsedConfig.RESEND_FROM,
   LEADS_TO_EMAIL: parsedConfig.LEADS_TO_EMAIL || parsedConfig.LEAD_EMAIL_TO || parsedConfig.LEAD_EMAIL,
-  OPENAI_MODEL: parsedConfig.NODE_ENV === 'production'
-    ? requiredProductionManagerModel
-    : parsedConfig.OPENAI_MODEL || primaryModel,
+  OPENAI_MODEL: parsedConfig.OPENAI_MODEL || primaryModel,
   OPENAI_ANSWER_MODEL: primaryModel,
   OPENAI_PLANNER_MODEL: plannerModel,
   OPENAI_FACT_MODEL: factModel,

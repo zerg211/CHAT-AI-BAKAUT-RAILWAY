@@ -65,6 +65,11 @@ export class AgentManagerTurnBudget {
   private providerEstimatedTotalTokens = 0;
   private estimatedCostUsd = 0;
   private hostedToolEstimatedCostUsd = 0;
+  private promptShapes: Array<{ stage: string; model: string; inputCharacters: number; schemaCharacters: number }> = [];
+
+  recordPromptShape(shape: { stage: string; model: string; inputCharacters: number; schemaCharacters: number }) {
+    this.promptShapes.push(shape);
+  }
 
   constructor(
     readonly limits: AgentManagerTurnLimits = DEFAULT_AGENT_MANAGER_TURN_LIMITS,
@@ -165,6 +170,7 @@ export class AgentManagerTurnBudget {
     return {
       limits: this.limits,
       usage: {
+        promptShapes: this.promptShapes.map(shape => ({ ...shape })),
         modelCalls: this.modelCalls,
         providerCalls: this.providerCalls,
         toolCalls: this.toolCalls,
@@ -194,4 +200,10 @@ export function hasCurrentAgentManagerTurnBudget() {
 
 export function consumeCurrentAgentManagerProviderCall(estimate: ProviderCallEstimate) {
   activeTurnBudget.getStore()?.consumeProviderCall(estimate);
+}
+
+export function recordCurrentAgentPromptShape(stage: string, request: Record<string, unknown>) {
+  activeTurnBudget.getStore()?.recordPromptShape({ stage, model: String(request.model ?? ''),
+    inputCharacters: JSON.stringify(request.input ?? '').length + JSON.stringify(request.instructions ?? '').length,
+    schemaCharacters: JSON.stringify(request.text ?? {}).length });
 }

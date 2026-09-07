@@ -3718,7 +3718,7 @@ describe('AgentManagerOrchestrator', () => {
       async composeAnswer(input) {
         const profile = (input.toolResults[0]?.payload as { profile?: { requiredNominalKw?: number } })?.profile;
         return {
-          answerText: `Calculated minimum is ${profile?.requiredNominalKw} kW nominal.`,
+          answerText: 'Running load is known, but pump startup is unconfirmed; a sufficient generator minimum cannot be asserted yet.',
           factsUsed: [],
           questionsAsked: [],
           toolResultIds: ['generator-load'],
@@ -3742,8 +3742,9 @@ describe('AgentManagerOrchestrator', () => {
       ['boiler', 0.15],
       ['lighting', 0.2]
     ]);
-    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredStartingKw).toBeCloseTo(2.6, 5);
-    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBe(3);
+    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredStartingKw).toBeUndefined();
+    expect(metadata.toolResults?.[0]?.payload?.profile?.requiredNominalKw).toBeUndefined();
+    expect(metadata.toolResults?.[0]?.warnings?.join('\n')).toContain('generator_load_startup_unconfirmed');
     expect(metadata.toolResults?.[0]?.payload?.loads?.map((item) => item.kind)).not.toContain('unknown_load');
     expect(metadata.toolResults?.[0]?.warnings?.join('\n') ?? '').not.toContain('generator_load_estimate_used:refrigerator');
   });
@@ -7958,6 +7959,30 @@ describe('AgentManagerOrchestrator', () => {
       expect.stringContaining('customer_output_research_process_disclosure')
     ]));
     expect(reviewCustomerLanguage).toHaveBeenCalledTimes(2);
+
+    // A fully fact-checked original must survive a wording-only repair failure.
+    for (const repairFailure of ['provider_error', 'repeated_editorial_issue'] as const) {
+      const editorialConversations = new PriorReferentConversations();
+      let attempts = 0;
+      const editorialOrchestrator = new AgentManagerOrchestrator(
+        editorialConversations as never, new MissingCurrentDetailsProducts() as never, new FakeLeads() as never,
+        model({
+          async planTurn() { return intent; },
+          composeAnswer: async (input) => {
+            attempts += 1;
+            if (attempts > 1 && repairFailure === 'provider_error') throw new Error('repair transport unavailable');
+            return composeAnswer(input);
+          },
+          reviewCustomerLanguage: async () => ({ processDisclosure: true,
+            evidence: 'источники', rationale: 'Wording-only complaint; no factual issues.', factualIssues: [] })
+        })
+      );
+      const editorialPayload = await editorialOrchestrator.generateAnswer({ sessionId, turnId,
+        userMessage: 'Сравните эти две модели по цене и запуску.' });
+      expect(editorialPayload.answer).toContain('69 990');
+      expect(editorialConversations.assistantSaves).toHaveLength(1);
+      expect(editorialPayload.metadata?.preSendValidation).toEqual(expect.objectContaining({ verdict: 'pass' }));
+    }
 
     const unavailableConversations = new PriorReferentConversations();
     const unavailableReview = vi.fn(async () => {

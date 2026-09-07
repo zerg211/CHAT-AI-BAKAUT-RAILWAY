@@ -41,7 +41,7 @@ describe('ProductRepository catalog freshness integration', () => {
     expect(upsertSql).not.toContain('products.raw || EXCLUDED.raw');
     expect(upsertSql).toContain('description = EXCLUDED.description');
     expect(upsertSql).toContain('price = EXCLUDED.price');
-    expect(upsertSql).toContain('products.source_content_hash IS DISTINCT FROM EXCLUDED.source_content_hash');
+    expect(upsertSql).toContain('products.technical_version IS DISTINCT FROM EXCLUDED.technical_version');
     expect(query.mock.calls[0]?.[0]).toBe('BEGIN');
     expect(query.mock.calls.at(-1)?.[0]).toBe('COMMIT');
     expect(release).toHaveBeenCalledOnce();
@@ -185,7 +185,7 @@ describe('ProductRepository catalog freshness integration', () => {
 
     const lookupSql = String(query.mock.calls[0]?.[0]);
     expect(lookupSql).toContain('LEFT JOIN products');
-    expect(lookupSql).toContain('catalog_source_hash = product.source_content_hash');
+    expect(lookupSql).toContain('coalesce(fact.catalog_technical_version, fact.catalog_source_hash) = coalesce(product.technical_version, product.source_content_hash)');
     const emptyExactIdsGuard = lookupSql.indexOf("$2::uuid[] = '{}'::uuid[]");
     const nameOnlyFactFallback = lookupSql.indexOf('fact.product_id IS NULL');
     expect(emptyExactIdsGuard).toBeGreaterThanOrEqual(0);

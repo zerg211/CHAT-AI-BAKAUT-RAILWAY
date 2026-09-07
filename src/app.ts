@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import { config } from './config.js';
 import { ConversationRepository } from './db/repositories.js';
 import { startLeadOutboxWorker } from './ai/leadOutbox.js';
+import { startKnowledgeEnrichmentWorker } from './ai/knowledgeEnrichment.js';
 import { AI_MANAGER_RUNTIME_MANIFEST } from './ai/aiManagerRuntimeManifest.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerChatRoutes } from './routes/chat.js';
@@ -88,6 +89,10 @@ export async function buildApp() {
   }, 60_000).unref();
 
   if (config.NODE_ENV !== 'test') startLeadOutboxWorker({ log: app.log });
+  if (config.NODE_ENV !== 'test') {
+    const stopEnrichment = startKnowledgeEnrichmentWorker();
+    app.addHook('onClose', stopEnrichment);
+  }
 
   return app;
 }

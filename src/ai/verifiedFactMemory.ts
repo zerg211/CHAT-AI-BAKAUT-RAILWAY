@@ -4,6 +4,7 @@ import type {
   ProductComparisonResearchResult
 } from './productComparisonResearch.js';
 import { compactModelText, modelTextTokens, textMatchesTargetName } from './modelTextMatching.js';
+import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 
 const genericAttributeTokens = new Set([
   'buyer',
@@ -101,6 +102,7 @@ export function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
 }
 
 export function verifiedFactMatchesAttribute(fact: VerifiedProductFact, attribute: string) {
+  if (canonicalFactAttribute(fact.attribute) === canonicalFactAttribute(attribute)) return true;
   const requestedTokens = verifiedFactAttributeTokens(attribute);
   if (!requestedTokens.length) return false;
   const factTokens = verifiedFactAttributeTokens([fact.attribute, fact.value].join(' '));
@@ -172,7 +174,7 @@ export function verifiedFactCoverageForRequest(input: {
         }, new Map<string, VerifiedProductFact[]>()).values()];
     return factGroups.length > 0 && factGroups.every((facts) => {
       if (!facts.length) return false;
-      const values = new Set(facts.map((fact) => compactModelText(fact.value)));
+      const values = new Set(facts.map(verifiedFactValueKey));
       return values.size === 1;
     });
   };
@@ -181,7 +183,7 @@ export function verifiedFactCoverageForRequest(input: {
     const facts = input.facts.filter((fact) =>
       textMatchesTargetName(fact.productName, productName) && verifiedFactMatchesAttribute(fact, attribute)
     );
-    const values = new Set(facts.map((fact) => compactModelText(fact.value)));
+    const values = new Set(facts.map(verifiedFactValueKey));
     return values.size === 1 ? [] : [{ productName, attribute }];
   });
   const missingSlotKeys = new Set(missingFactSlots.map((slot) =>

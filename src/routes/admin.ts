@@ -123,10 +123,11 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           leadOutbox: { status: 'not_checked_in_test' }
         }
       : await (async () => {
-          const [catalog, embeddings, leadOutbox] = await Promise.allSettled([
+          const [catalog, embeddings, leadOutbox, knowledgeEnrichment] = await Promise.allSettled([
             products.getCatalogFreshness(),
             products.getEmbeddingCoverage('products'),
-            leads.getLeadOutboxHealth()
+            leads.getLeadOutboxHealth(),
+            products.getVerifiedFactEnrichmentHealth()
           ]);
           const unavailable = (_result: PromiseRejectedResult) => ({
             status: 'unavailable',
@@ -135,7 +136,8 @@ export async function registerAdminRoutes(app: FastifyInstance) {
           return {
             catalog: catalog.status === 'fulfilled' ? catalog.value : unavailable(catalog),
             embeddings: embeddings.status === 'fulfilled' ? embeddings.value : unavailable(embeddings),
-            leadOutbox: leadOutbox.status === 'fulfilled' ? leadOutbox.value : unavailable(leadOutbox)
+            leadOutbox: leadOutbox.status === 'fulfilled' ? leadOutbox.value : unavailable(leadOutbox),
+            knowledgeEnrichment: knowledgeEnrichment.status === 'fulfilled' ? knowledgeEnrichment.value : unavailable(knowledgeEnrichment)
           };
         })();
     return {

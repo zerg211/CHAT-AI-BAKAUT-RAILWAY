@@ -56,6 +56,7 @@ export interface Product {
   lastSyncedAt?: string | null;
   isActive?: boolean;
   sourceContentHash?: string | null;
+  technicalVersion?: string | null;
   retrievalScore?: number | null;
   retrievalSource?: ProductRetrievalSource | null;
 }
@@ -120,6 +121,7 @@ export interface VerifiedProductFact {
 }
 
 export interface VerifiedProductFactInput {
+  expectedTechnicalVersion?: string | null;
   productId?: string | null;
   productName: string;
   attribute: string;
