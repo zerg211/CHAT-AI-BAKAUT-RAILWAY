@@ -161,6 +161,7 @@ import {
 } from './verifiedFactMemory.js';
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 import { knownTechnicalAnswerReady } from './knownTechnicalAnswer.js';
+import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
 import {
   authoritativeRequirementProofStatus,
   buildRequirementProofs,
@@ -4373,6 +4374,7 @@ const catalogSearchToolArgsJsonSchema = strictJsonObject({
 });
 
 const productDetailsToolArgsJsonSchema = strictJsonObject({
+  verifyCurrentPrice: { type: 'boolean', description: 'Read and persist the current price from the exact company product page. True for a current-price question or discrepancy; never copy a buyer-provided price.' },
   ...commonCatalogToolArgsJsonProperties,
   productIds: boundedStringArrayJsonSchema(8),
   productNames: boundedStringArrayJsonSchema(4),
@@ -5187,6 +5189,7 @@ function plannerSystemPromptBlock(
     'В полном productMention поле productClass — свободное название класса, canonicalProductClass — его точный идентификатор из enum либо null, если соответствия нет. Класс определяй по смыслу товара; согласуй canonicalProductClass цели с canonicalProductIntent её web-запроса. Не заменяй неизвестный класс ближайшим известным. Для targetRef класс уже сохранён в ссылке.',
     'Анафору разрешай по истории: priorProductTargets сохраняет точные прежние target names и messageId даже после технического ответа без карточек. Для ссылки на прежнюю модель скопируй её name и sourceMessageId оттуда в productMention, а evidence возьми из текущей реплики как точную фразу-ссылку. Не требуй повторного имени модели от покупателя и не удаляй разрешённую историческую цель из-за отсутствия имени в текущем сообщении. При model-specific техническом web-запросе exact_only передай это точное имя также в args.productNames: одного имени в свободном query недостаточно. Общий технический вопрос не наследует модель автоматически; сам реши смысл по контексту, неоднозначность уточни.',
     'Анафору по карточкам разрешай по реальным показам: history.productCards сохраняет ordinal внутри messageId, а priorVisibleProducts.occurrences хранит все прежние messageId/createdAt/ordinal, даже повторные показы одной модели. Первая в прежнем и последнем списках может быть разной. Выбери нужный показ и товар по смыслу реплики; неоднозначность уточни одним вопросом. productMentions role="target_product" с точным именем; для фактов catalog.getProductDetails по productIds или productNames.',
+    'Текущая цена компании определяется страницей точного товара на bakautprof.ru. Для вопроса о текущей цене известной модели или расхождения цены сайта и каталога выбирай catalog.getProductDetails с verifyCurrentPrice=true. Это самостоятельно проверит страницу и обновит сохранённую цену. Не отправляй вопрос цены в технический web-поиск производителя и не эскалируй при успешно проверенной цене. В остальных запросах verifyCurrentPrice=false. Названная покупателем цена — повод проверить, а не разрешение записать её как факт.',
     'Явный вопрос «есть ли у вас X / можно ли заказать / цена / альтернативы» → riskFlags "answer_policy_catalog_presence_relevant"; для чистого техфакта — не добавлять.',
     'Новая модель в текущем ходе → не переиспользуй факты прежней модели, даже при «same», без evidence scoped к тому же идентификатору.',
     'Мультиходовый подбор генератора: при прежнем расчете нагрузок в истории перезапусти calculator.generatorLoad в текущем ходе перед catalog.search, чтобы результаты несли payload.profile.requiredNominalKw.',
@@ -5714,6 +5717,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Чисто технический вопрос — без наличия/доставки/скидок/звонков, если покупатель не спросил. Исключение (web_research_unavailable_grounding): решающий факт не подтвержден после исчерпания попыток — сохрани полезный предварительный вывод, назови точный пробел, предложи передать специалисту, спроси номер и способ (сообщение/звонок), leadAction="offer_form", без заявления «уже передал».',
             'Не придумывай практические диапазоны, требования или допустимые компромиссы из класса задачи. Используй только typed requirements, alternativePolicy, rankingObjectives, tool facts и подтвержденные карточки; изменение требования может предложить только покупатель.',
             'Цена выше typed budget — подтвержденный конфликт. Неизвестная цена — пробел данных, а не превышение бюджета: сохрани модель как предварительного кандидата и честно обозначь, что цену нужно проверить.',
+            'priceVerifications.status=verified подтверждает актуальную цену точной страницы компании: прямо назови новую цену как верную. Если previousPrice отличается, объясни, что прежняя цена из твоего каталога устарела и больше не актуальна. Не называй её равноценной альтернативой и не отправляй к специалисту из-за уже разрешённого расхождения. Если status=unavailable, не выдавай старую цену за проверенную текущую и не копируй названную покупателем цену. Проверка цены сайта не подтверждает склад, доставку или резерв.',
             'Каталог-ответ: честно подходящие по всем hard requirements; много — сгруппируй/приоритизируй; не вводи near-match от нехватки точных. Размеры/веса/цены — только из контекста товаров или проверенных фактов. Каждая названная модель — копия products[].name. productEvidenceRoles — граница: recommendation_candidate можно рекомендовать; comparison_reference_only — только в явном сравнении с фактами и четким отклонением по rejectionReasons, никогда как подходящий. products включают релевантные прежние карточки — используй их вместо «нет свежего каталога» или формы ради продолжения подбора. Пустой eligible набор только из-за недостающего техфакта — сначала запланированный web и честная предварительная рекомендация.',
             'verifiedProductFacts — актуальные сохраненные факты точных моделей из проверенных источников. Используй их вместе с каталогом и наблюдениями, в том числе в catalog-only ходе; сам сопоставляй исходные attribute/value с формулировкой вопроса. Отсутствие значения в каталоге не отменяет сохраненный факт, но конфликт источников нельзя скрывать. Сохраняй модель, единицы, отрицания и условия.',
             'conflictingVerifiedProductFacts — источники с разными значениями одного атрибута модели, а не подтвержденные факты. Окончательное значение допустимо только если текущие наблюдения разрешили конфликт; иначе честно назови конкретное расхождение и сохрани полезный предварительный вывод. Их source IDs не разрешены в factsUsed.',
@@ -5771,7 +5775,8 @@ export class AgentManagerOrchestrator {
     private readonly products = new ProductRepository(),
     private readonly leads = new LeadRepository(),
     private readonly model: AgentManagerModel = new OpenAIAgentManagerModel(),
-    private readonly embedQuery: (text: string, signal?: AbortSignal) => Promise<number[] | undefined | null> = createEmbedding
+    private readonly embedQuery: (text: string, signal?: AbortSignal) => Promise<number[] | undefined | null> = createEmbedding,
+    private readonly readSitePrice = readCurrentSitePrice
   ) {}
 
   async generateAnswer(input: AgentManagerGenerateInput): Promise<ChatResponsePayload> {
@@ -8153,6 +8158,20 @@ export class AgentManagerOrchestrator {
             });
             requestProductsById.clear();
             scopedProducts.forEach((product) => requestProductsById.set(product.id, product));
+            const priceVerifications = request.args.verifyCurrentPrice === true
+              ? await Promise.all(scopedProducts.map(async product => {
+                try {
+                  const checked = await this.readSitePrice(product, toolSignal);
+                  const updated = await this.products.updateVerifiedSitePrice(checked);
+                  if (!updated) throw new Error('site_price_persistence_conflict');
+                  requestProductsById.set(product.id, updated);
+                  return { productId: product.id, status: 'verified' as const, previousPrice: checked.previousPrice,
+                    price: checked.price, currency: checked.currency, sourceUrl: checked.sourceUrl,
+                    observedAt: checked.observedAt, evidence: checked.evidence };
+                } catch {
+                  return { productId: product.id, status: 'unavailable' as const, errorCode: 'site_price_not_verified' };
+                }
+              })) : [];
             requestProductsById.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
               requestId: request.id,
@@ -8160,9 +8179,12 @@ export class AgentManagerOrchestrator {
               status: requestProductsById.size ? 'ok' : 'not_found',
               payload: {
                 productIds: [...requestProductsById.keys()],
-                products: [...requestProductsById.values()]
+                products: [...requestProductsById.values()],
+                ...(priceVerifications.length ? { priceVerifications } : {})
               },
-              warnings: requestProductsById.size ? [] : ['product_details_no_matches']
+              warnings: requestProductsById.size
+                ? priceVerifications.filter(check => check.status === 'unavailable').map(check => `site_price_not_verified:${check.productId}`)
+                : ['product_details_no_matches']
           });
         } else if (request.tool === 'calculator.generatorLoad') {
           const { loads, profile, estimateBasis, warnings } = buildGeneratorLoadToolPayload({

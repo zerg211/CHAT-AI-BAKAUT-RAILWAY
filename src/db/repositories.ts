@@ -3297,6 +3297,26 @@ export class ProductRepository {
     return Number(result.rows[0]?.count ?? 0);
   }
 
+  async updateVerifiedSitePrice(input: { productId: string; productName: string; sourceUrl: string;
+    price: number; currency: 'RUB'; observedAt: string }) {
+    if (!Number.isFinite(input.price) || input.price <= 0 || !Number.isFinite(Date.parse(input.observedAt))) return null;
+    if (new URL(input.sourceUrl).origin !== new URL(config.CATALOG_BASE_URL).origin) return null;
+    return this.inTransaction(async db => {
+      const locked = await db.query('SELECT * FROM products WHERE id=$1 AND name=$2 AND source_url=$3 AND is_active IS NOT FALSE FOR UPDATE',
+        [input.productId,input.productName,input.sourceUrl]);
+      const row = locked.rows[0];
+      if (!row || (row.price_verified_at && new Date(row.price_verified_at).getTime() > Date.parse(input.observedAt))) return null;
+      const sourceHash = catalogSourceContentHash(freshnessHashInput({ name:row.name, sourceUrl:row.source_url,
+        externalId:row.external_id, slug:row.slug, brand:row.brand, category:row.category, price:input.price,
+        currency:input.currency, imageUrl:row.image_url, description:row.description, specs:row.specs,
+        raw:row.raw, sourcePriority:row.source_priority }));
+      const updated = await db.query(`UPDATE products SET price=$2, currency=$3, price_verified_at=$4,
+        price_source_url=$5, source_content_hash=$6, updated_at=now() WHERE id=$1 RETURNING *`,
+        [input.productId,input.price,input.currency,input.observedAt,input.sourceUrl,sourceHash]);
+      return mapProduct(updated.rows[0]);
+    });
+  }
+
   async getVerifiedFactEnrichmentHealth() {
     const result = await this.db.query(`SELECT
       count(*) FILTER (WHERE status = 'pending')::int AS pending,

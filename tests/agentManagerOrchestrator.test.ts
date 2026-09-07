@@ -10243,7 +10243,7 @@ describe('verified product memory across catalog-only follow-ups', () => {
       firstSeenAt: now, lastVerifiedAt: now, createdAt: now, updatedAt: now, hitCount: 0, ...overrides };
   }
   async function followUp(options: { attribute?: string; facts?: VerifiedProductFact[]; omitCards?: boolean; bothCards?: boolean;
-    contradictMemory?: boolean; forceMemorySource?: boolean; interruptBeforeSend?: boolean } = {}) {
+    contradictMemory?: boolean; forceMemorySource?: boolean; interruptBeforeSend?: boolean; verifyPrice?: boolean; priceUnavailable?: boolean } = {}) {
     const currentUserMessage = options.bothCards ? 'Покажите CHAMPION и STEM и напомните их отличие.' : userMessage;
     const conversations = new FakeConversations();
     const previous = message('CHAMPION: 8,2 кН; STEM: 13,5 кН.', 'assistant');
@@ -10263,12 +10263,13 @@ describe('verified product memory across catalog-only follow-ups', () => {
     }
     const storedFacts = options.facts ?? [fact()];
     const products = { getProductsByIds: vi.fn(async () => [champion, stem]),
+      updateVerifiedSitePrice: vi.fn(async (checked) => ({ ...[champion,stem].find(p=>p.id===checked.productId)!,price:checked.price })),
       searchVerifiedProductFacts: vi.fn(async () => storedFacts), markVerifiedProductFactsUsed: vi.fn(async () => 1) };
     const intent = AgentIntentContractSchema.parse({
       userMessageSummary: currentUserMessage, dialogueUnderstanding: 'The buyer chooses the lighter model.',
       nextStepRationale: 'Reuse the confirmed comparison and show the selected card.', requiresTools: true,
       toolRequests: [{ id: 'details-current', tool: 'catalog.getProductDetails', required: true,
-        args: { productIds: [champion.id, stem.id], canonicalProductIntent: 'plate', productIntent: 'plate', limit: 2 },
+        args: { productIds: [champion.id, stem.id], canonicalProductIntent: 'plate', productIntent: 'plate', limit: 2, verifyCurrentPrice:options.verifyPrice },
         rationale: 'Get current catalog cards', coversRequirementIds: [] }],
       productMentions: [{ name: champion.name, role: 'target_product', evidence: 'CHAMPION', productClass: 'plate' },
         { name: stem.name, role: 'comparison_subject', evidence: 'STEM', productClass: 'plate' }],
@@ -10299,11 +10300,33 @@ describe('verified product memory across catalog-only follow-ups', () => {
       model({ decideTurn: async () => ({ intent, ledgerDelta: { rationale: 'Select this need', events: [{
         eventType: 'need.opened', scope: 'need', payload: { needId: 'plate', productClass: 'plate', activate: true },
         evidence: currentUserMessage, source: 'llm_state_delta', status: 'active' }] } }),
-        assessObservations, composeAnswer, reviewCustomerLanguage, matchVerifiedFactMemory }));
+        assessObservations, composeAnswer, reviewCustomerLanguage, matchVerifiedFactMemory }), undefined,
+      async (product) => {
+        if(options.priceUnavailable)throw new Error('source unavailable');
+        return {productId:product.id,productName:product.name,previousPrice:product.price??null,price:165000,
+          currency:'RUB',sourceUrl:product.sourceUrl!,observedAt:new Date().toISOString(),evidence:'165 000 ₽'};
+      });
     const result = orchestrator.generateAnswer({ sessionId, turnId, userMessage: currentUserMessage });
     return { result, conversations, products, assessObservations, composeAnswer, reviewCustomerLanguage, matchVerifiedFactMemory, orchestrator };
   }
 
+  it('propagates independently verified current prices to writer, tool proof and final cards',async()=>{
+    const run=await followUp({verifyPrice:true});
+    const payload=await run.result;
+    expect(run.products.updateVerifiedSitePrice).toHaveBeenCalled();
+    expect(payload.productCards[0].price).toBe(165000);
+    expect(run.composeAnswer.mock.calls[0][0].products.find((p: Product)=>p.id===champion.id).price).toBe(165000);
+    expect((payload.metadata?.toolResults as ToolResult[])[0].payload.priceVerifications).toEqual(
+      expect.arrayContaining([expect.objectContaining({productId:champion.id,status:'verified',price:165000,previousPrice:champion.price})]));
+  });
+  it('does not change catalog price when independent site verification fails',async()=>{
+    const run=await followUp({verifyPrice:true,priceUnavailable:true});
+    const payload=await run.result;
+    expect(run.products.updateVerifiedSitePrice).not.toHaveBeenCalled();
+    expect(payload.productCards[0].price).toBe(champion.price);
+    expect((payload.metadata?.toolResults as ToolResult[])[0].payload.priceVerifications).toEqual(
+      expect.arrayContaining([expect.objectContaining({status:'unavailable'})]));
+  });
   it.each(['centrifugal_force_kn', 'compaction_force'])('grounds the recap from saved facts with current attribute %s and no extra research', async (attribute) => {
     const run = await followUp({ attribute });
     const payload = await run.result;

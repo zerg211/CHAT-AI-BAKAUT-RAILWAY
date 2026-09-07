@@ -5,6 +5,7 @@ const url = new URL(process.env.DATABASE_URL || 'file:///missing');
 assert.ok(['127.0.0.1','localhost','[::1]'].includes(url.hostname) && url.pathname.startsWith('/bakaut_acceptance_'),
   'An explicit isolated loopback bakaut_acceptance_* database is required');
 process.env.NODE_ENV='test';
+process.env.CATALOG_BASE_URL='https://fixtures.bakaut.invalid';
 const {pool}=await import('../src/db/pool.ts');
 const {ProductRepository}=await import('../src/db/repositories.ts');
 const {processKnowledgeEnrichment}=await import('../src/ai/knowledgeEnrichment.ts');
@@ -15,7 +16,7 @@ const run=async(id,fn)=>{await fn();checks.push({id,status:'PASS'});};
 const key=randomUUID();
 let p;
 const input={name:`BAKAUT-TEST KNOWLEDGE ${key}`,sourceUrl:`https://fixtures.bakaut.invalid/${key}`,
-  externalId:key,price:100,specs:{'Масса':'70 кг'},raw:{acceptanceFixture:'bakaut-v2'},currency:'RUB'};
+  externalId:key,price:100,specs:{'Масса':'70 кг'},raw:{acceptanceFixture:'bakaut-v2',pageType:'product'},currency:'RUB'};
 const fact={productName:input.name,attribute:'Масса',value:'70 кг',sourceType:'manual',
   sourceUrl:`https://fixtures.bakaut.invalid/manual/${key}`,sourceTitle:input.name,
   evidence:`${input.name}: масса 70 кг.`,sourceTier:'official_manual',sourceAuthority:'manufacturer',
@@ -35,6 +36,7 @@ try {
   p=await repo.upsertProduct({...input,price:165,raw:{...input.raw,price:165},imageUrl:'https://fixtures.bakaut.invalid/new.jpg'});
   const after=await pool.query('SELECT * FROM products WHERE id=$1',[p.id]);
   const reloaded=await repo.getProductsByIds([p.id]);
+  assert.equal(reloaded.length,1);
   validateToolResultOutput({requestId:'real-db-readback',tool:'catalog.getProductDetails',status:'ok',warnings:[],
     payload:{products:reloaded,productIds:[p.id]}});
   assert.equal(after.rows[0].technical_version,before.rows[0].technical_version);
@@ -46,6 +48,21 @@ try {
   await repo.markVerifiedProductFactsUsed([facts[0].id]);
   const reused=await repo.searchVerifiedProductFacts({productIds:[p.id],sourceTypes:['manual']});
   assert.equal(reused[0].lastVerifiedAt,facts[0].lastVerifiedAt);
+ });
+ await run('VERIFIED_SITE_PRICE_PERSISTS_WITHOUT_ERASING_TECHNICAL_MEMORY',async()=>{
+  const before=(await pool.query('SELECT * FROM products WHERE id=$1',[p.id])).rows[0];
+  const checked={productId:p.id,productName:p.name,sourceUrl:input.sourceUrl,price:165000,currency:'RUB',observedAt:new Date().toISOString()};
+  const updated=await repo.updateVerifiedSitePrice(checked);
+  assert.equal(updated.price,165000);
+  assert.equal((await repo.getProductsByIds([p.id]))[0].price,165000);
+  const after=(await pool.query('SELECT * FROM products WHERE id=$1',[p.id])).rows[0];
+  assert.equal(after.technical_version,before.technical_version);
+  assert.equal(after.embedding,before.embedding);
+  assert.ok((await repo.searchVerifiedProductFacts({productIds:[p.id],sourceTypes:['manual']})).some(f=>f.attribute==='Масса'));
+  assert.equal(await repo.updateVerifiedSitePrice({...checked,price:160000,observedAt:fact.observedAt}),null);
+  assert.equal(await repo.updateVerifiedSitePrice({...checked,productName:p.name+'-E'}),null);
+  assert.equal(await repo.updateVerifiedSitePrice({...checked,sourceUrl:'https://untrusted.invalid/product'}),null);
+  assert.equal((await repo.getProductsByIds([p.id]))[0].price,165000);
  });
  await run('REQUESTED_SLOT_SURVIVES_40_NEWER_UNRELATED_FACTS',async()=>{
   for(let i=0;i<40;i++)await repo.upsertVerifiedProductFact({...fact,attribute:`Unrelated ${i}`,value:String(i),observedAt:new Date().toISOString()});

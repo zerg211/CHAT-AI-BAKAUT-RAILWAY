@@ -71,6 +71,7 @@ export const CatalogSearchToolArgsSchema = z.object({
 }).strict();
 
 export const ProductDetailsToolArgsSchema = z.object({
+  verifyCurrentPrice: optionalPlaceholder(z.boolean()),
   query: optionalText,
   semanticQuery: optionalText,
   productIntent: optionalProductClass,
@@ -234,6 +235,7 @@ export function canonicalToolObservationStatus(input: {
 }
 
 export interface ToolRequestArgs {
+  verifyCurrentPrice?: boolean | null;
   query?: string | null;
   semanticQuery?: string | null;
   productIntent?: string | null;

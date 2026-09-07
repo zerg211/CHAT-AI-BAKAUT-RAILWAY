@@ -75,6 +75,10 @@ const catalogSearchResult = z.object({
 }).strict();
 
 const productDetailsResult = z.object({
+  priceVerifications: z.array(z.object({ productId: nonEmpty, status: z.enum(['verified','unavailable']),
+    previousPrice: z.number().nullable().optional(), price: z.number().optional(), currency:z.literal('RUB').optional(),
+    sourceUrl:z.string().optional(), observedAt:z.string().optional(), evidence:z.string().optional(),
+    errorCode:z.string().optional() }).strict()).max(8).optional(),
   productIntent: z.string().optional(),
   reason: z.string().optional(),
   productIds: z.array(nonEmpty).optional(),
