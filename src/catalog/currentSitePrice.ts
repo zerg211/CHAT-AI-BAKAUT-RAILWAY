@@ -8,6 +8,13 @@ import { cleanText } from './normalize.js';
 export type VerifiedSitePrice = { productId: string; productName: string; previousPrice: number | null;
   price: number; currency: 'RUB'; sourceUrl: string; observedAt: string; evidence: string };
 
+export function sitePriceErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) return 'site_price_unknown_error';
+  if (error.name === 'TimeoutError' || error.name === 'AbortError') return 'site_price_timeout';
+  const known = ['site_price_source_untrusted','site_price_http_error','site_price_identity_or_value_unconfirmed','site_price_persistence_conflict'];
+  return known.includes(error.message) ? error.message : 'site_price_fetch_or_storage_error';
+}
+
 function strictPrice(text: string) {
   const value = [...text.normalize('NFKC')].filter(char => char.trim() !== '' && char !== '₽').join('').replace(',', '.');
   if (!value || [...value].some(char => !'0123456789.'.includes(char)) || value.split('.').length > 2) return null;
@@ -41,7 +48,7 @@ export function extractCurrentSitePrice(html: string, product: Product, pageUrl:
 export async function readCurrentSitePrice(product: Product, signal?: AbortSignal): Promise<VerifiedSitePrice> {
   if (!product.sourceUrl || new URL(product.sourceUrl).origin !== new URL(config.CATALOG_BASE_URL).origin) throw new Error('site_price_source_untrusted');
   const result = await safeFetchBytes(product.sourceUrl, { allowedOrigin:config.CATALOG_BASE_URL,
-    timeoutMs:7_000, maxBytes:config.CATALOG_MAX_RESPONSE_BYTES, maxRedirects:2, signal,
+    timeoutMs:Math.min(15_000,config.CATALOG_REQUEST_TIMEOUT_MS), maxBytes:config.CATALOG_MAX_RESPONSE_BYTES, maxRedirects:2, signal,
     headers:{'user-agent':'Bakaut catalog price verification'} });
   if (result.status !== 200) throw new Error('site_price_http_error');
   const price = extractCurrentSitePrice(outboundText(result), product, result.url, config.CATALOG_BASE_URL);

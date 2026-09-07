@@ -161,7 +161,7 @@ import {
 } from './verifiedFactMemory.js';
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 import { knownTechnicalAnswerReady } from './knownTechnicalAnswer.js';
-import { readCurrentSitePrice } from '../catalog/currentSitePrice.js';
+import { readCurrentSitePrice, sitePriceErrorCode } from '../catalog/currentSitePrice.js';
 import {
   authoritativeRequirementProofStatus,
   buildRequirementProofs,
@@ -7867,7 +7867,9 @@ export class AgentManagerOrchestrator {
     };
 
     for (const [requestIndex, request] of input.toolRequests.entries()) {
-      const definition = agentManagerToolRegistry[request.tool];
+      const baseDefinition = agentManagerToolRegistry[request.tool];
+      const definition = request.tool === 'catalog.getProductDetails' && request.args.verifyCurrentPrice === true
+        ? { ...baseDefinition, timeoutMs: 20_000 } : baseDefinition;
       const productIdsBeforeRequest = new Set(productsById.keys());
       const rollbackProductsAddedForRequest = () => {
         for (const productId of productsById.keys()) {
@@ -8160,16 +8162,22 @@ export class AgentManagerOrchestrator {
             scopedProducts.forEach((product) => requestProductsById.set(product.id, product));
             const priceVerifications = request.args.verifyCurrentPrice === true
               ? await Promise.all(scopedProducts.map(async product => {
+                let priceStage = 'read_page';
                 try {
                   const checked = await this.readSitePrice(product, toolSignal);
+                  priceStage = 'persist_price';
                   const updated = await this.products.updateVerifiedSitePrice(checked);
                   if (!updated) throw new Error('site_price_persistence_conflict');
                   requestProductsById.set(product.id, updated);
                   return { productId: product.id, status: 'verified' as const, previousPrice: checked.previousPrice,
                     price: checked.price, currency: checked.currency, sourceUrl: checked.sourceUrl,
                     observedAt: checked.observedAt, evidence: checked.evidence };
-                } catch {
-                  return { productId: product.id, status: 'unavailable' as const, errorCode: 'site_price_not_verified' };
+                } catch (error) {
+                  const errorCode = sitePriceErrorCode(error);
+                  await this.trace(input.session.id,input.turnId,'tools','site_price_verification_failed',{
+                    productId:product.id,errorCode,stage:priceStage,remainingTurnMs:input.budget.remainingWallTimeMs()
+                  });
+                  return { productId: product.id, status: 'unavailable' as const, errorCode };
                 }
               })) : [];
             requestProductsById.forEach((product) => productsById.set(product.id, product));

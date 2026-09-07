@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractCurrentSitePrice } from '../src/catalog/currentSitePrice.js';
+import { extractCurrentSitePrice, sitePriceErrorCode } from '../src/catalog/currentSitePrice.js';
 import type { Product } from '../src/shared/types.js';
 
 const product: Product = { id:'price-product',name:'Wacker Neuson BPS 1550 Gw-c CE',price:160000,
@@ -10,6 +10,11 @@ const page = (body=offer(),name=product.name) => `<h1>${name}</h1>${body}`;
 const parse = (html:string,url=product.sourceUrl!) => extractCurrentSitePrice(html,product,url,'https://bakautprof.ru');
 
 describe('authoritative company product price',()=>{
+  it('distinguishes a timeout without exposing arbitrary provider or database text',()=>{
+    const timeout=new Error('internal detail');timeout.name='TimeoutError';
+    expect(sitePriceErrorCode(timeout)).toBe('site_price_timeout');
+    expect(sitePriceErrorCode(new Error('private database detail'))).toBe('site_price_fetch_or_storage_error');
+  });
   it('uses current price, preserves previous price and binds full identity and source',()=>{
     expect(parse(page())).toMatchObject({productId:product.id,previousPrice:160000,price:165000,currency:'RUB',sourceUrl:product.sourceUrl});
   });
