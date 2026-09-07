@@ -108,7 +108,7 @@ function normalizeLoadItem(item: ProductElectricalLoadItem): ProductElectricalLo
   const runningKw = positiveFinite(item.runningKw);
   const providedStartingKw = positiveFinite(item.startingKw);
   const startingKw = providedStartingKw === undefined
-    ? runningKw
+    ? undefined
     : runningKw === undefined
       ? providedStartingKw
       : Math.max(providedStartingKw, runningKw);
@@ -145,6 +145,7 @@ function calculateFlatScenario(
   } = {}
 ): ProductGeneratorLoadScenario {
   const running = items.reduce((sum, item) => sum + (item.runningKw ?? 0) * item.count, 0);
+  const missingStartingLoads = items.filter(item => item.startingKw === undefined).map(itemScenarioKey);
   const startingExtraByItem = items.map((item) => Math.max(0, (item.startingKw ?? item.runningKw ?? 0) - (item.runningKw ?? 0)));
   const maxStartingExtra = startingExtraByItem.length
     ? Math.max(...items.map((item, index) => startingExtraByItem[index] * item.count))
@@ -167,21 +168,23 @@ function calculateFlatScenario(
       : maxStartingExtra;
   const requiredStartingKw = running + startingExtra;
   const calculation = items
-    .map((item) => `${item.name ?? item.kind}: ${item.count} x ${item.runningKw ?? '?'} kW run / ${item.startingKw ?? item.runningKw ?? '?'} kW start`)
+    .map((item) => `${item.name ?? item.kind}: ${item.count} x ${item.runningKw ?? '?'} kW run / ${item.startingKw ?? '?'} kW start`)
     .join('; ');
   return {
     id,
     label,
     itemKinds: items.map(itemScenarioKey),
     totalRunningKw: roundKw(running),
-    requiredStartingKw: roundKw(requiredStartingKw),
-    requiredNominalKw: ceilKw(requiredStartingKw, 0.5),
+    runningOnlyNominalFloorKw: ceilKw(running, 0.5),
+    ...(missingStartingLoads.length ? { missingStartingLoads } : {
+      requiredStartingKw: roundKw(requiredStartingKw), requiredNominalKw: ceilKw(requiredStartingKw, 0.5)
+    }),
     calculation
   };
 }
 
 function withStartingFloor(scenario: ProductGeneratorLoadScenario, floor: number) {
-  if (scenario.requiredStartingKw >= floor) return scenario;
+  if (scenario.requiredStartingKw === undefined || scenario.requiredStartingKw >= floor) return scenario;
   return {
     ...scenario,
     requiredStartingKw: roundKw(floor),
@@ -192,11 +195,13 @@ function withStartingFloor(scenario: ProductGeneratorLoadScenario, floor: number
 
 function strongestScenario(scenarios: ProductGeneratorLoadScenario[]) {
   return scenarios.reduce((best, current) => {
-    if (current.requiredNominalKw !== best.requiredNominalKw) {
-      return current.requiredNominalKw > best.requiredNominalKw ? current : best;
+    const currentNominal = current.requiredNominalKw ?? current.runningOnlyNominalFloorKw ?? 0;
+    const bestNominal = best.requiredNominalKw ?? best.runningOnlyNominalFloorKw ?? 0;
+    if (currentNominal !== bestNominal) {
+      return currentNominal > bestNominal ? current : best;
     }
     if (current.requiredStartingKw !== best.requiredStartingKw) {
-      return current.requiredStartingKw > best.requiredStartingKw ? current : best;
+      return (current.requiredStartingKw ?? 0) > (best.requiredStartingKw ?? 0) ? current : best;
     }
     return current.totalRunningKw > best.totalRunningKw ? current : best;
   }, scenarios[0]);
@@ -230,13 +235,15 @@ export function calculateGeneratorLoadProfile(
       totalRunningKw: aggregateScenario.totalRunningKw,
       requiredStartingKw: aggregateScenario.requiredStartingKw,
       requiredNominalKw: aggregateScenario.requiredNominalKw,
+      ...(aggregateScenario.missingStartingLoads?.length ? { missingStartingLoads: aggregateScenario.missingStartingLoads,
+        runningOnlyNominalFloorKw: aggregateScenario.runningOnlyNominalFloorKw } : {}),
       simultaneousRunning: Boolean(options.simultaneousRunning),
       simultaneousStarting: Boolean(options.simultaneousStarting),
       simultaneousStartingKinds: [...simultaneousKinds],
       scenarios: [aggregateScenario],
       primaryScenarioId: aggregateScenario.id,
       calculation: aggregateScenario.calculation,
-      confidence: options.confidence ?? (aggregateLoad.source === 'explicit_user' ? 0.9 : 0.62)
+      confidence: aggregateScenario.missingStartingLoads?.length ? undefined : options.confidence ?? (aggregateLoad.source === 'explicit_user' ? 0.9 : 0.62)
     };
   }
 
@@ -282,21 +289,27 @@ export function calculateGeneratorLoadProfile(
   }
 
   const primary = strongestScenario(scenarios);
+  const missingStartingLoads = usable.filter(item => item.startingKw === undefined).map(itemScenarioKey);
+  const totalRunningKw = missingStartingLoads.length ? Math.max(...scenarios.map(scenario => scenario.totalRunningKw)) : primary.totalRunningKw;
   const calculation = scenarios.length > 1
-    ? `primary ${primary.id}: ${primary.calculation}; scenarios: ${scenarios.map((scenario) => `${scenario.id}=${scenario.requiredNominalKw} kW nominal/${scenario.requiredStartingKw} kW start`).join(', ')}`
+    ? `primary ${primary.id}: ${primary.calculation}; scenarios: ${scenarios.map((scenario) => scenario.requiredNominalKw === undefined
+      ? `${scenario.id}=${scenario.totalRunningKw} kW running; startup unknown`
+      : `${scenario.id}=${scenario.requiredNominalKw} kW nominal/${scenario.requiredStartingKw} kW start`).join(', ')}`
     : primary.calculation;
 
   return {
     items: usable,
-    totalRunningKw: primary.totalRunningKw,
-    requiredStartingKw: primary.requiredStartingKw,
-    requiredNominalKw: primary.requiredNominalKw,
+    totalRunningKw,
+    ...(missingStartingLoads.length ? { missingStartingLoads,
+      runningOnlyNominalFloorKw: Math.max(...scenarios.map(scenario => scenario.runningOnlyNominalFloorKw ?? 0)) } : {
+      requiredStartingKw: primary.requiredStartingKw, requiredNominalKw: primary.requiredNominalKw
+    }),
     simultaneousRunning: Boolean(options.simultaneousRunning),
     simultaneousStarting: Boolean(options.simultaneousStarting),
     simultaneousStartingKinds: [...simultaneousKinds],
     scenarios,
     primaryScenarioId: primary.id,
     calculation,
-    confidence: options.confidence ?? (usable.some((item) => item.source === 'explicit_user') ? 0.82 : 0.58)
+    confidence: missingStartingLoads.length ? undefined : options.confidence ?? (usable.some((item) => item.source === 'explicit_user') ? 0.82 : 0.58)
   };
 }

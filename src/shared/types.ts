@@ -366,8 +366,10 @@ export interface ProductGeneratorLoadScenario {
   label: string;
   itemKinds: string[];
   totalRunningKw: number;
-  requiredStartingKw: number;
-  requiredNominalKw: number;
+  requiredStartingKw?: number;
+  requiredNominalKw?: number;
+  runningOnlyNominalFloorKw?: number;
+  missingStartingLoads?: string[];
   calculation?: string;
 }
 
@@ -376,6 +378,8 @@ export interface ProductGeneratorLoadProfile {
   totalRunningKw?: number;
   requiredStartingKw?: number;
   requiredNominalKw?: number;
+  runningOnlyNominalFloorKw?: number;
+  missingStartingLoads?: string[];
   simultaneousRunning?: boolean;
   simultaneousStarting?: boolean;
   simultaneousStartingKinds?: string[];

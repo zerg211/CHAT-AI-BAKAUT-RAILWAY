@@ -1626,6 +1626,7 @@ function sourceEvidenceValidationJsonFormat() {
 }
 
 const sourceApplicabilityInstructions = [
+  'Every evidence, scopeQuote and publisherEvidence must be one contiguous verbatim excerpt copied from sourceText. Never join separated passages, insert ellipses (...) or reconstruct a quotation. Keep the fact excerpt and the model-scope excerpt in their separate fields; they need not be adjacent in a shared instruction. If no single excerpt proves a required element, leave it unconfirmed.',
   'Return targetApplicability for this exact claim: exact_model for a model-specific instruction or matching table row/column; shared_instruction only for an instruction explicitly applicable to all covered models including the target; not_applicable for another model, excluded revision, or contradictory scope; uncertain when applicability is unproven.',
   'For a shared manual, scopeQuote must be a concise exact sourceText excerpt naming the exact target model and establishing the instruction scope. A family name, URL, page title, or mere unrelated mention is not a scope proof.',
   'Check model-specific table columns, exclusions, variants and revisions. Never transfer another model\'s number to the target merely because both appear on the manual cover.',

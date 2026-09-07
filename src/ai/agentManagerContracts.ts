@@ -457,6 +457,12 @@ export const AgentIntentContractSchema = z.object({
   productMentions: z.array(ProductMentionSchema).default([]),
   selectionPolicy: AgentSelectionPolicySchema.optional(),
   leadCaptureAuthorization: LeadCaptureAuthorizationSchema.optional(),
+  buyerRequestedTechnicalHandoff: z.object({
+    evidence: nonEmptyString,
+    buyerQuestion: nonEmptyString,
+    researchMessageId: z.string().uuid(),
+    researchRequestIds: z.array(nonEmptyString).min(1).max(8)
+  }).strict().nullable().optional(),
   policyRuleIds: z.array(nonEmptyString).default([]),
   mustNotAskQuestionIds: z.array(z.string()).default([]),
   riskFlags: z.array(z.string()).default([])

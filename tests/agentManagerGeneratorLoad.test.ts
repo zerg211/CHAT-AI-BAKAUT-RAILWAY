@@ -47,6 +47,52 @@ function toolResultFromPayload(payload: ReturnType<typeof buildGeneratorLoadTool
 }
 
 describe('Agent Manager generator load payload', () => {
+  it('derives the running floor before display rounding with startup still unknown', () => {
+    const request = generatorLoadRequest([{ kind: 'pump', name: 'pump', count: 1, runningKw: 0.501,
+      source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided',
+      operationMode: 'continuous', evidence: '501 W pump' }]);
+    const payload = buildGeneratorLoadToolPayload({ request, userMessage: '501 W pump' });
+    expect(payload.profile).toMatchObject({ totalRunningKw: 0.5, runningOnlyNominalFloorKw: 1 });
+    expect(payload.profile?.requiredNominalKw).toBeUndefined();
+  });
+
+  it.each(['unknown', 'explicit', 'estimated'] as const)('distinguishes running load from pump startup sizing: %s', mode => {
+    const request = generatorLoadRequest([
+      { kind: 'well_pump', name: 'насос', count: 1, runningKw: 0.9, startingKw: mode === 'unknown' ? null : 2.7,
+        source: mode === 'estimated' ? 'estimated_average' : 'explicit_user', runningSource: 'explicit_user',
+        startingSource: mode === 'unknown' ? 'not_provided' : mode === 'estimated' ? 'estimated_average' : 'explicit_user',
+        operationMode: 'occasional', evidence: 'насос 900 Вт без плавного пуска', basisKind: 'exact_power', basisSignals: ['explicit_power'] },
+      { kind: 'refrigerator', name: 'холодильник', count: 1, runningKw: 0.2, startingKw: mode === 'unknown' ? null : 0.6,
+        source: mode === 'estimated' ? 'estimated_average' : 'explicit_user', runningSource: 'explicit_user',
+        startingSource: mode === 'unknown' ? 'not_provided' : mode === 'estimated' ? 'estimated_average' : 'explicit_user',
+        operationMode: 'continuous', evidence: 'холодильник 200 Вт', basisKind: 'exact_power', basisSignals: ['explicit_power'] },
+      { kind: 'lighting', name: 'освещение', count: 1, runningKw: 0.15, startingKw: 0.15, source: 'explicit_user',
+        runningSource: 'explicit_user', startingSource: 'explicit_user', operationMode: 'continuous', evidence: 'освещение 150 Вт' }
+    ]);
+    Object.assign(request.args, { simultaneousRunning: true, simultaneousStarting: false, simultaneousStartingKinds: [],
+      estimateBasis: mode === 'estimated' ? 'bounded_assumption' : 'exact_or_user_provided' });
+    const payload = buildGeneratorLoadToolPayload({ request, userMessage: 'Насос запускается при работающем холодильнике и освещении.' });
+    const toolResult = toolResultFromPayload(payload);
+    expect(payload.profile?.totalRunningKw).toBe(1.3);
+    if (mode === 'unknown') {
+      expect(payload.profile?.requiredStartingKw).toBeUndefined();
+      expect(payload.profile?.requiredNominalKw).toBeUndefined();
+      expect(payload.profile).toMatchObject({ runningOnlyNominalFloorKw: 1.5, missingStartingLoads: ['pump:насос', 'refrigerator:холодильник'] });
+      expect(payload.profile?.items[0]?.startingKw).toBeUndefined();
+      expect(payload.profile?.scenarios?.[0]?.requiredNominalKw).toBeUndefined();
+      expect(payload.profile?.calculation).toContain('? kW start');
+      expect(payload.warnings).toContain('generator_load_startup_unconfirmed');
+    } else expect(payload.profile).toMatchObject({ requiredStartingKw: 3.1, requiredNominalKw: 3.5 });
+    expect(hasUnconfirmedGeneratorLoadBasisResult([toolResult])).toBe(mode !== 'explicit');
+    expect(hasGeneratorLoadBasisThatBlocksPreliminaryFit([toolResult])).toBe(false);
+    if (mode === 'explicit') {
+      request.args.simultaneousStarting = true;
+      request.args.simultaneousStartingKinds = ['pump', 'refrigerator'];
+      expect(buildGeneratorLoadToolPayload({ request, userMessage: 'Both motors start together.' }).profile)
+        .toMatchObject({ requiredStartingKw: 3.5, requiredNominalKw: 3.5 });
+    }
+  });
+
   it('keeps every explicitly simultaneous workshop load in one running scenario', () => {
     const request = generatorLoadRequest([
       { kind: 'compressor', name: 'compressor', count: 1, runningKw: 2.2, source: 'explicit_user', runningSource: 'explicit_user', startingSource: 'not_provided', operationMode: 'continuous', coRunningGroup: 'workshop', evidence: 'runs simultaneously' },
@@ -62,9 +108,10 @@ describe('Agent Manager generator load payload', () => {
 
     expect(payload.profile).toMatchObject({
       totalRunningKw: 5.1,
-      requiredStartingKw: 5.1,
-      requiredNominalKw: 5.5
+      runningOnlyNominalFloorKw: 5.5
     });
+    expect(payload.profile?.requiredStartingKw).toBeUndefined();
+    expect(payload.profile?.requiredNominalKw).toBeUndefined();
     expect(payload.profile?.scenarios).toHaveLength(1);
     expect(payload.profile?.scenarios?.[0]?.itemKinds).toHaveLength(4);
   });
@@ -266,7 +313,8 @@ describe('Agent Manager generator load payload', () => {
     expect(payload.loads).toEqual([
       expect.objectContaining({ kind: 'pump', runningKw: 1.1, source: 'explicit_user' })
     ]);
-    expect(payload.profile?.requiredNominalKw).toBe(1.5);
+    expect(payload.profile?.requiredNominalKw).toBeUndefined();
+    expect(payload.profile?.runningOnlyNominalFloorKw).toBe(1.5);
     expect(payload.loads).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ source: 'estimated_average' })
     ]));

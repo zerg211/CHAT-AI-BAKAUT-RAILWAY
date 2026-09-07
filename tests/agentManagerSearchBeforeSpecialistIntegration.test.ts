@@ -11,6 +11,8 @@ vi.mock('../src/ai/productComparisonResearch.js', async (importOriginal) => ({
 
 import {
   AgentManagerOrchestrator,
+  hasVerifiedBuyerRequestedTechnicalHandoff,
+  pendingBuyerRequestedTechnicalHandoffs,
   type AgentManagerAnswerInput,
   type AgentManagerModel
 } from '../src/ai/agentManagerOrchestrator.js';
@@ -505,6 +507,80 @@ function exhaustedTechnicalOfferHistory(buyerQuestion: string) {
 }
 
 describe('search-before-specialist orchestration', () => {
+  const unresolvedQuestion = 'Нужно ли закручивать щуп при замере для артикула 060007?';
+  const buyerHandoffMessage = 'Да, уточните у технического специалиста положение щупа для артикула 060007. Как получить ответ?';
+  function requestedHandoffFixture() {
+    const prior = exhaustedTechnicalOfferHistory(unresolvedQuestion);
+    const assistant = prior.messages[1];
+    assistant.content = 'Положение щупа не подтверждено. Сможем уточнить этот вопрос у технического специалиста.';
+    const metadata = assistant.metadata as any;
+    metadata.answerContract.answerText = assistant.content;
+    metadata.answerContract.leadAction = 'none';
+    metadata.toolResults[0].payload.searchDisposition = 'timed_out';
+    metadata.toolResults[0].payload.sourcesExhausted = false;
+    metadata.toolResults[0].payload.researchOutcome = 'partial';
+    const intent = prematureTechnicalSpecialistIntent();
+    intent.requiresTools = false;
+    intent.toolRequests = [];
+    intent.grounding = { ...intent.grounding!, taskType: 'lead_handoff', responseMode: 'handoff',
+      webPurpose: 'manual_or_service', buyerRequestedWeb: false, requiredToolKinds: [], buyerQuestion: unresolvedQuestion };
+    intent.buyerRequestedTechnicalHandoff = {
+      evidence: 'Да, уточните у технического специалиста положение щупа для артикула 060007.',
+      buyerQuestion: unresolvedQuestion, researchMessageId: prior.handoffOfferMessageId,
+      researchRequestIds: ['prior-exhausted-web']
+    };
+    return { prior, intent };
+  }
+
+  it('collects contact for an explicitly requested unresolved technical handoff without repeating research or claiming exhaustion', async () => {
+    researchProductComparisonFactsMock.mockReset();
+    const { prior, intent } = requestedHandoffFixture();
+    const conversations = new HarnessConversations(buyerHandoffMessage);
+    conversations.messages = [...prior.messages, ...conversations.messages];
+    const compose = vi.fn(async (input: AgentManagerAnswerInput) => {
+      expect(input.toolResults).toEqual([]);
+      return { answerText: 'Уточним положение щупа для артикула 060007 у технического специалиста. Оставьте номер телефона и скажите, как удобнее получить ответ: сообщением или звонком.',
+        factsUsed: [], questionsAsked: [{ questionId: 'contact', text: 'Какой номер телефона и способ ответа?', reason: 'requested technical followup' }], toolResultIds: [],
+        selectedProductIds: [], leadAction: 'offer_form' as const, riskFlags: [] };
+    });
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new HarnessProducts() as never,
+      new HarnessLeads() as never, harnessModel({ intent, compose }));
+    const answer = await orchestrator.generateAnswer({ sessionId, turnId, userMessage: buyerHandoffMessage });
+    expect(answer.answer).toContain('Оставьте номер телефона');
+    expect(compose).toHaveBeenCalledTimes(1);
+    expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
+    expect(conversations.toolArtifacts).toEqual([]);
+    expect((prior.messages[1].metadata as any).toolResults[0].payload.sourcesExhausted).toBe(false);
+    const saved = conversations.messages.at(-1)!;
+    saved.id = '78888888-8888-4888-8888-888888888888';
+    expect(pendingBuyerRequestedTechnicalHandoffs(conversations.messages)).toEqual([
+      { handoffOfferMessageId: saved.id, buyerQuestion: unresolvedQuestion }
+    ]);
+  });
+
+  it.each(['foreign_message', 'foreign_request', 'changed_question', 'stale_consent', 'new_technical_question', 'no_research', 'no_consent'] as const)(
+    'rejects ungrounded buyer-requested handoff: %s', async mode => {
+      researchProductComparisonFactsMock.mockReset();
+      const { prior, intent } = requestedHandoffFixture();
+      let userMessage = buyerHandoffMessage;
+      if (mode === 'foreign_message') intent.buyerRequestedTechnicalHandoff!.researchMessageId = '79999999-9999-4999-8999-999999999999';
+      if (mode === 'foreign_request') intent.buyerRequestedTechnicalHandoff!.researchRequestIds = ['other-web'];
+      if (mode === 'changed_question') intent.buyerRequestedTechnicalHandoff!.buyerQuestion = 'Другой вопрос';
+      if (mode === 'stale_consent' || mode === 'no_consent') userMessage = 'Спасибо, я сам подумаю.';
+      if (mode === 'new_technical_question') intent.grounding = { ...intent.grounding!, taskType: 'technical_answer' };
+      if (mode === 'no_research') (prior.messages[1].metadata as any).toolResults[0].payload.usedWebSearch = false;
+      expect(hasVerifiedBuyerRequestedTechnicalHandoff({ history: prior.messages, intent, userMessage })).toBe(false);
+      const conversations = new HarnessConversations(userMessage);
+      conversations.messages = [...prior.messages, ...conversations.messages];
+      const compose = vi.fn();
+      const orchestrator = new AgentManagerOrchestrator(conversations as never, new HarnessProducts() as never,
+        new HarnessLeads() as never, harnessModel({ intent, compose }));
+      await expect(orchestrator.generateAnswer({ sessionId, turnId, userMessage }))
+        .rejects.toThrow('buyer_requested_technical_handoff_unverified');
+      expect(compose).not.toHaveBeenCalled();
+      expect(researchProductComparisonFactsMock).not.toHaveBeenCalled();
+    });
+
   it('rejects a premature technical specialist plan instead of synthesizing web research', async () => {
     researchProductComparisonFactsMock.mockReset();
     researchProductComparisonFactsMock.mockResolvedValue(successfulTechnicalResearch());

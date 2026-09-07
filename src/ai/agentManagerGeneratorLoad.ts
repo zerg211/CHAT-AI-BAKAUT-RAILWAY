@@ -175,7 +175,7 @@ function hasAnyBasisSignal(load: GeneratorLoadToolItem, signals: string[]) {
 }
 
 function hasBoundedEstimatedLoadBasis(load: GeneratorLoadToolItem) {
-  if (load.source !== 'estimated_average') return true;
+  if (load.source !== 'estimated_average' && load.runningSource !== 'estimated_average' && load.startingSource !== 'estimated_average') return true;
   if (load.basisKind === 'exact_power' || load.basisKind === 'checked_fact') return true;
   if (hasAnyBasisSignal(load, ['explicit_power', 'catalog_or_web_fact'])) return true;
   const kind = canonicalElectricalLoadKind(load.kind);
@@ -224,7 +224,10 @@ export function hasEstimateOnlyGeneratorLoadResult(results: ToolResult[]) {
 }
 
 function hasUnconfirmedGeneratorLoadBasisWarning(result: ToolResult) {
-  return result.warnings.includes('generator_load_estimate_only') ||
+  const profile = result.payload.profile;
+  return (isObjectRecord(profile) && Array.isArray(profile.missingStartingLoads) && profile.missingStartingLoads.length > 0) ||
+    result.warnings.includes('generator_load_startup_unconfirmed') ||
+    result.warnings.includes('generator_load_estimate_only') ||
     result.warnings.includes('generator_load_bounded_assumption') ||
     result.warnings.includes('generator_load_unbounded_guess') ||
     result.warnings.includes('generator_load_bounded_basis_incomplete') ||
@@ -265,7 +268,8 @@ export function buildGeneratorLoadToolPayload(input: {
 }) {
   const { loads, warnings } = loadsFromArgs(input.request.args);
   const requestedEstimateBasis = estimateBasisFromToolArg(input.request.args.estimateBasis);
-  const hasEstimatedLoads = loads.some((load) => load.source === 'estimated_average');
+  const hasEstimatedLoads = loads.some((load) => load.source === 'estimated_average' ||
+    load.runningSource === 'estimated_average' || load.startingSource === 'estimated_average');
   const boundedEstimateBasis = hasEstimatedLoads && hasBoundedAssumptionBasis(loads);
   const estimateBasis = hasEstimatedLoads
     ? boundedEstimateBasis ? 'bounded_assumption' : 'unbounded_guess'
@@ -277,6 +281,7 @@ export function buildGeneratorLoadToolPayload(input: {
       ? input.request.args.simultaneousStartingKinds.filter((item): item is string => typeof item === 'string')
       : undefined
   });
+  if (profile?.missingStartingLoads?.length) warnings.push('generator_load_startup_unconfirmed');
   if (profile && hasEstimatedLoads) {
     if (boundedEstimateBasis) {
       warnings.push('generator_load_bounded_assumption');

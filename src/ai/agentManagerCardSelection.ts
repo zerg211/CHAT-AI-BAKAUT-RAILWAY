@@ -2,6 +2,7 @@ import type { CustomerNeedState, Message, Product, ProductCard, ProductSelection
 import type { AgentIntentContract, AnswerContract, AnswerSelectionReadiness, ToolRequest, ToolResult } from './agentManagerContracts.js';
 import {
   hasUnconfirmedGeneratorLoadBasisResult,
+  hasGeneratorLoadBasisThatBlocksPreliminaryFit,
   isGeneratorProductClass
 } from './agentManagerGeneratorLoad.js';
 import {
@@ -575,6 +576,10 @@ function typedToolRequirementProof(input: {
     }
     const profile = (result.payload as { profile?: { requiredNominalKw?: unknown } }).profile;
     const requiredNominalKw = profile?.requiredNominalKw;
+    if (selectionGoal !== 'final_fit' && result.warnings.includes('generator_load_startup_unconfirmed') &&
+      !hasGeneratorLoadBasisThatBlocksPreliminaryFit([result])) {
+      return {};
+    }
     if (typeof requiredNominalKw !== 'number' || !Number.isFinite(requiredNominalKw) || requiredNominalKw <= 0) {
       return { blocker: blocker('generator_load_profile_missing_positive_required_nominal_kw') };
     }

@@ -1191,6 +1191,25 @@ describe('AgentManager visible card readiness', () => {
     });
   });
 
+  it.each(['preliminary_fit', 'browse_catalog', 'final_fit'] as const)('handles unknown startup without turning a running floor into a minimum: %s', selectionGoal => {
+    const intent = generatorLoadDerivedConstraintIntent();
+    intent.selectionPolicy!.selectionGoal = selectionGoal;
+    const result = generatorLoadResult();
+    result.payload.profile = { totalRunningKw: 1.3, runningOnlyNominalFloorKw: 1.5, missingStartingLoads: ['pump:насос'] };
+    result.warnings = ['generator_load_startup_unconfirmed'];
+    const assessment = assessStrictSelectionRequirements(intent, 'generator', [result]);
+    expect(assessment.generatorNominalPowerMinKw).toBeUndefined();
+    if (selectionGoal === 'final_fit') expect(assessment.blockers).toContainEqual(expect.objectContaining({ reason: 'generator_load_result_not_final_fit_safe' }));
+    else {
+      expect(assessment.blockers).toEqual([]);
+      const candidate = generatorWithPower('preliminary', '3');
+      const selection = selectProductsForVisibleCards({ products: [candidate], userMessage: 'Нужен предварительный вариант.', history: [],
+        intent, answerText: `${candidate.name} — предварительный вариант; пуск насоса не подтверждён.`,
+        selectedProductIds: [candidate.id], needState: needStateWithBudget(), toolResults: [result] });
+      expect(selection.selectedProductIds).toEqual([candidate.id]);
+    }
+  });
+
   it('reuses a prior safe generator calculation for a preliminary comparison but never for final fit', () => {
     const preliminary = generatorLoadDerivedConstraintIntent();
     preliminary.toolRequests = [];

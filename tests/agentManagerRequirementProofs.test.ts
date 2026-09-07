@@ -158,7 +158,7 @@ describe('calculator-bound product proofs', () => {
     expect(proofs[2]).toMatchObject({ status: 'unverified', normalizedValue: null });
   });
 
-  it.each(['unbound', 'wrong-verifier', 'invalid-profile', 'uncertain-basis'] as const)(
+  it.each(['unbound', 'wrong-verifier', 'invalid-profile', 'uncertain-basis', 'unknown-startup'] as const)(
     'does not certify a calculator proof with %s', (failure) => {
       const selectedRequirement = structuredClone(requirement);
       const selectedRequest = structuredClone(request);
@@ -171,6 +171,10 @@ describe('calculator-bound product proofs', () => {
       if (failure === 'uncertain-basis') {
         selectedResult.payload.estimateBasis = 'unbounded_guess';
         selectedResult.warnings = ['generator_load_unbounded_guess'];
+      }
+      if (failure === 'unknown-startup') {
+        selectedResult.payload.profile = { requiredNominalKw: 1.5, missingStartingLoads: ['pump:насос'] };
+        selectedResult.warnings = ['generator_load_startup_unconfirmed'];
       }
       const [proof] = buildRequirementProofs({ intent: intentFor({ requirement: selectedRequirement, request: selectedRequest }),
         products: [generator('enough', 'Generator A', { 'Номинальная мощность, кВт': 4 })], toolResults: [selectedResult] });

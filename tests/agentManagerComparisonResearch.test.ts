@@ -361,6 +361,39 @@ describe('AgentManager comparison research flow', () => {
     extractCatalogProductComparisonFacts.mockResolvedValue(null);
   });
 
+  it.each(['editorial_only', 'mixed_factual'] as const)('retains a reviewed draft near deadline only for editorial issues: %s', async (kind) => {
+    researchProductComparisonFacts.mockResolvedValue({ usedWebSearch: true, searchDisposition: 'completed',
+      sourcesExhausted: false, facts: [], conflicts: [], warnings: [], summaryForAnswer: '',
+      answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] } });
+    const original = model();
+    const composeAnswer = vi.fn(original.composeAnswer).mockImplementationOnce(original.composeAnswer)
+      .mockImplementationOnce(async () => { throw new Error('repair cannot complete before deadline'); });
+    const conversations = new FakeConversations();
+    const orchestrator = new AgentManagerOrchestrator(conversations as never, new FakeProducts() as never,
+      {} as never, withStrictToolFixtures({ ...original, composeAnswer }));
+    let restoreBudget: (() => void) | undefined;
+    const reviewSpy = vi.spyOn(orchestrator as unknown as { review(input: unknown, budget: AgentManagerTurnBudget): Promise<unknown> }, 'review')
+      .mockImplementation(async (_input, budget) => {
+        const budgetSpy = vi.spyOn(budget, 'remainingWallTimeMs').mockReturnValue(11_000);
+        restoreBudget = () => budgetSpy.mockRestore();
+        return { verdict: 'block', issues: [{ code: 'customer_output_research_process_disclosure', severity: 'medium', message: 'Editorial wording.' },
+          ...(kind === 'mixed_factual' ? [{ code: 'factual_mismatch', severity: 'high', message: 'Unsupported claim.' }] : [])],
+          canShowProductCards: false, canOfferLeadForm: false };
+      });
+    try {
+      const pending = orchestrator.generateAnswer({ sessionId, turnId, userMessage: conversations.messages[0]!.content });
+      if (kind === 'mixed_factual') {
+        await expect(pending).rejects.toThrow();
+        expect(conversations.assistantSaves).toHaveLength(0);
+      } else {
+        const result = await pending;
+        expect(result.answer).toBe('SUMEC has checked noise in catalog; BISON noise must be treated as uncertain.');
+        expect(composeAnswer).toHaveBeenCalledOnce();
+        expect(conversations.traces).toEqual(expect.arrayContaining([expect.objectContaining({ eventType: 'editorial_repair_deferred_budget' })]));
+      }
+    } finally { restoreBudget?.(); reviewSpy.mockRestore(); }
+  });
+
   it.each(['conflict', 'ambiguous', 'contradicted'] as const)('keeps an earlier fresh-source conflict unresolved after an unrelated successful read: %s', async (veto) => {
     const baseResult = { usedWebSearch: true, searchDisposition: 'completed', sourcesExhausted: false,
       warnings: [], summaryForAnswer: '', answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] } };
