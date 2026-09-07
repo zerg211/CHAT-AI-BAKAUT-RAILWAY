@@ -474,7 +474,7 @@ describe('production web research regressions', () => {
     const calls = structured.mock.calls.filter(([call]) => call.stage === 'source_evidence_semantic_validation');
     expect(calls).toHaveLength(1);
     const payload = JSON.parse(calls[0]![0].request.input.find((item: any) => item.role === 'user').content);
-    expect(payload.claims).toHaveLength(4);
+    expect(payload.claims).toHaveLength(2);
     expect(payload.sources).toHaveLength(mode === 'shared source' ? 1 : 2);
     const sources = new Map(payload.sources.map((source: any) => [source.sourceId, source]));
     for (const claim of payload.claims) {
@@ -486,7 +486,7 @@ describe('production web research regressions', () => {
       expect(source.sourceText.length).toBeLessThanOrEqual(18_000);
       expect(claim.targetProductNames).toEqual([target]);
     }
-    expect(new Set(payload.claims.map((claim: any) => claim.itemIndex)).size).toBe(4);
+    expect(new Set(payload.claims.map((claim: any) => claim.itemIndex)).size).toBe(2);
     expect(actual.facts).toHaveLength(2);
     expect(actual.facts).toEqual(expect.arrayContaining(facts.map((fact) => expect.objectContaining({
       productName: fact.productName, attribute: fact.attribute, value: fact.value,
@@ -495,10 +495,9 @@ describe('production web research regressions', () => {
     }))));
     expect(actual.answerGuidance.coverage.filter((item) => item.status === 'confirmed')).toHaveLength(2);
     if (mode === 'shared source') {
-      const repeatedPayload = { claims: payload.claims.map(({ sourceId, ...claim }: any) => ({
-        ...claim, sourceText: (sources.get(sourceId) as any).sourceText
-      })) };
-      expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(Buffer.byteLength(JSON.stringify(repeatedPayload)) / 2);
+      expect(new Set(payload.claims.map((claim: any) => claim.sourceId)).size).toBe(1);
+    } else {
+      expect(new Set(payload.claims.map((claim: any) => claim.sourceId)).size).toBe(2);
     }
   });
 

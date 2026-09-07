@@ -1768,11 +1768,7 @@ async function validateEvidenceItem(input: {
   if (input.targetProductNames.length && input.item.productName?.trim() && !itemTargetProductNames.length) {
     return {
       valid: false,
-      invalidKinds: startClaimKindsFromText([
-        input.item.attribute,
-        input.item.value,
-        input.item.evidence
-      ].join(' ')),
+      invalidKinds: [],
       warnings: ['source_evidence_fact_target_mismatch', 'source_evidence_validation_failed:semantic']
     };
   }
@@ -1797,22 +1793,16 @@ async function validateEvidenceItem(input: {
     item: input.item,
     targetProductNames: itemTargetProductNames
   })) {
-    const claimKinds = startClaimKindsFromText([
-      input.item.attribute,
-      input.item.value,
-      input.item.evidence
-    ].join(' '));
     return {
       valid: false,
-      invalidKinds: claimKinds,
+      invalidKinds: [],
       exactExcerptFound: Boolean(sourceEvidenceExactExcerpt(input.item.evidence, source.text, 4)),
       modelScopeMatched: false,
       warnings: uniqueStrings([
         ...warnings,
         'source_evidence_exact_target_not_found',
         'source_evidence_model_scope_mismatch',
-        'source_evidence_validation_failed:semantic',
-        ...claimKinds.map((kind) => `source_evidence_validation_failed:${kind}`)
+        'source_evidence_validation_failed:semantic'
       ])
     };
   }
@@ -1880,13 +1870,9 @@ async function validateEvidenceItem(input: {
           sourceEvidenceExactExcerpt(evidence, scopeQuote, minimumEvidenceLength)))
       )))
     ));
-  const claimKinds = semanticValidation.claimStartKinds.length
-    ? semanticValidation.claimStartKinds
-    : startClaimKindsFromText([
-        input.item.attribute,
-        input.item.value,
-        input.item.evidence
-      ].join(' '));
+  // An empty semantic classification means this is not a start/control claim.
+  // A selected source passage may describe unrelated controls next to the fact.
+  const claimKinds = semanticValidation.claimStartKinds;
   const invalidKinds = claimKinds.filter((kind) => !semanticValidation.supportedStartKinds.includes(kind));
   const valid = semanticValidation.claimSupported && Boolean(scopedApplicability) &&
     Boolean(semanticEvidence) && invalidKinds.length === 0;
@@ -1928,7 +1914,7 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
   });
   const sources: Array<{ sourceId: string; sourceUrl: string | null; sourceText: string }> = [];
   const sourceIds = new Map<string, string>();
-  const claims = boundedItems.map(({ item, itemIndex, targetProductNames, boundedSource }) => {
+  const originalClaims = boundedItems.map(({ item, itemIndex, targetProductNames, boundedSource }) => {
     const sourceUrl = item.sourceUrl ?? null;
     // One URL may need different quote windows; one text may have different
     // publishers. Share only the identical source/window, never either alone.
@@ -1953,6 +1939,22 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
       sourceId
     };
   });
+  const uniqueClaimIndexes = new Map<string, number>();
+  const originalToUniqueIndexes: number[] = [];
+  const claims = originalClaims.flatMap(({ itemIndex, ...claim }) => {
+    // sourceId binds the exact URL/window; all claim and target fields remain
+    // in the key. Only identical fact/coverage work can share a verdict.
+    const key = JSON.stringify(claim);
+    const existing = uniqueClaimIndexes.get(key);
+    if (existing !== undefined) {
+      originalToUniqueIndexes[itemIndex] = existing;
+      return [];
+    }
+    const uniqueIndex = uniqueClaimIndexes.size;
+    uniqueClaimIndexes.set(key, uniqueIndex);
+    originalToUniqueIndexes[itemIndex] = uniqueIndex;
+    return [{ itemIndex: uniqueIndex, ...claim }];
+  });
   const itemSchema = sourceEvidenceValidationJsonFormat().format.schema;
   const { parsed } = await createStructuredJsonResponse({
     request: {
@@ -1968,6 +1970,7 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
             sourceApplicabilityInstructions,
             'Do not require exact wording. Interpret source text semantically across languages, tables, descriptions, manuals, listings, and specs.',
             'For start/control claims, classify the same canonical claimStartKinds and supportedStartKinds used in each requested validation.',
+            'For non-start claims, claimStartKinds and supportedStartKinds must be empty arrays. Classify the assertion in attribute/value, not unrelated instructions or controls appearing in its wider source passage.',
             'Classify publisherAuthority=manufacturer only when sourceText proves publisher/operator ownership; publisherEvidence must be an exact excerpt.',
             'evidence must be a concise exact sourceText excerpt supporting the claim, never a paraphrase.',
             'Return exactly one validation for every itemIndex and JSON only.'
@@ -1980,7 +1983,7 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
       ],
       max_output_tokens: Math.max(
         config.OPENAI_FACT_MAX_OUTPUT_TOKENS,
-        Math.min(6000, Math.max(900, input.items.length * 300))
+        Math.min(6000, Math.max(900, claims.length * 300))
       ),
       text: {
         format: {
@@ -1992,13 +1995,13 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
             properties: {
               validations: {
                 type: 'array',
-                minItems: input.items.length,
-                maxItems: input.items.length,
+                minItems: claims.length,
+                maxItems: claims.length,
                 items: {
                   type: 'object',
                   additionalProperties: false,
                   properties: {
-                    itemIndex: { type: 'integer', minimum: 0, maximum: input.items.length - 1 },
+                    itemIndex: { type: 'integer', minimum: 0, maximum: claims.length - 1 },
                     ...itemSchema.properties
                   },
                   required: ['itemIndex', ...itemSchema.required]
@@ -2019,10 +2022,11 @@ async function validateSourceEvidenceSemanticallyBatch(input: {
 
   const parsedValidations = Array.isArray(parsed.validations)
     ? parsed.validations.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-    : input.items.length === 1 ? [parsed] : [];
+    : [];
   return boundedItems.map(({ itemIndex, boundedSource }) => {
-    const matching = parsedValidations.find((item) => Number(item.itemIndex) === itemIndex) ??
-      (input.items.length === 1 ? parsedValidations[0] : undefined);
+    const matches = parsedValidations.filter((item) => item.itemIndex === originalToUniqueIndexes[itemIndex]);
+    const matching = matches.length === 1 ? matches[0] :
+      !Array.isArray(parsed.validations) && claims.length === 1 ? parsed : undefined;
     const normalized = normalizeSourceEvidenceValidation(matching ?? {});
     return {
       ...normalized,
@@ -3802,6 +3806,7 @@ export async function researchProductComparisonFacts(input: {
                       'A shared manual can support an instruction only if its scope explicitly includes the exact model; preserve conditions and distinguish neighbouring model columns.',
                       'For every fact and confirmed coverage choose evidenceRef.passageIds from the supplied document passages: one passage, or two passages from the same document in their original order. They may be separated sections, such as a scope statement and its instruction. Never invent IDs. Code preserves each literal excerpt and marks any gap; these references still require source validation.',
                       'Set evidence="", sourceUrl=null and sourceTitle=null; do not reconstruct source quotations or URLs. Keep necessary conditions in the value and use only values supported by the selected passages. Non-confirmed coverage may use evidenceRef=null.',
+                      'Keep each claim atomic: one requested attribute and its supported value with necessary conditions. Do not bundle unrelated instructions or different source versions into a single value; represent source disagreements as separate facts and conflicts.',
                       'When a manual gives multiple permitted grades for different temperatures, preserve that applicability instead of calling it a conflict.',
                       'Distinguish operating dependencies from accessory functions and package contents; silence about a dependency does not prove its absence.',
                       'Compare with catalog evidence if supplied, retaining any conflict and its supported resolution. No buyer handoff or commercial claims.',

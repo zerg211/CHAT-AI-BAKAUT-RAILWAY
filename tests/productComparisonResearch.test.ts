@@ -2837,6 +2837,87 @@ describe('product comparison research', () => {
     ]));
   });
 
+  it.each([false, true])('keeps semantic claim scope authoritative with unrelated starter context (unsupported start=%s)', async (unsupportedStart) => {
+    const quote = unsupportedStart ? 'FIRMAN RD4910E has an electric starter.' : 'FIRMAN RD4910E: first oil change after 20 hours.';
+    const passage = `${quote} Manual starter and engine switch are also listed on the control panel.`;
+    fetchMock.mockResolvedValue(sourceResponse(passage));
+    const fact = { productName: 'FIRMAN RD4910E', attribute: unsupportedStart ? 'start_control_mechanism' : 'first_oil_change_interval',
+      value: unsupportedStart ? 'ignition key' : '20 hours', evidence: passage, sourceType: 'web', confidence: 'high',
+      sourceUrl: 'https://example.test/rd4910e', sourceTitle: 'FIRMAN RD4910E' };
+    const research = result({ usedWebSearch: true, facts: [fact], answerGuidance: { directAnswer: '',
+      completeness: 'answered', coverage: [{ ...fact, status: 'confirmed' }] } });
+    createStructuredJsonResponse.mockImplementation(async call => call.stage === 'source_evidence_semantic_validation'
+      ? semanticValidationResponseWith(call, { claimSupported: !unsupportedStart, claimStartKinds: unsupportedStart ? ['key_start'] : [],
+        supportedStartKinds: unsupportedStart ? ['electric_start'] : [], evidence: quote, targetApplicability: 'exact_model', scopeQuote: '' })
+      : { parsed: research, response: { output: [{ type: 'web_search_call', status: 'completed' }] } });
+    const actual = await researchProductComparisonFacts({ userMessage: unsupportedStart ? 'Does RD4910E use an ignition key?' : 'When to change oil on RD4910E?',
+      products: [], targetProductNames: ['FIRMAN RD4910E'], comparisonAttributes: [fact.attribute] });
+    if (unsupportedStart) {
+      expect(actual.facts).toEqual([]);
+      expect(actual.warnings).toContain('source_evidence_validation_failed:key_start');
+    } else {
+      expect(actual.facts).toContainEqual(expect.objectContaining({ attribute: fact.attribute, evidence: quote, evidenceVerifiedExact: true }));
+      expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({ attribute: fact.attribute, status: 'confirmed' }));
+      expect(actual.warnings.some(warning => warning.startsWith('source_evidence_validation_failed:'))).toBe(false);
+    }
+  });
+
+  it.each([false, true])('validates identical fact and coverage once and maps missing verdicts fail closed (missing=%s)', async missing => {
+    const quote = 'FIRMAN RD4910E: first oil change after 20 hours.';
+    fetchMock.mockResolvedValue(sourceResponse(quote));
+    const fact = { productName: 'FIRMAN RD4910E', attribute: 'first_oil_change_interval', value: '20 hours', evidence: quote,
+      sourceType: 'web', confidence: 'high', sourceUrl: 'https://example.test/rd4910e', sourceTitle: 'FIRMAN RD4910E' };
+    const research = result({ usedWebSearch: true, facts: [fact], answerGuidance: { directAnswer: '', completeness: 'answered',
+      coverage: [{ ...fact, status: 'confirmed' }] } });
+    const claimCounts: number[] = [];
+    createStructuredJsonResponse.mockImplementation(async call => {
+      if (call.stage !== 'source_evidence_semantic_validation') return { parsed: research,
+        response: { output: [{ type: 'web_search_call', status: 'completed' }] } };
+      const payload = JSON.parse(call.request.input.find((item: { role: string }) => item.role === 'user').content);
+      claimCounts.push(payload.claims.length);
+      return missing ? { parsed: { validations: [] } } : semanticValidationResponseWith(call,
+        { claimSupported: true, claimStartKinds: [], supportedStartKinds: [], evidence: quote });
+    });
+    const actual = await researchProductComparisonFacts({ userMessage: 'When to change oil on RD4910E?', products: [],
+      targetProductNames: ['FIRMAN RD4910E'], comparisonAttributes: [fact.attribute] });
+    expect(claimCounts.length).toBeGreaterThan(0);
+    expect(claimCounts.every(count => count === 1)).toBe(true);
+    if (missing) {
+      expect(actual.facts).toEqual([]);
+      expect(actual.answerGuidance.coverage.some(item => item.status === 'confirmed')).toBe(false);
+      expect(actual.warnings).toContain('source_evidence_semantic_batch_item_missing');
+    } else {
+      expect(actual.facts).toContainEqual(expect.objectContaining({ attribute: fact.attribute }));
+      expect(actual.answerGuidance.coverage).toContainEqual(expect.objectContaining({ attribute: fact.attribute, status: 'confirmed' }));
+    }
+  });
+
+  it('keeps differences in claim ownership, attribute, value, evidence, URL and title separate', async () => {
+    const quote = 'FIRMAN RD4910E: first oil change after 20 hours.';
+    const otherQuote = 'FIRMAN RD3910E: first oil change after 20 hours.';
+    fetchMock.mockImplementation(async () => sourceResponse(`${quote} ${otherQuote}`));
+    const base = { productName: 'FIRMAN RD4910E', attribute: 'first_oil_change_interval', value: '20 hours', evidence: quote,
+      sourceType: 'web', confidence: 'high', sourceUrl: 'https://example.test/rd4910e', sourceTitle: 'Service instructions' };
+    const facts = [base, { ...base, productName: 'FIRMAN RD3910E' }, { ...base, attribute: 'regular_oil_change_interval' },
+      { ...base, value: '20h' }, { ...base, evidence: `${quote} ${otherQuote}` },
+      { ...base, sourceUrl: 'https://example.test/rd4910e-copy' }, { ...base, sourceTitle: 'Different edition' }];
+    const research = result({ usedWebSearch: true, facts, answerGuidance: { directAnswer: '', completeness: 'answered',
+      coverage: [{ ...base, status: 'confirmed' }] } });
+    const payloads: Array<{ claims: Array<{ itemIndex: number }>; sources: unknown[] }> = [];
+    createStructuredJsonResponse.mockImplementation(async call => {
+      if (call.stage !== 'source_evidence_semantic_validation') return { parsed: research,
+        response: { output: [{ type: 'web_search_call', status: 'completed' }] } };
+      payloads.push(JSON.parse(call.request.input.find((item: { role: string }) => item.role === 'user').content));
+      return semanticValidationResponseWith(call, { claimSupported: true, claimStartKinds: [], supportedStartKinds: [], evidence: quote });
+    });
+    await researchProductComparisonFacts({ userMessage: 'Compare oil change instructions for RD4910E and RD3910E.', products: [],
+      targetProductNames: ['FIRMAN RD4910E', 'FIRMAN RD3910E'], comparisonAttributes: ['first_oil_change_interval'] });
+    expect(payloads.length).toBeGreaterThan(0);
+    expect(payloads[0]!.claims).toHaveLength(7);
+    expect(payloads[0]!.sources).toHaveLength(2);
+    expect(new Set(payloads[0]!.claims.map(item => item.itemIndex)).size).toBe(7);
+  });
+
   it('marks a semantically verified exact-model fact and derives confirmed coverage without literal value matching', async () => {
     const sourceText = 'BISON BS6250IE specifications. DC USB Output: 5V/1A/2.1A.';
     fetchMock.mockResolvedValue(sourceResponse(sourceText));

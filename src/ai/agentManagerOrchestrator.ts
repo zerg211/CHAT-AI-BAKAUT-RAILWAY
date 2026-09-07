@@ -6705,6 +6705,7 @@ export class AgentManagerOrchestrator {
       });
     }
     const documentReadContext: ProductResearchDocumentReadContext = {};
+    const catalogResearchCache = new Map<string, ProductComparisonResearchResult>();
     let { toolResults, products } = await this.executeTools({
       session: input.session,
       turnId: input.turnId,
@@ -6717,6 +6718,7 @@ export class AgentManagerOrchestrator {
       toolRequests: intent.toolRequests,
       persistedToolResults: reusablePersistedToolResults,
       documentReadContext,
+      catalogResearchCache,
       budget: turnBudget,
       signal: input.signal
     });
@@ -6864,6 +6866,7 @@ export class AgentManagerOrchestrator {
           toolRequests: requests, persistedToolResults: reusablePersistedToolResults,
           priorProducts: observationProducts, priorToolResults: toolResults,
           documentReadContext,
+          catalogResearchCache,
           budget: turnBudget, signal: input.signal
         }));
         continuation = { status: 'stopped', rounds: round, rationale: decision.rationale,
@@ -7617,11 +7620,13 @@ export class AgentManagerOrchestrator {
     priorProducts?: Product[];
     priorToolResults?: ToolResult[];
     documentReadContext?: ProductResearchDocumentReadContext;
+    catalogResearchCache?: Map<string, ProductComparisonResearchResult>;
     budget: AgentManagerTurnBudget;
     signal?: AbortSignal;
   }) {
     const productsById = new Map<string, Product>((input.priorProducts ?? []).map((product) => [product.id, product]));
     const toolResults: ToolResult[] = [...(input.priorToolResults ?? [])];
+    const catalogResearchCache = input.catalogResearchCache ?? new Map<string, ProductComparisonResearchResult>();
     const technicalLeadRequiresExhaustionProof = intentRequiresSearchBeforeSpecialist(input.intent) &&
       input.intent.toolRequests.some((request) => request.tool === 'lead.capture');
     const technicalHandoffContinuationProven =
@@ -8164,7 +8169,15 @@ export class AgentManagerOrchestrator {
             'product_research_stage',
             { requestId: request.id, ...event }
           );
-          const catalogResearch = await extractCatalogProductComparisonFacts({
+          // Reuse only the same completed reading inside this buyer turn. The
+          // full card content is part of the key; changed facts cannot hit it.
+          const catalogResearchKey = createHash('sha256').update(JSON.stringify([
+            input.userMessage, [...targetProductNames].sort(), [...comparisonAttributes].sort(),
+            [...selectedProducts].sort((left, right) => left.id.localeCompare(right.id)),
+            priorCatalogLookupCompleted || currentWebCatalogLookupCompleted
+          ])).digest('hex');
+          const cachedCatalogResearch = catalogResearchCache.get(catalogResearchKey);
+          const catalogResearch = cachedCatalogResearch ? structuredClone(cachedCatalogResearch) : await extractCatalogProductComparisonFacts({
             userMessage: input.userMessage,
             products: selectedProducts,
             targetProductNames,
@@ -8176,6 +8189,14 @@ export class AgentManagerOrchestrator {
             deadlineAtMs: researchDeadlineAtMs,
             onTrace: researchTrace
           });
+          if (cachedCatalogResearch) {
+            await this.trace(input.session.id, input.turnId, 'tools', 'catalog_fact_extraction_reused', {
+              requestId: request.id, productIds: selectedProducts.map((product) => product.id), comparisonAttributes
+            });
+          } else if (catalogResearch && (catalogResearch.searchDisposition === 'completed' ||
+            catalogResearch.searchDisposition === 'not_needed')) {
+            catalogResearchCache.set(catalogResearchKey, structuredClone(catalogResearch));
+          }
           const catalogMissingFactSlots = allRequestedFactSlots.filter((slot) =>
             !catalogResearch || !researchResultCoversFactSlot({
               result: catalogResearch,
