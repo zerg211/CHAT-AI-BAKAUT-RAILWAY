@@ -31,6 +31,7 @@ const productResult = z.object({
   lastSyncedAt: z.string().nullable().optional(),
   isActive: z.boolean().optional(),
   sourceContentHash: z.string().nullable().optional(),
+  technicalVersion: z.string().nullable().optional(),
   retrievalScore: z.number().nullable().optional(),
   retrievalSource: z.enum(['text', 'exact', 'vector', 'unknown']).nullable().optional()
 }).strict();

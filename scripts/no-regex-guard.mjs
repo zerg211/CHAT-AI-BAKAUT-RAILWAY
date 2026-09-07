@@ -113,12 +113,17 @@ function sourceHash(text) {
 
 function pushFinding(findings, sourceFile, projectPath, node, kind) {
   const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+  const text = node.getText(sourceFile);
+  const lf = text.replaceAll('\r\n', '\n');
   findings.push({
     file: projectPath,
     line: position.line + 1,
     column: position.character + 1,
     kind,
     hash: sourceHash(node.getText(sourceFile)),
+    // Historical entries contain both Git LF and Windows CRLF. Only line-ending
+    // variants of the identical AST expression are accepted; patterns cannot change.
+    compatibleHashes: [...new Set([sourceHash(lf), sourceHash(lf.replaceAll('\n', '\r\n'))])],
   });
 }
 
@@ -181,9 +186,14 @@ function collectFindings() {
       return left.column - right.column;
     })
     .map((finding) => {
+      const compatibleIds = finding.compatibleHashes.map(hash => {
+        const key = [finding.file, finding.kind, hash].join('|');
+        const count = (occurrences.get(key) ?? 0) + 1;
+        occurrences.set(key, count);
+        return `${key}|${count}`;
+      });
       const occurrenceKey = [finding.file, finding.kind, finding.hash].join('|');
-      const occurrence = (occurrences.get(occurrenceKey) ?? 0) + 1;
-      occurrences.set(occurrenceKey, occurrence);
+      const occurrence = occurrences.get(occurrenceKey);
       return {
         id: [finding.file, finding.kind, finding.hash, String(occurrence)].join('|'),
         file: finding.file,
@@ -192,6 +202,7 @@ function collectFindings() {
         kind: finding.kind,
         hash: finding.hash,
         occurrence,
+        compatibleIds,
       };
     });
 }
@@ -244,8 +255,8 @@ function main() {
 
   const baseline = readBaseline();
   const baselineIds = new Set(baseline.findings.map((finding) => finding.id));
-  const currentIds = new Set(findings.map((finding) => finding.id));
-  const newFindings = findings.filter((finding) => !baselineIds.has(finding.id));
+  const currentIds = new Set(findings.flatMap((finding) => finding.compatibleIds));
+  const newFindings = findings.filter((finding) => !finding.compatibleIds.some(id => baselineIds.has(id)));
   const removedBaseline = baseline.findings.filter((finding) => !currentIds.has(finding.id));
 
   if (newFindings.length > 0) {

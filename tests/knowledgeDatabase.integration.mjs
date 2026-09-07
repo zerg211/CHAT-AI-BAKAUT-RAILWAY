@@ -8,6 +8,7 @@ process.env.NODE_ENV='test';
 const {pool}=await import('../src/db/pool.ts');
 const {ProductRepository}=await import('../src/db/repositories.ts');
 const {processKnowledgeEnrichment}=await import('../src/ai/knowledgeEnrichment.ts');
+const {validateToolResultOutput}=await import('../src/ai/agentManagerToolRegistry.ts');
 const repo=new ProductRepository();
 const checks=[];
 const run=async(id,fn)=>{await fn();checks.push({id,status:'PASS'});};
@@ -23,6 +24,9 @@ try {
  await run('TECHNICAL_FACT_PUBLISHED_WITH_ORIGINAL_VERIFICATION_TIME',async()=>{
   p=await repo.upsertProduct(input,Array(1536).fill(0.01));
   fact.productId=p.id;
+  for(const tool of ['catalog.search','catalog.getProductDetails'])validateToolResultOutput({
+    requestId:'real-db-shape',tool,status:'ok',warnings:[],payload:{productIds:[p.id],products:[p]}
+  });
   const saved=await repo.upsertVerifiedProductFact(fact);
   assert.equal(Date.parse(saved.lastVerifiedAt),Date.parse(fact.observedAt));
  });
@@ -30,6 +34,9 @@ try {
   const before=await pool.query('SELECT * FROM products WHERE id=$1',[p.id]);
   p=await repo.upsertProduct({...input,price:165,raw:{...input.raw,price:165},imageUrl:'https://fixtures.bakaut.invalid/new.jpg'});
   const after=await pool.query('SELECT * FROM products WHERE id=$1',[p.id]);
+  const reloaded=await repo.getProductsByIds([p.id]);
+  validateToolResultOutput({requestId:'real-db-readback',tool:'catalog.getProductDetails',status:'ok',warnings:[],
+    payload:{products:reloaded,productIds:[p.id]}});
   assert.equal(after.rows[0].technical_version,before.rows[0].technical_version);
   assert.notEqual(after.rows[0].commercial_version,before.rows[0].commercial_version);
   assert.notEqual(after.rows[0].source_content_hash,before.rows[0].source_content_hash);
