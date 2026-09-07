@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 interface DocumentPassage { id: string; start: number; end: number; text: string }
+export const DOCUMENT_PASSAGE_GAP = '\n[Non-contiguous source excerpts]\n';
 export interface EvidenceDocument {
   sourceUrl: string;
   sourceTitle?: string;
@@ -54,20 +55,21 @@ export function bindDocumentEvidence(parsed: Record<string, unknown>, documents:
     if (kind === 'coverage' && item.status !== 'confirmed' && evidenceRef == null) return item;
     const reference = evidenceRef && typeof evidenceRef === 'object' ? evidenceRef as Record<string, unknown> : {};
     const rawIds = Array.isArray(reference.passageIds) ? reference.passageIds : [];
-    // Repeating the same location adds no evidence. Bind it once, then apply
-    // the unchanged adjacency, document, and semantic fact checks.
+    // Repeating the same location adds no evidence. Bind it once; separated
+    // sections remain distinct source excerpts, subject to semantic validation.
     const ids = [...new Set(rawIds)];
     const document = documents.find((candidate) => candidate.passages.some((part) => part.id === ids[0]));
-    const firstIndex = document?.passages.findIndex((part) => part.id === ids[0]) ?? -1;
-    const parts = document?.passages.slice(firstIndex, firstIndex + ids.length) ?? [];
+    const parts = ids.flatMap((id) => document?.passages.filter((part) => part.id === id) ?? []);
     const valid = rawIds.length <= 2 && ids.length >= 1 && ids.length <= 2 && parts.length === ids.length &&
-      ids.every((id, index) => typeof id === 'string' && parts[index]?.id === id);
+      ids.every((id, index) => typeof id === 'string' && parts[index]?.id === id &&
+        (index === 0 || parts[index]!.start > parts[index - 1]!.start));
     if (!valid || !document) {
       invalid = true;
       selections.push({ kind, itemIndex, passageIds: ids.slice(0, 2).map((id) => String(id).slice(0, 96)), status: 'invalid' });
       return kind === 'fact' ? null : { ...item, status: 'not_confirmed', value: '', evidence: '', sourceUrl: null, sourceTitle: null };
     }
-    const evidence = parts.map((part) => part.text).join('');
+    const evidence = parts.map((part, index) =>
+      (index > 0 && parts[index - 1]!.end !== part.start ? DOCUMENT_PASSAGE_GAP : '') + part.text).join('');
     passageKeys.push(documentPassageKey(document.sourceUrl, evidence));
     selections.push({ kind, itemIndex, passageIds: ids as string[], status: 'bound', sourceUrl: document.sourceUrl,
       start: parts[0]!.start, end: parts.at(-1)!.end, evidenceHash: createHash('sha256').update(evidence).digest('hex') });

@@ -158,7 +158,7 @@ describe('production web research regressions', () => {
     }
   });
 
-  it.each(['late passage', 'adjacent passages', 'duplicate passage', 'invalid reference', 'unsupported claim', 'wrong model', 'missing reference'] as const)(
+  it.each(['late passage', 'adjacent passages', 'duplicate passage', 'separated passages', 'invalid reference', 'unsupported claim', 'wrong model', 'missing reference'] as const)(
     'binds document evidence and reports its validation boundary: %s', async (mode) => {
       const actualQuote = mode === 'wrong model' ? generalQuote.replace('20', '50') : generalQuote;
       const actualScope = mode === 'wrong model' ? 'This instruction manual applies only to FIRMAN RD4910E.' : scopeQuote;
@@ -172,7 +172,7 @@ describe('production web research regressions', () => {
         if (call.stage === 'source_evidence_semantic_validation') {
           validationCalls += 1;
           const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
-          if (mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage') {
+          if (mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage' || mode === 'separated passages') {
             expect(payload.sources[0].sourceText).toContain(actualQuote);
             expect(payload.sources[0].sourceText).toContain(scopeQuote);
             expect(payload.sources[0].sourceText.length).toBeLessThanOrEqual(18_000);
@@ -195,7 +195,7 @@ describe('production web research regressions', () => {
           const response = webResponse('official_manual', { evidence: 'The first oil change is required after twenty hours.',
             sourceUrl: 'https://invented.invalid/manual.pdf', value: '20 hours' });
           (response.parsed.facts[0] as any).evidenceRef = {
-            passageIds: mode === 'invalid reference' ? ['document-99-passage-0'] : mode === 'duplicate passage' ? [refs[0], refs[0]] : refs
+            passageIds: mode === 'invalid reference' ? ['document-99-passage-0'] : mode === 'duplicate passage' ? [refs[0], refs[0]] : mode === 'separated passages' ? ['document-0-passage-0', ...refs] : refs
           };
           if (mode === 'missing reference') delete (response.parsed.facts[0] as any).evidenceRef;
           return response;
@@ -206,7 +206,7 @@ describe('production web research regressions', () => {
         return response;
       });
       const actual = await research({ onTrace: (event) => { traces.push(event); } });
-      if (mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage') {
+      if (mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage' || mode === 'separated passages') {
         expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', sourceUrl: sharedUrl,
           evidence: actualQuote, evidenceVerifiedExact: true }));
       } else expect(actual.facts).toEqual([]);
@@ -222,8 +222,7 @@ describe('production web research regressions', () => {
         expect(actual.warnings).toContain('document_evidence_reference_invalid');
         const documents = createEvidenceDocuments([{ sourceUrl: sharedUrl, text: sourceText },
           { sourceUrl: `${sharedUrl}?other`, text: sourceText }]);
-        for (const ids of [['document-0-passage-0', 'document-0-passage-2'],
-          ['document-0-passage-0', 'document-1-passage-1'], ['document-0-passage-1', 'document-0-passage-0']]) {
+        for (const ids of [['document-0-passage-0', 'document-1-passage-1'], ['document-0-passage-1', 'document-0-passage-0']]) {
           const rebound = bindDocumentEvidence({ facts: [{ evidenceRef: { passageIds: ids } }] }, documents);
           expect(rebound.parsed.facts).toEqual([]);
           expect(rebound.trace.selections[0]?.status).toBe('invalid');
@@ -232,7 +231,7 @@ describe('production web research regressions', () => {
         const check: any = traces.find((event: any) => event.evidenceValidation?.length);
         expect(check.evidenceValidation[0]).toMatchObject({ sourceUrl: sharedUrl, exactExcerptFound: true,
           modelScopeMatched: mode !== 'wrong model', claimSupported: mode !== 'unsupported claim',
-          accepted: mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage' });
+          accepted: mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage' || mode === 'separated passages' });
         expect(check.evidenceValidation[0].validatorTextLength).toBeLessThanOrEqual(18_000);
       }
       if (mode === 'wrong model') {
@@ -797,4 +796,21 @@ it('finishes already-read document validation before reserving time for another 
   expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', evidenceVerifiedExact: true }));
   expect(structured.mock.calls.some(([call]) => call.stage.startsWith('product_comparison_research_'))).toBe(false);
   expect(actual.usedDocumentRead).toBe(true);
+});
+
+
+it('retains manual discovery leads before unrelated page PDFs for the next research attempt', async () => {
+  const unrelatedUrl = 'https://www.firman.biz/legal/general-certificate.pdf';
+  structured.mockImplementation(async (call) => {
+    if (call.stage === 'product_research_document_read') throw new Error('reader unavailable');
+    const tier = call.stage.slice('product_comparison_research_'.length);
+    const r = webResponse(tier);
+    if (tier === 'official_page') r.response.output[0]!.action.sources = [{url: unrelatedUrl, title: "Certificate"}];
+    if (tier === 'official_manual') r.response.output[0]!.action.sources = [{url: sharedUrl, title: "Manual"}];
+    return r;
+  });
+  parsePdf.mockResolvedValue({text: scopeQuote + generalQuote, totalPages: 1, parsedPages: 1, truncated: false});
+  const actual = await research();
+  expect(actual.sourceCandidates?.[0]?.url).toBe(sharedUrl);
+  expect(actual.facts).toEqual([]);
 });
