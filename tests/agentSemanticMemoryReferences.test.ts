@@ -229,6 +229,35 @@ describe('initial semantic producer memory references', () => {
     expect(createStructuredJsonResponse).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['identical', 'different value', 'additional field', 'supersedes', 'stale evidence'] as const)(
+    'normalizes a duplicate update only when the complete current event is identical: %s', async mode => {
+      const state = await seed();
+      createStructuredJsonResponse.mockImplementationOnce(async ({ request }) => {
+        const context = JSON.parse(request.input.find((x: any) => x.role === 'user').content);
+        const wire = refCorrection(context);
+        const action = wire.ledgerDelta.memoryActions.find((item: any) => item.factRef.endsWith('::budget_max_rub'));
+        const fact = context.memoryReferences.facts.find((item: any) => item.factRef === action.factRef);
+        if (mode === 'stale evidence') action.evidence = 'old unrelated evidence';
+        const payload: any = { factKey: fact.factKey, needId: fact.needId, productClass: fact.productClass, role: fact.role,
+          value: action.value, unit: action.unit, relation: action.relation, ranking: action.ranking, confidence: 1 };
+        if (mode === 'different value') payload.value = 60000;
+        if (mode === 'additional field') payload.extraConstraint = 'not represented by memoryAction';
+        if (mode === 'supersedes') payload.supersedesEventIds = ['some-other-event'];
+        wire.ledgerDelta.events.push({ eventId: null, eventType: 'fact.confirmed', scope: fact.scope, source: 'llm_state_delta',
+          status: 'active', evidence: action.evidence, payload });
+        return { parsed: wire };
+      });
+      const pending = new OpenAIAgentManagerModel().decideTurn({ session, history, userMessage: correction, ...state });
+      if (mode === 'identical') {
+        const decision = await pending;
+        expect(decision.ledgerDelta.events.filter(event => event.payload.factKey === 'budget_max_rub')).toHaveLength(1);
+        const validation = validateAgentSemanticDecision({ decision, previousLedgerState: state.ledgerState, sessionId, turnId, history, userMessage: correction });
+        expect(validation.issues).toEqual([]);
+        expect(validation.ledgerState.factsByKey['generator::budget_max_rub']!.value).toBe(70000);
+      } else await expect(pending).rejects.toThrow(mode === 'stale evidence' ? 'memory_change_evidence_not_current' : 'duplicate_memory_fact_write');
+    }
+  );
+
   it('repairs a duplicate reference write inside the existing generation loop before applying any delta', async () => {
     const state = await seed();
     const checkpoints: unknown[] = [], traces: unknown[] = [], writes: any[] = [];
@@ -265,6 +294,8 @@ describe('initial semantic producer memory references', () => {
           factRef: 'generator::budget_max_rub', inlineEventPolicy: 'new_facts_only', memoryActionPolicy: 'one_action_for_existing_fact'
         })]);
         expect(request.input.find((x: any) => x.role === 'system').content).toContain('duplicate_memory_fact_write');
+        expect(request.input.find((x: any) => x.role === 'system').content).not.toContain('Если покупатель изменил вводные, создай новый fact.confirmed');
+        if (attempt === 2) wire.ledgerDelta.memoryActions.find((action: any) => action.factRef.endsWith('::budget_max_rub')).evidence = 'old unrelated evidence';
       }
       wire.intent.requiresTools = false; wire.intent.toolRequests = [];
       wire.intent.selectionPolicy.maxCards = 0;
@@ -281,7 +312,7 @@ describe('initial semantic producer memory references', () => {
     const result = await new AgentManagerOrchestrator(conversations as never, {} as never, {} as never, new RepairModel())
       .generateAnswer({ sessionId, turnId, userMessage: correction });
     expect(result.answer).toBe('Новые условия учёл.');
-    expect(attempt).toBe(2);
+    expect(attempt).toBe(3);
     expect(writes.filter(write => write.payload.factKey === 'budget_max_rub')).toHaveLength(1);
     expect(traces).toContainEqual(expect.objectContaining({ eventType: 'semantic_decision_schema_invalid' }));
   });

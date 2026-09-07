@@ -419,6 +419,47 @@ describe('production web research regressions', () => {
     expect(structured.mock.calls.filter(([call]) => call.stage === 'product_research_document_read')).toHaveLength(1);
   });
 
+  it.each(['completed read', 'unexecuted lead', 'foreign target', 'mixed targets'] as const)(
+    'lets a changed research goal reach discovery only after an actual same-target document read: %s', async mode => {
+      arrangeManual();
+      const researchGoal = { query: `${target} alternative HTML instructions`, reason: 'The previous document did not resolve the question.' };
+      const actual = await research({ knownSourceCandidates: [{ url: sharedUrl }], researchGoal,
+        previousResearch: [{ requestId: 'prior-web', status: 'ok', warnings: [], payload: {
+          targetProductNames: mode === 'foreign target' ? ['FIRMAN RD4910E'] : mode === 'mixed targets' ? [target, 'FIRMAN RD4910E'] : [target],
+          usedDocumentRead: mode !== 'unexecuted lead', sourceCandidates: [{ url: sharedUrl }]
+        } }] });
+      const calls = structured.mock.calls.map(([call]) => call);
+      const discovery = calls.filter(call => call.stage.startsWith('product_comparison_research_'));
+      if (mode === 'completed read') {
+        expect(calls[0].stage).toBe('product_comparison_research_official_page');
+        expect(discovery.length).toBeGreaterThan(0);
+        for (const call of discovery) {
+          const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
+          expect(payload.researchGoal).toEqual(researchGoal);
+          expect(payload.knownSourceCandidates).toContainEqual(expect.objectContaining({ url: sharedUrl }));
+        }
+      } else {
+        expect(calls[0].stage).toBe('product_research_document_read');
+        expect(discovery).toHaveLength(0);
+      }
+      expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', evidenceVerifiedExact: true }));
+    }
+  );
+
+  it('retains bounded returned quote and scope diagnostics for rejected source claims only', async () => {
+    const returnedEvidence = `Unmatched quoted instruction ${'e'.repeat(400)}`;
+    const returnedScope = `Unsupported model scope ${'s'.repeat(700)}`;
+    arrangeManual(undefined, { evidence: returnedEvidence, scopeQuote: returnedScope, targetApplicability: 'uncertain' });
+    const traces: ProductResearchTraceEvent[] = [];
+    const actual = await research({ knownSourceCandidates: [{ url: sharedUrl }], onTrace: event => { traces.push(event); } });
+    expect(actual.facts).toEqual([]);
+    const rejected = traces.flatMap(event => event.evidenceValidation ?? []).filter(item => !item.accepted);
+    expect(rejected.length).toBeGreaterThan(0);
+    expect(rejected[0]).toMatchObject({ validatorEvidence: returnedEvidence.slice(0, 320),
+      validatorScopeQuote: returnedScope.slice(0, 640), validatorTargetApplicability: 'uncertain' });
+    expect(JSON.stringify(actual)).not.toContain('validatorEvidence');
+  });
+
   it('finishes the manual wait when the parallel page discovery fails', async () => {
     structured.mockImplementation(async (call) => {
       if (call.stage === 'product_comparison_research_official_page') throw new Error('discovery unavailable');

@@ -269,6 +269,8 @@ export interface ProductResearchTraceEvent {
     evidenceHash: string; evidenceLength: number; evidencePreview: string;
     validatorTextHash: string; validatorTextLength: number;
     exactExcerptFound: boolean; modelScopeMatched: boolean; claimSupported: boolean; accepted: boolean;
+    validatorEvidence?: string; validatorScopeQuote?: string;
+    validatorTargetApplicability?: 'exact_model' | 'shared_instruction' | 'not_applicable' | 'uncertain';
     warnings: string[];
   }>;
 }
@@ -1632,6 +1634,9 @@ const sourceApplicabilityInstructions = [
 ].join('\n');
 
 function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
+  const targetApplicability: 'exact_model' | 'shared_instruction' | 'not_applicable' | 'uncertain' =
+    parsed.targetApplicability === 'exact_model' || parsed.targetApplicability === 'shared_instruction' ||
+      parsed.targetApplicability === 'not_applicable' ? parsed.targetApplicability : 'uncertain';
   const claimStartKinds = Array.isArray(parsed.claimStartKinds)
     ? parsed.claimStartKinds.filter((kind): kind is SourceBackedStartKind =>
         sourceBackedStartKinds.includes(kind as SourceBackedStartKind)
@@ -1644,8 +1649,7 @@ function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
     : [];
   return {
     claimSupported: parsed.claimSupported === true,
-    targetApplicability: parsed.targetApplicability === 'exact_model' || parsed.targetApplicability === 'shared_instruction' ||
-      parsed.targetApplicability === 'not_applicable' ? parsed.targetApplicability : 'uncertain' as const,
+    targetApplicability,
     scopeQuote: typeof parsed.scopeQuote === 'string' ? collapseWhitespace(parsed.scopeQuote).slice(0, 640) : '',
     claimStartKinds: sourceBackedStartKinds.filter((kind) => claimStartKinds.includes(kind)),
     supportedStartKinds: sourceBackedStartKinds.filter((kind) => supportedStartKinds.includes(kind)),
@@ -2362,13 +2366,20 @@ async function validateSourceBackedResult(input: {
         : coverageValidations[candidate.itemIndex]?.validation;
       const evidence = candidate.item.evidence;
       const validatorText = boundedSemanticSourceTextForEvidence(candidate.sourceText, evidence).text;
+      const accepted = checked ? ('accepted' in checked ? checked.accepted : checked.valid) : false;
+      const semanticVerdict = batchedSemanticValidations[index];
       return { kind: candidate.kind, itemIndex: candidate.itemIndex, sourceUrl: candidate.item.sourceUrl,
         textHash: createHash('sha256').update(candidate.sourceText).digest('hex'), textLength: candidate.sourceText.length,
         evidenceHash: createHash('sha256').update(evidence).digest('hex'), evidenceLength: evidence.length,
         validatorTextHash: createHash('sha256').update(validatorText).digest('hex'), validatorTextLength: validatorText.length,
         evidencePreview: evidence.slice(0, 240), exactExcerptFound: checked?.exactExcerptFound === true,
         modelScopeMatched: checked?.modelScopeMatched === true, claimSupported: batchedSemanticValidations[index]?.claimSupported === true,
-        accepted: checked ? ('accepted' in checked ? checked.accepted : checked.valid) : false,
+        accepted,
+        ...(!accepted && semanticVerdict ? {
+          validatorEvidence: semanticVerdict.evidence.slice(0, 320),
+          validatorScopeQuote: semanticVerdict.scopeQuote.slice(0, 640),
+          validatorTargetApplicability: semanticVerdict.targetApplicability
+        } : {}),
         warnings: (checked?.warnings ?? []).slice(0, 12).map((warning) => warning.slice(0, 240)) };
     })
   });
@@ -3630,6 +3641,13 @@ export async function researchProductComparisonFacts(input: {
     }
     const scopedPriorResearch = exactScopedPriorResearch({ previousResearch: input.previousResearch,
       targetProductNames: targetProductNames.length ? targetProductNames : exactCatalogProducts.map((product) => product.name) });
+    const currentResearchTargets = targetProductNames.length ? targetProductNames : exactCatalogProducts.map((product) => product.name);
+    const alreadyReadCurrentTargets = scopedPriorResearch.some((observation) =>
+      observation.status === 'ok' && observation.payload.usedDocumentRead === true &&
+      currentResearchTargets.every((target) => Array.isArray(observation.payload.targetProductNames) &&
+        observation.payload.targetProductNames.some((name) => typeof name === 'string' &&
+          textMatchesTargetName(name, target) && textMatchesTargetName(target, name)))
+    );
     const priorFailedDocumentUrls = new Set(scopedPriorResearch.flatMap((observation) =>
       Array.isArray(observation.payload.sourceDiagnostics) ? observation.payload.sourceDiagnostics.flatMap((item) =>
         item && typeof item === 'object' && ['http_status', 'timeout', 'network', 'unsupported_binary', 'unreadable'].includes(String(item.reason))
@@ -3996,10 +4014,10 @@ export async function researchProductComparisonFacts(input: {
 
     const officialReserveMs = webResearchRemainingMs(input.deadlineAtMs) >= PRIMARY_WEB_MAX_MS + PRIMARY_WEB_FALLBACK_RESERVE_MS
       ? PRIMARY_WEB_FALLBACK_RESERVE_MS : TIER_FALLBACK_RESERVE_MS;
-    // Known exact-scoped leads already completed discovery. Spend the existing
-    // manual stage on actual reading first; incomplete/failed reads still leave
-    // the normal discovery tiers available, without a second document reader.
-    if (orderedDocumentCandidates().some((candidate) => !priorFailedDocumentUrls.has(candidate.url))) {
+    // A first known lead can bypass discovery. After a completed same-target
+    // read, let the planner's revised goal reach discovery instead of forcing
+    // the same document ahead of every continuation. Leads remain available.
+    if (!alreadyReadCurrentTargets && orderedDocumentCandidates().some((candidate) => !priorFailedDocumentUrls.has(candidate.url))) {
       knownDocumentResult = await executeTier({ tier: 'official_manual', stage: 'primary_web', attemptNumber: 1,
         readKnownDocumentsOnly: true, signal: input.signal, deadlineAtMs: boundedResearchStageDeadline({
           overallDeadlineAtMs: input.deadlineAtMs, maxDurationMs: PRIMARY_WEB_MAX_MS + WEB_RESEARCH_MIN_STAGE_MS,

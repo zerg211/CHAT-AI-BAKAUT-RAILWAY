@@ -4793,6 +4793,14 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
   const chosenConstraintRefs = new Set<string>();
   const chosenActions = new Set<string>();
   const expandedEvents = [...wire.ledgerDelta.events];
+  const normalizedMemoryEvent = (event: unknown) => {
+    // Runtime event IDs are derived from contents. Normalize the full write,
+    // preserving every payload field (including explicit supersession).
+    const { eventId: _eventId, ...normalized } = LedgerStateDeltaSchema.parse({
+      rationale: 'Compare memory writes.', events: [event]
+    }).events[0]!;
+    return JSON.parse(JSON.stringify(normalized));
+  };
   for (const candidate of wire.ledgerDelta.memoryActions ?? []) {
     const action = z.discriminatedUnion('action', [
       z.object({ factRef: z.string(), action: z.literal('retain') }).strict(),
@@ -4805,14 +4813,29 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
     const fact = factByRef.get(action.factRef) ?? fail(`unknown_memory_fact_reference:${action.factRef}`);
     if (chosenActions.has(action.factRef)) fail(`duplicate_memory_action:${action.factRef}`);
     chosenActions.add(action.factRef);
-    if (expandedEvents.some(event => {
+    const overlappingEventIndexes = expandedEvents.flatMap((event, index) => {
       const parsed = z.object({ payload: z.object({ factKey: z.unknown().optional(), needId: z.unknown().optional(),
         targetEventIds: z.array(z.string()).optional() }).passthrough() }).passthrough().safeParse(event);
       return parsed.success && ((parsed.data.payload.factKey === fact.factKey && (parsed.data.payload.needId ?? undefined) === fact.needId) ||
-        parsed.data.payload.targetEventIds?.includes(fact.eventId));
-    })) fail(`duplicate_memory_fact_write:${action.factRef}`);
-    if (action.action === 'retain') continue;
+        parsed.data.payload.targetEventIds?.includes(fact.eventId)) ? [index] : [];
+    });
+    if (action.action === 'retain') {
+      if (overlappingEventIndexes.length) fail(`duplicate_memory_fact_write:${action.factRef}`);
+      continue;
+    }
     if (!productMentionEvidenceGrounded(action.evidence, input.userMessage)) fail(`memory_change_evidence_not_current:${action.factRef}`);
+    const memoryEvent = { eventType: action.action === 'update' ? 'fact.confirmed' : 'fact.negated',
+      scope: fact.scope, source: 'llm_state_delta', status: action.action === 'update' ? 'active' : 'negated', evidence: action.evidence,
+      payload: action.action === 'update' ? { factKey: fact.factKey, needId: fact.needId, productClass: fact.productClass,
+        role: fact.role, value: action.value, unit: action.unit, relation: action.relation, ranking: action.ranking, confidence: 1 }
+        : { targetEventIds: [fact.eventId] } };
+    if (overlappingEventIndexes.length) {
+      const normalizedUpdate = normalizedMemoryEvent(memoryEvent);
+      if (action.action !== 'update' || overlappingEventIndexes.some(index =>
+        !isDeepStrictEqual(normalizedMemoryEvent(expandedEvents[index]), normalizedUpdate)
+      )) fail(`duplicate_memory_fact_write:${action.factRef}`);
+      for (const index of [...overlappingEventIndexes].reverse()) expandedEvents.splice(index, 1);
+    }
     const constraintFactBindings = (action.constraintRefs ?? []).map(ref => {
       const constraint = constraintByRef.get(ref) ?? fail(`unknown_memory_constraint_reference:${ref}`);
       if (constraint.needId !== fact.needId || fact.scope !== 'need') fail(`memory_constraint_scope_mismatch:${ref}`);
@@ -4822,11 +4845,7 @@ function expandSemanticMemoryReferences(raw: unknown, input: AgentManagerModelIn
     });
     if (constraintFactBindings.length) expandedEvents.push({ eventType: 'need.updated', scope: 'need', source: 'llm_state_delta',
       status: 'active', evidence: action.evidence, payload: { needId: fact.needId, constraintFactBindings } });
-    expandedEvents.push({ eventType: action.action === 'update' ? 'fact.confirmed' : 'fact.negated',
-      scope: fact.scope, source: 'llm_state_delta', status: action.action === 'update' ? 'active' : 'negated', evidence: action.evidence,
-      payload: action.action === 'update' ? { factKey: fact.factKey, needId: fact.needId, productClass: fact.productClass,
-        role: fact.role, value: action.value, unit: action.unit, relation: action.relation, ranking: action.ranking, confidence: 1 }
-        : { targetEventIds: [fact.eventId] } });
+    expandedEvents.push(memoryEvent);
   }
   const { memoryActions: _memoryActions, ...originalDelta } = wire.ledgerDelta;
   let ledgerDelta = LedgerStateDeltaSchema.parse({ ...originalDelta, events: expandedEvents });
@@ -4993,10 +5012,11 @@ export const agentManagerStructuredFormats = {
   answerContractFormat
 } as const;
 
-function ledgerReducerPolicyPromptBlock() {
+function ledgerReducerPolicyPromptBlock(memoryReferencesAvailable = false) {
   return [
     'Return the shortest complete semantic JSON that satisfies the schema. Do not restate the buyer request in rationale or evidence; use only the minimum exact evidence needed to preserve meaning.',
     'Не переносишь контекст из других диалогов. Не добавляешь выдуманные факты.',
+    ...(memoryReferencesAvailable ? ['При наличии factRef все изменения существующего факта, включая исправления предпочтений, выполняй только через memoryActions. Указания о создании fact.confirmed ниже относятся исключительно к новым фактам без factRef; не дублируй существующую запись в inline events.'] : []),
     'Веди несколько потребностей явно. Для новой темы создай need.opened с payload needId, productClass, summary, constraints, constraintsUpdateMode, openQuestions, openQuestionsUpdateMode, selectedProductIds, rejectedProductIds, rejectedProductIdsUpdateMode, selectionUpdateMode, invalidatedProductIds, status и activate=true. Для продолжения, исправления или возврата к теме используй need.updated с тем же needId; activate=true ставит эту потребность текущей, а прежнюю reducer поставит на паузу.',
     'В need.opened и need.updated всегда задавай constraintsUpdateMode, openQuestionsUpdateMode и rejectedProductIdsUpdateMode: merge добавляет элементы к сохранённым, replace полностью заменяет список, clear явно очищает его. Обязательный пустой массив без replace/clear не является командой удаления. Отказ покупателя от товара добавляй через rejectedProductIdsUpdateMode=merge; снимай отдельные отказы только полным replace, все отказы — только clear.',
     'В need.opened и need.updated всегда задавай selectionUpdateMode: preserve, если прежний выбор остаётся уместен; replace, если selectedProductIds полностью заменяют прежние; clear, если смена вводных аннулирует весь прежний выбор. В invalidatedProductIds перечисляй известные ID, которые больше не подходят. Не используй пустой selectedProductIds как неявную команду preserve.',
@@ -5004,11 +5024,13 @@ function ledgerReducerPolicyPromptBlock() {
     'Текущая потребность — existingState.activeNeedId. Новую второстепенную тему сохраняй с activate=false: она останется paused. Обновление paused темы без activate=true не переключает текущую; для возврата явно ставь activate=true. После закрытия темы не возвращайся к ней без такого решения.',
     'Одна реплика может одновременно менять несколько прежних потребностей. Сначала сохрани все независимые изменения потребностей отдельными ledgerDelta.events по их needId: выбор/отказ от товара, изменение требований, закрытие или возврат. Смена фокуса ответа не отменяет выбор в другой теме: её обновление сохраняй с activate=false, а activate=true ставь у темы текущего ответа. Для выбора конкретной прежней карточки разреши ссылку через priorVisibleProducts.occurrences и используй selectionUpdateMode=replace с её ID; не оставляй весь прежний список вариантов вместо выбора. Одно лишь сохранение выбора в другой теме не требует нового каталожного поиска по ней; текущие инструменты следуют реально заданным вопросам.',
     'В fact.observed/fact.confirmed всегда указывай payload.factKey, value, needId, productClass, confidence от 0 до 1 и role: hard_requirement, preference, context или commercial. fact.observed означает неподтверждённое наблюдение и не получает confidence=1; fact.confirmed используй только для явно подтверждённой покупателем или проверенной источником информации. Роль и productClass определяй по смыслу реплики, не по словам-шаблонам.',
-    'Явные предпочтения покупателя сохраняй как scoped fact.confirmed с role=preference, relation=preferred и теми же kind/value/unit, что в preference requirement. Числовое предпочтение сохраняй отдельно в payload.ranking={attribute,direction}, точно как в связанном rankingObjectives; value не заменяй этим объектом. Для нечислового предпочтения ranking=null. В следующий подбор этой потребности переноси тот же requirement и сохранённые attribute/direction, пока покупатель не изменит или не отменит предпочтение через ledgerDelta. Если у старого факта ranking отсутствует, восстанови его смысл из evidence/контекста и запиши обновлённый fact.confirmed с ranking или null; не угадывай по одному kind. Лимит нагрузки/бюджета и предпочтение минимального избытка/цены — разные требования; rankingObjectives связывай с отдельным preference requirement, не с hard constraint. При технической консультации по известной модели без нового подбора не нужно повторять предпочтения сортировки в selectionPolicy.',
+    'Явные предпочтения покупателя сохраняй как scoped fact.confirmed с role=preference, relation=preferred и теми же kind/value/unit, что в preference requirement. Числовое предпочтение сохраняй отдельно в payload.ranking={attribute,direction}, точно как в связанном rankingObjectives; value не заменяй этим объектом. Для нечислового предпочтения ranking=null. В следующий подбор этой потребности переноси тот же requirement и сохранённые attribute/direction, пока покупатель не изменит или не отменит предпочтение через ledgerDelta. Если у старого факта ranking отсутствует, восстанови его смысл из evidence/контекста и сохрани ranking или null: при наличии factRef используй memoryActions update, иначе новый fact.confirmed; не угадывай по одному kind. Лимит нагрузки/бюджета и предпочтение минимального избытка/цены — разные требования; rankingObjectives связывай с отдельным preference requirement, не с hard constraint. При технической консультации по известной модели без нового подбора не нужно повторять предпочтения сортировки в selectionPolicy.',
     'Область каждого факта задавай явно: scope=need и needId для требования этой покупки; scope=dialogue и needId=null только если оно действительно относится ко всем покупкам в диалоге; scope=product и productId для характеристики конкретной модели. Характеристика товара не становится hard_requirement покупателя. Сохраняй unit и relation, согласованные с requirement; неизвестную единицу не выдумывай.',
     'Для факта, который является ограничением подбора, payload.factKey должен совпадать со стабильным kind соответствующего selectionPolicy.requirement: budget_max_rub, price_max_rub, weight_min_kg, weight_max_kg, nominal_power_min_kw, nominal_power_max_kw, phase, voltage_v, fuel_type, price_visibility, electric_start_required, auto_start_required, remote_start_required, material или quantity. electric_start_required означает наличие электростартера; auto_start_required означает именно автоматический запуск/АВР; remote_start_required означает запуск по команде с брелока или пульта и не равен АВР или просто электростартеру. Для другого ограничения используй один и тот же точный новый идентификатор в factKey и requirement.kind.',
     'Если покупатель ответил на уже заданный вопрос, создай question.answered/question.closed.',
-    'Если покупатель изменил вводные, создай новый fact.confirmed и укажи supersedesEventIds для старого факта, если он известен.'
+    memoryReferencesAvailable
+      ? 'Если покупатель изменил вводные, обнови существующий factRef через memoryActions update с точным evidence текущей реплики. Inline fact.confirmed создавай только для нового факта, которого нет в memoryReferences.'
+      : 'Если покупатель изменил вводные, создай новый fact.confirmed и укажи supersedesEventIds для старого факта, если он известен.'
   ].join('\n');
 }
 
@@ -5085,7 +5107,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       ...semanticValidationIssues
     ]);
     const duplicateReferencePrefix = 'semantic_contract_schema_invalid:memoryReferences:duplicate_memory_fact_write:';
-    const semanticReferenceRepairs = semanticValidationIssues.flatMap(issue => {
+    const semanticReferenceRepairs = repairGuidanceIssues.flatMap(issue => {
       if (!issue.startsWith(duplicateReferencePrefix)) return [];
       const factRef = issue.slice(duplicateReferencePrefix.length);
       const fact = memoryReferences.facts.find(item => item.factRef === factRef);
@@ -5199,7 +5221,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             'Не запускай две независимые интерпретации. Не задавай вопрос, ответ на который присутствует в текущей реплике или активном ledger.',
             'Для generator_load_scenario сохрани полный structured value: loads, simultaneousRunning и simultaneousStarting. Каждый load из ledgerDelta обязан присутствовать в calculator.generatorLoad args.loads.',
             validationRepair,
-            ledgerReducerPolicyPromptBlock(),
+            ledgerReducerPolicyPromptBlock(true),
             plannerSystemPromptBlock(input.userMessage, false)
           ].join('\n')
         },
@@ -6706,6 +6728,7 @@ export class AgentManagerOrchestrator {
     }
     const documentReadContext: ProductResearchDocumentReadContext = {};
     const catalogResearchCache = new Map<string, ProductComparisonResearchResult>();
+    const freshResearchResults: ProductComparisonResearchResult[] = [];
     let { toolResults, products } = await this.executeTools({
       session: input.session,
       turnId: input.turnId,
@@ -6719,6 +6742,7 @@ export class AgentManagerOrchestrator {
       persistedToolResults: reusablePersistedToolResults,
       documentReadContext,
       catalogResearchCache,
+      freshResearchResults,
       budget: turnBudget,
       signal: input.signal
     });
@@ -6867,6 +6891,7 @@ export class AgentManagerOrchestrator {
           priorProducts: observationProducts, priorToolResults: toolResults,
           documentReadContext,
           catalogResearchCache,
+          freshResearchResults,
           budget: turnBudget, signal: input.signal
         }));
         continuation = { status: 'stopped', rounds: round, rationale: decision.rationale,
@@ -7621,12 +7646,14 @@ export class AgentManagerOrchestrator {
     priorToolResults?: ToolResult[];
     documentReadContext?: ProductResearchDocumentReadContext;
     catalogResearchCache?: Map<string, ProductComparisonResearchResult>;
+    freshResearchResults?: ProductComparisonResearchResult[];
     budget: AgentManagerTurnBudget;
     signal?: AbortSignal;
   }) {
     const productsById = new Map<string, Product>((input.priorProducts ?? []).map((product) => [product.id, product]));
     const toolResults: ToolResult[] = [...(input.priorToolResults ?? [])];
     const catalogResearchCache = input.catalogResearchCache ?? new Map<string, ProductComparisonResearchResult>();
+    const freshResearchResults = input.freshResearchResults ?? [];
     const technicalLeadRequiresExhaustionProof = intentRequiresSearchBeforeSpecialist(input.intent) &&
       input.intent.toolRequests.some((request) => request.tool === 'lead.capture');
     const technicalHandoffContinuationProven =
@@ -8227,15 +8254,30 @@ export class AgentManagerOrchestrator {
           const catalogAndMemory = catalogResearch && memory?.research
             ? mergeVerifiedMemoryWithResearch(catalogResearch, memory.research)
             : catalogResearch ?? memory?.research ?? null;
-          const requiresFreshWeb = input.intent.grounding?.webRequirement === 'buyer_requested' ||
+          const freshEvidence = freshResearchResults.length ? freshResearchResults.reduce((previous, next) => ({
+            ...mergeVerifiedMemoryWithResearch(previous, next), conflicts: [...previous.conflicts, ...next.conflicts]
+          })) : null;
+          const freshWebMissingSlots = allRequestedFactSlots.filter((slot) => !freshEvidence ||
+            freshResearchResults.some((result) => result.answerGuidance.coverage.some((item) =>
+              (item.status === 'ambiguous' || item.status === 'contradicted') &&
+              (!item.productName || exactCoverageProductNamesMatch(item.productName, slot.productName)) &&
+              compactModelText(item.attribute) === compactModelText(slot.attribute))) ||
+            !researchResultCoversFactSlot({ result: freshEvidence, ...slot, sourceTypes: ['web'] }));
+          const freshWebRequested = input.intent.grounding?.webRequirement === 'buyer_requested' ||
             input.intent.grounding?.webRequirement === 'independent_required';
+          const requiresFreshWeb = freshWebRequested && freshWebMissingSlots.length > 0;
           const allowCatalogOnlyAnswer = allowCatalogOnlyResearchForWebRequest(input.intent, request);
           let research = !requiresFreshWeb && ((catalogCoversRequest && allowCatalogOnlyAnswer) || memory?.attributesCovered)
             ? catalogAndMemory
             : null;
+          if (!research && freshEvidence && allRequestedFactSlots.length > 0 && freshWebMissingSlots.length === 0) {
+            research = { ...(catalogAndMemory ? mergeVerifiedMemoryWithResearch(catalogAndMemory, freshEvidence) : freshEvidence),
+              usedWebSearch: false, usedDocumentRead: false, searchDisposition: 'memory_hit',
+              warnings: [...freshEvidence.warnings, 'current_turn_verified_research_reused'] };
+          }
           if (!research) {
             const missingFactSlots = requiresFreshWeb
-              ? allRequestedFactSlots
+              ? freshWebMissingSlots
               : memory?.missingFactSlots ?? catalogMissingFactSlots;
             const gapTargetProductNames = missingFactSlots.length
               ? uniqueStrings(missingFactSlots.map((slot) => slot.productName))
@@ -8275,6 +8317,14 @@ export class AgentManagerOrchestrator {
               deadlineAtMs: researchDeadlineAtMs,
               onTrace: researchTrace
             });
+            // Capture fresh source-validated evidence before old memory is merged.
+            // Partial later tiers cannot undo a completed document read; an old
+            // memory hit or an unexecuted tool cannot satisfy fresh verification.
+            if ((researchedGaps.usedWebSearch && researchedGaps.searchDisposition === 'completed') ||
+              (researchedGaps.usedDocumentRead && ['completed', 'skipped_budget', 'timed_out'].includes(researchedGaps.searchDisposition ?? ''))) {
+              freshResearchResults.push({ ...structuredClone(researchedGaps),
+                facts: researchFactMemoryCandidates(researchedGaps).filter((fact) => fact.evidenceVerifiedExact === true) });
+            }
             await this.persistVerifiedResearchFacts({
               sessionId: input.session.id,
               turnId: input.turnId,

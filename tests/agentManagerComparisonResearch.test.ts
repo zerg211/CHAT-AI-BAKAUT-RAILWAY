@@ -361,7 +361,36 @@ describe('AgentManager comparison research flow', () => {
     extractCatalogProductComparisonFacts.mockResolvedValue(null);
   });
 
-  it.each(['completed', 'new_attribute', 'changed_card', 'timed_out'] as const)('passes revised research goals and reuses only completed unchanged catalog readings: %s', async (scenario) => {
+  it.each(['conflict', 'ambiguous', 'contradicted'] as const)('keeps an earlier fresh-source conflict unresolved after an unrelated successful read: %s', async (veto) => {
+    const baseResult = { usedWebSearch: true, searchDisposition: 'completed', sourcesExhausted: false,
+      warnings: [], summaryForAnswer: '', answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] } };
+    const sourceFact = (productName: string) => ({ productName, attribute: 'noise', value: '74 dB', sourceType: 'web',
+      confidence: 'high', evidenceVerifiedExact: true, evidence: `${productName}: 74 dB`, sourceUrl: 'https://manufacturer.example/manual' });
+    const freshResearchResults = [
+      { ...baseResult, facts: [sourceFact('SUMEC FIRMAN 6 kW')], conflicts: veto === 'conflict' ? [{ productName: 'SUMEC FIRMAN 6 kW',
+        attribute: 'noise', catalogValue: '70 dB', webValues: ['74 dB'], resolution: 'Unresolved disagreement' }] : [],
+        answerGuidance: { ...baseResult.answerGuidance, coverage: veto === 'conflict' ? [] : [{ productName: 'SUMEC FIRMAN 6 kW',
+          attribute: 'noise', status: veto, value: '74 dB', evidence: 'Conflicting conditions remain unresolved.' }] } },
+      { ...baseResult, facts: [sourceFact('BISON 6 kW')], conflicts: [] }
+    ];
+    researchProductComparisonFacts.mockResolvedValue({ ...baseResult, facts: [], conflicts: [] });
+    const intent = AgentIntentContractSchema.parse({ ...await model().planTurn({} as never), grounding: {
+      taskType: 'comparison', sourcePolicy: 'web_required', webPurpose: 'technical_specs', webRequirement: 'buyer_requested',
+      requiredToolKinds: ['web.researchProductFacts'], technicalAttributes: ['noise'], rationale: 'Verify the unresolved fact.'
+    } });
+    intent.toolRequests = [{ id: 'web:conflict', tool: 'web.researchProductFacts', required: true, rationale: 'Verify noise',
+      args: { productNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'], comparisonAttributes: ['noise'] } }];
+    const executor = new AgentManagerOrchestrator(new FakeConversations() as never, new FakeProducts() as never,
+      {} as never, withStrictToolFixtures(model())) as unknown as { executeTools(input: Record<string, unknown>): Promise<unknown> };
+    await executor.executeTools({ session: session(), turnId, executionOwner: 'fresh-conflict', userMessage: 'Compare noise.',
+      history: [], intent, toolRequests: intent.toolRequests, needState: emptyNeedState(), pendingLeadCaptureDraft: null,
+      persistedToolResults: new Map(), budget: new AgentManagerTurnBudget(), freshResearchResults });
+    expect(researchProductComparisonFacts).toHaveBeenCalledOnce();
+    expect(researchProductComparisonFacts.mock.calls[0]![0].missingFactSlots).toEqual([{ productName: 'SUMEC FIRMAN 6 kW', attribute: 'noise' }]);
+  });
+
+  it.each(['completed', 'new_attribute', 'changed_card', 'timed_out', 'fresh_document', 'fresh_complete', 'unexecuted_document'] as const)('passes revised research goals and reuses only completed unchanged catalog readings: %s', async (scenario) => {
+    const freshScenario = scenario === 'fresh_document' || scenario === 'fresh_complete' || scenario === 'unexecuted_document';
     extractCatalogProductComparisonFacts.mockResolvedValue({
       usedWebSearch: false, searchDisposition: scenario === 'timed_out' ? 'timed_out' : 'not_needed',
       sourcesExhausted: false, facts: [], conflicts: [], warnings: [], summaryForAnswer: '',
@@ -372,6 +401,14 @@ describe('AgentManager comparison research flow', () => {
       usedWebSearch: true, searchDisposition: 'completed', sourcesExhausted: false, facts: [], conflicts: [],
       sourceDiagnostics: [sourceDiagnostic], warnings: ['source_evidence_fetch_failed'],
       summaryForAnswer: 'Exact source is unreadable.',
+      answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] }
+    });
+    if (freshScenario) researchProductComparisonFacts.mockResolvedValueOnce({
+      usedWebSearch: false, usedDocumentRead: scenario !== 'unexecuted_document', searchDisposition: 'skipped_budget',
+      sourcesExhausted: false, conflicts: [], warnings: [], summaryForAnswer: '',
+      facts: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'].map(productName => ({ productName, attribute: 'noise', value: '74 dB',
+        sourceType: 'web', confidence: 'high', evidence: `${productName} noise 74 dB`, evidenceVerifiedExact: true,
+        sourceUrl: 'https://manufacturer.example/manual.pdf', sourceTitle: 'Manual', sourceTier: 'official_manual', sourceAuthority: 'manufacturer' })),
       answerGuidance: { directAnswer: '', completeness: 'partially_answered', coverage: [] }
     });
     const initialGoal = { query: 'SUMEC BISON manufacturer noise specifications', semanticQuery: 'Check the exact noise rating',
@@ -389,7 +426,10 @@ describe('AgentManager comparison research flow', () => {
         ...implementation,
         async planTurn(input) {
           const intent = await implementation.planTurn(input);
-          return { ...intent, toolRequests: intent.toolRequests.map(request => request.tool === 'web.researchProductFacts'
+          return { ...intent, ...(freshScenario ? { grounding: AgentIntentContractSchema.parse({ ...intent, grounding: {
+            taskType: 'comparison', sourcePolicy: 'web_required', webPurpose: 'technical_specs', webRequirement: 'buyer_requested',
+            requiredToolKinds: ['web.researchProductFacts'], technicalAttributes: ['noise'], rationale: 'Buyer requests verification.'
+          } }).grounding } : {}), toolRequests: intent.toolRequests.map(request => request.tool === 'web.researchProductFacts'
             ? { ...request, args: { ...request.args, ...initialGoal, comparisonAttributes: ['noise'] } } : request) };
         },
         async assessObservations(input) {
@@ -401,7 +441,7 @@ describe('AgentManager comparison research flow', () => {
             missingFacts: ['Verified noise rating'], candidateProductIds: input.products.map(item => item.id),
             toolRequests: observationCalls === 1 ? [{ id: 'web:refined', tool: 'web.researchProductFacts', required: true,
               rationale: 'Read another source for the same exact targets', coversRequirementIds: [],
-              args: { ...revisedGoal, productNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'], comparisonAttributes: scenario === 'new_attribute' ? ['noise', 'oil_capacity'] : ['noise'] }
+              args: { ...revisedGoal, productNames: ['SUMEC FIRMAN 6 kW', 'BISON 6 kW'], comparisonAttributes: scenario === 'new_attribute' || (freshScenario && scenario !== 'fresh_complete') ? ['noise', 'oil_capacity'] : ['noise'] }
             }] : [] };
         },
         async composeAnswer() {
@@ -410,8 +450,14 @@ describe('AgentManager comparison research flow', () => {
         }
       }));
     await orchestrator.generateAnswer({ sessionId, turnId, userMessage: conversations.messages[0]!.content });
-    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(2);
-    expect(extractCatalogProductComparisonFacts).toHaveBeenCalledTimes(scenario === 'completed' ? 1 : 2);
+    expect(researchProductComparisonFacts).toHaveBeenCalledTimes(scenario === 'fresh_complete' ? 1 : 2);
+    expect(extractCatalogProductComparisonFacts).toHaveBeenCalledTimes(scenario === 'completed' || scenario === 'fresh_complete' ? 1 : 2);
+    if (scenario === 'fresh_complete') return;
+    if (freshScenario) {
+      expect(researchProductComparisonFacts.mock.calls[1]![0].comparisonAttributes).toEqual(
+        scenario === 'fresh_document' ? ['oil_capacity'] : ['noise', 'oil_capacity']);
+      return;
+    }
     expect(researchProductComparisonFacts.mock.calls[0]![0].documentReadContext).toEqual({});
     expect(researchProductComparisonFacts.mock.calls[1]![0].documentReadContext)
       .toBe(researchProductComparisonFacts.mock.calls[0]![0].documentReadContext);
