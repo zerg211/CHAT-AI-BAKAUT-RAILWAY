@@ -117,7 +117,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
 
   it('reviews grounded factual polarity using source-bound findings in the existing review call', async () => {
     const finding = { claim: 'The model has a manual starter.', sourceResultId: 'manual-read', reason: 'The exact model source confirms absence.' };
-    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Fact polarity mismatch.', factualIssues: [finding] } });
+    createStructuredJsonResponse.mockResolvedValueOnce({ parsed: { processDisclosure: false, evidence: '', rationale: 'Fact polarity mismatch.', factualIssues: [{ claimId: 'claim_1', sourceResultId: finding.sourceResultId, reason: finding.reason }] } });
     const review = await new OpenAIAgentManagerModel().reviewCustomerLanguage({
       answerText: finding.claim,
       products: [{ id: 'model-1', name: 'Exact model X100', specs: {} }],

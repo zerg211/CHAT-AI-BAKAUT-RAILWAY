@@ -162,6 +162,7 @@ import {
 import { canonicalFactAttribute, verifiedFactValueKey } from './verifiedFactNormalization.js';
 import { knownTechnicalAnswerReady } from './knownTechnicalAnswer.js';
 import { compactSemanticDecisionFormat, expandCompactSemanticDecision } from './compactSemanticDecision.js';
+import { reviewClaimReferences, expandReviewFindings } from './reviewClaimReferences.js';
 import { AI_MANAGER_RUNTIME_VERSION } from './aiManagerRuntimeManifest.js';
 import { readCurrentSitePrice, sitePriceErrorCode } from '../catalog/currentSitePrice.js';
 import {
@@ -5543,6 +5544,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
     signal?: AbortSignal;
     deadlineAtMs?: number;
   }) {
+    const claimReferences = reviewClaimReferences(input.answerText);
     const factualSourceIds = [
       ...input.toolResults.map((result) => result.requestId),
       ...(input.verifiedProductFacts ?? []).map((fact) => `verified_fact:${fact.id}`),
@@ -5564,7 +5566,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
             untrustedEvidenceBoundary,
             'Также проверь factualIssues: противоречия между точными товарными утверждениями ответа и products/toolResults/verifiedProductFacts, перенос факта на другую модель, утрату отрицания или условий, выдачу неподтвержденного/конфликтного значения за установленный факт. verifiedProductFacts — актуальные сохраненные факты с источниками для точных моделей: учитывай исходные attribute/value, даже если вопрос использует другой термин. confirmed означает подтверждение конкретного value, включая отсутствие свойства; название атрибута, тип документа и упоминание слова не подтверждают наличие свойства. Не путай отрицание свойства другой модели с отрицанием свойства проверяемой модели.',
             'conflictingVerifiedProductFacts — актуальные источники точных моделей с разными значениями одного атрибута. Они не подтверждают окончательное значение: проверь, разрешают ли текущие toolResults конфликт; иначе ответ должен сохранить неопределенность. sourceResultId=verified_fact:<id> конфликтующего источника допустим для указания проблемы, но сам конфликт не становится фактом ответа.',
-            'Оценивай смысл и область утверждения, допускай корректный пересказ и полезный предварительный вывод с оговоркой. Не отклоняй общие знания без противоречия источникам и не требуй дословного копирования directAnswer. Для каждого factualIssues укажи claim — точную цитату ответа, sourceResultId — существующий requestId наблюдения или verified_fact:<id> сохраненного факта, доказывающего проблему, reason — конкретное противоречие или неподтвержденный факт. Без доказанной проблемы factualIssues=[]. Сам ответ не переписывай.',
+            'Оценивай смысл и область утверждения, допускай корректный пересказ и полезный предварительный вывод с оговоркой. Не отклоняй общие знания без противоречия источникам и не требуй дословного копирования directAnswer. Для каждого factualIssues укажи claimId — существующий id фрагмента claimReferences, содержащего ошибку, sourceResultId — существующий requestId наблюдения или verified_fact:<id> сохраненного факта, доказывающего проблему, reason — конкретное противоречие или неподтвержденный факт внутри этого фрагмента. Без доказанной проблемы factualIssues=[]. Не копируй и не переписывай цитату: точный исходный текст будет связан кодом по claimId.',
             'Если processDisclosure=true, evidence должно быть точной цитатой из answerText. Верни только JSON.'
           ].join('\n')
         }, {
@@ -5572,6 +5574,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           content: JSON.stringify({
             userMessage: input.userMessage ?? null,
             answerText: input.answerText,
+            claimReferences,
             technicalResearchStatus: technicalResearchStatus(input.toolResults, input.intent),
             technicalHandoffRequestedAndVerified: input.technicalHandoffRequestedAndVerified === true,
             products: input.products.map((product) => answerProductContext(product, input.toolResults)),
@@ -5593,16 +5596,16 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
                 rationale: { type: 'string' },
                 factualIssues: {
                   type: 'array',
-                  maxItems: factualSourceIds.length ? 5 : 0,
+                  maxItems: factualSourceIds.length && claimReferences.length ? 5 : 0,
                   items: {
                     type: 'object',
                     additionalProperties: false,
                     properties: {
-                      claim: { type: 'string' },
+                      claimId: { type: 'string', enum: claimReferences.length ? claimReferences.map(claim => claim.id) : [''] },
                       sourceResultId: { type: 'string', enum: factualSourceIds.length ? factualSourceIds : [''] },
                       reason: { type: 'string' }
                     },
-                    required: ['claim', 'sourceResultId', 'reason']
+                    required: ['claimId', 'sourceResultId', 'reason']
                   }
                 }
               },
@@ -5625,7 +5628,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       processDisclosure: parsed.processDisclosure,
       evidence: parsed.evidence.trim(),
       rationale: parsed.rationale.trim(),
-      factualIssues: parsed.factualIssues as Array<{ claim: string; sourceResultId: string; reason: string }>
+      factualIssues: expandReviewFindings(parsed.factualIssues, claimReferences, factualSourceIds)
     };
   }
 
