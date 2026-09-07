@@ -668,6 +668,27 @@ function searchTokens(query: string) {
 export class ConversationRepository {
   constructor(private readonly db: Db = pool) {}
 
+  async listQualityAuditTurns(hours:number,limit:number) {
+    const result=await this.db.query(`WITH recent AS (
+      SELECT * FROM conversation_turns WHERE created_at>=now()-make_interval(hours=>$1)
+      ORDER BY created_at DESC LIMIT $2
+    ) SELECT t.id AS "turnId",t.session_id AS "sessionId",t.status,t.created_at AS "createdAt",t.deadline_at AS "deadlineAt",
+      m.id IS NOT NULL AS "hasAnswer",t.error_code AS "errorCode",split_part(t.error_message,':',1) AS "errorClass",
+      m.metadata->'build'->>'commitSha' AS "buildCommit",m.metadata->'turnBudget'->'usage'->'wallTimeMs' AS "wallTimeMs",
+      m.metadata->'turnBudget'->'usage'->'modelCalls' AS "modelCalls",t.status='recovered' AS recovered,
+      (SELECT rating FROM assistant_feedback_events WHERE turn_id=t.id ORDER BY created_at DESC LIMIT 1) AS rating,
+      coalesce((SELECT jsonb_agg(jsonb_build_object('tool',item->>'tool','status',item->>'status',
+        'priceUnavailable',jsonb_path_exists(item,'$.payload.priceVerifications[*] ? (@.status == "unavailable")')))
+        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(m.metadata->'toolResults')='array'
+          THEN m.metadata->'toolResults' ELSE '[]'::jsonb END) item),'[]'::jsonb) AS tools,
+      coalesce((SELECT jsonb_agg(code) FROM agent_traces trace,
+        jsonb_array_elements_text(CASE WHEN jsonb_typeof(trace.payload->'issueCodes')='array'
+          THEN trace.payload->'issueCodes' ELSE '[]'::jsonb END) code
+        WHERE trace.turn_id=t.id),'[]'::jsonb) AS "reviewIssues"
+    FROM recent t LEFT JOIN messages m ON m.id=t.assistant_message_id ORDER BY t.created_at DESC`,[hours,limit]);
+    return result.rows;
+  }
+
   async createSession(input: { visitorId?: string; pageUrl?: string; userAgent?: string }) {
     const inserted = await this.db.query(
       `INSERT INTO conversation_sessions(visitor_id, page_url, user_agent, need_state, title)

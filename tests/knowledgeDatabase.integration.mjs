@@ -7,7 +7,8 @@ assert.ok(['127.0.0.1','localhost','[::1]'].includes(url.hostname) && url.pathna
 process.env.NODE_ENV='test';
 process.env.CATALOG_BASE_URL='https://fixtures.bakaut.invalid';
 const {pool}=await import('../src/db/pool.ts');
-const {ProductRepository}=await import('../src/db/repositories.ts');
+const {ProductRepository,ConversationRepository}=await import('../src/db/repositories.ts');
+const {buildDialogueQualityAudit}=await import('../src/ai/dialogueQualityAudit.ts');
 const {processKnowledgeEnrichment}=await import('../src/ai/knowledgeEnrichment.ts');
 const {validateToolResultOutput}=await import('../src/ai/agentManagerToolRegistry.ts');
 const repo=new ProductRepository();
@@ -22,6 +23,28 @@ const fact={productName:input.name,attribute:'Масса',value:'70 кг',source
   evidence:`${input.name}: масса 70 кг.`,sourceTier:'official_manual',sourceAuthority:'manufacturer',
   confidence:'high',observedAt:new Date(Date.now()-86400000).toISOString()};
 try {
+ await run('REAL_AUDIT_RETRIEVES_FAILED_AND_COMPLETED_TURNS_WITHOUT_BUYER_TEXT',async()=>{
+  const sessionId=randomUUID(),failedId=randomUUID(),completeId=randomUUID(),messageId=randomUUID();
+  await pool.query('INSERT INTO conversation_sessions(id) VALUES($1)',[sessionId]);
+  try {
+   await pool.query("INSERT INTO messages(id,session_id,role,content,metadata) VALUES($1,$2,'assistant','private fixture', $3)",
+    [messageId,sessionId,JSON.stringify({build:{commitSha:'test-build'},turnBudget:{usage:{wallTimeMs:40000,modelCalls:4}},
+      toolResults:[{tool:'catalog.getProductDetails',status:'ok',payload:{priceVerifications:[{status:'unavailable'}]}}]})]);
+   await pool.query(`INSERT INTO conversation_turns(id,session_id,status,request_hash,deadline_at,error_code)
+      VALUES($1::uuid,$2,'failed',$1::text,now()-interval '1 minute','generation_failed')`,[failedId,sessionId]);
+   await pool.query(`INSERT INTO conversation_turns(id,session_id,status,request_hash,deadline_at,assistant_message_id)
+      VALUES($1::uuid,$2,'completed',$1::text,now(),$3)`,[completeId,sessionId,messageId]);
+   const rows=(await new ConversationRepository().listQualityAuditTurns(1,500)).filter(r=>r.sessionId===sessionId);
+   assert.equal(rows.length,2);
+   const report=buildDialogueQualityAudit(rows,{hours:1,limit:500});
+   assert.equal(report.qualityVerdict,'NOT_PROVEN');
+   assert.ok(report.reviewQueue.some(g=>g.reason==='expired_without_answer'));
+   assert.ok(report.reviewQueue.some(g=>g.reason==='company_price_unavailable'));
+   assert.equal(report.turns.find(t=>t.turnId===completeId).buildCommit,'test-build');
+   assert.equal(report.latency.medianMs,40000);
+   assert.ok(!JSON.stringify(report).includes('private fixture'));
+  } finally {await pool.query('DELETE FROM conversation_sessions WHERE id=$1',[sessionId]);}
+ });
  await run('TECHNICAL_FACT_PUBLISHED_WITH_ORIGINAL_VERIFICATION_TIME',async()=>{
   p=await repo.upsertProduct(input,Array(1536).fill(0.01));
   fact.productId=p.id;

@@ -10,6 +10,7 @@ import { createOpenAIClient } from '../ai/openaiClient.js';
 import { recordOpenAIUsageOnce } from '../ai/openaiUsageGuard.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { AI_MANAGER_RUNTIME_MANIFEST } from '../ai/aiManagerRuntimeManifest.js';
+import { buildDialogueQualityAudit, type QualityAuditTurn } from '../ai/dialogueQualityAudit.js';
 import {
   AssistantFeedbackQueueStatusSchema,
   AssistantFeedbackRatingSchema,
@@ -236,6 +237,13 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/api/admin/leads', async (request) => {
     const query = z.object({ limit: z.coerce.number().int().positive().max(500).default(100) }).parse(request.query);
     return { leads: await leads.listLeads(query.limit) };
+  });
+
+  app.get('/api/admin/quality/audit',async(request)=>{
+    const input=z.object({hours:z.coerce.number().int().min(1).max(168).default(24),
+      limit:z.coerce.number().int().min(1).max(5000).default(500)}).parse(request.query);
+    const rows=await conversations.listQualityAuditTurns(input.hours,input.limit);
+    return buildDialogueQualityAudit(rows as QualityAuditTurn[],input);
   });
 
   app.get('/api/admin/feedback', async (request) => {

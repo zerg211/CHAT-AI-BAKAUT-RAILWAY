@@ -270,7 +270,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(input).toEqual(original);
   });
 
-  it('creates ledger delta and executable intent in one structured semantic request', async () => {
+  it.each(['legacy','compact'])('creates ledger delta and executable intent in one structured semantic request from %s wire', async (wireKind) => {
     const now = new Date('2026-08-13T10:00:00.000Z').toISOString();
     const session: ConversationSession = {
       id: '11111111-1111-4111-8111-111111111111',
@@ -294,8 +294,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
       { name: 'ТСС SGG 5000N, артикул 060007', role: 'target_product', productClass: 'generator', evidence: 'ТСС SGG 5000N' },
       { name: 'Consumer MODEL 100', role: 'context_load_device', productClass: null, evidence: 'Consumer MODEL 100' }
     ] } };
-    createStructuredJsonResponse.mockResolvedValueOnce({
-      parsed: {
+    const responseWire: any = {
         ledgerDelta: { rationale: 'preserve the current need', events: [] },
         intent: {
           userMessageSummary: 'continue the current need',
@@ -305,8 +304,15 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
           toolRequests: [],
           riskFlags: []
         }
-      }
-    });
+    };
+    if(wireKind==='compact'){
+      responseWire.wireVersion='semantic-actions-v1';
+      responseWire.intent=AgentIntentContractSchema.parse(responseWire.intent);
+      delete responseWire.intent.turnId;
+      delete responseWire.intent.requiresTools;
+      delete responseWire.intent.grounding.requiredToolKinds;
+    }
+    createStructuredJsonResponse.mockResolvedValueOnce({parsed:responseWire});
 
     const rejectedSemanticDecision = {
       ledgerDelta: { rationale: 'rejected interpretation', events: [] },
@@ -395,7 +401,7 @@ describe('OpenAIAgentManagerModel semantic inputs', () => {
     expect(systemPrompt).toContain('Не подставляй конкретный класс ради прохождения проверки');
     expect(request).toMatchObject({ max_output_tokens: 3200 });
     expect(createStructuredJsonResponse.mock.calls[0]?.[0]).toMatchObject({ retryOutputTokenCap: 4800 });
-    expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent']);
+    expect(request.text?.format?.schema?.required).toEqual(['ledgerDelta', 'intent', 'wireVersion']);
   });
 
   it('retains an inactive need selection while the same buyer turn resumes another need', async () => {

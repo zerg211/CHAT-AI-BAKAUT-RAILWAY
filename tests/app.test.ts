@@ -19,7 +19,7 @@ describe('app', () => {
     expect(response.json()).toMatchObject({
       ok: true,
       runtime: {
-        version: '2026-09-07.verified-site-price-v19',
+        version: '2026-09-07.compact-actions-and-audit-v20',
         contractVersion: '2026-08-11.manager-contract-v2',
         productionRuntime: 'agent_manager'
       }

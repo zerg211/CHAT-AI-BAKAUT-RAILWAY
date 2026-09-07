@@ -1,9 +1,11 @@
 // Physical units and catalog field identifiers are deterministic data contracts.
 // Unrecognized or qualified text stays distinct for semantic adjudication.
 const fields = {
-  mass: ['масса', 'вес', 'weight', 'mass', 'масса, кг', 'вес, кг'],
-  nominal_power: ['номинальная мощность', 'мощность номинальная', 'nominal power', 'rated power'],
-  maximum_power: ['максимальная мощность', 'maximum power', 'peak power'],
+  mass: ['масса', 'вес', 'weight', 'mass', 'масса, кг', 'вес, кг', 'weight_kg', 'weightkg', 'рабочая масса, кг', 'working_weight_kg'],
+  transport_mass: ['транспортный вес. кг', 'транспортный вес, кг', 'transport_weight_kg', 'transport_mass_kg'],
+  price: ['price', 'price_rub', 'цена', 'цена, руб'],
+  nominal_power: ['номинальная мощность', 'мощность номинальная', 'nominal power', 'rated power', 'nominal_power_kw', 'rated_power_kw'],
+  maximum_power: ['максимальная мощность', 'maximum power', 'peak power', 'maximum_power_kw', 'peak_power_kw'],
   voltage: ['напряжение', 'voltage'],
   frequency: ['частота', 'frequency']
 } as const;

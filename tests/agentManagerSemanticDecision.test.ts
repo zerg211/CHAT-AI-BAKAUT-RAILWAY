@@ -7,6 +7,7 @@ import {
 import type { ToolResult } from '../src/ai/agentManagerContracts.js';
 import { reduceDialogueLedger } from '../src/ai/dialogueLedgerReducer.js';
 import { buildRequirementProofs } from '../src/ai/requirementProofs.js';
+import { expandCompactSemanticDecision } from '../src/ai/compactSemanticDecision.js';
 
 const memorySessionId = '11111111-1111-4111-8111-111111111111';
 const memoryTurnId = '22222222-2222-4222-8222-222222222222';
@@ -57,6 +58,18 @@ function qualificationDecision(canonicalProductClass: 'generator' | 'plate' | nu
 }
 
 describe('selection qualification semantic contract', () => {
+  it('still rejects an absent required catalog action after compact wire expansion',()=>{
+    const original=selectionDecision();
+    const wire=JSON.parse(JSON.stringify(original));
+    wire.wireVersion='semantic-actions-v1';
+    delete wire.intent.turnId;
+    delete wire.intent.requiresTools;
+    delete wire.intent.grounding.requiredToolKinds;
+    wire.intent.toolRequests=[];
+    for(const event of wire.ledgerDelta.events){delete event.eventId;delete event.source;}
+    const expanded=expandCompactSemanticDecision(wire) as AgentSemanticDecision;
+    expect(validateMemoryDecision(expanded).issues).toContain('required_catalog_tool_missing');
+  });
   it.each(['generator', 'plate', null] as const)('accepts a qualification step within product selection for %s', (productClass) => {
     const decision = qualificationDecision(productClass);
     const result = validateAgentSemanticDecision({
