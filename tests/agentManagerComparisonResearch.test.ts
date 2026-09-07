@@ -2494,7 +2494,7 @@ describe('AgentManager comparison research flow', () => {
     ]));
   });
 
-  it.each(['web_search', 'known_document'] as const)('persists validated coverage through the tool boundary and reuses its exact manual source on the next turn: %s', async (execution) => {
+  it.each(['web_search', 'known_document', 'partial_document', 'timed_out_document'] as const)('persists validated coverage through the tool boundary and reuses its exact manual source on the next turn: %s', async (execution) => {
     const fakeProducts = new FakeProducts();
     const orchestrator = new AgentManagerOrchestrator(new FakeConversations() as never, fakeProducts as never, {} as never, withStrictToolFixtures(model()));
     const memory = orchestrator as any;
@@ -2504,9 +2504,9 @@ describe('AgentManager comparison research flow', () => {
       sourceTitle: 'Руководство по эксплуатации ТСС SGG 5000N', sourceTier: 'reliable_secondary', sourceAuthority: 'secondary',
       evidenceVerifiedExact: true, targetApplicability: 'shared_instruction', scopeQuote: 'Инструкция применима к ТСС SGG 2000N и ТСС SGG 5000N.' };
     const validated = validateToolResultOutput({ requestId: 'web1', tool: 'web.researchProductFacts', status: 'ok', warnings: [], payload: {
-      usedWebSearch: execution === 'web_search', usedDocumentRead: execution === 'known_document',
-      searchDisposition: 'completed', sourcesExhausted: false, sourceAttempts: [], facts: [], conflicts: [],
-      answerGuidance: { directAnswer: coverage.value, completeness: 'partially_answered', coverage: [coverage] }, summaryForAnswer: '', warnings: []
+      usedWebSearch: execution === 'web_search', usedDocumentRead: execution !== 'web_search',
+      searchDisposition: execution === 'partial_document' ? 'skipped_budget' : execution === 'timed_out_document' ? 'timed_out' : 'completed', sourcesExhausted: false, sourceAttempts: [], facts: [], conflicts: [],
+      answerGuidance: { directAnswer: coverage.value, completeness: 'partially_answered', coverage: [...(execution === 'partial_document' ? [{ ...coverage, status: 'not_confirmed', value: '', evidence: 'The catalog does not specify this attribute.' }] : []), coverage] }, summaryForAnswer: '', warnings: []
     } });
     const input = { sessionId, turnId, targetProductNames: ['ТСС SGG 5000N'], comparisonAttributes: ['first_oil_change_interval'], selectedProducts: [] };
     expect(await memory.persistVerifiedResearchFacts({ ...input, research: validated.payload })).toBe(1);

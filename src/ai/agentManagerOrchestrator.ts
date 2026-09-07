@@ -6018,7 +6018,13 @@ export class AgentManagerOrchestrator {
     const targetNames = input.targetProductNames.length
       ? input.targetProductNames
       : input.selectedProducts.map((product) => product.name);
-    if ((input.research.usedWebSearch !== true && input.research.usedDocumentRead !== true) || input.research.searchDisposition !== 'completed') {
+    // A later skipped/timed-out discovery tier does not undo a completed
+    // document read. Only its independently verified facts below can persist;
+    // memory hits and unexecuted research still cannot refresh their TTL.
+    const completedDocumentWithPartialSearch = input.research.usedDocumentRead === true &&
+      (input.research.searchDisposition === 'skipped_budget' || input.research.searchDisposition === 'timed_out');
+    if ((input.research.usedWebSearch !== true && input.research.usedDocumentRead !== true) ||
+      (input.research.searchDisposition !== 'completed' && !completedDocumentWithPartialSearch)) {
       await this.trace(input.sessionId, input.turnId, 'tools', 'verified_fact_memory_persistence', {
         persistableCount: 0,
         savedCount: 0,
@@ -6048,7 +6054,7 @@ export class AgentManagerOrchestrator {
       const unresolvedCoverage = input.research.answerGuidance.coverage.some((coverage) =>
         compactModelText(coverage.attribute) === compactModelText(fact.attribute) &&
         (!coverage.productName || textMatchesTargetName(coverage.productName, fact.productName)) &&
-        coverage.status !== 'confirmed'
+        (coverage.status === 'ambiguous' || coverage.status === 'contradicted')
       );
       if (unresolvedConflict || unresolvedCoverage) continue;
       const product = productForResearchFact({
