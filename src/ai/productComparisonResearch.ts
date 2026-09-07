@@ -3840,10 +3840,17 @@ export async function researchProductComparisonFacts(input: {
         }
         let validatedResult: ProductComparisonResearchResult;
         try {
+          // Discovery has already produced a read document. Complete its
+          // mandatory verification before spending the remaining tool time on
+          // secondary discovery; the caller's deadline is still authoritative.
+          const validationDeadlineAtMs = documentPassageKeys.size
+            ? boundedResearchStageDeadline({ overallDeadlineAtMs: input.deadlineAtMs,
+                maxDurationMs: webResearchRemainingMs(input.deadlineAtMs), reserveMs: TIER_FALLBACK_RESERVE_MS })
+            : inputTier.deadlineAtMs;
           validatedResult = await validateSourceBackedResult({ result: candidateResult,
             products: exactCatalogProducts, targetProductNames, comparisonAttributes,
             expectedSourceTier: inputTier.tier, cache: sourceTextCache,
-            signal: inputTier.signal, deadlineAtMs: inputTier.deadlineAtMs, onTrace: input.onTrace, documentPassageKeys });
+            signal: inputTier.signal, deadlineAtMs: validationDeadlineAtMs, onTrace: input.onTrace, documentPassageKeys });
         } catch (error) {
           if (input.documentReadContext && completedDocumentRead && !input.signal?.aborted && !inputTier.signal?.aborted &&
             webResearchTimedOut(error, inputTier.signal)) input.documentReadContext.pending = completedDocumentRead;

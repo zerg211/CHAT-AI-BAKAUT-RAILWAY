@@ -8784,17 +8784,56 @@ export class AgentManagerOrchestrator {
       ? Math.max(limit * 25, 200)
       : Math.max(limit, limit * 3);
 
-    try {
-      textProducts = await this.products.searchProducts(query, retrievalLimit, { signal: input.signal });
-    } catch (error) {
-      firstError = error;
-      warnings.push(`catalog_text_search_error:${safeError(error).code ?? safeError(error).message}`);
+    // The planner selects exact-only consultation versus alternative discovery.
+    // Once every named identity is found, unrelated candidates cannot improve it.
+    const exactTargets = input.intent?.selectionPolicy?.alternativePolicy === 'exact_only'
+      ? uniqueStrings((input.intent.productMentions ?? [])
+        .filter((mention) => exactTargetProductMentionRoles.has(mention.role))
+        .map((mention) => mention.name))
+      : [];
+    const preciseTargets = exactTargets.length > 0 && exactTargets.every((name) =>
+      exactProductIdentity(name).decisiveParts.some(tokenHasDigit)
+    );
+    // Model-code matching intentionally tolerates brand/name layout. A shortcut
+    // needs stronger evidence: the complete requested name (or exact catalog SKU).
+    const matchesCompleteTarget = (product: Product, name: string) =>
+      productMatchesExactTargetIdentity(product, name) && (
+        compactModelText([product.brand, product.name].filter(Boolean).join(' ')).includes(compactModelText(name)) ||
+        compactModelText(product.externalId) === compactModelText(name)
+      );
+    let exactLookupSaturated = false;
+    const exactTargetsResolved = (products: Product[]) => preciseTargets && !exactLookupSaturated && exactTargets.every((name) =>
+      products.filter((product) => matchesCompleteTarget(product, name)).length === 1
+    );
+    const exactModelSearch = this.products.searchProductsByModelTokens;
+    if (preciseTargets && exactTargets.length <= 4 && typeof exactModelSearch === 'function') {
+      for (const name of exactTargets) {
+        try {
+          const tokens = exactProductIdentity(name).decisiveParts.map(compactModelText).filter(Boolean);
+          const candidates = await exactModelSearch.call(this.products, tokens, 20, { signal: input.signal });
+          if (candidates.length >= 20) exactLookupSaturated = true;
+          textProducts.push(...candidates.filter((product) => matchesCompleteTarget(product, name)));
+        } catch (error) {
+          warnings.push(`catalog_exact_search_error:${safeError(error).code ?? safeError(error).message}`);
+        }
+      }
+      textProducts = [...new Map(textProducts.map((product) => [product.id, product])).values()];
+    }
+
+    if (!exactTargetsResolved(textProducts)) {
+      try {
+        const found = await this.products.searchProducts(query, retrievalLimit, { signal: input.signal });
+        textProducts = [...new Map([...textProducts, ...found].map((product) => [product.id, product])).values()];
+      } catch (error) {
+        firstError = error;
+        warnings.push(`catalog_text_search_error:${safeError(error).code ?? safeError(error).message}`);
+      }
     }
 
     const vectorSearchFn = (this.products as unknown as {
       vectorSearch?: ProductRepository['vectorSearch'];
     }).vectorSearch;
-    if (vectorSearchFn && await this.canUseProductEmbeddings(input.signal)) {
+    if (!exactTargetsResolved(textProducts) && vectorSearchFn && await this.canUseProductEmbeddings(input.signal)) {
       const embedding = await this.createCachedQueryEmbedding(embeddingQuery, input.signal);
       if (embedding) {
         try {
@@ -8808,7 +8847,8 @@ export class AgentManagerOrchestrator {
 
     const byId = new Map<string, Product>();
     for (const product of [...textProducts, ...vectorProducts]) byId.set(product.id, product);
-    const shouldBroadenForBudget = input.budgetMax !== undefined &&
+    const exactIdentityComplete = exactTargetsResolved([...byId.values()]);
+    const shouldBroadenForBudget = !exactIdentityComplete && input.budgetMax !== undefined &&
       Number.isFinite(input.budgetMax) &&
       input.budgetMax > 0 &&
       productIntent !== 'unknown';
@@ -8862,7 +8902,7 @@ export class AgentManagerOrchestrator {
       : matchingProducts;
     if (sourceFilteredProducts.length !== matchingProducts.length) {
       warnings.push(`catalog_products_filtered_by_power_source:battery:${matchingProducts.length - sourceFilteredProducts.length}`);
-      if (!sourceFilteredProducts.length) {
+      if (!sourceFilteredProducts.length && !exactIdentityComplete) {
         try {
           const expandedBatteryProducts = await this.products.searchProducts(
             fromEscaped('\\u0430\\u043a\\u043a\\u0443\\u043c\\u0443\\u043b\\u044f\\u0442\\u043e\\u0440\\u043d\\u0430\\u044f \\u044d\\u043b\\u0435\\u043a\\u0442\\u0440\\u043e\\u0441\\u0442\\u0430\\u043d\\u0446\\u0438\\u044f'),
@@ -8922,6 +8962,7 @@ export class AgentManagerOrchestrator {
         remoteStartPreference
       ) &&
       !firstError &&
+      !exactIdentityComplete &&
       input.allowPrimaryExpansion !== false
     ) {
       const expansionQuery = structuredCatalogExpansionQuery(

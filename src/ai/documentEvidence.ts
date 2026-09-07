@@ -53,11 +53,14 @@ export function bindDocumentEvidence(parsed: Record<string, unknown>, documents:
     const { evidenceRef, ...item } = raw as Record<string, unknown>;
     if (kind === 'coverage' && item.status !== 'confirmed' && evidenceRef == null) return item;
     const reference = evidenceRef && typeof evidenceRef === 'object' ? evidenceRef as Record<string, unknown> : {};
-    const ids = Array.isArray(reference.passageIds) ? reference.passageIds : [];
+    const rawIds = Array.isArray(reference.passageIds) ? reference.passageIds : [];
+    // Repeating the same location adds no evidence. Bind it once, then apply
+    // the unchanged adjacency, document, and semantic fact checks.
+    const ids = [...new Set(rawIds)];
     const document = documents.find((candidate) => candidate.passages.some((part) => part.id === ids[0]));
     const firstIndex = document?.passages.findIndex((part) => part.id === ids[0]) ?? -1;
     const parts = document?.passages.slice(firstIndex, firstIndex + ids.length) ?? [];
-    const valid = ids.length >= 1 && ids.length <= 2 && parts.length === ids.length &&
+    const valid = rawIds.length <= 2 && ids.length >= 1 && ids.length <= 2 && parts.length === ids.length &&
       ids.every((id, index) => typeof id === 'string' && parts[index]?.id === id);
     if (!valid || !document) {
       invalid = true;

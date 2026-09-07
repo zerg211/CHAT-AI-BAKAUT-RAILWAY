@@ -158,7 +158,7 @@ describe('production web research regressions', () => {
     }
   });
 
-  it.each(['late passage', 'adjacent passages', 'invalid reference', 'unsupported claim', 'wrong model', 'missing reference'] as const)(
+  it.each(['late passage', 'adjacent passages', 'duplicate passage', 'invalid reference', 'unsupported claim', 'wrong model', 'missing reference'] as const)(
     'binds document evidence and reports its validation boundary: %s', async (mode) => {
       const actualQuote = mode === 'wrong model' ? generalQuote.replace('20', '50') : generalQuote;
       const actualScope = mode === 'wrong model' ? 'This instruction manual applies only to FIRMAN RD4910E.' : scopeQuote;
@@ -172,7 +172,7 @@ describe('production web research regressions', () => {
         if (call.stage === 'source_evidence_semantic_validation') {
           validationCalls += 1;
           const payload = JSON.parse(call.request.input.find((item: any) => item.role === 'user').content);
-          if (mode === 'late passage' || mode === 'adjacent passages') {
+          if (mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage') {
             expect(payload.sources[0].sourceText).toContain(actualQuote);
             expect(payload.sources[0].sourceText).toContain(scopeQuote);
             expect(payload.sources[0].sourceText.length).toBeLessThanOrEqual(18_000);
@@ -195,7 +195,7 @@ describe('production web research regressions', () => {
           const response = webResponse('official_manual', { evidence: 'The first oil change is required after twenty hours.',
             sourceUrl: 'https://invented.invalid/manual.pdf', value: '20 hours' });
           (response.parsed.facts[0] as any).evidenceRef = {
-            passageIds: mode === 'invalid reference' ? ['document-99-passage-0'] : refs
+            passageIds: mode === 'invalid reference' ? ['document-99-passage-0'] : mode === 'duplicate passage' ? [refs[0], refs[0]] : refs
           };
           if (mode === 'missing reference') delete (response.parsed.facts[0] as any).evidenceRef;
           return response;
@@ -206,7 +206,7 @@ describe('production web research regressions', () => {
         return response;
       });
       const actual = await research({ onTrace: (event) => { traces.push(event); } });
-      if (mode === 'late passage' || mode === 'adjacent passages') {
+      if (mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage') {
         expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', sourceUrl: sharedUrl,
           evidence: actualQuote, evidenceVerifiedExact: true }));
       } else expect(actual.facts).toEqual([]);
@@ -232,7 +232,7 @@ describe('production web research regressions', () => {
         const check: any = traces.find((event: any) => event.evidenceValidation?.length);
         expect(check.evidenceValidation[0]).toMatchObject({ sourceUrl: sharedUrl, exactExcerptFound: true,
           modelScopeMatched: mode !== 'wrong model', claimSupported: mode !== 'unsupported claim',
-          accepted: mode === 'late passage' || mode === 'adjacent passages' });
+          accepted: mode === 'late passage' || mode === 'adjacent passages' || mode === 'duplicate passage' });
         expect(check.evidenceValidation[0].validatorTextLength).toBeLessThanOrEqual(18_000);
       }
       if (mode === 'wrong model') {
@@ -665,14 +665,14 @@ describe('production web research regressions', () => {
     expect(traces.filter((trace) => trace.outcome === 'skipped_budget')).toHaveLength(3);
   });
 
-  it('reserves source-validation time within full-budget official stages while keeping secondary bounded', async () => {
+  it('keeps completed-manual verification inside the overall research deadline', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
     arrangeManual();
     const actual = await research({ deadlineAtMs: 1_060_000 });
     const query = structured.mock.calls.find(([call]) => call.stage.endsWith('_official_manual'))![0];
     const validation = structured.mock.calls.find(([call]) => call.stage === 'source_evidence_semantic_validation')![0];
     expect(validation.deadlineAtMs - query.deadlineAtMs).toBeGreaterThanOrEqual(5_000);
-    expect(validation.deadlineAtMs).toBeLessThanOrEqual(1_038_000);
+    expect(validation.deadlineAtMs).toBeLessThanOrEqual(1_060_000);
     expect(actual.facts).toHaveLength(1);
   });
 
@@ -774,4 +774,27 @@ describe('production web research regressions', () => {
       ...(reason === 'http_status' ? { status: 404 } : {}), ...(reason === 'network' ? { code: 'ECONNRESET' } : {}) }));
     expect(JSON.stringify(actual.sourceDiagnostics)).not.toContain('private');
   });
+});
+
+
+it('finishes already-read document validation before reserving time for another search', async () => {
+  const startedAt = Date.now();
+  let now = startedAt;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  arrangeManual();
+  const base = structured.getMockImplementation()!;
+  structured.mockImplementation(async (call) => {
+    if (call.stage === 'product_research_document_read') now = startedAt + 30_000;
+    if (call.stage === 'source_evidence_semantic_validation') {
+      // Eight seconds left in the discovery tier is insufficient, but the
+      // caller still has thirty seconds to finish verification of this source.
+      if (call.deadlineAtMs - now < 12_000) throw Object.assign(new Error('deadline'), { code: 'structured_json_deadline_exceeded' });
+      expect(call.deadlineAtMs).toBeLessThanOrEqual(startedAt + 60_000);
+    }
+    return base(call);
+  });
+  const actual = await research({ knownSourceCandidates: [{ url: sharedUrl }], deadlineAtMs: startedAt + 60_000 });
+  expect(actual.facts).toContainEqual(expect.objectContaining({ value: '20 hours', evidenceVerifiedExact: true }));
+  expect(structured.mock.calls.some(([call]) => call.stage.startsWith('product_comparison_research_'))).toBe(false);
+  expect(actual.usedDocumentRead).toBe(true);
 });
