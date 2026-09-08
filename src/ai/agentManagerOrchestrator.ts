@@ -19,7 +19,7 @@ import { AgentIntentContractSchema, AgentSemanticDecisionSchema, DialogueLedgerE
 import { deriveNeedStateSnapshotFromLedger, getActiveDialogueNeed, parseReducedDialogueLedgerState, reduceDialogueLedger, type ReducedDialogueLedgerState } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
-import { CONTINUATION_MAX_ROUNDS, continuationValidationIssues, parseContinuationDecision, type ContinuationDecision, type ContinuationOutcome } from './agentManagerContinuation.js';
+import { CONTINUATION_MAX_ROUNDS, continuationReadTools, continuationValidationIssues, parseContinuationDecision, type ContinuationDecision, type ContinuationOutcome } from './agentManagerContinuation.js';
 import { resolveProductsForEvidence } from './productFactResolution.js';
 import { StructuredJsonDeadlineExceededError, StructuredJsonRetrySkippedError } from './openaiStructured.js';
 import { extractCatalogProductComparisonFacts, researchProductComparisonFacts, researchResultCoversFactSlot, type ProductComparisonResearchFact, type ProductComparisonResearchResult, type ProductResearchDocumentReadContext, type ProductResearchTraceEvent } from './productComparisonResearch.js';
@@ -2860,6 +2860,7 @@ private async persistVerifiedResearchFacts(input: {
     }
     if (!knownFactShortPath && this.model.assessObservations && intent.grounding?.taskType !== 'lead_handoff' &&
       (toolResults.length > 0 || intent.selectionPolicy?.reusePreviousCards)) {
+      let observationRepairUsed = Boolean(latestCheckpoint(persistedExecution.checkpoints, 'observation_repair_reserved'));
       for (let round = 1; round <= CONTINUATION_MAX_ROUNDS + 1; round += 1) {
         const checkpoint = `observation_decision_${round}`;
         const savedObservation = latestCheckpoint(persistedExecution.checkpoints, checkpoint);
@@ -2915,7 +2916,29 @@ private async persistVerifiedResearchFacts(input: {
               signal: input.signal
             }));
           }
-          const issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+          let issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+          if (issues.length && !savedObservation && !observationRepairUsed &&
+            decision.toolRequests.every(request => continuationReadTools.has(request.tool)) &&
+            turnBudget.remainingWallTimeMs() >= 40_000) {
+            observationRepairUsed = true;
+            await this.conversations.upsertTurnCheckpoint({
+              sessionId: input.sessionId, turnId: input.turnId, executionOwner: input.executionOwner,
+              checkpoint: 'observation_repair_reserved', status: 'succeeded', payload: { round, issues }
+            });
+            await this.trace(input.sessionId, input.turnId, 'tools', 'observation_validation_repair', { round, issues });
+            turnBudget.consumeModelCall();
+            decision = parseContinuationDecision(await this.model.assessObservations({
+              session: input.session, history, userMessage,
+              ledgerEvents: effectiveLedgerEvents, ledgerState,
+              intent, products: observationProducts, toolResults, verifiedProductFacts, conflictingVerifiedProductFacts,
+              pendingLeadCaptureDraft: pendingLeadDraftContext,
+              round, remainingBudget: turnBudget.snapshot(),
+              validationFeedback: { issues, rejectedDecision: decision },
+              structuredDeadlineAtMs: turnBudget.deadlineForStage(20_000, 30_000),
+              signal: input.signal
+            }));
+            issues = continuationValidationIssues({ decision, intent, products: observationProducts });
+          }
           if (issues.length) {
             await this.trace(input.sessionId, input.turnId, 'tools', 'observation_validation_failed', { round, issues, replayed: Boolean(savedObservation) });
             await this.conversations.upsertTurnCheckpoint({
