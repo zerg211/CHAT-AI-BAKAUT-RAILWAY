@@ -1622,6 +1622,7 @@ function sourceEvidenceValidationJsonFormat() {
           claimSupported: { type: 'boolean' },
           targetApplicability: { type: 'string', enum: ['exact_model', 'shared_instruction', 'not_applicable', 'uncertain'] },
           scopeQuote: { type: 'string' },
+          relatedItemIdentifiers: { type: 'array', maxItems: 8, items: { type: 'string' } },
           claimStartKinds: {
             type: 'array',
             items: { type: 'string', enum: [...sourceBackedStartKinds] }
@@ -1639,6 +1640,7 @@ function sourceEvidenceValidationJsonFormat() {
           'claimSupported',
           'targetApplicability',
           'scopeQuote',
+          'relatedItemIdentifiers',
           'claimStartKinds',
           'supportedStartKinds',
           'publisherAuthority',
@@ -1657,7 +1659,9 @@ const sourceApplicabilityInstructions = [
   'For a shared manual, scopeQuote must be a concise exact sourceText excerpt naming the exact target model and establishing the instruction scope. A family name, URL, page title, or mere unrelated mention is not a scope proof.',
   'Check model-specific table columns, exclusions, variants and revisions. Never transfer another model\'s number to the target merely because both appear on the manual cover.',
   'For exact_model with a separate scopeQuote, quote the target-specific row/instruction including the fact evidence; for shared_instruction quote the covered-model statement and verify that the fact is a general instruction, not a row for another model.',
-  'Return evidence as the exact fact excerpt and scopeQuote separately. If either necessary excerpt is absent, mark claimSupported=false and applicability uncertain or not_applicable.'
+  'Return evidence as the exact fact excerpt and scopeQuote separately. If either necessary excerpt is absent, mark claimSupported=false and applicability uncertain or not_applicable.',
+  'Prefer the shortest contiguous excerpt preserving the exact target-to-value relationship. Copy PDF line-break hyphenation as supplied rather than reconstructing words; a nearby unrelated component or model need not be included in the quote.',
+  'Return relatedItemIdentifiers as identifiers copied from this source for components, accessories, consumables or standards relevant to the claim. Never list another equipment model here, including a compared model or different variant. This is an explicit semantic role classification, not permission to transfer another model\'s facts. Return [] when none are present.'
 ].join('\n');
 
 function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
@@ -1676,6 +1680,8 @@ function normalizeSourceEvidenceValidation(parsed: Record<string, unknown>) {
     : [];
   return {
     claimSupported: parsed.claimSupported === true,
+    relatedItemIdentifiers: Array.isArray(parsed.relatedItemIdentifiers)
+      ? parsed.relatedItemIdentifiers.filter((item): item is string => typeof item === 'string').slice(0, 8) : [],
     targetApplicability,
     scopeQuote: typeof parsed.scopeQuote === 'string' ? collapseWhitespace(parsed.scopeQuote).slice(0, 640) : '',
     claimStartKinds: sourceBackedStartKinds.filter((kind) => claimStartKinds.includes(kind)),
@@ -1882,6 +1888,9 @@ async function validateEvidenceItem(input: {
   const otherScopedIdentifiers = scopeQuote ? modelIdentifierTokens(scopeQuote).filter((identifier) =>
     !itemTargetProductNames.some((name) => exactProductIdentity(identifier).hasExactMention(name))
   ) : [];
+  const sourceIdentifiers = new Set(modelIdentifierTokens(source.text));
+  const relatedItemIdentifiers = new Set(semanticValidation.relatedItemIdentifiers.flatMap(modelIdentifierTokens)
+    .filter((identifier) => sourceIdentifiers.has(identifier)));
   // A selected passage is context, not a concise model-bound claim quote. The
   // validator must extract that quote; a broad passage must not bypass scope.
   const exactExcerpts = [semanticValidation.evidence, ...(input.requireSemanticExcerpt ? [] : [input.item.evidence])]
@@ -1889,7 +1898,11 @@ async function validateEvidenceItem(input: {
     .filter((evidence): evidence is string => Boolean(evidence));
   const semanticEvidence = exactExcerpts
     .find((evidence): evidence is string => Boolean(
-      evidence && (exactQuoteIsBoundToTarget({
+      evidence && ((scopedApplicability === 'exact_model' && itemTargetProductNames.some((name) =>
+        exactProductIdentity(name).hasExactMention(evidence)
+      ) && modelIdentifierTokens(evidence).every((identifier) => relatedItemIdentifiers.has(identifier) ||
+        itemTargetProductNames.some((name) => exactProductIdentity(identifier).hasExactMention(name))
+      )) || exactQuoteIsBoundToTarget({
         item: { ...input.item, evidence },
         sourceKind: source.sourceKind,
         targetProductNames: itemTargetProductNames
@@ -1907,6 +1920,12 @@ async function validateEvidenceItem(input: {
   const invalidKinds = claimKinds.filter((kind) => !semanticValidation.supportedStartKinds.includes(kind));
   const valid = semanticValidation.claimSupported && Boolean(scopedApplicability) &&
     Boolean(semanticEvidence) && invalidKinds.length === 0;
+  // Component identifiers do not invalidate a model-specific relation accepted
+  // by semantic review. Scope still binds a literal source span naming the target.
+  const boundScopeQuote = scopeNamesExactTarget ? scopeQuote :
+    scopedApplicability === 'exact_model' && semanticEvidence && itemTargetProductNames.some((name) =>
+      exactProductIdentity(name).hasExactMention(semanticEvidence)
+    ) ? semanticEvidence : null;
   return {
     valid,
     exactExcerptFound: exactExcerpts.length > 0,
@@ -1925,7 +1944,7 @@ async function validateEvidenceItem(input: {
     ]),
     manufacturerAuthorityVerified,
     verifiedEvidence: valid ? semanticEvidence : undefined,
-    ...(valid && scopeQuote && scopeNamesExactTarget && scopedApplicability ? { targetApplicability: scopedApplicability, scopeQuote } : {})
+    ...(valid && boundScopeQuote && scopedApplicability ? { targetApplicability: scopedApplicability, scopeQuote: boundScopeQuote } : {})
   };
 }
 
