@@ -1,5 +1,6 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import {OutcomeDashboard} from './OutcomeDashboard';
 import {
   abandonSavedChat,
   findCompletedAnswerForRetry,
@@ -939,12 +940,12 @@ function AdminApp() {
         fetch(`${target.baseUrl}/api/admin/leads?limit=200`, { headers })
       ]);
       if (conversationData.status === 401 || emptyConversationData.status === 401 || leadData.status === 401) throw new Error('Неверный пароль администратора');
-      if (!conversationData.ok) throw new Error(await adminResponseError(conversationData, 'Не удалось загрузить данные'));
-      if (!leadData.ok) throw new Error(await adminResponseError(leadData, 'Не удалось загрузить данные'));
-      if (!emptyConversationData.ok) throw new Error(await adminResponseError(emptyConversationData, 'Не удалось загрузить пустые диалоги'));
-      const conversationsJson = await conversationData.json() as { sessions: ConversationSummary[]; stats?: AdminConversationStats };
-      const emptyConversationsJson = await emptyConversationData.json() as { sessions: ConversationSummary[]; stats?: AdminConversationStats };
-      const leadsJson = await leadData.json() as { leads: Lead[] };
+      if (!conversationData.ok && conversationData.status!==403) throw new Error(await adminResponseError(conversationData, 'Не удалось загрузить данные'));
+      if (!leadData.ok && leadData.status!==403) throw new Error(await adminResponseError(leadData, 'Не удалось загрузить данные'));
+      if (!emptyConversationData.ok && emptyConversationData.status!==403) throw new Error(await adminResponseError(emptyConversationData, 'Не удалось загрузить пустые диалоги'));
+      const conversationsJson = (conversationData.status===403?{sessions:[]}:await conversationData.json()) as { sessions: ConversationSummary[]; stats?: AdminConversationStats };
+      const emptyConversationsJson = (emptyConversationData.status===403?{sessions:[]}:await emptyConversationData.json()) as { sessions: ConversationSummary[]; stats?: AdminConversationStats };
+      const leadsJson = (leadData.status===403?{leads:[]}:await leadData.json()) as { leads: Lead[] };
       const mergedSessions = [
         ...conversationsJson.sessions,
         ...emptyConversationsJson.sessions.filter((emptySession) => !conversationsJson.sessions.some((session) => session.id === emptySession.id))
@@ -1078,6 +1079,7 @@ function AdminApp() {
       </header>
 
       {error ? <div className="admin-error">{error}</div> : null}
+      <OutcomeDashboard baseUrl={currentSource.baseUrl} token={token} />
 
       <section className="admin-layout">
         <aside className="admin-sidebar">

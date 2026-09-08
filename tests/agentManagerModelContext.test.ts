@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { compactToolResultsForModel, compactVerifiedFactsForModel } from '../src/ai/agentManagerModelContext.js';
+import { compactToolResultsForModel, compactVerifiedFactsForModel,compactObserverCandidates } from '../src/ai/agentManagerModelContext.js';
 import type { ToolResult } from '../src/ai/agentManagerContracts.js';
 import type { Product, VerifiedProductFact } from '../src/shared/types.js';
 
@@ -31,6 +31,17 @@ function catalogResult(products: Product[]): ToolResult {
 }
 
 describe('agent manager model context compaction', () => {
+  it('retains every ranked candidate and makes complete details available by explicit read',()=>{
+    const candidates=Array.from({length:15},(_,i)=>catalogProduct(`p${i}`,'technical source '.repeat(300)));
+    const compact=compactObserverCandidates(candidates,[catalogResult(candidates)]);
+    expect(compact.map(product=>product.id)).toEqual(candidates.map(product=>product.id));
+    expect(Buffer.byteLength(JSON.stringify(compact))/Buffer.byteLength(JSON.stringify(candidates))).toBeLessThan(.6);
+    expect(candidates.every(product=>Boolean(product.specs.blob))).toBe(true);
+    const details:ToolResult={requestId:'details',tool:'catalog.getProductDetails',status:'ok',warnings:[],
+      payload:{productIds:['p2'],products:[candidates[2]]}};
+    expect(compactObserverCandidates(candidates,[details])[2]).toEqual(candidates[2]);
+    expect(compactObserverCandidates(candidates,[{...details,status:'error'}])[2]).not.toHaveProperty('specs');
+  });
   it('shares only exactly represented web products and keeps unmatched source evidence and durable artifacts intact', () => {
     const same = catalogProduct('p1');
     const different = { ...same, description: 'A different source description.', specs: { oil: '10W-30' } };

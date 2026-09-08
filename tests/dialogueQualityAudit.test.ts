@@ -30,7 +30,8 @@ describe('automatic execution audit review queue',()=>{
       unresolvedConversationCount:1,
       unknownConversationCount:1,
       totalEstimatedCostUsd:2,
-      costPerResolvedConversationUsd:2
+      costPerResolvedConversationUsd:null,
+      complete:false,unknownCostTurnCount:1
     });
     expect(report.turns[0]).toMatchObject({ estimatedCostUsd: 1.25, totalTokens: 100, wallTimeMs: 42000 });
   });

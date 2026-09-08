@@ -43,6 +43,13 @@ try {
    assert.equal(report.turns.find(t=>t.turnId===completeId).buildCommit,'test-build');
    assert.equal(report.latency.medianMs,40000);
    assert.ok(!JSON.stringify(report).includes('private fixture'));
+   const conversations=new ConversationRepository();
+   assert.equal(rows.find(t=>t.turnId===completeId).resolutionStatus,'unknown');
+   assert.equal(await conversations.annotateConversationOutcome({sessionId:randomUUID(),turnId:completeId,resolutionStatus:'resolved',actor:'test-reviewer'}),false);
+   assert.equal(await conversations.annotateConversationOutcome({sessionId,turnId:failedId,resolutionStatus:'resolved',actor:'test-reviewer'}),false);
+   assert.equal(await conversations.annotateConversationOutcome({sessionId,turnId:completeId,resolutionStatus:'resolved',actor:'test-reviewer'}),true);
+   const annotated=(await conversations.listQualityAuditTurns(1,500)).find(t=>t.turnId===completeId);
+   assert.equal(annotated.resolutionStatus,'resolved');
   } finally {await pool.query('DELETE FROM conversation_sessions WHERE id=$1',[sessionId]);}
  });
  await run('TECHNICAL_FACT_PUBLISHED_WITH_ORIGINAL_VERIFICATION_TIME',async()=>{
@@ -53,6 +60,7 @@ try {
   });
   const saved=await repo.upsertVerifiedProductFact(fact);
   assert.equal(Date.parse(saved.lastVerifiedAt),Date.parse(fact.observedAt));
+  assert.equal(Date.parse(saved.validUntil),Date.parse(fact.observedAt)+90*86400000);
  });
  await run('PRICE_ONLY_PRESERVES_MEMORY_AND_EMBEDDING',async()=>{
   const before=await pool.query('SELECT * FROM products WHERE id=$1',[p.id]);
@@ -110,11 +118,21 @@ try {
   await repo.finishVerifiedFactEnrichmentJob(second);
  });
  await run('LATE_OLD_EVIDENCE_CANNOT_REPLACE_NEWER_SOURCE_REVISION',async()=>{
+  const previous=(await repo.searchVerifiedProductFacts({productIds:[p.id],sourceTypes:['manual'],attributes:['frequency']})).find(f=>f.attribute==='Частота');
   const newest={...fact,attribute:'Частота',value:'60 Гц',observedAt:new Date().toISOString()};
-  assert.ok(await repo.upsertVerifiedProductFact(newest));
+  const replacement=await repo.upsertVerifiedProductFact(newest);
+  assert.ok(replacement);
+  assert.ok(replacement.supersedesFactIds.includes(previous.id));
+  assert.equal((await pool.query('SELECT status FROM verified_product_facts WHERE id=$1',[previous.id])).rows[0].status,'superseded');
   assert.equal(await repo.upsertVerifiedProductFact({...fact,attribute:'Частота',value:'50 Гц'}),null);
   const rows=await repo.searchVerifiedProductFacts({productIds:[p.id],sourceTypes:['manual'],attributes:['frequency']});
   assert.deepEqual(rows.filter(f=>f.attribute==='Частота').map(f=>f.value),['60 Гц']);
+ });
+ await run('SLOT_LIMIT_NEVER_HIDES_CONTRADICTORY_SOURCE',async()=>{
+  const conflicting=await repo.upsertVerifiedProductFact({...fact,attribute:'Частота',value:'50 Гц',sourceUrl:fact.sourceUrl+'-independent',observedAt:fact.observedAt});
+  assert.ok(conflicting);
+  const rows=await repo.searchVerifiedProductFacts({productIds:[p.id],sourceTypes:['manual'],attributes:['frequency'],limit:1});
+  assert.deepEqual(rows.filter(f=>f.attribute==='Частота').map(f=>f.value).sort(),['50 Гц','60 Гц']);
  });
  await run('REPEATED_WORKER_CRASH_HAS_BOUNDED_RETRIES',async()=>{
   await repo.enqueueVerifiedProductFacts(key+'-crash',[{...fact,attribute:'Напряжение',value:'220 В'}]);

@@ -484,6 +484,8 @@ function mapLeadCaptureDraft(row: QueryResultRow): LeadCaptureDraft {
 
 function mapVerifiedProductFact(row: QueryResultRow): VerifiedProductFact {
   return {
+    validUntil: row.valid_until ? isoTimestamp(row.valid_until) : null,
+    supersedesFactIds: row.supersedes_fact_ids ?? [],
     id: row.id,
     productId: row.product_id ?? null,
     productKey: row.product_key,
@@ -686,15 +688,19 @@ export class ConversationRepository {
       m.id IS NOT NULL AS "hasAnswer",t.error_code AS "errorCode",split_part(t.error_message,':',1) AS "errorClass",
       m.metadata->'build'->>'commitSha' AS "buildCommit",m.metadata->'turnBudget'->'usage'->'wallTimeMs' AS "wallTimeMs",
        m.metadata->'turnBudget'->'usage'->'modelCalls' AS "modelCalls",t.status='recovered' AS recovered,
-       (SELECT sum(usage.cost_usd) FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "estimatedCostUsd",
+       (SELECT CASE WHEN count(*)=count(usage.cost_usd) THEN sum(usage.cost_usd) ELSE NULL END
+         FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "estimatedCostUsd",
        (SELECT sum(usage.total_tokens) FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "totalTokens",
        CASE
-         WHEN m.metadata->'answerContract' IS NULL OR jsonb_typeof(m.metadata->'answerContract') <> 'object' THEN 'unknown'
-         WHEN jsonb_array_length(CASE WHEN jsonb_typeof(m.metadata->'answerContract'->'questionsAsked')='array'
-           THEN m.metadata->'answerContract'->'questionsAsked' ELSE '[]'::jsonb END) > 0
-           OR m.metadata->'answerContract'->'selectionReadiness'->>'status' = 'needs_more_info' THEN 'unresolved'
-         ELSE 'resolved'
+         WHEN m.metadata->'outcome'->>'confirmedBy' IN ('buyer','human_review') AND
+           m.metadata->'outcome'->>'resolutionStatus' IN ('resolved','unresolved')
+           THEN m.metadata->'outcome'->>'resolutionStatus'
+         ELSE 'unknown'
        END AS "resolutionStatus",
+       t.recovery_attempts AS "recoveryAttempts",
+       CASE WHEN m.id IS NOT NULL THEN extract(epoch FROM (m.created_at-t.created_at))*1000 ELSE NULL END AS "serverAnswerMs",
+       (SELECT count(*) FROM agent_traces trace WHERE trace.turn_id=t.id AND trace.event_type='verified_fact_memory_used'
+         AND trace.payload->>'attributesCovered'='true') AS "knowledgeReuseHits",
       (SELECT rating FROM assistant_feedback_events WHERE turn_id=t.id ORDER BY created_at DESC LIMIT 1) AS rating,
       coalesce((SELECT jsonb_agg(jsonb_build_object('tool',item->>'tool','status',item->>'status',
         'priceUnavailable',jsonb_path_exists(item,'$.payload.priceVerifications[*] ? (@.status == "unavailable")')))
@@ -706,6 +712,14 @@ export class ConversationRepository {
         WHERE trace.turn_id=t.id),'[]'::jsonb) AS "reviewIssues"
     FROM recent t LEFT JOIN messages m ON m.id=t.assistant_message_id ORDER BY t.created_at DESC`,[hours,limit]);
     return result.rows;
+  }
+
+  async annotateConversationOutcome(input:{sessionId:string;turnId:string;resolutionStatus:'resolved'|'unresolved'|'unknown';actor:string}) {
+    const result=await this.db.query(`UPDATE messages m SET metadata=jsonb_set(coalesce(m.metadata,'{}'::jsonb),'{outcome}',$3::jsonb)
+      FROM conversation_turns t WHERE t.id=$2 AND t.session_id=$1 AND t.assistant_message_id=m.id
+      AND t.status IN ('completed','recovered') RETURNING t.id`,[input.sessionId,input.turnId,
+      JSON.stringify({resolutionStatus:input.resolutionStatus,confirmedBy:'human_review',actor:input.actor,assessedAt:new Date().toISOString()})]);
+    return result.rowCount === 1;
   }
 
   async createSession(input: { visitorId?: string; pageUrl?: string; userAgent?: string }) {
@@ -3476,10 +3490,11 @@ export class ProductRepository {
           INSERT INTO verified_product_facts(
             product_id, product_key, product_name, attribute, value, source_type,
             source_url, source_title, evidence, source_tier, source_authority, observed_at, last_verified_at,
-            confidence, catalog_source_hash, source_fingerprint, normalized_attribute, normalized_value
+            confidence, catalog_source_hash, source_fingerprint, normalized_attribute, normalized_value, valid_until, supersedes_fact_ids
           )
           SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $12, $13, coalesce($14::timestamptz, now()), coalesce($14::timestamptz, now()), $10,
-                 (SELECT source_content_hash FROM product_snapshot), $11, $16, $17::jsonb
+                 (SELECT source_content_hash FROM product_snapshot), $11, $16, $17::jsonb,
+                 coalesce($14::timestamptz, now())+interval '90 days', ARRAY(SELECT id FROM superseded)
          FROM supersede_barrier
          WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM product_snapshot))
            AND (SELECT current FROM evidence_order)
@@ -3506,6 +3521,7 @@ export class ProductRepository {
              ELSE verified_product_facts.confidence
            END,
            last_verified_at = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now())),
+           valid_until = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now()))+interval '90 days',
            normalized_attribute = $16,
            normalized_value = $17::jsonb,
            updated_at = now()
@@ -3601,8 +3617,12 @@ export class ProductRepository {
               AND fact.product_key = ANY($1::text[])
             )
           )
-       ) SELECT * FROM candidates
-       WHERE product_rank <= $4 OR lower(trim(attribute)) = ANY($6::text[])
+       ), selected_slots AS (
+         SELECT coalesce(product_id::text,product_key) AS identity, coalesce(normalized_attribute,lower(trim(attribute))) AS slot
+         FROM candidates WHERE product_rank <= $4 OR lower(trim(attribute)) = ANY($6::text[])
+       ) SELECT * FROM candidates c
+       WHERE EXISTS (SELECT 1 FROM selected_slots s WHERE s.identity=coalesce(c.product_id::text,c.product_key)
+         AND s.slot=coalesce(c.normalized_attribute,lower(trim(c.attribute))))
        ORDER BY (lower(trim(attribute)) = ANY($6::text[])) DESC,
          product_rank, id`,
       [

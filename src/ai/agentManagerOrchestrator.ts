@@ -41,7 +41,7 @@ import {
 } from './dialogueLedgerReducer.js';
 import { createEmbedding } from './openaiClient.js';
 import { sanitizeVisibleAnswerNumbers } from './answerSanity.js';
-import { compactToolResultsForModel, compactVerifiedFactsForModel } from './agentManagerModelContext.js';
+import { compactToolResultsForModel, compactVerifiedFactsForModel,compactObserverCandidates } from './agentManagerModelContext.js';
 import {
   CONTINUATION_MAX_ROUNDS,
   continuationValidationIssues,
@@ -143,6 +143,9 @@ import {
 import { agentIntentRequiresCatalogEvidence, evaluateAgentManagerPolicyGate } from './agentManagerPolicyGate.js';
 import { guardCustomerOutput } from './agentManagerOutputGuard.js';
 import { buildDecisionArtifact } from './decisionArtifact.js';
+import {admitReadContinuation} from './readContinuationController.js';
+import {adaptiveConversationGuidance} from './adaptiveConversationPolicy.js';
+import {currentAgentWriterPolicy} from './agentManagerTurnBudget.js';
 import {
   compactModelText,
   exactProductIdentity,
@@ -5640,6 +5643,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
         max_output_tokens: 2400,
         input: [{ role: 'system', content: [
           'Ты продолжаешь текущий ход профессионального консультанта БАКАУТ после получения реальных результатов инструментов.',
+          'products с detailRequired=true — компактные кандидаты в порядке каталожного отбора, а не полные карточки. Отсутствие specs здесь не означает отсутствие характеристики. Если для следующего решения нужны детали кандидата и их нет в verifiedProductFacts или результатах инструментов, выбери catalog.getProductDetails с его id. Не угадывай свойства по названию. Не перечитывай уже переданные полные карточки.',
           untrustedEvidenceBoundary,
           'Проверь, позволяют ли наблюдения решить задачу покупателя, а не просто назвать найденные товары. Учитывай весь активный контекст, назначение, доступные покупателю условия работы и сравниваемые модели.',
           'Верни action=answer, если данных достаточно для полезного обоснованного ответа. Верни clarify только для решающего неизвестного условия самого покупателя; характеристики товара выясняй самостоятельно. Не предлагай неподъемную/неуместную технику новичку, если способ работы и перевозки еще неизвестен: выясни существенное условие без выдумывания лимита.',
@@ -5657,7 +5661,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
           state: compactLedger(input.ledgerState),
           intent: input.intent,
           allowedRequirementIds,
-          products: input.products.map((product) => answerProductContext(product, input.toolResults)),
+          products: compactObserverCandidates(input.products,input.toolResults),
           verifiedProductFacts: compactVerifiedFactsForModel(input.verifiedProductFacts ?? []),
           conflictingVerifiedProductFacts: compactVerifiedFactsForModel(input.conflictingVerifiedProductFacts ?? []),
           toolResults: compactToolResultsForModel(input.toolResults, input.products),
@@ -5677,6 +5681,7 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
   }
 
   async composeAnswer(input: AgentManagerAnswerInput): Promise<AnswerContract> {
+    const writerPolicy=input.reviewIssuesFeedback?.length?null:currentAgentWriterPolicy();
     const styleExamples = approvedAnswerStyleExamplesPromptBlock();
     const availableEvidenceSources = answerEvidenceSourceHints(input);
     const reviewRepair = input.reviewIssuesFeedback?.length
@@ -5695,16 +5700,17 @@ export class OpenAIAgentManagerModel implements AgentManagerModel {
       model: config.OPENAI_ANSWER_MODEL,
       reasoning: { effort: input.reviewIssuesFeedback?.length
         ? config.OPENAI_REPAIR_REASONING_EFFORT
-        : config.OPENAI_ANSWER_REASONING_EFFORT },
+        : writerPolicy?.reasoningEffort ?? config.OPENAI_ANSWER_REASONING_EFFORT },
       max_output_tokens: input.reviewIssuesFeedback?.length
         ? config.OPENAI_WRITER_MAX_OUTPUT_TOKENS
-        : Math.max(config.OPENAI_WRITER_MAX_OUTPUT_TOKENS, config.OPENAI_MAX_OUTPUT_TOKENS),
+        : Math.min(writerPolicy?.outputTokenCap ?? Infinity,Math.max(config.OPENAI_WRITER_MAX_OUTPUT_TOKENS, config.OPENAI_MAX_OUTPUT_TOKENS)),
       input: [
         {
           role: 'system',
           content: [
             ...(reviewRepair ? [reviewRepair] : []),
             'Ты AI менеджер-консультант БАКАУТ в чате сайта.',
+            adaptiveConversationGuidance,
             untrustedEvidenceBoundary,
             managerPolicy,
             'Отвечай по-русски как живой менеджер БАКАУТ: просто, легко, без канцелярита и третьего лица, от лица магазина («у нас есть», «можем уточнить»). Простое — кратко; сложное/сравнение — сначала вывод 1-2 предложения, затем 2-4 отличия. Покупателю сообщай состояние товарного факта, а не процесс работы системы: что уже известно по конкретной модели и какой именно параметр, артикул или совместимость пока не подтверждены. Никогда не упоминай инструменты, web/внешний поиск, попытки, timeout/тайм-аут, сбой, pipeline, внутреннюю проверку или то, завершилась ли проверка. Эти сведения остаются только в admin metadata.',
@@ -6034,7 +6040,7 @@ export class AgentManagerOrchestrator {
       attributes: input.comparisonAttributes,
       limit: 32
     });
-    const exactBoundFacts = input.targetProductNames.length
+    const exactBoundFacts = (input.targetProductNames.length
       ? facts.filter((fact) => input.targetProductNames.some((targetName) => {
           if (!textMatchesTargetName(fact.productName, targetName)) return false;
           const targetProductIds = input.selectedProducts
@@ -6046,7 +6052,7 @@ export class AgentManagerOrchestrator {
         }))
       : exactProductIds.length
         ? facts.filter((fact) => Boolean(fact.productId && exactProductIds.includes(fact.productId)))
-        : facts;
+        : facts).filter(fact=>reusableVerifiedFact(fact,new Date()));
     const knownSourceCandidates = [...new Map(exactBoundFacts.filter(fact => reusableVerifiedFact(fact, new Date()) &&
       fact.sourceTier && fact.sourceAuthority && fact.sourceUrl).map(fact => [fact.sourceUrl!, {
         url: fact.sourceUrl!, title: fact.sourceTitle ?? undefined
@@ -6769,6 +6775,10 @@ export class AgentManagerOrchestrator {
       ...intentWithoutOrderedTools,
       toolRequests: orderToolRequestsForSelectionDependencies(validatedToolRequests, intentWithoutOrderedTools)
     };
+    turnBudget.applySemanticProfile(selectAgentManagerBudgetProfile({recovered:input.recovered,intent}), 'validated_current_turn_intent');
+    await this.trace(input.sessionId,input.turnId,'intent','task_budget_classified',{
+      taskType:intent.grounding?.taskType,profile:turnBudget.profile,transitions:turnBudget.snapshot().profileTransitions
+    });
     const initialPolicyGate = evaluateAgentManagerPolicyGate({ intent, toolResults: [] });
     await this.trace(input.sessionId, input.turnId, 'intent', 'policy_gate_evaluated', {
       ok: initialPolicyGate.ok,
@@ -7009,10 +7019,8 @@ export class AgentManagerOrchestrator {
           requestIds: decision.toolRequests.map((request) => request.id),
           replayed: Boolean(savedObservation), remainingTurnMs: turnBudget.remainingWallTimeMs()
         });
-        if (decision.action !== 'continue') {
-          continuation = { status: decision.action, rounds: round - 1,
-            rationale: decision.rationale, missingFacts: decision.missingFacts, candidateProductIds: decision.candidateProductIds };
-          break;
+        if (decision.toolRequests.some(request=>request.tool === 'web.researchProductFacts')) {
+          turnBudget.applySemanticProfile('RESEARCH','validated_observation_requires_research');
         }
         const usage = turnBudget.snapshot().usage;
         // Replayed artifacts still count as completed logical requests. A new
@@ -7021,16 +7029,20 @@ export class AgentManagerOrchestrator {
         const completedWebCalls = Math.max(usage.webCalls, toolResults.filter((result) =>
           result.tool === 'web.researchProductFacts' && result.payload.searchDisposition !== 'not_needed'
         ).length);
-        const nextWebCalls = decision.toolRequests.filter((request) => request.tool === 'web.researchProductFacts').length;
         const allReadsAlreadyPersisted = Boolean(savedObservation) && decision.toolRequests.every((request) =>
           reusablePersistedToolResults.get(request.id)?.tool === request.tool
         );
-        if (round > CONTINUATION_MAX_ROUNDS ||
-          (!allReadsAlreadyPersisted && (
-            completedToolCalls + decision.toolRequests.length > turnBudget.limits.maxToolCalls ||
-            completedWebCalls + nextWebCalls > turnBudget.limits.maxWebCalls ||
-            turnBudget.remainingWallTimeMs() < 36_000))) {
-          await stop(round > CONTINUATION_MAX_ROUNDS ? 'continuation_round_limit' : 'continuation_budget_reserve', decision);
+        const admission=admitReadContinuation({intent,decision,results:toolResults,round,
+          completedToolCalls,completedWebCalls,maxToolCalls:turnBudget.limits.maxToolCalls,
+          maxWebCalls:turnBudget.limits.maxWebCalls,remainingMs:turnBudget.remainingWallTimeMs(),allReadsAlreadyPersisted});
+        await this.trace(input.sessionId,input.turnId,'tools','autonomy_decision',admission.state);
+        if (admission.action === 'stop') {
+          await stop(admission.stopReason!, decision);
+          break;
+        }
+        if (decision.action !== 'continue') {
+          continuation = { status: decision.action, rounds: round - 1,
+            rationale: decision.rationale, missingFacts: decision.missingFacts, candidateProductIds: decision.candidateProductIds };
           break;
         }
         const requests = orderToolRequestsForSelectionDependencies(decision.toolRequests.map(validateToolRequest), intent);
@@ -7185,6 +7197,9 @@ export class AgentManagerOrchestrator {
     const savedAnswer = legacyIntentUpgraded
       ? { found: false as const, payload: undefined }
       : succeededCheckpoint(persistedExecution.checkpoints, 'answer_contract_created');
+    if (turnBudget.remainingWallTimeMs() < WEB_ANSWER_RESERVE_MS) {
+      turnBudget.applySemanticProfile('RESEARCH','finalization_reserve_after_reads');
+    }
     let answer: AnswerContract;
     if (savedAnswer.found) {
       answer = failClosedRecoveredAnswerContract(
@@ -7290,6 +7305,7 @@ export class AgentManagerOrchestrator {
         // the whole turn. Deterministic gates stay as validators; the fix is semantic.
         const issueCodes = review.issues.map((issue) => issue.code);
         const repairable = review.issues.every((issue) => issue.code !== 'requires_adjudication');
+        if (repairable) turnBudget.applySemanticProfile('RESEARCH','validated_review_requires_repair');
         const canAffordRepair = turnBudget.remainingWallTimeMs() > 30_000;
         if (repairable && canAffordRepair) {
           try {
@@ -8452,6 +8468,19 @@ export class AgentManagerOrchestrator {
             'product_research_stage',
             { requestId: request.id, ...event }
           );
+          const freshRequested = input.intent.grounding?.webRequirement === 'buyer_requested' ||
+            input.intent.grounding?.webRequirement === 'independent_required';
+          const memoryCheckedFirst = !freshRequested && allRequestedFactSlots.length > 0;
+          const priorMemory = memoryCheckedFirst ? await this.researchFromVerifiedFactMemory({
+            sessionId:input.session.id,turnId:input.turnId,targetProductNames,comparisonAttributes,
+            requestedFactSlots:allRequestedFactSlots,selectedProducts,signal:toolSignal,
+            deadlineAtMs:Math.min(researchDeadlineAtMs,Date.now()+8_000)
+          }) : null;
+          await this.trace(input.session.id,input.turnId,'tools','evidence_broker_lookup',{
+            requestId:request.id,sourcePolicy:input.intent.grounding?.sourcePolicy,
+            products:selectedProducts.map(product=>({id:product.id,technicalVersion:product.technicalVersion??null})),
+            requestedSlots:allRequestedFactSlots.length,hit:priorMemory?.attributesCovered===true,freshRequested
+          });
           // Reuse only the same completed reading inside this buyer turn. The
           // full card content is part of the key; changed facts cannot hit it.
           const catalogResearchKey = createHash('sha256').update(JSON.stringify([
@@ -8460,7 +8489,7 @@ export class AgentManagerOrchestrator {
             priorCatalogLookupCompleted || currentWebCatalogLookupCompleted
           ])).digest('hex');
           const cachedCatalogResearch = catalogResearchCache.get(catalogResearchKey);
-          const catalogResearch = cachedCatalogResearch ? structuredClone(cachedCatalogResearch) : await extractCatalogProductComparisonFacts({
+          const catalogResearch = priorMemory?.attributesCovered ? null : cachedCatalogResearch ? structuredClone(cachedCatalogResearch) : await extractCatalogProductComparisonFacts({
             userMessage: input.userMessage,
             products: selectedProducts,
             targetProductNames,
@@ -8495,8 +8524,11 @@ export class AgentManagerOrchestrator {
           const memoryComparisonAttributes = catalogMissingFactSlots.length
             ? uniqueStrings(catalogMissingFactSlots.map((slot) => slot.attribute))
             : comparisonAttributes;
+          const priorMemoryResearch = priorMemory?.research;
           const memory = catalogCoversRequest
             ? null
+            : memoryCheckedFirst ? (priorMemory ? {...priorMemory,attributesCovered:Boolean(priorMemoryResearch && catalogMissingFactSlots.every(slot=>
+                researchResultCoversFactSlot({result:priorMemoryResearch,productName:slot.productName,attribute:slot.attribute,sourceTypes:['web']})))} : null)
             : await this.researchFromVerifiedFactMemory({
                 sessionId: input.session.id,
                 turnId: input.turnId,

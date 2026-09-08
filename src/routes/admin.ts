@@ -1,5 +1,5 @@
-import crypto from 'node:crypto';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
+import {registerAdminAuthorization,authorizeAdmin} from './adminAuthorization.js';
 import { z } from 'zod';
 import { importCatalogCsv } from '../catalog/csvImport.js';
 import { syncCatalogFromSite } from '../catalog/crawler.js';
@@ -19,33 +19,6 @@ import {
 import { config } from '../config.js';
 import { pool } from '../db/pool.js';
 import { ConversationRepository, LeadRepository, ProductRepository } from '../db/repositories.js';
-
-function adminSecret() {
-  return config.ADMIN_PASSWORD?.trim() || config.ADMIN_API_KEY?.trim();
-}
-
-function secretsMatch(input: string, expected: string) {
-  const inputBuffer = Buffer.from(input);
-  const expectedBuffer = Buffer.from(expected);
-  return inputBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(inputBuffer, expectedBuffer);
-}
-
-function assertAdmin(request: FastifyRequest) {
-  const secret = adminSecret();
-  if (!secret) {
-    const error = new Error('Пароль администратора не настроен. Задайте ADMIN_PASSWORD в переменных окружения.');
-    (error as Error & { statusCode?: number }).statusCode = 403;
-    throw error;
-  }
-
-  const header = request.headers.authorization;
-  const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
-  if (!token || !secretsMatch(token, secret)) {
-    const error = new Error('Unauthorized');
-    (error as Error & { statusCode?: number }).statusCode = 401;
-    throw error;
-  }
-}
 
 export type OpenAIRuntimeErrorClass =
   | 'quota_or_billing'
@@ -111,9 +84,7 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   const products = new ProductRepository();
   const leads = new LeadRepository();
 
-  app.addHook('preHandler', async (request) => {
-    if (request.url.startsWith('/api/admin/')) assertAdmin(request);
-  });
+  registerAdminAuthorization(app);
 
   app.get('/api/admin/health', async () => {
     const operations = config.NODE_ENV === 'test'
@@ -236,6 +207,14 @@ export async function registerAdminRoutes(app: FastifyInstance) {
   app.get('/api/admin/leads', async (request) => {
     const query = z.object({ limit: z.coerce.number().int().positive().max(500).default(100) }).parse(request.query);
     return { leads: await leads.listLeads(query.limit) };
+  });
+
+  app.patch('/api/admin/conversations/:id/outcome',async request=>{
+    const {id}=z.object({id:z.string().uuid()}).parse(request.params);
+    const body=z.object({turnId:z.string().uuid(),resolutionStatus:z.enum(['resolved','unresolved','unknown'])}).strict().parse(request.body);
+    const saved=await conversations.annotateConversationOutcome({sessionId:id,...body,actor:authorizeAdmin(request).actor});
+    if(!saved)throw Object.assign(new Error('Completed turn not found'),{statusCode:404});
+    return {ok:true};
   });
 
   app.get('/api/admin/quality/audit',async(request)=>{
