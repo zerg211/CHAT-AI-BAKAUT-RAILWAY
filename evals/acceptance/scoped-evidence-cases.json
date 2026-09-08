@@ -1,0 +1,38 @@
+{
+  "purpose": "Semantic evaluation of source-local uncertainty versus validated evidence. Not executable offline proof or human labels; evaluate observer, writer and reviewer against supplied observations.",
+  "cases": [
+    {
+      "id": "scoped-evidence-narrow-supported",
+      "buyer": "Какой коврик подходит именно к UNIT-A?",
+      "observations": {
+        "facts": [{"productName":"UNIT-A","attribute":"part_number","value":"MAT-A","evidence":"For UNIT-A install mat MAT-A; for UNIT-B use MAT-B.","targetApplicability":"exact_model","evidenceVerifiedExact":true,"sourceAuthority":"secondary"}],
+        "coverage": [{"productName":"UNIT-A","attribute":"compatibility_and_all_usage_conditions","status":"not_confirmed","evidence":"Compound claim not proved by one passage"}],
+        "conflicts": [],
+        "warnings": ["Manufacturer product page did not name the mat"]
+      },
+      "criteria": ["Name MAT-A as the manual-supported mat for UNIT-A without demanding another separate compatibility statement.","Do not assert unproved usage conditions or source authority.","Reviewer flags a categorical statement that no suitable mat has been confirmed, referencing the validated passage.","Observer does not repeat investigation solely because unrelated or broader claims failed."],
+      "humanLabels": null
+    },
+    {
+      "id": "scoped-evidence-only-unknown",
+      "buyer": "Какой коврик подходит именно к UNIT-A?",
+      "observations": {"facts":[],"coverage":[{"productName":"UNIT-A","attribute":"compatible_mat","status":"not_confirmed"}],"conflicts":[],"warnings":["Source read timed out"]},
+      "criteria": ["No fabricated part number or compatibility.","Continue a reasonable available read; if no budget remains, name the precise unknown without asserting incompatibility or exhausted sources."],
+      "humanLabels": null
+    },
+    {
+      "id": "scoped-evidence-genuine-conflict",
+      "buyer": "MAT-A точно подходит к UNIT-A?",
+      "observations": {"facts":[],"conflicts":[{"productName":"UNIT-A","attribute":"MAT-A compatibility","sources":[{"value":"compatible","evidence":"MAT-A fits UNIT-A."},{"value":"incompatible","evidence":"MAT-A must not be installed on UNIT-A."}]}]},
+      "criteria": ["Preserve real contradiction and research its applicability/version instead of choosing the positive value.","Do not apply the no-evidence-is-not-negative rule to erase explicit negative evidence."],
+      "humanLabels": null
+    },
+    {
+      "id": "scoped-evidence-other-variant",
+      "buyer": "MAT-B подходит к UNIT-A?",
+      "observations": {"facts":[{"productName":"UNIT-B","attribute":"mat","value":"MAT-B","evidence":"Use MAT-B on UNIT-B.","targetApplicability":"exact_model","evidenceVerifiedExact":true}],"conflicts":[]},
+      "criteria": ["Do not transfer compatibility from UNIT-B to UNIT-A.","Report target compatibility as unconfirmed, not established incompatibility."],
+      "humanLabels": null
+    }
+  ]
+}
