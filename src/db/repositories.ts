@@ -484,6 +484,8 @@ function mapLeadCaptureDraft(row: QueryResultRow): LeadCaptureDraft {
 
 function mapVerifiedProductFact(row: QueryResultRow): VerifiedProductFact {
   return {
+    validUntil: row.valid_until ? isoTimestamp(row.valid_until) : null,
+    supersedesFactIds: row.supersedes_fact_ids ?? [],
     id: row.id,
     productId: row.product_id ?? null,
     productKey: row.product_key,
@@ -518,6 +520,11 @@ export interface LeadOutboxItem {
   payload: Record<string, unknown>;
   status: string;
   attemptCount: number;
+  leaseToken?: string | null;
+  leasedUntil?: string | null;
+  firstAttemptAt?: string | null;
+  requestSnapshot?: import('../email/httpEmail.js').LeadEmailRequestSnapshot | null;
+  providerOperationId?: string | null;
   nextAttemptAt?: string | null;
   lastError?: string | null;
   createdAt: string;
@@ -534,6 +541,11 @@ function mapLeadOutboxItem(row: QueryResultRow): LeadOutboxItem {
     payload: row.payload ?? {},
     status: row.status,
     attemptCount: Number(row.attempt_count ?? 0),
+    leaseToken: row.lease_token ?? null,
+    leasedUntil: row.leased_until ? isoTimestamp(row.leased_until) : null,
+    firstAttemptAt: row.first_attempt_at ? isoTimestamp(row.first_attempt_at) : null,
+    requestSnapshot: row.request_snapshot ?? null,
+    providerOperationId: row.provider_operation_id ?? null,
     nextAttemptAt: row.next_attempt_at ? row.next_attempt_at.toISOString() : null,
     lastError: row.last_error ?? null,
     createdAt: row.created_at.toISOString(),
@@ -676,15 +688,24 @@ export class ConversationRepository {
       m.id IS NOT NULL AS "hasAnswer",t.error_code AS "errorCode",split_part(t.error_message,':',1) AS "errorClass",
       m.metadata->'build'->>'commitSha' AS "buildCommit",m.metadata->'turnBudget'->'usage'->'wallTimeMs' AS "wallTimeMs",
        m.metadata->'turnBudget'->'usage'->'modelCalls' AS "modelCalls",t.status='recovered' AS recovered,
-       (SELECT sum(usage.cost_usd) FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "estimatedCostUsd",
+       (SELECT CASE WHEN count(*)=count(usage.cost_usd) THEN sum(usage.cost_usd) ELSE NULL END
+         FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "estimatedCostUsd",
        (SELECT sum(usage.total_tokens) FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "totalTokens",
        CASE
-         WHEN m.metadata->'answerContract' IS NULL OR jsonb_typeof(m.metadata->'answerContract') <> 'object' THEN 'unknown'
-         WHEN jsonb_array_length(CASE WHEN jsonb_typeof(m.metadata->'answerContract'->'questionsAsked')='array'
-           THEN m.metadata->'answerContract'->'questionsAsked' ELSE '[]'::jsonb END) > 0
-           OR m.metadata->'answerContract'->'selectionReadiness'->>'status' = 'needs_more_info' THEN 'unresolved'
-         ELSE 'resolved'
+         WHEN m.metadata->'outcome'->>'confirmedBy' IN ('buyer','human_review') AND
+           m.metadata->'outcome'->>'resolutionStatus' IN ('resolved','unresolved')
+           THEN m.metadata->'outcome'->>'resolutionStatus'
+         ELSE 'unknown'
        END AS "resolutionStatus",
+       t.recovery_attempts AS "recoveryAttempts",
+       m.metadata->'clientDelivery'->'firstUsefulContentMs' AS "firstUsefulContentMs",
+       CASE WHEN m.id IS NOT NULL THEN extract(epoch FROM (m.created_at-t.created_at))*1000 ELSE NULL END AS "serverAnswerMs",
+       (SELECT count(*) FROM agent_traces trace WHERE trace.turn_id=t.id AND trace.event_type='verified_fact_memory_used'
+         AND trace.payload->>'attributesCovered'='true') AS "knowledgeReuseHits",
+       coalesce((SELECT jsonb_agg(jsonb_build_object('eventType',trace.event_type,
+         'round',trace.payload->'round','action',trace.payload->'selectedAction','stopReason',trace.payload->'stopReason'))
+         FROM agent_traces trace WHERE trace.turn_id=t.id AND trace.session_id=t.session_id
+           AND trace.event_type IN ('autonomy_decision','observation_cycle_stopped')),'[]'::jsonb) AS "autonomyObservations",
       (SELECT rating FROM assistant_feedback_events WHERE turn_id=t.id ORDER BY created_at DESC LIMIT 1) AS rating,
       coalesce((SELECT jsonb_agg(jsonb_build_object('tool',item->>'tool','status',item->>'status',
         'priceUnavailable',jsonb_path_exists(item,'$.payload.priceVerifications[*] ? (@.status == "unavailable")')))
@@ -696,6 +717,22 @@ export class ConversationRepository {
         WHERE trace.turn_id=t.id),'[]'::jsonb) AS "reviewIssues"
     FROM recent t LEFT JOIN messages m ON m.id=t.assistant_message_id ORDER BY t.created_at DESC`,[hours,limit]);
     return result.rows;
+  }
+
+  async annotateConversationOutcome(input:{sessionId:string;turnId:string;resolutionStatus:'resolved'|'unresolved'|'unknown';actor:string}) {
+    const result=await this.db.query(`UPDATE messages m SET metadata=jsonb_set(coalesce(m.metadata,'{}'::jsonb),'{outcome}',$3::jsonb)
+      FROM conversation_turns t WHERE t.id=$2 AND t.session_id=$1 AND t.assistant_message_id=m.id
+      AND t.status IN ('completed','recovered') RETURNING t.id`,[input.sessionId,input.turnId,
+      JSON.stringify({resolutionStatus:input.resolutionStatus,confirmedBy:'human_review',actor:input.actor,assessedAt:new Date().toISOString()})]);
+    return result.rowCount === 1;
+  }
+
+  async recordAnswerDelivery(input:{sessionId:string;messageId:string;firstUsefulContentMs:number}) {
+    const result=await this.db.query(`UPDATE messages SET metadata=CASE WHEN metadata ? 'clientDelivery' THEN metadata
+      ELSE jsonb_set(coalesce(metadata,'{}'::jsonb),'{clientDelivery}',$3::jsonb) END
+      WHERE id=$2 AND session_id=$1 AND role='assistant' RETURNING id`,[input.sessionId,input.messageId,
+      JSON.stringify({firstUsefulContentMs:input.firstUsefulContentMs,basis:'client_visible_render_opportunity',cohort:'initial_submit',receivedAt:new Date().toISOString()})]);
+    return result.rowCount===1;
   }
 
   async createSession(input: { visitorId?: string; pageUrl?: string; userAgent?: string }) {
@@ -3466,10 +3503,11 @@ export class ProductRepository {
           INSERT INTO verified_product_facts(
             product_id, product_key, product_name, attribute, value, source_type,
             source_url, source_title, evidence, source_tier, source_authority, observed_at, last_verified_at,
-            confidence, catalog_source_hash, source_fingerprint, normalized_attribute, normalized_value
+            confidence, catalog_source_hash, source_fingerprint, normalized_attribute, normalized_value, valid_until, supersedes_fact_ids
           )
           SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $12, $13, coalesce($14::timestamptz, now()), coalesce($14::timestamptz, now()), $10,
-                 (SELECT source_content_hash FROM product_snapshot), $11, $16, $17::jsonb
+                 (SELECT source_content_hash FROM product_snapshot), $11, $16, $17::jsonb,
+                 coalesce($14::timestamptz, now())+interval '90 days', ARRAY(SELECT id FROM superseded)
          FROM supersede_barrier
          WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM product_snapshot))
            AND (SELECT current FROM evidence_order)
@@ -3496,6 +3534,7 @@ export class ProductRepository {
              ELSE verified_product_facts.confidence
            END,
            last_verified_at = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now())),
+           valid_until = greatest(verified_product_facts.last_verified_at, coalesce($14::timestamptz, now()))+interval '90 days',
            normalized_attribute = $16,
            normalized_value = $17::jsonb,
            updated_at = now()
@@ -3591,8 +3630,12 @@ export class ProductRepository {
               AND fact.product_key = ANY($1::text[])
             )
           )
-       ) SELECT * FROM candidates
-       WHERE product_rank <= $4 OR lower(trim(attribute)) = ANY($6::text[])
+       ), selected_slots AS (
+         SELECT coalesce(product_id::text,product_key) AS identity, coalesce(normalized_attribute,lower(trim(attribute))) AS slot
+         FROM candidates WHERE product_rank <= $4 OR lower(trim(attribute)) = ANY($6::text[])
+       ) SELECT * FROM candidates c
+       WHERE EXISTS (SELECT 1 FROM selected_slots s WHERE s.identity=coalesce(c.product_id::text,c.product_key)
+         AND s.slot=coalesce(c.normalized_attribute,lower(trim(c.attribute))))
        ORDER BY (lower(trim(attribute)) = ANY($6::text[])) DESC,
          product_rank, id`,
       [
@@ -4377,7 +4420,7 @@ export class LeadRepository {
              AND (next_attempt_at IS NULL OR next_attempt_at <= now())
            ) OR (
              status = 'sending'
-             AND updated_at < now() - interval '15 minutes'
+             AND COALESCE(leased_until, updated_at + interval '15 minutes') <= now()
            )
          ORDER BY created_at ASC
          LIMIT $1
@@ -4385,6 +4428,8 @@ export class LeadRepository {
        )
        UPDATE lead_outbox o
        SET status = 'sending',
+           lease_token = gen_random_uuid(),
+           leased_until = now() + interval '15 minutes',
            attempt_count = o.attempt_count + 1,
            updated_at = now()
        FROM due
@@ -4395,32 +4440,82 @@ export class LeadRepository {
     return result.rows.map(mapLeadOutboxItem);
   }
 
-  async markLeadOutboxSent(id: string) {
+  async prepareLeadOutboxDispatch(input: {
+    id: string; leaseToken: string;
+    snapshot: import('../email/httpEmail.js').LeadEmailRequestSnapshot;
+  }) {
+    const result = await this.db.query(`WITH prepared AS (UPDATE lead_outbox
+      SET request_snapshot = COALESCE(request_snapshot, $3::jsonb),
+          first_attempt_at = COALESCE(first_attempt_at, now()), updated_at = now()
+      WHERE id = $1 AND lease_token = $2 AND status = 'sending' AND leased_until > now()
+      RETURNING *), recorded AS (
+        INSERT INTO lead_delivery_attempts(outbox_id,lease_token)
+        SELECT id,lease_token FROM prepared ON CONFLICT DO NOTHING RETURNING outbox_id
+      ) SELECT prepared.* FROM prepared`, [input.id, input.leaseToken, JSON.stringify(input.snapshot)]);
+    return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
+  }
+
+  async markLeadOutboxSent(id: string, leaseToken: string, providerResponse: Record<string, unknown> = {}) {
     const result = await this.db.query(
-      `UPDATE lead_outbox
+      `WITH receipt AS (
+        UPDATE lead_delivery_attempts SET received_at=coalesce(received_at,now()),
+          provider_operation_id=coalesce(provider_operation_id,left($3::jsonb->'response'->>'id',300))
+        WHERE outbox_id=$1 AND lease_token=$2 RETURNING outbox_id
+       ), completed AS (UPDATE lead_outbox
        SET status = 'sent',
+           provider_operation_id = $3::jsonb->'response'->>'id',
            last_error = NULL,
            next_attempt_at = NULL,
+           leased_until = NULL,
            updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [id]
+       WHERE id = $1 AND lease_token = $2 AND status = 'sending' AND leased_until > now()
+       RETURNING *), updated_lead AS (
+         UPDATE leads SET status = 'sent_email', email_provider_response = $3::jsonb,
+           sent_at = COALESCE(sent_at, now())
+         FROM completed WHERE leads.id = completed.lead_id RETURNING leads.id
+       ) SELECT completed.* FROM completed JOIN updated_lead ON updated_lead.id = completed.lead_id`,
+      [id, leaseToken, JSON.stringify(providerResponse)]
     );
     return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
   }
 
-  async markLeadOutboxFailed(input: { id: string; error: string; nextAttemptAt?: string | null; dead?: boolean }) {
+  async markLeadOutboxFailed(input: { id: string; leaseToken: string; error: string; nextAttemptAt?: string | null; dead?: boolean }) {
     const result = await this.db.query(
-      `UPDATE lead_outbox
+      `WITH completed AS (UPDATE lead_outbox
        SET status = $2,
            last_error = $3,
            next_attempt_at = $4::timestamptz,
+           leased_until = NULL,
            updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [input.id, input.dead ? 'dead' : 'failed', input.error, input.nextAttemptAt ?? null]
+       WHERE id = $1 AND lease_token = $5 AND status = 'sending' AND leased_until > now()
+       RETURNING *), updated_lead AS (
+         UPDATE leads SET status = CASE WHEN leads.status = 'sent_email' THEN leads.status ELSE 'email_failed' END
+         FROM completed WHERE leads.id = completed.lead_id RETURNING leads.id
+       ) SELECT completed.* FROM completed JOIN updated_lead ON updated_lead.id = completed.lead_id`,
+      [input.id, input.dead ? 'dead' : 'failed', input.error, input.nextAttemptAt ?? null, input.leaseToken]
     );
     return result.rowCount ? mapLeadOutboxItem(result.rows[0]) : null;
+  }
+
+  async getLeadDeliveryMetrics(hours:number) {
+    const result=await this.db.query(`WITH operations AS (
+      SELECT o.id,o.attempt_count,count(a.lease_token)::int AS attempts,
+        count(a.lease_token) FILTER (WHERE a.provider_operation_id IS NULL)::int AS unknown_attempts,
+        count(DISTINCT a.provider_operation_id)::int AS provider_operations
+      FROM lead_outbox o LEFT JOIN lead_delivery_attempts a ON a.outbox_id=o.id
+      WHERE o.created_at>=now()-make_interval(hours=>$1) GROUP BY o.id
+    ) SELECT count(*)::int AS operations,coalesce(sum(attempts),0)::int AS attempts,
+      coalesce(sum(greatest(attempts-1,0)),0)::int AS retries,
+      count(*) FILTER (WHERE provider_operations>1)::int AS duplicates,
+      count(*) FILTER (WHERE attempts=0 AND attempt_count>0)::int AS legacy,
+      count(*) FILTER (WHERE unknown_attempts>0 OR attempts=0)::int AS unknown
+      FROM operations`,[hours]);
+    const row=result.rows[0];
+    const operations=Number(row.operations),unknown=Number(row.unknown),duplicates=Number(row.duplicates);
+    return {operationDenominator:operations,attemptCount:Number(row.attempts),retryCount:Number(row.retries),
+      observedDuplicateOperations:duplicates,unknownOperations:unknown,legacyOperations:Number(row.legacy),
+      duplicatesPer100Operations:operations>0&&unknown===0?duplicates*100/operations:null,
+      basis:'distinct provider receipt IDs per outbox operation; entire lifecycle of operations created in window'};
   }
 
   async getLeadOutboxHealth() {
@@ -4430,9 +4525,10 @@ export class LeadRepository {
          count(*) FILTER (WHERE status = 'sending')::int AS sending,
          count(*) FILTER (WHERE status = 'failed')::int AS failed,
          count(*) FILTER (WHERE status = 'dead')::int AS dead,
+         count(*) FILTER (WHERE status = 'dead' AND last_error LIKE 'reconciliation_required:%')::int AS reconciliation_required,
          count(*) FILTER (
            WHERE status = 'sending'
-             AND updated_at < now() - interval '15 minutes'
+             AND COALESCE(leased_until, updated_at + interval '15 minutes') <= now()
          )::int AS stale_sending,
          min(created_at) FILTER (WHERE status IN ('pending', 'failed', 'sending')) AS oldest_backlog_at,
          max(updated_at) FILTER (WHERE status = 'sent') AS last_sent_at
@@ -4450,6 +4546,7 @@ export class LeadRepository {
       sending,
       failed,
       dead,
+      reconciliationRequired: Number(row.reconciliation_required ?? 0),
       staleSending,
       oldestBacklogAt: row.oldest_backlog_at ? isoTimestamp(row.oldest_backlog_at) : null,
       lastSentAt: row.last_sent_at ? isoTimestamp(row.last_sent_at) : null

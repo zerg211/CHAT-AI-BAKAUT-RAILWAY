@@ -87,15 +87,38 @@ describe('agent manager turn budget', () => {
     });
 
     expect(selectAgentManagerBudgetProfile({ recovered: true })).toBe('RECOVERY');
-    expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Да', needState: contextualState })).toBe('FAST');
+    expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Да', needState: contextualState })).toBe('RESEARCH');
     expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Проверь характеристики', needState: researchState })).toBe('RESEARCH');
-    expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Оформим', needState: actionState })).toBe('ACTION');
+    expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Оформим', needState: actionState })).toBe('RESEARCH');
     expect(agentManagerTurnLimitsForProfile('NORMAL').maxModelCalls).toBeLessThan(
       AGENT_MANAGER_TURN_BUDGET_PROFILES.RESEARCH.maxModelCalls
     );
     expect(agentManagerTurnLimitsForProfile('FAST').maxWallTimeMs).toBeLessThan(
       AGENT_MANAGER_TURN_BUDGET_PROFILES.RESEARCH.maxWallTimeMs
     );
+  });
+
+  it('uses current semantic meaning rather than short text or a previously selected product',()=>{
+    const exact = {grounding:{taskType:'technical_answer',sourcePolicy:'catalog_required'},toolRequests:[],riskFlags:[]} as never;
+    expect(selectAgentManagerBudgetProfile({recovered:false,userMessage:'x'.repeat(2000),intent:exact})).toBe('FAST');
+    const selection={grounding:{taskType:'product_selection'},toolRequests:[],riskFlags:[]} as never;
+    expect(selectAgentManagerBudgetProfile({recovered:false,userMessage:'Да',intent:selection})).toBe('NORMAL');
+    const research={grounding:{taskType:'technical_answer',sourcePolicy:'web_required'},toolRequests:[],riskFlags:[]} as never;
+    expect(selectAgentManagerBudgetProfile({recovered:false,intent:research})).toBe('RESEARCH');
+    const action={toolRequests:[{tool:'lead.capture'}],riskFlags:[],leadCaptureAuthorization:{authorized:true}} as never;
+    expect(selectAgentManagerBudgetProfile({recovered:false,intent:action})).toBe('ACTION');
+  });
+
+  it('escalates a discovered gap without resetting spent calls or the original hard deadline',()=>{
+    let now=0;
+    const budget=new AgentManagerTurnBudget(agentManagerTurnLimitsForProfile('RESEARCH'),()=>now,100_000,'RESEARCH');
+    budget.consumeModelCall();budget.applySemanticProfile('FAST','current_intent');
+    expect(budget.remainingWallTimeMs()).toBe(60_000);
+    now=40_000;budget.applySemanticProfile('RESEARCH','discovered_gap');
+    expect(budget.remainingWallTimeMs()).toBe(60_000);
+    expect(budget.snapshot().usage.modelCalls).toBe(1);
+    expect(budget.snapshot().profileTransitions).toHaveLength(2);
+    expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(150_000);
   });
 
   it('records a stable prompt fingerprint and selected profile in the turn snapshot', async () => {

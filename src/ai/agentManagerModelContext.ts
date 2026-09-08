@@ -55,3 +55,18 @@ export function compactToolResultsForModel(
 export function compactVerifiedFactsForModel(facts: VerifiedProductFact[]) {
   return facts.map(({ hitCount, createdAt, updatedAt, firstSeenAt, catalogSourceHash, sourceFingerprint, ...evidence }) => evidence);
 }
+
+/** Shortlist identity/order stays exact. Reading details is an explicit observer action. */
+export function compactObserverCandidates(products: Product[], results: ToolResult[]) {
+  const detailedIds = new Set(results.filter(result=>result.status==='ok' &&
+    (result.tool==='catalog.getProductDetails' || result.tool==='web.researchProductFacts'))
+    .flatMap(result=>[
+      ...(Array.isArray(result.payload.productIds)?result.payload.productIds.filter((id):id is string=>typeof id==='string'):[]),
+      ...(Array.isArray(result.payload.products)?result.payload.products.flatMap((product:unknown)=>
+        product && typeof product==='object' && 'id' in product && typeof product.id==='string'?[product.id]:[]):[])
+    ]));
+  return products.map(product=>detailedIds.has(product.id)?product:{
+    id:product.id,name:product.name,brand:product.brand,category:product.category,
+    price:product.price,currency:product.currency,sourceUrl:product.sourceUrl,detailRequired:true
+  });
+}

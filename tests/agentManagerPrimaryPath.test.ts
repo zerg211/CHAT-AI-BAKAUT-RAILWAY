@@ -7,7 +7,10 @@ async function source(path: string) {
 
 describe('agent manager primary answer path', () => {
   it('has no deterministic terminal or reviewer replacement answer path', async () => {
-    const orchestrator = await source('../src/ai/agentManagerOrchestrator.ts');
+    const orchestrator = (await source('../src/ai/agentManagerOrchestrator.ts')) + '\n' +
+      (await source('../src/ai/agentManagerModelAdapter.ts')) + '\n' +
+      (await source('../src/ai/agentManagerReleaseValidator.ts')) + '\n' +
+      (await source('../src/ai/agentManagerToolExecutor.ts'));
     const contracts = await source('../src/ai/agentManagerContracts.ts');
     const config = await source('../src/config.ts');
     const policyTargets = await source('../src/ai/policy/policyRuleTypes.ts');

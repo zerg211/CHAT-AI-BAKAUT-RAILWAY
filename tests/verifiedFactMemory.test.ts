@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { VerifiedProductFact } from '../src/shared/types.js';
 import {
   matchingVerifiedFactsForRequest,
+  reusableVerifiedFact,
   verifiedFactCoverageForRequest,
   verifiedFactsCoverRequest
 } from '../src/ai/verifiedFactMemory.js';
@@ -31,6 +32,13 @@ function fact(input: Partial<VerifiedProductFact> & Pick<VerifiedProductFact, 'i
 }
 
 describe('verified fact memory safety', () => {
+  it('honors explicit expiry without extending the existing age ceiling',()=>{
+    const fresh=fact({id:'expiry',value:'5 kW'});
+    expect(reusableVerifiedFact({...fresh,validUntil:now.toISOString()},now)).toBe(false);
+    expect(reusableVerifiedFact({...fresh,validUntil:'invalid'},now)).toBe(false);
+    expect(reusableVerifiedFact({...fresh,validUntil:'2026-08-10T00:00:00Z'},now)).toBe(true);
+    expect(reusableVerifiedFact({...fresh,lastVerifiedAt:'2020-01-01',validUntil:'2030-01-01'},now)).toBe(false);
+  });
   it('does not answer from a stale fact that has not been reverified within the memory TTL', () => {
     const stale = fact({
       id: 'stale-power',

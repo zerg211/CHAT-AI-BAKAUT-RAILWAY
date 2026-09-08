@@ -8,9 +8,15 @@
     "src/ai/agentManagerGeneratorLoad.ts",
     "src/ai/agentManagerModelContext.ts",
     "src/ai/agentManagerOrchestrator.ts",
+    "src/ai/agentManagerModelAdapter.ts",
+    "src/ai/agentManagerReleaseValidator.ts",
+    "src/ai/agentManagerToolExecutor.ts",
     "src/ai/agentManagerOutputGuard.ts",
     "src/ai/agentManagerPolicyGate.ts",
     "src/ai/agentManagerTurnBudget.ts",
+    "src/ai/readContinuationController.ts",
+    "src/ai/recoveryCoordinator.ts",
+    "src/ai/adaptiveConversationPolicy.ts",
     "src/ai/decisionArtifact.ts",
     "src/ai/dialogueLedgerReducer.ts",
     "src/ai/leadReviewGuards.ts",
@@ -28,29 +34,29 @@
   "count": 203,
   "findings": [
     {
-      "id": "src/ai/agentManagerOrchestrator.ts|regex_test_call|1638d9e3c0d8fad7|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
+      "id": "src/ai/agentManagerReleaseValidator.ts|regex_test_call|1638d9e3c0d8fad7|1",
+      "file": "src/ai/agentManagerReleaseValidator.ts",
       "kind": "regex_test_call",
       "hash": "1638d9e3c0d8fad7",
       "occurrence": 1
     },
     {
-      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|841434ef0453514a|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
+      "id": "src/ai/agentManagerReleaseValidator.ts|regular_expression_literal|841434ef0453514a|1",
+      "file": "src/ai/agentManagerReleaseValidator.ts",
       "kind": "regular_expression_literal",
       "hash": "841434ef0453514a",
       "occurrence": 1
     },
     {
-      "id": "src/ai/agentManagerOrchestrator.ts|split_regex_argument|f7910d814fe53e1a|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
+      "id": "src/ai/agentManagerReleaseValidator.ts|split_regex_argument|f7910d814fe53e1a|1",
+      "file": "src/ai/agentManagerReleaseValidator.ts",
       "kind": "split_regex_argument",
       "hash": "f7910d814fe53e1a",
       "occurrence": 1
     },
     {
-      "id": "src/ai/agentManagerOrchestrator.ts|regular_expression_literal|f6723d9eeed2a53c|1",
-      "file": "src/ai/agentManagerOrchestrator.ts",
+      "id": "src/ai/agentManagerReleaseValidator.ts|regular_expression_literal|f6723d9eeed2a53c|1",
+      "file": "src/ai/agentManagerReleaseValidator.ts",
       "kind": "regular_expression_literal",
       "hash": "f6723d9eeed2a53c",
       "occurrence": 1

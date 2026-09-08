@@ -94,6 +94,10 @@ function isHttpSourceUrl(value: string | null | undefined) {
 export function reusableVerifiedFact(fact: VerifiedProductFact, now: Date) {
   if (fact.status !== 'active') return false;
   if (fact.confidence !== 'high' && fact.confidence !== 'medium') return false;
+  if (fact.validUntil != null) {
+    const expiresAt = Date.parse(fact.validUntil);
+    if (!Number.isFinite(expiresAt) || expiresAt <= now.getTime()) return false;
+  }
   if ((fact.sourceType === 'web' || fact.sourceType === 'manual') && !isHttpSourceUrl(fact.sourceUrl)) return false;
   const verifiedAt = Date.parse(fact.lastVerifiedAt);
   if (!Number.isFinite(verifiedAt)) return false;

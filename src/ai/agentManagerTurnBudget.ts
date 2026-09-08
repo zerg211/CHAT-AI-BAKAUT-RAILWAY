@@ -4,6 +4,7 @@ import type { AgentManagerToolDefinition } from './agentManagerToolRegistry.js';
 import type { ProviderCallEstimate, ProviderBudgetEstimationStopReason } from './openaiRequestBudget.js';
 import { estimateProviderUsageCostUsd } from './openaiRequestBudget.js';
 import type { CustomerNeedState } from '../shared/types.js';
+import type {AgentIntentContract} from './agentManagerContracts.js';
 
 export interface AgentManagerTurnLimits {
   maxModelCalls: number;
@@ -114,20 +115,17 @@ export function selectAgentManagerBudgetProfile(input: {
   recovered: boolean;
   userMessage?: string;
   needState?: CustomerNeedState | null;
+  intent?: AgentIntentContract;
 }): Exclude<AgentManagerBudgetProfile, 'CUSTOM'> {
   if (input.recovered) return 'RECOVERY';
-  const state = input.needState;
-  if (!state) return 'NORMAL';
-  const selectedNeed = state.activeNeeds.some((need) => need.status === 'selected' && need.selectedProductIds.length > 0);
-  if (selectedNeed) return 'ACTION';
-  const requiresResearch = state.contradictions.length > 0 ||
-    state.uncertainInferences.length > 0 ||
-    state.selectionState.unknowns.length > 0 ||
-    state.activeNeeds.some((need) => need.status === 'open' &&
-      (need.openQuestions.length > 0 || need.selectedProductIds.length === 0));
-  if (requiresResearch) return 'RESEARCH';
-  const hasConversationContext = Boolean(state.lastSummary.trim()) || state.activeNeeds.length > 0;
-  if (hasConversationContext && (input.userMessage?.trim().length ?? 0) <= 160) return 'FAST';
+  const intent = input.intent;
+  // Before current-turn interpretation, historical state and text length do not
+  // establish the new task's risk or authorize a transaction.
+  if (!intent) return 'RESEARCH';
+  if (intent.toolRequests.some(request=>request.tool === 'web.researchProductFacts') ||
+      intent.grounding?.sourcePolicy === 'web_required' || intent.riskFlags.length > 0) return 'RESEARCH';
+  if (intent.leadCaptureAuthorization?.authorized && intent.toolRequests.some(request=>request.tool === 'lead.capture')) return 'ACTION';
+  if (['technical_answer','offtopic'].includes(intent.grounding?.taskType ?? '') && intent.toolRequests.length <= 2) return 'FAST';
   return 'NORMAL';
 }
 
@@ -142,7 +140,9 @@ export class AgentManagerTurnBudgetExceededError extends Error {
 
 export class AgentManagerTurnBudget {
   private readonly startedAt: number;
-  private readonly deadlineAtMs: number;
+  private deadlineAtMs: number;
+  private readonly hardDeadlineAtMs: number;
+  private readonly profileTransitions: Array<{from:AgentManagerBudgetProfile;to:AgentManagerBudgetProfile;reason:string}> = [];
   private modelCalls = 0;
   private providerCalls = 0;
   private providerReconciledCalls = 0;
@@ -178,13 +178,30 @@ export class AgentManagerTurnBudget {
     readonly limits: AgentManagerTurnLimits = DEFAULT_AGENT_MANAGER_TURN_LIMITS,
     private readonly now: () => number = Date.now,
     absoluteDeadlineAtMs?: number,
-    readonly profile: AgentManagerBudgetProfile = 'CUSTOM'
+    public profile: AgentManagerBudgetProfile = 'CUSTOM'
   ) {
     this.startedAt = this.now();
     const localDeadlineAtMs = this.startedAt + this.limits.maxWallTimeMs;
     this.deadlineAtMs = Number.isFinite(absoluteDeadlineAtMs)
       ? Math.min(localDeadlineAtMs, Number(absoluteDeadlineAtMs))
       : localDeadlineAtMs;
+    this.hardDeadlineAtMs = this.deadlineAtMs;
+    this.limits = {...limits};
+  }
+
+  applySemanticProfile(profile: Exclude<AgentManagerBudgetProfile,'CUSTOM'>, reason: string) {
+    if (this.profile === 'CUSTOM' || this.profile === profile) return;
+    const next = agentManagerTurnLimitsForProfile(profile);
+    for (const key of Object.keys(next) as Array<keyof AgentManagerTurnLimits>) {
+      next[key] = Math.min(next[key],DEFAULT_AGENT_MANAGER_TURN_LIMITS[key]);
+    }
+    // Completed interpretation/recovery work is still charged. Classification
+    // cannot consume the two calls needed to write and fact-check the answer.
+    next.maxModelCalls = Math.min(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxModelCalls,Math.max(next.maxModelCalls,this.modelCalls+2));
+    Object.assign(this.limits,next);
+    this.deadlineAtMs = Math.min(this.hardDeadlineAtMs,Math.max(this.startedAt+next.maxWallTimeMs,this.now()+30_000));
+    this.profileTransitions.push({from:this.profile,to:profile,reason});
+    this.profile = profile;
   }
 
   assertWallTime() {
@@ -293,6 +310,7 @@ export class AgentManagerTurnBudget {
     return {
       limits: this.limits,
       profile: this.profile,
+      profileTransitions: this.profileTransitions.map(transition=>({...transition})),
       usage: {
         promptShapes: this.promptShapes.map(shape => ({ ...shape })),
         modelCalls: this.modelCalls,
@@ -314,6 +332,11 @@ export class AgentManagerTurnBudget {
 }
 
 const activeTurnBudget = new AsyncLocalStorage<AgentManagerTurnBudget>();
+
+export function currentAgentWriterPolicy() {
+  return activeTurnBudget.getStore()?.profile === 'FAST'
+    ? {reasoningEffort:'low' as const,outputTokenCap:2400} : null;
+}
 
 export function runWithAgentManagerTurnBudget<T>(budget: AgentManagerTurnBudget, fn: () => Promise<T>) {
   return activeTurnBudget.run(budget, fn);

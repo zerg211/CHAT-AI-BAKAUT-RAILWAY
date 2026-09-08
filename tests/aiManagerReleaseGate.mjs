@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import {assertRegexBaselineDoesNotGrow} from '../scripts/regexBaselineIntegrity.mjs';
 
 const rootDir = process.cwd();
 const baselineProjectPath = 'scripts/no-regex-baseline.json';
@@ -65,24 +66,18 @@ function assertBaselineDidNotGrow(referenceText) {
   const currentText = fs.readFileSync(currentPath, 'utf8');
   const reference = parseBaseline(referenceText, baselineRef);
   const current = parseBaseline(currentText, currentPath);
-  const referenceIds = new Set(reference.findings.map((finding) => finding.id));
-  const addedIds = current.findings
-    .map((finding) => finding.id)
-    .filter((id) => !referenceIds.has(id));
-  if (addedIds.length) {
-    throw new Error(
-      `No-regex baseline grew by ${addedIds.length} entries relative to ${baselineRef}. ` +
-      'Remove the new regex constructs instead of accepting them into the baseline.'
-    );
-  }
+  assertRegexBaselineDoesNotGrow(reference,current);
+  return currentText;
 }
 
 function prepareReferenceBaseline() {
   const referenceText = readBaselineAtRef(baselineRef);
-  assertBaselineDidNotGrow(referenceText);
+  const validatedCurrentText=assertBaselineDidNotGrow(referenceText);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatai-release-gate-'));
   const tempBaselinePath = path.join(tempDir, 'no-regex-baseline.json');
-  fs.writeFileSync(tempBaselinePath, referenceText, 'utf8');
+  // Current file locations are accepted only after the reference's expression
+  // multiset proves there is no new expression or increased occurrence count.
+  fs.writeFileSync(tempBaselinePath, validatedCurrentText, 'utf8');
   return { tempDir, tempBaselinePath };
 }
 

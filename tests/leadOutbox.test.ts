@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const sendLeadEmail = vi.hoisted(() => vi.fn());
+const prepareLeadEmailRequest = vi.hoisted(() => vi.fn());
+const snapshot = {version: 1, url: 'https://api.resend.com/emails', method: 'POST', body: '{}', idempotencyKey: 'lead-id', provider: 'resend'};
 
 vi.mock('../src/email/httpEmail.js', () => ({
-  sendLeadEmail
+  sendPreparedLeadEmail: sendLeadEmail, prepareLeadEmailRequest
 }));
 
 const { processLeadOutboxItem } = await import('../src/ai/leadOutbox.js');
@@ -11,6 +13,8 @@ const { processLeadOutboxItem } = await import('../src/ai/leadOutbox.js');
 describe('lead outbox worker', () => {
   beforeEach(() => {
     sendLeadEmail.mockReset();
+    prepareLeadEmailRequest.mockReset();
+    prepareLeadEmailRequest.mockReturnValue(snapshot);
   });
 
   it('preserves pending draft context from a public form through email delivery', async () => {
@@ -21,7 +25,8 @@ describe('lead outbox worker', () => {
     };
     const leads = {
       getLead: vi.fn(async () => ({ id: 'lead-id', name: 'Алексей', status: 'pending_email', createdAt: new Date().toISOString() })),
-      markLeadOutboxSent: vi.fn(async () => null),
+      prepareLeadOutboxDispatch: vi.fn(async () => ({requestSnapshot: snapshot})),
+      markLeadOutboxSent: vi.fn(async () => ({status: 'sent'})),
       markLeadOutboxFailed: vi.fn(async () => null),
       markEmailResult: vi.fn(async () => null)
     };
@@ -43,13 +48,14 @@ describe('lead outbox worker', () => {
         },
         status: 'sending',
         attemptCount: 1,
+        leaseToken: 'owner',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
     });
 
     expect(result).toEqual({ ok: true });
-    expect(sendLeadEmail).toHaveBeenCalledWith(
+    expect(prepareLeadEmailRequest).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'lead-id' }),
       expect.objectContaining({
         handoff: {
@@ -59,8 +65,9 @@ describe('lead outbox worker', () => {
         }
       })
     );
-    expect(leads.markLeadOutboxSent).toHaveBeenCalledWith('outbox-id');
-    expect(leads.markEmailResult).toHaveBeenCalledWith('lead-id', 'sent_email', { ok: true });
+    expect(sendLeadEmail).toHaveBeenCalledWith(snapshot);
+    expect(leads.markLeadOutboxSent).toHaveBeenCalledWith('outbox-id', 'owner', {ok: true});
+    expect(leads.markEmailResult).not.toHaveBeenCalled();
   });
 
   it('keeps failed delivery in outbox for retry without buyer-facing action', async () => {
@@ -71,6 +78,7 @@ describe('lead outbox worker', () => {
     };
     const leads = {
       getLead: vi.fn(async () => ({ id: 'lead-id', name: 'Алексей', status: 'pending_email', createdAt: new Date().toISOString() })),
+      prepareLeadOutboxDispatch: vi.fn(async () => ({requestSnapshot: snapshot})),
       markLeadOutboxSent: vi.fn(async () => null),
       markLeadOutboxFailed: vi.fn(async () => null),
       markEmailResult: vi.fn(async () => null)
@@ -87,7 +95,8 @@ describe('lead outbox worker', () => {
         destination: 'lead_email',
         payload: {},
         status: 'sending',
-        attemptCount: 2,
+        attemptCount: 1,
+        leaseToken: 'owner',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
@@ -98,6 +107,6 @@ describe('lead outbox worker', () => {
       id: 'outbox-id',
       error: expect.stringContaining('transport_down')
     }));
-    expect(leads.markEmailResult).toHaveBeenCalledWith('lead-id', 'email_failed', { ok: false, error: 'transport_down' });
+    expect(leads.markEmailResult).not.toHaveBeenCalled();
   });
 });

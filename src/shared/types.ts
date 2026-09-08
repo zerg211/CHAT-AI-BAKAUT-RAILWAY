@@ -96,6 +96,8 @@ export type VerifiedProductFactConfidence = 'high' | 'medium' | 'low';
 export type VerifiedProductFactSource = 'web' | 'catalog' | 'manual';
 
 export interface VerifiedProductFact {
+  validUntil?: string | null;
+  supersedesFactIds?: string[];
   id: string;
   productId?: string | null;
   productKey: string;
