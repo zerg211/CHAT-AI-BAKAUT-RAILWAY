@@ -1,4 +1,6 @@
 import {recordTurnTelemetry,runWithTurnStageEmitter,type AgentManagerStageEmitter} from './turnTelemetry.js';
+import {coordinateTurnRecovery,TurnExecutionInProgressError} from './recoveryCoordinator.js';
+export {TurnExecutionInProgressError,RecoveryAttemptUnavailableError,MAX_TURN_RECOVERY_ATTEMPTS,RECOVERY_LEASE_WAIT_LIMIT_MS} from './recoveryCoordinator.js';
 export type {AgentManagerStageEvent} from './turnTelemetry.js';
 import { managerTaskOwnershipGuidance } from './managerTaskOwnership.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -1905,24 +1907,6 @@ function resolvedToolPowerSource(request: ToolRequest, intent: AgentIntentContra
     : undefined;
 }
 
-export class TurnExecutionInProgressError extends Error {
-  readonly code = 'turn_execution_in_progress';
-
-  constructor() {
-    super('turn_execution_in_progress');
-    this.name = 'TurnExecutionInProgressError';
-  }
-}
-
-export class RecoveryAttemptUnavailableError extends Error {
-  readonly code = 'recovery_attempt_unavailable';
-
-  constructor() {
-    super('recovery_attempt_unavailable');
-    this.name = 'RecoveryAttemptUnavailableError';
-  }
-}
-
 class AnswerValidationBlockedError extends Error {
   readonly code = 'answer_contract_blocked_by_validation';
 
@@ -1932,9 +1916,6 @@ class AnswerValidationBlockedError extends Error {
   }
 }
 
-const RECOVERY_LEASE_RETRY_INTERVAL_MS = 500;
-export const MAX_TURN_RECOVERY_ATTEMPTS = 2;
-export const RECOVERY_LEASE_WAIT_LIMIT_MS = DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs;
 const TURN_COMMIT_RESERVE_MS = 5_000;
 const WEB_ANSWER_RESERVE_MS = 30_000;
 const WEB_MIN_EXECUTION_MS = 6_000;
@@ -1954,24 +1935,6 @@ export function effectiveAgentToolTimeoutMs(input: {
       ? CATALOG_ANSWER_RESERVE_MS
       : 0;
   return Math.min(input.configuredTimeoutMs, Math.max(1, input.remainingWallTimeMs - reserveMs));
-}
-
-async function waitForRecoveryLeaseRetry(signal?: AbortSignal) {
-  if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
-  await new Promise<void>((resolve, reject) => {
-    const onTimeout = () => {
-      signal?.removeEventListener('abort', onAbort);
-      resolve();
-    };
-    const timeout = setTimeout(onTimeout, RECOVERY_LEASE_RETRY_INTERVAL_MS);
-    const onAbort = () => {
-      clearTimeout(timeout);
-      signal?.removeEventListener('abort', onAbort);
-      reject(new DOMException('The operation was aborted.', 'AbortError'));
-    };
-    signal?.addEventListener('abort', onAbort, { once: true });
-    timeout.unref?.();
-  });
 }
 
 function parseSavedChatResponsePayload(value: unknown): ChatResponsePayload | null {
@@ -5796,45 +5759,11 @@ export class AgentManagerOrchestrator {
   }
 
   async recoverTurn(input: AgentManagerRecoverInput): Promise<ChatResponsePayload> {
-    const initialSession = await this.conversations.getSession(input.sessionId);
-    if (!initialSession || initialSession.status !== 'active') throw new Error('Conversation session is not active');
-    const alreadyCompleted = await this.completedPayload(initialSession, input.turnId, input.onDelta);
-    if (alreadyCompleted) return alreadyCompleted;
-
-    const repository = this.conversations as ConversationRepository & {
-      beginRecoveryAttempt?: ConversationRepository['beginRecoveryAttempt'];
-    };
-    if (typeof repository.beginRecoveryAttempt === 'function') {
-      const claimed = await repository.beginRecoveryAttempt.call(this.conversations, {
-        sessionId: input.sessionId,
-        turnId: input.turnId,
-        maxAttempts: MAX_TURN_RECOVERY_ATTEMPTS
-      });
-      if (!claimed) throw new RecoveryAttemptUnavailableError();
-    }
-
-    const startedAt = Date.now();
-    while (true) {
-      const session = await this.conversations.getSession(input.sessionId);
-      if (!session || session.status !== 'active') throw new Error('Conversation session is not active');
-      try {
-        return await this.executeTurn({
-          sessionId: input.sessionId,
-          userMessage: '',
-          turnId: input.turnId,
-          skipUserMessage: true,
-          onDelta: input.onDelta,
-          onStage: input.onStage,
-          signal: input.signal,
-          session,
-          recovered: true
-        });
-      } catch (error) {
-        if (!(error instanceof TurnExecutionInProgressError)) throw error;
-        if (Date.now() - startedAt >= RECOVERY_LEASE_WAIT_LIMIT_MS) throw error;
-        await waitForRecoveryLeaseRetry(input.signal);
-      }
-    }
+    return coordinateTurnRecovery({
+      sessionId:input.sessionId,turnId:input.turnId,signal:input.signal,conversations:this.conversations,
+      completed:session=>this.completedPayload(session,input.turnId,input.onDelta),
+      execute:session=>this.executeTurn({...input,userMessage:'',skipUserMessage:true,session,recovered:true})
+    });
   }
 
   private async loadPersistedTurnExecution(sessionId: string, turnId: string) {

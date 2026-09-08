@@ -23,6 +23,7 @@ const SEMANTIC_SCOPE_FILES = [
   'src/ai/agentManagerPolicyGate.ts',
   'src/ai/agentManagerTurnBudget.ts',
   'src/ai/readContinuationController.ts',
+  'src/ai/recoveryCoordinator.ts',
   'src/ai/adaptiveConversationPolicy.ts',
   'src/ai/decisionArtifact.ts',
   'src/ai/dialogueLedgerReducer.ts',
