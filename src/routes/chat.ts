@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { AssistantService } from '../ai/assistant.js';
-import { AgentSemanticDecisionIncoherentError, RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
+import { RecoveryAttemptUnavailableError, TurnExecutionInProgressError } from '../ai/agentManagerOrchestrator.js';
 import { AgentManagerTurnBudgetExceededError } from '../ai/agentManagerTurnBudget.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { buildPublicCustomerResponse } from '../ai/agentManagerOutputGuard.js';
@@ -315,9 +315,9 @@ export async function registerChatRoutes(
         clientMessageId
       });
       const sendStageStatus = createStageStatusSender(send);
-      let payload: Awaited<ReturnType<typeof assistant.generateAnswer>>;
-      try {
-        payload = await runWithOpenAIUsageContext({
+      // The orchestrator owns stage retries and durable recovery. The route
+      // cannot infer whether an external action committed before an exception.
+      const payload = await runWithOpenAIUsageContext({
           sessionId: params.id,
           turnId,
           pageUrl: session.pageUrl,
@@ -330,32 +330,6 @@ export async function registerChatRoutes(
            onStage: sendStageStatus,
            signal: controller.signal
         }));
-      } catch (firstError) {
-        const isTransient = !(firstError instanceof TurnExecutionInProgressError) &&
-          !(firstError instanceof AgentSemanticDecisionIncoherentError) &&
-          !(firstError instanceof AgentManagerTurnBudgetExceededError) &&
-          !controller.signal.aborted;
-        if (isTransient) {
-          app.log.warn({ sessionId: params.id, turnId, error: safeErrorMessage(firstError) }, 'chat generation transient failure, retrying once');
-          // brief backoff before retry
-          await new Promise<void>((resolve) => setTimeout(resolve, 350));
-          payload = await runWithOpenAIUsageContext({
-            sessionId: params.id,
-            turnId,
-            pageUrl: session.pageUrl,
-            userAgent: session.userAgent
-          }, () => assistant.generateAnswer({
-            sessionId: params.id,
-            userMessage: input.message,
-             turnId,
-             onDelta: (delta) => send('delta', { delta }),
-             onStage: sendStageStatus,
-             signal: controller.signal
-          }));
-        } else {
-          throw firstError;
-        }
-      }
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;

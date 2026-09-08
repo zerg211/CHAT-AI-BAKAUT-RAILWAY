@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg';
 import { config } from '../config.js';
 import { pool } from '../db/pool.js';
 import { estimateProviderUsageCostUsd } from './openaiRequestBudget.js';
+import { estimateLunaStandardTokenCost, isPricingStale, lunaPricing } from './modelPricing.js';
 
 export type OpenAIUsageContext = {
   sessionId?: string | null;
@@ -13,6 +14,7 @@ export type OpenAIUsageContext = {
 
 type UsageNumbers = {
   inputTokens: number | null;
+  cachedInputTokens: number | null;
   outputTokens: number | null;
   reasoningTokens: number | null;
   totalTokens: number | null;
@@ -60,17 +62,45 @@ export function extractOpenAIUsage(response: unknown): UsageNumbers {
     ? (response as { usage?: Record<string, unknown> }).usage
     : undefined;
   if (!usage || typeof usage !== 'object') {
-    return { inputTokens: null, outputTokens: null, reasoningTokens: null, totalTokens: null };
+    return { inputTokens: null, cachedInputTokens: null, outputTokens: null, reasoningTokens: null, totalTokens: null };
   }
   const outputDetails = usage.output_tokens_details && typeof usage.output_tokens_details === 'object'
     ? usage.output_tokens_details as Record<string, unknown>
     : {};
+  const inputDetails = usage.input_tokens_details && typeof usage.input_tokens_details === 'object'
+    ? usage.input_tokens_details as Record<string, unknown>
+    : {};
   return {
     inputTokens: numberOrNull(usage.input_tokens),
+    cachedInputTokens: numberOrNull(inputDetails.cached_tokens),
     outputTokens: numberOrNull(usage.output_tokens),
     reasoningTokens: numberOrNull(outputDetails.reasoning_tokens),
     totalTokens: numberOrNull(usage.total_tokens)
   };
+}
+
+export function estimateRecordedUsageCost(model: string, response: unknown) {
+  const usage = extractOpenAIUsage(response);
+  const tier = response && typeof response === 'object'
+    ? (response as { service_tier?: unknown }).service_tier
+    : undefined;
+  const isLuna = model === lunaPricing.model || model.startsWith(`${lunaPricing.model}-`);
+  if (isLuna) {
+    // An absent tier is not proof of standard processing. Missing cache counts
+    // also remain unknown rather than silently charging the uncached rate.
+    const supported = tier === 'default' && !isPricingStale(lunaPricing.verifiedAt) &&
+      usage.inputTokens !== null && usage.cachedInputTokens !== null && usage.outputTokens !== null;
+    const costUsd = supported ? estimateLunaStandardTokenCost({
+      inputTokens: usage.inputTokens!, cachedInputTokens: usage.cachedInputTokens!, outputTokens: usage.outputTokens!
+    }) : null;
+    return { costUsd, costBasis: costUsd === null ? 'unavailable' : 'standard_token_rate_estimate',
+      pricingVersion: lunaPricing.version, serviceTier: typeof tier === 'string' ? tier : null,
+      cachedInputTokens: usage.cachedInputTokens, excludes: ['cache_write_surcharge', 'hosted_tools', 'account_adjustments'] };
+  }
+  const costUsd = estimateProviderUsageCostUsd({ model, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+  return { costUsd, costBasis: costUsd === null ? 'unavailable' : 'legacy_reservation_ceiling_estimate',
+    pricingVersion: 'legacy-2026-07-11', serviceTier: typeof tier === 'string' ? tier : null,
+    cachedInputTokens: usage.cachedInputTokens, excludes: ['cached_input_discount', 'hosted_tools', 'account_adjustments'] };
 }
 
 export async function assertOpenAIUsageBudget(stage: string, model: string, requestedReserveTokens?: number) {
@@ -183,11 +213,8 @@ export async function recordOpenAIUsage(stage: string, model: string, response: 
     : null;
 
   const reservationId = usageReservationByResponse.get(response) ?? null;
-  const estimatedCostUsd = estimateProviderUsageCostUsd({
-    model,
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens
-  });
+  const pricing = estimateRecordedUsageCost(model, response);
+  const estimatedCostUsd = pricing.costUsd;
   if (config.NODE_ENV === 'test' && !reservationId) {
     usageRecorded.add(response);
     return;
@@ -230,7 +257,7 @@ export async function recordOpenAIUsage(stage: string, model: string, response: 
         responseId,
         JSON.stringify({
           hasUsage: usage.totalTokens !== null,
-          costBasis: estimatedCostUsd === null ? 'unavailable' : 'token_rate_estimate'
+          ...pricing
         })
       ]
     );
@@ -259,6 +286,7 @@ export async function recordOpenAIUsageOnce(stage: string, model: string, respon
 }
 
 function numberOrNull(value: unknown) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null;
   const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
 }
