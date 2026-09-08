@@ -181,10 +181,12 @@ export async function repairRequiredSchema(client: QueryableClient) {
       output_tokens integer,
       reasoning_tokens integer,
       total_tokens integer,
+      cost_usd numeric(12, 6),
       response_id text,
       metadata jsonb NOT NULL DEFAULT '{}'::jsonb
     )
   `);
+  await client.query('ALTER TABLE openai_usage_events ADD COLUMN IF NOT EXISTS cost_usd numeric(12, 6)');
   await client.query(`
     CREATE INDEX IF NOT EXISTS openai_usage_events_created_idx
       ON openai_usage_events(created_at DESC)
@@ -196,6 +198,11 @@ export async function repairRequiredSchema(client: QueryableClient) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS openai_usage_events_session_created_idx
       ON openai_usage_events(session_id, created_at DESC)
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS openai_usage_events_turn_cost_idx
+      ON openai_usage_events(turn_id, created_at DESC)
+      WHERE turn_id IS NOT NULL
   `);
   await client.query(`
     CREATE TABLE IF NOT EXISTS openai_usage_reservations (
@@ -482,6 +489,23 @@ async function repairAgentManagerHarnessSchema(client: QueryableClient) {
     )
   `);
   await client.query('CREATE INDEX IF NOT EXISTS agent_traces_session_turn_created_idx ON agent_traces(session_id, turn_id, created_at DESC)');
+
+  await client.query('CREATE SEQUENCE IF NOT EXISTS turn_event_seq_seq');
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS turn_events (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      session_id uuid NOT NULL REFERENCES conversation_sessions(id) ON DELETE CASCADE,
+      turn_id uuid NOT NULL REFERENCES conversation_turns(id) ON DELETE CASCADE,
+      seq bigint NOT NULL DEFAULT nextval('turn_event_seq_seq'),
+      stage text NOT NULL,
+      event_type text NOT NULL,
+      payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(turn_id, seq)
+    )
+  `);
+  await client.query('CREATE INDEX IF NOT EXISTS turn_events_turn_seq_idx ON turn_events(turn_id, seq)');
+  await client.query('CREATE INDEX IF NOT EXISTS turn_events_session_turn_seq_idx ON turn_events(session_id, turn_id, seq)');
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS data_quality_issues (

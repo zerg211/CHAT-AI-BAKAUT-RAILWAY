@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { closeSseReply, openSseReply, startStatusTimer, type SseReply } from '../src/routes/sse.js';
+import { closeSseReply, createStageStatusSender, customerStatusForStage, openSseReply, type SseReply } from '../src/routes/sse.js';
 
 function fakeReply() {
   const writes: string[] = [];
@@ -59,34 +59,27 @@ describe('chat SSE helpers', () => {
     });
   });
 
-  it('sends the initial status immediately and advances on the timer', async () => {
-    vi.useFakeTimers();
+  it('maps real agent stages to coalesced customer statuses', () => {
     const events: Array<{ event: string; data: unknown }> = [];
-    const stop = startStatusTimer({
-      send(event, data) {
-        events.push({ event, data });
-      },
-      initialStatus: 'starting',
-      statusMessages: ['first', 'second', 'third'],
-      intervalMs: 1000
+    const sendStageStatus = createStageStatusSender((event, data) => {
+      events.push({ event, data });
     });
 
-    expect(events).toEqual([{ event: 'status', data: { status: 'starting' } }]);
-
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
+    sendStageStatus({ phase: 'turn', eventType: 'started' });
+    sendStageStatus({ phase: 'turn', eventType: 'started' });
+    sendStageStatus({ phase: 'intent', eventType: 'semantic_decision_started' });
+    sendStageStatus({ phase: 'tools', eventType: 'tool_started' });
+    sendStageStatus({ phase: 'answer', eventType: 'contract_created' });
+    sendStageStatus({ phase: 'validation', eventType: 'completed' });
+    sendStageStatus({ phase: 'recovery', eventType: 'checkpoint_reused' });
 
     expect(events).toEqual([
-      { event: 'status', data: { status: 'starting' } },
-      { event: 'status', data: { status: 'second' } },
-      { event: 'status', data: { status: 'third' } },
-      { event: 'status', data: { status: 'third' } }
+      { event: 'status', data: { status: 'Готовлю ответ...' } },
+      { event: 'status', data: { status: 'Уточняю задачу...' } },
+      { event: 'status', data: { status: 'Проверяю данные по товарам...' } },
+      { event: 'status', data: { status: 'Формирую ответ...' } },
+      { event: 'status', data: { status: 'Проверяю итог...' } }
     ]);
-
-    stop();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(events).toHaveLength(4);
-    vi.useRealTimers();
+    expect(customerStatusForStage({ phase: 'tools', eventType: 'unknown' })).toBeNull();
   });
 });

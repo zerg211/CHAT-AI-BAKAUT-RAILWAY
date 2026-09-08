@@ -33,4 +33,65 @@ describe('company price evidence before budget selection', () => {
     expect(result.products[0].price).toBeNull();
     expect(result.proofs[0]).toMatchObject({status:'unavailable',errorCode:'site_price_persistence_conflict'});
   });
+  it('deduplicates a batch, limits in-flight reads, and keeps output order', async () => {
+    const batch = [products[0], products[1], { ...products[0], price: 70000 }];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const readCalls: string[] = [];
+    const boundedRead = vi.fn(async (product: Product) => {
+      readCalls.push(product.id);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return {
+        productId: product.id,
+        productName: product.name,
+        previousPrice: product.price ?? null,
+        price: product.id === 'sgg5000' ? 78240 : 98930,
+        currency: 'RUB' as const,
+        sourceUrl: `https://bakautprof.ru/catalog/${product.id}`,
+        observedAt: '2026-09-07T16:22:20Z',
+        evidence: 'company page'
+      };
+    });
+    const persist = vi.fn(async (proof: Awaited<ReturnType<typeof boundedRead>>) => ({
+      ...batch.find(product => product.id === proof.productId)!,
+      price: proof.price
+    }));
+
+    const result = await verifyBudgetPrices({
+      products: batch,
+      read: boundedRead,
+      persist,
+      maxConcurrency: 1
+    });
+
+    expect(readCalls).toEqual(['sgg5000', 'sgg6000']);
+    expect(maxInFlight).toBe(1);
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(result.products.map(product => product.price)).toEqual([78240, 98930, 78240]);
+    expect(result.proofs.map(proof => proof.productId)).toEqual(['sgg5000', 'sgg6000', 'sgg5000']);
+  });
+  it('opens the verification circuit after the configured failure threshold', async () => {
+    const batch = [products[0], products[1], { ...products[0], id: 'sgg7000', name: 'SGG 7000Ei' }];
+    const read = vi.fn(async () => {
+      throw new Error('site_price_http_error');
+    });
+    const result = await verifyBudgetPrices({
+      products: batch,
+      read,
+      persist: vi.fn(),
+      maxConcurrency: 1,
+      maxFailures: 1
+    });
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(result.proofs.map(proof => proof.errorCode)).toEqual([
+      'site_price_http_error',
+      'site_price_circuit_open',
+      'site_price_circuit_open'
+    ]);
+    expect(result.products.every(product => product.price === null)).toBe(true);
+  });
 });

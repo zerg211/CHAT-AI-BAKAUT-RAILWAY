@@ -7,16 +7,18 @@ import {
 } from '../src/ai/openaiStructured.js';
 
 describe('parseJsonObject', () => {
-  it('parses the first complete JSON object and ignores trailing model text', () => {
-    expect(parseJsonObject('{"ok":true}\nExtra explanation after the contract.', 'stage')).toEqual({ ok: true });
+  it('rejects trailing model text instead of repairing a non-contract response', () => {
+    expect(() => parseJsonObject('{"ok":true}\nExtra explanation after the contract.', 'stage'))
+      .toThrow('stage did not return a strict JSON object');
   });
 
-  it('does not consume a second JSON object as trailing text', () => {
-    expect(parseJsonObject('{"first":1}\n{"second":2}', 'stage')).toEqual({ first: 1 });
+  it('rejects multiple JSON objects instead of selecting one', () => {
+    expect(() => parseJsonObject('{"first":1}\n{"second":2}', 'stage'))
+      .toThrow('stage did not return a strict JSON object');
   });
 
-  it('keeps braces inside JSON strings while finding the object boundary', () => {
-    expect(parseJsonObject('prefix {"text":"brace } inside string","nested":{"ok":true}} suffix {not json}', 'stage')).toEqual({
+  it('parses a strict nested JSON object without custom brace balancing', () => {
+    expect(parseJsonObject('{"text":"brace } inside string","nested":{"ok":true}}', 'stage')).toEqual({
       text: 'brace } inside string',
       nested: { ok: true }
     });

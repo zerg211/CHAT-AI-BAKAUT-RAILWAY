@@ -5,7 +5,6 @@ import { importCatalogCsv } from '../catalog/csvImport.js';
 import { syncCatalogFromSite } from '../catalog/crawler.js';
 import { syncCatalogFromSitemap } from '../catalog/sitemapSync.js';
 import { buildEmbeddingCoverageReport } from '../ai/embeddingCoverage.js';
-import { EvalLlmRubricJudgeInputSchema, runEvalLlmRubricJudge } from '../ai/evalJudge.js';
 import { createOpenAIClient } from '../ai/openaiClient.js';
 import { recordOpenAIUsageOnce } from '../ai/openaiUsageGuard.js';
 import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
@@ -356,16 +355,6 @@ export async function registerAdminRoutes(app: FastifyInstance) {
     } finally {
       clearTimeout(timeout);
     }
-  });
-
-  app.post('/api/admin/evals/llm-rubric', async (request) => {
-    const input = EvalLlmRubricJudgeInputSchema.parse(request.body ?? {});
-    const result = await runEvalLlmRubricJudge({ prompt: input.prompt });
-    return {
-      ok: true,
-      model: config.OPENAI_FACT_MODEL,
-      result
-    };
   });
 
   app.get('/api/admin/openai-usage', async (request) => {

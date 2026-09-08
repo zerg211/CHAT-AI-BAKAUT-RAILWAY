@@ -88,54 +88,21 @@ function stripMarkdownJsonFence(text: string) {
   return trimmed.slice(firstLineEnd + 1, bodyEnd).trim();
 }
 
-function findBalancedJsonObject(text: string, start: number) {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === '\\') {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === '{') {
-      depth += 1;
-    } else if (char === '}') {
-      depth -= 1;
-      if (depth === 0) return text.slice(start, index + 1);
-    }
-  }
-  return null;
-}
-
 export function parseJsonObject(text: string, stage: string): Record<string, unknown> {
   const candidate = stripMarkdownJsonFence(text);
-  let start = candidate.indexOf('{');
-  let lastError: unknown;
-  while (start >= 0) {
-    const raw = findBalancedJsonObject(candidate, start);
-    if (!raw) break;
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error(`${stage} JSON root must be an object`);
-      }
-      return parsed as Record<string, unknown>;
-    } catch (error) {
-      lastError = error;
-      start = candidate.indexOf('{', start + 1);
+  if (!candidate) throw new Error(`${stage} did not return a JSON object`);
+  try {
+    const parsed = JSON.parse(candidate);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`${stage} JSON root must be an object`);
     }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof Error && error.message === `${stage} JSON root must be an object`) {
+      throw error;
+    }
+    throw new Error(`${stage} did not return a strict JSON object`, { cause: error });
   }
-  if (lastError) throw lastError;
-  throw new Error(`${stage} did not return a JSON object`);
 }
 
 function responseTextForJson(response: unknown) {

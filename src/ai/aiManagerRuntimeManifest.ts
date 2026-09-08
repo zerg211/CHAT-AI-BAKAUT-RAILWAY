@@ -3,7 +3,7 @@ import {
   SALES_MANAGER_POLICY_PACK_VERSION
 } from './salesManagerBehaviorPolicy.js';
 
-export const AI_MANAGER_RUNTIME_VERSION = '2026-09-07.research-role-and-known-facts-v22';
+export const AI_MANAGER_RUNTIME_VERSION = '2026-09-08.final-hardening-v23';
 export const AI_MANAGER_CONTRACT_VERSION = '2026-08-11.manager-contract-v2';
 
 export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({
@@ -27,6 +27,7 @@ export const AI_MANAGER_RUNTIME_MANIFEST = Object.freeze({
     'answer_contracts.response_payload',
     'leads.origin_tool_request_id',
     'agent_traces',
+    'turn_events.seq',
     'assistant_feedback_events',
     'catalog_sync_runs',
     'products.is_active'

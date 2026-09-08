@@ -8,6 +8,7 @@ import { getAgentManagerRuntimeDecision } from '../ai/agentManagerRuntime.js';
 import { buildPublicCustomerResponse } from '../ai/agentManagerOutputGuard.js';
 import { runWithOpenAIUsageContext } from '../ai/openaiUsageGuard.js';
 import { config } from '../config.js';
+import type { ChatResponsePayload } from '../shared/types.js';
 import {
   ActiveConversationTurnError,
   ClientMessagePayloadConflictError,
@@ -15,7 +16,7 @@ import {
   ConversationRepository
 } from '../db/repositories.js';
 import { limitPublicHistoryResponse, normalizePublicHistoryMessage } from '../shared/publicChatHistory.js';
-import { closeSseReply, openSseReply, startStatusTimer } from './sse.js';
+import { closeSseReply, createStageStatusSender, customerStatusForStage, openSseReply } from './sse.js';
 import { sseCorsHeaders } from '../cors.js';
 
 const createSessionSchema = z.object({
@@ -32,11 +33,10 @@ const feedbackSchema = z.object({
   rating: z.enum(['positive', 'negative', 'wrong_cards'])
 }).strict();
 
-const generationStatusMessages = [
-  'Проверяю каталог и контекст диалога...',
-  'Сверяю факты и актуальные источники...',
-  'Собираю короткий ответ с выводом и ценами...'
-];
+const turnEventsQuerySchema = z.object({
+  afterSeq: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(500).default(200)
+}).strict();
 
 // Must exceed the turn budget wall time (150s) plus SSE delivery headroom.
 const TURN_DEADLINE_MS = 160_000;
@@ -128,6 +128,22 @@ function publicPendingTurn(
   };
 }
 
+function publicPersistedTurnResult(value: unknown, turnId: string) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const candidate = value as Partial<ChatResponsePayload>;
+  if (typeof candidate.answer !== 'string' || !Array.isArray(candidate.productCards)) return null;
+  try {
+    return buildPublicCustomerResponse({
+      ...candidate,
+      turnId,
+      answer: candidate.answer,
+      productCards: candidate.productCards
+    } as ChatResponsePayload);
+  } catch {
+    return null;
+  }
+}
+
 export async function registerChatRoutes(
   app: FastifyInstance,
   dependencies: ChatRouteDependencies = {}
@@ -157,6 +173,51 @@ export async function registerChatRoutes(
         .filter((message) => message !== null)),
       leadOfferConsumed: history.leadOfferConsumed,
       pendingTurn: history.pendingTurn ? publicPendingTurn(history.pendingTurn) : null
+    });
+  });
+
+  app.get('/api/chat/sessions/:id/messages/:turnId/events', async (request, reply) => {
+    const params = z.object({
+      id: z.string().uuid(),
+      turnId: z.string().uuid()
+    }).parse(request.params);
+    const query = turnEventsQuerySchema.parse(request.query ?? {});
+    const session = await restoreAuthorizedSession(request, reply, conversations, params.id);
+    if (!session) return sessionNotFound(reply);
+    const turn = await conversations.getTurn(params.id, params.turnId);
+    if (!turn) return reply.code(404).send({ error: 'Turn not found' });
+
+    const eventRepository = conversations as ConversationRepository & {
+      listTurnEvents?: ConversationRepository['listTurnEvents'];
+      getFinalAnswerContract?: ConversationRepository['getFinalAnswerContract'];
+    };
+    const rows = typeof eventRepository.listTurnEvents === 'function'
+      ? await eventRepository.listTurnEvents.call(conversations, params.id, params.turnId, query.afterSeq, query.limit)
+      : [];
+    const events = rows.map((row) => {
+      const seq = Number(row.seq);
+      if (!Number.isSafeInteger(seq) || seq <= 0) return null;
+      const phase = String(row.stage ?? '');
+      const eventType = String(row.event_type ?? '');
+      const status = customerStatusForStage({ phase, eventType });
+      return {
+        seq,
+        stage: phase,
+        eventType,
+        timestamp: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at ?? ''),
+        ...(status ? { status } : {})
+      };
+    }).filter((event): event is NonNullable<typeof event> => event !== null);
+    const finalContract = typeof eventRepository.getFinalAnswerContract === 'function'
+      ? await eventRepository.getFinalAnswerContract.call(conversations, params.id, params.turnId)
+      : null;
+    const result = publicPersistedTurnResult(finalContract?.response_payload, params.turnId);
+    return reply.send({
+      turnId: params.turnId,
+      afterSeq: query.afterSeq,
+      events,
+      nextSeq: events.length ? events[events.length - 1].seq : query.afterSeq,
+      result
     });
   });
 
@@ -247,18 +308,13 @@ export async function registerChatRoutes(
       ...sseCorsHeaders(request.headers.origin)
     });
 
-    let stopStatusTimer: (() => void) | null = null;
     try {
       send('start', { ok: true });
       send('turn', {
         turnId,
         clientMessageId
       });
-      stopStatusTimer = startStatusTimer({
-        send,
-        initialStatus: generationStatusMessages[0],
-        statusMessages: generationStatusMessages
-      });
+      const sendStageStatus = createStageStatusSender(send);
       let payload: Awaited<ReturnType<typeof assistant.generateAnswer>>;
       try {
         payload = await runWithOpenAIUsageContext({
@@ -269,9 +325,10 @@ export async function registerChatRoutes(
         }, () => assistant.generateAnswer({
           sessionId: params.id,
           userMessage: input.message,
-          turnId,
-          onDelta: (delta) => send('delta', { delta }),
-          signal: controller.signal
+           turnId,
+           onDelta: (delta) => send('delta', { delta }),
+           onStage: sendStageStatus,
+           signal: controller.signal
         }));
       } catch (firstError) {
         const isTransient = !(firstError instanceof TurnExecutionInProgressError) &&
@@ -290,16 +347,15 @@ export async function registerChatRoutes(
           }, () => assistant.generateAnswer({
             sessionId: params.id,
             userMessage: input.message,
-            turnId,
-            onDelta: (delta) => send('delta', { delta }),
-            signal: controller.signal
+             turnId,
+             onDelta: (delta) => send('delta', { delta }),
+             onStage: sendStageStatus,
+             signal: controller.signal
           }));
         } else {
           throw firstError;
         }
       }
-      stopStatusTimer?.();
-      stopStatusTimer = null;
       send('done', buildPublicCustomerResponse(payload));
     } catch (error) {
       const executionInProgress = error instanceof TurnExecutionInProgressError;
@@ -338,7 +394,6 @@ export async function registerChatRoutes(
         recoverable: false
       });
     } finally {
-      stopStatusTimer?.();
       clearTimeout(timeout);
       closeSseReply(reply);
     }
@@ -362,7 +417,6 @@ export async function registerChatRoutes(
       ...sseCorsHeaders(request.headers.origin)
     });
 
-    let stopStatusTimer: (() => void) | null = null;
     let runtimeDecision = getAgentManagerRuntimeDecision();
     try {
       runtimeDecision = getAgentManagerRuntimeDecision();
@@ -370,11 +424,7 @@ export async function registerChatRoutes(
         turnId: params.turnId,
         recovered: true
       });
-      stopStatusTimer = startStatusTimer({
-        send,
-        initialStatus: 'Ответ оборвался, восстанавливаю...',
-        statusMessages: generationStatusMessages
-      });
+      const sendStageStatus = createStageStatusSender(send);
       const payload = await runWithOpenAIUsageContext({
         sessionId: params.id,
         turnId: params.turnId,
@@ -384,6 +434,7 @@ export async function registerChatRoutes(
         sessionId: params.id,
         turnId: params.turnId,
         onDelta: (delta) => send('delta', { delta }),
+        onStage: sendStageStatus,
         signal: controller.signal
       }));
       send('done', buildPublicCustomerResponse(payload));
@@ -417,7 +468,6 @@ export async function registerChatRoutes(
           : 'Не удалось завершить ответ. Ваш вопрос сохранён в истории чата.'
       });
     } finally {
-      stopStatusTimer?.();
       clearTimeout(timeout);
       closeSseReply(reply);
     }

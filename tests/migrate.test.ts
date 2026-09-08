@@ -21,6 +21,8 @@ describe('database schema migrations', () => {
     expect(queries).toContain('ALTER TABLE troubleshooting_cases ADD COLUMN IF NOT EXISTS embedding_updated_at timestamptz');
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS troubleshooting_cases'))).toBe(true);
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS openai_usage_events'))).toBe(true);
+    expect(queries).toContain('ALTER TABLE openai_usage_events ADD COLUMN IF NOT EXISTS cost_usd numeric(12, 6)');
+    expect(queries.some((query) => query.includes('openai_usage_events_turn_cost_idx'))).toBe(true);
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS openai_usage_reservations'))).toBe(true);
     expect(queries).toContain('ALTER SEQUENCE dialogue_ledger_event_seq_seq OWNED BY dialogue_ledger_events.event_seq');
     expect(queries.filter((query) => query.includes("SELECT setval(\n      'dialogue_ledger_event_seq_seq'")).length).toBe(2);
@@ -29,6 +31,9 @@ describe('database schema migrations', () => {
     expect(queries).toContain('ALTER TABLE lead_outbox ALTER COLUMN turn_id DROP NOT NULL');
     expect(queries.some((query) => query.includes('leads_session_client_lead_id_idx'))).toBe(true);
     expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS lead_capture_drafts'))).toBe(true);
+    expect(queries).toContain('CREATE SEQUENCE IF NOT EXISTS turn_event_seq_seq');
+    expect(queries.some((query) => query.includes('CREATE TABLE IF NOT EXISTS turn_events'))).toBe(true);
+    expect(queries).toContain('CREATE INDEX IF NOT EXISTS turn_events_turn_seq_idx ON turn_events(turn_id, seq)');
   });
 
   it('creates history_summary in the fresh database schema', async () => {
@@ -65,7 +70,15 @@ describe('database schema migrations', () => {
     expect(schema).toContain('CREATE TABLE IF NOT EXISTS openai_usage_events');
     expect(schema).toContain('request_source text NOT NULL');
     expect(schema).toContain('total_tokens integer');
+    expect(schema).toContain('cost_usd numeric(12, 6)');
     expect(schema).toContain('openai_usage_events_source_created_idx');
+  });
+
+  it('adds an auditable cost column to OpenAI usage events', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '034_openai_usage_cost.sql'), 'utf8');
+
+    expect(schema).toContain('ADD COLUMN IF NOT EXISTS cost_usd numeric(12, 6)');
+    expect(schema).toContain('openai_usage_events_turn_cost_idx');
   });
 
   it('adds atomic OpenAI token reservations for concurrent budget enforcement', async () => {
@@ -99,6 +112,16 @@ describe('database schema migrations', () => {
     expect(schema).toContain('CREATE TABLE IF NOT EXISTS dialogue_ledger_snapshots');
     expect(schema).toContain('through_event_seq bigint NOT NULL');
     expect(schema).toContain('recent_events jsonb');
+  });
+
+  it('adds durable per-turn event sequencing for reconnect replay', async () => {
+    const schema = await fs.readFile(path.join(process.cwd(), 'sql', '033_durable_turn_events.sql'), 'utf8');
+
+    expect(schema).toContain('CREATE SEQUENCE IF NOT EXISTS turn_event_seq_seq');
+    expect(schema).toContain('CREATE TABLE IF NOT EXISTS turn_events');
+    expect(schema).toContain('seq bigint');
+    expect(schema).toContain('UNIQUE(turn_id, seq)');
+    expect(schema).toContain('turn_events_session_turn_seq_idx');
   });
 
   it('adds public lead-form idempotency and allows pre-turn email outbox rows', async () => {

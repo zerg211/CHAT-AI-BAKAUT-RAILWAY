@@ -16,7 +16,7 @@ export type ChatStreamOptions = {
 
 const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 150_000;
 const DEFAULT_RECOVERY_IDLE_TIMEOUT_MS = 180_000;
-const MAX_RECOVERY_TRANSPORT_ATTEMPTS = 1;
+const MAX_RECOVERY_TRANSPORT_ATTEMPTS = 2;
 const RECOVERY_TRANSPORT_RETRY_DELAY_MS = 250;
 const STREAM_TIMEOUT_MESSAGE = 'Ответ ассистента не завершился вовремя.';
 const RECOVERING_STATUS = 'Ответ оборвался, восстанавливаю...';
@@ -147,7 +147,20 @@ async function recoverChatMessage(
   idleTimeoutMs: number
 ) {
   let lastError: unknown = new Error(FRIENDLY_FINAL_ERROR);
+  let lastSeq = 0;
   for (let attempt = 0; attempt < MAX_RECOVERY_TRANSPORT_ATTEMPTS; attempt += 1) {
+    const replayed = await replayDurableTurnEvents({
+      apiBase,
+      sessionId,
+      turnId,
+      visitorId,
+      afterSeq: lastSeq,
+      signal,
+      fetcher,
+      onStatus: handlers.onStatus,
+      onSeq: (seq) => { lastSeq = Math.max(lastSeq, seq); }
+    });
+    if (replayed) return replayed;
     handlers.onStatus?.(RECOVERING_STATUS);
     try {
       const response = await fetcher(`${apiBase}/api/chat/sessions/${sessionId}/messages/${turnId}/recover`, {
@@ -187,6 +200,46 @@ async function recoverChatMessage(
     }
   }
   throw lastError instanceof Error ? lastError : new Error(FRIENDLY_FINAL_ERROR);
+}
+
+async function replayDurableTurnEvents(input: {
+  apiBase: string;
+  sessionId: string;
+  turnId: string;
+  visitorId: string;
+  afterSeq: number;
+  signal?: AbortSignal;
+  fetcher: FetchLike;
+  onStatus?: (status: string) => void;
+  onSeq: (seq: number) => void;
+}): Promise<ChatResponsePayload | null> {
+  try {
+    const response = await input.fetcher(
+      `${input.apiBase}/api/chat/sessions/${input.sessionId}/messages/${input.turnId}/events?afterSeq=${input.afterSeq}`,
+      {
+        method: 'GET',
+        headers: { 'x-bakaut-visitor-id': input.visitorId },
+        signal: input.signal
+      }
+    );
+    if (!response.ok) return null;
+    const body = await response.json() as {
+      events?: Array<{ seq?: unknown; status?: unknown }>;
+      result?: ChatResponsePayload | null;
+    };
+    for (const event of body.events ?? []) {
+      const seq = typeof event.seq === 'number' && Number.isSafeInteger(event.seq) ? event.seq : Number(event.seq);
+      if (!Number.isSafeInteger(seq) || seq <= input.afterSeq) continue;
+      input.onSeq(seq);
+      if (typeof event.status === 'string' && event.status.trim()) input.onStatus?.(event.status);
+    }
+    return body.result && typeof body.result.answer === 'string' && body.result.answer.trim()
+      ? body.result
+      : null;
+  } catch (error) {
+    if (input.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error;
+    return null;
+  }
 }
 
 export async function recoverChatTurn(

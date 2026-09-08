@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z, ZodError } from 'zod';
@@ -134,10 +135,13 @@ import {
   AgentManagerTurnBudget,
   AgentManagerTurnBudgetExceededError,
   DEFAULT_AGENT_MANAGER_TURN_LIMITS,
-  runWithAgentManagerTurnBudget
+  agentManagerTurnLimitsForProfile,
+  runWithAgentManagerTurnBudget,
+  selectAgentManagerBudgetProfile
 } from './agentManagerTurnBudget.js';
 import { agentIntentRequiresCatalogEvidence, evaluateAgentManagerPolicyGate } from './agentManagerPolicyGate.js';
 import { guardCustomerOutput } from './agentManagerOutputGuard.js';
+import { buildDecisionArtifact } from './decisionArtifact.js';
 import {
   compactModelText,
   exactProductIdentity,
@@ -176,12 +180,22 @@ import {
   selectionRequirementAttributeMatches
 } from './requirementProofs.js';
 
+export interface AgentManagerStageEvent {
+  phase: string;
+  eventType: string;
+}
+
+type AgentManagerStageEmitter = (event: AgentManagerStageEvent) => void | Promise<void>;
+
+const activeStageEmitter = new AsyncLocalStorage<AgentManagerStageEmitter | undefined>();
+
 export interface AgentManagerGenerateInput {
   sessionId: string;
   userMessage: string;
   turnId?: string;
   skipUserMessage?: boolean;
   onDelta?: (text: string) => void | Promise<void>;
+  onStage?: AgentManagerStageEmitter;
   signal?: AbortSignal;
 }
 
@@ -189,6 +203,7 @@ export interface AgentManagerRecoverInput {
   sessionId: string;
   turnId: string;
   onDelta?: (text: string) => void | Promise<void>;
+  onStage?: AgentManagerStageEmitter;
   signal?: AbortSignal;
 }
 
@@ -1922,11 +1937,13 @@ class AnswerValidationBlockedError extends Error {
 }
 
 const RECOVERY_LEASE_RETRY_INTERVAL_MS = 500;
+export const MAX_TURN_RECOVERY_ATTEMPTS = 2;
 export const RECOVERY_LEASE_WAIT_LIMIT_MS = DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs;
 const TURN_COMMIT_RESERVE_MS = 5_000;
 const WEB_ANSWER_RESERVE_MS = 30_000;
 const WEB_MIN_EXECUTION_MS = 6_000;
 const CATALOG_ANSWER_RESERVE_MS = 8_000;
+const CURRENT_PRICE_VERIFICATION_TOP_K = 6;
 const SEMANTIC_DECISION_ATTEMPT_TIMEOUT_MS = 45_000;
 const SEMANTIC_DECISION_DOWNSTREAM_RESERVE_MS = 45_000;
 
@@ -4430,6 +4447,7 @@ const ledgerDeltaFormat = {
   format: {
     type: 'json_schema',
     name: 'ledger_state_delta',
+    strict: true,
     description: 'A concise semantic state delta. Keep free-text values short and non-repetitive while preserving exact evidence.',
     schema: {
       type: 'object',
@@ -4737,6 +4755,7 @@ const intentContractFormat = {
   format: {
     type: 'json_schema',
     name: 'agent_intent_contract',
+    strict: true,
     description: 'A concise semantic execution contract. Keep free-text values short and non-repetitive while preserving exact buyer evidence.',
     schema: {
       type: 'object',
@@ -4774,6 +4793,7 @@ const semanticDecisionFormat = {
   format: {
     type: 'json_schema',
     name: 'agent_semantic_decision',
+    strict: true,
     description: 'One authoritative turn interpretation containing both durable state changes and the executable post-delta intent.',
     schema: {
       type: 'object',
@@ -5018,6 +5038,7 @@ const answerContractFormat = {
   format: {
     type: 'json_schema',
     name: 'agent_answer_contract',
+    strict: true,
     schema: {
       type: 'object',
       additionalProperties: false,
@@ -5808,7 +5829,7 @@ export class AgentManagerOrchestrator {
       const claimed = await repository.beginRecoveryAttempt.call(this.conversations, {
         sessionId: input.sessionId,
         turnId: input.turnId,
-        maxAttempts: 1
+        maxAttempts: MAX_TURN_RECOVERY_ATTEMPTS
       });
       if (!claimed) throw new RecoveryAttemptUnavailableError();
     }
@@ -5824,6 +5845,7 @@ export class AgentManagerOrchestrator {
           turnId: input.turnId,
           skipUserMessage: true,
           onDelta: input.onDelta,
+          onStage: input.onStage,
           signal: input.signal,
           session,
           recovered: true
@@ -6337,10 +6359,16 @@ export class AgentManagerOrchestrator {
     const absoluteWorkDeadlineAtMs = Number.isFinite(persistedDeadlineAtMs)
       ? persistedDeadlineAtMs - TURN_COMMIT_RESERVE_MS
       : undefined;
+    const budgetProfile = selectAgentManagerBudgetProfile({
+      recovered: input.recovered,
+      userMessage: input.userMessage,
+      needState: input.session.needState
+    });
     const turnBudget = new AgentManagerTurnBudget(
-      DEFAULT_AGENT_MANAGER_TURN_LIMITS,
+      agentManagerTurnLimitsForProfile(budgetProfile),
       Date.now,
-      absoluteWorkDeadlineAtMs
+      absoluteWorkDeadlineAtMs,
+      budgetProfile
     );
     let wallTimeSignal: AbortSignal;
     try {
@@ -6352,10 +6380,10 @@ export class AgentManagerOrchestrator {
       ? AbortSignal.any([input.signal, wallTimeSignal])
       : wallTimeSignal;
     try {
-      const payload = await runWithAgentManagerTurnBudget(
+      const payload = await activeStageEmitter.run(input.onStage, () => runWithAgentManagerTurnBudget(
         turnBudget,
         () => this.executeClaimedTurnWithinBudget({ ...input, signal }, turnBudget)
-      );
+      ));
       return payload;
     } catch (error) {
       if (
@@ -7675,6 +7703,28 @@ export class AgentManagerOrchestrator {
       intent: effectiveIntent,
       toolResults: selectionToolResults
     });
+    const decisionArtifact = buildDecisionArtifact({
+      intent: effectiveIntent,
+      toolResults: selectionToolResults,
+      answer: finalAnswerContract,
+      policyGate,
+      review
+    });
+    await this.trace(input.sessionId, input.turnId, 'intent', 'decision_artifact_created', {
+      version: decisionArtifact.version,
+      loop: decisionArtifact.loop,
+      goal: decisionArtifact.goal,
+      knownFacts: decisionArtifact.knownFacts,
+      unknowns: decisionArtifact.unknowns,
+      blockingUnknowns: decisionArtifact.blockingUnknowns,
+      possibleActions: decisionArtifact.possibleActions,
+      selectedAction: decisionArtifact.selectedAction,
+      risk: decisionArtifact.risk,
+      requiredConsent: decisionArtifact.requiredConsent,
+      stopCondition: decisionArtifact.stopCondition,
+      fallback: decisionArtifact.fallback,
+      rationale: decisionArtifact.rationale
+    });
     const failedRequiredTools = policyGate.requiredActions.filter((tool) =>
       !selectionToolResults.some((result) => result.tool === tool && result.status === 'ok')
     );
@@ -7723,7 +7773,9 @@ export class AgentManagerOrchestrator {
         fact: config.OPENAI_FACT_MODEL,
         deepReasoning: config.OPENAI_DEEP_REASONING_MODEL
       },
+      budgetProfile: turnBudget.profile,
       turnBudget: turnBudget.snapshot(),
+      decisionArtifact,
       continuation,
       verifiedProductFacts,
       conflictingVerifiedProductFacts,
@@ -8077,7 +8129,8 @@ export class AgentManagerOrchestrator {
               ? generatorLoadRequirementKw(toolResults)
               : undefined;
             const budgetPrices = verifyBudget ? await verifyBudgetPrices({products:search.products,
-              read:this.readSitePrice, persist:price=>this.products.updateVerifiedSitePrice(price), signal:toolSignal}) : undefined;
+              read:this.readSitePrice, persist:price=>this.products.updateVerifiedSitePrice(price), signal:toolSignal,
+              maxProducts: CURRENT_PRICE_VERIFICATION_TOP_K}) : undefined;
             const loadFit = filterGeneratorProductsByLoadProfile(budgetPrices?.products ?? search.products, loadRequirementKw);
             const loadAwareRetry = false;
             const products = loadFit.products;
@@ -8177,27 +8230,28 @@ export class AgentManagerOrchestrator {
             });
             requestProductsById.clear();
             scopedProducts.forEach((product) => requestProductsById.set(product.id, product));
-            const priceVerifications = request.args.verifyCurrentPrice === true || verifyBudget
-              ? await Promise.all(scopedProducts.map(async product => {
-                let priceStage = 'read_page';
-                try {
-                  const checked = await this.readSitePrice(product, toolSignal);
-                  priceStage = 'persist_price';
-                  const updated = await this.products.updateVerifiedSitePrice(checked);
-                  if (!updated) throw new Error('site_price_persistence_conflict');
-                  requestProductsById.set(product.id, updated);
-                  return { productId: product.id, status: 'verified' as const, previousPrice: checked.previousPrice,
-                    price: checked.price, currency: checked.currency, sourceUrl: checked.sourceUrl,
-                    observedAt: checked.observedAt, evidence: checked.evidence };
-                } catch (error) {
-                  const errorCode = sitePriceErrorCode(error);
-                  if (verifyBudget) requestProductsById.set(product.id,{...product,price:null});
-                  await this.trace(input.session.id,input.turnId,'tools','site_price_verification_failed',{
-                    productId:product.id,errorCode,stage:priceStage,remainingTurnMs:input.budget.remainingWallTimeMs()
+            const priceVerification = request.args.verifyCurrentPrice === true || verifyBudget
+              ? await verifyBudgetPrices({
+                products: scopedProducts,
+                read: this.readSitePrice,
+                persist: (price) => this.products.updateVerifiedSitePrice(price),
+                signal: toolSignal,
+                maxProducts: CURRENT_PRICE_VERIFICATION_TOP_K,
+                preservePriceOnFailure: !verifyBudget,
+                onFailure: async (product, errorCode, stage) => {
+                  if (verifyBudget) requestProductsById.set(product.id, { ...product, price: null });
+                  await this.trace(input.session.id, input.turnId, 'tools', 'site_price_verification_failed', {
+                    productId: product.id,
+                    errorCode,
+                    stage,
+                    remainingTurnMs: input.budget.remainingWallTimeMs()
                   });
-                  return { productId: product.id, status: 'unavailable' as const, errorCode };
                 }
-              })) : [];
+              })
+              : { products: scopedProducts, proofs: [] };
+            requestProductsById.clear();
+            priceVerification.products.forEach((product) => requestProductsById.set(product.id, product));
+            const priceVerifications = priceVerification.proofs;
             requestProductsById.forEach((product) => productsById.set(product.id, product));
           result = ToolResultSchema.parse({
               requestId: request.id,
@@ -9808,6 +9862,23 @@ export class AgentManagerOrchestrator {
   }
 
   private async trace(sessionId: string, turnId: string, phase: string, eventType: string, payload: Record<string, unknown>) {
+    const eventRepository = this.conversations as ConversationRepository & {
+      appendTurnEvent?: ConversationRepository['appendTurnEvent'];
+    };
+    if (typeof eventRepository.appendTurnEvent === 'function') {
+      await eventRepository.appendTurnEvent.call(this.conversations, {
+        sessionId,
+        turnId,
+        stage: phase,
+        eventType,
+        payload: {}
+      }).catch((error) => console.warn('Agent manager durable event write failed', safeError(error)));
+    }
+    try {
+      await activeStageEmitter.getStore()?.({ phase, eventType });
+    } catch (error) {
+      console.warn('Agent manager stage delivery failed', safeError(error));
+    }
     await this.conversations.addAgentTrace({
       sessionId,
       turnId,

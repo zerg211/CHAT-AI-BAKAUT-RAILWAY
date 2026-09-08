@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ProviderBudgetEstimationError,
   estimateEmbeddingProviderCall,
+  estimateProviderUsageCostUsd,
   estimateResponsesProviderCall
 } from '../src/ai/openaiRequestBudget.js';
 
@@ -90,6 +91,24 @@ describe('OpenAI request budget estimation', () => {
     expect(estimate.estimatedCostUsd)
       .toBeCloseTo(expectedInputTokens * 0.022 / 1_000_000, 12);
     expect(estimate.estimatedCostUsd).toBeGreaterThan(0);
+  });
+
+  it('converts persisted provider usage into a bounded estimated dollar cost', () => {
+    expect(estimateProviderUsageCostUsd({
+      model: 'gpt-5.6-luna',
+      inputTokens: '1000' as unknown as number,
+      outputTokens: '2000' as unknown as number
+    })).toBe(0.0286);
+    expect(estimateProviderUsageCostUsd({
+      model: 'unpriced-future-model',
+      inputTokens: 100,
+      outputTokens: 100
+    })).toBeNull();
+    expect(estimateProviderUsageCostUsd({
+      model: 'gpt-5.6-luna',
+      inputTokens: Number.NaN,
+      outputTokens: 100
+    })).toBeNull();
   });
 
   it('fails closed when the model has no pricing ceiling', () => {

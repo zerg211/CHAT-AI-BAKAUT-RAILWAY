@@ -675,7 +675,16 @@ export class ConversationRepository {
     ) SELECT t.id AS "turnId",t.session_id AS "sessionId",t.status,t.created_at AS "createdAt",t.deadline_at AS "deadlineAt",
       m.id IS NOT NULL AS "hasAnswer",t.error_code AS "errorCode",split_part(t.error_message,':',1) AS "errorClass",
       m.metadata->'build'->>'commitSha' AS "buildCommit",m.metadata->'turnBudget'->'usage'->'wallTimeMs' AS "wallTimeMs",
-      m.metadata->'turnBudget'->'usage'->'modelCalls' AS "modelCalls",t.status='recovered' AS recovered,
+       m.metadata->'turnBudget'->'usage'->'modelCalls' AS "modelCalls",t.status='recovered' AS recovered,
+       (SELECT sum(usage.cost_usd) FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "estimatedCostUsd",
+       (SELECT sum(usage.total_tokens) FROM openai_usage_events usage WHERE usage.turn_id=t.id) AS "totalTokens",
+       CASE
+         WHEN m.metadata->'answerContract' IS NULL OR jsonb_typeof(m.metadata->'answerContract') <> 'object' THEN 'unknown'
+         WHEN jsonb_array_length(CASE WHEN jsonb_typeof(m.metadata->'answerContract'->'questionsAsked')='array'
+           THEN m.metadata->'answerContract'->'questionsAsked' ELSE '[]'::jsonb END) > 0
+           OR m.metadata->'answerContract'->'selectionReadiness'->>'status' = 'needs_more_info' THEN 'unresolved'
+         ELSE 'resolved'
+       END AS "resolutionStatus",
       (SELECT rating FROM assistant_feedback_events WHERE turn_id=t.id ORDER BY created_at DESC LIMIT 1) AS rating,
       coalesce((SELECT jsonb_agg(jsonb_build_object('tool',item->>'tool','status',item->>'status',
         'priceUnavailable',jsonb_path_exists(item,'$.payload.priceVerifications[*] ? (@.status == "unavailable")')))
@@ -2186,6 +2195,38 @@ export class ConversationRepository {
       ]
     );
     return result.rows[0] ?? null;
+  }
+
+  async appendTurnEvent(input: {
+    sessionId: string;
+    turnId: string;
+    stage: string;
+    eventType: string;
+    payload?: unknown;
+  }) {
+    const result = await this.db.query(
+      `INSERT INTO turn_events(session_id, turn_id, stage, event_type, payload)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb)
+       RETURNING *`,
+      [input.sessionId, input.turnId, input.stage, input.eventType, jsonbParam(input.payload ?? {})]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async listTurnEvents(sessionId: string, turnId: string, afterSeq = 0, limit = 200) {
+    const boundedAfterSeq = Number.isSafeInteger(afterSeq) && afterSeq >= 0 ? afterSeq : 0;
+    const boundedLimit = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 500) : 200;
+    const result = await this.db.query(
+      `SELECT *
+       FROM turn_events
+       WHERE session_id = $1
+         AND turn_id = $2
+         AND seq > $3
+       ORDER BY seq ASC
+       LIMIT $4`,
+      [sessionId, turnId, boundedAfterSeq, boundedLimit]
+    );
+    return result.rows;
   }
 
   async listAgentTraces(sessionId: string, turnId?: string, limit = 200) {

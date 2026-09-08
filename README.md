@@ -22,7 +22,7 @@ npm run dev
 npm run verify                 # полный локальный release gate
 npm run typecheck
 npm test
-npm run test:eval:agentic
+npm run test:acceptance:live -- --approve-paid --max-agent-turns N --max-judge-calls N --max-http-requests N
 npm run lint:no-regex
 npm run build
 npm run migrate

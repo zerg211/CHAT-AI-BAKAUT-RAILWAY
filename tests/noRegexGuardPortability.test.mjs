@@ -11,8 +11,8 @@ it('preserves the same baseline across Git LF/CRLF conversion but rejects a chan
     cwd: root, encoding: 'utf8', env: { ...process.env, NO_REGEX_BASELINE_PATH: 'scripts/no-regex-baseline.json' }
   });
   try {
-    fs.mkdirSync(path.join(root,'src')); fs.mkdirSync(path.join(root,'scripts'));
-    const file = path.join(root,'src/example.ts');
+    fs.mkdirSync(path.join(root,'src','ai'), { recursive: true }); fs.mkdirSync(path.join(root,'scripts'));
+    const file = path.join(root,'src','ai','agentManagerOrchestrator.ts');
     const lines = ['const normalize = text => text', '  .trim()', '  .replace(/a/g, "b");'];
     fs.writeFileSync(file, lines.join('\r\n'));
     expect(run('--update-baseline').status).toBe(0);

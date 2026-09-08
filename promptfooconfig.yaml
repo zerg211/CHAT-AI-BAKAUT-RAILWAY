@@ -1,9 +1,0 @@
-# Retired: the old keyword/aggregate rubric route is not a release authority.
-# npx promptfoo using this file fails explicitly instead of giving a false green.
-description: Legacy BAKAUT eval entry retired — use evals/acceptance/runner.cjs
-prompts:
-  - 'legacy-route-retired-v2'
-providers:
-  - id: file://evals/acceptance/promptfoo-disabled.cjs
-tests:
-  - description: legacy_pipeline_is_not_acceptance

@@ -151,8 +151,6 @@ type AdminConversationStats = {
 type AdminFilter = 'today' | 'all' | 'active' | 'withLeads' | 'empty';
 type AdminSource = 'local' | 'production';
 
-const PRODUCTION_ADMIN_BASE_URL = 'https://bakaut-chat.vexr.dev';
-
 function isLoopbackHost(hostname: string) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
 }
@@ -160,6 +158,18 @@ function isLoopbackHost(hostname: string) {
 function localAdminBaseUrl() {
   const isApiOrigin = isLoopbackHost(window.location.hostname) && (!window.location.port || window.location.port === '3010');
   return isApiOrigin ? '' : 'http://127.0.0.1:3010';
+}
+
+function productionAdminBaseUrl() {
+  const windowConfig = window as unknown as {
+    BAKAUT_ADMIN_API_BASE?: unknown;
+    BAKAUT_CHAT_API_BASE?: unknown;
+  };
+  const configured = windowConfig.BAKAUT_ADMIN_API_BASE ?? windowConfig.BAKAUT_CHAT_API_BASE;
+  if (typeof configured === 'string' && configured.trim()) {
+    return configured.trim().replace(/\/+$/, '');
+  }
+  return window.location.origin;
 }
 
 function shortDiagnosticReason(reason: unknown) {
@@ -332,7 +342,7 @@ const ADMIN_SOURCES: Record<AdminSource, { label: string; baseUrl: string; stora
   },
   production: {
     label: 'Прод',
-    baseUrl: PRODUCTION_ADMIN_BASE_URL,
+    baseUrl: productionAdminBaseUrl(),
     storageKey: 'bakaut_admin_password_production',
     hint: 'Railway production'
   }
@@ -1309,8 +1319,7 @@ function App() {
               role: 'assistant',
               content: '',
               createdAt: nowIso(),
-              status: 'sending',
-              progress: 'Восстанавливаю незавершённый ответ...'
+              status: 'sending'
             }
           ]);
           try {
@@ -1471,8 +1480,7 @@ function App() {
         role: 'assistant',
         content: '',
         createdAt: nowIso(),
-        status: 'sending',
-        progress: 'Проверяю каталог и контекст...'
+        status: 'sending'
       }
     ]);
     let attemptedSessionId: string | null = null;
@@ -1555,11 +1563,6 @@ function App() {
         )));
       } else {
         const visitorId = safeStorageGet(safeBrowserStorage('localStorage'), 'bakaut_visitor_id');
-        setMessages((current) => current.map((message) => (
-          message.id === assistantId && !message.content
-            ? { ...message, progress: 'Проверяю, готов ли ответ...' }
-            : message
-        )));
         const recovered = await recoverCompletedAnswerAfterStreamFailure({
           apiBase,
           sessionId: attemptedSessionId,

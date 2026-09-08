@@ -11,7 +11,7 @@ export type VerifiedSitePrice = { productId: string; productName: string; previo
 export function sitePriceErrorCode(error: unknown): string {
   if (!(error instanceof Error)) return 'site_price_unknown_error';
   if (error.name === 'TimeoutError' || error.name === 'AbortError') return 'site_price_timeout';
-  const known = ['site_price_source_untrusted','site_price_http_error','site_price_identity_or_value_unconfirmed','site_price_persistence_conflict'];
+  const known = ['site_price_source_untrusted','site_price_http_error','site_price_identity_or_value_unconfirmed','site_price_persistence_conflict','site_price_circuit_open','site_price_verification_deferred'];
   return known.includes(error.message) ? error.message : 'site_price_fetch_or_storage_error';
 }
 

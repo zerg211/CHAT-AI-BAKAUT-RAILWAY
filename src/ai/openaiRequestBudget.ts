@@ -76,6 +76,26 @@ function priceEstimate(input: {
     input.hostedToolCostUsd;
 }
 
+export function estimateProviderUsageCostUsd(input: {
+  model: string;
+  inputTokens: number | null | undefined;
+  outputTokens: number | null | undefined;
+  hostedToolCostUsd?: number;
+}) {
+  const inputTokens = Number(input.inputTokens);
+  const outputTokens = Number(input.outputTokens);
+  if (!Number.isFinite(inputTokens) || !Number.isFinite(outputTokens) || inputTokens < 0 || outputTokens < 0) {
+    return null;
+  }
+  if (!pricingForModel(input.model)) return null;
+  return Number(priceEstimate({
+    model: input.model,
+    inputTokens,
+    outputTokens,
+    hostedToolCostUsd: Math.max(0, input.hostedToolCostUsd ?? 0)
+  }).toFixed(6));
+}
+
 export function estimateResponsesProviderCall(body: Record<string, unknown>): ProviderCallEstimate {
   const model = typeof body.model === 'string' ? body.model.trim() : '';
   if (!model || !pricingForModel(model)) {

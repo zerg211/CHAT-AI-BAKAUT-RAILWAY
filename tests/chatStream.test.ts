@@ -485,7 +485,17 @@ describe('streamChatMessage watchdog and explicit continuation', () => {
         controller.close();
       }
     });
-    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(stream, { status: 200 }));
+    const fetcher = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => String(url).includes('/events')
+      ? new Response(JSON.stringify({ events: [], result: null }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        })
+      : new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(sseEvent('done', payload)));
+            controller.close();
+          }
+        }), { status: 200 }));
 
     await expect(recoverChatTurn(
       '',
@@ -500,6 +510,54 @@ describe('streamChatMessage watchdog and explicit continuation', () => {
     expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
       'x-bakaut-visitor-id': visitorId
     });
+  });
+
+  it('retries an explicitly requested recovery once, without changing primary-stream behavior', async () => {
+    const payload = {
+      turnId: '33333333-3333-4333-8333-333333333333',
+      answer: 'Восстановленный ответ',
+      needState: {},
+      productCards: [],
+      usedWebSearch: false
+    };
+    let recoveryCall = 0;
+    const fetcher = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('/events')) {
+        return new Response(JSON.stringify({ events: [], result: null }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      recoveryCall += 1;
+      if (recoveryCall === 1) {
+        const incomplete = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          }
+        });
+        return new Response(incomplete, { status: 200 });
+      }
+      const recovered = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(sseEvent('done', payload)));
+          controller.close();
+        }
+      });
+      return new Response(recovered, { status: 200 });
+    });
+
+    await expect(recoverChatTurn(
+      '',
+      'session-1',
+      payload.turnId,
+      visitorId,
+      { onDelta: () => undefined },
+      undefined,
+      { fetcher }
+    )).resolves.toMatchObject(payload);
+
+    expect(recoveryCall).toBe(2);
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
   it('does not start recovery when the server reports a non-recoverable runner collision', async () => {

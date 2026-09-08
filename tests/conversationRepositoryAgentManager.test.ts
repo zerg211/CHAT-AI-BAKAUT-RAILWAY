@@ -54,4 +54,33 @@ describe('ConversationRepository agent manager primitives', () => {
     expect(query.mock.calls[0][0]).toContain('INSERT INTO answer_contracts');
     expect(message).toMatchObject({ id: 'message-id', content: 'answer' });
   });
+
+  it('appends and replays durable turn events from a monotonic cursor', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ session_id: 'session-id', turn_id: 'turn-id', seq: '7', stage: 'tools', event_type: 'tool_started' }]
+      })
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ session_id: 'session-id', turn_id: 'turn-id', seq: '8', stage: 'answer', event_type: 'contract_created' }]
+      });
+    const repository = new ConversationRepository({ query } as never);
+
+    await repository.appendTurnEvent({
+      sessionId: 'session-id',
+      turnId: 'turn-id',
+      stage: 'tools',
+      eventType: 'tool_started',
+      payload: { tool: 'catalog.search' }
+    });
+    const events = await repository.listTurnEvents('session-id', 'turn-id', 7, 25);
+
+    expect(query.mock.calls[0][0]).toContain('INSERT INTO turn_events');
+    expect(query.mock.calls[0][1][4]).toBe(JSON.stringify({ tool: 'catalog.search' }));
+    expect(query.mock.calls[1][0]).toContain('seq > $3');
+    expect(query.mock.calls[1][0]).toContain('ORDER BY seq ASC');
+    expect(query.mock.calls[1][1]).toEqual(['session-id', 'turn-id', 7, 25]);
+    expect(events).toEqual([{ session_id: 'session-id', turn_id: 'turn-id', seq: '8', stage: 'answer', event_type: 'contract_created' }]);
+  });
 });

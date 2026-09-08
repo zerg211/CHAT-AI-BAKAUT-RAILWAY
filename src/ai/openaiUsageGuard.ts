@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { PoolClient } from 'pg';
 import { config } from '../config.js';
 import { pool } from '../db/pool.js';
+import { estimateProviderUsageCostUsd } from './openaiRequestBudget.js';
 
 export type OpenAIUsageContext = {
   sessionId?: string | null;
@@ -182,6 +183,11 @@ export async function recordOpenAIUsage(stage: string, model: string, response: 
     : null;
 
   const reservationId = usageReservationByResponse.get(response) ?? null;
+  const estimatedCostUsd = estimateProviderUsageCostUsd({
+    model,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens
+  });
   if (config.NODE_ENV === 'test' && !reservationId) {
     usageRecorded.add(response);
     return;
@@ -203,10 +209,11 @@ export async function recordOpenAIUsage(stage: string, model: string, response: 
          output_tokens,
          reasoning_tokens,
          total_tokens,
+         cost_usd,
          response_id,
          metadata
        )
-       VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)`,
+       VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb)`,
       [
         stage,
         model,
@@ -219,8 +226,12 @@ export async function recordOpenAIUsage(stage: string, model: string, response: 
         usage.outputTokens,
         usage.reasoningTokens,
         usage.totalTokens,
+        estimatedCostUsd,
         responseId,
-        JSON.stringify({ hasUsage: usage.totalTokens !== null })
+        JSON.stringify({
+          hasUsage: usage.totalTokens !== null,
+          costBasis: estimatedCostUsd === null ? 'unavailable' : 'token_rate_estimate'
+        })
       ]
     );
     if (reservationId) {

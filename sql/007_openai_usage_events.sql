@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS openai_usage_events (
   output_tokens integer,
   reasoning_tokens integer,
   total_tokens integer,
+  cost_usd numeric(12, 6),
   response_id text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb
 );

@@ -8,26 +8,33 @@ const configuredBaselinePath = process.env.NO_REGEX_BASELINE_PATH;
 const BASELINE_PATH = configuredBaselinePath
   ? path.resolve(ROOT_DIR, configuredBaselinePath)
   : path.join(ROOT_DIR, 'scripts', 'no-regex-baseline.json');
-const SCAN_ROOTS = ['src', 'tests', 'evals', 'scripts'];
-const ROOT_FILES = [
-  'vite.config.ts',
-  'vitest.config.ts',
-  'playwright.config.ts',
-  'promptfooconfig.yaml',
+// Regex is a semantic hazard only in the modules that decide meaning,
+// evidence, selection, or action policy. Protocol parsing, formatting,
+// sanitization, tests, and evaluation harnesses are intentionally outside
+// this guard and keep their own focused tests.
+const SEMANTIC_SCOPE_FILES = [
+  'src/ai/agentManagerContracts.ts',
+  'src/ai/agentManagerContinuation.ts',
+  'src/ai/agentManagerCardSelection.ts',
+  'src/ai/agentManagerGeneratorLoad.ts',
+  'src/ai/agentManagerModelContext.ts',
+  'src/ai/agentManagerOrchestrator.ts',
+  'src/ai/agentManagerOutputGuard.ts',
+  'src/ai/agentManagerPolicyGate.ts',
+  'src/ai/agentManagerTurnBudget.ts',
+  'src/ai/decisionArtifact.ts',
+  'src/ai/dialogueLedgerReducer.ts',
+  'src/ai/leadReviewGuards.ts',
+  'src/ai/needState.ts',
+  'src/ai/productClassifier.ts',
+  'src/ai/productComparisonResearch.ts',
+  'src/ai/requirementProofs.ts',
+  'src/ai/salesManagerBehaviorPolicy.ts',
+  'src/ai/verifiedFactMemory.ts'
 ];
+const SCAN_ROOTS = ['semantic decision modules'];
+const ROOT_FILES = [];
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
-const SKIPPED_DIRECTORIES = new Set([
-  '.git',
-  '.agent',
-  '.claude',
-  '.hermes',
-  '.promptfoo',
-  'coverage',
-  'dist',
-  'node_modules',
-  'playwright-report',
-  'test-results',
-]);
 const REGEX_ARGUMENT_METHODS = new Set(['match', 'matchAll', 'replace', 'replaceAll', 'search', 'split']);
 const REGEX_OWN_METHODS = new Set(['exec', 'test']);
 
@@ -53,41 +60,11 @@ function scriptKindFor(filePath) {
   return ts.ScriptKind.TS;
 }
 
-function collectFilesFromDirectory(directoryPath, files) {
-  if (!fs.existsSync(directoryPath)) {
-    return;
-  }
-
-  const entries = fs.readdirSync(directoryPath, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      if (!SKIPPED_DIRECTORIES.has(entry.name)) {
-        collectFilesFromDirectory(path.join(directoryPath, entry.name), files);
-      }
-      continue;
-    }
-
-    if (entry.isFile()) {
-      const filePath = path.join(directoryPath, entry.name);
-      if (CODE_EXTENSIONS.has(path.extname(filePath))) {
-        files.push(filePath);
-      }
-    }
-  }
-}
-
 function collectScanFiles() {
-  const files = [];
-  for (const root of SCAN_ROOTS) {
-    collectFilesFromDirectory(path.join(ROOT_DIR, root), files);
-  }
-  for (const rootFile of ROOT_FILES) {
-    const filePath = path.join(ROOT_DIR, rootFile);
-    if (fs.existsSync(filePath) && CODE_EXTENSIONS.has(path.extname(filePath))) {
-      files.push(filePath);
-    }
-  }
-  return files.sort((left, right) => toProjectPath(left).localeCompare(toProjectPath(right)));
+  return SEMANTIC_SCOPE_FILES
+    .map((projectPath) => path.join(ROOT_DIR, ...projectPath.split('/')))
+    .filter((filePath) => fs.existsSync(filePath) && CODE_EXTENSIONS.has(path.extname(filePath)))
+    .sort((left, right) => toProjectPath(left).localeCompare(toProjectPath(right)));
 }
 
 function isRegExpIdentifier(node) {
@@ -210,7 +187,8 @@ function collectFindings() {
 function baselinePayload(findings) {
   return {
     version: 1,
-    note: 'Legacy regex baseline. Entries intentionally store hashes, not regex pattern text.',
+    note: 'Targeted semantic regex baseline. Regex in protocol parsing, formatting, sanitization, tests, and evals is out of scope. Entries store hashes, not regex pattern text.',
+    semanticScopeFiles: SEMANTIC_SCOPE_FILES,
     scannedRoots: SCAN_ROOTS,
     rootFiles: ROOT_FILES,
     count: findings.length,

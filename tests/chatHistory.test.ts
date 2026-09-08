@@ -20,6 +20,7 @@ import {
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const otherSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const turnId = '33333333-3333-4333-8333-333333333333';
 const visitorId = 'visitor-capability-with-high-entropy';
 
 const openApps: Array<ReturnType<typeof Fastify>> = [];
@@ -49,7 +50,10 @@ async function publicHistoryApp(
       : null),
     listMessages: vi.fn(async () => messages),
     getLatestUnansweredTurn: vi.fn(async () => pendingTurn),
-    getHistorySnapshot: vi.fn(async () => ({ messages, pendingTurn }))
+    getHistorySnapshot: vi.fn(async () => ({ messages, pendingTurn })),
+    getTurn: vi.fn(async () => ({ id: turnId })),
+    listTurnEvents: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
+    getFinalAnswerContract: vi.fn(async (): Promise<Record<string, unknown> | null> => null)
   };
   const app = Fastify();
   openApps.push(app);
@@ -58,6 +62,68 @@ async function publicHistoryApp(
 }
 
 describe('public chat history API', () => {
+  it('replays public durable turn events and a persisted final result without internal payloads', async () => {
+    const { app, conversations } = await publicHistoryApp([]);
+    conversations.listTurnEvents.mockResolvedValueOnce([
+      {
+        seq: '11',
+        stage: 'tools',
+        event_type: 'tool_started',
+        created_at: new Date('2026-07-27T12:00:01.000Z')
+      },
+      {
+        seq: '12',
+        stage: 'answer',
+        event_type: 'contract_created',
+        created_at: '2026-07-27T12:00:02.000Z'
+      }
+    ]);
+    conversations.getFinalAnswerContract.mockResolvedValueOnce({
+      response_payload: {
+        answer: 'Готовый ответ после восстановления.',
+        productCards: [],
+        metadata: { privateReasoning: 'must-not-leak' }
+      }
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/chat/sessions/${sessionId}/messages/${turnId}/events?afterSeq=10`,
+      headers: { 'x-bakaut-visitor-id': visitorId }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      turnId,
+      afterSeq: 10,
+      events: [
+        {
+          seq: 11,
+          stage: 'tools',
+          eventType: 'tool_started',
+          timestamp: '2026-07-27T12:00:01.000Z',
+          status: 'Проверяю данные по товарам...'
+        },
+        {
+          seq: 12,
+          stage: 'answer',
+          eventType: 'contract_created',
+          timestamp: '2026-07-27T12:00:02.000Z',
+          status: 'Формирую ответ...'
+        }
+      ],
+      nextSeq: 12,
+      result: {
+        turnId,
+        answer: 'Готовый ответ после восстановления.',
+        productCards: []
+      }
+    });
+    expect(response.body).not.toContain('privateReasoning');
+    expect(conversations.listTurnEvents).toHaveBeenCalledWith(sessionId, turnId, 10, 200);
+    expect(conversations.getFinalAnswerContract).toHaveBeenCalledWith(sessionId, turnId);
+  });
+
   it('returns the same 404 for a missing, wrong, or unknown restoration capability', async () => {
     const { app, conversations } = await publicHistoryApp([]);
 

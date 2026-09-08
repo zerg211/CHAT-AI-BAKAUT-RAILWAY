@@ -1,5 +1,10 @@
 export type SseSender = (event: string, data: unknown) => void;
 
+export type AgentStageEvent = {
+  phase: string;
+  eventType: string;
+};
+
 type RawSseReply = {
   destroyed?: boolean;
   writableEnded?: boolean;
@@ -36,18 +41,21 @@ export function closeSseReply(reply: SseReply) {
   if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.end();
 }
 
-export function startStatusTimer(input: {
-  send: SseSender;
-  initialStatus: string;
-  statusMessages: string[];
-  intervalMs?: number;
-}) {
-  input.send('status', { status: input.initialStatus });
-  let statusIndex = 0;
-  const timer = setInterval(() => {
-    statusIndex = Math.min(statusIndex + 1, input.statusMessages.length - 1);
-    input.send('status', { status: input.statusMessages[statusIndex] });
-  }, input.intervalMs ?? 12_000);
-  timer.unref?.();
-  return () => clearInterval(timer);
+export function customerStatusForStage(event: AgentStageEvent) {
+  if (event.phase === 'turn' && event.eventType === 'started') return 'Готовлю ответ...';
+  if (event.phase === 'intent' && event.eventType === 'semantic_decision_started') return 'Уточняю задачу...';
+  if (event.phase === 'tools' && event.eventType === 'tool_started') return 'Проверяю данные по товарам...';
+  if (event.phase === 'answer' && event.eventType === 'contract_created') return 'Формирую ответ...';
+  if (event.phase === 'validation' && event.eventType === 'completed') return 'Проверяю итог...';
+  return null;
+}
+
+export function createStageStatusSender(send: SseSender) {
+  let lastStatus: string | null = null;
+  return (event: AgentStageEvent) => {
+    const status = customerStatusForStage(event);
+    if (!status || status === lastStatus) return;
+    lastStatus = status;
+    send('status', { status });
+  };
 }

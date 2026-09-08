@@ -3,11 +3,16 @@ import { agentManagerToolRegistry } from '../src/ai/agentManagerToolRegistry.js'
 import {
   AgentManagerTurnBudget,
   AgentManagerTurnBudgetExceededError,
+  AGENT_MANAGER_TURN_BUDGET_PROFILES,
   DEFAULT_AGENT_MANAGER_TURN_LIMITS,
+  agentManagerTurnLimitsForProfile,
   consumeCurrentAgentManagerProviderCall,
-  runWithAgentManagerTurnBudget
+  recordCurrentAgentPromptShape,
+  runWithAgentManagerTurnBudget,
+  selectAgentManagerBudgetProfile
 } from '../src/ai/agentManagerTurnBudget.js';
 import { effectiveAgentToolTimeoutMs } from '../src/ai/agentManagerOrchestrator.js';
+import { emptyNeedState } from '../src/ai/needState.js';
 
 describe('agent manager turn budget', () => {
   const providerEstimate = (inputTokens: number, outputTokens: number, costUsd = 0.01) => ({
@@ -26,6 +31,70 @@ describe('agent manager turn budget', () => {
     expect(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs).toBe(150_000);
     expect(webTimeoutMs).toBe(60_000);
     expect(webTimeoutMs).toBeLessThan(DEFAULT_AGENT_MANAGER_TURN_LIMITS.maxWallTimeMs);
+  });
+
+  it('selects risk-adaptive profiles while keeping every profile below the hard ceiling', () => {
+    const contextualState = emptyNeedState();
+    contextualState.lastSummary = 'Покупатель уточняет генератор для дачи';
+    const researchState = emptyNeedState();
+    researchState.uncertainInferences.push({
+      key: 'power',
+      value: 'unknown',
+      confidence: 0.2,
+      source: 'inference'
+    } as never);
+    const actionState = emptyNeedState();
+    actionState.activeNeeds.push({
+      id: 'generator',
+      productClass: 'generator',
+      summary: 'Выбран генератор',
+      constraints: [],
+      openQuestions: [],
+      selectedProductIds: ['product-1'],
+      status: 'selected',
+      updatedAt: new Date().toISOString()
+    });
+
+    expect(selectAgentManagerBudgetProfile({ recovered: true })).toBe('RECOVERY');
+    expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Да', needState: contextualState })).toBe('FAST');
+    expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Проверь характеристики', needState: researchState })).toBe('RESEARCH');
+    expect(selectAgentManagerBudgetProfile({ recovered: false, userMessage: 'Оформим', needState: actionState })).toBe('ACTION');
+    expect(agentManagerTurnLimitsForProfile('NORMAL').maxModelCalls).toBeLessThan(
+      AGENT_MANAGER_TURN_BUDGET_PROFILES.RESEARCH.maxModelCalls
+    );
+    expect(agentManagerTurnLimitsForProfile('FAST').maxWallTimeMs).toBeLessThan(
+      AGENT_MANAGER_TURN_BUDGET_PROFILES.RESEARCH.maxWallTimeMs
+    );
+  });
+
+  it('records a stable prompt fingerprint and selected profile in the turn snapshot', async () => {
+    const budget = new AgentManagerTurnBudget(
+      agentManagerTurnLimitsForProfile('FAST'),
+      Date.now,
+      undefined,
+      'FAST'
+    );
+    await runWithAgentManagerTurnBudget(budget, async () => {
+      recordCurrentAgentPromptShape('observe', {
+        model: 'gpt-5.6-luna',
+        input: { b: 2, a: 1 },
+        instructions: 'Уточнить задачу',
+        text: { format: { type: 'json_schema' } }
+      });
+      recordCurrentAgentPromptShape('observe', {
+        model: 'gpt-5.6-luna',
+        input: { a: 1, b: 2 },
+        instructions: 'Уточнить задачу',
+        text: { format: { type: 'json_schema' } }
+      });
+    });
+
+    const snapshot = budget.snapshot();
+    expect(snapshot.profile).toBe('FAST');
+    expect(snapshot.usage.promptShapes).toHaveLength(2);
+    expect(snapshot.usage.promptShapes[0]?.promptFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(snapshot.usage.promptShapes[0]?.promptFingerprint)
+      .toBe(snapshot.usage.promptShapes[1]?.promptFingerprint);
   });
 
   it('caps web work to the time left after preserving one answer composition', () => {
