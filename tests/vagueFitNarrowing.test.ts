@@ -5,7 +5,8 @@ import type { AnswerSelectionReadiness } from '../src/ai/agentManagerContracts.j
 
 async function orchestratorSource() {
   return (await readFile(new URL('../src/ai/agentManagerOrchestrator.ts', import.meta.url), 'utf8')) + '\n' +
-    (await readFile(new URL('../src/ai/agentManagerModelAdapter.ts', import.meta.url), 'utf8'));
+    (await readFile(new URL('../src/ai/agentManagerModelAdapter.ts', import.meta.url), 'utf8')) + '\n' +
+    (await readFile(new URL('../src/ai/agentManagerReleaseValidator.ts', import.meta.url), 'utf8'));
 }
 
 function readiness(status: AnswerSelectionReadiness['status'], canShow: boolean): AnswerSelectionReadiness {
