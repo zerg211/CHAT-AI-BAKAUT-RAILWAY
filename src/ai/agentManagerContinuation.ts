@@ -91,8 +91,15 @@ export function continuationValidationIssues(input: {
     }
     const policy = input.intent.selectionPolicy;
     const requestedClass = request.args.canonicalProductIntent;
+    // A secondary class is not a new shopping intent when the semantic planner
+    // already grounded it in a buyer mention and scheduled that read class.
+    const groundedSecondaryRead = input.intent.productMentions?.some((mention) =>
+      ['target_product', 'catalog_candidate', 'comparison_subject'].includes(mention.role) &&
+      mention.productClass === requestedClass && Boolean(mention.evidence?.trim())
+    ) && input.intent.toolRequests.some((planned) => continuationReadTools.has(planned.tool) &&
+      planned.args.canonicalProductIntent === requestedClass);
     if (requestedClass && requestedClass !== 'unknown' && policy?.canonicalProductClass &&
-      policy.canonicalProductClass !== 'unknown' && requestedClass !== policy.canonicalProductClass) {
+      policy.canonicalProductClass !== 'unknown' && requestedClass !== policy.canonicalProductClass && !groundedSecondaryRead) {
       issues.push(`continuation_product_class_changed:${requestedClass}`);
     }
     if (request.args.powerSource && request.args.powerSource !== 'any' &&

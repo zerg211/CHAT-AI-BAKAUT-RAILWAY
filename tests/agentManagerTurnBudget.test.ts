@@ -15,6 +15,37 @@ import { effectiveAgentToolTimeoutMs } from '../src/ai/agentManagerOrchestrator.
 import { emptyNeedState } from '../src/ai/needState.js';
 
 describe('agent manager turn budget', () => {
+  it('releases only a completed request reserve so the final review can run', () => {
+    const budget = new AgentManagerTurnBudget({ ...DEFAULT_AGENT_MANAGER_TURN_LIMITS,
+      maxProviderEstimatedInputTokens: 1000, maxProviderEstimatedTotalTokens: 1200 });
+    const request = { kind: 'responses' as const, model: 'gpt-5.6-luna',
+      estimatedInputTokens: 700, reservedOutputTokens: 100, estimatedTotalTokens: 800,
+      estimatedCostUsd: 0.00286, hostedToolCostUsd: 0 };
+    const settle = budget.consumeProviderCall(request);
+    expect(() => budget.consumeProviderCall(request)).toThrow('provider_input_token_budget_exceeded');
+    settle({ input_tokens: 100, output_tokens: 20, total_tokens: 120 });
+    settle({ input_tokens: 0, output_tokens: 0, total_tokens: 0 });
+    budget.consumeProviderCall(request);
+    expect(budget.snapshot().usage).toMatchObject({ providerCalls: 2,
+      providerEstimatedInputTokens: 800, providerReservedOutputTokens: 120, providerEstimatedTotalTokens: 920 });
+    expect(budget.snapshot().usage.estimatedCostUsd).toBeCloseTo(0.003344, 6);
+  });
+
+  it('retains unknown or malformed usage and other in-flight reserves', () => {
+    const budget = new AgentManagerTurnBudget();
+    const request = { kind: 'responses' as const, model: 'gpt-5.6-luna',
+      estimatedInputTokens: 700, reservedOutputTokens: 100, estimatedTotalTokens: 800,
+      estimatedCostUsd: 0.00286, hostedToolCostUsd: 0 };
+    const settleFirst = budget.consumeProviderCall(request);
+    budget.consumeProviderCall(request);
+    for (const usage of [null, {}, { input_tokens: -1, output_tokens: 0, total_tokens: -1 },
+      { input_tokens: 100, output_tokens: 20, total_tokens: 100 },
+      { input_tokens: '100', output_tokens: 20, total_tokens: 120 }]) settleFirst(usage);
+    expect(budget.snapshot().usage.providerEstimatedTotalTokens).toBe(1600);
+    settleFirst({ input_tokens: 100, output_tokens: 20, total_tokens: 120 });
+    expect(budget.snapshot().usage.providerEstimatedTotalTokens).toBe(920);
+    expect(budget.snapshot().usage.providerCalls).toBe(2);
+  });
   const providerEstimate = (inputTokens: number, outputTokens: number, costUsd = 0.01) => ({
     kind: 'responses' as const,
     model: 'gpt-5.6-terra',

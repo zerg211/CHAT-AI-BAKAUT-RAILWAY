@@ -23,8 +23,8 @@ function reserveCurrentTurnProviderCall(buildEstimate: () => ProviderCallEstimat
   if (!hasCurrentAgentManagerTurnBudget()) return undefined;
   try {
     const estimate = buildEstimate();
-    consumeCurrentAgentManagerProviderCall(estimate);
-    return estimate;
+    const reconcile = consumeCurrentAgentManagerProviderCall(estimate);
+    return { ...estimate, reconcile };
   } catch (error) {
     if (error instanceof ProviderBudgetEstimationError) {
       throw new AgentManagerTurnBudgetExceededError(error.stopReason);
@@ -47,6 +47,7 @@ export function createOpenAIClient() {
     );
     try {
       const response = await createResponse(body, options);
+      turnEstimate?.reconcile?.(response?.usage);
       bindOpenAIUsageReservation(response, reservationId);
       return response;
     } catch (error) {
