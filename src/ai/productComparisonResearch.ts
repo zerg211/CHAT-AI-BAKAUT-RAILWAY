@@ -1496,7 +1496,7 @@ function sourceEvidenceExactExcerpt(
   return collapsedSource.slice(firstRange.start, lastRange.end);
 }
 
-function boundedSemanticSourceTextForEvidence(sourceText: string, evidence: unknown) {
+export function boundedSemanticSourceTextForEvidence(sourceText: string, evidence: unknown) {
   const collapsedSource = collapseWhitespace(sourceText);
   const parts = String(evidence ?? '').split(DOCUMENT_PASSAGE_GAP.trim());
   if (parts.length === 2 && collapsedSource.length > semanticSourceTextLimit) {
@@ -1513,7 +1513,31 @@ function boundedSemanticSourceTextForEvidence(sourceText: string, evidence: unkn
     }
   }
   const exactEvidence = sourceEvidenceExactExcerpt(evidence, collapsedSource, 4);
-  if (!exactEvidence || collapsedSource.length <= semanticSourceTextLimit) {
+  if (collapsedSource.length <= semanticSourceTextLimit) {
+    return boundedSemanticSourceText(collapsedSource);
+  }
+  if (!exactEvidence) {
+    // A proposed quotation may be paraphrased or stitched. Retrieve context from
+    // literal source windows, but never treat lexical overlap as claim approval.
+    // The existing semantic validator must still recover valid exact excerpts.
+    const words = (value: string) => value.toLocaleLowerCase('ru-RU').match(/[\p{L}\p{N}]+/gu) ?? [];
+    const queryWords = words(String(evidence ?? ''));
+    const phrases = new Set(queryWords.slice(0, -2).map((word, index) =>
+      [word, queryWords[index + 1], queryWords[index + 2]].join(' ')));
+    const scopeLength = 4_000;
+    const windowLength = semanticSourceTextLimit - scopeLength - DOCUMENT_PASSAGE_GAP.length;
+    let bestStart = 0;
+    let bestScore = 0;
+    for (let offset = 0; offset < collapsedSource.length; offset += Math.floor(windowLength / 2)) {
+      const start = Math.min(offset, Math.max(0, collapsedSource.length - windowLength));
+      const candidate = ` ${words(collapsedSource.slice(start, start + windowLength)).join(' ')} `;
+      const score = [...phrases].filter((phrase) => candidate.includes(` ${phrase} `)).length;
+      if (score > bestScore) { bestScore = score; bestStart = start; }
+    }
+    if (bestScore > 0 && bestStart > scopeLength) {
+      return { text: collapsedSource.slice(0, scopeLength) + DOCUMENT_PASSAGE_GAP +
+        collapsedSource.slice(bestStart, bestStart + windowLength), truncated: true };
+    }
     return boundedSemanticSourceText(collapsedSource);
   }
   const evidenceIndex = collapsedSource.indexOf(exactEvidence);
